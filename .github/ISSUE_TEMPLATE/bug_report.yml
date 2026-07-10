@@ -1,0 +1,105 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Kangentic Mobile
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a security vulnerability instead? Do not file it here. See [SECURITY.md](https://github.com/Kangentic/kangentic-mobile/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android emulator
+        - Android device
+        - iOS device
+        - iOS TestFlight
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version
+      placeholder: e.g. Android 14, iOS 18.1
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App Version or Commit
+      placeholder: e.g. 0.1.0, or a commit SHA
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Installation Method
+      options:
+        - Development build
+        - TestFlight
+        - Play Store internal testing
+        - Built from source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: relay
+    attributes:
+      label: Relay
+      options:
+        - Kangentic-hosted relay
+        - Self-hosted relay
+        - Not paired yet
+    validations:
+      required: false
+
+  - type: input
+    id: desktop-version
+    attributes:
+      label: Desktop Kangentic Version
+      placeholder: e.g. 0.29.0
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open the app
+        2. Tap on ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-vs-actual
+    attributes:
+      label: Expected vs Actual Behavior
+      placeholder: |
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or Logs
+      description: Paste any relevant screenshots, device logs, or error messages.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other details that might help diagnose the issue.
+    validations:
+      required: false

@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "columns": [
+    {
+      "id": "28b8b0cd-81ea-447c-b7a8-2d05daefd855",
+      "name": "To Do",
+      "role": "todo",
+      "icon": "layers",
+      "color": "#6b7280"
+    },
+    {
+      "id": "ed873612-be49-4071-94d2-c221fe4413ba",
+      "name": "Planning",
+      "icon": "map",
+      "color": "#8b5cf6",
+      "autoSpawn": true,
+      "permissionMode": "plan",
+      "planExitTarget": "Executing"
+    },
+    {
+      "id": "5358e3a9-8cf7-4818-b33b-71a98536a37e",
+      "name": "Executing",
+      "icon": "square-terminal",
+      "autoSpawn": true,
+      "modelOverride": "claude-sonnet-5",
+      "effortOverride": "high"
+    },
+    {
+      "id": "9a7ef24b-2417-4277-bfd3-862250c1b6f7",
+      "name": "Code Review",
+      "icon": "code",
+      "color": "#f59e0b",
+      "autoSpawn": true,
+      "autoCommand": "/code-review",
+      "effortOverride": "xhigh",
+      "sessionTarget": "isolated",
+      "sessionSpawnStrategy": "always_spawn_new"
+    },
+    {
+      "id": "91ad5825-f506-4020-91b2-207b28124eb7",
+      "name": "Testing",
+      "icon": "flask-conical",
+      "color": "#06b6d4",
+      "autoSpawn": true,
+      "autoCommand": "/pull-request",
+      "modelOverride": "claude-sonnet-5",
+      "effortOverride": "high"
+    },
+    {
+      "id": "ed8a6c51-e609-4a87-b2db-bbe6770c5acc",
+      "name": "Merge",
+      "icon": "merge",
+      "color": "#F97316",
+      "autoSpawn": true,
+      "autoCommand": "/merge-pull-request",
+      "modelOverride": "claude-sonnet-5",
+      "effortOverride": "high"
+    },
+    {
+      "id": "857923ef-41f9-4905-b4e5-11790bc9dc70",
+      "name": "Done",
+      "role": "done",
+      "icon": "circle-check-big",
+      "color": "#10b981"
+    }
+  ],
+  "actions": [
+    {
+      "id": "4d4040fd-4dc4-4a5a-b678-96bc2e13b8b6",
+      "name": "Kill Session",
+      "type": "kill_session",
+      "config": {}
+    },
+    {
+      "id": "540db101-d43d-421b-81a7-1103e39b9368",
+      "name": "Start Planning Agent",
+      "type": "spawn_agent",
+      "config": {
+        "promptTemplate": "{{task_xml}}{{attachments}}"
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "from": "*",
+      "to": "Done",
+      "actions": [
+        "Kill Session"
+      ]
+    },
+    {
+      "from": "*",
+      "to": "Planning",
+      "actions": [
+        "Kill Session",
+        "Start Planning Agent"
+      ]
+    }
+  ],
+  "_modifiedBy": "7ef4fd0cb484"
+}

@@ -1,0 +1,14 @@
+# Enforce LF line endings for all text files
+* text=auto eol=lf
+
+# Binary assets: never normalize line endings (auto-detection could corrupt them)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary

@@ -1,0 +1,117 @@
+# Security
+
+kangentic-mobile pairs to, and then remotely steers, agent sessions running on a desktop machine
+that can edit code and execute commands. This document is the threat model and the security
+design; an auditable core is treated as a feature, not a nice-to-have. See
+[SECURITY.md](../SECURITY.md) for how to report a vulnerability.
+
+## Threat model
+
+**Assets:** the device identity key (X25519, per device), the pairing token, the signed device
+roster, and transcript/board content in transit.
+
+**Adversaries:**
+- A network attacker who can observe or inject traffic to and from the relay.
+- A malicious or compromised relay operator (including a self-hosted relay run by an untrusted
+  third party, or Kangentic's own hosted relay if it were ever compromised).
+- An attacker who photographs or otherwise captures the pairing QR code.
+- An attacker with physical access to a lost or stolen phone.
+
+**Blast radius:** the channel this app establishes can steer an agent that edits code and runs
+commands on the paired desktop. A compromise here is not "read someone's chat", it is closer to
+a remote-access compromise, and the design is held to that bar.
+
+## Pairing ceremony
+
+The desktop displays a QR code; the phone scans it. The QR carries the desktop's static public
+key, a short-lived (~10 minute) single-use pairing token, a relay address, and a protocol
+version. It never carries a long-lived secret (this is the mistake in Happy's `handy://` QR
+scheme, which embeds the raw 32-byte master secret).
+
+**This is a token-bound Noise PSK, deliberately NOT a PAKE.** The pairing token is a high-entropy
+(>=128-bit), single-use, machine-generated value, mixed into the Noise handshake as a pre-shared
+key in PSK mode. A PAKE (SPAKE2, CPace) exists to defend a *low-entropy, human-typed* code
+against offline dictionary grinding; that property is irrelevant here because the token is
+already high-entropy and scanned, not typed. Reusing the token as a Noise PSK gives the same
+practical guarantee a PAKE would (an attacker who intercepts the pairing traffic gets exactly one
+online guess, gated by the relay, and nothing to grind offline), while keeping exactly one
+audited crypto primitive (Noise) across both pairing and ongoing sessions, and without depending
+on a maintained, audited JavaScript SPAKE2 implementation (none currently exists; the one
+published package is years-stale, targets an old draft, and is Node-only, which would also break
+React Native parity). If a human-typeable short-code pairing path is ever added, a PAKE becomes
+relevant again and should be revisited at that time.
+
+## SAS confirmation
+
+After the handshake, both sides derive a **Short Authentication String** (a 6-digit or emoji
+code, Matrix-style) from the transcript hash, using commitment-before-reveal so neither side can
+choose a value after seeing the other's. The user confirms the two codes match on both screens.
+This defeats a photographed or relayed QR: an attacker who intercepts the QR and races to pair
+first cannot also make both SAS values agree, because the SAS is bound to the actual handshake
+transcript with the real desktop.
+
+## Transport
+
+Every session runs a fresh **Noise KK** handshake
+(`Noise_KK_25519_ChaChaPoly_BLAKE2s`): both static keys are pre-messages exchanged during
+pairing, so there is mutual authentication by construction and neither identity is ever sent on
+the wire.
+
+- **Downgrade protection:** the protocol version is bound into the Noise prologue; a mismatched
+  prologue fails the handshake rather than silently negotiating down.
+- **No state-changing command in the first payload:** Noise KK message 1 is replayable
+  pre-ephemeral, so nothing that changes state may ride it.
+- **Rekeying:** sessions rekey roughly every 2 minutes (WireGuard's `REKEY_AFTER_TIME`), bounding
+  the damage of a compromised session key.
+- **Replay protection:** per-direction 64-bit counter nonces reject anything at or below the last
+  seen value.
+- **No Double Ratchet.** Double Ratchet solves offline, asynchronous message queuing, which this
+  interactive link does not have; adding it would be unjustified complexity.
+
+## Authorization
+
+The encrypted channel proves *which* device is talking; a desktop-enforced capability allowlist
+decides *what* it may do (see `docs/architecture.md` for the v1 verb table). **There is no
+shell, file-read, or arbitrary-command verb in the protocol at all: it is absent, not filtered.**
+This follows the lesson of Chrome Remote Desktop and VS Code tunnels, which are identity-gated
+but capability-unscoped, and of the SSH forced-command pattern, which shows that a filter on an
+otherwise-general command channel is the wrong shape.
+
+**Revocation is removal from the signed roster AND a rekey of the channel.** Removing a device
+from the roster without rotating keys is not revocation; a device also ages out via a per-device
+key expiry, so a lost phone is not trusted forever even if revocation is missed.
+
+## Key storage
+
+- **iOS:** `expo-secure-store`, backed by the Keychain. The Secure Enclave only supports P-256,
+  so the app's X25519 identity keys cannot be enclave-resident; they get Keychain protection
+  instead. This is stated plainly rather than worked around.
+- **Android:** `expo-secure-store`, backed by the Keystore (StrongBox-backed where the device
+  supports it).
+- **No attestation requirement.** Play Integrity and App Attest would break sideloaded and
+  F-Droid-style builds of an open-source app, and buy little against this threat model, so this
+  app does not require them.
+
+## Relay metadata honesty statement
+
+A blind relay forwards ciphertext only, but it still sees source and destination IP addresses,
+connection timing, frame sizes and frequency, and the pairing graph (which devices talk to which
+relay slot). This app does not claim otherwise. Mitigations: self-hosting your own
+`kangentic-relay` instance, single-use pairing tokens, and relay slot tokens so only paired
+devices can consume relay capacity at all.
+
+## Push privacy
+
+Push notifications are ciphertext plus a generic placeholder only (see
+`.claude/rules/e2e-notification-privacy.md`); every failure mode degrades to the placeholder,
+never to plaintext or raw ciphertext shown to the user.
+
+## Reporting a vulnerability
+
+See [SECURITY.md](../SECURITY.md).
+
+## See Also
+
+- [docs/architecture.md](architecture.md) - system overview, the capability verb table, the
+  notification pipeline.
+- [docs/developer-guide.md](developer-guide.md) - setup and testing.
