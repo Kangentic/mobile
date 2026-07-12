@@ -5,7 +5,7 @@ const config: ExpoConfig = {
   slug: 'mobile',
   version: '0.1.0',
   orientation: 'portrait',
-  scheme: ['kangentic-pair', 'kangentic-mobile'],
+  scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
   ios: {
     bundleIdentifier: 'com.kangentic.mobile',
