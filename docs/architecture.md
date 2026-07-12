@@ -1,9 +1,9 @@
 # Architecture
 
 kangentic-mobile is a companion app that remote-controls agent sessions running in the desktop
-[Kangentic](https://github.com/Kangentic/kangentic) app. This document describes the **planned**
-architecture (App Phase 0: no application code exists yet; see `CLAUDE.md`'s Project Structure
-for the target layout). The durable research behind these decisions lives in the desktop repo's
+[Kangentic](https://github.com/Kangentic/kangentic) app. This document describes the
+architecture as scaffolded in App Phase 1; see `CLAUDE.md`'s Project Structure for the current
+layout. The durable research behind these decisions lives in the desktop repo's
 [`docs/research/mobile-companion-app.md`](https://github.com/Kangentic/kangentic/blob/main/docs/research/mobile-companion-app.md);
 this document is the implementation-facing summary and is authoritative where the two disagree
 (notably the pairing ceremony, see below).
@@ -65,7 +65,9 @@ per-device capability set. The roster, not the relay, is the source of truth for
 
 Every session runs a **Noise KK** handshake (`Noise_KK_25519_ChaChaPoly_BLAKE2s`): both static
 keys are pre-messages from pairing, so there is no trust-on-first-use and neither identity ever
-travels on the wire in the clear.
+travels on the wire in the clear. The desktop always initiates the handshake and owns the ~2
+minute rekey timer; the phone is the responder, reacting identically to the very first handshake
+and to every later peer-initiated rekey.
 
 - Version negotiation is bound into the Noise prologue; a differing prologue fails the handshake
   outright, closing downgrade attacks.
@@ -73,10 +75,12 @@ travels on the wire in the clear.
 - Sessions rekey roughly every 2 minutes (WireGuard's `REKEY_AFTER_TIME`) for bounded
   post-compromise security.
 - Per-direction 64-bit counter nonces reject anything at or below the last seen value.
-- Crypto libraries: `react-native-quick-crypto` on mobile (matching Node's WebCrypto X25519 and
-  Ed25519 primitives, so the handshake is one shared TypeScript module against official Noise
-  test vectors), and `react-native-libsodium` for the `secretstream` framing layer (function
-  coverage against the desktop's `libsodium-wrappers` needs verification during implementation).
+- Crypto library: `@kangentic/protocol` is pure TypeScript on `@noble/curves`/`@noble/hashes`/
+  `@noble/ciphers` - no native crypto module. The exact same handshake and `secretstream`-style
+  AEAD framing code runs on Node (the desktop) and on Hermes (this app), tested once against
+  official Noise test vectors. The app adds only `react-native-get-random-values` (Hermes has no
+  built-in `crypto.getRandomValues`, which the protocol's key generation needs) and
+  `@bacons/text-decoder` (Hermes has `TextEncoder` but not `TextDecoder`).
 
 ## Capability allowlist
 
@@ -97,22 +101,33 @@ filtered. `answer-permission-prompt` is the most sensitive verb: the phone rende
 is being approved, and the desktop enforces that the response binds to a specific outstanding
 prompt id.
 
-## App structure (planned)
+## App structure
 
 ```
+app/              # expo-router route wrappers (thin - render the src/screens/ implementation)
 src/
-  screens/        # TriageHome, Board, TaskDetail (Conversation/Terminal/Changes), Pairing, Settings, Devices
+  screens/        # TriageHome, Board, Pairing (Scan/Confirm), Settings, Devices; TaskDetail is later phase
   components/      # Design system + transcript-terminal cells, tool cards, diff viewer
-  pairing/         # QR scan, SAS confirm, device identity, roster client, key storage
-  channel/         # Noise KK secure channel, relay WS client, reconnect/resume, capability client
-  notifications/   # Push registration, E2E blob decrypt, category prefs, presence suppression
+  pairing/         # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
+  channel/         # Relay WebSocket transport, KK session manager (responder), slot derivation, capability client
+  notifications/   # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
   state/           # Zustand stores
-  lib/             # Shared pure utilities
+  lib/             # Shared pure utilities (crypto polyfills)
 ```
+
+Route files under `app/` are thin wrappers that render the matching `src/screens/` implementation
+(e.g. `app/pair.tsx` renders `PairingScanScreen`); this keeps the documented `src/` layout as the
+place screen logic actually lives while still getting expo-router's file-based routing. In Phase 1
+the pairing on-ramp is the in-app camera scan (or the paste-link fallback) inside
+`PairingScanScreen`; OS-level deep-link routing of a `kangentic-pair://` URI is not wired yet.
+The pairing payload is a base64url blob in the URI authority (not a `/pair` path), so routing it
+needs a dedicated `expo-linking` handler that feeds the captured URL through the same
+`validateScannedQr` then `beginPairing` path; that lands in a later phase.
 
 Navigation: an activity-triage home (Needs you / Working / Idle) plus a swipeable Board tab.
 Opening a task is full-screen with a bottom tab bar (Conversation-terminal / Terminal / Changes)
-and a composer pinned at the bottom.
+and a composer pinned at the bottom - this is App Phase 2 scope; Phase 1 ships the triage home and
+Board tab on mock data only.
 
 ## Rendering
 

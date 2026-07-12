@@ -7,7 +7,10 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
 - **Framework:** Expo SDK 55+, React Native New Architecture, TypeScript strict mode
 - **State:** Zustand
 - **Lists:** FlashList (transcript feed, board, chat-style streaming)
-- **Crypto:** react-native-quick-crypto (X25519/Ed25519, matches Node WebCrypto), react-native-libsodium (secretstream framing)
+- **Crypto:** `@kangentic/protocol` (pure TypeScript on `@noble/curves`/`@noble/hashes`/`@noble/ciphers` -
+  no native crypto module; the same handshake code runs on Node and Hermes), plus
+  `react-native-get-random-values` (CSPRNG polyfill) and `@bacons/text-decoder` (Hermes has no
+  built-in `TextDecoder`)
 - **Storage:** expo-secure-store (Keychain / Android Keystore)
 - **Notifications:** Expo Push, Notifee (Android), a native iOS Notification Service Extension via config plugin
 - **Build:** EAS Build/Submit/Workflows (cloud, including all iOS builds), Continuous Native Generation (no checked-in native projects)
@@ -15,25 +18,29 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
 
 ## Project Structure
 
-**PLANNED - App Phase 1+.** None of `src/` exists yet; the rules in `.claude/rules/` and the
-docs in `docs/` are written against this layout as the north star. If the layout changes at
-scaffold time, update this tree and the rule `paths:` globs together.
+**Scaffolded - App Phase 1.** `app/` holds thin expo-router route wrappers; the actual screen
+implementations and everything else live under `src/`. If the layout changes, update this tree
+and the rule `paths:` globs together.
 
 ```
-app.json / app.config.ts     # Expo config; CNG - config plugins only, no checked-in native projects
-eas.json                     # EAS Build/Submit/Workflows profiles
-plugins/                     # Local Expo config plugins (NSE injection, keychain access group, notifee)
-targets/nse/                 # iOS Notification Service Extension source, injected via plugin
+app.config.ts                 # Expo config; CNG - config plugins only, no checked-in native projects
+eas.json                      # EAS Build/Submit/Workflows profiles (development/preview/production)
+app/                           # expo-router route wrappers (thin - render the src/screens/ implementation)
+  _layout.tsx, (tabs)/         # root Stack + bottom Tabs (Home, Board)
+  pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen (OS deep-link routing of kangentic-pair:// is a later phase)
+  settings.tsx, devices.tsx
+plugins/                      # Local Expo config plugins (NSE injection, keychain access group, notifee) - later phase
+targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
-  screens/        # TriageHome, Board, TaskDetail (Conversation/Terminal/Changes), Pairing, Settings, Devices
-  components/     # Design system + transcript-terminal cells (FlashList), tool cards, diff viewer
-  pairing/        # QR scan, SAS confirm, device identity, roster client, key storage
-  channel/        # Noise KK secure channel, relay WS client, reconnect/resume, capability client
-  notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression
-  state/          # Zustand stores
-  lib/            # Shared pure utilities
+  screens/        # TriageHome, Board, Pairing (Scan/Confirm), Settings, Devices
+  components/     # Design system primitives (Screen/Text/Button/Card/...) + theme tokens
+  pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
+  channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation, capability client
+  notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
+  state/          # Zustand stores (activity/board mock data, pairing, channel - all in-memory)
+  lib/            # Shared pure utilities (crypto polyfills)
 tests/
-  unit/           # vitest (pure TS, no RN runtime)
+  unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows
@@ -42,14 +49,15 @@ scripts/          # bash-guard.js + repo scripts
 
 ## Commands
 
-**PLANNED - land in App Phase 1.**
-
-- `npx expo start --android` - Start the dev server against the Android emulator
+- `npm install` - Install dependencies
+- `npx expo start --dev-client` (`npm start`) - Start the dev server against a dev-client build
+- `npx expo start --android` (`npm run android`) - Start the dev server against the Android emulator
 - `eas build --profile development --platform android` - Build a dev-client for local iteration
 - `eas build --profile production --platform ios` - Build for the App Store (cloud, no Mac needed)
 - `npm run typecheck` - `tsc --noEmit`
-- `npx vitest run tests/unit` - Unit tests
-- `npx jest tests/components` - Component tests
+- `npm run lint` - `eslint . --max-warnings 0`
+- `npm run test:unit` - Unit tests (`vitest run tests/unit`)
+- `npm run test:components` - Component tests (`jest tests/components`)
 - `maestro test .maestro/` - E2E flows against the Android emulator
 - `eas update` - Push a JS-only OTA update
 
@@ -67,8 +75,9 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   the pairing completes.
 - **Secure channel:** every session runs a fresh Noise KK handshake
   (`Noise_KK_25519_ChaChaPoly_BLAKE2s`) over a blind, self-hostable relay
-  (`kangentic-relay`, a separate repo) that forwards ciphertext only. Rekeys roughly every
-  2 minutes; version negotiation is bound into the prologue to close downgrade attacks.
+  (`kangentic-relay`, a separate repo) that forwards ciphertext only. The desktop always
+  initiates the KK handshake and owns the ~2 minute rekey timer; the phone is the responder.
+  Version negotiation is bound into the prologue to close downgrade attacks.
 - **Capability allowlist:** the channel proves which device is connected; a desktop-enforced
   allowlist decides what it may do. Six v1 verbs (`read-stream`, `read-board`, `read-diff`,
   `send-user-message`, `move-task`, `answer-permission-prompt`). **There is no shell, file, or

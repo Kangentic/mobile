@@ -36,8 +36,9 @@ updated to match.
 - **Workflow (live now):** `/sync-docs` performs the full update pass; its targeted anchor check
   also runs automatically inside `/pull-request`, `/merge-pull-request`, and `/merge-back`.
 
-Most anchors are still planned, since `src/` does not exist yet in App Phase 0; the mapping is
-prose-only until App Phase 1 adds the source files.
+`src/`, `app.config.ts`, `eas.json`, and `package.json` now exist (App Phase 1), so the anchors
+(capability verbs, EAS profile names, test-tier commands, key-storage call sites) are real,
+enumerable source - not prose placeholders.
 
 ## Scope
 
