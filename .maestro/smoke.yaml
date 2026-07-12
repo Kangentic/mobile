@@ -1,0 +1,13 @@
+appId: com.kangentic.mobile
+---
+- launchApp
+- assertVisible:
+    id: "home-tab"
+- assertVisible:
+    id: "triage-home-list"
+- tapOn:
+    id: "board-tab"
+- assertVisible:
+    id: "board-screen"
+- assertVisible:
+    id: "board-column-column-todo"
