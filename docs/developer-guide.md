@@ -1,6 +1,6 @@
 # Developer Guide
 
-Setup, build system, and testing for kangentic-mobile. The Expo scaffold, `package.json`, and
+Setup, build system, and testing for Kangentic Mobile. The Expo scaffold, `package.json`, and
 test harness landed in App Phase 1; everything below reflects the current setup.
 
 ## Prerequisites

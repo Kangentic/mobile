@@ -56,7 +56,7 @@ through EAS cloud builds and a physical device or TestFlight, never a local simu
      Metro - the first run can take several minutes (Gradle downloads + native compilation); say
      so before running it.
 5. **Verify the app actually came to the foreground**, don't just trust Metro's log. On a
-   cold-booted emulator (just launched in step 2), the `Opening exp+kangentic-mobile://...` intent
+   cold-booted emulator (just launched in step 2), the `Opening exp+mobile://...` intent
    Metro fires can race ahead of the OS being ready to route it, so the emulator silently sits on
    the home screen even though Metro reports success. Check:
    `adb shell dumpsys window | grep mCurrentFocus` (or `mResumedActivity`) and confirm it names

@@ -52,8 +52,8 @@ full text is in [CLA.md](CLA.md).
 Once App Phase 1 lands the Expo scaffold:
 
 ```bash
-git clone https://github.com/Kangentic/kangentic-mobile.git
-cd kangentic-mobile
+git clone https://github.com/Kangentic/mobile.git
+cd mobile
 npm install
 npx expo start --android
 ```
@@ -161,5 +161,5 @@ See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Questions?
 
-Open a [discussion](https://github.com/Kangentic/kangentic-mobile/discussions) or comment on the
+Open a [discussion](https://github.com/Kangentic/mobile/discussions) or comment on the
 relevant issue.

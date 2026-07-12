@@ -1,10 +1,10 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions & Discussion
-    url: https://github.com/Kangentic/kangentic-mobile/discussions
+    url: https://github.com/Kangentic/mobile/discussions
     about: Ask questions, share ideas, or get help from the community.
   - name: Report a security vulnerability
-    url: https://github.com/Kangentic/kangentic-mobile/security/policy
+    url: https://github.com/Kangentic/mobile/security/policy
     about: Please do not open a public issue for a security vulnerability. See SECURITY.md.
   - name: Desktop app or bridge issue?
     url: https://github.com/Kangentic/kangentic/issues

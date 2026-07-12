@@ -1,6 +1,6 @@
 # Architecture
 
-kangentic-mobile is a companion app that remote-controls agent sessions running in the desktop
+Kangentic Mobile is a companion app that remote-controls agent sessions running in the desktop
 [Kangentic](https://github.com/Kangentic/kangentic) app. This document describes the
 architecture as scaffolded in App Phase 1; see `CLAUDE.md`'s Project Structure for the current
 layout. The durable research behind these decisions lives in the desktop repo's
@@ -11,7 +11,7 @@ this document is the implementation-facing summary and is authoritative where th
 ## Overview
 
 ```
-  Desktop (Kangentic)                            Phone (kangentic-mobile)
+  Desktop (Kangentic)                            Phone (Kangentic Mobile)
   mobile-bridge module                           Expo / React Native app
   - device identity + roster    QR pairing       - device identity (Keychain/
   - capability router          <=============>     Keystore)
@@ -20,7 +20,7 @@ this document is the implementation-facing summary and is authoritative where th
         |  outbound WSS                    outbound WSS  |
         +-----------> [ blind relay ] <------------------+
         |             (ciphertext only,                  |
-        |              self-hostable: kangentic-relay)    |
+        |              self-hostable: relay)              |
         +===== Noise KK secure channel (E2E) =============+
         +---- Expo Push (E2E-encrypted blob -> NSE / Notifee handler) -->+
 ```
@@ -36,9 +36,9 @@ fallback for the networks that cannot punch through.
 - **`@kangentic/protocol`**: the wire schema, the shared Noise KK implementation, capability
   verbs, and transcript/board/activity event types. Published from the desktop repo; this app
   never forks or redeclares these types (see `.claude/rules/protocol-types-from-package.md`).
-- **`kangentic-relay`** (separate, open-source repo): a stateless, self-hostable blind
+- **`relay`** (separate, open-source repo): a stateless, self-hostable blind
   byte-forwarder. It authenticates nothing and reads nothing beyond ciphertext framing.
-- **`kangentic-mobile`** (this repo): the Expo/React Native client.
+- **`mobile`** (this repo): the Expo/React Native client.
 
 The pairing, transport, and capability layer is **accountless** by design: it works identically
 self-hosted or on a Kangentic-hosted relay, and a Kangentic account is only ever relevant to

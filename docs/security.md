@@ -1,6 +1,6 @@
 # Security
 
-kangentic-mobile pairs to, and then remotely steers, agent sessions running on a desktop machine
+Kangentic Mobile pairs to, and then remotely steers, agent sessions running on a desktop machine
 that can edit code and execute commands. This document is the threat model and the security
 design; an auditable core is treated as a feature, not a nice-to-have. See
 [SECURITY.md](../SECURITY.md) for how to report a vulnerability.
@@ -107,7 +107,7 @@ key expiry, so a lost phone is not trusted forever even if revocation is missed.
 A blind relay forwards ciphertext only, but it still sees source and destination IP addresses,
 connection timing, frame sizes and frequency, and the pairing graph (which devices talk to which
 relay slot). This app does not claim otherwise. Mitigations: self-hosting your own
-`kangentic-relay` instance, single-use pairing tokens, and relay slot tokens so only paired
+`relay` instance, single-use pairing tokens, and relay slot tokens so only paired
 devices can consume relay capacity at all.
 
 ## Push privacy
