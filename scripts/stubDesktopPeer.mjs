@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * A desktop counterpart to kangentic-mobile's pairing + secure channel
+ * A desktop counterpart to Kangentic Mobile's pairing + secure channel
  * client, run over a REAL WebSocket against a locally running
- * kangentic-relay. This is a manual integration smoke, not part of the
+ * relay. This is a manual integration smoke, not part of the
  * automated test suite (that lives in tests/unit/, driven by the same
  * @kangentic/protocol code over an in-memory loopback transport).
  *
  * Usage:
- *   1. Run a local kangentic-relay (see that repo's README), e.g. on
+ *   1. Run a local relay (see that repo's README), e.g. on
  *      ws://127.0.0.1:8080.
  *   2. node scripts/stubDesktopPeer.mjs --relay ws://127.0.0.1:8080
  *   3. Scan the printed kangentic-pair:// URI with the app, or paste it into

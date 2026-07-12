@@ -81,7 +81,7 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   the pairing completes.
 - **Secure channel:** every session runs a fresh Noise KK handshake
   (`Noise_KK_25519_ChaChaPoly_BLAKE2s`) over a blind, self-hostable relay
-  (`kangentic-relay`, a separate repo) that forwards ciphertext only. The desktop always
+  (`relay`, a separate repo) that forwards ciphertext only. The desktop always
   initiates the KK handshake and owns the ~2 minute rekey timer; the phone is the responder.
   Version negotiation is bound into the prologue to close downgrade attacks.
 - **Capability allowlist:** the channel proves which device is connected; a desktop-enforced

@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Found a security vulnerability instead? Do not file it here. See [SECURITY.md](https://github.com/Kangentic/kangentic-mobile/blob/main/SECURITY.md).
+        Found a security vulnerability instead? Do not file it here. See [SECURITY.md](https://github.com/Kangentic/mobile/blob/main/SECURITY.md).
 
   - type: dropdown
     id: platform

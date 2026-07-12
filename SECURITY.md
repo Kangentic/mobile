@@ -15,7 +15,7 @@ branches yet.
 **Do not open a public GitHub issue for a security vulnerability.**
 
 1. **Preferred:** use
-   [GitHub's private vulnerability reporting](https://github.com/Kangentic/kangentic-mobile/security/advisories/new)
+   [GitHub's private vulnerability reporting](https://github.com/Kangentic/mobile/security/advisories/new)
    for this repository.
 2. **Fallback:** email `security@kangentic.com` with a description of the issue, the affected
    component, and reproduction steps if you have them.
@@ -38,7 +38,7 @@ proof-of-concept or reproduction steps. You do not need to have a fix in hand.
 | Component | Report here or elsewhere |
 |---|---|
 | This app (pairing, secure channel, notification handling, UI) | Here |
-| `kangentic-relay` (the blind byte-forwarder) | [kangentic-relay](https://github.com/Kangentic/kangentic-relay) |
+| `relay` (the blind byte-forwarder) | [relay](https://github.com/Kangentic/relay) |
 | The desktop bridge, `@kangentic/protocol`, or the desktop app itself | [kangentic](https://github.com/Kangentic/kangentic) |
 
 If you are not sure which repo a finding belongs to, report it here and we will route it.

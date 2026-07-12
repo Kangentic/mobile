@@ -12,7 +12,7 @@
 
 ---
 
-kangentic-mobile is the mobile companion to the desktop
+Kangentic Mobile is the mobile companion to the desktop
 [Kangentic](https://github.com/Kangentic/kangentic) app. It pairs to your desktop, lets you see
 what your agents are doing, and lets you steer them, all without giving up end-to-end encryption
 or a self-hostable relay in between.
@@ -25,7 +25,7 @@ the roadmap below.
 
 - A companion app for the desktop [Kangentic](https://github.com/Kangentic/kangentic) board:
   it does not run agents itself, it remote-controls sessions your desktop is already running.
-- The blind relay that connects the two is [kangentic-relay](https://github.com/Kangentic/kangentic-relay),
+- The blind relay that connects the two is [relay](https://github.com/Kangentic/relay),
   a separate, self-hostable, open-source repo.
 - Wire and crypto types come from `@kangentic/protocol`, published from the desktop repo, so the
   two apps never drift on the protocol they share.
@@ -99,7 +99,7 @@ the full threat model and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 The relay is accountless by design: a Kangentic account is only ever relevant to using
 Kangentic's hosted relay past a free cap. To run your own, see
-[kangentic-relay](https://github.com/Kangentic/kangentic-relay).
+[relay](https://github.com/Kangentic/relay).
 
 ## Contributing
 

@@ -5,7 +5,7 @@ const MAX_BACKOFF_MS = 15_000;
 const BACKOFF_MULTIPLIER = 2;
 
 /**
- * kangentic-relay close codes (see the relay repo's src/closeCodes.ts).
+ * relay close codes (see the relay repo's src/closeCodes.ts).
  * SLOT_BUSY and PARK_TIMEOUT both mean "the desktop peer never showed up
  * on this slot" - from the phone's perspective that is indistinguishable
  * from the desktop being offline, so both get the same slower retry

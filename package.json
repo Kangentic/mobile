@@ -1,7 +1,11 @@
 {
-  "name": "kangentic-mobile",
+  "name": "@kangentic/mobile",
   "version": "0.1.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kangentic/mobile.git"
+  },
   "main": "index.js",
   "engines": {
     "node": ">=22"
