@@ -38,7 +38,7 @@ src/
   components/     # Design system + transcript-terminal cells, tool cards, diff viewer
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation, capability client
-  notifications/  # Push registration, E2E blob decrypt, category prefs - later phase
+  notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
   state/          # Zustand stores
   lib/            # Shared pure utilities (crypto polyfills)
 tests/unit/       # vitest        tests/components/  # Jest + RNTL

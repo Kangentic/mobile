@@ -67,6 +67,11 @@ the wire.
   seen value.
 - **No Double Ratchet.** Double Ratchet solves offline, asynchronous message queuing, which this
   interactive link does not have; adding it would be unjustified complexity.
+- **Relay scheme enforcement:** the pairing token is mixed into the handshake as the Noise PSK
+  and dialed verbatim as the relay's slot parameter, so a plaintext relay connection would put
+  it on the wire in cleartext. The phone (`src/pairing/qr.ts`) refuses to pair through any
+  relay address that isn't `wss://`, carving out only loopback (`ws://localhost`, `127.0.0.1`,
+  `::1`) for a local dev relay.
 
 ## Authorization
 
@@ -91,6 +96,11 @@ key expiry, so a lost phone is not trusted forever even if revocation is missed.
 - **No attestation requirement.** Play Integrity and App Attest would break sideloaded and
   F-Droid-style builds of an open-source app, and buy little against this threat model, so this
   app does not require them.
+- **Device-bound, not backup-portable.** The identity key (`src/pairing/deviceIdentity.ts`) and
+  the pinned trust anchor (`src/pairing/trustAnchor.ts`) are written with
+  `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`, so neither is included in an encrypted iOS
+  device backup or restorable onto different hardware. Restoring a backup onto a new phone
+  cannot reconstitute a working paired client; the device must re-pair.
 
 ## Relay metadata honesty statement
 
