@@ -41,7 +41,8 @@ src/
   notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
   state/          # Zustand stores
   lib/            # Shared pure utilities (crypto polyfills)
-tests/unit/       # vitest        tests/components/  # Jest + RNTL
+tests/unit/       # vitest
+tests/components/ # Jest + RNTL
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows
 scripts/          # bash-guard.js + repo scripts
@@ -57,7 +58,9 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
 - **Development builds** (`expo-dev-client`) from day one: Expo Go cannot run this app, since
   `expo-secure-store`, `expo-camera`, and (later) Notifee are all custom native modules.
 - **EAS profiles:** `development` (dev-client, for local iteration), `preview` (internal
-  distribution, TestFlight/Play internal), `production` (store release).
+  distribution, TestFlight/Play internal), `production` (store release). Convenience scripts:
+  `npm run build:dev` / `build:preview` / `build:prod` wrap
+  `eas build --profile <profile> --platform android` for each.
 - **EAS Update** for JS-only OTA updates (free tier, 1,000 MAU) once the app ships.
 
 ## Testing

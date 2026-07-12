@@ -51,8 +51,14 @@ scripts/          # bash-guard.js + repo scripts
 
 - `npm install` - Install dependencies
 - `npx expo start --dev-client` (`npm start`) - Start the dev server against a dev-client build
-- `npx expo start --android` (`npm run android`) - Start the dev server against the Android emulator
-- `eas build --profile development --platform android` - Build a dev-client for local iteration
+- `npx expo run:android` (`npm run android`) - Build, install, and launch the dev client on the
+  Android emulator (rebuilds native code; use this after a native dependency or config plugin
+  change, or the first time on a fresh emulator)
+- `eas build --profile development --platform android` (`npm run build:dev`) - Build a dev-client
+  for local iteration in the cloud, no local Android SDK build required
+- `eas build --profile preview --platform android` (`npm run build:preview`) - Internal
+  distribution build
+- `eas build --profile production --platform android` (`npm run build:prod`) - Store-release build
 - `eas build --profile production --platform ios` - Build for the App Store (cloud, no Mac needed)
 - `npm run typecheck` - `tsc --noEmit`
 - `npm run lint` - `eslint . --max-warnings 0`
