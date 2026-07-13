@@ -12,7 +12,7 @@ import { ChangesTab } from './ChangesTab';
 
 type TaskTabKey = 'conversation' | 'terminal' | 'changes';
 
-const TAB_ITEMS: Array<{ key: TaskTabKey; label: string }> = [
+const TAB_ITEMS: { key: TaskTabKey; label: string }[] = [
   { key: 'conversation', label: 'Conversation' },
   { key: 'terminal', label: 'Terminal' },
   { key: 'changes', label: 'Changes' },

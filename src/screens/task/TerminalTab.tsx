@@ -1,6 +1,9 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
-import { Stack, Text } from '@/components';
+import { Stack, Text, useTheme } from '@/components';
+import { TerminalPane } from '@/components/terminal/TerminalPane';
+import { QuickKeyBar } from '@/components/terminal/QuickKeyBar';
+import { TerminalInputRow } from '@/components/terminal/TerminalInputRow';
 
 export interface TerminalTabProps {
   sessionId: string | null;
@@ -8,24 +11,50 @@ export interface TerminalTabProps {
   mounted: boolean;
 }
 
-/** Placeholder - the xterm.js mirror lands with the terminal surface work. */
+/** The raw interactive terminal mirror tab: the xterm WebView, mounted on first visit. */
 export function TerminalTab({ sessionId, mounted }: TerminalTabProps): React.JSX.Element {
-  return (
-    <Stack gap="sm" style={styles.placeholder}>
-      <Text variant="body" color="secondary">
-        {sessionId && mounted ? 'Terminal loading...' : 'No active session for this task'}
-      </Text>
-    </Stack>
-  );
+  if (sessionId === null) {
+    return (
+      <Stack gap="sm" style={styles.placeholder}>
+        <Text variant="body" color="secondary">
+          No active session for this task
+        </Text>
+      </Stack>
+    );
+  }
+  if (!mounted) {
+    return (
+      <Stack gap="sm" style={styles.placeholder}>
+        <Text variant="body" color="secondary">
+          Open this tab to attach the terminal
+        </Text>
+      </Stack>
+    );
+  }
+  return <TerminalPane sessionId={sessionId} />;
 }
 
 export interface TerminalFooterProps {
   sessionId: string | null;
 }
 
-/** Placeholder - the quick-key bar + terminal input row land with the terminal surface work. */
-export function TerminalFooter(_props: TerminalFooterProps): React.JSX.Element | null {
-  return null;
+/** Quick keys above the line composer; the TaskScreen keyboard-avoids both together. */
+export function TerminalFooter({ sessionId }: TerminalFooterProps): React.JSX.Element | null {
+  const theme = useTheme();
+  if (sessionId === null) return null;
+  return (
+    <Stack
+      gap="xs"
+      style={{
+        backgroundColor: theme.colors.surface,
+        paddingHorizontal: theme.spacing.sm,
+        paddingVertical: theme.spacing.xs,
+      }}
+    >
+      <QuickKeyBar sessionId={sessionId} />
+      <TerminalInputRow sessionId={sessionId} />
+    </Stack>
+  );
 }
 
 const styles = StyleSheet.create({

@@ -27,6 +27,7 @@ import {
   createPairingResponderHandshake,
   decodeMessage,
   deriveSecretstreamPair,
+  deriveSessionSlotId,
   deriveShortAuthenticationString,
   encodeMessage,
   encodePairingQrPayload,
@@ -85,9 +86,194 @@ async function runPairing(relayUrl, desktopStatic, pairingToken) {
   });
 }
 
+/**
+ * Canned Phase 2 data: one project, a small board, and one "live" session
+ * that streams terminal chunks, flips activity states, and raises a
+ * permission prompt after a while, so every phone surface (triage, board,
+ * conversation, terminal, changes, prompt cards) has something real to
+ * render without a desktop.
+ */
+const STUB_PROJECT = { id: 'stub-project', name: 'Stub Project' };
+const STUB_SESSION_ID = 'stub-session-1';
+const STUB_TASK_ID = 'stub-task-1';
+const STUB_PROMPT_ID = `${STUB_SESSION_ID}:stub-tool-2`;
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function stubColumns() {
+  return [
+    { id: 'lane-todo', name: 'To Do', description: null, role: 'todo', position: 0, color: '#3fb950', icon: null, is_archived: false, is_ghost: false },
+    { id: 'lane-doing', name: 'Doing', description: null, role: null, position: 1, color: '#d29922', icon: null, is_archived: false, is_ghost: false },
+    { id: 'lane-done', name: 'Done', description: null, role: 'done', position: 2, color: '#8957e5', icon: null, is_archived: false, is_ghost: false },
+  ];
+}
+
+function stubTask(id, displayId, title, swimlaneId, position, sessionId) {
+  return {
+    id, display_id: displayId, title, description: 'Stubbed for manual integration testing.', swimlane_id: swimlaneId, position,
+    agent: 'claude', session_id: sessionId, worktree_path: null, branch_name: sessionId ? 'feature/stub-work' : null,
+    pr_number: null, pr_url: null, pr_state: null, base_branch: 'main', labels: [], priority: 0, attachment_count: 0,
+    archived_at: null, created_at: nowIso(), updated_at: nowIso(),
+  };
+}
+
+function stubBoardSnapshot() {
+  return {
+    projectId: STUB_PROJECT.id,
+    columns: stubColumns(),
+    tasks: [
+      stubTask(STUB_TASK_ID, 1, 'Streaming stub session', 'lane-doing', 0, STUB_SESSION_ID),
+      stubTask('stub-task-2', 2, 'A quiet backlog-ish card', 'lane-todo', 0, null),
+    ],
+    backlog: [],
+  };
+}
+
+function stubTranscript(turnCount) {
+  const entries = [
+    { kind: 'user', uuid: 'stub-user-1', ts: Date.now() - 60000, text: 'Fix the login redirect bug and add a regression test.' },
+    {
+      kind: 'assistant', uuid: 'stub-assistant-1', ts: Date.now() - 55000,
+      blocks: [
+        { type: 'text', text: 'Looking at the auth flow now. The redirect drops the `next` parameter on **expired-session** logins.' },
+        { type: 'tool_use', id: 'stub-tool-1', name: 'Bash', input: { command: 'rg -n "next=" src/auth' } },
+      ],
+    },
+    { kind: 'tool_result', uuid: 'stub-result-1', ts: Date.now() - 50000, toolUseId: 'stub-tool-1', content: 'src/auth/login.ts:42: redirect(`/login?next=${encodeURIComponent(path)}`)' },
+  ];
+  if (turnCount > 1) {
+    entries.push({
+      kind: 'assistant', uuid: 'stub-assistant-2', ts: Date.now() - 5000,
+      blocks: [{ type: 'tool_use', id: 'stub-tool-2', name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
+    });
+  }
+  return entries;
+}
+
+function stubDiffFileList() {
+  return {
+    files: [
+      { path: 'src/auth/login.ts', status: 'M', insertions: 8, deletions: 2, binary: false },
+      { path: 'tests/auth-redirect.test.ts', status: 'A', insertions: 31, deletions: 0, binary: false },
+    ],
+    totalInsertions: 39,
+    totalDeletions: 2,
+  };
+}
+
+function stubDiffFileContent(filePath) {
+  if (filePath === 'src/auth/login.ts') {
+    return {
+      original: 'export function loginRedirect(path) {\n  redirect("/login");\n}\n',
+      modified: 'export function loginRedirect(path) {\n  const next = encodeURIComponent(path);\n  redirect(`/login?next=${next}`);\n}\n',
+      language: 'typescript',
+    };
+  }
+  return { original: '', modified: 'test("redirect keeps next", () => {\n  expect(loginRedirect("/boards")).toContain("next=");\n});\n', language: 'typescript' };
+}
+
 function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
-  return connect(`${relayUrl}?slot=${bytesToHex(desktopStatic.publicKey)}`).then((socket) => {
+  const slotId = deriveSessionSlotId(desktopStatic.publicKey, phoneStaticPublicKey);
+  return connect(`${relayUrl}?slot=${slotId}`).then((socket) => {
     let streams = null;
+    let streamSubscribed = false;
+    let transcriptTurnCount = 1;
+    let permissionPending = false;
+    let feedTimer = null;
+    let feedTick = 0;
+
+    function send(message) {
+      if (!streams) throw new Error('session not established yet');
+      const frame = streams.send.seal(encodeMessage(message));
+      socket.send(wrapSessionFrame(SessionFrameKind.Application, frame).slice().buffer);
+    }
+
+    function sendEvent(event) {
+      send({ type: 'event', event });
+    }
+
+    // A little agent-life simulator: terminal chunks stream continuously;
+    // every ~12 ticks the transcript grows a turn; at tick 20 a permission
+    // prompt raises and stays pending until the phone answers it.
+    function startFeed() {
+      if (feedTimer) return;
+      feedTimer = setInterval(() => {
+        if (!streams || !streamSubscribed) return;
+        feedTick += 1;
+        sendEvent({ kind: 'terminal', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` } });
+        if (feedTick % 12 === 0) {
+          transcriptTurnCount += 1;
+          sendEvent({ kind: 'transcript', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: stubTranscript(transcriptTurnCount) });
+        }
+        if (feedTick === 20 && !permissionPending) {
+          permissionPending = true;
+          sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: true } });
+          sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'permission', reason: { kind: 'permission' } } });
+          console.log('[feed] raised a permission prompt (answer it from the phone)');
+        }
+      }, 1000);
+    }
+
+    function answerCapabilityRequest(request) {
+      const { requestId, verb, payload } = request;
+      console.log(`[verb] ${verb}`, JSON.stringify(payload));
+      const ok = (responsePayload) => send({ type: 'capability-response', requestId, ok: true, ...(responsePayload === undefined ? {} : { payload: responsePayload }) });
+      const fail = (error) => send({ type: 'capability-response', requestId, ok: false, error });
+
+      switch (verb) {
+        case 'read-board':
+          if (!payload.projectId) return ok({ projects: [STUB_PROJECT] });
+          if (payload.action === 'unsubscribe') return ok();
+          return ok(stubBoardSnapshot());
+        case 'read-stream':
+          if (payload.action === 'unsubscribe') { streamSubscribed = false; return ok(); }
+          if (payload.sessionId !== STUB_SESSION_ID) return fail(`No such session: ${payload.sessionId}`);
+          streamSubscribed = true;
+          startFeed();
+          setTimeout(() => {
+            if (streamSubscribed) sendEvent({ kind: 'transcript', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: stubTranscript(transcriptTurnCount) });
+          }, 100);
+          return ok({
+            scrollback: 'kangentic stub desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n',
+            activity: { state: permissionPending ? 'permission' : 'thinking', reason: permissionPending ? { kind: 'permission' } : { kind: 'turn-active' } },
+            usage: null,
+            awaitedPromptId: permissionPending ? STUB_PROMPT_ID : null,
+          });
+        case 'read-diff':
+          if (payload.action === 'unsubscribe') return ok();
+          if (payload.filePath) return ok(stubDiffFileContent(payload.filePath));
+          return ok(stubDiffFileList());
+        case 'send-user-message':
+          console.log(`[message] phone says: ${payload.text}`);
+          return ok({ delivered: true });
+        case 'move-task':
+          return ok({ ok: true });
+        case 'answer-permission-prompt':
+          if (!permissionPending || payload.promptId !== STUB_PROMPT_ID) {
+            return fail('promptId does not match the currently outstanding prompt (stale or already answered)');
+          }
+          permissionPending = false;
+          console.log(`[prompt] answered with keystrokes ${JSON.stringify(payload.keystrokes)}`);
+          setTimeout(() => {
+            sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: false } });
+            sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } } });
+          }, 50);
+          return ok({ answered: true });
+        case 'interactive-terminal':
+          console.log(`[pty] phone wrote ${JSON.stringify(payload.data)}`);
+          sendEvent({ kind: 'terminal', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { data: payload.data.replace(/\r/g, '\r\n') } });
+          return ok({ written: true });
+        case 'board-tool-read':
+          return ok({ result: { note: `stub answered ${payload.tool}` } });
+        case 'board-tool-write':
+          console.log(`[board-tool] ${payload.tool}`, JSON.stringify(payload.params));
+          return ok({ result: { created: 'stub-created-task' } });
+        default:
+          return fail(`Stub has no handler for ${verb}`);
+      }
+    }
 
     function beginHandshake() {
       const handshake = createKKHandshake({ initiator: true, localStatic: desktopStatic, remoteStatic: phoneStaticPublicKey });
@@ -107,17 +293,16 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         const opened = streams.receive.open(payload);
         if (opened.tag === FrameTag.Final) {
           console.log('[session] remote closed');
+          if (feedTimer) clearInterval(feedTimer);
           return;
         }
         const message = decodeMessage(opened.plaintext);
-        console.log('[session] received:', message);
+        if (message.type === 'capability-request') {
+          answerCapabilityRequest(message);
+        } else if (message.type !== 'heartbeat') {
+          console.log('[session] received:', message);
+        }
       });
-    }
-
-    function send(message) {
-      if (!streams) throw new Error('session not established yet');
-      const frame = streams.send.seal(encodeMessage(message));
-      socket.send(wrapSessionFrame(SessionFrameKind.Application, frame).slice().buffer);
     }
 
     beginHandshake();

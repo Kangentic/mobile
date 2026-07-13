@@ -18,33 +18,45 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
 
 ## Project Structure
 
-**Scaffolded - App Phase 1.** `app/` holds thin expo-router route wrappers; the actual screen
-implementations and everything else live under `src/`. If the layout changes, update this tree
-and the rule `paths:` globs together.
+**App Phase 2 (core experience).** `app/` holds thin expo-router route wrappers; the actual
+screen implementations and everything else live under `src/`. If the layout changes, update
+this tree and the rule `paths:` globs together.
 
 ```
 app.config.ts                 # Expo config; CNG - config plugins only, no checked-in native projects
 eas.json                      # EAS Build/Submit/Workflows profiles (development/preview/production)
 app/                           # expo-router route wrappers (thin - render the src/screens/ implementation)
-  _layout.tsx, (tabs)/         # root Stack + bottom Tabs (Home, Board)
+  _layout.tsx, (tabs)/         # root Stack + bottom Tabs (Home, Board); boots the connection lifecycle
+  task/[taskId].tsx             # full-screen task view (Conversation-terminal / Terminal / Changes)
+  file-diff.tsx                 # per-file unified diff, pushed over the task view
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen (OS deep-link routing of kangentic-pair:// is a later phase)
   settings.tsx, devices.tsx
 plugins/                      # Local Expo config plugins (NSE injection, keychain access group, notifee) - later phase
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
-  screens/        # TriageHome, Board, Pairing (Scan/Confirm), Settings, Devices
-  components/     # Design system primitives (Screen/Text/Button/Card/...) + theme tokens
+  screens/        # TriageHome, Board, task/ (TaskScreen + tab implementations), FileDiff,
+                  #   Pairing (Scan/Confirm), Settings, Devices
+  components/     # Design system primitives + conversation/ cells and prompt cards, terminal/
+                  #   xterm pane + quick keys, board/ move+create sheets, composer/, diff/ cells
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
-  channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation, capability client
+  channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
+                  #   capability client, typed verb client, feed router, subscription manager
+  connection/     # Lifecycle composer: AppState connect/dispose, bootstrap, store feed glue,
+                  #   the actions API screens call (accountless-core scoped)
+  conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
+  terminal/       # Pure liveTail PTY cleaner, key sequences, WebView bridge, generated xterm.html
+  diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
-  state/          # Zustand stores (activity/board mock data, pairing, channel - all in-memory)
+  state/          # Zustand stores (activity/board/transcript/diff/channel/settings, all channel-fed,
+                  #   in-memory) + the non-Zustand terminalFeed PTY ring buffers
+  voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
   lib/            # Shared pure utilities (crypto polyfills)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library
   web/            # Playwright via react-native-web (later)
-.maestro/         # Maestro E2E flows
-scripts/          # bash-guard.js + repo scripts
+.maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
+scripts/          # bash-guard.js, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
 ```
 
 ## Commands
@@ -85,12 +97,17 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   initiates the KK handshake and owns the ~2 minute rekey timer; the phone is the responder.
   Version negotiation is bound into the prologue to close downgrade attacks.
 - **Capability allowlist:** the channel proves which device is connected; a desktop-enforced
-  allowlist decides what it may do. Six v1 verbs (`read-stream`, `read-board`, `read-diff`,
-  `send-user-message`, `move-task`, `answer-permission-prompt`). **There is no shell, file, or
-  arbitrary-command verb in the protocol - absent, not filtered.**
+  allowlist decides what it may do. Nine verbs (`read-stream`, `read-board`, `read-diff`,
+  `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
+  `board-tool-read`, `board-tool-write`); the default pairing grant is the read-only four, and
+  every write/control verb needs an explicit per-verb grant on the desktop. **There is no
+  shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**
 - **Transcript-terminal rendering:** the primary session view renders the transcript styled as a
-  terminal, reflowed to phone width and streamed token-by-token, with `AskUserQuestion`/
-  permission prompts as tappable cards. A raw interactive terminal mirror is a secondary view.
+  terminal, reflowed to phone width, with `AskUserQuestion`/permission prompts as tappable
+  cards; the in-progress turn streams token-by-token as a cleaned tail of the raw PTY feed
+  (`src/terminal/liveTail.ts`), replaced when the next transcript revision lands. The raw
+  interactive terminal mirror (xterm.js in a WebView, quick-key bar, `interactive-terminal`
+  writes) is a secondary view; the desktop PTY is never resized by the phone.
 - **E2E push:** payloads are ciphertext plus a generic placeholder only; decryption happens
   on-device (iOS Notification Service Extension / Android Notifee). Every failure degrades to
   the placeholder, never to plaintext.
@@ -106,7 +123,7 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
 [docs/developer-guide.md](docs/developer-guide.md).
 
 **Always fine:**
-- `npm run typecheck` - run freely at any point (once it exists).
+- `npm run typecheck` - run freely at any point.
 - Running tests you just added or modified, scoped to those files.
 
 **Never run unless the user explicitly asks, or `/test` is executing:**
@@ -116,8 +133,9 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
 If a run would execute tests you did not add or modify, it is a full-tier run: stop and let
 `/test` handle it.
 
-**Phase 0 note:** the harness (vitest, Jest+RNTL, Maestro) does not exist yet. Until App Phase 1
-scaffolds it, `/test` and `test-builder` operate in audit/plan mode only.
+**Maestro note:** `.maestro/smoke.yaml` runs against a fresh (unpaired) install; the flows under
+`.maestro/paired/` need a running relay plus `node scripts/stubDesktopPeer.mjs` and a completed
+pairing first (each flow's header documents the setup).
 
 ## Conventions
 
@@ -135,7 +153,7 @@ names its enforcement (live now, or planned for App Phase 1).
 - `protocol-types-from-package.md` - wire/crypto/capability types come only from
   `@kangentic/protocol`, never redeclared (`src/**`).
 - `accountless-core.md` - pairing/transport/capability code has no account/entitlement imports
-  (`src/pairing/`, `src/channel/`, `src/notifications/`).
+  (`src/pairing/`, `src/channel/`, `src/connection/`, `src/notifications/`).
 - `e2e-notification-privacy.md` - push payloads are ciphertext plus placeholder only
   (`src/notifications/`, `plugins/`, `targets/`).
 - `expo-cng.md` - no hand-edited `ios/`/`android/`; native config via config plugins

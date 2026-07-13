@@ -25,7 +25,7 @@ interface Harness {
   requests: CapabilityRequestMessage[];
   sinkCalls: {
     streamSnapshots: string[];
-    streamRejections: Array<{ sessionId: string; error: CapabilityError }>;
+    streamRejections: { sessionId: string; error: CapabilityError }[];
     boardSnapshots: string[];
     diffFileLists: string[];
   };

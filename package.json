@@ -24,7 +24,7 @@
   "dependencies": {
     "@bacons/text-decoder": "^0.0.0",
     "@expo/vector-icons": "^15.0.2",
-    "@kangentic/protocol": "file:../../../AppData/Local/Temp/claude/C--Users-tyler-Documents-GitHub-kangentic-mobile/a9922845-e67d-482f-8623-a48893f74fcb/scratchpad/kangentic-protocol-0.2.0.tgz",
+    "@kangentic/protocol": "^0.2.0",
     "@shopify/flash-list": "2.0.2",
     "diff": "^9.0.0",
     "expo": "^57.0.4",

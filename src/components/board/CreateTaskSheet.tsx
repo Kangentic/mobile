@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { Button, Sheet, Stack, Text, TextField, useTheme } from '@/components';
@@ -29,21 +29,22 @@ export function CreateTaskSheet({
   const theme = useTheme();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [columnName, setColumnName] = useState<string | null>(initialColumnName);
-
-  useEffect(() => {
-    if (visible) setColumnName(initialColumnName ?? columns[0]?.name ?? BACKLOG_COLUMN_NAME);
-  }, [visible, initialColumnName, columns]);
+  // null = the user has not picked yet: the selection FOLLOWS the visible
+  // column until an explicit tap, and close() clears the explicit pick, so
+  // no effect is needed to re-sync on open.
+  const [pickedColumnName, setPickedColumnName] = useState<string | null>(null);
+  const columnName = pickedColumnName ?? initialColumnName ?? columns[0]?.name ?? BACKLOG_COLUMN_NAME;
 
   const close = useCallback(() => {
     setTitle('');
     setDescription('');
+    setPickedColumnName(null);
     onClose();
   }, [onClose]);
 
   const confirm = useCallback(() => {
     const trimmedTitle = title.trim();
-    if (trimmedTitle.length === 0 || !columnName) return;
+    if (trimmedTitle.length === 0) return;
     onCreate({ title: trimmedTitle, description: description.trim(), column: columnName });
   }, [onCreate, title, description, columnName]);
 
@@ -76,7 +77,7 @@ export function CreateTaskSheet({
                   testID={`create-task-column-${choiceName}`}
                   accessibilityRole="radio"
                   accessibilityState={{ selected: isSelected }}
-                  onPress={() => setColumnName(choiceName)}
+                  onPress={() => setPickedColumnName(choiceName)}
                   style={[
                     styles.columnChip,
                     {
