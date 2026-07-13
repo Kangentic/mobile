@@ -8,7 +8,10 @@ import {
   SessionFrameKind,
   unwrapSessionFrame,
   wrapSessionFrame,
+  type BridgeEvent,
   type BridgeMessage,
+  type CapabilityRequestMessage,
+  type CapabilityResponseMessage,
   type HandshakeState,
   type SecretstreamDirectionPair,
   type ShortAuthenticationString,
@@ -92,6 +95,7 @@ export class StubSessionInitiator {
   private readonly unsubscribe: Unsubscribe;
   private readonly receivedMessages: BridgeMessage[] = [];
   private establishedCountValue = 0;
+  private requestHandler: ((request: CapabilityRequestMessage) => CapabilityResponseMessage | null) | null = null;
 
   constructor(transport: Transport, options: StubSessionInitiatorOptions) {
     this.transport = transport;
@@ -129,6 +133,20 @@ export class StubSessionInitiator {
     this.transport.send(wrapSessionFrame(SessionFrameKind.Application, frame));
   }
 
+  /** Pushes one feed event to the phone, the way the desktop's sendEvent() does. */
+  emitEvent(event: BridgeEvent): void {
+    this.send({ type: 'event', event });
+  }
+
+  /**
+   * Auto-answers decoded capability-requests, mirroring the desktop's
+   * CapabilityRouter dispatch. Return null to leave a request unanswered
+   * (for timeout tests). Requests still land in `messages` either way.
+   */
+  setRequestHandler(handler: ((request: CapabilityRequestMessage) => CapabilityResponseMessage | null) | null): void {
+    this.requestHandler = handler;
+  }
+
   private onFrame(rawFrame: Uint8Array): void {
     const { kind, payload } = unwrapSessionFrame(rawFrame);
     if (kind === SessionFrameKind.Handshake) {
@@ -151,7 +169,12 @@ export class StubSessionInitiator {
   private handleApplicationFrame(payload: Uint8Array): void {
     if (!this.streams) return;
     const opened = this.streams.receive.open(payload);
-    this.receivedMessages.push(decodeMessage(opened.plaintext));
+    const message = decodeMessage(opened.plaintext);
+    this.receivedMessages.push(message);
+    if (message.type === 'capability-request' && this.requestHandler) {
+      const response = this.requestHandler(message);
+      if (response) this.send(response);
+    }
   }
 
   dispose(): void {

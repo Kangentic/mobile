@@ -1,40 +1,164 @@
 import { create } from 'zustand';
-import { mockBoardColumns, mockBoardTasks } from './mockData';
+import type {
+  BacklogItemWire,
+  BoardColumnWire,
+  BoardTaskWire,
+  ReadBoardProjectSummary,
+  ReadBoardSnapshotResponsePayload,
+} from '@kangentic/protocol';
 
-export interface BoardColumn {
-  id: string;
-  name: string;
-  order: number;
-  taskIds: string[];
+export interface ProjectBoard {
+  columns: BoardColumnWire[];
+  tasksById: Record<string, BoardTaskWire>;
+  backlog: BacklogItemWire[];
+  /** Epoch ms when this snapshot was applied. */
+  snapshotAt: number;
 }
 
-export interface BoardTask {
-  id: string;
-  title: string;
-  columnId: string;
-  repository: string;
-  sessionId?: string;
-  /** ISO 8601. */
-  updatedAt: string;
+export interface PendingMove {
+  moveId: string;
+  projectId: string;
+  taskId: string;
+  fromSwimlaneId: string;
+  fromPosition: number;
+  toSwimlaneId: string;
+  toPosition: number;
 }
 
-interface BoardState {
-  columns: BoardColumn[];
-  tasksById: Record<string, BoardTask>;
+interface BoardStoreState {
+  projects: ReadBoardProjectSummary[];
+  boardsByProjectId: Record<string, ProjectBoard>;
+  pendingMoves: PendingMove[];
+  applyProjectList: (projects: ReadBoardProjectSummary[]) => void;
+  applyBoardSnapshot: (snapshot: ReadBoardSnapshotResponsePayload) => void;
+  applyOptimisticMove: (move: { projectId: string; taskId: string; toSwimlaneId: string; toPosition: number }) => string | null;
+  commitMove: (moveId: string) => void;
+  rollbackMove: (moveId: string) => void;
+  reset: () => void;
 }
 
-export const useBoardStore = create<BoardState>(() => ({
-  columns: mockBoardColumns,
-  tasksById: Object.fromEntries(mockBoardTasks.map((task) => [task.id, task])),
+let nextMoveSequence = 0;
+
+function moveTaskInBoard(board: ProjectBoard, taskId: string, toSwimlaneId: string, toPosition: number): ProjectBoard {
+  const task = board.tasksById[taskId];
+  if (!task) return board;
+  const movedTask: BoardTaskWire = { ...task, swimlane_id: toSwimlaneId, position: toPosition };
+  const tasksById: Record<string, BoardTaskWire> = { ...board.tasksById, [taskId]: movedTask };
+  // Shift positions in the target column so the moved task slots in without
+  // duplicate positions; the authoritative ordering arrives with the next
+  // snapshot refresh, this only has to look right until then.
+  for (const otherTask of Object.values(board.tasksById)) {
+    if (otherTask.id === taskId) continue;
+    if (otherTask.swimlane_id === toSwimlaneId && otherTask.position >= toPosition) {
+      tasksById[otherTask.id] = { ...otherTask, position: otherTask.position + 1 };
+    }
+  }
+  return { ...board, tasksById };
+}
+
+export const useBoardStore = create<BoardStoreState>((set, get) => ({
+  projects: [],
+  boardsByProjectId: {},
+  pendingMoves: [],
+
+  applyProjectList: (projects) => set({ projects }),
+
+  applyBoardSnapshot: (snapshot) =>
+    set((state) => {
+      let board: ProjectBoard = {
+        columns: snapshot.columns,
+        tasksById: Object.fromEntries(snapshot.tasks.map((task) => [task.id, task])),
+        backlog: snapshot.backlog,
+        snapshotAt: Date.now(),
+      };
+      // Re-apply in-flight optimistic moves on top, so a snapshot racing a
+      // move does not visibly bounce the card back before the move commits.
+      for (const pendingMove of state.pendingMoves) {
+        if (pendingMove.projectId === snapshot.projectId) {
+          board = moveTaskInBoard(board, pendingMove.taskId, pendingMove.toSwimlaneId, pendingMove.toPosition);
+        }
+      }
+      return { boardsByProjectId: { ...state.boardsByProjectId, [snapshot.projectId]: board } };
+    }),
+
+  applyOptimisticMove: (move) => {
+    const state = get();
+    const board = state.boardsByProjectId[move.projectId];
+    const task = board?.tasksById[move.taskId];
+    if (!board || !task) return null;
+    nextMoveSequence += 1;
+    const pendingMove: PendingMove = {
+      moveId: `move-${nextMoveSequence}`,
+      projectId: move.projectId,
+      taskId: move.taskId,
+      fromSwimlaneId: task.swimlane_id,
+      fromPosition: task.position,
+      toSwimlaneId: move.toSwimlaneId,
+      toPosition: move.toPosition,
+    };
+    set({
+      pendingMoves: [...state.pendingMoves, pendingMove],
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        [move.projectId]: moveTaskInBoard(board, move.taskId, move.toSwimlaneId, move.toPosition),
+      },
+    });
+    return pendingMove.moveId;
+  },
+
+  commitMove: (moveId) =>
+    set((state) => ({ pendingMoves: state.pendingMoves.filter((pendingMove) => pendingMove.moveId !== moveId) })),
+
+  rollbackMove: (moveId) =>
+    set((state) => {
+      const pendingMove = state.pendingMoves.find((candidate) => candidate.moveId === moveId);
+      if (!pendingMove) return state;
+      const board = state.boardsByProjectId[pendingMove.projectId];
+      const restoredBoard = board
+        ? moveTaskInBoard(board, pendingMove.taskId, pendingMove.fromSwimlaneId, pendingMove.fromPosition)
+        : board;
+      return {
+        pendingMoves: state.pendingMoves.filter((candidate) => candidate.moveId !== moveId),
+        ...(restoredBoard ? { boardsByProjectId: { ...state.boardsByProjectId, [pendingMove.projectId]: restoredBoard } } : {}),
+      };
+    }),
+
+  reset: () => set({ projects: [], boardsByProjectId: {}, pendingMoves: [] }),
 }));
 
-export function selectColumnsOrdered(): BoardColumn[] {
-  return [...useBoardStore.getState().columns].sort((a, b) => a.order - b.order);
+/** Visible columns in board order (archived and ghost columns are desktop-internal). */
+export function selectColumnsOrdered(board: ProjectBoard): BoardColumnWire[] {
+  return board.columns
+    .filter((column) => !column.is_archived && !column.is_ghost)
+    .sort((first, second) => first.position - second.position);
 }
 
-export function selectTasksForColumn(columnId: string): BoardTask[] {
-  const state = useBoardStore.getState();
-  const column = state.columns.find((candidate) => candidate.id === columnId);
-  if (!column) return [];
-  return column.taskIds.map((taskId) => state.tasksById[taskId]).filter((task): task is BoardTask => task !== undefined);
+/** Non-archived tasks of one column, by position. */
+export function selectTasksForColumn(board: ProjectBoard, swimlaneId: string): BoardTaskWire[] {
+  return Object.values(board.tasksById)
+    .filter((task) => task.swimlane_id === swimlaneId && task.archived_at === null)
+    .sort((first, second) => first.position - second.position);
+}
+
+/** The union of live session ids across every cached board - the bootstrap's stream desired-set source. */
+export function selectLiveSessionIds(state: { boardsByProjectId: Record<string, ProjectBoard> }): Set<string> {
+  const liveSessionIds = new Set<string>();
+  for (const board of Object.values(state.boardsByProjectId)) {
+    for (const task of Object.values(board.tasksById)) {
+      if (task.session_id !== null && task.archived_at === null) liveSessionIds.add(task.session_id);
+    }
+  }
+  return liveSessionIds;
+}
+
+/** Locates a task (and its project) by id across cached boards - the task screen's param fallback. */
+export function findTaskById(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  taskId: string,
+): { task: BoardTaskWire; projectId: string } | null {
+  for (const [projectId, board] of Object.entries(state.boardsByProjectId)) {
+    const task = board.tasksById[taskId];
+    if (task) return { task, projectId };
+  }
+  return null;
 }

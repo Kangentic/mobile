@@ -20,10 +20,18 @@ const config: ExpoConfig = {
     'expo-dev-client',
     'expo-secure-store',
     'expo-font',
+    'expo-asset',
     [
       'expo-camera',
       {
         cameraPermission: 'Kangentic uses the camera to scan a desktop pairing QR code.',
+      },
+    ],
+    [
+      'expo-speech-recognition',
+      {
+        microphonePermission: 'Kangentic uses the microphone to dictate messages to your agent.',
+        speechRecognitionPermission: 'Kangentic uses speech recognition to turn your dictation into text.',
       },
     ],
   ],

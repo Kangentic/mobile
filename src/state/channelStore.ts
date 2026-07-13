@@ -6,12 +6,15 @@ interface ChannelState {
   established: boolean;
   rekeyCount: number;
   relayUrl: string | null;
+  /** 'unknown' until the trust anchor has been checked at least once this launch. */
+  pairedState: 'unknown' | 'unpaired' | 'paired';
 }
 
 interface ChannelActions {
   setTransportState: (state: TransportState) => void;
   markEstablished: () => void;
   setRelayUrl: (relayUrl: string) => void;
+  setPairedState: (pairedState: ChannelState['pairedState']) => void;
   reset: () => void;
 }
 
@@ -20,6 +23,7 @@ const initialState: ChannelState = {
   established: false,
   rekeyCount: 0,
   relayUrl: null,
+  pairedState: 'unknown',
 };
 
 /** Mirrors the active ChannelController's state for UI reads. Never persisted - a fresh connect always rebuilds this from scratch. */
@@ -34,5 +38,6 @@ export const useChannelStore = create<ChannelState & ChannelActions>((set, get) 
     }),
   markEstablished: () => set((state) => ({ established: true, rekeyCount: state.established ? state.rekeyCount + 1 : state.rekeyCount })),
   setRelayUrl: (relayUrl) => set({ relayUrl }),
-  reset: () => set({ ...initialState, relayUrl: get().relayUrl }),
+  setPairedState: (pairedState) => set({ pairedState }),
+  reset: () => set({ ...initialState, relayUrl: get().relayUrl, pairedState: get().pairedState }),
 }));

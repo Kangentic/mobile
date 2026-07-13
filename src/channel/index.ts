@@ -2,6 +2,8 @@ import type { Unsubscribe, X25519KeyPair } from '@kangentic/protocol';
 import { RelayTransport } from './relayTransport';
 import { SessionManager } from './sessionManager';
 import { CapabilityClient } from './capabilityClient';
+import { FeedRouter } from './feedRouter';
+import { VerbClient } from './verbClient';
 import { deriveSlotId } from './slot';
 
 export interface ChannelControllerOptions {
@@ -23,12 +25,18 @@ export class ChannelController {
   readonly transport: RelayTransport;
   readonly session: SessionManager;
   readonly capabilities: CapabilityClient;
+  readonly feed: FeedRouter;
+  readonly verbs: VerbClient;
 
   private readonly unsubscribeTransportState: Unsubscribe;
   private started = false;
 
   constructor(options: ChannelControllerOptions) {
-    const slotId = deriveSlotId({ kind: 'session', desktopStaticPublicKey: options.desktopStaticPublicKey });
+    const slotId = deriveSlotId({
+      kind: 'session',
+      desktopStaticPublicKey: options.desktopStaticPublicKey,
+      phoneStaticPublicKey: options.identity.publicKey,
+    });
     this.transport = new RelayTransport({ relayUrl: options.relayUrl, slotId });
     this.session = new SessionManager({
       identity: options.identity,
@@ -36,6 +44,8 @@ export class ChannelController {
       transport: this.transport,
     });
     this.capabilities = new CapabilityClient(this.session);
+    this.feed = new FeedRouter(this.session);
+    this.verbs = new VerbClient(this.capabilities);
 
     this.unsubscribeTransportState = this.transport.onStateChange((state) => {
       if (state !== 'connected') {
@@ -57,6 +67,7 @@ export class ChannelController {
 
   dispose(): void {
     this.unsubscribeTransportState();
+    this.feed.dispose();
     this.capabilities.dispose();
     this.session.dispose();
     this.transport.close();
@@ -66,4 +77,7 @@ export class ChannelController {
 export { RelayTransport, type RelayTransportOptions } from './relayTransport';
 export { SessionManager, type SessionManagerOptions } from './sessionManager';
 export { CapabilityClient } from './capabilityClient';
+export { FeedRouter } from './feedRouter';
+export { VerbClient, CapabilityError, type ReadDiffFileListInput, type ReadDiffFileContentInput } from './verbClient';
+export { SubscriptionManager, type SubscriptionManagerOptions, type SubscriptionSnapshotSinks } from './subscriptionManager';
 export { deriveSlotId, type SlotContext } from './slot';

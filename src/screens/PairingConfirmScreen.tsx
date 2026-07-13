@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { Screen, Stack, Row, Text, Button, useTheme } from '@/components';
 import { usePairingStore } from '@/state/pairingStore';
 import { confirmActivePairing, rejectActivePairing, resetActivePairing } from '@/pairing/activePairing';
+import { reconnectNow } from '@/connection/connectionManager';
 
 export function PairingConfirmScreen(): React.JSX.Element {
   const router = useRouter();
@@ -27,6 +28,8 @@ export function PairingConfirmScreen(): React.JSX.Element {
     setConfirmError(null);
     try {
       await confirmActivePairing();
+      // Pick the freshly saved trust anchor up without an app restart.
+      reconnectNow();
       router.replace('/');
     } catch {
       setConfirmError('Could not complete pairing. Try again, or reject and rescan.');

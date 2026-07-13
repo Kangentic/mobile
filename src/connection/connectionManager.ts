@@ -1,0 +1,163 @@
+import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { ChannelController, SubscriptionManager, type VerbClient } from '@/channel';
+import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
+import { TrustAnchorStore } from '@/pairing/trustAnchor';
+import { useChannelStore } from '@/state/channelStore';
+import { bindFeedToStores, createSnapshotSinks } from './storeFeed';
+import { runBootstrap } from './bootstrap';
+
+/**
+ * The app's one connection lifecycle owner, a module-level singleton
+ * following the activePairing.ts pattern: a live ChannelController is a
+ * stateful crypto object with a transport, not serializable UI state.
+ * Screens read channelStore (which this feeds) and call actions.ts (which
+ * reads the active connection from here).
+ *
+ * Lifecycle policy: connect while the app is foregrounded and paired;
+ * dispose immediately on background (iOS suspends the socket within
+ * seconds anyway, the desktop treats a vanished phone fine - relay close
+ * tears its subscriptions down - and background awareness is Phase 3's
+ * push notifications). iOS 'inactive' (app switcher, permission dialogs)
+ * counts as still-active.
+ *
+ * This module composes pairing (trust anchor), channel, and stores, so it
+ * lives in its own src/connection/ directory: src/channel/ stays a pure
+ * protocol layer and src/pairing/ already imports channel, so parking the
+ * composer in either would tangle the layering. It carries the same
+ * accountless-core discipline as both (see .claude/rules/accountless-core.md).
+ */
+
+export interface ActiveConnection {
+  controller: ChannelController;
+  verbs: VerbClient;
+  subscriptions: SubscriptionManager;
+}
+
+const deviceIdentityManager = new DeviceIdentityManager();
+const trustAnchorStore = new TrustAnchorStore();
+
+let appStateSubscription: NativeEventSubscription | null = null;
+let activeConnection: ActiveConnection | null = null;
+let teardownActiveConnection: (() => void) | null = null;
+let connectGeneration = 0;
+
+export class NotConnectedError extends Error {
+  constructor() {
+    super('Not connected to the desktop');
+    this.name = 'NotConnectedError';
+  }
+}
+
+export function getActiveConnection(): ActiveConnection | null {
+  return activeConnection;
+}
+
+/** For action call sites: throws a typed error the UI maps to "reconnect first". */
+export function requireVerbClient(): VerbClient {
+  if (!activeConnection || !activeConnection.controller.session.isEstablished) throw new NotConnectedError();
+  return activeConnection.verbs;
+}
+
+export function requireSubscriptions(): SubscriptionManager {
+  if (!activeConnection) throw new NotConnectedError();
+  return activeConnection.subscriptions;
+}
+
+async function openConnection(): Promise<void> {
+  if (activeConnection) return;
+  const generation = connectGeneration;
+
+  const anchor = await trustAnchorStore.load();
+  if (!anchor) {
+    // Not paired (or a partial/legacy anchor): stay idle; the pairing flow
+    // triggers a reconnect via reconnectNow() when it completes.
+    useChannelStore.getState().setPairedState('unpaired');
+    return;
+  }
+  useChannelStore.getState().setPairedState('paired');
+  const identity = await deviceIdentityManager.getIdentity();
+  // A background/dispose (or a second open) raced our secure-store reads.
+  if (generation !== connectGeneration || activeConnection) return;
+
+  const controller = new ChannelController({
+    identity,
+    desktopStaticPublicKey: anchor.desktopStaticPublicKey,
+    relayUrl: anchor.relayAddress,
+  });
+
+  // The sinks need the manager back (board snapshots re-declare the stream
+  // desired set), so hand them a lazy getter resolved after construction.
+  let subscriptionsHolder: SubscriptionManager | null = null;
+  const subscriptions: SubscriptionManager = new SubscriptionManager({
+    session: controller.session,
+    verbs: controller.verbs,
+    sinks: createSnapshotSinks((): SubscriptionManager => {
+      if (!subscriptionsHolder) throw new Error('SubscriptionManager sink resolved before construction completed');
+      return subscriptionsHolder;
+    }),
+  });
+  subscriptionsHolder = subscriptions;
+
+  const unbindFeed = bindFeedToStores(controller.feed, subscriptions);
+  const unsubscribeTransportState = controller.transport.onStateChange((state) => {
+    useChannelStore.getState().setTransportState(state);
+  });
+  const unsubscribeEstablished = controller.session.onEstablished(() => {
+    useChannelStore.getState().markEstablished();
+    void runBootstrap(controller.verbs, subscriptions).catch(() => {
+      // Bootstrap failures (a request timing out mid-rekey) self-heal on
+      // the next established handshake; the stores keep their last state.
+    });
+  });
+
+  useChannelStore.getState().setRelayUrl(anchor.relayAddress);
+  activeConnection = { controller, verbs: controller.verbs, subscriptions };
+  teardownActiveConnection = () => {
+    unsubscribeTransportState();
+    unsubscribeEstablished();
+    unbindFeed();
+    subscriptions.dispose();
+    controller.dispose();
+  };
+
+  await controller.connect().catch(() => {
+    // The transport keeps retrying with backoff on its own; channelStore
+    // already reflects the connecting/reconnecting state.
+  });
+}
+
+function closeConnection(): void {
+  connectGeneration += 1;
+  teardownActiveConnection?.();
+  teardownActiveConnection = null;
+  activeConnection = null;
+  useChannelStore.getState().reset();
+}
+
+function onAppStateChange(status: AppStateStatus): void {
+  if (status === 'active') {
+    void openConnection();
+  } else if (status === 'background') {
+    closeConnection();
+  }
+  // 'inactive' (iOS app switcher / permission dialog) is still-active.
+}
+
+/** Idempotent; called once from the root layout. */
+export function startConnectionLifecycle(): void {
+  if (appStateSubscription) return;
+  appStateSubscription = AppState.addEventListener('change', onAppStateChange);
+  if (AppState.currentState === 'active' || AppState.currentState === 'unknown') void openConnection();
+}
+
+export function stopConnectionLifecycle(): void {
+  appStateSubscription?.remove();
+  appStateSubscription = null;
+  closeConnection();
+}
+
+/** For the pairing flow: pick up a freshly saved trust anchor without an app restart. */
+export function reconnectNow(): void {
+  closeConnection();
+  void openConnection();
+}
