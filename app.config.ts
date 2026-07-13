@@ -32,8 +32,8 @@ const config: ExpoConfig = {
   },
   extra: {
     eas: {
-      // Populated by a one-time maintainer `eas init`; builds fail without it.
-      projectId: process.env.EAS_PROJECT_ID ?? '',
+      // Created by `eas init` under the kangentic org; override via EAS_PROJECT_ID if needed.
+      projectId: process.env.EAS_PROJECT_ID ?? '68840f02-bfa6-41a1-a5bf-386f65d41f83',
     },
   },
 };
