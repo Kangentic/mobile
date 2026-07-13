@@ -20,12 +20,14 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const xtermJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'), 'utf8');
 const xtermCss = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'), 'utf8');
+const xtermFitJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'), 'utf8');
 const xtermVersion = JSON.parse(readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'package.json'), 'utf8')).version;
 
 const bridgeGlue = `
 (function () {
   'use strict';
   var terminal = null;
+  var fitAddon = null;
   var currentCols = 80;
   var currentFontSizePx = 12;
 
@@ -35,12 +37,36 @@ const bridgeGlue = `
     }
   }
 
-  function measuredRowCount(fontSizePx) {
-    // Approximate cell height (xterm default lineHeight 1.0 plus padding);
-    // rows only size the viewport - scrollback holds the real history.
-    var approximateCellHeight = Math.ceil(fontSizePx * 1.4);
-    var rows = Math.floor(window.innerHeight / approximateCellHeight);
-    return Math.max(24, rows);
+  function fallbackRowCount(fontSizePx) {
+    // Only used before xterm has measured its real cell metrics: a rough
+    // guess so the first paint is close, corrected by fitRows() right after.
+    var approximateCellHeight = Math.ceil(fontSizePx * 1.35);
+    return Math.max(8, Math.floor(window.innerHeight / approximateCellHeight));
+  }
+
+  // Rows from xterm's ACTUAL measured cell height (via the fit addon), so the
+  // terminal fills the WebView vertically instead of leaving a gap under the
+  // last line. Cols stay the desktop-inferred width (wide output pans
+  // horizontally); we take only the addon's row proposal.
+  function fitRows() {
+    if (fitAddon) {
+      try {
+        var proposed = fitAddon.proposeDimensions();
+        if (proposed && isFinite(proposed.rows) && proposed.rows > 0) return proposed.rows;
+      } catch (fitError) {
+        // Fall through to the estimate below.
+      }
+    }
+    return fallbackRowCount(currentFontSizePx);
+  }
+
+  function resizeToFit() {
+    if (!terminal) return;
+    var rows = fitRows();
+    if (rows !== terminal.rows || currentCols !== terminal.cols) {
+      terminal.resize(currentCols, rows);
+    }
+    terminal.scrollToBottom();
   }
 
   function createTerminal(initMessage) {
@@ -48,7 +74,7 @@ const bridgeGlue = `
     currentFontSizePx = initMessage.fontSizePx;
     terminal = new window.Terminal({
       cols: initMessage.cols,
-      rows: measuredRowCount(initMessage.fontSizePx),
+      rows: fallbackRowCount(initMessage.fontSizePx),
       fontSize: initMessage.fontSizePx,
       fontFamily: 'Menlo, Consolas, monospace',
       theme: initMessage.theme,
@@ -56,6 +82,8 @@ const bridgeGlue = `
       convertEol: false,
       cursorBlink: false,
     });
+    fitAddon = new window.FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
     terminal.open(document.getElementById('terminal'));
     // Hardware/Bluetooth keyboard typing directly into the WebView flows to
     // the PTY the same way quick keys do (the host routes both through the
@@ -65,16 +93,21 @@ const bridgeGlue = `
     });
     if (initMessage.scrollback) {
       terminal.write(initMessage.scrollback, function () {
-        terminal.scrollToBottom();
+        resizeToFit();
       });
+    } else {
+      resizeToFit();
     }
+    // Cell metrics can settle a frame after open(); refit once they have.
+    requestAnimationFrame(resizeToFit);
   }
 
   function applyFontSize(fontSizePx) {
     if (!terminal) return;
     currentFontSizePx = fontSizePx;
     terminal.options.fontSize = fontSizePx;
-    terminal.resize(currentCols, measuredRowCount(fontSizePx));
+    // The cell height changed, so the row count that fills the viewport did too.
+    resizeToFit();
   }
 
   function onHostMessage(rawData) {
@@ -108,6 +141,10 @@ const bridgeGlue = `
   window.addEventListener('message', handleMessageEvent);
   document.addEventListener('message', handleMessageEvent);
 
+  // The WebView viewport changes when the soft keyboard shows/hides or on
+  // rotation: refit the rows so the last line stays pinned above the footer.
+  window.addEventListener('resize', resizeToFit);
+
   window.addEventListener('load', function () {
     postToHost({ type: 'ready' });
   });
@@ -132,6 +169,9 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
 <div id="scroll-container"><div id="terminal"></div></div>
 <script>
 ${xtermJs}
+</script>
+<script>
+${xtermFitJs}
 </script>
 <script>
 ${bridgeGlue}

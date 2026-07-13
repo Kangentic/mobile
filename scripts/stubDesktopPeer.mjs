@@ -21,6 +21,9 @@
  * faithful desktop stand-in, not a mock.
  */
 import readline from 'node:readline/promises';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   bytesToHex,
   createKKHandshake,
@@ -33,12 +36,35 @@ import {
   encodePairingQrPayload,
   FrameTag,
   generateX25519KeyPair,
+  hexToBytes,
   PROTOCOL_VERSION,
   randomBytes,
   SessionFrameKind,
   unwrapSessionFrame,
   wrapSessionFrame,
 } from '@kangentic/protocol';
+
+// Persist the stub's static X25519 identity OUTSIDE the repo so restarting
+// the stub (e.g. to pick up code changes, or after a phone reload) keeps the
+// same desktop key the phone pinned at pairing - no re-pairing needed. The
+// pairing token is still fresh per run (single-use); only the static key is
+// stable. Delete this file to force a fresh identity.
+const IDENTITY_FILE = join(tmpdir(), 'kangentic-stub-desktop-identity.json');
+
+function loadOrCreateDesktopStatic() {
+  if (existsSync(IDENTITY_FILE)) {
+    try {
+      const stored = JSON.parse(readFileSync(IDENTITY_FILE, 'utf8'));
+      return { secretKey: hexToBytes(stored.secretKey), publicKey: hexToBytes(stored.publicKey) };
+    } catch (parseError) {
+      console.log(`[identity] ignoring unreadable ${IDENTITY_FILE}: ${parseError.message}`);
+    }
+  }
+  const keypair = generateX25519KeyPair();
+  writeFileSync(IDENTITY_FILE, JSON.stringify({ secretKey: bytesToHex(keypair.secretKey), publicKey: bytesToHex(keypair.publicKey) }));
+  console.log(`[identity] generated a new stub desktop identity at ${IDENTITY_FILE}`);
+  return keypair;
+}
 
 function parseArgs(argv) {
   const relayIndex = argv.indexOf('--relay');
@@ -279,44 +305,61 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
       }
     }
 
-    function beginHandshake() {
-      const handshake = createKKHandshake({ initiator: true, localStatic: desktopStatic, remoteStatic: phoneStaticPublicKey });
+    // The current in-progress KK handshake (reassigned on each re-initiation),
+    // read by the persistent frame handler below.
+    let handshake = null;
+
+    // The desktop always INITIATES the KK handshake. It does so on first
+    // connect and then on its ~2-minute rekey timer; that timer is also what
+    // recovers a phone that dropped and reconnected (the phone is the
+    // responder and only reacts to an inbound handshake). We re-initiate on a
+    // faster interval here so a dev reload of the app re-establishes quickly.
+    function initiateHandshake() {
+      handshake = createKKHandshake({ initiator: true, localStatic: desktopStatic, remoteStatic: phoneStaticPublicKey });
       const { message } = handshake.writeMessage(new Uint8Array(0));
       socket.send(wrapSessionFrame(SessionFrameKind.Handshake, message).slice().buffer);
-
-      onFrame(socket, (frame) => {
-        const { kind, payload } = unwrapSessionFrame(frame);
-        if (kind === SessionFrameKind.Handshake) {
-          const result = handshake.readMessage(payload);
-          if (!result.split) return;
-          streams = deriveSecretstreamPair(handshake.getChainingKey(), true);
-          console.log('[session] established');
-          return;
-        }
-        if (!streams) return;
-        const opened = streams.receive.open(payload);
-        if (opened.tag === FrameTag.Final) {
-          console.log('[session] remote closed');
-          if (feedTimer) clearInterval(feedTimer);
-          return;
-        }
-        const message = decodeMessage(opened.plaintext);
-        if (message.type === 'capability-request') {
-          answerCapabilityRequest(message);
-        } else if (message.type !== 'heartbeat') {
-          console.log('[session] received:', message);
-        }
-      });
     }
 
-    beginHandshake();
+    onFrame(socket, (frame) => {
+      const { kind, payload } = unwrapSessionFrame(frame);
+      if (kind === SessionFrameKind.Handshake) {
+        if (!handshake) return;
+        const result = handshake.readMessage(payload);
+        if (!result.split) return;
+        streams = deriveSecretstreamPair(handshake.getChainingKey(), true);
+        console.log('[session] established');
+        return;
+      }
+      if (!streams) return;
+      let opened;
+      try {
+        opened = streams.receive.open(payload);
+      } catch {
+        // A frame sealed under a superseded rekey can arrive mid-transition; ignore it.
+        return;
+      }
+      if (opened.tag === FrameTag.Final) {
+        console.log('[session] remote closed');
+        return;
+      }
+      const message = decodeMessage(opened.plaintext);
+      if (message.type === 'capability-request') {
+        answerCapabilityRequest(message);
+      } else if (message.type !== 'heartbeat') {
+        console.log('[session] received:', message);
+      }
+    });
+
+    initiateHandshake();
+    const rehandshakeTimer = setInterval(initiateHandshake, 10_000);
+    socket.addEventListener('close', () => clearInterval(rehandshakeTimer));
     return { send, socket };
   });
 }
 
 async function main() {
   const { relayUrl, autoConfirm } = parseArgs(process.argv.slice(2));
-  const desktopStatic = generateX25519KeyPair();
+  const desktopStatic = loadOrCreateDesktopStatic();
   const pairingToken = randomBytes(32);
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 

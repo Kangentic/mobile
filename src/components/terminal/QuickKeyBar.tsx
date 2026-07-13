@@ -14,19 +14,24 @@ interface QuickKey {
   accessibilityLabel: string;
   sequence: string;
   danger?: boolean;
+  /** Arrow glyphs read small at label size; render them larger. */
+  glyph?: boolean;
 }
 
 const QUICK_KEYS: QuickKey[] = [
   { id: 'esc', label: 'Esc', accessibilityLabel: 'Escape', sequence: ESCAPE },
   { id: 'tab', label: 'Tab', accessibilityLabel: 'Tab', sequence: TAB },
-  { id: 'up', label: '↑', accessibilityLabel: 'Arrow up', sequence: arrowKeySequence('up') },
-  { id: 'down', label: '↓', accessibilityLabel: 'Arrow down', sequence: arrowKeySequence('down') },
-  { id: 'left', label: '←', accessibilityLabel: 'Arrow left', sequence: arrowKeySequence('left') },
-  { id: 'right', label: '→', accessibilityLabel: 'Arrow right', sequence: arrowKeySequence('right') },
+  { id: 'up', label: '↑', accessibilityLabel: 'Arrow up', sequence: arrowKeySequence('up'), glyph: true },
+  { id: 'down', label: '↓', accessibilityLabel: 'Arrow down', sequence: arrowKeySequence('down'), glyph: true },
+  { id: 'left', label: '←', accessibilityLabel: 'Arrow left', sequence: arrowKeySequence('left'), glyph: true },
+  { id: 'right', label: '→', accessibilityLabel: 'Arrow right', sequence: arrowKeySequence('right'), glyph: true },
   { id: 'enter', label: 'Enter', accessibilityLabel: 'Enter', sequence: ENTER },
-  { id: 'ctrl-c', label: '^C', accessibilityLabel: 'Control C', sequence: CTRL_C, danger: true },
+  { id: 'ctrl-c', label: '^C', accessibilityLabel: 'Control C (interrupt)', sequence: CTRL_C, danger: true },
   { id: 'slash', label: '/', accessibilityLabel: 'Slash', sequence: SLASH },
 ];
+
+const KEY_LABEL_FONT_SIZE = 15;
+const KEY_GLYPH_FONT_SIZE = 22;
 
 /**
  * The terminal quick-key row: the control keys a phone keyboard cannot type,
@@ -59,7 +64,14 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
               },
             ]}
           >
-            <MonoText size="caption" color={quickKey.danger ? 'danger' : 'primary'}>
+            <MonoText
+              color={quickKey.danger ? 'danger' : 'primary'}
+              style={{
+                fontSize: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE,
+                lineHeight: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE + 2,
+                fontWeight: '600',
+              }}
+            >
               {quickKey.label}
             </MonoText>
           </Pressable>
