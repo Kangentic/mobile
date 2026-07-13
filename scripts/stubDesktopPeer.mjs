@@ -43,7 +43,11 @@ import {
 function parseArgs(argv) {
   const relayIndex = argv.indexOf('--relay');
   const relayUrl = relayIndex >= 0 ? argv[relayIndex + 1] : 'ws://127.0.0.1:8080';
-  return { relayUrl };
+  // --yes: skip the interactive SAS confirmation (Maestro flows and
+  // agent-driven runs have no stdin). The SAS still prints for an eyeball
+  // check against the phone; this stub trusts its own loopback rig.
+  const autoConfirm = argv.includes('--yes');
+  return { relayUrl, autoConfirm };
 }
 
 function connect(url) {
@@ -311,7 +315,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
 }
 
 async function main() {
-  const { relayUrl } = parseArgs(process.argv.slice(2));
+  const { relayUrl, autoConfirm } = parseArgs(process.argv.slice(2));
   const desktopStatic = generateX25519KeyPair();
   const pairingToken = randomBytes(32);
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
@@ -333,12 +337,16 @@ async function main() {
   console.log(`  digits: ${sas.digits}`);
   console.log(`  emoji:  ${sas.emoji.join(' ')}`);
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question('\nDoes the SAS match? [y/N] ');
-  rl.close();
-  if (answer.trim().toLowerCase() !== 'y') {
-    console.log('Not confirmed - exiting.');
-    process.exit(1);
+  if (autoConfirm) {
+    console.log('\n--yes given: auto-confirming the SAS (eyeball it against the phone anyway).');
+  } else {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question('\nDoes the SAS match? [y/N] ');
+    rl.close();
+    if (answer.trim().toLowerCase() !== 'y') {
+      console.log('Not confirmed - exiting.');
+      process.exit(1);
+    }
   }
 
   console.log(`\nPaired. Phone static key: ${bytesToHex(phoneStaticPublicKey)}`);

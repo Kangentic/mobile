@@ -40,6 +40,14 @@ const LIVE_TAIL_MAX_LINES = 12;
 const LIVE_TAIL_FLUSH_INTERVAL_MS = 250;
 const JUMP_TO_LATEST_THRESHOLD_PX = 600;
 
+// A stable identity (an inline object literal re-triggers FlashList layout
+// every render). `startRenderingFromBottom` is deliberately omitted: on a
+// transcript shorter than the viewport it makes FlashList v2 re-anchor to the
+// bottom in a layout loop ("Maximum update depth exceeded"). We pin to the
+// bottom manually via scrollToEnd on the first content instead, and
+// autoscrollToBottomThreshold keeps it pinned as the turn streams.
+const MAINTAIN_VISIBLE_CONTENT_POSITION = { autoscrollToBottomThreshold: 0.2 } as const;
+
 const EMPTY_ENTRIES: TranscriptEntryWire[] = [];
 
 /** The conversation-terminal surface: the flattened transcript cell feed for the task's session. */
@@ -138,16 +146,31 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
 
   const listRef = useRef<FlashListRef<ConversationCell>>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  // Ref-track the current value so a scroll storm (auto-scroll on mount)
+  // dispatches a React update only on a real transition, never re-entrantly.
+  const showJumpToLatestRef = useRef(false);
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    setShowJumpToLatest(distanceFromBottom > JUMP_TO_LATEST_THRESHOLD_PX);
+    const nextShowJumpToLatest = distanceFromBottom > JUMP_TO_LATEST_THRESHOLD_PX;
+    if (nextShowJumpToLatest === showJumpToLatestRef.current) return;
+    showJumpToLatestRef.current = nextShowJumpToLatest;
+    setShowJumpToLatest(nextShowJumpToLatest);
   }, []);
 
   const renderItem = useCallback(
     ({ item }: { item: ConversationCell }) => renderConversationCell(item, sessionId),
     [sessionId],
   );
+
+  // Land at the newest message on first open: scroll to the end once cells
+  // first populate (replaces startRenderingFromBottom without its layout loop).
+  const hasScrolledToInitialEndRef = useRef(false);
+  const onContentSizeChange = useCallback(() => {
+    if (hasScrolledToInitialEndRef.current || cells.length === 0) return;
+    hasScrolledToInitialEndRef.current = true;
+    listRef.current?.scrollToEnd({ animated: false });
+  }, [cells.length]);
 
   return (
     <View style={styles.flex}>
@@ -159,7 +182,9 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         getItemType={(cell) => cell.kind}
         renderItem={renderItem}
         onScroll={onScroll}
-        maintainVisibleContentPosition={{ startRenderingFromBottom: true, autoscrollToBottomThreshold: 0.2 }}
+        scrollEventThrottle={64}
+        onContentSizeChange={onContentSizeChange}
+        maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
       />
       {showJumpToLatest ? (
         <Pressable

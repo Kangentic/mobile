@@ -33,11 +33,16 @@ export function TaskScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string }>();
   const taskId = params.taskId;
 
-  const located = useBoardStore((state) => findTaskById(state, taskId));
-  const taskTitle = located?.task.title ?? 'Task';
-  const projectId = params.projectId && params.projectId.length > 0 ? params.projectId : (located?.projectId ?? null);
+  // Select primitives, never the object findTaskById builds: returning a
+  // fresh { task, projectId } from a Zustand selector changes identity every
+  // render and drives useSyncExternalStore into an infinite re-render loop.
+  const locatedTaskTitle = useBoardStore((state) => findTaskById(state, taskId)?.task.title ?? null);
+  const locatedProjectId = useBoardStore((state) => findTaskById(state, taskId)?.projectId ?? null);
+  const locatedSessionId = useBoardStore((state) => findTaskById(state, taskId)?.task.session_id ?? null);
+  const taskTitle = locatedTaskTitle ?? 'Task';
+  const projectId = params.projectId && params.projectId.length > 0 ? params.projectId : locatedProjectId;
   const paramSessionId = params.sessionId && params.sessionId.length > 0 ? params.sessionId : null;
-  const sessionId = paramSessionId ?? located?.task.session_id ?? null;
+  const sessionId = paramSessionId ?? locatedSessionId;
 
   const [activeTab, setActiveTab] = useState<TaskTabKey>('conversation');
   const pagerRef = useRef<PagerView>(null);
