@@ -7,6 +7,9 @@ CLAUDE.local.md
 .claude/scheduled_tasks.lock
 kangentic.local.json
 
+# Local dev rig state (relay repo path, stub phone key, AVD override)
+.devrig.local.json
+
 # Node
 node_modules/
 npm-debug.log*
