@@ -51,6 +51,13 @@ import {
 // stable. Delete this file to force a fresh identity.
 const IDENTITY_FILE = join(tmpdir(), 'kangentic-stub-desktop-identity.json');
 
+function generateAndPersistDesktopStatic() {
+  const keypair = generateX25519KeyPair();
+  writeFileSync(IDENTITY_FILE, JSON.stringify({ secretKey: bytesToHex(keypair.secretKey), publicKey: bytesToHex(keypair.publicKey) }));
+  console.log(`[identity] generated a new stub desktop identity at ${IDENTITY_FILE}`);
+  return keypair;
+}
+
 function loadOrCreateDesktopStatic() {
   if (existsSync(IDENTITY_FILE)) {
     try {
@@ -60,10 +67,7 @@ function loadOrCreateDesktopStatic() {
       console.log(`[identity] ignoring unreadable ${IDENTITY_FILE}: ${parseError.message}`);
     }
   }
-  const keypair = generateX25519KeyPair();
-  writeFileSync(IDENTITY_FILE, JSON.stringify({ secretKey: bytesToHex(keypair.secretKey), publicKey: bytesToHex(keypair.publicKey) }));
-  console.log(`[identity] generated a new stub desktop identity at ${IDENTITY_FILE}`);
-  return keypair;
+  return generateAndPersistDesktopStatic();
 }
 
 function parseArgs(argv) {
@@ -73,7 +77,13 @@ function parseArgs(argv) {
   // agent-driven runs have no stdin). The SAS still prints for an eyeball
   // check against the phone; this stub trusts its own loopback rig.
   const autoConfirm = argv.includes('--yes');
-  return { relayUrl, autoConfirm };
+  // --phone-key <hex>: skip pairing and open the ongoing session directly,
+  // for a phone already paired to this stub's persisted identity (printed as
+  // "Phone static key: ..." on the first pairing). Lets the stub restart
+  // without a re-pair.
+  const phoneKeyIndex = argv.indexOf('--phone-key');
+  const phoneKeyHex = phoneKeyIndex >= 0 ? argv[phoneKeyIndex + 1] : null;
+  return { relayUrl, autoConfirm, phoneKeyHex };
 }
 
 function connect(url) {
@@ -324,7 +334,15 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
       const { kind, payload } = unwrapSessionFrame(frame);
       if (kind === SessionFrameKind.Handshake) {
         if (!handshake) return;
-        const result = handshake.readMessage(payload);
+        let result;
+        try {
+          result = handshake.readMessage(payload);
+        } catch {
+          // A reply to a since-superseded re-handshake attempt (the ~10s
+          // rekey races the phone's response); drop it and wait for the
+          // reply to the current handshake.
+          return;
+        }
         if (!result.split) return;
         streams = deriveSecretstreamPair(handshake.getChainingKey(), true);
         console.log('[session] established');
@@ -357,19 +375,59 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
   });
 }
 
+// `adb shell input text` (the only way to get the pairing link onto an
+// emulator without a camera) cannot type base64url's '_'. To keep manual
+// emulator pairing frictionless, regenerate the token - and, if a persisted
+// key makes it unavoidable, the key - until the QR blob contains no '_'.
+// This costs a negligible fraction of a bit of token entropy and is a
+// test-harness accommodation only; real pairing scans a QR.
+function isEmulatorTypeable(uri) {
+  return uri.indexOf('_') === -1;
+}
+
 async function main() {
-  const { relayUrl, autoConfirm } = parseArgs(process.argv.slice(2));
-  const desktopStatic = loadOrCreateDesktopStatic();
-  const pairingToken = randomBytes(32);
+  const { relayUrl, autoConfirm, phoneKeyHex } = parseArgs(process.argv.slice(2));
+
+  // Already-paired fast path: open the ongoing session directly, no pairing.
+  if (phoneKeyHex) {
+    const desktopStatic = loadOrCreateDesktopStatic();
+    const phoneStaticPublicKey = hexToBytes(phoneKeyHex);
+    console.log(`Relay: ${relayUrl}`);
+    console.log(`Session-only mode: reconnecting to the phone paired at ${bytesToHex(phoneStaticPublicKey)}`);
+    const session = await runSession(relayUrl, desktopStatic, phoneStaticPublicKey);
+    setInterval(() => {
+      try {
+        session.send({ type: 'heartbeat' });
+      } catch {
+        // Not established between re-handshakes; skip this heartbeat.
+      }
+    }, 5_000);
+    return;
+  }
+
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-  const qrUri = encodePairingQrPayload({
-    desktopStaticPublicKey: desktopStatic.publicKey,
-    pairingToken,
-    relayAddress: relayUrl,
-    expiresAt,
-    protocolVersion: PROTOCOL_VERSION,
-  });
+  let desktopStatic = loadOrCreateDesktopStatic();
+  let pairingToken;
+  let qrUri;
+  let tokenAttempts = 0;
+  for (;;) {
+    pairingToken = randomBytes(32);
+    qrUri = encodePairingQrPayload({
+      desktopStaticPublicKey: desktopStatic.publicKey,
+      pairingToken,
+      relayAddress: relayUrl,
+      expiresAt,
+      protocolVersion: PROTOCOL_VERSION,
+    });
+    if (isEmulatorTypeable(qrUri)) break;
+    tokenAttempts += 1;
+    if (tokenAttempts >= 300) {
+      // The loaded key forces a '_' no token can avoid; regenerate + re-persist it.
+      desktopStatic = generateAndPersistDesktopStatic();
+      tokenAttempts = 0;
+    }
+  }
 
   console.log(`Relay: ${relayUrl}`);
   console.log(`Pairing URI (paste into the app's "paste pairing link" field):\n${qrUri}\n`);
