@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { TranscriptEntryWire, TranscriptEvent } from '@kangentic/protocol';
 import { useTranscriptStore } from '@/state/transcriptStore';
-import { assistantEntryFixture, userEntryFixture } from './helpers/desktopFixtures';
+import { assistantEntryFixture, userEntryFixture } from '@/devsupport/desktopFixtures';
 
 function transcriptEvent(sessionId: string, entries: TranscriptEntryWire[]): TranscriptEvent {
   return { kind: 'transcript', sessionId, taskId: 'task-1', payload: entries };

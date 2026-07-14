@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { generateX25519KeyPair, randomBytes, type PairingQrPayload } from '@kangentic/protocol';
 import { PairingMachine, type PairingMachineState } from '@/pairing/pairingMachine';
-import { createLoopbackPair } from './helpers/loopbackTransport';
-import { StubPairingResponder } from './helpers/stubDesktopPeer';
+import { createLoopbackPair } from '@/devsupport/loopbackTransport';
+import { StubPairingResponder } from '@/devsupport/stubDesktopPeer';
 
 function futureIsoTimestamp(secondsFromNow: number): string {
   return new Date(Date.now() + secondsFromNow * 1000).toISOString();

@@ -25,9 +25,9 @@ import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { resetTerminalFeed } from '@/state/terminalFeed';
-import { createLoopbackPair } from './helpers/loopbackTransport';
-import { StubSessionInitiator } from './helpers/stubDesktopPeer';
-import { boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from './helpers/desktopFixtures';
+import { createLoopbackPair } from '@/devsupport/loopbackTransport';
+import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
+import { boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 async function flushLoopback(rounds = 8): Promise<void> {
   for (let round = 0; round < rounds; round += 1) {

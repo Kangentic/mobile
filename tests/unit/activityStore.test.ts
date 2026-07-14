@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
 import { sectionForEntry, selectTriageRows, useActivityStore } from '@/state/activityStore';
-import { streamSnapshotFixture, usageFixture } from './helpers/desktopFixtures';
+import { streamSnapshotFixture, usageFixture } from '@/devsupport/desktopFixtures';
 
 function activityEvent(sessionId: string, payload: ActivityEventPayload): ActivityEvent {
   return { kind: 'activity', sessionId, taskId: 'task-1', payload };

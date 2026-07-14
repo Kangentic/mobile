@@ -14,9 +14,9 @@ import { SessionManager } from '@/channel/sessionManager';
 import { CapabilityClient } from '@/channel/capabilityClient';
 import { VerbClient, type CapabilityError } from '@/channel/verbClient';
 import { SubscriptionManager, type SubscriptionSnapshotSinks } from '@/channel/subscriptionManager';
-import { createLoopbackPair } from './helpers/loopbackTransport';
-import { StubSessionInitiator } from './helpers/stubDesktopPeer';
-import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from './helpers/desktopFixtures';
+import { createLoopbackPair } from '@/devsupport/loopbackTransport';
+import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
+import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 interface Harness {
   session: SessionManager;
