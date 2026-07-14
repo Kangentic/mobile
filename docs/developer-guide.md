@@ -25,6 +25,44 @@ npx expo start --android
 Requires a development build already installed on the emulator; see `/preview`'s notes on
 building one with `eas build --profile development --platform android` or `npx expo run:android`.
 
+For anything beyond a bare Metro session, use the dev rig below.
+
+## Local Dev Rig
+
+`scripts/devRig.mjs` is one command that wires up everything a preview needs - emulator boot,
+`adb reverse`, a local relay, optionally the stub desktop peer, and Metro:
+
+| Command | What you get |
+|---|---|
+| `npm run dev:mock` | The app against an **in-app fake desktop** (real channel stack over an in-process loopback). No relay, no pairing, nothing touches a real board. UI/UX iteration and full-feature demos. |
+| `npm run dev:live` | The app connected to **your real running Kangentic desktop dev instance** through a local relay. The rig prints the one-time desktop checklist (enable the mobile bridge, relay URL `ws://127.0.0.1:8080`, pair once, grant verbs). |
+| `npm run dev:pair` | Resets the app to unpaired (`pm clear`) so you can exercise the QR/paste + SAS **pairing ceremony**. Add `-- --stub` to pair against the stub peer instead of the live desktop. |
+| `npm run dev:stub` | Relay + `scripts/stubDesktopPeer.mjs` - the Maestro E2E rig. Reuses the saved phone key for a session-only reconnect when it can (`-- --fresh` forces a re-pair). |
+| `npm run dev:doctor` | Read-only preflight: adb/emulator/AVD, the `hw.keyboard=yes` typing check, relay repo and port states, dev-client install, Node version. |
+
+Details worth knowing:
+
+- **Relay checkout:** the rig expects the `kangentic-relay` repo as a sibling directory
+  (`../kangentic-relay`), overridable via `--relay-repo`, the `KANGENTIC_RELAY_REPO` env var, or
+  `relayRepoPath` in the state file. It starts the relay's `npm run dev` with
+  `SLOT_ID_PATTERN='^([0-9a-f]{32}|[0-9a-f]{64})$'` (the 32-hex ongoing-session slot plus the
+  64-hex pairing slot); when it adopts an already-running relay it probes for 32-hex acceptance
+  and warns with the exact restart command if the pattern is too narrow (symptom: pairing works,
+  every session 400s at upgrade).
+- **`.devrig.local.json`** (repo root, gitignored, safe to delete): `relayRepoPath`,
+  `stubPhoneKey` (captured automatically from the stub's output after a pairing), `avdName`.
+- **`adb reverse tcp:8080 tcp:8080`** is required for any relay connectivity - the app only
+  accepts `ws://` for loopback hosts - and is wiped on every emulator reboot. The rig re-applies
+  it on every run.
+- **Lifecycle:** relay/stub/Metro run as supervised children (Ctrl-C stops them; the emulator
+  stays up). Healthy already-running pieces are adopted, not restarted. Metro's interactive keys
+  (`r`, `j`) pass through.
+- **Stale stub pairing:** if `dev:stub` shows no `[session] established` within ~20s, the saved
+  phone key or the stub identity (in the OS temp dir) is stale - `npm run dev:pair -- --stub`
+  re-pairs fresh and re-captures the key.
+- **Mock flag caveat:** `EXPO_PUBLIC_KANGENTIC_MOCK` is inlined at bundle time, so switching
+  mock on or off needs a Metro restart with `--clear`.
+
 ## Project Structure
 
 ```
@@ -42,8 +80,11 @@ src/
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
-  connection/     # Lifecycle composer: connect/dispose, bootstrap, store feed glue, actions API
+  connection/     # Lifecycle composer: connect/dispose, bootstrap, store feed glue, actions API,
+                  #   dev-only mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
+  devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures -
+                  #   shared by tests/unit and the mock desktop
   terminal/       # Pure liveTail cleaner, key sequences, WebView bridge, generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
@@ -54,7 +95,7 @@ tests/unit/       # vitest
 tests/components/ # Jest + RNTL
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
+scripts/          # bash-guard.js, devRig.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
 ```
 
 See `CLAUDE.md`'s Project Structure section; the tree there and this one move together.
@@ -105,6 +146,13 @@ Any variable prefixed `EXPO_PUBLIC_` is baked directly into the JS bundle at bui
 **never** an appropriate place for a secret. There are no runtime secrets embedded in this app;
 push credentials (FCM service account, APNs key) live only in the maintainer's EAS account,
 uploaded at build time, never in the repo or the shipped binary.
+
+Dev-only variables:
+
+- `EXPO_PUBLIC_KANGENTIC_MOCK=1` - enables the in-app mock desktop peer (dev builds only; the
+  code path is stripped from production bundles). Set by `npm run dev:mock`, not by hand.
+- `KANGENTIC_RELAY_REPO` - where `scripts/devRig.mjs` finds the relay checkout; never read by
+  the app bundle.
 
 ## Conventions
 

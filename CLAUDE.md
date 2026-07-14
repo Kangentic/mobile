@@ -42,8 +42,11 @@ src/
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
   connection/     # Lifecycle composer: AppState connect/dispose, bootstrap, store feed glue,
-                  #   the actions API screens call (accountless-core scoped)
+                  #   the actions API screens call (accountless-core scoped), dev-only
+                  #   mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
+  devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures -
+                  #   shared by tests/unit and the mock desktop
   terminal/       # Pure liveTail PTY cleaner, key sequences, WebView bridge, generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
@@ -56,13 +59,18 @@ tests/
   components/     # Jest + React Native Testing Library
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
+scripts/          # bash-guard.js, devRig.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
 ```
 
 ## Commands
 
 - `npm install` - Install dependencies
 - `npx expo start --dev-client` (`npm start`) - Start the dev server against a dev-client build
+- `npm run dev:mock` / `dev:live` / `dev:pair` / `dev:stub` / `dev:doctor` - The local dev rig
+  (`scripts/devRig.mjs`): emulator + adb reverse + relay + Metro in one command, in mock
+  (in-app fake desktop), live (real desktop dev instance), pair (pairing-ceremony testing),
+  or stub (Maestro E2E rig) mode; doctor is a read-only preflight. See
+  [docs/developer-guide.md](docs/developer-guide.md)'s Local Dev Rig section.
 - `npx expo run:android` (`npm run android`) - Build, install, and launch the dev client on the
   Android emulator (rebuilds native code; use this after a native dependency or config plugin
   change, or the first time on a fresh emulator)
