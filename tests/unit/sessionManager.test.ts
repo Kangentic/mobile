@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { generateX25519KeyPair, type BridgeMessage } from '@kangentic/protocol';
 import { SessionManager } from '@/channel/sessionManager';
 import { CapabilityClient } from '@/channel/capabilityClient';
-import { createLoopbackPair } from './helpers/loopbackTransport';
-import { StubSessionInitiator } from './helpers/stubDesktopPeer';
+import { createLoopbackPair } from '@/devsupport/loopbackTransport';
+import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 
 function waitFor(predicate: () => boolean): Promise<void> {
   if (predicate()) return Promise.resolve();

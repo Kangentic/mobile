@@ -67,7 +67,20 @@ async function openConnection(): Promise<void> {
   if (activeConnection) return;
   const generation = connectGeneration;
 
-  const anchor = await trustAnchorStore.load();
+  // Dev-only mock desktop (the dev rig's mock mode sets
+  // EXPO_PUBLIC_KANGENTIC_MOCK=1): the real channel stack runs against an
+  // in-process fake desktop over a loopback transport - no relay, no
+  // pairing, no trust anchor. Metro strips this branch and the dynamically
+  // imported module from production bundles.
+  let mockDesktop: import('./mockDesktop').MockDesktop | null = null;
+  if (__DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_MOCK === '1') {
+    const { createMockDesktop } = await import('./mockDesktop');
+    mockDesktop = createMockDesktop();
+  }
+
+  const anchor: { desktopStaticPublicKey: Uint8Array; relayAddress: string } | null = mockDesktop
+    ? { desktopStaticPublicKey: mockDesktop.desktopStaticPublicKey, relayAddress: 'loopback://mock-desktop' }
+    : await trustAnchorStore.load();
   if (!anchor) {
     // Not paired (or a partial/legacy anchor): stay idle; the pairing flow
     // triggers a reconnect via reconnectNow() when it completes.
@@ -75,14 +88,18 @@ async function openConnection(): Promise<void> {
     return;
   }
   useChannelStore.getState().setPairedState('paired');
-  const identity = await deviceIdentityManager.getIdentity();
+  const identity = mockDesktop ? mockDesktop.identity : await deviceIdentityManager.getIdentity();
   // A background/dispose (or a second open) raced our secure-store reads.
-  if (generation !== connectGeneration || activeConnection) return;
+  if (generation !== connectGeneration || activeConnection) {
+    mockDesktop?.dispose();
+    return;
+  }
 
   const controller = new ChannelController({
     identity,
     desktopStaticPublicKey: anchor.desktopStaticPublicKey,
     relayUrl: anchor.relayAddress,
+    ...(mockDesktop ? { transport: mockDesktop.phoneTransport } : {}),
   });
 
   // The sinks need the manager back (board snapshots re-declare the stream
@@ -118,12 +135,16 @@ async function openConnection(): Promise<void> {
     unbindFeed();
     subscriptions.dispose();
     controller.dispose();
+    mockDesktop?.dispose();
   };
 
   await controller.connect().catch(() => {
     // The transport keeps retrying with backoff on its own; channelStore
     // already reflects the connecting/reconnecting state.
   });
+  // The desktop always initiates the KK handshake; the in-process fake one
+  // is no exception.
+  await mockDesktop?.start();
 }
 
 function closeConnection(): void {

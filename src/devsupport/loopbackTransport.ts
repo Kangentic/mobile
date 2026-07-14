@@ -1,11 +1,12 @@
 import type { Transport, TransportState, Unsubscribe } from '@kangentic/protocol';
 
 /**
- * Two linked in-memory Transports, for testing pairing/session code with no
- * relay and no network. Delivery is scheduled on a microtask (not
- * synchronous) so tests exercise the same "send doesn't synchronously
- * invoke the peer's listener" ordering a real transport has, without
- * needing a real socket.
+ * Two linked in-memory Transports: unit tests and the in-app mock desktop
+ * peer (src/connection/mockDesktopPeer.ts) both run pairing/session code
+ * over these with no relay and no network. Delivery is scheduled on a
+ * microtask (not synchronous) so consumers exercise the same "send doesn't
+ * synchronously invoke the peer's listener" ordering a real transport has,
+ * without needing a real socket.
  */
 class LoopbackTransport implements Transport {
   private peer: LoopbackTransport | null = null;

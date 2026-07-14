@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { generateX25519KeyPair, type BridgeEvent, type TerminalEvent } from '@kangentic/protocol';
 import { SessionManager } from '@/channel/sessionManager';
 import { FeedRouter } from '@/channel/feedRouter';
-import { createLoopbackPair } from './helpers/loopbackTransport';
-import { StubSessionInitiator } from './helpers/stubDesktopPeer';
+import { createLoopbackPair } from '@/devsupport/loopbackTransport';
+import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 
 async function establishedPair(): Promise<{ session: SessionManager; stub: StubSessionInitiator }> {
   const [phoneTransport, desktopTransport] = createLoopbackPair();

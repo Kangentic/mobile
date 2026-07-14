@@ -11,7 +11,7 @@ import {
   selectTasksForColumn,
   useBoardStore,
 } from '@/state/boardStore';
-import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from './helpers/desktopFixtures';
+import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 
 const COLUMNS = [
   boardColumnFixture({ id: 'lane-todo', name: 'To Do', position: 0 }),

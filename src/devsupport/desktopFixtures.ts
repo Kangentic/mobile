@@ -1,7 +1,7 @@
 /**
- * Canned typed payloads shared across channel/store tests - shaped exactly
- * like the desktop's wire mappers produce them (fixtures are data, exempt
- * from the no-redeclare rule).
+ * Canned typed payloads shared across channel/store tests and the in-app
+ * mock desktop peer - shaped exactly like the desktop's wire mappers
+ * produce them (fixtures are data, exempt from the no-redeclare rule).
  */
 import type {
   BoardColumnWire,

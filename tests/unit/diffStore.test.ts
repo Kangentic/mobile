@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useDiffStore } from '@/state/diffStore';
-import { diffFileListFixture } from './helpers/desktopFixtures';
+import { diffFileListFixture } from '@/devsupport/desktopFixtures';
 
 describe('diffStore', () => {
   beforeEach(() => {

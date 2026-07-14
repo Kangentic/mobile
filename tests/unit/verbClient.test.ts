@@ -14,9 +14,9 @@ import {
 import { SessionManager } from '@/channel/sessionManager';
 import { CapabilityClient } from '@/channel/capabilityClient';
 import { CapabilityError, VerbClient } from '@/channel/verbClient';
-import { createLoopbackPair } from './helpers/loopbackTransport';
-import { StubSessionInitiator } from './helpers/stubDesktopPeer';
-import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from './helpers/desktopFixtures';
+import { createLoopbackPair } from '@/devsupport/loopbackTransport';
+import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
+import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 interface Harness {
   verbs: VerbClient;

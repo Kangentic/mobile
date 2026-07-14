@@ -1,4 +1,4 @@
-import type { Unsubscribe, X25519KeyPair } from '@kangentic/protocol';
+import type { Transport, Unsubscribe, X25519KeyPair } from '@kangentic/protocol';
 import { RelayTransport } from './relayTransport';
 import { SessionManager } from './sessionManager';
 import { CapabilityClient } from './capabilityClient';
@@ -11,6 +11,12 @@ export interface ChannelControllerOptions {
   /** Pinned from the trust anchor at pairing time - never trust-on-first-use. */
   desktopStaticPublicKey: Uint8Array;
   relayUrl: string;
+  /**
+   * Injection seam for the dev-only mock desktop peer (and tests): when
+   * given, the controller runs over this transport instead of dialing the
+   * relay. Production callers never pass it.
+   */
+  transport?: Transport;
 }
 
 /**
@@ -22,7 +28,7 @@ export interface ChannelControllerOptions {
  * invalidates both.
  */
 export class ChannelController {
-  readonly transport: RelayTransport;
+  readonly transport: Transport;
   readonly session: SessionManager;
   readonly capabilities: CapabilityClient;
   readonly feed: FeedRouter;
@@ -37,7 +43,7 @@ export class ChannelController {
       desktopStaticPublicKey: options.desktopStaticPublicKey,
       phoneStaticPublicKey: options.identity.publicKey,
     });
-    this.transport = new RelayTransport({ relayUrl: options.relayUrl, slotId });
+    this.transport = options.transport ?? new RelayTransport({ relayUrl: options.relayUrl, slotId });
     this.session = new SessionManager({
       identity: options.identity,
       remoteStaticPublicKey: options.desktopStaticPublicKey,
