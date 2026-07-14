@@ -1,7 +1,7 @@
 ---
-description: Boot the Android emulator if needed and run the app for previewing live changes (Expo dev client)
-allowed-tools: Bash(npx:*), Bash(adb:*), Bash(emulator:*), Bash(npm:*), PowerShell(Get-NetTCPConnection:*), PowerShell(Stop-Process:*)
-argument-hint: [--clear] [--avd <name>]
+description: Boot the Android emulator if needed and run the app for previewing live changes (Expo dev client), optionally through the dev rig's mock/live/pair modes
+allowed-tools: Bash(npx:*), Bash(adb:*), Bash(emulator:*), Bash(npm:*), Bash(node:*), PowerShell(Get-NetTCPConnection:*), PowerShell(Stop-Process:*)
+argument-hint: [mock|live|pair] [--clear] [--avd <name>]
 ---
 
 # Preview
@@ -13,6 +13,17 @@ through EAS cloud builds and a physical device or TestFlight, never a local simu
 
 ## Instructions
 
+0. **If a mode was given (`mock`, `live`, or `pair`), or the user asks for a connected preview**
+   (mentions the relay, the stub peer, pairing, or their live desktop board), delegate to the
+   dev rig instead of the manual steps: run `node scripts/devRig.mjs <mode>` (pass `--clear` /
+   `--avd <name>` through) with `run_in_background: true` and monitor its output. The rig
+   performs steps 1-4 of this skill itself (emulator boot, port-8081 hygiene, Metro) plus
+   everything connectivity needs (relay startup with the widened slot pattern, `adb reverse`,
+   pm clear for pair mode, mock env for mock mode). When the rig reports Metro up, continue at
+   step 5 (foreground verification). `node scripts/devRig.mjs doctor` diagnoses a broken setup.
+   Mode meanings: `mock` = in-app fake desktop, no peers needed; `live` = the user's real
+   running Kangentic desktop through a local relay; `pair` = reset to unpaired and exercise the
+   pairing ceremony. For a plain UI preview with no mode, follow steps 1-6 as written.
 1. **Check for an attached device.** Run `adb devices`.
    - If a device is already listed, skip to step 3.
    - If none is listed, continue to step 2.
@@ -90,6 +101,14 @@ through EAS cloud builds and a physical device or TestFlight, never a local simu
 - An EAS cloud build (`eas build --profile development --platform android`) is the alternative to
   `npx expo run:android` when you'd rather not compile natively on this machine - download the
   resulting APK and `adb install` it instead of step 3's local build path.
+- **Any connected mode needs `adb reverse tcp:8080 tcp:8080`.** The app only accepts `ws://` for
+  loopback hosts, so the emulator reaches a host relay exclusively through adb reverse - and the
+  mapping is wiped on every emulator reboot. The dev rig re-applies it on every run; if you
+  bypass the rig, re-run it yourself after any reboot (`adb reverse --list` to check).
+- **Relay slot pattern.** Until the relay-side fix ships everywhere, a local relay must run with
+  `SLOT_ID_PATTERN='^([0-9a-f]{32}|[0-9a-f]{64})$'` or pairing succeeds and the ongoing session
+  400s at upgrade. The rig sets this when it starts the relay and warns when it adopts a relay
+  that rejects 32-hex slots.
 
 ## Allowed Tools
 
