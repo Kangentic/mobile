@@ -171,8 +171,8 @@ function stubBoardSnapshot() {
   };
 }
 
-function stubTranscript(turnCount) {
-  const entries = [
+function stubTranscript() {
+  return [
     { kind: 'user', uuid: 'stub-user-1', ts: Date.now() - 60000, text: 'Fix the login redirect bug and add a regression test.' },
     {
       kind: 'assistant', uuid: 'stub-assistant-1', ts: Date.now() - 55000,
@@ -183,13 +183,6 @@ function stubTranscript(turnCount) {
     },
     { kind: 'tool_result', uuid: 'stub-result-1', ts: Date.now() - 50000, toolUseId: 'stub-tool-1', content: 'src/auth/login.ts:42: redirect(`/login?next=${encodeURIComponent(path)}`)' },
   ];
-  if (turnCount > 1) {
-    entries.push({
-      kind: 'assistant', uuid: 'stub-assistant-2', ts: Date.now() - 5000,
-      blocks: [{ type: 'tool_use', id: 'stub-tool-2', name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
-    });
-  }
-  return entries;
 }
 
 function stubDiffFileList() {
@@ -219,10 +212,14 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
   return connect(`${relayUrl}?slot=${slotId}`).then((socket) => {
     let streams = null;
     let streamSubscribed = false;
-    let transcriptTurnCount = 1;
     let permissionPending = false;
     let feedTimer = null;
     let feedTick = 0;
+    // Protocol v2: the transcript never ships wholesale. This array is the
+    // stub's authoritative conversation; appends stream as indexed deltas
+    // and history loads via the read-stream transcript-window action.
+    const transcriptEntries = stubTranscript();
+    let transcriptRevision = 1;
 
     function send(message) {
       if (!streams) throw new Error('session not established yet');
@@ -234,9 +231,26 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
       send({ type: 'event', event });
     }
 
+    function appendTranscriptEntry(entry) {
+      transcriptEntries.push(entry);
+      transcriptRevision += 1;
+      if (!streamSubscribed) return;
+      sendEvent({
+        kind: 'transcript',
+        sessionId: STUB_SESSION_ID,
+        taskId: STUB_TASK_ID,
+        payload: {
+          mode: 'delta',
+          revision: transcriptRevision,
+          totalEntries: transcriptEntries.length,
+          upserts: [{ index: transcriptEntries.length - 1, entry }],
+        },
+      });
+    }
+
     // A little agent-life simulator: terminal chunks stream continuously;
-    // every ~12 ticks the transcript grows a turn; at tick 20 a permission
-    // prompt raises and stays pending until the phone answers it.
+    // every ~12 ticks the transcript grows a turn (streamed as a delta); at
+    // tick 20 a permission prompt raises and stays pending until answered.
     function startFeed() {
       if (feedTimer) return;
       feedTimer = setInterval(() => {
@@ -244,11 +258,23 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         feedTick += 1;
         sendEvent({ kind: 'terminal', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` } });
         if (feedTick % 12 === 0) {
-          transcriptTurnCount += 1;
-          sendEvent({ kind: 'transcript', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: stubTranscript(transcriptTurnCount) });
+          appendTranscriptEntry({
+            kind: 'assistant',
+            uuid: `stub-assistant-tick-${feedTick}`,
+            ts: Date.now(),
+            blocks: [{ type: 'tool_use', id: `stub-tool-tick-${feedTick}`, name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
+          });
         }
         if (feedTick === 20 && !permissionPending) {
           permissionPending = true;
+          // The awaited tool_use lands in the transcript first so the phone's
+          // prompt card can show the exact command being approved.
+          appendTranscriptEntry({
+            kind: 'assistant',
+            uuid: 'stub-assistant-2',
+            ts: Date.now(),
+            blocks: [{ type: 'tool_use', id: 'stub-tool-2', name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
+          });
           sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: true } });
           sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'permission', reason: { kind: 'permission' } } });
           console.log('[feed] raised a permission prompt (answer it from the phone)');
@@ -267,20 +293,28 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
           if (!payload.projectId) return ok({ projects: [STUB_PROJECT] });
           if (payload.action === 'unsubscribe') return ok();
           return ok(stubBoardSnapshot());
-        case 'read-stream':
+        case 'read-stream': {
           if (payload.action === 'unsubscribe') { streamSubscribed = false; return ok(); }
           if (payload.sessionId !== STUB_SESSION_ID) return fail(`No such session: ${payload.sessionId}`);
+          if (payload.action === 'transcript-window') {
+            const end = Math.min(payload.beforeIndex ?? transcriptEntries.length, transcriptEntries.length);
+            const start = Math.max(0, end - (payload.limit ?? 60));
+            return ok({
+              revision: transcriptRevision,
+              totalEntries: transcriptEntries.length,
+              startIndex: start,
+              entries: transcriptEntries.slice(start, end),
+            });
+          }
           streamSubscribed = true;
           startFeed();
-          setTimeout(() => {
-            if (streamSubscribed) sendEvent({ kind: 'transcript', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: stubTranscript(transcriptTurnCount) });
-          }, 100);
           return ok({
             scrollback: 'kangentic stub desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n',
             activity: { state: permissionPending ? 'permission' : 'thinking', reason: permissionPending ? { kind: 'permission' } : { kind: 'turn-active' } },
             usage: null,
             awaitedPromptId: permissionPending ? STUB_PROMPT_ID : null,
           });
+        }
         case 'read-diff':
           if (payload.action === 'unsubscribe') return ok();
           if (payload.filePath) return ok(stubDiffFileContent(payload.filePath));

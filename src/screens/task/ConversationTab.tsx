@@ -25,8 +25,10 @@ import {
   type ConversationCell,
   type PendingPromptDescriptor,
 } from '@/conversation/transcriptCells';
+import { loadOlderTranscript, loadTranscriptTail } from '@/connection/actions';
 import { getBufferedData, subscribeChunks } from '@/state/terminalFeed';
 import { useActivityStore } from '@/state/activityStore';
+import { useChannelStore } from '@/state/channelStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { createLiveTailBuffer, type LiveTailBuffer } from '@/terminal/liveTail';
 
@@ -68,8 +70,37 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   const theme = useTheme();
   const transcript = useTranscriptStore((state) => state.bySessionId[sessionId]);
   const entries = transcript?.entries ?? EMPTY_ENTRIES;
-  const localRevision = transcript?.localRevision ?? 0;
+  const tailRevision = transcript?.tailRevision ?? 0;
+  const needsTailFetch = transcript?.needsTailFetch ?? false;
+  const hasMoreHistory = (transcript?.startIndex ?? 0) > 0;
+  const established = useChannelStore((state) => state.established);
   const activityEntry = useActivityStore((state) => state.bySessionId[sessionId] ?? null);
+
+  // Self-heal: whenever the store flags that its window is missing or
+  // unpatchable (reset signal, delta gap, delta before any window) and the
+  // channel is up, re-fetch the newest window. openSessionScreen does the
+  // first fetch; this covers reconnects and mid-stream resets.
+  useEffect(() => {
+    if (!needsTailFetch || !established) return;
+    void loadTranscriptTail(sessionId).catch(() => {
+      // Still disconnected or a transient failure: the flag stays set and
+      // the next established/flag change retries.
+    });
+  }, [needsTailFetch, established, sessionId]);
+
+  // Scroll-up pagination: one in-flight older-page request at a time.
+  const loadingOlderRef = useRef(false);
+  const onStartReached = useCallback(() => {
+    if (!hasMoreHistory || loadingOlderRef.current) return;
+    loadingOlderRef.current = true;
+    void loadOlderTranscript(sessionId)
+      .catch(() => {
+        // Transient failure: the next onStartReached retries.
+      })
+      .finally(() => {
+        loadingOlderRef.current = false;
+      });
+  }, [hasMoreHistory, sessionId]);
 
   // LIVE TAIL: raw PTY chunks feed a cleaner buffer; re-renders are throttled
   // to one snapshot per ~250ms while chunks stream.
@@ -112,16 +143,17 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
     };
   }, [sessionId, scheduleFlush, clearPendingFlush]);
 
-  // The settled transcript replaces the tail: every applied transcript push
-  // resets the live-tail buffer and its rendered lines.
-  const previousRevisionRef = useRef(localRevision);
+  // The settled transcript replaces the tail: only NEW settled content at
+  // the window's end resets the live-tail buffer (tailRevision). Older-page
+  // prepends and mid-window edits leave the in-progress stream render alone.
+  const previousTailRevisionRef = useRef(tailRevision);
   useEffect(() => {
-    if (previousRevisionRef.current === localRevision) return;
-    previousRevisionRef.current = localRevision;
+    if (previousTailRevisionRef.current === tailRevision) return;
+    previousTailRevisionRef.current = tailRevision;
     liveTailBufferRef.current?.reset();
     clearPendingFlush();
     setLiveTailLines([]);
-  }, [localRevision, clearPendingFlush]);
+  }, [tailRevision, clearPendingFlush]);
 
   // PENDING PROMPT: the awaited tool_use may not have arrived in the
   // transcript yet; the card renders a generic state until it does.
@@ -184,6 +216,8 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         onScroll={onScroll}
         scrollEventThrottle={64}
         onContentSizeChange={onContentSizeChange}
+        onStartReached={onStartReached}
+        onStartReachedThreshold={0.4}
         maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
       />
       {showJumpToLatest ? (

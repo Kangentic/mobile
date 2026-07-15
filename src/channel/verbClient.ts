@@ -2,6 +2,7 @@ import {
   parseReadBoardResponsePayload,
   parseReadDiffResponsePayload,
   parseReadStreamResponsePayload,
+  parseTranscriptWindowResponsePayload,
   type AnswerPermissionPromptRequestPayload,
   type AnswerPermissionPromptResponsePayload,
   type BoardToolReadName,
@@ -22,6 +23,7 @@ import {
   type ReadStreamResponsePayload,
   type SendUserMessageRequestPayload,
   type SendUserMessageResponsePayload,
+  type TranscriptWindowResponsePayload,
   isRecord,
 } from '@kangentic/protocol';
 import type { CapabilityClient } from './capabilityClient';
@@ -84,6 +86,23 @@ export class VerbClient {
   async readStreamUnsubscribe(sessionId: string): Promise<void> {
     const payload: ReadStreamRequestPayload = { sessionId, action: 'unsubscribe' };
     await this.requireOk('read-stream', asRequestJson(payload));
+  }
+
+  /**
+   * One-shot windowed transcript read: the newest `limit` entries strictly
+   * before `beforeIndex` (or the tail when omitted). The desktop may
+   * return fewer entries than asked to keep the frame small - page again
+   * from the returned startIndex. Live updates ride TranscriptEvent deltas.
+   */
+  async readTranscriptWindow(sessionId: string, options: { beforeIndex?: number; limit?: number } = {}): Promise<TranscriptWindowResponsePayload> {
+    const payload: ReadStreamRequestPayload = {
+      sessionId,
+      action: 'transcript-window',
+      ...(options.beforeIndex !== undefined ? { beforeIndex: options.beforeIndex } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+    };
+    const response = await this.requireOk('read-stream', asRequestJson(payload));
+    return this.parsePayload('read-stream', response, parseTranscriptWindowResponsePayload);
   }
 
   async readProjectList(): Promise<ReadBoardProjectListResponsePayload> {

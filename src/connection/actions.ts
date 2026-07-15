@@ -89,11 +89,36 @@ export async function fetchDiffFileContent(input: {
   useDiffStore.getState().applyFileContent(input.taskId, input.filePath, content);
 }
 
+/** Initial window size on screen open - enough to fill the list a few screens deep; older pages load on scroll-up. */
+const TRANSCRIPT_INITIAL_WINDOW = 60;
+const TRANSCRIPT_PAGE_SIZE = 60;
+
 /**
- * A task screen opened a session: retain its transcript + terminal buffers
- * and re-subscribe the stream so fresh scrollback (and, desktop-side, a
- * fresh transcript seed) arrive even though terminal payloads were being
- * dropped while unwatched.
+ * Fetches the newest transcript window for a retained session - the
+ * screen-open bootstrap and the self-heal path whenever the store flags
+ * `needsTailFetch` (reset signal, delta gap, delta before any window).
+ */
+export async function loadTranscriptTail(sessionId: string): Promise<void> {
+  const window = await requireVerbClient().readTranscriptWindow(sessionId, { limit: TRANSCRIPT_INITIAL_WINDOW });
+  useTranscriptStore.getState().applyWindow(sessionId, window);
+}
+
+/** Scroll-up pagination: prepends the next older window above the current one. */
+export async function loadOlderTranscript(sessionId: string): Promise<void> {
+  const session = useTranscriptStore.getState().bySessionId[sessionId];
+  if (!session || session.startIndex === 0) return;
+  const window = await requireVerbClient().readTranscriptWindow(sessionId, {
+    beforeIndex: session.startIndex,
+    limit: TRANSCRIPT_PAGE_SIZE,
+  });
+  useTranscriptStore.getState().applyWindow(sessionId, window);
+}
+
+/**
+ * A task screen opened a session: retain its transcript + terminal buffers,
+ * re-subscribe the stream so fresh scrollback (and delta flow) resume even
+ * though payloads were being dropped while unwatched, and fetch the newest
+ * transcript window (the desktop never pushes whole transcripts).
  */
 export function openSessionScreen(sessionId: string): void {
   useTranscriptStore.getState().retainSession(sessionId);
@@ -101,6 +126,10 @@ export function openSessionScreen(sessionId: string): void {
   useActivityStore.getState().markRead(sessionId);
   const connection = getActiveConnection();
   connection?.subscriptions.refreshStream(sessionId);
+  void loadTranscriptTail(sessionId).catch(() => {
+    // Not connected yet or a transient failure: the store keeps
+    // needsTailFetch set, and the screen retries when it sees the flag.
+  });
 }
 
 export function closeSessionScreen(sessionId: string): void {

@@ -9,6 +9,7 @@ import {
   type DiffFileListWire,
   type JsonValue,
   type ReadStreamResponsePayload,
+  type TranscriptWindowResponsePayload,
   type Transport,
   type TranscriptEntryWire,
   type X25519KeyPair,
@@ -150,6 +151,7 @@ export function createMockDesktop(): MockDesktop {
   // module is re-instantiated per openConnection).
   const tasks = initialTasks();
   const transcript = baseTranscript();
+  let transcriptRevision = 1;
   let streamSubscribed = false;
   let feedTick = 0;
   let pendingPromptId: string | null = null;
@@ -171,8 +173,21 @@ export function createMockDesktop(): MockDesktop {
     oneShotTimers.add(timer);
   }
 
-  function emitTranscript(): void {
-    emit({ kind: 'transcript', sessionId: MOCK_SESSION_ID, taskId: MOCK_TASK_ID, payload: [...transcript] });
+  /** Appends an entry and streams it as a protocol-v2 indexed delta, exactly like the real bridge. */
+  function appendTranscriptEntry(entry: TranscriptEntryWire): void {
+    transcript.push(entry);
+    transcriptRevision += 1;
+    emit({
+      kind: 'transcript',
+      sessionId: MOCK_SESSION_ID,
+      taskId: MOCK_TASK_ID,
+      payload: {
+        mode: 'delta',
+        revision: transcriptRevision,
+        totalEntries: transcript.length,
+        upserts: [{ index: transcript.length - 1, entry }],
+      },
+    });
   }
 
   function emitActivity(state: 'thinking' | 'idle' | 'permission'): void {
@@ -196,7 +211,7 @@ export function createMockDesktop(): MockDesktop {
 
   function raiseQuestionPrompt(): void {
     questionRaised = true;
-    transcript.push({
+    appendTranscriptEntry({
       kind: 'assistant',
       uuid: 'mock-assistant-question',
       ts: Date.now(),
@@ -222,7 +237,6 @@ export function createMockDesktop(): MockDesktop {
         },
       ],
     });
-    emitTranscript();
     raisePrompt(QUESTION_PROMPT_ID);
   }
 
@@ -242,22 +256,20 @@ export function createMockDesktop(): MockDesktop {
       });
       if (feedTick % 12 === 0 && pendingPromptId === null) {
         entryCounter += 1;
-        transcript.push({
+        appendTranscriptEntry({
           kind: 'assistant',
           uuid: `mock-assistant-tick-${entryCounter}`,
           ts: Date.now(),
           blocks: [{ type: 'tool_use', id: `mock-tool-tick-${entryCounter}`, name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
         });
-        emitTranscript();
       }
       if (feedTick === 20 && pendingPromptId === null && !questionRaised) {
-        transcript.push({
+        appendTranscriptEntry({
           kind: 'assistant',
           uuid: 'mock-assistant-permission',
           ts: Date.now(),
           blocks: [{ type: 'tool_use', id: PERMISSION_TOOL_ID, name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
         });
-        emitTranscript();
         raisePrompt(PERMISSION_PROMPT_ID);
       }
     }, 1000);
@@ -295,11 +307,19 @@ export function createMockDesktop(): MockDesktop {
           return ok(request);
         }
         if (payload.sessionId !== MOCK_SESSION_ID) return failWith(request, `No such session: ${payload.sessionId}`);
+        if (payload.action === 'transcript-window') {
+          const end = Math.min(payload.beforeIndex ?? transcript.length, transcript.length);
+          const start = Math.max(0, end - (payload.limit ?? 60));
+          const window: TranscriptWindowResponsePayload = {
+            revision: transcriptRevision,
+            totalEntries: transcript.length,
+            startIndex: start,
+            entries: transcript.slice(start, end),
+          };
+          return ok(request, window as unknown as JsonValue);
+        }
         streamSubscribed = true;
         startFeed();
-        later(100, () => {
-          if (streamSubscribed) emitTranscript();
-        });
         const snapshot: ReadStreamResponsePayload = {
           scrollback: 'kangentic mock desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n',
           activity: pendingPromptId ? { state: 'permission', reason: { kind: 'permission' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
@@ -317,18 +337,16 @@ export function createMockDesktop(): MockDesktop {
       case 'send-user-message': {
         const payload = parseCapabilityRequestPayload('send-user-message', request.payload);
         entryCounter += 1;
-        transcript.push({ kind: 'user', uuid: `mock-user-sent-${entryCounter}`, ts: Date.now(), text: payload.text });
-        emitTranscript();
+        appendTranscriptEntry({ kind: 'user', uuid: `mock-user-sent-${entryCounter}`, ts: Date.now(), text: payload.text });
         emitActivity('thinking');
         const replyCounter = entryCounter;
         later(2500, () => {
-          transcript.push({
+          appendTranscriptEntry({
             kind: 'assistant',
             uuid: `mock-assistant-reply-${replyCounter}`,
             ts: Date.now(),
             blocks: [{ type: 'text', text: 'Got it - folding that into the fix. (This reply came from the in-app mock desktop.)' }],
           });
-          emitTranscript();
         });
         return ok(request, { delivered: true });
       }
