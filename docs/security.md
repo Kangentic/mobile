@@ -87,7 +87,10 @@ The default pairing grant is read-only (`read-stream`, `read-board`, `read-diff`
 `answer-permission-prompt`, `interactive-terminal`, `board-tool-write`) requires an explicit
 per-verb grant in the desktop's Mobile Devices settings. `interactive-terminal` is deliberately
 raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
-already running, never a new shell. The `board-tool-*` verbs dispatch into a hand-classified
+already running, never a new shell. Its resize/release actions (the phone sizing that PTY to the
+phone screen) ride the same grant rather than a new verb: a device already trusted to type raw
+bytes into the PTY gains nothing from resizing it, and the desktop restores its own dimensions
+the moment the phone releases, disconnects, or is revoked. The `board-tool-*` verbs dispatch into a hand-classified
 allowlist of the desktop's task/backlog command registry; the raw-SQL escape hatch and every
 code-execution tool family are excluded desktop-side.
 

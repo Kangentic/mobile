@@ -251,6 +251,11 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     let permissionPending = false;
     let feedTimer = null;
     let feedTick = 0;
+    // The stub's PTY grid: reported in the subscribe snapshot, overridden by
+    // a fit-mode resize, restored by release-size. A scripted desktop-origin
+    // refit fires at tick 30 so Maestro can exercise mirror-mode re-layout.
+    const STUB_DESKTOP_DIMS = { cols: 120, rows: 30 };
+    let ptyDimensions = { ...STUB_DESKTOP_DIMS };
     // Protocol v2: the transcript never ships wholesale. This array is the
     // stub's authoritative conversation; appends stream as indexed deltas
     // and history loads via the read-stream transcript-window action.
@@ -265,6 +270,11 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
 
     function sendEvent(event) {
       send({ type: 'event', event });
+    }
+
+    function emitPtyResize() {
+      if (!streamSubscribed) return;
+      sendEvent({ kind: 'terminal-resize', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { ...ptyDimensions } });
     }
 
     function appendTranscriptEntry(entry) {
@@ -300,6 +310,13 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
             ts: Date.now(),
             blocks: [{ type: 'tool_use', id: `stub-tool-tick-${feedTick}`, name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
           });
+        }
+        if (feedTick === 30 && ptyDimensions.cols === STUB_DESKTOP_DIMS.cols && ptyDimensions.rows === STUB_DESKTOP_DIMS.rows) {
+          // Simulate the desktop user drag-resizing their pane: the phone's
+          // mirror view should re-lay out without a reload.
+          ptyDimensions = { cols: 100, rows: 28 };
+          emitPtyResize();
+          console.log('[feed] desktop pane resized to 100x28 (terminal-resize pushed)');
         }
         if (feedTick === 20 && !permissionPending) {
           permissionPending = true;
@@ -349,6 +366,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
             activity: { state: permissionPending ? 'permission' : 'thinking', reason: permissionPending ? { kind: 'permission' } : { kind: 'turn-active' } },
             usage: null,
             awaitedPromptId: permissionPending ? STUB_PROMPT_ID : null,
+            ptyDimensions: { ...ptyDimensions },
           });
         }
         case 'read-diff':
@@ -372,6 +390,19 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
           }, 50);
           return ok({ answered: true });
         case 'interactive-terminal':
+          if (payload.action === 'resize') {
+            const colsChanged = payload.dimensions.cols !== ptyDimensions.cols;
+            ptyDimensions = { cols: payload.dimensions.cols, rows: payload.dimensions.rows };
+            console.log(`[pty] phone resized the grid to ${ptyDimensions.cols}x${ptyDimensions.rows}`);
+            emitPtyResize();
+            return ok({ resized: true, colsChanged });
+          }
+          if (payload.action === 'release-size') {
+            ptyDimensions = { ...STUB_DESKTOP_DIMS };
+            console.log('[pty] phone released the grid; restored desktop dims');
+            emitPtyResize();
+            return ok({ released: true });
+          }
           console.log(`[pty] phone wrote ${JSON.stringify(payload.data)}`);
           sendEvent({ kind: 'terminal', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { data: payload.data.replace(/\r/g, '\r\n') } });
           return ok({ written: true });
