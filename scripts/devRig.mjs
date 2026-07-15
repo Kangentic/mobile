@@ -94,6 +94,7 @@ function parseRigArgs(argv) {
     options: {
       avd: { type: 'string' },
       'relay-repo': { type: 'string' },
+      'kangentic-repo': { type: 'string' },
       clear: { type: 'boolean', default: false },
       'no-metro': { type: 'boolean', default: false },
       stub: { type: 'boolean', default: false },
@@ -111,6 +112,15 @@ function resolveRelayRepo(flags, state) {
     process.env.KANGENTIC_RELAY_REPO ??
     state.relayRepoPath ??
     resolve(repoRoot, '..', 'kangentic-relay')
+  );
+}
+
+function resolveKangenticRepo(flags, state) {
+  return (
+    flags['kangentic-repo'] ??
+    process.env.KANGENTIC_REPO ??
+    state.kangenticRepoPath ??
+    resolve(repoRoot, '..', 'kangentic')
   );
 }
 
@@ -465,6 +475,62 @@ function printLiveChecklist() {
 `);
 }
 
+// ---------------------------------------------------------------------------
+// Live-mode quick pair: dev-only instant pairing, no in-app ceremony.
+//
+// The desktop dev instance (bridge enabled) publishes its static public key
+// and relay URL to its repo's gitignored .kangentic/mobile-dev-pairing/
+// directory; the rig answers with a persistent dev phone PUBLIC key, which
+// the desktop adopts into its signed roster with all verbs granted. The
+// matching secret key rides into the app via a dev-only env var, so the
+// app links instantly. Only public keys cross the repo boundary, and both
+// sides compile the path out of production builds. The QR/SAS ceremony
+// (dev:pair) remains untouched for testing real pairing.
+
+const DEV_PAIRING_SUBDIR = join('.kangentic', 'mobile-dev-pairing');
+
+async function prepareQuickPair(kangenticRepo) {
+  const pairingDir = join(kangenticRepo, DEV_PAIRING_SUBDIR);
+  const desktopFile = join(pairingDir, 'desktop.json');
+
+  let desktop = null;
+  const deadline = Date.now() + 15_000;
+  let waitedNotice = false;
+  while (Date.now() < deadline) {
+    if (existsSync(desktopFile)) {
+      try {
+        desktop = JSON.parse(readFileSync(desktopFile, 'utf8'));
+        break;
+      } catch {
+        // Mid-write; retry.
+      }
+    }
+    if (!waitedNotice) {
+      log(`quick pair: waiting for the desktop handshake file (${desktopFile})...`);
+      waitedNotice = true;
+    }
+    await sleep(1000);
+  }
+  if (!desktop || typeof desktop.desktopStaticPublicKey !== 'string' || typeof desktop.relayUrl !== 'string') {
+    warn('quick pair unavailable: no desktop handshake file appeared.');
+    warn('Is your Kangentic dev instance running with the mobile bridge enabled, on a build that has dev-quick-pair?');
+    warn('Falling back to manual pairing.');
+    return null;
+  }
+
+  const protocol = await import('@kangentic/protocol');
+  let keyPair = loadState().devPhoneKeyPair;
+  if (!keyPair || typeof keyPair.secretKey !== 'string' || typeof keyPair.publicKey !== 'string') {
+    const generated = protocol.generateX25519KeyPair();
+    keyPair = { secretKey: protocol.bytesToHex(generated.secretKey), publicKey: protocol.bytesToHex(generated.publicKey) };
+    saveState({ devPhoneKeyPair: keyPair });
+    log('quick pair: generated a persistent dev phone identity');
+  }
+  writeFileSync(join(pairingDir, 'phone.json'), `${JSON.stringify({ phonePublicKey: keyPair.publicKey }, null, 2)}\n`);
+
+  return `${desktop.desktopStaticPublicKey},${keyPair.secretKey},${keyPair.publicKey},${desktop.relayUrl}`;
+}
+
 async function main() {
   const { mode, flags } = parseRigArgs(process.argv.slice(2));
   const state = loadState();
@@ -501,10 +567,22 @@ async function main() {
     }
   }
 
-  if (mode === 'live') printLiveChecklist();
   if (mode === 'stub') startStub(state, flags);
 
-  if (mode === 'mock') {
+  if (mode === 'live') {
+    const quickPairEnv = await prepareQuickPair(resolveKangenticRepo(flags, state));
+    if (quickPairEnv) {
+      // The env value is inlined at bundle time, so the first run (or a key
+      // or relay change) needs a clean Metro cache to take effect.
+      const changed = loadState().lastQuickPairEnv !== quickPairEnv;
+      if (changed) saveState({ lastQuickPairEnv: quickPairEnv });
+      log('quick pair: the app links to your desktop instantly - no in-app pairing needed');
+      startMetro({ ...flags, clear: flags.clear || changed }, { EXPO_PUBLIC_KANGENTIC_DEV_PAIRING: quickPairEnv });
+    } else {
+      printLiveChecklist();
+      startMetro(flags);
+    }
+  } else if (mode === 'mock') {
     log('mock mode: in-app fake desktop, no relay or pairing involved');
     log('(switching mock on/off later needs a Metro restart with --clear: the flag is inlined at bundle time)');
     startMetro(flags, { EXPO_PUBLIC_KANGENTIC_MOCK: '1' });
