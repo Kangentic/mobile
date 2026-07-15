@@ -18,20 +18,32 @@
  *                                    key for a no-re-pair session when it can.
  *   node scripts/devRig.mjs doctor   Preflight checks only.
  *
- * Flags: --avd <name>, --relay-repo <path>, --clear, --no-metro,
- *        --stub (pair mode), --fresh (stub mode: ignore the saved phone key).
+ * Flags: --avd <name>, --relay-repo <path>, --kangentic-repo <path>, --clear,
+ *        --no-metro, --no-protocol-link, --stub (pair mode),
+ *        --fresh (stub mode: ignore the saved phone key).
+ *
+ * Every run builds the sibling kangentic monorepo's packages/protocol and
+ * links its packed output into node_modules (unless --no-protocol-link or the
+ * sibling repo is absent), so local dev tracks the @kangentic/protocol source
+ * of truth without an npm publish; a change to the protocol source forces a
+ * clean Metro cache. See docs/developer-guide.md's "Developing @kangentic/protocol".
  *
  * Local state lives in the gitignored .devrig.local.json at the repo root:
- *   { "relayRepoPath": "...", "stubPhoneKey": "<64 hex>", "avdName": "..." }
+ *   { "relayRepoPath": "...", "kangenticRepoPath": "...", "stubPhoneKey":
+ *     "<64 hex>", "avdName": "...", "linkedProtocolHash": "..." }
  * Relay repo resolution: --relay-repo > KANGENTIC_RELAY_REPO env >
- * .devrig.local.json > ../kangentic-relay (sibling checkout).
+ * .devrig.local.json > ../kangentic-relay (sibling checkout). The kangentic
+ * repo resolves the same way (--kangentic-repo / KANGENTIC_REPO / state /
+ * ../kangentic).
  *
  * The rig adopts healthy already-running pieces (relay via /healthz, Metro
  * via port 8081, emulator via adb devices) and only tears down children it
  * spawned itself. Ctrl-C stops relay/stub/Metro; the emulator stays up.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,6 +109,7 @@ function parseRigArgs(argv) {
       'kangentic-repo': { type: 'string' },
       clear: { type: 'boolean', default: false },
       'no-metro': { type: 'boolean', default: false },
+      'no-protocol-link': { type: 'boolean', default: false },
       stub: { type: 'boolean', default: false },
       fresh: { type: 'boolean', default: false },
     },
@@ -136,6 +149,85 @@ function run(command, args, options = {}) {
 
 function commandExists(command, args) {
   return run(command, args).status === 0;
+}
+
+// Blocking shell command (npm/npx need the shell for their .cmd shims on
+// Windows). Distinct from spawnPrefixed, which supervises a long-lived child.
+function runShell(commandString, options = {}) {
+  return spawnSync(commandString, { encoding: 'utf8', shell: true, windowsHide: true, ...options });
+}
+
+// ---------------------------------------------------------------------------
+// Local @kangentic/protocol linking
+//
+// The protocol package is the source of truth in the sibling kangentic
+// monorepo (packages/protocol). Rather than publish to npm on every change
+// (slow), local dev builds that package and links its packed output into this
+// app's node_modules, so Metro/tsc track the monorepo checkout. The committed
+// package.json stays pinned to the published range - this only touches
+// node_modules. See docs/developer-guide.md's "Developing @kangentic/protocol".
+
+/** Content hash of the protocol package's source, so a re-link only happens when it actually changed. */
+function hashProtocolSource(protocolDir) {
+  const hash = createHash('sha256');
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      hash.update(full);
+      hash.update(readFileSync(full));
+    }
+  };
+  walk(join(protocolDir, 'src'));
+  hash.update(readFileSync(join(protocolDir, 'package.json')));
+  return hash.digest('hex');
+}
+
+/**
+ * Build the sibling @kangentic/protocol and link its packed build into this
+ * app's node_modules. Best-effort: any failure (or an absent sibling repo)
+ * warns and falls back to whatever @kangentic/protocol is already installed,
+ * so the rig never dies over the link. Returns true when the link changed, so
+ * the caller can force a clean Metro cache (Metro caches resolved deps).
+ */
+function ensureLocalProtocol(kangenticRepo, flags) {
+  if (flags['no-protocol-link']) return false;
+  const protocolDir = join(kangenticRepo, 'packages', 'protocol');
+  if (!existsSync(join(protocolDir, 'package.json'))) {
+    log(`protocol: no packages/protocol under ${kangenticRepo}; using the installed @kangentic/protocol`);
+    return false;
+  }
+  const installedDir = join(repoRoot, 'node_modules', '@kangentic', 'protocol');
+  const sourceHash = hashProtocolSource(protocolDir);
+  if (loadState().linkedProtocolHash === sourceHash && existsSync(installedDir)) {
+    log('protocol: local build already linked (source unchanged)');
+    return false;
+  }
+  log('protocol: building and linking the local @kangentic/protocol...');
+  const build = runShell('npm run build --workspace packages/protocol', { cwd: kangenticRepo });
+  if (build.status !== 0) {
+    warn(`protocol build failed; keeping the installed package.\n${(build.stderr || build.stdout || '').trim()}`);
+    return false;
+  }
+  const packDestination = tmpdir();
+  const pack = runShell(`npm pack --workspace packages/protocol --pack-destination "${packDestination}"`, { cwd: kangenticRepo });
+  if (pack.status !== 0) {
+    warn(`protocol pack failed; keeping the installed package.\n${(pack.stderr || pack.stdout || '').trim()}`);
+    return false;
+  }
+  const tarballName = pack.stdout.trim().split('\n').pop().trim();
+  const install = runShell(`npm install "${join(packDestination, tarballName)}" --no-save`, { cwd: repoRoot });
+  if (install.status !== 0) {
+    warn(`protocol link install failed; keeping the installed package.\n${(install.stderr || install.stdout || '').trim()}`);
+    return false;
+  }
+  saveState({ linkedProtocolHash: sourceHash });
+  log('protocol: linked the local build (clearing Metro cache to pick it up)');
+  return true;
 }
 
 /**
@@ -548,6 +640,11 @@ async function main() {
   if (!commandExists('adb', ['version'])) fail('adb is not on PATH');
   await ensureEmulator(avdName);
 
+  const kangenticRepo = resolveKangenticRepo(flags, state);
+  // Link the sibling protocol build into node_modules; a change forces a
+  // clean Metro cache so the bundler re-resolves the dependency.
+  const protocolRelinked = ensureLocalProtocol(kangenticRepo, flags);
+
   if (needsRelay) {
     await ensureRelay(relayRepo);
     ensureAdbReverse();
@@ -570,24 +667,24 @@ async function main() {
   if (mode === 'stub') startStub(state, flags);
 
   if (mode === 'live') {
-    const quickPairEnv = await prepareQuickPair(resolveKangenticRepo(flags, state));
+    const quickPairEnv = await prepareQuickPair(kangenticRepo);
     if (quickPairEnv) {
       // The env value is inlined at bundle time, so the first run (or a key
       // or relay change) needs a clean Metro cache to take effect.
       const changed = loadState().lastQuickPairEnv !== quickPairEnv;
       if (changed) saveState({ lastQuickPairEnv: quickPairEnv });
       log('quick pair: the app links to your desktop instantly - no in-app pairing needed');
-      startMetro({ ...flags, clear: flags.clear || changed }, { EXPO_PUBLIC_KANGENTIC_DEV_PAIRING: quickPairEnv });
+      startMetro({ ...flags, clear: flags.clear || changed || protocolRelinked }, { EXPO_PUBLIC_KANGENTIC_DEV_PAIRING: quickPairEnv });
     } else {
       printLiveChecklist();
-      startMetro(flags);
+      startMetro({ ...flags, clear: flags.clear || protocolRelinked });
     }
   } else if (mode === 'mock') {
     log('mock mode: in-app fake desktop, no relay or pairing involved');
     log('(switching mock on/off later needs a Metro restart with --clear: the flag is inlined at bundle time)');
-    startMetro(flags, { EXPO_PUBLIC_KANGENTIC_MOCK: '1' });
+    startMetro({ ...flags, clear: flags.clear || protocolRelinked }, { EXPO_PUBLIC_KANGENTIC_MOCK: '1' });
   } else {
-    startMetro(flags);
+    startMetro({ ...flags, clear: flags.clear || protocolRelinked });
   }
 
   if (flags['no-metro'] && spawnedChildren.length === 0) {

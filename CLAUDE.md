@@ -114,8 +114,10 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   terminal, reflowed to phone width, with `AskUserQuestion`/permission prompts as tappable
   cards; the in-progress turn streams token-by-token as a cleaned tail of the raw PTY feed
   (`src/terminal/liveTail.ts`), replaced when the next transcript revision lands. The raw
-  interactive terminal mirror (xterm.js in a WebView, quick-key bar, `interactive-terminal`
-  writes) is a secondary view; the desktop PTY is never resized by the phone.
+  interactive terminal (xterm.js in a WebView, quick-key bar, `interactive-terminal` writes)
+  renders at the desktop's reported PTY grid; its default Mobile view resizes that PTY to the
+  phone via the `interactive-terminal` grant (restored on tab close / disconnect / revoke), and
+  its Desktop view mirrors the grid 1:1 with pan and zoom.
 - **E2E push:** payloads are ciphertext plus a generic placeholder only; decryption happens
   on-device (iOS Notification Service Extension / Android Notifee). Every failure degrades to
   the placeholder, never to plaintext.

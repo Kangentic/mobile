@@ -74,6 +74,44 @@ Details worth knowing:
 - **Mock flag caveat:** `EXPO_PUBLIC_KANGENTIC_MOCK` is inlined at bundle time, so switching
   mock on or off needs a Metro restart with `--clear`.
 
+## Developing @kangentic/protocol
+
+`@kangentic/protocol` (the wire format, Noise handshakes, capability verbs, and event types) is
+the one dependency shared by this app, the desktop `kangentic` app, and `kangentic-relay`
+(see `.claude/rules/protocol-types-from-package.md`). Its source of truth is the **kangentic
+monorepo** at `packages/protocol`; it is published to npm only at release milestones, not on
+every change.
+
+- **Committed dependency.** This app's `package.json` pins `@kangentic/protocol` to a published
+  semver range (e.g. `^0.4.0`). That is what a fresh `npm install`, CI, and EAS cloud builds
+  resolve, so the pinned version must be published before a cloud build that needs it.
+- **Local iteration (no publish).** The dev rig builds the sibling monorepo's `packages/protocol`
+  and links its packed output into this app's `node_modules` on every run (the rig's
+  `ensureLocalProtocol`), so Metro and `tsc` track your local protocol checkout without an npm
+  publish. It only touches `node_modules`, never the committed `package.json`; a change to the
+  protocol source is detected by a content hash and forces a clean Metro cache. Pass
+  `--no-protocol-link` to skip it (to test against exactly the installed package), and it skips
+  itself gracefully when the sibling `../kangentic` checkout is absent.
+
+Workflow for a protocol change:
+
+1. Edit `packages/protocol/src` in the kangentic monorepo and bump its `package.json` version
+   (minor for an additive, backward-compatible change; see wire compatibility below).
+2. Open a PR against the monorepo and merge it to `main` - `main` is the protocol's source of
+   truth, decoupled from npm publishing.
+3. Locally, just re-run the dev rig (`npm run dev:live` / `dev:mock` / ...): it rebuilds and
+   relinks the protocol automatically. The desktop app consumes `packages/protocol` as an
+   in-repo workspace, so it only needs `npm run build --workspace packages/protocol` plus a
+   desktop restart (its mobile-bridge runs in the Electron main process, which does not
+   hot-reload).
+4. Bump this app's pinned `^x.y.z` and publish `@kangentic/protocol@x.y.z` to npm only when the
+   protocol is firmed up for a release, or a cloud build needs it.
+
+**Wire compatibility.** Additive, backward-compatible changes keep `PROTOCOL_VERSION` the same,
+so peers on different minor versions still interoperate (an older phone ignores unknown fields; a
+newer desktop tolerates their absence). A breaking wire change bumps `PROTOCOL_VERSION`, which is
+bound into the Noise prologue and forces all peers to upgrade in lockstep.
+
 ## Project Structure
 
 ```
