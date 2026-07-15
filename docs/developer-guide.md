@@ -42,6 +42,17 @@ For anything beyond a bare Metro session, use the dev rig below.
 
 Details worth knowing:
 
+- **Live-mode quick pair (dev-only hot path):** `dev:live` skips the in-app QR/SAS ceremony
+  entirely. The desktop dev instance (bridge enabled, dev build) publishes its static public key
+  and relay URL to its repo's gitignored `.kangentic/mobile-dev-pairing/desktop.json`; the rig
+  answers with a persistent dev phone public key (`phone.json`) that the desktop adopts into its
+  signed roster with all verbs granted, and hands the matching identity to the app via
+  `EXPO_PUBLIC_KANGENTIC_DEV_PAIRING`. Only public keys cross the file boundary; both sides
+  compile the path out of production builds; the ceremony remains the only pairing path for real
+  devices (and `dev:pair` still exercises it). The kangentic repo resolves like the relay repo:
+  `--kangentic-repo`, `KANGENTIC_REPO`, `kangenticRepoPath` in the state file, or the
+  `../kangentic` sibling default. If the handshake file never appears (bridge disabled, or the
+  desktop build predates dev-quick-pair), the rig falls back to the manual checklist.
 - **Relay checkout:** the rig expects the `kangentic-relay` repo as a sibling directory
   (`../kangentic-relay`), overridable via `--relay-repo`, the `KANGENTIC_RELAY_REPO` env var, or
   `relayRepoPath` in the state file. It starts the relay's `npm run dev` with
