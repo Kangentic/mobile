@@ -16,6 +16,14 @@ import { writeTerminal } from '@/connection/actions';
 
 export interface TerminalPaneProps {
   sessionId: string;
+  /**
+   * True only while the Terminal tab is the visible page. When false the
+   * WebView stops repainting: live writes are skipped (the terminalFeed ring
+   * keeps buffering independently), so a hidden terminal never composites the
+   * stream off-screen. On becoming visible again the pane re-seeds from the
+   * ring to catch up.
+   */
+  isActive: boolean;
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
@@ -27,7 +35,10 @@ const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
  */
 const MIN_TERMINAL_FONT_SIZE_PX = 6;
 const MAX_TERMINAL_FONT_SIZE_PX = 24;
-const CHUNK_BATCH_INTERVAL_MS = 16;
+// 32ms (~30fps) coalesces a token firehose into fewer, larger writes than 16ms
+// did, halving repaint frequency at a latency the eye cannot see. Keystroke
+// echo is unaffected - keys go phone->desktop directly, not through this batch.
+const CHUNK_BATCH_INTERVAL_MS = 32;
 const FONT_SIZE_POST_THROTTLE_MS = 50;
 
 // Metro asset reference; ESM import syntax cannot load an html asset.
@@ -78,11 +89,14 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
  * out as 'input' and is written to the PTY (the one thing the phone sends);
  * pinch zoom adjusts the local font between 6 and 24 px.
  */
-export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Element {
+export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
   const webViewRef = useRef<WebView>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
+  // Read inside the live-feed listener so pausing takes effect without
+  // re-subscribing the feed on every tab switch.
+  const isActiveRef = useRef(isActive);
   // Font size lives in refs, not state: nothing renders from it (the WebView
   // owns the glyphs), and a re-render per pinch frame would be pure waste.
   const fontSizePxRef = useRef(DEFAULT_TERMINAL_FONT_SIZE_PX);
@@ -147,6 +161,9 @@ export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Elemen
   useEffect(() => {
     if (!terminalReady) return;
     const unsubscribe = subscribeChunks(sessionId, (event) => {
+      // Paused (tab not visible): the ring keeps every byte; drop the render
+      // work and re-seed from the ring when the tab becomes visible again.
+      if (!isActiveRef.current) return;
       if (event.kind === 'dims') {
         // The desktop's authoritative grid (snapshot or a desktop refit).
         // Adopt it and re-fit the whole frame to screen - this is READ-ONLY;
@@ -176,6 +193,19 @@ export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Elemen
       flushPendingChunks();
     };
   }, [terminalReady, sessionId, postInit, flushPendingChunks, clearFlushTimer, postToTerminal]);
+
+  // Pause/resume rendering with tab visibility. When the terminal becomes the
+  // visible page again, drop any queued writes and re-seed from the ring so the
+  // WebView jumps straight to the latest frame it missed while paused.
+  useEffect(() => {
+    const wasActive = isActiveRef.current;
+    isActiveRef.current = isActive;
+    if (isActive && !wasActive && terminalReady) {
+      pendingChunksRef.current = [];
+      clearFlushTimer();
+      postInit();
+    }
+  }, [isActive, terminalReady, postInit, clearFlushTimer]);
 
   // Drop this session's DECCKM state on unmount. There is nothing to release -
   // the mirror never resized the PTY.
