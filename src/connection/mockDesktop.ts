@@ -54,6 +54,8 @@ const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
 const QUESTION_PROMPT_ID = `${MOCK_SESSION_ID}:${QUESTION_TOOL_ID}`;
+/** The mock desktop pane's grid; a fit-mode resize overrides it until release-size restores it. */
+const MOCK_DESKTOP_PTY_DIMENSIONS = { cols: 120, rows: 30 };
 
 function initialTasks(): BoardTaskWire[] {
   const nowIso = new Date().toISOString();
@@ -158,11 +160,16 @@ export function createMockDesktop(): MockDesktop {
   let questionRaised = false;
   let entryCounter = 0;
   let feedTimer: ReturnType<typeof setInterval> | null = null;
+  let ptyDimensions = { ...MOCK_DESKTOP_PTY_DIMENSIONS };
   const oneShotTimers = new Set<ReturnType<typeof setTimeout>>();
 
   function emit(event: BridgeEvent): void {
     if (!peer.isEstablished) return;
     peer.emitEvent(event);
+  }
+
+  function emitPtyResize(): void {
+    emit({ kind: 'terminal-resize', sessionId: MOCK_SESSION_ID, taskId: MOCK_TASK_ID, payload: { ...ptyDimensions } });
   }
 
   function later(delayMs: number, action: () => void): void {
@@ -325,6 +332,7 @@ export function createMockDesktop(): MockDesktop {
           activity: pendingPromptId ? { state: 'permission', reason: { kind: 'permission' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
           usage: null,
           awaitedPromptId: pendingPromptId,
+          ptyDimensions: { ...ptyDimensions },
         };
         return ok(request, snapshot as unknown as JsonValue);
       }
@@ -378,6 +386,19 @@ export function createMockDesktop(): MockDesktop {
       }
       case 'interactive-terminal': {
         const payload = parseCapabilityRequestPayload('interactive-terminal', request.payload);
+        // Mirrors the desktop's action union: resize holds the grid until
+        // release-size restores the mock's desktop-default 120x30.
+        if (payload.action === 'resize') {
+          const colsChanged = payload.dimensions.cols !== ptyDimensions.cols;
+          ptyDimensions = { cols: payload.dimensions.cols, rows: payload.dimensions.rows };
+          emitPtyResize();
+          return ok(request, { resized: true, colsChanged });
+        }
+        if (payload.action === 'release-size') {
+          ptyDimensions = { ...MOCK_DESKTOP_PTY_DIMENSIONS };
+          emitPtyResize();
+          return ok(request, { released: true });
+        }
         emit({
           kind: 'terminal',
           sessionId: MOCK_SESSION_ID,

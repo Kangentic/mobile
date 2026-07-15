@@ -11,7 +11,11 @@ export interface TerminalTabProps {
   mounted: boolean;
 }
 
-/** The raw interactive terminal mirror tab: the xterm WebView, mounted on first visit. */
+/**
+ * The raw interactive terminal tab: a FAITHFUL MIRROR of the desktop terminal
+ * in an xterm WebView, mounted on first visit. It renders the desktop's grid
+ * 1:1 and never resizes the shared session; pinch-zoom + pan read the detail.
+ */
 export function TerminalTab({ sessionId, mounted }: TerminalTabProps): React.JSX.Element {
   if (sessionId === null) {
     return (

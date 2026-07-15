@@ -133,6 +133,7 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
     liveTailBuffer.append(getBufferedData(sessionId));
     setLiveTailLines(liveTailBuffer.snapshotLines());
     const unsubscribe = subscribeChunks(sessionId, (event) => {
+      if (event.kind === 'dims') return; // geometry concerns the xterm pane, not the cleaned tail
       if (event.kind === 'seed') liveTailBuffer.reset();
       liveTailBuffer.append(event.data);
       scheduleFlush();

@@ -10,7 +10,8 @@ import {
   type HostToTerminalMessage,
 } from '@/terminal/terminalBridge';
 import { parseColsFromScrollback } from '@/terminal/liveTail';
-import { getBufferedData, subscribeChunks } from '@/state/terminalFeed';
+import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state/terminalFeed';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { writeTerminal } from '@/connection/actions';
 
 export interface TerminalPaneProps {
@@ -18,9 +19,15 @@ export interface TerminalPaneProps {
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
-const MIN_TERMINAL_FONT_SIZE_PX = 11;
+/**
+ * Pinch floor inside the WebView. Deliberately below the 11px RN text floor
+ * (ui-conventions.md): this is pinch-zoomable terminal CONTENT the user
+ * scales at will - the fit-to-screen first paint of a wide desktop grid needs
+ * small glyphs, and a pinch enlarges any part of it instantly.
+ */
+const MIN_TERMINAL_FONT_SIZE_PX = 6;
 const MAX_TERMINAL_FONT_SIZE_PX = 24;
-const CHUNK_BATCH_INTERVAL_MS = 32;
+const CHUNK_BATCH_INTERVAL_MS = 16;
 const FONT_SIZE_POST_THROTTLE_MS = 50;
 
 // Metro asset reference; ESM import syntax cannot load an html asset.
@@ -61,17 +68,23 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
 }
 
 /**
- * The raw interactive terminal mirror: an xterm.js WebView fed by the
- * terminalFeed ring. Keyboard input typed inside the WebView flows back out
- * as 'input' messages and is written to the desktop PTY; pinch zoom adjusts
- * the xterm font size between 11 and 24 px.
+ * The raw interactive terminal: a FAITHFUL MIRROR of the desktop terminal.
+ * An xterm.js WebView fed by the terminalFeed ring renders the desktop's
+ * EXACT grid 1:1 and the glue sizes the font so the whole frame fits the
+ * phone screen (nothing cut off); pinch-zoom + pan read the detail.
+ *
+ * It NEVER resizes the desktop PTY - a shared desktop session must not be
+ * reshaped by the phone. Keyboard input typed inside the WebView flows back
+ * out as 'input' and is written to the PTY (the one thing the phone sends);
+ * pinch zoom adjusts the local font between 6 and 24 px.
  */
 export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
   const webViewRef = useRef<WebView>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
-  const [fontSizePx, setFontSizePx] = useState(DEFAULT_TERMINAL_FONT_SIZE_PX);
+  // Font size lives in refs, not state: nothing renders from it (the WebView
+  // owns the glyphs), and a re-render per pinch frame would be pure waste.
   const fontSizePxRef = useRef(DEFAULT_TERMINAL_FONT_SIZE_PX);
   const pinchBaseFontSizeRef = useRef(DEFAULT_TERMINAL_FONT_SIZE_PX);
   const lastFontSizePostAtRef = useRef(0);
@@ -101,14 +114,19 @@ export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Elemen
 
   const postInit = useCallback(() => {
     const scrollback = getBufferedData(sessionId);
+    const ptyDimensions = getTerminalDimensions(sessionId);
     postToTerminal({
       type: 'init',
       scrollback,
-      cols: parseColsFromScrollback(scrollback),
-      fontSizePx,
+      // The desktop's exact grid. When the dims have not arrived yet (e.g.
+      // mid-reconnect, before the snapshot lands) infer cols from content and
+      // leave rows null; the real grid arrives shortly as a 'resize'.
+      cols: ptyDimensions ? ptyDimensions.cols : parseColsFromScrollback(scrollback),
+      rows: ptyDimensions ? ptyDimensions.rows : null,
+      fontSizePx: fontSizePxRef.current,
       theme: buildXtermTheme(theme.terminalPalette, theme.colors),
     });
-  }, [postToTerminal, sessionId, fontSizePx, theme]);
+  }, [postToTerminal, sessionId, theme]);
 
   const flushPendingChunks = useCallback(() => {
     const joinedData = pendingChunksRef.current.join('');
@@ -129,6 +147,13 @@ export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Elemen
   useEffect(() => {
     if (!terminalReady) return;
     const unsubscribe = subscribeChunks(sessionId, (event) => {
+      if (event.kind === 'dims') {
+        // The desktop's authoritative grid (snapshot or a desktop refit).
+        // Adopt it and re-fit the whole frame to screen - this is READ-ONLY;
+        // the phone never sends a resize back.
+        postToTerminal({ type: 'resize', cols: event.cols, rows: event.rows });
+        return;
+      }
       if (event.kind === 'seed') {
         // A fresh read-stream subscribe replaced the buffer: drop anything
         // queued and re-init the terminal from the new scrollback.
@@ -150,7 +175,15 @@ export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Elemen
       clearFlushTimer();
       flushPendingChunks();
     };
-  }, [terminalReady, sessionId, postInit, flushPendingChunks, clearFlushTimer]);
+  }, [terminalReady, sessionId, postInit, flushPendingChunks, clearFlushTimer, postToTerminal]);
+
+  // Drop this session's DECCKM state on unmount. There is nothing to release -
+  // the mirror never resized the PTY.
+  useEffect(() => {
+    return () => {
+      useTerminalUiStore.getState().clearSession(sessionId);
+    };
+  }, [sessionId]);
 
   const onWebViewMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -159,6 +192,18 @@ export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Elemen
       if (message.type === 'ready') {
         postInit();
         setTerminalReady(true);
+        return;
+      }
+      if (message.type === 'modes') {
+        useTerminalUiStore.getState().setApplicationCursorMode(sessionId, message.applicationCursorKeys);
+        return;
+      }
+      if (message.type === 'font-size') {
+        // The glue fit the font to the screen; keep the pinch baseline in sync
+        // so the first pinch does not jump.
+        const syncedFontSize = clampTerminalFontSize(Math.round(message.fontSizePx));
+        fontSizePxRef.current = syncedFontSize;
+        pinchBaseFontSizeRef.current = syncedFontSize;
         return;
       }
       // 'input': keys typed inside the xterm WebView go to the desktop PTY.
@@ -181,7 +226,6 @@ export function TerminalPane({ sessionId }: TerminalPaneProps): React.JSX.Elemen
       if (now - lastFontSizePostAtRef.current < FONT_SIZE_POST_THROTTLE_MS) return;
       lastFontSizePostAtRef.current = now;
       fontSizePxRef.current = nextFontSize;
-      setFontSizePx(nextFontSize);
       postToTerminal({ type: 'set-font-size', fontSizePx: nextFontSize });
     })
     .onEnd(() => {

@@ -28,8 +28,11 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   hydrated: false,
 
   hydrate: async () => {
-    const storedMode = await SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY);
-    set({ dictationMode: isDictationMode(storedMode) ? storedMode : 'auto-send', hydrated: true });
+    const storedDictationMode = await SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY);
+    set({
+      dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
+      hydrated: true,
+    });
   },
 
   setDictationMode: async (mode) => {

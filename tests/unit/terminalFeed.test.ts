@@ -6,11 +6,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   appendChunk,
   getBufferedData,
+  getTerminalDimensions,
   isTerminalRetained,
   releaseTerminal,
   resetTerminalFeed,
   retainTerminal,
   seedScrollback,
+  setTerminalDimensions,
   subscribeChunks,
   type TerminalFeedEvent,
 } from '@/state/terminalFeed';
@@ -72,6 +74,30 @@ describe('terminalFeed', () => {
     appendChunk('sess-1', 'after release');
     expect(getBufferedData('sess-1')).toBe('');
     expect(events).toEqual([]);
+  });
+
+  it('records dims for retained sessions and notifies listeners only on change', () => {
+    setTerminalDimensions('sess-1', { cols: 120, rows: 30 }); // not retained: dropped
+    expect(getTerminalDimensions('sess-1')).toBeNull();
+
+    retainTerminal('sess-1');
+    const events: TerminalFeedEvent[] = [];
+    subscribeChunks('sess-1', (event) => events.push(event));
+
+    setTerminalDimensions('sess-1', { cols: 120, rows: 30 });
+    setTerminalDimensions('sess-1', { cols: 120, rows: 30 }); // unchanged: no event
+    setTerminalDimensions('sess-1', { cols: 48, rows: 26 });
+
+    expect(getTerminalDimensions('sess-1')).toEqual({ cols: 48, rows: 26 });
+    expect(events).toEqual([
+      { kind: 'dims', cols: 120, rows: 30 },
+      { kind: 'dims', cols: 48, rows: 26 },
+    ]);
+
+    // A pre-0.4.0 desktop reports nothing: null clears silently.
+    setTerminalDimensions('sess-1', null);
+    expect(getTerminalDimensions('sess-1')).toBeNull();
+    expect(events).toHaveLength(2);
   });
 
   it('unsubscribe stops delivery without touching the buffer', () => {

@@ -1,7 +1,8 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet } from 'react-native';
 import { MonoText, Row, useTheme } from '@/components';
-import { arrowKeySequence, CTRL_C, ENTER, ESCAPE, SLASH, TAB } from '@/terminal/keySequences';
+import { arrowKeySequence, CTRL_C, ENTER, ESCAPE, SLASH, TAB, type ArrowKeyDirection } from '@/terminal/keySequences';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { writeTerminal } from '@/connection/actions';
 
 export interface QuickKeyBarProps {
@@ -12,7 +13,9 @@ interface QuickKey {
   id: string;
   label: string;
   accessibilityLabel: string;
-  sequence: string;
+  /** Fixed byte sequence; arrows use `arrow` instead so DECCKM picks CSI vs SS3 at press time. */
+  sequence?: string;
+  arrow?: ArrowKeyDirection;
   danger?: boolean;
   /** Arrow glyphs read small at label size; render them larger. */
   glyph?: boolean;
@@ -21,10 +24,10 @@ interface QuickKey {
 const QUICK_KEYS: QuickKey[] = [
   { id: 'esc', label: 'Esc', accessibilityLabel: 'Escape', sequence: ESCAPE },
   { id: 'tab', label: 'Tab', accessibilityLabel: 'Tab', sequence: TAB },
-  { id: 'up', label: '↑', accessibilityLabel: 'Arrow up', sequence: arrowKeySequence('up'), glyph: true },
-  { id: 'down', label: '↓', accessibilityLabel: 'Arrow down', sequence: arrowKeySequence('down'), glyph: true },
-  { id: 'left', label: '←', accessibilityLabel: 'Arrow left', sequence: arrowKeySequence('left'), glyph: true },
-  { id: 'right', label: '→', accessibilityLabel: 'Arrow right', sequence: arrowKeySequence('right'), glyph: true },
+  { id: 'up', label: '↑', accessibilityLabel: 'Arrow up', arrow: 'up', glyph: true },
+  { id: 'down', label: '↓', accessibilityLabel: 'Arrow down', arrow: 'down', glyph: true },
+  { id: 'left', label: '←', accessibilityLabel: 'Arrow left', arrow: 'left', glyph: true },
+  { id: 'right', label: '→', accessibilityLabel: 'Arrow right', arrow: 'right', glyph: true },
   { id: 'enter', label: 'Enter', accessibilityLabel: 'Enter', sequence: ENTER },
   { id: 'ctrl-c', label: '^C', accessibilityLabel: 'Control C (interrupt)', sequence: CTRL_C, danger: true },
   { id: 'slash', label: '/', accessibilityLabel: 'Slash', sequence: SLASH },
@@ -35,11 +38,16 @@ const KEY_GLYPH_FONT_SIZE = 22;
 
 /**
  * The terminal quick-key row: the control keys a phone keyboard cannot type,
- * each writing its raw byte sequence to the desktop PTY. Failures are dropped
- * silently (the connection banner is the surface for that state).
+ * each writing its raw byte sequence to the desktop PTY. Arrows respect the
+ * session's DECCKM state (reported by the xterm pane) so full-screen
+ * programs in application cursor mode get SS3 instead of CSI. Failures are
+ * dropped silently (the connection banner is the surface for that state).
  */
 export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element {
   const theme = useTheme();
+  const applicationCursorMode = useTerminalUiStore(
+    (state) => state.applicationCursorModeBySessionId[sessionId] ?? false,
+  );
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
       <Row gap="xs">
@@ -50,7 +58,8 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
             accessibilityRole="button"
             accessibilityLabel={quickKey.accessibilityLabel}
             onPress={() => {
-              void writeTerminal(sessionId, quickKey.sequence).catch(() => undefined);
+              const sequence = quickKey.arrow ? arrowKeySequence(quickKey.arrow, applicationCursorMode) : (quickKey.sequence ?? '');
+              void writeTerminal(sessionId, sequence).catch(() => undefined);
             }}
             style={({ pressed }) => [
               styles.key,

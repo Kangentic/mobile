@@ -1,4 +1,4 @@
-import type { Unsubscribe } from '@kangentic/protocol';
+import type { TerminalDimensionsWire, Unsubscribe } from '@kangentic/protocol';
 
 /**
  * Per-session raw PTY buffering, deliberately NOT a Zustand store: chunks
@@ -15,19 +15,21 @@ import type { Unsubscribe } from '@kangentic/protocol';
  */
 const TERMINAL_RING_CAPACITY_BYTES = 128 * 1024;
 
-export interface TerminalFeedEvent {
+export type TerminalFeedEvent =
   /**
    * 'chunk' appends to what the consumer already rendered; 'seed' REPLACES
    * it (a fresh read-stream subscribe superseded the buffer - reset the
    * view, then render the data).
    */
-  kind: 'chunk' | 'seed';
-  data: string;
-}
+  | { kind: 'chunk' | 'seed'; data: string }
+  /** The desktop PTY's grid changed (or was first learned); the bytes that follow are laid out for it. */
+  | { kind: 'dims'; cols: number; rows: number };
 
 interface TerminalRing {
   chunks: string[];
   totalBytes: number;
+  /** The PTY grid the buffered bytes are laid out for; null until the desktop reports one (or never, pre-0.4.0). */
+  dims: TerminalDimensionsWire | null;
   listeners: Set<(event: TerminalFeedEvent) => void>;
 }
 
@@ -43,7 +45,7 @@ function evictPastCapacity(ring: TerminalRing): void {
 
 export function retainTerminal(sessionId: string): void {
   if (!ringsBySessionId.has(sessionId)) {
-    ringsBySessionId.set(sessionId, { chunks: [], totalBytes: 0, listeners: new Set() });
+    ringsBySessionId.set(sessionId, { chunks: [], totalBytes: 0, dims: null, listeners: new Set() });
   }
 }
 
@@ -78,6 +80,29 @@ export function appendChunk(sessionId: string, data: string): void {
 export function getBufferedData(sessionId: string): string {
   const ring = ringsBySessionId.get(sessionId);
   return ring ? ring.chunks.join('') : '';
+}
+
+/**
+ * Records the authoritative PTY grid (snapshot's ptyDimensions or a
+ * terminal-resize event) and notifies listeners on change. No-op unless
+ * the session is retained, like every other write here.
+ */
+export function setTerminalDimensions(sessionId: string, dims: TerminalDimensionsWire | null): void {
+  const ring = ringsBySessionId.get(sessionId);
+  if (!ring) return;
+  if (dims === null) {
+    ring.dims = null;
+    return;
+  }
+  if (ring.dims && ring.dims.cols === dims.cols && ring.dims.rows === dims.rows) return;
+  ring.dims = { cols: dims.cols, rows: dims.rows };
+  for (const listener of [...ring.listeners]) listener({ kind: 'dims', cols: dims.cols, rows: dims.rows });
+}
+
+/** The PTY grid the buffered bytes are laid out for, or null when unknown (pre-0.4.0 desktop, or not yet reported). */
+export function getTerminalDimensions(sessionId: string): TerminalDimensionsWire | null {
+  const ring = ringsBySessionId.get(sessionId);
+  return ring?.dims ? { ...ring.dims } : null;
 }
 
 /**

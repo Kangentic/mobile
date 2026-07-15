@@ -12,7 +12,6 @@ import {
   type DiffFileContentWire,
   type DiffFileListWire,
   type InteractiveTerminalRequestPayload,
-  type InteractiveTerminalResponsePayload,
   type JsonValue,
   type MoveTaskRequestPayload,
   type MoveTaskResponsePayload,
@@ -177,8 +176,14 @@ export class VerbClient {
     });
   }
 
-  async writeInteractiveTerminal(sessionId: string, data: string): Promise<InteractiveTerminalResponsePayload> {
-    const payload: InteractiveTerminalRequestPayload = { sessionId, data };
+  /**
+   * The one thing the phone writes to the terminal: raw keystrokes. The phone
+   * is a faithful mirror and deliberately never RESIZES the desktop PTY (the
+   * protocol's resize/release actions exist for the desktop, not this client) -
+   * a shared session must not be reshaped by the phone.
+   */
+  async writeInteractiveTerminal(sessionId: string, data: string): Promise<{ written: boolean }> {
+    const payload: InteractiveTerminalRequestPayload = { sessionId, action: 'write', data };
     const response = await this.requireOk('interactive-terminal', asRequestJson(payload));
     return this.parsePayload('interactive-terminal', response, (value) => {
       if (!isRecord(value) || typeof value.written !== 'boolean') throw new Error('interactive-terminal response is missing "written"');
