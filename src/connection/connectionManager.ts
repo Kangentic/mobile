@@ -78,9 +78,20 @@ async function openConnection(): Promise<void> {
     mockDesktop = createMockDesktop();
   }
 
+  // Dev-only instant pairing (the dev rig's live mode): identity and the
+  // pinned desktop key arrive via EXPO_PUBLIC_KANGENTIC_DEV_PAIRING and
+  // the SecureStore trust anchor is bypassed entirely. See devPairing.ts.
+  let devPairing: import('./devPairing').DevPairing | null = null;
+  if (__DEV__ && !mockDesktop && process.env.EXPO_PUBLIC_KANGENTIC_DEV_PAIRING) {
+    const { getDevPairing } = await import('./devPairing');
+    devPairing = getDevPairing();
+  }
+
   const anchor: { desktopStaticPublicKey: Uint8Array; relayAddress: string } | null = mockDesktop
     ? { desktopStaticPublicKey: mockDesktop.desktopStaticPublicKey, relayAddress: 'loopback://mock-desktop' }
-    : await trustAnchorStore.load();
+    : devPairing
+      ? { desktopStaticPublicKey: devPairing.desktopStaticPublicKey, relayAddress: devPairing.relayAddress }
+      : await trustAnchorStore.load();
   if (!anchor) {
     // Not paired (or a partial/legacy anchor): stay idle; the pairing flow
     // triggers a reconnect via reconnectNow() when it completes.
@@ -88,7 +99,7 @@ async function openConnection(): Promise<void> {
     return;
   }
   useChannelStore.getState().setPairedState('paired');
-  const identity = mockDesktop ? mockDesktop.identity : await deviceIdentityManager.getIdentity();
+  const identity = mockDesktop ? mockDesktop.identity : devPairing ? devPairing.identity : await deviceIdentityManager.getIdentity();
   // A background/dispose (or a second open) raced our secure-store reads.
   if (generation !== connectGeneration || activeConnection) {
     mockDesktop?.dispose();
