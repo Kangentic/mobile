@@ -45,6 +45,21 @@ describe('ConnectionBanner', () => {
     expect(screen.getByText('Connecting to desktop...')).toBeTruthy();
   });
 
+  it('shows the connecting message while connected but not yet established (mid-handshake)', () => {
+    act(() => useChannelStore.setState({ transportState: 'connected', established: false }));
+
+    render(
+      <ThemeProvider>
+        <ConnectionBanner />
+      </ThemeProvider>,
+    );
+
+    // The socket is up and the desktop is re-initiating the KK handshake; this
+    // is recovery, not an outage, so it must read as connecting (not "Offline").
+    expect(screen.getByTestId('connection-banner')).toBeTruthy();
+    expect(screen.getByText('Connecting to desktop...')).toBeTruthy();
+  });
+
   it('shows the offline message when the transport is closed', () => {
     act(() => useChannelStore.setState({ transportState: 'closed', established: false }));
 

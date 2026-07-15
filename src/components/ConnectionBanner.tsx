@@ -7,8 +7,11 @@ import { Text } from './Text';
 /**
  * Slim full-width channel-status bar. Hidden while the secure channel is fully
  * up (transport connected and the KK session established); shows a warning
- * tint while the transport is (re)connecting and a danger tint otherwise.
- * Subscribes to the channel store reactively, so it updates in place.
+ * tint while the transport is (re)connecting OR connected-but-still-handshaking
+ * (the desktop re-initiates the Noise KK handshake on reconnect, a brief window
+ * where the socket is up but the session is not yet established), and a danger
+ * tint only when genuinely offline. Subscribes to the channel store reactively,
+ * so it updates in place.
  */
 export function ConnectionBanner(): React.JSX.Element | null {
   const theme = useTheme();
@@ -19,7 +22,12 @@ export function ConnectionBanner(): React.JSX.Element | null {
     return null;
   }
 
-  const isConnecting = transportState === 'connecting' || transportState === 'reconnecting';
+  // A connected transport that has not established yet is mid-handshake, not
+  // offline: treat it as connecting so the reconnect window reads as recovery.
+  const isConnecting =
+    transportState === 'connecting' ||
+    transportState === 'reconnecting' ||
+    (transportState === 'connected' && !established);
   const backgroundColor = isConnecting ? theme.colors.warning : theme.colors.danger;
   const message = isConnecting ? 'Connecting to desktop...' : 'Offline - showing last known state';
 
