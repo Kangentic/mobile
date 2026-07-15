@@ -10,6 +10,8 @@ import { appendChunk, resetTerminalFeed, retainTerminal } from '@/state/terminal
 jest.mock('@/connection/actions', () => ({
   sendUserMessage: jest.fn().mockResolvedValue(undefined),
   answerPermissionPrompt: jest.fn().mockResolvedValue(undefined),
+  loadTranscriptTail: jest.fn().mockResolvedValue(undefined),
+  loadOlderTranscript: jest.fn().mockResolvedValue(undefined),
 }));
 
 // EnrichedMarkdownText is a native Fabric component; pass props through a View.
@@ -55,7 +57,16 @@ function seedStores(): void {
   useActivityStore.getState().reset();
   resetTerminalFeed();
   useTranscriptStore.setState({
-    bySessionId: { 'sess-1': { entries: fixtureEntries, localRevision: 1 } },
+    bySessionId: {
+      'sess-1': {
+        entries: fixtureEntries,
+        startIndex: 0,
+        totalEntries: fixtureEntries.length,
+        revision: 1,
+        tailRevision: 1,
+        needsTailFetch: false,
+      },
+    },
     retainedSessionIds: ['sess-1'],
   });
   useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
