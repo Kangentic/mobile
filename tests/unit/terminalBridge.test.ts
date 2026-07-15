@@ -9,15 +9,26 @@ import {
 } from '@/terminal/terminalBridge';
 
 describe('host -> terminal round-trip', () => {
-  it('round-trips an init message', () => {
-    const message: HostToTerminalMessage = {
+  it('round-trips an init message with known dims and with unknown dims (legacy)', () => {
+    const knownDims: HostToTerminalMessage = {
       type: 'init',
       scrollback: 'previous output\x1b[32m colored\x1b[0m\n',
       cols: 96,
+      rows: 30,
       fontSizePx: 13,
       theme: { background: '#101014', foreground: '#e6e6e6', cursor: '#e6e6e6', black: '#000000' },
     };
-    expect(decodeHostMessage(encodeHostMessage(message))).toEqual(message);
+    expect(decodeHostMessage(encodeHostMessage(knownDims))).toEqual(knownDims);
+
+    const legacy: HostToTerminalMessage = {
+      type: 'init',
+      scrollback: 'plain',
+      cols: 80,
+      rows: null,
+      fontSizePx: 12,
+      theme: {},
+    };
+    expect(decodeHostMessage(encodeHostMessage(legacy))).toEqual(legacy);
   });
 
   it('round-trips a write message including control bytes', () => {
@@ -29,6 +40,11 @@ describe('host -> terminal round-trip', () => {
     const message: HostToTerminalMessage = { type: 'set-font-size', fontSizePx: 15 };
     expect(decodeHostMessage(encodeHostMessage(message))).toEqual(message);
   });
+
+  it('round-trips a resize message (the desktop grid the phone adopts, read-only)', () => {
+    const resize: HostToTerminalMessage = { type: 'resize', cols: 48, rows: 26 };
+    expect(decodeHostMessage(encodeHostMessage(resize))).toEqual(resize);
+  });
 });
 
 describe('terminal -> host round-trip', () => {
@@ -37,6 +53,13 @@ describe('terminal -> host round-trip', () => {
     const inputMessage: TerminalToHostMessage = { type: 'input', data: '\x1b[A' };
     expect(decodeTerminalMessage(encodeTerminalMessage(readyMessage))).toEqual(readyMessage);
     expect(decodeTerminalMessage(encodeTerminalMessage(inputMessage))).toEqual(inputMessage);
+  });
+
+  it('round-trips modes and font-size messages', () => {
+    const modes: TerminalToHostMessage = { type: 'modes', applicationCursorKeys: true };
+    expect(decodeTerminalMessage(encodeTerminalMessage(modes))).toEqual(modes);
+    const fontSize: TerminalToHostMessage = { type: 'font-size', fontSizePx: 7 };
+    expect(decodeTerminalMessage(encodeTerminalMessage(fontSize))).toEqual(fontSize);
   });
 });
 
@@ -49,11 +72,18 @@ describe('decodeTerminalMessage - malformed input', () => {
     expect(decodeTerminalMessage('[]')).toBeNull();
     expect(decodeTerminalMessage('{}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"launch-missiles"}')).toBeNull();
+    // fit-dims was removed: the phone never proposes a resize anymore.
+    expect(decodeTerminalMessage('{"type":"fit-dims","cols":44,"rows":22}')).toBeNull();
   });
 
   it('returns null for an input message with a missing or non-string data field', () => {
     expect(decodeTerminalMessage('{"type":"input"}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"input","data":7}')).toBeNull();
+  });
+
+  it('returns null for malformed modes and font-size messages', () => {
+    expect(decodeTerminalMessage('{"type":"modes","applicationCursorKeys":"yes"}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"font-size","fontSizePx":"7"}')).toBeNull();
   });
 });
 
@@ -61,26 +91,27 @@ describe('decodeHostMessage - malformed input', () => {
   it('returns null for non-JSON and unknown-type payloads', () => {
     expect(decodeHostMessage('{nope')).toBeNull();
     expect(decodeHostMessage('{"type":"reboot"}')).toBeNull();
+    // set-fit-mode was removed: there are no modes to switch anymore.
+    expect(decodeHostMessage('{"type":"set-fit-mode","fitMode":"fit"}')).toBeNull();
   });
 
-  it('returns null for an init message with wrong field types', () => {
+  it('returns null for an init message with wrong or missing fields', () => {
     expect(
-      decodeHostMessage(
-        '{"type":"init","scrollback":"x","cols":"80","fontSizePx":13,"theme":{}}',
-      ),
+      decodeHostMessage('{"type":"init","scrollback":"x","cols":"80","rows":null,"fontSizePx":13,"theme":{}}'),
     ).toBeNull();
     expect(
-      decodeHostMessage('{"type":"init","scrollback":"x","cols":80,"fontSizePx":13,"theme":{"a":1}}'),
+      decodeHostMessage('{"type":"init","scrollback":"x","cols":80,"rows":null,"fontSizePx":13,"theme":{"a":1}}'),
     ).toBeNull();
     expect(
-      decodeHostMessage('{"type":"init","scrollback":"x","cols":80,"fontSizePx":13,"theme":[]}'),
+      decodeHostMessage('{"type":"init","scrollback":"x","cols":80,"rows":null,"fontSizePx":13,"theme":[]}'),
     ).toBeNull();
-    expect(decodeHostMessage('{"type":"init","cols":80,"fontSizePx":13,"theme":{}}')).toBeNull();
+    expect(decodeHostMessage('{"type":"init","scrollback":"x","fontSizePx":13,"theme":{}}')).toBeNull();
   });
 
-  it('returns null for write and set-font-size messages with wrong field types', () => {
+  it('returns null for write, set-font-size, and resize messages with wrong field types', () => {
     expect(decodeHostMessage('{"type":"write","data":123}')).toBeNull();
     expect(decodeHostMessage('{"type":"write"}')).toBeNull();
     expect(decodeHostMessage('{"type":"set-font-size","fontSizePx":"12"}')).toBeNull();
+    expect(decodeHostMessage('{"type":"resize","cols":48}')).toBeNull();
   });
 });

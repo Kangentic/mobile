@@ -3,7 +3,13 @@ import { act, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
-import { appendChunk, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
+import {
+  appendChunk,
+  resetTerminalFeed,
+  retainTerminal,
+  setTerminalDimensions,
+} from '@/state/terminalFeed';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 
 jest.mock('@/connection/actions', () => ({
   writeTerminal: jest.fn().mockResolvedValue(undefined),
@@ -64,14 +70,16 @@ interface WebViewMockModule {
 }
 
 const webViewMock = jest.requireMock<WebViewMockModule>('react-native-webview');
+const actionsMock = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
 
-async function renderPaneAndAwaitWebView(): Promise<void> {
+async function renderPaneAndReady(): Promise<void> {
   render(
     <ThemeProvider>
       <TerminalPane sessionId="sess-1" />
     </ThemeProvider>,
   );
   await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+  postFromWebView(JSON.stringify({ type: 'ready' }));
 }
 
 function postFromWebView(data: string): void {
@@ -80,51 +88,85 @@ function postFromWebView(data: string): void {
   });
 }
 
-describe('TerminalPane', () => {
+function decodedPosts(): ReturnType<typeof decodeHostMessage>[] {
+  return webViewMock.__postMessageMock.mock.calls.map((call) => decodeHostMessage(call[0] as string));
+}
+
+describe('TerminalPane (faithful mirror)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     resetTerminalFeed();
     webViewMock.__capturedProps.current = null;
+    useTerminalUiStore.setState({ applicationCursorModeBySessionId: {} });
   });
 
-  it('posts an init with the buffered scrollback after the WebView reports ready', async () => {
+  it('inits at the exact PTY grid when the desktop reported dimensions', async () => {
     retainTerminal('sess-1');
+    setTerminalDimensions('sess-1', { cols: 120, rows: 30 });
     appendChunk('sess-1', 'hello world');
-    await renderPaneAndAwaitWebView();
+    await renderPaneAndReady();
 
-    postFromWebView(JSON.stringify({ type: 'ready' }));
-
-    expect(webViewMock.__postMessageMock).toHaveBeenCalledTimes(1);
-    const initMessage = decodeHostMessage(webViewMock.__postMessageMock.mock.calls[0][0] as string);
-    expect(initMessage).not.toBeNull();
-    expect(initMessage?.type).toBe('init');
+    const initMessage = decodedPosts().find((message) => message?.type === 'init');
+    expect(initMessage).toBeDefined();
     if (initMessage?.type === 'init') {
       expect(initMessage.scrollback).toBe('hello world');
-      // 'hello world' is 11 visible columns, clamped up to the 40-column floor.
-      expect(initMessage.cols).toBe(40);
-      expect(initMessage.fontSizePx).toBe(12);
-      expect(initMessage.theme.background).toBe('#090b0a');
+      expect(initMessage.cols).toBe(120);
+      expect(initMessage.rows).toBe(30);
     }
   });
 
-  it('forwards input messages from the WebView to writeTerminal', async () => {
-    const { writeTerminal } = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
+  it('falls back to inferred cols and null rows when the desktop reports no dimensions', async () => {
     retainTerminal('sess-1');
-    await renderPaneAndAwaitWebView();
+    appendChunk('sess-1', 'hello world');
+    await renderPaneAndReady();
+
+    const initMessage = decodedPosts().find((message) => message?.type === 'init');
+    expect(initMessage).toBeDefined();
+    if (initMessage?.type === 'init') {
+      // 'hello world' is 11 visible columns, clamped up to the 40-column floor.
+      expect(initMessage.cols).toBe(40);
+      expect(initMessage.rows).toBeNull();
+    }
+  });
+
+  it('adopts an authoritative grid change by posting a resize to the WebView', async () => {
+    retainTerminal('sess-1');
+    setTerminalDimensions('sess-1', { cols: 120, rows: 30 });
+    await renderPaneAndReady();
+    webViewMock.__postMessageMock.mockClear();
+
+    act(() => setTerminalDimensions('sess-1', { cols: 48, rows: 26 }));
+
+    const resizeMessage = decodedPosts().find((message) => message?.type === 'resize');
+    expect(resizeMessage).toEqual({ type: 'resize', cols: 48, rows: 26 });
+  });
+
+  it('forwards input messages from the WebView to writeTerminal', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
 
     postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
 
-    expect(writeTerminal).toHaveBeenCalledWith('sess-1', 'ls');
+    expect(actionsMock.writeTerminal).toHaveBeenCalledWith('sess-1', 'ls');
+  });
+
+  it('records the DECCKM report on the terminal-ui store', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
+
+    postFromWebView(JSON.stringify({ type: 'modes', applicationCursorKeys: true }));
+
+    expect(useTerminalUiStore.getState().applicationCursorModeBySessionId['sess-1']).toBe(true);
   });
 
   it('drops malformed WebView messages without posting or writing', async () => {
-    const { writeTerminal } = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
     retainTerminal('sess-1');
-    await renderPaneAndAwaitWebView();
+    await renderPaneAndReady();
+    webViewMock.__postMessageMock.mockClear();
 
     postFromWebView('not json at all');
 
     expect(webViewMock.__postMessageMock).not.toHaveBeenCalled();
-    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(actionsMock.writeTerminal).not.toHaveBeenCalled();
   });
 });

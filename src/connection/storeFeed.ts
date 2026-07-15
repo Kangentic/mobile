@@ -4,7 +4,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
-import { appendChunk, isTerminalRetained, seedScrollback } from '@/state/terminalFeed';
+import { appendChunk, isTerminalRetained, seedScrollback, setTerminalDimensions } from '@/state/terminalFeed';
 
 /**
  * The single place feed events and subscription snapshots meet store
@@ -51,7 +51,12 @@ export function createSnapshotSinks(getSubscriptions: () => SubscriptionManager)
     onStreamSnapshot: (sessionId, snapshot) => {
       const owner = sessionOwnerFor(sessionId);
       useActivityStore.getState().applySnapshot(sessionId, owner?.taskId ?? '', owner?.projectId ?? '', snapshot);
-      if (isTerminalRetained(sessionId)) seedScrollback(sessionId, snapshot.scrollback);
+      if (isTerminalRetained(sessionId)) {
+        // Dims land BEFORE the seed so the pane's re-init reads the grid the
+        // fresh scrollback was laid out for.
+        setTerminalDimensions(sessionId, snapshot.ptyDimensions ?? null);
+        seedScrollback(sessionId, snapshot.scrollback);
+      }
     },
     onStreamRejected: (sessionId) => {
       useActivityStore.getState().markRejected(sessionId);
@@ -76,6 +81,9 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       // Dropped at the terminalFeed boundary unless the session is retained
       // (a task screen has it open) - triage needs activity, not PTY bytes.
       appendChunk(event.sessionId, event.payload.data);
+    }),
+    feed.on('terminal-resize', (event) => {
+      setTerminalDimensions(event.sessionId, event.payload);
     }),
     feed.on('activity', (event) => {
       useActivityStore.getState().applyActivityEvent(event);

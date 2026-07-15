@@ -128,6 +128,14 @@ describe('VerbClient', () => {
     expect(content).toEqual({ original: 'old', modified: 'new', language: 'typescript' });
   });
 
+  it('writeInteractiveTerminal sends a write-action payload (the phone never resizes the desktop)', async () => {
+    const { verbs, requests } = await establishedHarness((request) => okResponse(request, { written: true }));
+
+    await expect(verbs.writeInteractiveTerminal('sess-1', 'ls\r')).resolves.toEqual({ written: true });
+    expect(requests[0].verb).toBe('interactive-terminal');
+    expect(requests[0].payload).toEqual({ sessionId: 'sess-1', action: 'write', data: 'ls\r' });
+  });
+
   it('write verbs send their typed payloads and parse boolean results', async () => {
     const { verbs, requests } = await establishedHarness((request) => {
       switch (request.verb) {

@@ -28,6 +28,7 @@ export function streamSnapshotFixture(overrides: Partial<ReadStreamResponsePaylo
     activity: { state: 'thinking', reason: { kind: 'turn-active' } },
     usage: usageFixture(),
     awaitedPromptId: null,
+    ptyDimensions: { cols: 120, rows: 30 },
     ...overrides,
   };
 }

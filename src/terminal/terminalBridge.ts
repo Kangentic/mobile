@@ -5,6 +5,13 @@
  * both treat the boundary as untrusted-ish (anything malformed decodes to
  * null and is dropped).
  *
+ * The pane is a FAITHFUL MIRROR: it renders the desktop's exact grid 1:1 and
+ * NEVER resizes the desktop PTY (a shared session must not be reshaped by the
+ * phone). It sizes the font so the whole frame fits the phone screen, and
+ * pinch-zoom + pan read the detail. `rows: null` on init means the desktop
+ * never reported its grid (pre-0.4.0) - the glue then infers cols from
+ * content and fits rows to the viewport until the real dims arrive.
+ *
  * The theme record maps xterm ITheme keys (black, red, ..., brightWhite,
  * background, foreground, cursor) to hex color strings. It stays a plain
  * Record<string, string> so this module never depends on the app theme type
@@ -16,13 +23,23 @@ export type HostToTerminalMessage =
       type: 'init';
       scrollback: string;
       cols: number;
+      /** The PTY's rows, or null when the desktop never reported dims (legacy inference). */
+      rows: number | null;
       fontSizePx: number;
       theme: Record<string, string>;
     }
   | { type: 'write'; data: string }
-  | { type: 'set-font-size'; fontSizePx: number };
+  | { type: 'set-font-size'; fontSizePx: number }
+  /** The authoritative PTY grid changed (desktop refit); adopt it and re-fit the frame to screen. */
+  | { type: 'resize'; cols: number; rows: number };
 
-export type TerminalToHostMessage = { type: 'ready' } | { type: 'input'; data: string };
+export type TerminalToHostMessage =
+  | { type: 'ready' }
+  | { type: 'input'; data: string }
+  /** DECCKM report: arrows need SS3 (application cursor mode) instead of CSI. */
+  | { type: 'modes'; applicationCursorKeys: boolean }
+  /** The glue changed the font size autonomously (fit-to-screen zoom); keeps the host's pinch base in sync. */
+  | { type: 'font-size'; fontSizePx: number };
 
 export function encodeHostMessage(message: HostToTerminalMessage): string {
   return JSON.stringify(message);
@@ -73,6 +90,12 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
   if (parsedObject.type === 'input' && typeof parsedObject.data === 'string') {
     return { type: 'input', data: parsedObject.data };
   }
+  if (parsedObject.type === 'modes' && typeof parsedObject.applicationCursorKeys === 'boolean') {
+    return { type: 'modes', applicationCursorKeys: parsedObject.applicationCursorKeys };
+  }
+  if (parsedObject.type === 'font-size' && isFiniteNumber(parsedObject.fontSizePx)) {
+    return { type: 'font-size', fontSizePx: parsedObject.fontSizePx };
+  }
   return null;
 }
 
@@ -91,10 +114,14 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
   if (parsedObject.type === 'set-font-size' && isFiniteNumber(parsedObject.fontSizePx)) {
     return { type: 'set-font-size', fontSizePx: parsedObject.fontSizePx };
   }
+  if (parsedObject.type === 'resize' && isFiniteNumber(parsedObject.cols) && isFiniteNumber(parsedObject.rows)) {
+    return { type: 'resize', cols: parsedObject.cols, rows: parsedObject.rows };
+  }
   if (
     parsedObject.type === 'init' &&
     typeof parsedObject.scrollback === 'string' &&
     isFiniteNumber(parsedObject.cols) &&
+    (parsedObject.rows === null || isFiniteNumber(parsedObject.rows)) &&
     isFiniteNumber(parsedObject.fontSizePx) &&
     isStringRecord(parsedObject.theme)
   ) {
@@ -102,6 +129,7 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
       type: 'init',
       scrollback: parsedObject.scrollback,
       cols: parsedObject.cols,
+      rows: parsedObject.rows === null ? null : parsedObject.rows,
       fontSizePx: parsedObject.fontSizePx,
       theme: parsedObject.theme,
     };

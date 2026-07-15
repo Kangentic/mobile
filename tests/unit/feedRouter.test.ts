@@ -4,7 +4,7 @@
  * drops malformed events, and ignores non-event messages.
  */
 import { describe, expect, it } from 'vitest';
-import { generateX25519KeyPair, type BridgeEvent, type TerminalEvent } from '@kangentic/protocol';
+import { generateX25519KeyPair, type BridgeEvent, type TerminalEvent, type TerminalResizeEvent } from '@kangentic/protocol';
 import { SessionManager } from '@/channel/sessionManager';
 import { FeedRouter } from '@/channel/feedRouter';
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
@@ -52,6 +52,23 @@ describe('FeedRouter', () => {
 
     expect(terminalEvents.map((event) => event.payload.data)).toEqual(['chunk-1']);
     expect(diffTaskIds).toEqual(['task-9']);
+  });
+
+  it('routes terminal-resize events (0.4.0 grid changes) to their own listener, dropping a malformed grid', async () => {
+    const { session, stub } = await establishedPair();
+    const router = new FeedRouter(session);
+    const resizes: TerminalResizeEvent[] = [];
+    router.on('terminal-resize', (event) => resizes.push(event));
+
+    stub.emitEvent({ kind: 'terminal-resize', sessionId: 'sess-1', taskId: 'task-1', payload: { cols: 48, rows: 26 } });
+    // A malformed grid (cols below the floor) is dropped by isBridgeEvent.
+    stub.send({
+      type: 'event',
+      event: { kind: 'terminal-resize', sessionId: 'sess-1', taskId: 'task-1', payload: { cols: 0, rows: 26 } } as unknown as BridgeEvent,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(resizes).toEqual([{ kind: 'terminal-resize', sessionId: 'sess-1', taskId: 'task-1', payload: { cols: 48, rows: 26 } }]);
   });
 
   it('drops a structurally malformed event silently', async () => {
