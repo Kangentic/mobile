@@ -103,26 +103,62 @@ function onFrame(socket, listener) {
   };
 }
 
+/** How long the stub keeps re-parking its pairing socket. Matches the token's ~10 minute lifetime. */
+const PAIRING_WAIT_MS = 10 * 60 * 1000;
+
 async function runPairing(relayUrl, desktopStatic, pairingToken) {
   const slotId = bytesToHex(pairingToken);
-  const socket = await connect(`${relayUrl}?slot=${slotId}`);
-  const handshake = createPairingResponderHandshake({ localStatic: desktopStatic, pairingToken });
+  const deadline = Date.now() + PAIRING_WAIT_MS;
 
+  // The relay reaps a parked (peer-less) connection after PARK_TIMEOUT_MS
+  // (60s default), so a stub waiting on a slow human would silently lose
+  // its socket and exit 0 when the event loop drained. Reconnect the
+  // pairing slot whenever it closes before the phone showed up.
   return new Promise((resolve, reject) => {
-    onFrame(socket, (frame) => {
+    let settled = false;
+
+    const park = async () => {
+      let socket;
       try {
-        handshake.readMessage(frame);
+        socket = await connect(`${relayUrl}?slot=${slotId}`);
       } catch (error) {
-        reject(new Error(`Pairing handshake failed to authenticate: ${error.message}`));
+        if (Date.now() > deadline) {
+          reject(new Error(`Gave up waiting for the phone: ${error.message}`));
+          return;
+        }
+        setTimeout(park, 1000);
         return;
       }
-      const { message } = handshake.writeMessage(new Uint8Array(0));
-      socket.send(message.slice().buffer);
+      const handshake = createPairingResponderHandshake({ localStatic: desktopStatic, pairingToken });
+      socket.onclose = () => {
+        if (settled) return;
+        if (Date.now() > deadline) {
+          reject(new Error('Gave up waiting for the phone (pairing token expired)'));
+          return;
+        }
+        console.log('[pairing] relay parked-connection timeout; reconnecting the pairing slot...');
+        setTimeout(park, 500);
+      };
+      onFrame(socket, (frame) => {
+        try {
+          handshake.readMessage(frame);
+        } catch (error) {
+          settled = true;
+          reject(new Error(`Pairing handshake failed to authenticate: ${error.message}`));
+          return;
+        }
+        const { message } = handshake.writeMessage(new Uint8Array(0));
+        socket.send(message.slice().buffer);
 
-      const phoneStaticPublicKey = handshake.getRemoteStaticKey();
-      const sas = deriveShortAuthenticationString(handshake.getHandshakeHash());
-      resolve({ phoneStaticPublicKey, sas, socket });
-    });
+        const phoneStaticPublicKey = handshake.getRemoteStaticKey();
+        const sas = deriveShortAuthenticationString(handshake.getHandshakeHash());
+        settled = true;
+        socket.onclose = null;
+        resolve({ phoneStaticPublicKey, sas, socket });
+      });
+    };
+
+    void park();
   });
 }
 
@@ -386,8 +422,9 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
       let opened;
       try {
         opened = streams.receive.open(payload);
-      } catch {
+      } catch (openError) {
         // A frame sealed under a superseded rekey can arrive mid-transition; ignore it.
+        console.log(`[session] dropped an application frame that failed to open: ${openError.message}`);
         return;
       }
       if (opened.tag === FrameTag.Final) {
