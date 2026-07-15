@@ -72,14 +72,23 @@ interface WebViewMockModule {
 const webViewMock = jest.requireMock<WebViewMockModule>('react-native-webview');
 const actionsMock = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
 
-async function renderPaneAndReady(): Promise<void> {
-  render(
+async function renderPaneAndReady(isActive = true): Promise<ReturnType<typeof render>> {
+  const result = render(
     <ThemeProvider>
-      <TerminalPane sessionId="sess-1" />
+      <TerminalPane sessionId="sess-1" isActive={isActive} />
     </ThemeProvider>,
   );
   await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
   postFromWebView(JSON.stringify({ type: 'ready' }));
+  return result;
+}
+
+function rerenderPane(result: ReturnType<typeof render>, isActive: boolean): void {
+  result.rerender(
+    <ThemeProvider>
+      <TerminalPane sessionId="sess-1" isActive={isActive} />
+    </ThemeProvider>,
+  );
 }
 
 function postFromWebView(data: string): void {
@@ -157,6 +166,31 @@ describe('TerminalPane (faithful mirror)', () => {
     postFromWebView(JSON.stringify({ type: 'modes', applicationCursorKeys: true }));
 
     expect(useTerminalUiStore.getState().applicationCursorModeBySessionId['sess-1']).toBe(true);
+  });
+
+  it('pauses WebView writes while inactive and re-seeds on becoming active', async () => {
+    retainTerminal('sess-1');
+    setTerminalDimensions('sess-1', { cols: 80, rows: 24 });
+    appendChunk('sess-1', 'first');
+    const result = await renderPaneAndReady(true);
+
+    // Go inactive (user switched to another tab).
+    rerenderPane(result, false);
+    webViewMock.__postMessageMock.mockClear();
+
+    // A chunk arrives while paused: nothing is posted to the WebView, though
+    // the ring still buffers it.
+    act(() => appendChunk('sess-1', 'while-hidden'));
+    expect(decodedPosts().some((message) => message?.type === 'write')).toBe(false);
+
+    // Back to active: it re-seeds (init) so the WebView jumps to the latest
+    // frame, including what streamed while it was hidden.
+    rerenderPane(result, true);
+    const reseed = decodedPosts().find((message) => message?.type === 'init');
+    expect(reseed).toBeDefined();
+    if (reseed?.type === 'init') {
+      expect(reseed.scrollback).toContain('while-hidden');
+    }
   });
 
   it('drops malformed WebView messages without posting or writing', async () => {

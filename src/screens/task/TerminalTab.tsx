@@ -9,6 +9,8 @@ export interface TerminalTabProps {
   sessionId: string | null;
   /** True once the tab has been visited - the xterm WebView mounts lazily. */
   mounted: boolean;
+  /** True while the Terminal tab is the visible page; pauses WebView repaint when false. */
+  active: boolean;
 }
 
 /**
@@ -16,7 +18,7 @@ export interface TerminalTabProps {
  * in an xterm WebView, mounted on first visit. It renders the desktop's grid
  * 1:1 and never resizes the shared session; pinch-zoom + pan read the detail.
  */
-export function TerminalTab({ sessionId, mounted }: TerminalTabProps): React.JSX.Element {
+export function TerminalTab({ sessionId, mounted, active }: TerminalTabProps): React.JSX.Element {
   if (sessionId === null) {
     return (
       <Stack gap="sm" style={styles.placeholder}>
@@ -35,7 +37,7 @@ export function TerminalTab({ sessionId, mounted }: TerminalTabProps): React.JSX
       </Stack>
     );
   }
-  return <TerminalPane sessionId={sessionId} />;
+  return <TerminalPane sessionId={sessionId} isActive={active} />;
 }
 
 export interface TerminalFooterProps {

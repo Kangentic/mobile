@@ -75,7 +75,7 @@ export function TaskScreen(): React.JSX.Element {
             <ConversationTab taskId={taskId} sessionId={sessionId} projectId={projectId} />
           </View>
           <View key="terminal" style={styles.flex} testID="task-tab-terminal">
-            <TerminalTab sessionId={sessionId} mounted={terminalVisited} />
+            <TerminalTab sessionId={sessionId} mounted={terminalVisited} active={activeTab === 'terminal'} />
           </View>
           <View key="changes" style={styles.flex} testID="task-tab-changes">
             <ChangesTab taskId={taskId} projectId={projectId} isActive={activeTab === 'changes'} />
