@@ -29,7 +29,7 @@
   "dependencies": {
     "@bacons/text-decoder": "^0.0.0",
     "@expo/vector-icons": "^15.0.2",
-    "@kangentic/protocol": "^0.2.0",
+    "@kangentic/protocol": "^0.3.0",
     "@shopify/flash-list": "2.0.2",
     "diff": "^9.0.0",
     "expo": "^57.0.4",
