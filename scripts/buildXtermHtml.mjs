@@ -21,6 +21,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const xtermJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'), 'utf8');
 const xtermCss = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'), 'utf8');
 const xtermFitJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'), 'utf8');
+const xtermWebglJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-webgl', 'lib', 'addon-webgl.js'), 'utf8');
 const xtermVersion = JSON.parse(readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'package.json'), 'utf8')).version;
 
 const bridgeGlue = `
@@ -32,6 +33,10 @@ const bridgeGlue = `
   // whole frame fits the screen; pinch zoom + pan read the detail.
   var terminal = null;
   var fitAddon = null;
+  // WebGL renderer state, reset per createTerminal. See attachWebgl.
+  var webglAddon = null;
+  var webglRetryTimer = null;
+  var webglLossCount = 0;
   // The desktop's grid. knownRows === null means the desktop has not reported
   // its grid yet (pre-0.4.0, or mid-reconnect before the snapshot): infer cols
   // from content and fit rows to the viewport until the real grid arrives as a
@@ -141,6 +146,63 @@ const bridgeGlue = `
     panToCursor();
   }
 
+  // Ported from the desktop renderer's terminal-webgl.ts. xterm's WebGL renderer
+  // is 10-50x faster than the DOM fallback for output bursts. The GPU can drop
+  // the context (driver reset, memory pressure); the naive "dispose on loss"
+  // permanently reverts to the DOM renderer, so every later burst becomes slow.
+  // Instead, on a loss we RETRY re-init with a backoff, and only give up (DOM for
+  // good) after the retries are exhausted. The desktop's per-page WebGL attach
+  // budget / LRU coordinator is deliberately omitted: a phone hosts exactly one
+  // xterm per WebView, so it never approaches Chromium's per-page context cap.
+  var WEBGL_RETRY_DELAYS_MS = [2000, 10000];
+
+  function attachWebgl() {
+    if (!terminal) return false;
+    try {
+      var addon = new window.WebglAddon.WebglAddon();
+      addon.onContextLoss(handleWebglContextLoss);
+      terminal.loadAddon(addon);
+      webglAddon = addon;
+      return true;
+    } catch (webglError) {
+      // WebGL unavailable in this WebView (no GPU / blocklisted): DOM stays.
+      webglAddon = null;
+      return false;
+    }
+  }
+
+  function handleWebglContextLoss() {
+    if (webglAddon) {
+      try { webglAddon.dispose(); } catch (disposeError) { /* may already be gone */ }
+      webglAddon = null;
+    }
+    reportRenderer(); // now on the DOM renderer until (and unless) a retry recovers WebGL
+    webglLossCount += 1;
+    if (webglLossCount > WEBGL_RETRY_DELAYS_MS.length) return; // give up: DOM renderer for good
+    if (webglRetryTimer !== null) clearTimeout(webglRetryTimer);
+    webglRetryTimer = setTimeout(function () {
+      webglRetryTimer = null;
+      attachWebgl();
+      reportRenderer();
+    }, WEBGL_RETRY_DELAYS_MS[webglLossCount - 1]);
+  }
+
+  function resetWebglState() {
+    if (webglRetryTimer !== null) {
+      clearTimeout(webglRetryTimer);
+      webglRetryTimer = null;
+    }
+    // A fresh createTerminal disposed the old terminal (and its addon) already.
+    webglAddon = null;
+    webglLossCount = 0;
+  }
+
+  // Report the active renderer to the host (like the desktop's renderer report),
+  // so a degraded terminal is observable rather than a silent DOM fallback.
+  function reportRenderer() {
+    postToHost({ type: 'renderer', renderer: webglAddon ? 'webgl' : 'dom' });
+  }
+
   function createTerminal(initMessage) {
     knownCols = initMessage.cols;
     knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
@@ -158,9 +220,12 @@ const bridgeGlue = `
       convertEol: false,
       cursorBlink: false,
     });
+    resetWebglState();
     fitAddon = new window.FitAddon.FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(document.getElementById('terminal'));
+    attachWebgl();
+    reportRenderer();
     // Android predictive keyboards buffer composition text against xterm's
     // hidden textarea, echoing late and breaking Backspace - turn every
     // assist off so keys route straight through.
@@ -289,6 +354,9 @@ ${xtermJs}
 </script>
 <script>
 ${xtermFitJs}
+</script>
+<script>
+${xtermWebglJs}
 </script>
 <script>
 ${bridgeGlue}

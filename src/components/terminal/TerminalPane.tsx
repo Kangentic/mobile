@@ -238,6 +238,14 @@ export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.
         pinchBaseFontSizeRef.current = syncedFontSize;
         return;
       }
+      if (message.type === 'renderer') {
+        // Observability, mirroring the desktop's renderer report: WebGL is the
+        // fast path; a 'dom' report means WebGL was unavailable or its context
+        // was lost. Logged for now; a future devtools surface can read it.
+        // eslint-disable-next-line no-console -- intentional renderer-status breadcrumb
+        console.log(`[terminal] renderer for ${sessionId}: ${message.renderer}`);
+        return;
+      }
       // 'input': keys typed inside the xterm WebView go to the desktop PTY.
       // Failures (not connected, capability revoked) are dropped silently -
       // the connection banner is the surface for that state.
