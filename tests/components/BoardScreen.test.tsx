@@ -26,6 +26,7 @@ jest.mock('@/connection/actions', () => ({
   updateTaskFields: (input: unknown) => mockUpdateTaskFields(input),
   deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
   archiveTask: (input: unknown) => mockArchiveTask(input),
+  refreshSnapshots: jest.fn().mockResolvedValue(undefined),
 }));
 
 // The create/edit description fields carry the dictation mic.
@@ -193,6 +194,22 @@ describe('BoardScreen', () => {
       description: '',
       column: 'To Do',
     });
+  });
+
+  it('renders named column chips, highlights the tapped one, and states empty columns', () => {
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: true });
+    expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: false });
+
+    fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
+    expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: true });
+
+    // The empty Doing column states itself instead of blank space.
+    expect(screen.getByTestId('board-column-lane-doing-empty')).toBeTruthy();
   });
 
   it('shows the disconnected empty state when no boards are cached', () => {
