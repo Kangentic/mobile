@@ -1,4 +1,4 @@
-import type { Unsubscribe } from '@kangentic/protocol';
+import type { TranscriptEvent, Unsubscribe } from '@kangentic/protocol';
 import type { FeedRouter, SubscriptionManager, SubscriptionSnapshotSinks } from '@/channel';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
@@ -72,10 +72,39 @@ export function createSnapshotSinks(getSubscriptions: () => SubscriptionManager)
   };
 }
 
+/**
+ * Coalesce window for transcript deltas. They arrive many times per second
+ * while an agent streams (the settled tail entry grows token by token), and
+ * each one re-copies the window array AND re-runs ConversationTab's O(n)
+ * conversation-cell flatten - so a firehose costs O(n * deltas/sec) of
+ * main-thread work that worsens as the transcript grows. Batching a burst into
+ * one apply per window collapses that to one flatten+render per window. The
+ * settled transcript does not need per-token freshness: the 250ms live-tail
+ * carries the token-by-token streaming feel.
+ */
+const TRANSCRIPT_COALESCE_MS = 100;
+
 export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionManager): Unsubscribe {
+  let pendingTranscriptEvents: TranscriptEvent[] = [];
+  let transcriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushTranscriptEvents = (): void => {
+    transcriptFlushTimer = null;
+    if (pendingTranscriptEvents.length === 0) return;
+    const events = pendingTranscriptEvents;
+    pendingTranscriptEvents = [];
+    // Applied in arrival order; revisions are monotonic so this equals applying
+    // each delta as it arrived. React batches the resulting store updates into a
+    // single render, so the O(n) flatten runs once for the whole batch.
+    const store = useTranscriptStore.getState();
+    for (const event of events) store.applyTranscript(event);
+  };
+
   const unsubscribers: Unsubscribe[] = [
     feed.on('transcript', (event) => {
-      useTranscriptStore.getState().applyTranscript(event);
+      pendingTranscriptEvents.push(event);
+      if (transcriptFlushTimer === null) {
+        transcriptFlushTimer = setTimeout(flushTranscriptEvents, TRANSCRIPT_COALESCE_MS);
+      }
     }),
     feed.on('terminal', (event) => {
       // Dropped at the terminalFeed boundary unless the session is retained
@@ -98,6 +127,11 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
     }),
   ];
   return () => {
+    if (transcriptFlushTimer !== null) {
+      clearTimeout(transcriptFlushTimer);
+      transcriptFlushTimer = null;
+    }
+    flushTranscriptEvents();
     for (const unsubscribe of unsubscribers) unsubscribe();
   };
 }
