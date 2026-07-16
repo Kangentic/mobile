@@ -27,6 +27,13 @@ export type HostToTerminalMessage =
       rows: number | null;
       fontSizePx: number;
       theme: Record<string, string>;
+      /**
+       * True enables the CLEAN FEED: a second, headless parser over the same
+       * bytes whose debounced serialize -> line diff posts readable lines
+       * back as 'clean-lines' (the chat reading view for agents without a
+       * structured transcript). Costs a parse per chunk; off by default.
+       */
+      cleanFeed: boolean;
     }
   | { type: 'write'; data: string }
   | { type: 'set-font-size'; fontSizePx: number }
@@ -41,7 +48,13 @@ export type TerminalToHostMessage =
   /** The glue changed the font size autonomously (fit-to-screen zoom); keeps the host's pinch base in sync. */
   | { type: 'font-size'; fontSizePx: number }
   /** Which renderer backs the terminal: WebGL (GPU) or the DOM fallback. Observability for a degraded terminal. */
-  | { type: 'renderer'; renderer: 'webgl' | 'dom' };
+  | { type: 'renderer'; renderer: 'webgl' | 'dom' }
+  /**
+   * Cleaned readable lines derived from the terminal (cleanFeed on).
+   * reset=false appends to what the reader already shows; reset=true
+   * REPLACES it (a fullscreen repaint rewrote content above the tail).
+   */
+  | { type: 'clean-lines'; lines: string[]; reset: boolean };
 
 export function encodeHostMessage(message: HostToTerminalMessage): string {
   return JSON.stringify(message);
@@ -101,6 +114,14 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
   if (parsedObject.type === 'renderer' && (parsedObject.renderer === 'webgl' || parsedObject.renderer === 'dom')) {
     return { type: 'renderer', renderer: parsedObject.renderer };
   }
+  if (
+    parsedObject.type === 'clean-lines' &&
+    Array.isArray(parsedObject.lines) &&
+    parsedObject.lines.every((line) => typeof line === 'string') &&
+    typeof parsedObject.reset === 'boolean'
+  ) {
+    return { type: 'clean-lines', lines: parsedObject.lines as string[], reset: parsedObject.reset };
+  }
   return null;
 }
 
@@ -128,7 +149,8 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
     isFiniteNumber(parsedObject.cols) &&
     (parsedObject.rows === null || isFiniteNumber(parsedObject.rows)) &&
     isFiniteNumber(parsedObject.fontSizePx) &&
-    isStringRecord(parsedObject.theme)
+    isStringRecord(parsedObject.theme) &&
+    typeof parsedObject.cleanFeed === 'boolean'
   ) {
     return {
       type: 'init',
@@ -137,6 +159,7 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
       rows: parsedObject.rows === null ? null : parsedObject.rows,
       fontSizePx: parsedObject.fontSizePx,
       theme: parsedObject.theme,
+      cleanFeed: parsedObject.cleanFeed,
     };
   }
   return null;

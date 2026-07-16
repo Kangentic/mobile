@@ -173,6 +173,25 @@ const STUB_PROJECT = { id: 'stub-project', name: 'Stub Project' };
 const STUB_SESSION_ID = 'stub-session-1';
 const STUB_TASK_ID = 'stub-task-1';
 const STUB_PROMPT_ID = `${STUB_SESSION_ID}:stub-tool-2`;
+// A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat
+// reading-view fallback (mirrors mockDesktop.ts).
+const STUB_CODEX_SESSION_ID = 'stub-session-codex';
+const STUB_CODEX_TASK_ID = 'stub-task-codex';
+
+/** A codex-style fullscreen TUI frame: cursor-home + full rewrite each paint. */
+function codexTuiFrame(paintTick) {
+  const spinnerGlyphs = ['|', '/', '-', '\\'];
+  const spinner = spinnerGlyphs[paintTick % spinnerGlyphs.length];
+  const statusLine = paintTick % 2 === 0 ? 'Refactoring src/billing/invoice.ts' : 'Running the affected tests';
+  return (
+    '\x1b[H\x1b[2J' +
+    'codex session (stub)\r\n' +
+    '╭────────────────────────╮\r\n' +
+    `${statusLine} ${spinner}\r\n` +
+    '╰────────────────────────╯\r\n' +
+    `files touched: ${3 + (paintTick % 4)} · tests: ${12 + paintTick}\r\n`
+  );
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -196,12 +215,14 @@ function stubTask(id, displayId, title, swimlaneId, position, sessionId) {
 }
 
 function stubBoardSnapshot(activeSessionId) {
+  const codexTask = { ...stubTask(STUB_CODEX_TASK_ID, 3, 'Codex refactor (no structured transcript)', 'lane-doing', 1, STUB_CODEX_SESSION_ID), agent: 'codex' };
   return {
     projectId: STUB_PROJECT.id,
     columns: stubColumns(),
     tasks: [
       stubTask(STUB_TASK_ID, 1, 'Streaming stub session', 'lane-doing', 0, activeSessionId),
       stubTask('stub-task-2', 2, 'A quiet backlog-ish card', 'lane-todo', 0, null),
+      codexTask,
     ],
     backlog: [],
   };
@@ -266,6 +287,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     // the desktop respawning a task's agent under a fresh id.
     let activeSessionId = STUB_SESSION_ID;
     let respawnCounter = 1;
+    let codexStreamSubscribed = false;
 
     function send(message) {
       if (!streams) throw new Error('session not established yet');
@@ -343,8 +365,12 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     function startFeed() {
       if (feedTimer) return;
       feedTimer = setInterval(() => {
-        if (!streams || !streamSubscribed || activeSessionId === null) return;
+        if (!streams) return;
         feedTick += 1;
+        if (codexStreamSubscribed && feedTick % 2 === 0) {
+          sendEvent({ kind: 'terminal', sessionId: STUB_CODEX_SESSION_ID, taskId: STUB_CODEX_TASK_ID, payload: { data: codexTuiFrame(feedTick / 2) } });
+        }
+        if (!streamSubscribed || activeSessionId === null) return;
         sendEvent({ kind: 'terminal', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` } });
         if (feedTick % 12 === 0) {
           appendTranscriptEntry({
@@ -390,7 +416,27 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
           if (payload.action === 'unsubscribe') return ok();
           return ok(stubBoardSnapshot(activeSessionId));
         case 'read-stream': {
-          if (payload.action === 'unsubscribe') { streamSubscribed = false; return ok(); }
+          if (payload.action === 'unsubscribe') {
+            if (payload.sessionId === STUB_CODEX_SESSION_ID) codexStreamSubscribed = false;
+            else streamSubscribed = false;
+            return ok();
+          }
+          if (payload.sessionId === STUB_CODEX_SESSION_ID) {
+            if (payload.action === 'transcript-window') {
+              // No structured transcript: the loaded-but-empty window flips
+              // the phone's chat lens to the reading view.
+              return ok({ revision: 1, totalEntries: 0, startIndex: 0, entries: [] });
+            }
+            codexStreamSubscribed = true;
+            startFeed();
+            return ok({
+              scrollback: codexTuiFrame(0),
+              activity: { state: 'thinking', reason: { kind: 'turn-active' } },
+              usage: null,
+              awaitedPromptId: null,
+              ptyDimensions: { ...ptyDimensions },
+            });
+          }
           if (activeSessionId === null || payload.sessionId !== activeSessionId) return fail(`No such session: ${payload.sessionId}`);
           if (payload.action === 'transcript-window') {
             const end = Math.min(payload.beforeIndex ?? transcriptEntries.length, transcriptEntries.length);
