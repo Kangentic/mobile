@@ -1,4 +1,4 @@
-import type { TranscriptEvent, Unsubscribe } from '@kangentic/protocol';
+import type { ActivityEvent, TranscriptEvent, Unsubscribe } from '@kangentic/protocol';
 import type { FeedRouter, SubscriptionManager, SubscriptionSnapshotSinks } from '@/channel';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
@@ -84,6 +84,16 @@ export function createSnapshotSinks(getSubscriptions: () => SubscriptionManager)
  */
 const TRANSCRIPT_COALESCE_MS = 100;
 
+/**
+ * Coalesce window for usage (token-accounting) activity events. They stream
+ * frequently during a turn but only bump a counter, yet each one produces a new
+ * activity map and re-renders TriageHome (which subscribes to the whole map and
+ * stays mounted behind the task screen). Only the latest usage per session
+ * matters, so we keep the newest and apply it per window. Meaningful
+ * transitions (state / event / permission) still apply immediately.
+ */
+const USAGE_COALESCE_MS = 500;
+
 export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionManager): Unsubscribe {
   let pendingTranscriptEvents: TranscriptEvent[] = [];
   let transcriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -97,6 +107,17 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
     // single render, so the O(n) flatten runs once for the whole batch.
     const store = useTranscriptStore.getState();
     for (const event of events) store.applyTranscript(event);
+  };
+
+  const latestUsageEventBySession = new Map<string, ActivityEvent>();
+  let usageFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushUsageEvents = (): void => {
+    usageFlushTimer = null;
+    if (latestUsageEventBySession.size === 0) return;
+    const events = [...latestUsageEventBySession.values()];
+    latestUsageEventBySession.clear();
+    const store = useActivityStore.getState();
+    for (const event of events) store.applyActivityEvent(event);
   };
 
   const unsubscribers: Unsubscribe[] = [
@@ -115,6 +136,15 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       setTerminalDimensions(event.sessionId, event.payload);
     }),
     feed.on('activity', (event) => {
+      if (event.payload.type === 'usage') {
+        // Keep only the newest usage per session; flush per window so a token
+        // firehose does not re-render TriageHome on every tick.
+        latestUsageEventBySession.set(event.sessionId, event);
+        if (usageFlushTimer === null) {
+          usageFlushTimer = setTimeout(flushUsageEvents, USAGE_COALESCE_MS);
+        }
+        return;
+      }
       useActivityStore.getState().applyActivityEvent(event);
     }),
     feed.on('board', (event) => {
@@ -132,6 +162,11 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       transcriptFlushTimer = null;
     }
     flushTranscriptEvents();
+    if (usageFlushTimer !== null) {
+      clearTimeout(usageFlushTimer);
+      usageFlushTimer = null;
+    }
+    flushUsageEvents();
     for (const unsubscribe of unsubscribers) unsubscribe();
   };
 }
