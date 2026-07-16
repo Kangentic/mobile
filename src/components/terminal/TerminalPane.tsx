@@ -34,7 +34,9 @@ const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
  * small glyphs, and a pinch enlarges any part of it instantly.
  */
 const MIN_TERMINAL_FONT_SIZE_PX = 6;
-const MAX_TERMINAL_FONT_SIZE_PX = 24;
+// Ceiling above the fill-to-height default (which can reach ~48px for a short
+// grid) so pinch-zoom has headroom and never clamp-jumps off the default.
+const MAX_TERMINAL_FONT_SIZE_PX = 56;
 // 32ms (~30fps) coalesces a token firehose into fewer, larger writes than 16ms
 // did, halving repaint frequency at a latency the eye cannot see. Keystroke
 // echo is unaffected - keys go phone->desktop directly, not through this batch.
