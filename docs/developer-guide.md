@@ -74,6 +74,31 @@ Details worth knowing:
 - **Mock flag caveat:** `EXPO_PUBLIC_KANGENTIC_MOCK` is inlined at bundle time, so switching
   mock on or off needs a Metro restart with `--clear`.
 
+## Mobile inspect loop
+
+`scripts/mobileInspect.mjs` is the see-poke-interrogate CLI for the app on the attached
+emulator/device, built so an agent (or a human) can verify UI changes in a tight loop:
+
+```
+node scripts/mobileInspect.mjs screenshot [--out <path>]   # adb screencap -> file, prints the path
+node scripts/mobileInspect.mjs tap <x> <y>                 # adb input tap
+node scripts/mobileInspect.mjs text "<string>"             # adb input text (spaces handled)
+node scripts/mobileInspect.mjs key <ANDROID_KEYCODE>       # adb input keyevent
+node scripts/mobileInspect.mjs logcat [--lines n] [--tag t]  # dumped ReactNativeJS log tail
+node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route>
+node scripts/mobileInspect.mjs serve                       # long-lived server, logs app hellos
+```
+
+`screenshot`/`tap`/`text`/`key`/`logcat` are plain adb and work even when the JS bundle is
+broken. `state` interrogates the app's **dev-only inspect bridge**
+(`src/devsupport/inspectBridge.ts`): the app dials out to `ws://127.0.0.1:8791` (the rig sets
+`EXPO_PUBLIC_KANGENTIC_INSPECT=1` and the `adb reverse` in every mode) and answers with store
+SUMMARIES - connection state, per-session activity/transcript-window/diff status, the
+subscription manager's desired vs active sets, terminal ring stats, and the current route.
+Production bundles never contain the bridge: the boot site is `__DEV__`-and-env gated and the
+module loads via dynamic import, the same stripping arrangement as the mock desktop. Wire
+shapes live in `src/devsupport/inspectProtocol.ts`; the script mirrors them by hand.
+
 ## Developing @kangentic/protocol
 
 `@kangentic/protocol` (the wire format, Noise handshakes, capability verbs, and event types) is

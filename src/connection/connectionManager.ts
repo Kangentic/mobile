@@ -126,6 +126,14 @@ async function openConnection(): Promise<void> {
   });
   subscriptionsHolder = subscriptions;
 
+  // Dev-only inspect loop: expose this connection's SubscriptionManager to
+  // the state-dump bridge (dynamic import keeps it out of prod bundles).
+  let inspectStateModule: typeof import('@/devsupport/inspectState') | null = null;
+  if (__DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_INSPECT === '1') {
+    inspectStateModule = await import('@/devsupport/inspectState');
+    inspectStateModule.setInspectSubscriptions(subscriptions);
+  }
+
   const unbindFeed = bindFeedToStores(controller.feed, subscriptions);
   const unsubscribeTransportState = controller.transport.onStateChange((state) => {
     useChannelStore.getState().setTransportState(state);
@@ -141,6 +149,7 @@ async function openConnection(): Promise<void> {
   useChannelStore.getState().setRelayUrl(anchor.relayAddress);
   activeConnection = { controller, verbs: controller.verbs, subscriptions };
   teardownActiveConnection = () => {
+    inspectStateModule?.setInspectSubscriptions(null);
     unsubscribeTransportState();
     unsubscribeEstablished();
     unbindFeed();
@@ -178,6 +187,12 @@ function onAppStateChange(status: AppStateStatus): void {
 /** Idempotent; called once from the root layout. */
 export function startConnectionLifecycle(): void {
   if (appStateSubscription) return;
+  // Dev-only inspect loop: the bridge dials the local inspect server once
+  // per app boot and survives connection churn (it reads stores, not the
+  // connection). Dynamic import keeps it out of prod bundles.
+  if (__DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_INSPECT === '1') {
+    void import('@/devsupport/inspectBridge').then(({ startInspectBridge }) => startInspectBridge());
+  }
   appStateSubscription = AppState.addEventListener('change', onAppStateChange);
   if (AppState.currentState === 'active' || AppState.currentState === 'unknown') void openConnection();
 }

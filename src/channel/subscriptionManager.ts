@@ -158,6 +158,25 @@ export class SubscriptionManager {
     );
   }
 
+  /** Read-only copies of the desired/active sets, for the dev inspect bridge. */
+  debugSnapshot(): {
+    desiredStreams: string[];
+    activeStreams: string[];
+    desiredBoards: string[];
+    activeBoards: string[];
+    desiredDiffTaskIds: string[];
+    activeDiffTaskIds: string[];
+  } {
+    return {
+      desiredStreams: [...this.desiredStreamIds].sort(),
+      activeStreams: [...this.activeStreamIds].sort(),
+      desiredBoards: [...this.desiredBoardIds].sort(),
+      activeBoards: [...this.activeBoardIds].sort(),
+      desiredDiffTaskIds: [...this.desiredDiffsByTaskId.keys()].sort(),
+      activeDiffTaskIds: [...this.activeDiffTaskIds].sort(),
+    };
+  }
+
   dispose(): void {
     this.disposed = true;
     this.unsubscribeEstablished();
