@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { Button, Sheet, Stack, Text, TextField, useTheme } from '@/components';
+import { DictationTextField } from '@/components/DictationTextField';
 
 export interface CreateTaskSheetProps {
   visible: boolean;
@@ -60,7 +61,7 @@ export function CreateTaskSheet({
           testID="create-task-title"
           autoFocus
         />
-        <TextField
+        <DictationTextField
           value={description}
           onChangeText={setDescription}
           placeholder="Description (optional)"

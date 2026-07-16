@@ -25,19 +25,45 @@ export interface PendingMove {
   toPosition: number;
 }
 
+export interface PendingTaskEdit {
+  editId: string;
+  projectId: string;
+  taskId: string;
+  previousTitle: string;
+  previousDescription: string;
+  nextTitle: string | null;
+  nextDescription: string | null;
+}
+
+export interface PendingTaskRemoval {
+  removalId: string;
+  projectId: string;
+  removedTask: BoardTaskWire;
+}
+
 interface BoardStoreState {
   projects: ReadBoardProjectSummary[];
   boardsByProjectId: Record<string, ProjectBoard>;
   pendingMoves: PendingMove[];
+  pendingEdits: PendingTaskEdit[];
+  pendingRemovals: PendingTaskRemoval[];
   applyProjectList: (projects: ReadBoardProjectSummary[]) => void;
   applyBoardSnapshot: (snapshot: ReadBoardSnapshotResponsePayload) => void;
   applyOptimisticMove: (move: { projectId: string; taskId: string; toSwimlaneId: string; toPosition: number }) => string | null;
   commitMove: (moveId: string) => void;
   rollbackMove: (moveId: string) => void;
+  applyOptimisticTaskEdit: (edit: { projectId: string; taskId: string; title?: string; description?: string }) => string | null;
+  commitTaskEdit: (editId: string) => void;
+  rollbackTaskEdit: (editId: string) => void;
+  applyOptimisticRemoval: (removal: { projectId: string; taskId: string }) => string | null;
+  commitRemoval: (removalId: string) => void;
+  rollbackRemoval: (removalId: string) => void;
   reset: () => void;
 }
 
 let nextMoveSequence = 0;
+let nextEditSequence = 0;
+let nextRemovalSequence = 0;
 
 function moveTaskInBoard(board: ProjectBoard, taskId: string, toSwimlaneId: string, toPosition: number): ProjectBoard {
   const task = board.tasksById[taskId];
@@ -56,10 +82,30 @@ function moveTaskInBoard(board: ProjectBoard, taskId: string, toSwimlaneId: stri
   return { ...board, tasksById };
 }
 
+function editTaskInBoard(board: ProjectBoard, taskId: string, fields: { title: string | null; description: string | null }): ProjectBoard {
+  const task = board.tasksById[taskId];
+  if (!task) return board;
+  const editedTask: BoardTaskWire = {
+    ...task,
+    ...(fields.title !== null ? { title: fields.title } : {}),
+    ...(fields.description !== null ? { description: fields.description } : {}),
+  };
+  return { ...board, tasksById: { ...board.tasksById, [taskId]: editedTask } };
+}
+
+function removeTaskFromBoard(board: ProjectBoard, taskId: string): ProjectBoard {
+  if (!(taskId in board.tasksById)) return board;
+  const tasksById = { ...board.tasksById };
+  delete tasksById[taskId];
+  return { ...board, tasksById };
+}
+
 export const useBoardStore = create<BoardStoreState>((set, get) => ({
   projects: [],
   boardsByProjectId: {},
   pendingMoves: [],
+  pendingEdits: [],
+  pendingRemovals: [],
 
   applyProjectList: (projects) => set({ projects }),
 
@@ -71,11 +117,21 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
         backlog: snapshot.backlog,
         snapshotAt: Date.now(),
       };
-      // Re-apply in-flight optimistic moves on top, so a snapshot racing a
-      // move does not visibly bounce the card back before the move commits.
+      // Re-apply in-flight optimistic mutations on top, so a snapshot racing
+      // one does not visibly bounce the card before the mutation commits.
       for (const pendingMove of state.pendingMoves) {
         if (pendingMove.projectId === snapshot.projectId) {
           board = moveTaskInBoard(board, pendingMove.taskId, pendingMove.toSwimlaneId, pendingMove.toPosition);
+        }
+      }
+      for (const pendingEdit of state.pendingEdits) {
+        if (pendingEdit.projectId === snapshot.projectId) {
+          board = editTaskInBoard(board, pendingEdit.taskId, { title: pendingEdit.nextTitle, description: pendingEdit.nextDescription });
+        }
+      }
+      for (const pendingRemoval of state.pendingRemovals) {
+        if (pendingRemoval.projectId === snapshot.projectId) {
+          board = removeTaskFromBoard(board, pendingRemoval.removedTask.id);
         }
       }
       return { boardsByProjectId: { ...state.boardsByProjectId, [snapshot.projectId]: board } };
@@ -123,7 +179,87 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       };
     }),
 
-  reset: () => set({ projects: [], boardsByProjectId: {}, pendingMoves: [] }),
+  applyOptimisticTaskEdit: (edit) => {
+    const state = get();
+    const board = state.boardsByProjectId[edit.projectId];
+    const task = board?.tasksById[edit.taskId];
+    if (!board || !task) return null;
+    nextEditSequence += 1;
+    const pendingEdit: PendingTaskEdit = {
+      editId: `edit-${nextEditSequence}`,
+      projectId: edit.projectId,
+      taskId: edit.taskId,
+      previousTitle: task.title,
+      previousDescription: task.description,
+      nextTitle: edit.title ?? null,
+      nextDescription: edit.description ?? null,
+    };
+    set({
+      pendingEdits: [...state.pendingEdits, pendingEdit],
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        [edit.projectId]: editTaskInBoard(board, edit.taskId, { title: pendingEdit.nextTitle, description: pendingEdit.nextDescription }),
+      },
+    });
+    return pendingEdit.editId;
+  },
+
+  commitTaskEdit: (editId) =>
+    set((state) => ({ pendingEdits: state.pendingEdits.filter((pendingEdit) => pendingEdit.editId !== editId) })),
+
+  rollbackTaskEdit: (editId) =>
+    set((state) => {
+      const pendingEdit = state.pendingEdits.find((candidate) => candidate.editId === editId);
+      if (!pendingEdit) return state;
+      const board = state.boardsByProjectId[pendingEdit.projectId];
+      const restoredBoard = board
+        ? editTaskInBoard(board, pendingEdit.taskId, { title: pendingEdit.previousTitle, description: pendingEdit.previousDescription })
+        : board;
+      return {
+        pendingEdits: state.pendingEdits.filter((candidate) => candidate.editId !== editId),
+        ...(restoredBoard ? { boardsByProjectId: { ...state.boardsByProjectId, [pendingEdit.projectId]: restoredBoard } } : {}),
+      };
+    }),
+
+  applyOptimisticRemoval: (removal) => {
+    const state = get();
+    const board = state.boardsByProjectId[removal.projectId];
+    const task = board?.tasksById[removal.taskId];
+    if (!board || !task) return null;
+    nextRemovalSequence += 1;
+    const pendingRemoval: PendingTaskRemoval = {
+      removalId: `removal-${nextRemovalSequence}`,
+      projectId: removal.projectId,
+      removedTask: task,
+    };
+    set({
+      pendingRemovals: [...state.pendingRemovals, pendingRemoval],
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        [removal.projectId]: removeTaskFromBoard(board, removal.taskId),
+      },
+    });
+    return pendingRemoval.removalId;
+  },
+
+  commitRemoval: (removalId) =>
+    set((state) => ({ pendingRemovals: state.pendingRemovals.filter((pendingRemoval) => pendingRemoval.removalId !== removalId) })),
+
+  rollbackRemoval: (removalId) =>
+    set((state) => {
+      const pendingRemoval = state.pendingRemovals.find((candidate) => candidate.removalId === removalId);
+      if (!pendingRemoval) return state;
+      const board = state.boardsByProjectId[pendingRemoval.projectId];
+      const restoredBoard = board
+        ? { ...board, tasksById: { ...board.tasksById, [pendingRemoval.removedTask.id]: pendingRemoval.removedTask } }
+        : board;
+      return {
+        pendingRemovals: state.pendingRemovals.filter((candidate) => candidate.removalId !== removalId),
+        ...(restoredBoard ? { boardsByProjectId: { ...state.boardsByProjectId, [pendingRemoval.projectId]: restoredBoard } } : {}),
+      };
+    }),
+
+  reset: () => set({ projects: [], boardsByProjectId: {}, pendingMoves: [], pendingEdits: [], pendingRemovals: [] }),
 }));
 
 /** Visible columns in board order (archived and ghost columns are desktop-internal). */

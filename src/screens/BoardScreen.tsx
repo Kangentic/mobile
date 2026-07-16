@@ -7,11 +7,17 @@ import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
 import { Badge, Card, ConnectionBanner, IconButton, Row, Screen, Sheet, Stack, Text, useTheme } from '@/components';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { CreateTaskSheet } from '@/components/board/CreateTaskSheet';
+import { EditTaskSheet } from '@/components/board/EditTaskSheet';
+import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
 import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
 import { StatusDot } from '@/components/StatusDot';
 import { CapabilityError } from '@/channel';
-import { createTask, moveTaskOptimistic } from '@/connection/actions';
+import { archiveTask, createTask, deleteTaskFromBoard, moveTaskOptimistic, updateTaskFields } from '@/connection/actions';
+
+function messageForActionError(error: unknown, fallback: string): string {
+  return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
+}
 
 export function BoardScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -27,12 +33,20 @@ export function BoardScreen(): React.JSX.Element {
   const columns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
   const projectName = projects.find((project) => project.id === projectId)?.name ?? null;
 
+  const [actionsTarget, setActionsTarget] = useState<BoardTaskWire | null>(null);
+  const [actionsInFlight, setActionsInFlight] = useState(false);
+  const [actionsError, setActionsError] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState<BoardTaskWire | null>(null);
   const [moveInFlight, setMoveInFlight] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<BoardTaskWire | null>(null);
+  const [editInFlight, setEditInFlight] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
   const [createInFlight, setCreateInFlight] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  const archiveAvailable = columns.some((column) => column.role === 'done');
 
   const onMove = useCallback(
     (targetSwimlaneId: string, position: 'top' | 'bottom') => {
@@ -69,6 +83,39 @@ export function BoardScreen(): React.JSX.Element {
     },
     [projectId],
   );
+
+  const onEditSave = useCallback(
+    (fields: { title?: string; description?: string }) => {
+      if (!editTarget || !projectId) return;
+      setEditInFlight(true);
+      setEditError(null);
+      void updateTaskFields({ projectId, taskId: editTarget.id, ...fields })
+        .then(() => setEditTarget(null))
+        .catch((error: unknown) => setEditError(messageForActionError(error, 'Edit failed - check the connection')))
+        .finally(() => setEditInFlight(false));
+    },
+    [editTarget, projectId],
+  );
+
+  const onArchive = useCallback(() => {
+    if (!actionsTarget || !projectId) return;
+    setActionsInFlight(true);
+    setActionsError(null);
+    void archiveTask({ projectId, taskId: actionsTarget.id })
+      .then(() => setActionsTarget(null))
+      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Archive failed - check the connection')))
+      .finally(() => setActionsInFlight(false));
+  }, [actionsTarget, projectId]);
+
+  const onDelete = useCallback(() => {
+    if (!actionsTarget || !projectId) return;
+    setActionsInFlight(true);
+    setActionsError(null);
+    void deleteTaskFromBoard({ projectId, taskId: actionsTarget.id })
+      .then(() => setActionsTarget(null))
+      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Delete failed - check the connection')))
+      .finally(() => setActionsInFlight(false));
+  }, [actionsTarget, projectId]);
 
   return (
     <Screen testID="board-screen">
@@ -107,8 +154,8 @@ export function BoardScreen(): React.JSX.Element {
                   column={column}
                   board={board}
                   onTaskLongPress={(task) => {
-                    setMoveError(null);
-                    setMoveTarget(task);
+                    setActionsError(null);
+                    setActionsTarget(task);
                   }}
                   projectId={projectId ?? ''}
                 />
@@ -143,6 +190,26 @@ export function BoardScreen(): React.JSX.Element {
         />
       </View>
 
+      <TaskActionsSheet
+        visible={actionsTarget !== null}
+        task={actionsTarget}
+        archiveAvailable={archiveAvailable}
+        onClose={() => setActionsTarget(null)}
+        onMove={() => {
+          setMoveError(null);
+          setMoveTarget(actionsTarget);
+          setActionsTarget(null);
+        }}
+        onEdit={() => {
+          setEditError(null);
+          setEditTarget(actionsTarget);
+          setActionsTarget(null);
+        }}
+        onArchive={onArchive}
+        onDelete={onDelete}
+        actionInFlight={actionsInFlight}
+        errorMessage={actionsError}
+      />
       <MoveTaskSheet
         visible={moveTarget !== null}
         task={moveTarget}
@@ -151,6 +218,14 @@ export function BoardScreen(): React.JSX.Element {
         onMove={onMove}
         moveInFlight={moveInFlight}
         errorMessage={moveError}
+      />
+      <EditTaskSheet
+        visible={editTarget !== null}
+        task={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSave={onEditSave}
+        saveInFlight={editInFlight}
+        errorMessage={editError}
       />
       <CreateTaskSheet
         visible={createVisible}

@@ -288,6 +288,18 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     let activeSessionId = STUB_SESSION_ID;
     let respawnCounter = 1;
     let codexStreamSubscribed = false;
+    // Board statefulness: mutations from board-tool-write / move-task overlay
+    // the canned snapshot so Maestro can assert create/edit/move/delete.
+    const boardMutations = { patches: new Map(), deleted: new Set(), created: [] };
+    let createdTaskCounter = 0;
+
+    function applyBoardMutations(snapshot) {
+      const tasks = snapshot.tasks
+        .filter((task) => !boardMutations.deleted.has(task.id))
+        .map((task) => ({ ...task, ...(boardMutations.patches.get(task.id) ?? {}) }));
+      const createdTasks = boardMutations.created.filter((task) => !boardMutations.deleted.has(task.id));
+      return { ...snapshot, tasks: [...tasks, ...createdTasks] };
+    }
 
     function send(message) {
       if (!streams) throw new Error('session not established yet');
@@ -414,7 +426,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         case 'read-board':
           if (!payload.projectId) return ok({ projects: [STUB_PROJECT] });
           if (payload.action === 'unsubscribe') return ok();
-          return ok(stubBoardSnapshot(activeSessionId));
+          return ok(applyBoardMutations(stubBoardSnapshot(activeSessionId)));
         case 'read-stream': {
           if (payload.action === 'unsubscribe') {
             if (payload.sessionId === STUB_CODEX_SESSION_ID) codexStreamSubscribed = false;
@@ -473,8 +485,14 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
             return ok({ delivered: true });
           }
           return ok({ delivered: true });
-        case 'move-task':
+        case 'move-task': {
+          const movePatch = boardMutations.patches.get(payload.taskId) ?? {};
+          movePatch.swimlane_id = payload.targetSwimlaneId;
+          movePatch.position = payload.targetPosition;
+          boardMutations.patches.set(payload.taskId, movePatch);
+          setTimeout(() => sendEvent({ kind: 'board', projectId: STUB_PROJECT.id, taskId: payload.taskId, payload: { change: 'task-updated', ids: [payload.taskId] } }), 50);
           return ok({ ok: true });
+        }
         case 'answer-permission-prompt':
           if (!permissionPending || payload.promptId !== STUB_PROMPT_ID) {
             return fail('promptId does not match the currently outstanding prompt (stale or already answered)');
@@ -507,9 +525,32 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
           return ok({ written: true });
         case 'board-tool-read':
           return ok({ result: { note: `stub answered ${payload.tool}` } });
-        case 'board-tool-write':
+        case 'board-tool-write': {
           console.log(`[board-tool] ${payload.tool}`, JSON.stringify(payload.params));
-          return ok({ result: { created: 'stub-created-task' } });
+          const params = payload.params ?? {};
+          if (payload.tool === 'create_task') {
+            createdTaskCounter += 1;
+            const created = stubTask(`stub-created-${createdTaskCounter}`, 100 + createdTaskCounter, String(params.title ?? 'Untitled stub task'), 'lane-todo', 0, null);
+            created.description = String(params.description ?? '');
+            boardMutations.created.push(created);
+            setTimeout(() => sendEvent({ kind: 'board', projectId: STUB_PROJECT.id, taskId: created.id, payload: { change: 'task-created', ids: [created.id] } }), 50);
+            return ok({ result: { created: created.id } });
+          }
+          if (payload.tool === 'update_task') {
+            const patch = boardMutations.patches.get(params.taskId) ?? {};
+            if (typeof params.title === 'string') patch.title = params.title;
+            if (typeof params.description === 'string') patch.description = params.description;
+            boardMutations.patches.set(params.taskId, patch);
+            setTimeout(() => sendEvent({ kind: 'board', projectId: STUB_PROJECT.id, taskId: params.taskId, payload: { change: 'task-updated', ids: [params.taskId] } }), 50);
+            return ok({ result: { updated: params.taskId } });
+          }
+          if (payload.tool === 'delete_task') {
+            boardMutations.deleted.add(params.taskId);
+            setTimeout(() => sendEvent({ kind: 'board', projectId: STUB_PROJECT.id, taskId: params.taskId, payload: { change: 'task-deleted', ids: [params.taskId] } }), 50);
+            return ok({ result: { deleted: params.taskId } });
+          }
+          return ok({ result: { note: `stub answered ${payload.tool}` } });
+        }
         default:
           return fail(`Stub has no handler for ${verb}`);
       }

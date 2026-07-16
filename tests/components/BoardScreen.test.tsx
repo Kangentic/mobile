@@ -17,9 +17,26 @@ jest.mock('expo-router', () => ({
 
 const mockMoveTaskOptimistic = jest.fn().mockResolvedValue(undefined);
 const mockCreateTask = jest.fn().mockResolvedValue(undefined);
+const mockUpdateTaskFields = jest.fn().mockResolvedValue(undefined);
+const mockDeleteTaskFromBoard = jest.fn().mockResolvedValue(undefined);
+const mockArchiveTask = jest.fn().mockResolvedValue(undefined);
 jest.mock('@/connection/actions', () => ({
   moveTaskOptimistic: (input: unknown) => mockMoveTaskOptimistic(input),
   createTask: (input: unknown) => mockCreateTask(input),
+  updateTaskFields: (input: unknown) => mockUpdateTaskFields(input),
+  deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
+  archiveTask: (input: unknown) => mockArchiveTask(input),
+}));
+
+// The create/edit description fields carry the dictation mic.
+jest.mock('expo-speech-recognition', () => ({
+  ExpoSpeechRecognitionModule: {
+    isRecognitionAvailable: jest.fn().mockReturnValue(false),
+    requestPermissionsAsync: jest.fn().mockResolvedValue({ granted: false }),
+    start: jest.fn(),
+    stop: jest.fn(),
+  },
+  useSpeechRecognitionEvent: jest.fn(),
 }));
 
 function baseTask(id: string, title: string, swimlaneId: string, position: number, sessionId: string | null) {
@@ -93,13 +110,16 @@ describe('BoardScreen', () => {
     });
   });
 
-  it('long-press opens the move sheet and confirming calls the optimistic move action', async () => {
+  it('long-press opens the actions sheet; Move routes to the move sheet and calls the optimistic move', async () => {
     render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
     fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
+    expect(screen.getByTestId('task-actions-sheet')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('task-action-move'));
     expect(screen.getByTestId('move-task-sheet')).toBeTruthy();
 
     fireEvent.press(screen.getByTestId('move-target-lane-doing'));
@@ -113,6 +133,44 @@ describe('BoardScreen', () => {
       targetSwimlaneId: 'lane-doing',
       targetPosition: 0,
     });
+  });
+
+  it('Edit routes to the edit sheet and saves the changed fields', async () => {
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
+    fireEvent.press(screen.getByTestId('task-action-edit'));
+    expect(screen.getByTestId('edit-task-sheet')).toBeTruthy();
+
+    fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Renamed from the phone');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-task-save'));
+    });
+
+    expect(mockUpdateTaskFields).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      title: 'Renamed from the phone',
+    });
+  });
+
+  it('Delete requires the two-step confirm then calls the delete action', async () => {
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
+    fireEvent.press(screen.getByTestId('task-action-delete'));
+    expect(mockDeleteTaskFromBoard).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+    });
+
+    expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
   });
 
   it('the FAB opens the create sheet and confirming calls createTask with the column name', async () => {
