@@ -544,8 +544,9 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
     } else {
       applyGeometry();
     }
-    // Cell metrics can settle a frame after open(); re-apply once they have.
-    requestAnimationFrame(applyGeometry);
+    // Cell metrics AND the viewport height can settle a frame after open();
+    // re-fit the font (not just the geometry) once they have.
+    requestAnimationFrame(refit);
   }
 
   function applyFontSize(fontSizePx) {
@@ -553,6 +554,17 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
     currentFontSizePx = fontSizePx;
     terminal.options.fontSize = fontSizePx;
     // Pinch changed the cell size; the grid (cols/rows) is unchanged.
+    applyGeometry();
+  }
+
+  // Re-fit the font to the CURRENT viewport height, then re-apply the grid.
+  // Called whenever the viewport settles or changes - the first-open layout
+  // settle (window.innerHeight is not always final the instant the terminal is
+  // created, which left the initial fit stale until a manual reload), the soft
+  // keyboard, and rotation - so the fit is never left stale.
+  function refit() {
+    if (!terminal) return;
+    autoFitFontToScreen();
     applyGeometry();
   }
 
@@ -601,10 +613,7 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
   // The WebView viewport changes when the soft keyboard shows/hides or on
   // rotation: re-fit the whole frame to the new viewport so it stays fully
   // visible.
-  window.addEventListener('resize', function () {
-    autoFitFontToScreen();
-    applyGeometry();
-  });
+  window.addEventListener('resize', refit);
 
   window.addEventListener('load', function () {
     var container = scrollContainer();
@@ -615,6 +624,25 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
       container.addEventListener('click', function () {
         if (terminal) terminal.focus();
       });
+      // The scroll-container is 100% of the WebView, so its box height tracks
+      // window.innerHeight. Observing it re-fits the moment the viewport box
+      // actually settles - which a plain 'resize' listener misses on first open
+      // (the RN layout can finalize a beat after the terminal is created). This
+      // is what removes the "needs a manual reload to fit" bug, and also covers
+      // keyboard/rotation. Debounced to one fit per frame; refit changes only
+      // the terminal's CONTENT size, never the container box, so it never loops.
+      if (typeof ResizeObserver !== 'undefined') {
+        var refitScheduled = false;
+        var viewportObserver = new ResizeObserver(function () {
+          if (refitScheduled) return;
+          refitScheduled = true;
+          requestAnimationFrame(function () {
+            refitScheduled = false;
+            refit();
+          });
+        });
+        viewportObserver.observe(container);
+      }
     }
     postToHost({ type: 'ready' });
   });
