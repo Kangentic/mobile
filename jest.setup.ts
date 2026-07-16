@@ -14,7 +14,7 @@ jest.mock('react-native-reanimated', () => {
 
   const mockCreateAnimationBuilder = (): Record<string, () => unknown> => {
     const mockBuilder: Record<string, () => unknown> = {};
-    for (const methodName of ['duration', 'delay', 'springify', 'damping', 'easing']) {
+    for (const methodName of ['duration', 'delay', 'springify', 'damping', 'easing', 'reduceMotion']) {
       mockBuilder[methodName] = () => mockBuilder;
     }
     return mockBuilder;
@@ -33,13 +33,31 @@ jest.mock('react-native-reanimated', () => {
     __esModule: true,
     default: mockAnimated,
     ...mockAnimated,
-    useSharedValue: (initialValue: unknown) => ({ value: initialValue }),
+    useSharedValue: (initialValue: unknown) => {
+      const mockSharedValue = {
+        value: initialValue,
+        get: () => mockSharedValue.value,
+        set: (nextValue: unknown) => {
+          mockSharedValue.value = nextValue;
+        },
+      };
+      return mockSharedValue;
+    },
     useAnimatedStyle: (styleFactory: () => object) => styleFactory(),
     useDerivedValue: (valueFactory: () => unknown) => ({ value: valueFactory() }),
+    // Tests that need the reduced-motion branch jest.spyOn this export.
+    useReducedMotion: () => false,
     withTiming: (toValue: unknown) => toValue,
     withSpring: (toValue: unknown) => toValue,
     withDelay: (delayMilliseconds: number, animation: unknown) => animation,
+    withRepeat: (animation: unknown) => animation,
+    cancelAnimation: () => undefined,
     runOnJS: (callback: unknown) => callback,
+    ReduceMotion: { System: 'system', Always: 'always', Never: 'never' },
+    // Runtime stub only; src code typechecks against the real Easing types.
+    Easing: {
+      bezier: () => ({ factory: () => (progress: number) => progress }),
+    },
     SlideInDown: mockCreateAnimationBuilder(),
     SlideOutDown: mockCreateAnimationBuilder(),
     SlideInUp: mockCreateAnimationBuilder(),

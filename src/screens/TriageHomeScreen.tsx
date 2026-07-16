@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
-import { Screen, Card, ConnectionBanner, Row, Stack, Text, Badge, Button, StatusDot, SectionHeader, useTheme } from '@/components';
+import { Screen, Card, ConnectionBanner, EmptyState, Row, Stack, Text, Badge, Button, StatusDot, SectionHeader, useTheme } from '@/components';
 import {
   selectTriageRows,
   sectionForEntry,
@@ -118,16 +118,17 @@ export function TriageHomeScreen(): React.JSX.Element {
 }
 
 function UnpairedEmptyState(): React.JSX.Element {
-  const theme = useTheme();
   const router = useRouter();
   return (
-    <Stack gap="md" style={[styles.emptyState, { padding: theme.spacing.xl }]}>
-      <Text variant="title">No desktop paired</Text>
-      <Text variant="body" color="secondary" style={styles.centeredText}>
-        Pair this phone with your desktop Kangentic app to triage and steer your agents from anywhere.
-      </Text>
+    <EmptyState
+      testID="unpaired-empty-state"
+      title="No desktop paired"
+      caption="Pair this phone with your desktop Kangentic app to triage and steer your agents from anywhere."
+      overseerSize={90}
+      overseerAnimate="blink-loop"
+    >
       <Button label="Pair with your desktop" onPress={() => router.push('/pair')} testID="triage-pair-cta" />
-    </Stack>
+    </EmptyState>
   );
 }
 
@@ -180,13 +181,5 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  centeredText: {
-    textAlign: 'center',
   },
 });

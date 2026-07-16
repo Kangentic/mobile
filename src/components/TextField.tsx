@@ -11,10 +11,11 @@ export interface TextFieldProps extends TextInputProps {
 /**
  * Themed TextInput primitive: surface background, hairline border, primary
  * text on textMuted placeholders, body-size (14) text. Forwards its ref so
- * composers can manage focus imperatively.
+ * composers can manage focus imperatively. The iOS keyboard defaults to the
+ * dark appearance to match the dark-only theme (callers can still override).
  */
 export const TextField = React.forwardRef<TextInput, TextFieldProps>(function TextField(
-  { testID, mono = false, multiline = false, style, ...rest },
+  { testID, mono = false, multiline = false, keyboardAppearance = 'dark', style, ...rest },
   ref,
 ): React.JSX.Element {
   const theme = useTheme();
@@ -24,6 +25,7 @@ export const TextField = React.forwardRef<TextInput, TextFieldProps>(function Te
       ref={ref}
       testID={testID}
       multiline={multiline}
+      keyboardAppearance={keyboardAppearance}
       placeholderTextColor={theme.colors.textMuted}
       style={[
         styles.base,

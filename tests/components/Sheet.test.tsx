@@ -48,4 +48,41 @@ describe('Sheet', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('hides the content on close and shows it again when reopened during the exit window', () => {
+    jest.useFakeTimers();
+    try {
+      const view = render(
+        <ThemeProvider>
+          <Sheet visible onClose={jest.fn()} testID="move-task-sheet">
+            <Text>Sheet body</Text>
+          </Sheet>
+        </ThemeProvider>,
+      );
+      expect(screen.getByText('Sheet body')).toBeTruthy();
+
+      // Closing removes the content immediately (the exit animation plays on
+      // the removed views) while the Modal lingers for the exit window.
+      view.rerender(
+        <ThemeProvider>
+          <Sheet visible={false} onClose={jest.fn()} testID="move-task-sheet">
+            <Text>Sheet body</Text>
+          </Sheet>
+        </ThemeProvider>,
+      );
+      expect(screen.queryByText('Sheet body')).toBeNull();
+
+      // Reopening inside the exit window cancels the deferred unmount.
+      view.rerender(
+        <ThemeProvider>
+          <Sheet visible onClose={jest.fn()} testID="move-task-sheet">
+            <Text>Sheet body</Text>
+          </Sheet>
+        </ThemeProvider>,
+      );
+      expect(screen.getByText('Sheet body')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

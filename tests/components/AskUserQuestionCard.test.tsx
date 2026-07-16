@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import * as Haptics from 'expo-haptics';
 import { ThemeProvider } from '@/components';
 import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCard';
 import { answerPermissionPrompt } from '@/connection/actions';
@@ -9,7 +10,16 @@ jest.mock('@/connection/actions', () => ({
   answerPermissionPrompt: jest.fn(),
 }));
 
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn().mockResolvedValue(undefined),
+  notificationAsync: jest.fn().mockResolvedValue(undefined),
+  selectionAsync: jest.fn().mockResolvedValue(undefined),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
+}));
+
 const mockAnswerPermissionPrompt = jest.mocked(answerPermissionPrompt);
+const mockImpactAsync = jest.mocked(Haptics.impactAsync);
 
 const questionPrompt: PendingPromptDescriptor = {
   promptId: 'sess-1:tool-9',
@@ -43,6 +53,7 @@ describe('AskUserQuestionCard', () => {
   beforeEach(() => {
     mockAnswerPermissionPrompt.mockReset();
     mockAnswerPermissionPrompt.mockResolvedValue(undefined);
+    mockImpactAsync.mockClear();
   });
 
   it('renders the first question with its header and options', () => {
@@ -58,6 +69,13 @@ describe('AskUserQuestionCard', () => {
     renderCard();
     fireEvent.press(screen.getByTestId('ask-option-0-1'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-9', '2');
+  });
+
+  it('fires the promptAnswered haptic when an option is tapped', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('ask-option-0-0'));
+    expect(mockImpactAsync).toHaveBeenCalledTimes(1);
+    expect(mockImpactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Medium);
   });
 
   it('falls back to the generic permission card on malformed input', () => {

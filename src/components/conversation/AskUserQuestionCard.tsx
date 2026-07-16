@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Badge, Card, Stack, Text, useTheme } from '@/components';
+import { triggerHaptic } from '@/lib/haptics';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
 import { parseAskUserQuestionInput } from '@/conversation/pendingPromptSummary';
 import { askUserQuestionOptionKeystrokes } from '@/conversation/promptKeystrokes';
@@ -55,7 +56,10 @@ export function AskUserQuestionCard({ sessionId, prompt }: AskUserQuestionCardPr
                 accessibilityState={{ disabled: optionsDisabled || !selectable }}
                 testID={`ask-option-0-${optionIndex}`}
                 disabled={optionsDisabled || !selectable}
-                onPress={() => submit(askUserQuestionOptionKeystrokes(optionIndex))}
+                onPress={() => {
+                  triggerHaptic('promptAnswered');
+                  submit(askUserQuestionOptionKeystrokes(optionIndex));
+                }}
                 style={({ pressed }) => [
                   styles.optionRow,
                   {

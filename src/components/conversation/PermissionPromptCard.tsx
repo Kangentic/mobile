@@ -2,6 +2,7 @@ import React from 'react';
 import { ScrollView, View } from 'react-native';
 import { isRecord, type JsonValue } from '@kangentic/protocol';
 import { Badge, Button, Card, MarkdownBlock, MonoText, Row, Stack, Text, useTheme } from '@/components';
+import { triggerHaptic } from '@/lib/haptics';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
 import { approvePermissionKeystrokes, denyPermissionKeystrokes } from '@/conversation/promptKeystrokes';
@@ -143,14 +144,20 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
               variant="primary"
               testID="permission-approve"
               disabled={buttonsDisabled}
-              onPress={() => submit(approvePermissionKeystrokes())}
+              onPress={() => {
+                triggerHaptic('promptAnswered');
+                submit(approvePermissionKeystrokes());
+              }}
             />
             <Button
               label="Deny"
               variant="danger"
               testID="permission-deny"
               disabled={buttonsDisabled}
-              onPress={() => submit(denyPermissionKeystrokes())}
+              onPress={() => {
+                triggerHaptic('promptAnswered');
+                submit(denyPermissionKeystrokes());
+              }}
             />
           </Row>
         </Stack>

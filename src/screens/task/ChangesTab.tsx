@@ -5,9 +5,11 @@ import { FlashList } from '@shopify/flash-list';
 import type { DiffFileStatusWire, DiffFileWire, ReadDiffScope } from '@kangentic/protocol';
 import {
   Badge,
+  EmptyState,
   MonoText,
   Row,
   SegmentedTabBar,
+  SkeletonRow,
   Stack,
   Text,
   useTheme,
@@ -30,6 +32,9 @@ const SCOPE_ITEMS: SegmentedTabBarItem[] = [
   { key: 'staged', label: 'Staged' },
   { key: 'branch', label: 'Branch' },
 ];
+
+const LOADING_SKELETON_ROW_COUNT = 6;
+const EMPTY_STATE_OVERSEER_SIZE = 54;
 
 const BADGE_COLOR_BY_STATUS: Record<DiffFileStatusWire, TextColorRole> = {
   A: 'success',
@@ -87,9 +92,15 @@ export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): Re
   } else if (taskDiff?.fileListStatus === 'error') {
     body = <CenteredNote color="danger" message="Could not load changes" />;
   } else if (fileList === null) {
-    body = <CenteredNote color="secondary" message="Loading changes..." />;
+    body = (
+      <View testID="changes-skeleton" style={[styles.flex, { paddingVertical: theme.spacing.sm }]}>
+        {Array.from({ length: LOADING_SKELETON_ROW_COUNT }, (_unused, rowIndex) => (
+          <SkeletonRow key={`changes-skeleton-row-${rowIndex}`} />
+        ))}
+      </View>
+    );
   } else if (fileList.files.length === 0) {
-    body = <CenteredNote color="secondary" message="No changes" />;
+    body = <EmptyState testID="changes-empty" title="No changes" overseerSize={EMPTY_STATE_OVERSEER_SIZE} />;
   } else {
     body = (
       <FlashList<DiffFileWire>
