@@ -1,0 +1,31 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# /respawn makes the stub swap the task to a fresh sessionId (a model
+# switch). The screen must follow the successor automatically - the new
+# session's transcript marker appears and the ended state never shows.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 20000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- assertVisible:
+    id: "session-screen"
+- tapOn:
+    id: "session-mode-chat"
+- extendedWaitUntil:
+    visible:
+      id: "composer-input"
+    timeout: 10000
+- tapOn:
+    id: "composer-input"
+- inputText: "/respawn"
+- tapOn:
+    id: "composer-send"
+- extendedWaitUntil:
+    visible: "Respawned session online (stub-session-2)."
+    timeout: 25000
+- assertNotVisible:
+    id: "session-ended-state"

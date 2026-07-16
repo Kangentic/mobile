@@ -1,0 +1,34 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# Self-contained delete: create a throwaway card, then delete it through the
+# two-step confirm and assert it leaves the board.
+- launchApp
+- tapOn:
+    id: "board-tab"
+- extendedWaitUntil:
+    visible:
+      id: "board-card-stub-task-1"
+    timeout: 20000
+- tapOn:
+    id: "board-create-task"
+- tapOn:
+    id: "create-task-title"
+- inputText: "Delete me Maestro"
+- tapOn:
+    id: "create-task-column-To Do"
+- tapOn:
+    id: "create-task-confirm"
+- extendedWaitUntil:
+    visible: "Delete me Maestro"
+    timeout: 15000
+- longPressOn: "Delete me Maestro"
+- assertVisible:
+    id: "task-actions-sheet"
+- tapOn:
+    id: "task-action-delete"
+- tapOn:
+    id: "task-action-delete-confirm"
+- extendedWaitUntil:
+    notVisible: "Delete me Maestro"
+    timeout: 15000

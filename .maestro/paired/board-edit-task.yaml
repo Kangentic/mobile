@@ -1,0 +1,33 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# Long-press -> Edit: rename the quiet card and assert the optimistic (then
+# stub-confirmed) title lands on the board.
+- launchApp
+- tapOn:
+    id: "board-tab"
+- extendedWaitUntil:
+    visible:
+      id: "board-card-stub-task-2"
+    timeout: 20000
+- longPressOn:
+    id: "board-card-stub-task-2"
+- assertVisible:
+    id: "task-actions-sheet"
+- tapOn:
+    id: "task-action-edit"
+- assertVisible:
+    id: "edit-task-sheet"
+- tapOn:
+    id: "edit-task-title"
+- eraseText
+- inputText: "Renamed by Maestro"
+- tapOn:
+    id: "edit-task-save"
+- extendedWaitUntil:
+    notVisible:
+      id: "edit-task-sheet"
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "Renamed by Maestro"
+    timeout: 15000
