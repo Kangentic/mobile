@@ -1,6 +1,7 @@
 import React from 'react';
-import { Pressable, StyleSheet } from 'react-native';
-import { Icon, MonoText, Row, StatusDot, Text, useTheme } from '@/components';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { MessagesSquare, SquareTerminal } from 'lucide-react-native';
+import { Row, StatusDot, useTheme } from '@/components';
 import { triggerHaptic } from '@/lib/haptics';
 
 export type SessionMode = 'terminal' | 'chat';
@@ -16,12 +17,15 @@ export interface SessionModeToggleProps {
   chatAttention: boolean;
 }
 
+const SEGMENT_ICON_SIZE = 18;
+
 /**
- * The session's mode pill: one session, two lenses. Docked in the input bar
- * (adjacent to the input row it re-programs, thumb-reachable with the
- * keyboard open); active segment fill + the input row transforming + the
- * pane slide are the three reinforcing mode signals. Tap-only: swipe
- * belongs to the terminal's pan gesture.
+ * The session's mode pill: one session, two lenses. Compact icon-only
+ * segments docked at the left edge of the input row (thumb-reachable with
+ * the keyboard open, adjacent to the input it re-programs) so the bottom
+ * row keeps identical geometry in both modes. Active segment fill + the
+ * input row transforming + the pane slide are the three reinforcing mode
+ * signals. Tap-only: swipe belongs to the terminal's pan gesture.
  */
 export function SessionModeToggle({ mode, onModeChange, chatAttention }: SessionModeToggleProps): React.JSX.Element {
   const theme = useTheme();
@@ -37,9 +41,9 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
     return [
       styles.segment,
       {
-        minHeight: theme.minTouchSize,
+        width: theme.minTouchSize,
+        height: theme.minTouchSize,
         borderRadius: theme.radii.md,
-        paddingHorizontal: theme.spacing.md,
         backgroundColor: isActive ? theme.colors.surfaceRaised : 'transparent',
       },
     ];
@@ -47,7 +51,6 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
 
   return (
     <Row
-      gap="xs"
       style={[
         styles.pill,
         {
@@ -65,14 +68,10 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
         onPress={() => selectMode('terminal')}
         style={segmentStyle('terminal')}
       >
-        <Row gap="xs" style={styles.segmentContent}>
-          <MonoText size="caption" color={mode === 'terminal' ? 'accent' : 'secondary'}>
-            {'>_'}
-          </MonoText>
-          <Text variant="caption" color={mode === 'terminal' ? 'accent' : 'secondary'}>
-            Terminal
-          </Text>
-        </Row>
+        <SquareTerminal
+          size={SEGMENT_ICON_SIZE}
+          color={mode === 'terminal' ? theme.colors.accent : theme.colors.textSecondary}
+        />
       </Pressable>
       <Pressable
         accessibilityRole="button"
@@ -82,13 +81,15 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
         onPress={() => selectMode('chat')}
         style={segmentStyle('chat')}
       >
-        <Row gap="xs" style={styles.segmentContent}>
-          <Icon name="chatbubble-outline" size={14} color={mode === 'chat' ? 'accent' : 'secondary'} />
-          <Text variant="caption" color={mode === 'chat' ? 'accent' : 'secondary'}>
-            Chat
-          </Text>
-          {chatAttention ? <StatusDot variant="needs-you" testID="session-mode-chat-attention" /> : null}
-        </Row>
+        <MessagesSquare
+          size={SEGMENT_ICON_SIZE}
+          color={mode === 'chat' ? theme.colors.accent : theme.colors.textSecondary}
+        />
+        {chatAttention ? (
+          <View style={styles.attentionDot}>
+            <StatusDot variant="needs-you" testID="session-mode-chat-attention" />
+          </View>
+        ) : null}
       </Pressable>
     </Row>
   );
@@ -96,15 +97,16 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
 
 const styles = StyleSheet.create({
   pill: {
-    alignSelf: 'flex-start',
     borderWidth: StyleSheet.hairlineWidth,
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   segment: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  segmentContent: {
-    alignItems: 'center',
+  attentionDot: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
   },
 });

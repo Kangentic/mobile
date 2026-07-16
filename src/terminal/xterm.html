@@ -612,6 +612,13 @@ return exports; })();
     lastAppCursorMode = false;
     manualPanUntil = 0;
     cleanFeedEnabled = initMessage.cleanFeed === true;
+    // The row-stretch fill can leave a sub-row remainder below the last row;
+    // paint the page in the terminal's own background so it never reads as a
+    // seam against the host screen.
+    if (initMessage.theme && typeof initMessage.theme.background === 'string') {
+      document.documentElement.style.background = initMessage.theme.background;
+      document.body.style.background = initMessage.theme.background;
+    }
     setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
     autoFitFontToScreen();
     terminal = new window.Terminal({
@@ -668,6 +675,27 @@ return exports; })();
     applyGeometry();
   }
 
+  // After the integer font fit, rows * cellHeight usually ends a strip short
+  // of the viewport (font sizes are whole pixels). Stretch the LINE HEIGHT by
+  // the remainder ratio so the grid consumes the full height - no dead band
+  // under the last row. One-shot per refit, measured off the renderer's
+  // actual cell height; clamped so a pathological measure cannot balloon rows.
+  function stretchRowsToViewport() {
+    if (!terminal) return;
+    var screen = document.querySelector('.xterm-screen');
+    if (!screen) return;
+    var screenHeight = screen.getBoundingClientRect().height;
+    if (!(screenHeight > 0) || terminal.rows < 1) return;
+    var currentLineHeight = terminal.options.lineHeight || 1;
+    var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
+    if (!(baseCellHeight > 0)) return;
+    var desiredLineHeight = window.innerHeight / (terminal.rows * baseCellHeight);
+    var next = Math.max(1, Math.min(1.3, desiredLineHeight));
+    if (Math.abs(next - currentLineHeight) > 0.005) {
+      terminal.options.lineHeight = next;
+    }
+  }
+
   // Re-fit the font to the CURRENT viewport height, then re-apply the grid.
   // Called whenever the viewport settles or changes - the first-open layout
   // settle (window.innerHeight is not always final the instant the terminal is
@@ -677,6 +705,8 @@ return exports; })();
     if (!terminal) return;
     autoFitFontToScreen();
     applyGeometry();
+    // Measure AFTER the font/geometry pass paints, then true up the height.
+    requestAnimationFrame(stretchRowsToViewport);
   }
 
   function onHostMessage(rawData) {

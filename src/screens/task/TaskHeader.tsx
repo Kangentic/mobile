@@ -2,7 +2,8 @@ import React from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ConnectionBanner, Icon, IconButton, Row, StatusDot, Text, useTheme } from '@/components';
+import { GitCompareArrows } from 'lucide-react-native';
+import { ConnectionBanner, IconButton, Row, StatusDot, Text, useTheme } from '@/components';
 import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 
 export interface TaskHeaderProps {
@@ -38,27 +39,25 @@ export function TaskHeader({ taskTitle, sessionId, onOpenChanges }: TaskHeaderPr
           {taskTitle}
         </Text>
         {onOpenChanges ? (
+          // Icon-only with a full touch target: the title keeps its room and
+          // the affordance still reads as a button (raised circle, pressed dim).
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="View changes"
             testID="task-header-changes"
             onPress={onOpenChanges}
-            style={[
-              styles.changesChip,
+            style={({ pressed }) => [
+              styles.changesButton,
               {
-                minHeight: theme.minTouchSize,
-                borderColor: theme.colors.border,
-                borderRadius: theme.radii.md,
-                paddingHorizontal: theme.spacing.md,
+                width: theme.minTouchSize,
+                height: theme.minTouchSize,
+                borderRadius: theme.minTouchSize / 2,
+                backgroundColor: theme.colors.surfaceRaised,
+                opacity: pressed ? 0.7 : 1,
               },
             ]}
           >
-            <Row gap="xs" style={styles.changesChipContent}>
-              <Icon name="git-compare-outline" size={14} color="secondary" />
-              <Text variant="caption" color="secondary">
-                Changes
-              </Text>
-            </Row>
+            <GitCompareArrows size={20} color={theme.colors.textSecondary} />
           </Pressable>
         ) : null}
       </Row>
@@ -75,12 +74,8 @@ const styles = StyleSheet.create({
   title: {
     flex: 1,
   },
-  changesChip: {
+  changesButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  changesChipContent: {
-    alignItems: 'center',
   },
 });

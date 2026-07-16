@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { FlashList } from '@shopify/flash-list';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { Badge, Card, ConnectionBanner, IconButton, Row, Screen, Sheet, Stack, Text, useTheme } from '@/components';
+import { AppHeader, Badge, Card, ConnectionBanner, IconButton, Row, Screen, Sheet, Stack, Text, useTheme } from '@/components';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { CreateTaskSheet } from '@/components/board/CreateTaskSheet';
 import { EditTaskSheet } from '@/components/board/EditTaskSheet';
@@ -128,20 +128,17 @@ export function BoardScreen(): React.JSX.Element {
   }, [actionsTarget, projectId]);
 
   return (
-    <Screen testID="board-screen">
+    <Screen testID="board-screen" edges={['left', 'right']}>
+      {/* The header title IS the project switcher: the board is always
+          "some project's board", so the current project stays visible and
+          tappable even before a second project exists. */}
+      <AppHeader
+        title={projectName ?? 'Board'}
+        subtitle={projectName ? 'Board' : undefined}
+        onTitlePress={projects.length > 0 ? () => setProjectPickerVisible(true) : undefined}
+        testID="board-header"
+      />
       <ConnectionBanner />
-      {projects.length > 1 ? (
-        <Pressable
-          testID="board-project-picker"
-          accessibilityRole="button"
-          onPress={() => setProjectPickerVisible(true)}
-          style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, minHeight: theme.minTouchSize, justifyContent: 'center' }}
-        >
-          <Text variant="caption" color="accent">
-            {projectName ?? 'Select project'} ▾
-          </Text>
-        </Pressable>
-      ) : null}
 
       {columns.length === 0 ? (
         <Stack gap="sm" style={[styles.emptyState, { padding: theme.spacing.xl }]}>

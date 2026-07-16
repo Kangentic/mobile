@@ -1,36 +1,28 @@
 import React from 'react';
-import { Pressable } from 'react-native';
-import { Tabs, useRouter } from 'expo-router';
-import { Icon, useTheme } from '@/components';
+import { Tabs } from 'expo-router';
+import { House, SquareKanban } from 'lucide-react-native';
+import { useTheme } from '@/components';
 
+/**
+ * Bottom tabs: Home (attention feed) and Board. Screens render their own
+ * AppHeader (brandmark + title + settings), so the native header stays off.
+ */
 export default function TabsLayout(): React.JSX.Element {
   const theme = useTheme();
-  const router = useRouter();
 
   return (
     <Tabs
       screenOptions={{
-        headerShown: true,
-        headerStyle: { backgroundColor: theme.colors.surface },
-        headerTintColor: theme.colors.textPrimary,
+        headerShown: false,
         tabBarActiveTintColor: theme.colors.accent,
         tabBarInactiveTintColor: theme.colors.textMuted,
-        tabBarStyle: { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.border },
-        headerRight: () => (
-          <Pressable
-            testID="header-settings-button"
-            accessibilityRole="button"
-            onPress={() => router.push('/settings')}
-            style={{
-              minWidth: theme.minTouchSize,
-              minHeight: theme.minTouchSize,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Icon name="settings-outline" color="secondary" />
-          </Pressable>
-        ),
+        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
+        // No fixed height: the navigator adds the gesture-nav inset itself.
+        tabBarStyle: {
+          backgroundColor: theme.colors.surface,
+          borderTopColor: theme.colors.border,
+          paddingTop: 6,
+        },
       }}
     >
       <Tabs.Screen
@@ -38,7 +30,9 @@ export default function TabsLayout(): React.JSX.Element {
         options={{
           title: 'Home',
           tabBarButtonTestID: 'home-tab',
-          tabBarIcon: ({ focused, size }) => <Icon name="home" color={focused ? 'accent' : 'muted'} size={size} />,
+          tabBarIcon: ({ focused, color }) => (
+            <House size={22} color={color} strokeWidth={focused ? 2.4 : 1.8} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -46,7 +40,9 @@ export default function TabsLayout(): React.JSX.Element {
         options={{
           title: 'Board',
           tabBarButtonTestID: 'board-tab',
-          tabBarIcon: ({ focused, size }) => <Icon name="grid" color={focused ? 'accent' : 'muted'} size={size} />,
+          tabBarIcon: ({ focused, color }) => (
+            <SquareKanban size={22} color={color} strokeWidth={focused ? 2.4 : 1.8} />
+          ),
         }}
       />
     </Tabs>

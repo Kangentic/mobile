@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet } from 'react-native';
-import { MonoText, Row, useTheme } from '@/components';
+import { OctagonX } from 'lucide-react-native';
+import { MonoText, Row, Text, useTheme } from '@/components';
 import { arrowKeySequence, CTRL_C, ENTER, ESCAPE, SLASH, TAB, type ArrowKeyDirection } from '@/terminal/keySequences';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { writeTerminal } from '@/connection/actions';
@@ -16,7 +17,6 @@ interface QuickKey {
   /** Fixed byte sequence; arrows use `arrow` instead so DECCKM picks CSI vs SS3 at press time. */
   sequence?: string;
   arrow?: ArrowKeyDirection;
-  danger?: boolean;
   /** Arrow glyphs read small at label size; render them larger. */
   glyph?: boolean;
 }
@@ -29,7 +29,6 @@ const QUICK_KEYS: QuickKey[] = [
   { id: 'left', label: '←', accessibilityLabel: 'Arrow left', arrow: 'left', glyph: true },
   { id: 'right', label: '→', accessibilityLabel: 'Arrow right', arrow: 'right', glyph: true },
   { id: 'enter', label: 'Enter', accessibilityLabel: 'Enter', sequence: ENTER },
-  { id: 'ctrl-c', label: '^C', accessibilityLabel: 'Control C (interrupt)', sequence: CTRL_C, danger: true },
   { id: 'slash', label: '/', accessibilityLabel: 'Slash', sequence: SLASH },
 ];
 
@@ -49,9 +48,10 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
     (state) => state.applicationCursorModeBySessionId[sessionId] ?? false,
   );
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
-      <Row gap="xs">
-        {QUICK_KEYS.map((quickKey) => (
+    <Row gap="xs" style={styles.bar}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={styles.scroll}>
+        <Row gap="xs">
+          {QUICK_KEYS.map((quickKey) => (
           <Pressable
             key={quickKey.id}
             testID={`quick-key-${quickKey.id}`}
@@ -74,25 +74,65 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
             ]}
           >
             <MonoText
-              color={quickKey.danger ? 'danger' : 'primary'}
+              color="primary"
               style={{
                 fontSize: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE,
                 lineHeight: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE + 2,
                 fontWeight: '600',
               }}
-            >
-              {quickKey.label}
-            </MonoText>
-          </Pressable>
-        ))}
-      </Row>
-    </ScrollView>
+              >
+                {quickKey.label}
+              </MonoText>
+            </Pressable>
+          ))}
+        </Row>
+      </ScrollView>
+      {/* Ctrl+C by name: an unlabeled red ^C says nothing to most users.
+          'Stop' says exactly what it does - interrupt the running agent.
+          Pinned outside the scroll so the safety control is always visible. */}
+      <Pressable
+        testID="quick-key-ctrl-c"
+        accessibilityRole="button"
+        accessibilityLabel="Stop the running agent (Ctrl+C)"
+        onPress={() => {
+          void writeTerminal(sessionId, CTRL_C).catch(() => undefined);
+        }}
+        style={({ pressed }) => [
+          styles.key,
+          styles.stopKey,
+          {
+            minHeight: theme.minTouchSize,
+            borderRadius: theme.radii.sm,
+            backgroundColor: theme.colors.surfaceRaised,
+            borderColor: theme.colors.danger,
+            paddingHorizontal: theme.spacing.md,
+            gap: theme.spacing.xs,
+            opacity: pressed ? 0.7 : 1,
+          },
+        ]}
+      >
+        <OctagonX size={16} color={theme.colors.danger} />
+        <Text variant="caption" color="danger">
+          Stop
+        </Text>
+      </Pressable>
+    </Row>
   );
 }
 
 const styles = StyleSheet.create({
+  bar: {
+    alignItems: 'center',
+  },
+  scroll: {
+    flex: 1,
+  },
   key: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  stopKey: {
+    flexDirection: 'row',
+    borderWidth: StyleSheet.hairlineWidth,
   },
 });
