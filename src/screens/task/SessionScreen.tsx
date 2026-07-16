@@ -7,6 +7,7 @@ import { findTaskById, useBoardStore } from '@/state/boardStore';
 import { useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { openSessionScreen, closeSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
@@ -120,6 +121,24 @@ export function SessionScreen(): React.JSX.Element {
   const dismissModeHint = useCallback(() => {
     void useSettingsStore.getState().markSessionModeHintSeen();
   }, []);
+
+  // Deep chat content (the prompt cards' "Answer in terminal" escape
+  // hatch) raises a one-shot mode request through the terminal UI store.
+  // Subscription-callback form: the store is the external system, setState
+  // fires only inside its change callback, and the request is consumed
+  // exactly once. Cards only render inside this mounted screen, so a
+  // pre-mount request cannot exist.
+  useEffect(() => {
+    if (sessionId === null) return;
+    const boundSessionId = sessionId;
+    return useTerminalUiStore.subscribe((state) => {
+      const requested = state.requestedModeBySessionId[boundSessionId];
+      if (requested === undefined) return;
+      useTerminalUiStore.getState().consumeRequestedMode(boundSessionId);
+      setMode(requested);
+      pagerRef.current?.setPage(MODE_PAGE_INDEX[requested]);
+    });
+  }, [sessionId]);
 
   const onModeChange = useCallback(
     (nextMode: SessionMode) => {

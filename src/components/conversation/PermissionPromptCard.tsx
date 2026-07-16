@@ -6,6 +6,7 @@ import { triggerHaptic } from '@/lib/haptics';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
 import { approvePermissionKeystrokes, denyPermissionKeystrokes } from '@/conversation/promptKeystrokes';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { InlineDiff } from './InlineDiff';
 import { MonoBlock } from './MonoBlock';
 import { usePromptAnswer } from './usePromptAnswer';
@@ -192,6 +193,16 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                 }}
               />
             </Row>
+            {/* The agent-agnostic escape hatch: some dialogs carry options
+                this card cannot see ("always allow", free text). One tap
+                lands the user at the real prompt in the terminal lens. */}
+            <Button
+              label="More options in terminal"
+              variant="ghost"
+              testID="permission-answer-in-terminal"
+              disabled={answering}
+              onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal')}
+            />
           </Stack>
         </Row>
       </Card>

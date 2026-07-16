@@ -7,7 +7,16 @@ interface TerminalUiStoreState {
    * sequences instead of CSI; everything defaults to false (normal mode).
    */
   applicationCursorModeBySessionId: Record<string, boolean>;
+  /**
+   * A one-shot request to flip the session's lens, raised by deep chat
+   * content (the prompt cards' "Answer in terminal" escape hatch - the
+   * agent-agnostic path for free-text and exotic prompt options).
+   * SessionScreen consumes and clears it.
+   */
+  requestedModeBySessionId: Record<string, 'terminal' | 'chat'>;
   setApplicationCursorMode: (sessionId: string, enabled: boolean) => void;
+  requestSessionMode: (sessionId: string, mode: 'terminal' | 'chat') => void;
+  consumeRequestedMode: (sessionId: string) => void;
   clearSession: (sessionId: string) => void;
 }
 
@@ -18,6 +27,7 @@ interface TerminalUiStoreState {
  */
 export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
   applicationCursorModeBySessionId: {},
+  requestedModeBySessionId: {},
 
   setApplicationCursorMode: (sessionId, enabled) =>
     set((state) => {
@@ -27,11 +37,28 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
       };
     }),
 
+  requestSessionMode: (sessionId, mode) =>
+    set((state) => ({
+      requestedModeBySessionId: { ...state.requestedModeBySessionId, [sessionId]: mode },
+    })),
+
+  consumeRequestedMode: (sessionId) =>
+    set((state) => {
+      if (!(sessionId in state.requestedModeBySessionId)) return state;
+      const next = { ...state.requestedModeBySessionId };
+      delete next[sessionId];
+      return { requestedModeBySessionId: next };
+    }),
+
   clearSession: (sessionId) =>
     set((state) => {
-      if (!(sessionId in state.applicationCursorModeBySessionId)) return state;
-      const next = { ...state.applicationCursorModeBySessionId };
-      delete next[sessionId];
-      return { applicationCursorModeBySessionId: next };
+      const hasCursorMode = sessionId in state.applicationCursorModeBySessionId;
+      const hasRequestedMode = sessionId in state.requestedModeBySessionId;
+      if (!hasCursorMode && !hasRequestedMode) return state;
+      const nextCursorModes = { ...state.applicationCursorModeBySessionId };
+      delete nextCursorModes[sessionId];
+      const nextRequestedModes = { ...state.requestedModeBySessionId };
+      delete nextRequestedModes[sessionId];
+      return { applicationCursorModeBySessionId: nextCursorModes, requestedModeBySessionId: nextRequestedModes };
     }),
 }));
