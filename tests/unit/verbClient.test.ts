@@ -173,4 +173,25 @@ describe('VerbClient', () => {
     ]);
     expect(requests[4].payload).toEqual({ tool: 'create_task', params: { title: 'New', description: '', column: 'To Do' } });
   });
+
+  it('registerPush sends the typed registration payload and parses the boolean result', async () => {
+    const { verbs, requests } = await establishedHarness((request) => okResponse(request, { registered: true }));
+
+    const pushKeyBase64 = 'a'.repeat(43);
+    await expect(
+      verbs.registerPush({ action: 'register', expoPushToken: 'ExponentPushToken[test]', pushKeyBase64, platform: 'android' }),
+    ).resolves.toEqual({ registered: true });
+    expect(requests[0].verb).toBe('register-push');
+    expect(requests[0].payload).toEqual({
+      action: 'register',
+      expoPushToken: 'ExponentPushToken[test]',
+      pushKeyBase64,
+      platform: 'android',
+    });
+  });
+
+  it('registerPush rejects a response missing the registered flag', async () => {
+    const { verbs } = await establishedHarness((request) => okResponse(request, { ok: true }));
+    await expect(verbs.registerPush({ action: 'unregister' })).rejects.toThrow(/registered/);
+  });
 });

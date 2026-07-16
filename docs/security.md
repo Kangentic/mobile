@@ -108,13 +108,16 @@ key expiry, so a lost phone is not trusted forever even if revocation is missed.
 - **No attestation requirement.** Play Integrity and App Attest would break sideloaded and
   F-Droid-style builds of an open-source app, and buy little against this threat model, so this
   app does not require them.
-- **Device-bound, not backup-portable.** The identity key (`src/pairing/deviceIdentity.ts`) and
+- **Device-bound, not backup-portable.** The identity key (`src/pairing/deviceIdentity.ts`),
   the pinned trust anchor (`src/pairing/trustAnchor.ts` - the desktop's static key, the relay
-  address under `trust.relayAddress`, and the paired-at timestamp) are written with
+  address under `trust.relayAddress`, and the paired-at timestamp), and the push secrets
+  (`src/notifications/pushKeys.ts` - the 32-byte push-decrypt key under `push.decrypt.key` and
+  the last-registered Expo push token, itself a per-device bearer secret, under
+  `push.expoToken.lastRegistered`) are written with
   `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`, so none of it is included in an encrypted iOS
   device backup or restorable onto different hardware. Restoring a backup onto a new phone
   cannot reconstitute a working paired client; the device must re-pair. The only other
-  secure-store value is the non-secret dictation preference (`src/state/settingsStore.ts`),
+  secure-store values are the non-secret user preferences (`src/state/settingsStore.ts`),
   stored there because AsyncStorage is banned in `src/state/**`.
 
 ## Relay metadata honesty statement
@@ -129,7 +132,11 @@ devices can consume relay capacity at all.
 
 Push notifications are ciphertext plus a generic placeholder only (see
 `.claude/rules/e2e-notification-privacy.md`); every failure mode degrades to the placeholder,
-never to plaintext or raw ciphertext shown to the user.
+never to plaintext or raw ciphertext shown to the user. On-device decrypt lives in
+`src/notifications/pushDecrypt.ts`: the envelope is sealed with a device-generated push key and
+this phone's static public key as the AAD, opened with a 24h staleness / 5min future-skew
+window, and any failure (missing key, wrong key, wrong recipient, tamper, malformed, stale)
+returns the placeholder. Decrypted content is never logged.
 
 ## Reporting a vulnerability
 
