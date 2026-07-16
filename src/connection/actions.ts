@@ -65,6 +65,62 @@ export async function createTask(input: { projectId: string; title: string; desc
   await requireVerbClient().boardToolWrite('create_task', params);
 }
 
+/** Edits a task's title and/or description (board-tool-write update_task), optimistically applied. */
+export async function updateTaskFields(input: {
+  projectId: string;
+  taskId: string;
+  title?: string;
+  description?: string;
+}): Promise<void> {
+  const editId = useBoardStore.getState().applyOptimisticTaskEdit(input);
+  try {
+    const params: JsonValue = {
+      project: input.projectId,
+      taskId: input.taskId,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+    };
+    await requireVerbClient().boardToolWrite('update_task', params);
+    if (editId) useBoardStore.getState().commitTaskEdit(editId);
+  } catch (error) {
+    if (editId) useBoardStore.getState().rollbackTaskEdit(editId);
+    throw error;
+  }
+}
+
+/** Deletes a task (board-tool-write delete_task; the desktop also kills its live session PTY), optimistically removed. */
+export async function deleteTaskFromBoard(input: { projectId: string; taskId: string }): Promise<void> {
+  const removalId = useBoardStore.getState().applyOptimisticRemoval(input);
+  try {
+    const params: JsonValue = { project: input.projectId, taskId: input.taskId };
+    await requireVerbClient().boardToolWrite('delete_task', params);
+    if (removalId) useBoardStore.getState().commitRemoval(removalId);
+  } catch (error) {
+    if (removalId) useBoardStore.getState().rollbackRemoval(removalId);
+    throw error;
+  }
+}
+
+/**
+ * Archives a task the way the desktop does: a move into the board's
+ * done-role column (archive is not a board-tool command; the desktop's
+ * cross-column move handler owns the archive semantics). Throws when the
+ * board has no done column.
+ */
+export async function archiveTask(input: { projectId: string; taskId: string }): Promise<void> {
+  const board = useBoardStore.getState().boardsByProjectId[input.projectId];
+  const doneColumn = board?.columns.find(
+    (column) => column.role === 'done' && !column.is_archived && !column.is_ghost,
+  );
+  if (!doneColumn) throw new Error('This board has no Done column to archive into');
+  await moveTaskOptimistic({
+    projectId: input.projectId,
+    taskId: input.taskId,
+    targetSwimlaneId: doneColumn.id,
+    targetPosition: 0,
+  });
+}
+
 /** Sets the Changes tab's live diff watch (scope changes re-subscribe); pass null on blur. */
 export function setDiffWatch(taskId: string, input: { projectId: string; scope: ReadDiffScope } | null): void {
   const connection = getActiveConnection();

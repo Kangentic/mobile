@@ -564,6 +564,29 @@ export function createMockDesktop(): MockDesktop {
           });
           return ok(request, { result: { created: created.id } });
         }
+        if (payload.tool === 'update_task') {
+          const params = (payload.params ?? {}) as { taskId?: string; title?: string; description?: string };
+          const task = tasks.find((candidate) => candidate.id === params.taskId);
+          if (!task) return failWith(request, `No such task: ${params.taskId}`);
+          if (typeof params.title === 'string') task.title = params.title;
+          if (typeof params.description === 'string') task.description = params.description;
+          task.updated_at = new Date().toISOString();
+          later(50, () => {
+            emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: task.id, payload: { change: 'task-updated', ids: [task.id] } });
+          });
+          return ok(request, { result: { updated: task.id } });
+        }
+        if (payload.tool === 'delete_task') {
+          const params = (payload.params ?? {}) as { taskId?: string };
+          const taskIndex = tasks.findIndex((candidate) => candidate.id === params.taskId);
+          if (taskIndex < 0) return failWith(request, `No such task: ${params.taskId}`);
+          const [removed] = tasks.splice(taskIndex, 1);
+          if (removed.session_id !== null && removed.session_id === activeSessionId) endActiveSession();
+          later(50, () => {
+            emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: removed.id, payload: { change: 'task-deleted', ids: [removed.id] } });
+          });
+          return ok(request, { result: { deleted: removed.id } });
+        }
         return ok(request, { result: { note: `mock answered ${payload.tool}` } });
       }
       default:

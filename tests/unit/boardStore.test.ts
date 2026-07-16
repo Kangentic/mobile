@@ -105,6 +105,42 @@ describe('boardStore', () => {
     expect(useBoardStore.getState().pendingMoves).toEqual([]);
   });
 
+  it('optimistic edit patches immediately, rollback restores, and a racing snapshot re-applies the pending edit', () => {
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    const editId = useBoardStore.getState().applyOptimisticTaskEdit({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      title: 'Renamed task',
+    });
+    expect(editId).not.toBeNull();
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-1'].title).toBe('Renamed task');
+
+    // A snapshot racing the in-flight edit keeps the optimistic title.
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-1'].title).toBe('Renamed task');
+
+    if (editId) useBoardStore.getState().rollbackTaskEdit(editId);
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-1'].title).toBe('Fix the login bug');
+  });
+
+  it('optimistic removal hides immediately, commit finalizes, rollback restores the card', () => {
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    const removalId = useBoardStore.getState().applyOptimisticRemoval({ projectId: 'project-1', taskId: 'task-2' });
+    expect(removalId).not.toBeNull();
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-2']).toBeUndefined();
+
+    // A snapshot racing the in-flight delete does not resurrect the card.
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-2']).toBeUndefined();
+
+    if (removalId) useBoardStore.getState().rollbackRemoval(removalId);
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-2']).toBeDefined();
+
+    const secondRemovalId = useBoardStore.getState().applyOptimisticRemoval({ projectId: 'project-1', taskId: 'task-2' });
+    if (secondRemovalId) useBoardStore.getState().commitRemoval(secondRemovalId);
+    expect(useBoardStore.getState().pendingRemovals).toEqual([]);
+  });
+
   it('findTaskById locates a task and its project across cached boards', () => {
     useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
     expect(findTaskById(useBoardStore.getState(), 'task-2')?.projectId).toBe('project-1');
