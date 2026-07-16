@@ -1,0 +1,264 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Pressable,
+  StyleSheet,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
+import { FlashList, type FlashListRef } from '@shopify/flash-list';
+import type { TranscriptEntryWire } from '@kangentic/protocol';
+import { Stack, Text, useTheme } from '@/components';
+import { ComposerBar } from '@/components/composer/ComposerBar';
+import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCard';
+import { LiveTailCell } from '@/components/conversation/LiveTailCell';
+import { MarkdownCell } from '@/components/conversation/MarkdownCell';
+import { PermissionPromptCard } from '@/components/conversation/PermissionPromptCard';
+import { SystemDividerCell } from '@/components/conversation/SystemDividerCell';
+import { ThinkingCell } from '@/components/conversation/ThinkingCell';
+import { ToolCallCard } from '@/components/conversation/ToolCallCard';
+import { ToolResultCell } from '@/components/conversation/ToolResultCell';
+import { UserMessageCell } from '@/components/conversation/UserMessageCell';
+import { findAwaitedToolUse } from '@/conversation/pendingPromptSummary';
+import {
+  buildConversationCells,
+  type ConversationCell,
+  type PendingPromptDescriptor,
+} from '@/conversation/transcriptCells';
+import { getBufferedData, subscribeChunks } from '@/state/terminalFeed';
+import { useActivityStore } from '@/state/activityStore';
+import { useTranscriptStore } from '@/state/transcriptStore';
+import { createLiveTailBuffer, type LiveTailBuffer } from '@/terminal/liveTail';
+
+export interface ConversationTabProps {
+  taskId: string;
+  sessionId: string | null;
+  projectId: string | null;
+}
+
+const LIVE_TAIL_MAX_LINES = 12;
+const LIVE_TAIL_FLUSH_INTERVAL_MS = 250;
+const JUMP_TO_LATEST_THRESHOLD_PX = 600;
+
+// A stable identity (an inline object literal re-triggers FlashList layout
+// every render). `startRenderingFromBottom` is deliberately omitted: on a
+// transcript shorter than the viewport it makes FlashList v2 re-anchor to the
+// bottom in a layout loop ("Maximum update depth exceeded"). We pin to the
+// bottom manually via scrollToEnd on the first content instead, and
+// autoscrollToBottomThreshold keeps it pinned as the turn streams.
+const MAINTAIN_VISIBLE_CONTENT_POSITION = { autoscrollToBottomThreshold: 0.2 } as const;
+
+const EMPTY_ENTRIES: TranscriptEntryWire[] = [];
+
+/** The conversation-terminal surface: the flattened transcript cell feed for the task's session. */
+export function ConversationTab({ sessionId }: ConversationTabProps): React.JSX.Element {
+  if (sessionId === null) {
+    return (
+      <Stack gap="sm" style={styles.emptyState}>
+        <Text variant="body" color="secondary">
+          No active session for this task
+        </Text>
+      </Stack>
+    );
+  }
+  return <ConversationFeed sessionId={sessionId} />;
+}
+
+function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Element {
+  const theme = useTheme();
+  const transcript = useTranscriptStore((state) => state.bySessionId[sessionId]);
+  const entries = transcript?.entries ?? EMPTY_ENTRIES;
+  const localRevision = transcript?.localRevision ?? 0;
+  const activityEntry = useActivityStore((state) => state.bySessionId[sessionId] ?? null);
+
+  // LIVE TAIL: raw PTY chunks feed a cleaner buffer; re-renders are throttled
+  // to one snapshot per ~250ms while chunks stream.
+  const liveTailBufferRef = useRef<LiveTailBuffer | null>(null);
+  if (liveTailBufferRef.current === null) {
+    liveTailBufferRef.current = createLiveTailBuffer({ maxLines: LIVE_TAIL_MAX_LINES });
+  }
+  const [liveTailLines, setLiveTailLines] = useState<string[]>([]);
+  const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearPendingFlush = useCallback(() => {
+    if (flushTimeoutRef.current !== null) {
+      clearTimeout(flushTimeoutRef.current);
+      flushTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (flushTimeoutRef.current !== null) return;
+    flushTimeoutRef.current = setTimeout(() => {
+      flushTimeoutRef.current = null;
+      setLiveTailLines(liveTailBufferRef.current?.snapshotLines() ?? []);
+    }, LIVE_TAIL_FLUSH_INTERVAL_MS);
+  }, []);
+
+  useEffect(() => {
+    const liveTailBuffer = liveTailBufferRef.current;
+    if (liveTailBuffer === null) return undefined;
+    liveTailBuffer.reset();
+    liveTailBuffer.append(getBufferedData(sessionId));
+    setLiveTailLines(liveTailBuffer.snapshotLines());
+    const unsubscribe = subscribeChunks(sessionId, (event) => {
+      if (event.kind === 'seed') liveTailBuffer.reset();
+      liveTailBuffer.append(event.data);
+      scheduleFlush();
+    });
+    return () => {
+      unsubscribe();
+      clearPendingFlush();
+    };
+  }, [sessionId, scheduleFlush, clearPendingFlush]);
+
+  // The settled transcript replaces the tail: every applied transcript push
+  // resets the live-tail buffer and its rendered lines.
+  const previousRevisionRef = useRef(localRevision);
+  useEffect(() => {
+    if (previousRevisionRef.current === localRevision) return;
+    previousRevisionRef.current = localRevision;
+    liveTailBufferRef.current?.reset();
+    clearPendingFlush();
+    setLiveTailLines([]);
+  }, [localRevision, clearPendingFlush]);
+
+  // PENDING PROMPT: the awaited tool_use may not have arrived in the
+  // transcript yet; the card renders a generic state until it does.
+  const awaitedPromptId = activityEntry?.awaitedPromptId ?? null;
+  const pendingPrompt = useMemo<PendingPromptDescriptor | null>(() => {
+    if (awaitedPromptId === null) return null;
+    const awaitedToolUse = findAwaitedToolUse(entries, sessionId, awaitedPromptId);
+    return {
+      promptId: awaitedPromptId,
+      sessionId,
+      toolUseId: awaitedToolUse?.toolUseId ?? null,
+      toolName: awaitedToolUse?.name ?? null,
+      input: awaitedToolUse?.input ?? null,
+    };
+  }, [awaitedPromptId, entries, sessionId]);
+
+  const liveTailLinesForCells = activityEntry?.state === 'thinking' ? liveTailLines : null;
+  const cells = useMemo(
+    () => buildConversationCells(entries, { liveTailLines: liveTailLinesForCells, pendingPrompt }),
+    [entries, liveTailLinesForCells, pendingPrompt],
+  );
+
+  const listRef = useRef<FlashListRef<ConversationCell>>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  // Ref-track the current value so a scroll storm (auto-scroll on mount)
+  // dispatches a React update only on a real transition, never re-entrantly.
+  const showJumpToLatestRef = useRef(false);
+  const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    const nextShowJumpToLatest = distanceFromBottom > JUMP_TO_LATEST_THRESHOLD_PX;
+    if (nextShowJumpToLatest === showJumpToLatestRef.current) return;
+    showJumpToLatestRef.current = nextShowJumpToLatest;
+    setShowJumpToLatest(nextShowJumpToLatest);
+  }, []);
+
+  const renderItem = useCallback(
+    ({ item }: { item: ConversationCell }) => renderConversationCell(item, sessionId),
+    [sessionId],
+  );
+
+  // Land at the newest message on first open: scroll to the end once cells
+  // first populate (replaces startRenderingFromBottom without its layout loop).
+  const hasScrolledToInitialEndRef = useRef(false);
+  const onContentSizeChange = useCallback(() => {
+    if (hasScrolledToInitialEndRef.current || cells.length === 0) return;
+    hasScrolledToInitialEndRef.current = true;
+    listRef.current?.scrollToEnd({ animated: false });
+  }, [cells.length]);
+
+  return (
+    <View style={styles.flex}>
+      <FlashList<ConversationCell>
+        ref={listRef}
+        testID="conversation-list"
+        data={cells}
+        keyExtractor={(cell) => cell.key}
+        getItemType={(cell) => cell.kind}
+        renderItem={renderItem}
+        onScroll={onScroll}
+        scrollEventThrottle={64}
+        onContentSizeChange={onContentSizeChange}
+        maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
+      />
+      {showJumpToLatest ? (
+        <Pressable
+          accessibilityRole="button"
+          testID="jump-to-latest"
+          onPress={() => listRef.current?.scrollToEnd({ animated: true })}
+          style={[
+            styles.jumpToLatest,
+            {
+              minHeight: theme.minTouchSize,
+              borderRadius: theme.minTouchSize / 2,
+              backgroundColor: theme.colors.surfaceRaised,
+              borderColor: theme.colors.border,
+              paddingHorizontal: theme.spacing.lg,
+              bottom: theme.spacing.lg,
+            },
+          ]}
+        >
+          <Text variant="caption" color="accent">
+            Jump to latest
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function renderConversationCell(cell: ConversationCell, sessionId: string): React.JSX.Element {
+  switch (cell.kind) {
+    case 'user-message':
+      return <UserMessageCell cell={cell} />;
+    case 'markdown':
+      return <MarkdownCell cell={cell} />;
+    case 'thinking':
+      return <ThinkingCell cell={cell} />;
+    case 'tool-call':
+      return <ToolCallCard cell={cell} />;
+    case 'tool-result-orphan':
+      return <ToolResultCell cell={cell} />;
+    case 'system-divider':
+      return <SystemDividerCell cell={cell} />;
+    case 'live-tail':
+      return <LiveTailCell lines={cell.lines} />;
+    case 'permission-prompt':
+      return <PermissionPromptCard sessionId={sessionId} prompt={cell.prompt} />;
+    case 'ask-user-question':
+      return <AskUserQuestionCard sessionId={sessionId} prompt={cell.prompt} />;
+  }
+}
+
+export interface ConversationFooterProps {
+  sessionId: string | null;
+}
+
+/** The conversation tab's footer: the composer when a session exists. */
+export function ConversationFooter({ sessionId }: ConversationFooterProps): React.JSX.Element | null {
+  if (sessionId === null) return null;
+  return <ComposerBar sessionId={sessionId} />;
+}
+
+const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  jumpToLatest: {
+    position: 'absolute',
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+});

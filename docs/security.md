@@ -76,11 +76,20 @@ the wire.
 ## Authorization
 
 The encrypted channel proves *which* device is talking; a desktop-enforced capability allowlist
-decides *what* it may do (see `docs/architecture.md` for the v1 verb table). **There is no
+decides *what* it may do (see `docs/architecture.md` for the nine-verb table). **There is no
 shell, file-read, or arbitrary-command verb in the protocol at all: it is absent, not filtered.**
 This follows the lesson of Chrome Remote Desktop and VS Code tunnels, which are identity-gated
 but capability-unscoped, and of the SSH forced-command pattern, which shows that a filter on an
 otherwise-general command channel is the wrong shape.
+
+The default pairing grant is read-only (`read-stream`, `read-board`, `read-diff`,
+`board-tool-read`); every write/control verb (`send-user-message`, `move-task`,
+`answer-permission-prompt`, `interactive-terminal`, `board-tool-write`) requires an explicit
+per-verb grant in the desktop's Mobile Devices settings. `interactive-terminal` is deliberately
+raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
+already running, never a new shell. The `board-tool-*` verbs dispatch into a hand-classified
+allowlist of the desktop's task/backlog command registry; the raw-SQL escape hatch and every
+code-execution tool family are excluded desktop-side.
 
 **Revocation is removal from the signed roster AND a rekey of the channel.** Removing a device
 from the roster without rotating keys is not revocation; a device also ages out via a per-device
@@ -97,10 +106,13 @@ key expiry, so a lost phone is not trusted forever even if revocation is missed.
   F-Droid-style builds of an open-source app, and buy little against this threat model, so this
   app does not require them.
 - **Device-bound, not backup-portable.** The identity key (`src/pairing/deviceIdentity.ts`) and
-  the pinned trust anchor (`src/pairing/trustAnchor.ts`) are written with
-  `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`, so neither is included in an encrypted iOS
+  the pinned trust anchor (`src/pairing/trustAnchor.ts` - the desktop's static key, the relay
+  address under `trust.relayAddress`, and the paired-at timestamp) are written with
+  `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`, so none of it is included in an encrypted iOS
   device backup or restorable onto different hardware. Restoring a backup onto a new phone
-  cannot reconstitute a working paired client; the device must re-pair.
+  cannot reconstitute a working paired client; the device must re-pair. The only other
+  secure-store value is the non-secret dictation preference (`src/state/settingsStore.ts`),
+  stored there because AsyncStorage is banned in `src/state/**`.
 
 ## Relay metadata honesty statement
 

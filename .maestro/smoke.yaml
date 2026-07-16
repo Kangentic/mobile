@@ -1,13 +1,16 @@
 appId: com.kangentic.mobile
 ---
+# Cold-start smoke on a fresh (unpaired) install: the triage home offers
+# pairing, the board tab renders its empty state. Paired flows live under
+# .maestro/paired/ and need scripts/stubDesktopPeer.mjs running first.
 - launchApp
 - assertVisible:
     id: "home-tab"
 - assertVisible:
-    id: "triage-home-list"
+    id: "triage-pair-cta"
 - tapOn:
     id: "board-tab"
 - assertVisible:
     id: "board-screen"
 - assertVisible:
-    id: "board-column-column-todo"
+    id: "board-create-task"

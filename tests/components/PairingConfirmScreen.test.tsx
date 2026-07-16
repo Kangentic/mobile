@@ -9,6 +9,10 @@ jest.mock('@/pairing/activePairing', () => ({
   resetActivePairing: jest.fn(),
 }));
 
+jest.mock('@/connection/connectionManager', () => ({
+  reconnectNow: jest.fn(),
+}));
+
 jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: jest.fn() }),
 }));

@@ -1,11 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Stack } from 'expo-router';
 import { ThemeProvider, useTheme } from '@/components';
+import { startConnectionLifecycle } from '@/connection/connectionManager';
+import { useSettingsStore } from '@/state/settingsStore';
 
 export default function RootLayout(): React.JSX.Element {
+  useEffect(() => {
+    startConnectionLifecycle();
+    void useSettingsStore.getState().hydrate();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
@@ -30,6 +37,8 @@ function RootStack(): React.JSX.Element {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="task/[taskId]" options={{ headerShown: false }} />
+        <Stack.Screen name="file-diff" options={{ title: 'Changes' }} />
         <Stack.Screen name="pair" options={{ title: 'Pair a device' }} />
         <Stack.Screen name="pair-confirm" options={{ title: 'Confirm pairing' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />

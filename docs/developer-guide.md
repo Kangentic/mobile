@@ -33,19 +33,28 @@ eas.json                     # EAS Build/Submit/Workflows profiles
 plugins/                     # Local Expo config plugins (NSE injection, keychain access group, notifee) - later phase
 targets/nse/                 # iOS Notification Service Extension source, injected via plugin - later phase
 app/                          # expo-router route wrappers (thin - render the src/screens/ implementation)
+  task/[taskId].tsx           # full-screen task view; file-diff.tsx hosts the per-file diff
 src/
-  screens/        # TriageHome, Board, Pairing (Scan/Confirm), Settings, Devices
-  components/     # Design system + transcript-terminal cells, tool cards, diff viewer
+  screens/        # TriageHome, Board, task/ (TaskScreen + Conversation/Terminal/Changes tabs),
+                  #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
+  components/     # Design system + conversation/ cells and prompt cards, terminal/ xterm pane +
+                  #   quick keys, board/ sheets, composer/, diff/ line cells
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
-  channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation, capability client
+  channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
+                  #   capability client, typed verb client, feed router, subscription manager
+  connection/     # Lifecycle composer: connect/dispose, bootstrap, store feed glue, actions API
+  conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
+  terminal/       # Pure liveTail cleaner, key sequences, WebView bridge, generated xterm.html
+  diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
-  state/          # Zustand stores
+  state/          # Zustand stores + the non-Zustand terminalFeed PTY ring buffers
+  voice/          # Dictation hook over the OS speech engines
   lib/            # Shared pure utilities (crypto polyfills)
 tests/unit/       # vitest
 tests/components/ # Jest + RNTL
 tests/web/        # Playwright via react-native-web (later)
-.maestro/         # Maestro E2E flows
-scripts/          # bash-guard.js + repo scripts
+.maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
+scripts/          # bash-guard.js, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
 ```
 
 See `CLAUDE.md`'s Project Structure section; the tree there and this one move together.

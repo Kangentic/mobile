@@ -1,0 +1,23 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# The stub raises a permission prompt ~20s after the stream subscribes; this
+# flow waits for it, approves it, and asserts the card resolves. The stub's
+# console logs the received answer-permission-prompt keystrokes.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 20000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "permission-approve"
+    timeout: 45000
+- tapOn:
+    id: "permission-approve"
+- extendedWaitUntil:
+    notVisible:
+      id: "permission-approve"
+    timeout: 15000

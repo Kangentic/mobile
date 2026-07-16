@@ -1,0 +1,31 @@
+appId: com.kangentic.mobile
+---
+# Precondition: the app is PAIRED to a running scripts/stubDesktopPeer.mjs
+# (over a local kangentic-relay) and the stub's ongoing session is up.
+# Pair once manually: node scripts/stubDesktopPeer.mjs --relay ws://<host>:8080,
+# paste the printed URI into the pairing screen, confirm the SAS both sides.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 20000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- assertVisible:
+    id: "task-screen"
+- extendedWaitUntil:
+    visible:
+      id: "conversation-list"
+    timeout: 15000
+- assertVisible: "Fix the login redirect bug and add a regression test."
+- tapOn:
+    id: "task-tab-bar-changes"
+- extendedWaitUntil:
+    visible:
+      id: "changes-file-list"
+    timeout: 15000
+- assertVisible: "login.ts"

@@ -3,6 +3,7 @@ export interface ColorTokens {
   surface: string;
   surfaceRaised: string;
   border: string;
+  backdrop: string;
   textPrimary: string;
   textSecondary: string;
   textMuted: string;
@@ -14,6 +15,36 @@ export interface ColorTokens {
   success: string;
   warning: string;
   danger: string;
+  diffAddBackground: string;
+  diffAddText: string;
+  diffRemoveBackground: string;
+  diffRemoveText: string;
+  codeBackground: string;
+  terminalBackground: string;
+}
+
+/**
+ * The 16 standard ANSI colors, tuned to the dark terminal theme. Consumed by
+ * terminal-style renderers (and later an xterm.js theme object) so escape-coded
+ * output matches the rest of the design system.
+ */
+export interface TerminalPalette {
+  ansiBlack: string;
+  ansiRed: string;
+  ansiGreen: string;
+  ansiYellow: string;
+  ansiBlue: string;
+  ansiMagenta: string;
+  ansiCyan: string;
+  ansiWhite: string;
+  ansiBrightBlack: string;
+  ansiBrightRed: string;
+  ansiBrightGreen: string;
+  ansiBrightYellow: string;
+  ansiBrightBlue: string;
+  ansiBrightMagenta: string;
+  ansiBrightCyan: string;
+  ansiBrightWhite: string;
 }
 
 export interface TypographyToken {
@@ -47,6 +78,7 @@ export interface RadiusTokens {
 
 export interface Theme {
   colors: ColorTokens;
+  terminalPalette: TerminalPalette;
   typography: TypographyTokens;
   spacing: SpacingTokens;
   radii: RadiusTokens;
@@ -64,6 +96,7 @@ export const darkTerminalTheme: Theme = {
     surface: '#121613',
     surfaceRaised: '#181d19',
     border: '#26302a',
+    backdrop: 'rgba(0, 0, 0, 0.6)',
     textPrimary: '#e6f2ea',
     textSecondary: '#9fb3a6',
     textMuted: '#647268',
@@ -75,6 +108,32 @@ export const darkTerminalTheme: Theme = {
     success: '#3ddc84',
     warning: '#f2a33d',
     danger: '#e05d5d',
+    // Diff tints are solid dark blends (not alpha overlays) so mono 12px text
+    // keeps full contrast regardless of what the row sits on.
+    diffAddBackground: '#10291b',
+    diffAddText: '#7ee2a8',
+    diffRemoveBackground: '#301518',
+    diffRemoveText: '#f09a9a',
+    codeBackground: '#0f1310',
+    terminalBackground: '#090b0a',
+  },
+  terminalPalette: {
+    ansiBlack: '#121613',
+    ansiRed: '#e05d5d',
+    ansiGreen: '#3ddc84',
+    ansiYellow: '#f2a33d',
+    ansiBlue: '#5da9e0',
+    ansiMagenta: '#c792ea',
+    ansiCyan: '#56c8d8',
+    ansiWhite: '#c9d8cf',
+    ansiBrightBlack: '#647268',
+    ansiBrightRed: '#f08a8a',
+    ansiBrightGreen: '#7ee2a8',
+    ansiBrightYellow: '#f7c377',
+    ansiBrightBlue: '#8cc4ec',
+    ansiBrightMagenta: '#dcb8f2',
+    ansiBrightCyan: '#8adbe6',
+    ansiBrightWhite: '#e6f2ea',
   },
   typography: {
     body: { fontSize: 14, lineHeight: 20, fontWeight: '400' },

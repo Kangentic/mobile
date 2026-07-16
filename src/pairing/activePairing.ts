@@ -46,7 +46,11 @@ export async function confirmActivePairing(): Promise<void> {
   if (machine.getState().status !== 'awaiting-sas') {
     throw new Error(`Cannot confirm pairing while state is "${machine.getState().status}"`);
   }
-  await trustAnchorStore.save({ desktopStaticPublicKey: activePayload.desktopStaticPublicKey, pairedAt: new Date().toISOString() });
+  await trustAnchorStore.save({
+    desktopStaticPublicKey: activePayload.desktopStaticPublicKey,
+    relayAddress: activePayload.relayAddress,
+    pairedAt: new Date().toISOString(),
+  });
   try {
     machine.confirm();
   } catch (error) {

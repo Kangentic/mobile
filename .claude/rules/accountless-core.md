@@ -2,6 +2,7 @@
 paths:
   - "src/pairing/**"
   - "src/channel/**"
+  - "src/connection/**"
   - "src/notifications/**"
 ---
 # Rule: pairing, transport, and capability code stay accountless
@@ -16,8 +17,8 @@ degrades and the load-bearing separation the business model depends on breaks.
 
 ## The rule
 
-- No file under `src/pairing/`, `src/channel/`, or `src/notifications/` may import from any
-  account, billing, or entitlement module.
+- No file under `src/pairing/`, `src/channel/`, `src/connection/`, or `src/notifications/` may
+  import from any account, billing, or entitlement module.
 - No code path in these directories may require a Kangentic account or signup to function.
 - The relay address is a user-configurable setting; self-hosting is a first-class, equally
   supported path, never a degraded one.
@@ -33,5 +34,6 @@ degrades and the load-bearing separation the business model depends on breaks.
 
 ## Scope
 
-`src/pairing/**`, `src/channel/**`, `src/notifications/**`. Settings UI that merely lets a user
-type in a hosted-account token (if that ever exists) lives outside these directories.
+`src/pairing/**`, `src/channel/**`, `src/connection/**` (the lifecycle composer over pairing +
+channel + stores), `src/notifications/**`. Settings UI that merely lets a user type in a
+hosted-account token (if that ever exists) lives outside these directories.

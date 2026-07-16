@@ -2,8 +2,8 @@
 
 Kangentic Mobile is a companion app that remote-controls agent sessions running in the desktop
 [Kangentic](https://github.com/Kangentic/kangentic) app. This document describes the
-architecture as scaffolded in App Phase 1; see `CLAUDE.md`'s Project Structure for the current
-layout. The durable research behind these decisions lives in the desktop repo's
+architecture as of App Phase 2 (the core remote-control experience); see `CLAUDE.md`'s Project
+Structure for the current layout. The durable research behind these decisions lives in the desktop repo's
 [`docs/research/mobile-companion-app.md`](https://github.com/Kangentic/kangentic/blob/main/docs/research/mobile-companion-app.md);
 this document is the implementation-facing summary and is authoritative where the two disagree
 (notably the pairing ceremony, see below).
@@ -89,29 +89,50 @@ decides *what* it may do:
 
 | Verb | Purpose |
 |------|---------|
-| `read-stream` | Read live transcript/terminal output |
-| `read-board` | Read board and task state |
-| `read-diff` | Read git diffs for a task |
-| `send-user-message` | Send a message into an agent session |
+| `read-stream` | Subscribe one session's live feeds: raw PTY tail, activity/usage/permission telemetry, and revision-gated transcript pushes (the subscribe response carries the scrollback snapshot and the outstanding `awaitedPromptId`) |
+| `read-board` | Project list (no `projectId`) or a board snapshot + live board-change subscription |
+| `read-diff` | A task's diff file list (+ a live change-signal watch) or one file's old/new content |
+| `send-user-message` | Send a composed message into an agent session (bracketed paste desktop-side) |
 | `move-task` | Move a task between board columns |
 | `answer-permission-prompt` | Respond to an outstanding agent permission prompt |
+| `interactive-terminal` | Raw keystroke write to the session PTY (full terminal parity) |
+| `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...) |
+| `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
 is being approved, and the desktop enforces that the response binds to a specific outstanding
-prompt id.
+prompt id (`${sessionId}:${toolUseId}`, also covering `AskUserQuestion`/`ExitPlanMode` pauses,
+which ride the same permission machinery). `interactive-terminal` and `board-tool-write` are
+explicit-grant-only; the default pairing grant is read-only. The `board-tool-*` surface is NOT
+MCP: the `tool` name is the desktop's internal command-registry key, dispatched as a direct
+function call against a hand-classified allowlist (raw-SQL and code-execution tools are
+excluded desktop-side, and the protocol package's `BOARD_TOOL_READ_NAMES`/
+`BOARD_TOOL_WRITE_NAMES` tuples keep both sides in lockstep).
 
 ## App structure
 
 ```
 app/              # expo-router route wrappers (thin - render the src/screens/ implementation)
+  task/[taskId]   # full-screen task view; file-diff.tsx hosts the per-file diff on the stack
 src/
-  screens/        # TriageHome, Board, Pairing (Scan/Confirm), Settings, Devices; TaskDetail is later phase
-  components/      # Design system + transcript-terminal cells, tool cards, diff viewer
+  screens/        # TriageHome, Board, task/ (TaskScreen + Conversation/Terminal/Changes tabs),
+                  #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
+  components/      # Design system + conversation/ cells and prompt cards, terminal/ pane +
+                  #   quick keys, board/ sheets, composer/, diff/ line cells
   pairing/         # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
-  channel/         # Relay WebSocket transport, KK session manager (responder), slot derivation, capability client
+  channel/         # Relay WebSocket transport, KK session manager (responder), slot derivation,
+                  #   capability client, typed verb client, feed router, subscription manager
+  connection/      # The lifecycle composer: AppState-driven connect/dispose, bootstrap,
+                  #   store feed glue, the actions API screens call
+  conversation/    # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
+  terminal/        # Pure liveTail PTY cleaner, key sequences, WebView bridge protocol,
+                  #   the generated self-contained xterm.html asset
+  diff/            # Pure unified-diff line computation (jsdiff) + path display helpers
   notifications/   # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
-  state/           # Zustand stores
+  state/           # Zustand stores (activity/board/transcript/diff/channel/settings) +
+                  #   the non-Zustand terminalFeed PTY ring buffers
+  voice/           # Dictation hook over the OS speech engines
   lib/             # Shared pure utilities (crypto polyfills)
 ```
 
@@ -124,19 +145,50 @@ The pairing payload is a base64url blob in the URI authority (not a `/pair` path
 needs a dedicated `expo-linking` handler that feeds the captured URL through the same
 `validateScannedQr` then `beginPairing` path; that lands in a later phase.
 
-Navigation: an activity-triage home (Needs you / Working / Idle) plus a swipeable Board tab.
-Opening a task is full-screen with a bottom tab bar (Conversation-terminal / Terminal / Changes)
-and a composer pinned at the bottom - this is App Phase 2 scope; Phase 1 ships the triage home and
-Board tab on mock data only.
+Navigation: an activity-triage home (Needs you / Working / Idle) plus a swipeable Board tab,
+both live off the channel feeds. Opening a task is full-screen with a bottom tab bar
+(Conversation-terminal / Terminal / Changes) and the active tab's input pinned at the bottom
+(the composer on Conversation, the quick-key bar + terminal input row on Terminal). All three
+tab pages stay mounted on a non-swipe pager so the terminal WebView never reloads and the
+conversation keeps scroll position; tab switching is tap-only.
+
+The connection lifecycle (`src/connection/connectionManager.ts`) connects while the app is
+foregrounded and paired, and disposes on background: iOS suspends sockets within seconds
+anyway, and background awareness is Phase 3's push notifications. Reconnects re-subscribe and
+re-snapshot everything (the wire has no cursors by design); the triage home follows board
+snapshots - every task with a non-null `session_id` gets a `read-stream` subscription, and
+terminal bytes for sessions not open on screen are dropped at the phone's buffer boundary.
 
 ## Rendering
 
 The primary session view renders the **transcript styled as a terminal**: it reflows to phone
 width (the desktop terminal is never resized to accommodate the phone), streams the in-progress
 turn token-by-token, and renders `AskUserQuestion`/permission prompts as tappable cards. It is
-built on FlashList for feed performance (see `.claude/rules/ui-conventions.md`). The raw
-interactive terminal grid (a faithful mirror with pinch-zoom and a quick-key bar) is a secondary
-view for nested full-screen programs.
+built on FlashList v2 block cells (see `.claude/rules/ui-conventions.md`): settled content comes
+from the desktop's revision-gated transcript pushes (full `TranscriptEntryWire[]`, merged
+identity-preservingly so unchanged rows never re-render), while the live in-progress turn is a
+cleaned tail of the raw PTY stream (`src/terminal/liveTail.ts` interprets only line-identity
+control bytes, filters spinner/frame chrome, and resets on full-screen redraws), shown while the
+session is thinking and replaced when the next transcript revision lands. Markdown renders
+through the `MarkdownBlock` adapter (react-native-enriched-markdown, swappable in one file).
+
+The raw interactive terminal is a secondary view for nested full-screen programs: xterm.js
+bundled offline in a WebView (`src/terminal/xterm.html`, generated by
+`scripts/buildXtermHtml.mjs`, CSP-locked to inline-only), fed the scrollback snapshot plus live
+PTY chunks over a small postMessage bridge (`src/terminal/terminalBridge.ts`). Columns are
+inferred from the scrollback (the phone can never resize the desktop PTY - no such verb
+exists); wide content pans horizontally, pinch-zoom adjusts the font between 11 and 24px, and
+the quick-key bar (Esc / Tab / arrows / Enter / Ctrl-C / slash) plus a text input row write
+through `interactive-terminal`.
+
+## Composer and voice dictation
+
+The conversation composer sends through `send-user-message` (the desktop injects it as a
+bracketed paste, exactly like its own Send box). Dictation uses the OS speech engines via
+`expo-speech-recognition` (iOS `SFSpeechRecognizer`, Android `SpeechRecognizer` - free, no
+per-message cost), isolated in `src/voice/useDictation.ts`. Partial results stream into the
+composer; on a final result the default mode **auto-sends**, configurable in Settings to
+review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictationMode`).
 
 ## Notification pipeline
 
