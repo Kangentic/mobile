@@ -1,9 +1,10 @@
 import React from 'react';
-import { act, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
-import { TaskScreen } from '@/screens/task/TaskScreen';
+import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { boardTaskFixture } from '@/devsupport/desktopFixtures';
 import { closeSessionScreen, openSessionScreen } from '@/connection/actions';
 
@@ -12,10 +13,11 @@ jest.mock('react-native-safe-area-context', () =>
   require('react-native-safe-area-context/jest/mock').default,
 );
 
-let mockParams: { taskId: string; sessionId?: string; projectId?: string } = { taskId: 'task-1' };
+let mockParams: { taskId: string; sessionId?: string; projectId?: string; mode?: string } = { taskId: 'task-1' };
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
-  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: jest.fn() }),
+  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
 }));
 
 jest.mock('@/connection/actions', () => ({
@@ -23,20 +25,18 @@ jest.mock('@/connection/actions', () => ({
   closeSessionScreen: jest.fn(),
 }));
 
-// The tabs are heavy (FlashList transcript, xterm WebView, diff watch); this
-// test is about SESSION BINDING, so each tab becomes a marker that records
-// the sessionId it received.
-jest.mock('@/screens/task/ConversationTab', () => {
+// The panes and the input bar are heavy (FlashList transcript, xterm
+// WebView, composer with dictation); this test is about SESSION BINDING and
+// MODE state, so each becomes a light marker that records its props.
+jest.mock('@/screens/task/ChatPane', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const ReactModule = require('react');
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const { View } = require('react-native');
   return {
     __esModule: true,
-    ConversationTab: (props: { sessionId: string | null }) =>
-      ReactModule.createElement(View, { testID: 'stub-conversation', accessibilityLabel: props.sessionId ?? 'none' }),
-    ConversationFooter: (props: { sessionId: string | null }) =>
-      ReactModule.createElement(View, { testID: 'stub-conversation-footer', accessibilityLabel: props.sessionId ?? 'none' }),
+    ChatPane: (props: { sessionId: string | null }) =>
+      ReactModule.createElement(View, { testID: 'stub-chat-pane', accessibilityLabel: props.sessionId ?? 'none' }),
   };
 });
 
@@ -47,19 +47,22 @@ jest.mock('@/screens/task/TerminalTab', () => {
   const { View } = require('react-native');
   return {
     __esModule: true,
-    TerminalTab: () => ReactModule.createElement(View, { testID: 'stub-terminal' }),
-    TerminalFooter: () => ReactModule.createElement(View, { testID: 'stub-terminal-footer' }),
+    TerminalTab: (props: { sessionId: string | null }) =>
+      ReactModule.createElement(View, { testID: 'stub-terminal-tab', accessibilityLabel: props.sessionId ?? 'none' }),
   };
 });
 
-jest.mock('@/screens/task/ChangesTab', () => {
+jest.mock('@/screens/task/SessionInputBar', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const ReactModule = require('react');
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const { View } = require('react-native');
   return {
     __esModule: true,
-    ChangesTab: () => ReactModule.createElement(View, { testID: 'stub-changes' }),
+    SessionInputBar: (props: { sessionId: string | null; mode: string }) =>
+      props.sessionId === null
+        ? null
+        : ReactModule.createElement(View, { testID: 'stub-session-input-bar', accessibilityLabel: props.mode }),
   };
 });
 
@@ -83,25 +86,26 @@ function seedTaskWithSession(sessionId: string | null): void {
   });
 }
 
-function renderTaskScreen(): void {
-  render(
+function renderSessionScreen(): ReturnType<typeof render> {
+  return render(
     <ThemeProvider>
-      <TaskScreen />
+      <SessionScreen />
     </ThemeProvider>,
   );
 }
 
-describe('TaskScreen session binding', () => {
+describe('SessionScreen session binding', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockParams = { taskId: 'task-1' };
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
+    useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
   });
 
   it('binds to the param session before the board locates the task', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-param' };
-    renderTaskScreen();
+    renderSessionScreen();
     expect(openSessionScreenMock).toHaveBeenCalledWith('sess-param');
     expect(screen.queryByTestId('session-ended-state')).toBeNull();
   });
@@ -109,7 +113,7 @@ describe('TaskScreen session binding', () => {
   it('re-binds to the successor session when the board swaps the task session', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
     seedTaskWithSession('sess-a');
-    renderTaskScreen();
+    renderSessionScreen();
     expect(openSessionScreenMock).toHaveBeenCalledWith('sess-a');
 
     act(() => {
@@ -125,10 +129,11 @@ describe('TaskScreen session binding', () => {
     expect(screen.queryByTestId('session-ended-state')).toBeNull();
   });
 
-  it('shows the ended state when the located task loses its session with no successor', () => {
+  it('shows the ended state (and hides the input bar) when the located task loses its session', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
     seedTaskWithSession('sess-a');
-    renderTaskScreen();
+    renderSessionScreen();
+    expect(screen.getByTestId('stub-session-input-bar')).toBeTruthy();
 
     act(() => {
       seedTaskWithSession(null);
@@ -136,13 +141,13 @@ describe('TaskScreen session binding', () => {
 
     expect(screen.getByTestId('session-ended-state')).toBeTruthy();
     expect(closeSessionScreenMock).toHaveBeenCalledWith('sess-a');
-    expect(screen.queryByTestId('stub-conversation-footer')).toBeNull();
+    expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
   });
 
   it('recovers from the ended state when a successor session appears', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
     seedTaskWithSession('sess-a');
-    renderTaskScreen();
+    renderSessionScreen();
     act(() => {
       seedTaskWithSession(null);
     });
@@ -158,7 +163,7 @@ describe('TaskScreen session binding', () => {
 
   it('does not show the ended state for a task that never had a session', () => {
     seedTaskWithSession(null);
-    renderTaskScreen();
+    renderSessionScreen();
     expect(screen.queryByTestId('session-ended-state')).toBeNull();
     expect(openSessionScreenMock).not.toHaveBeenCalled();
   });
@@ -169,7 +174,7 @@ describe('TaskScreen session binding', () => {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
       seedTaskWithSession('sess-a');
       useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
-      renderTaskScreen();
+      renderSessionScreen();
 
       act(() => {
         useActivityStore.getState().markRejected('sess-a');
@@ -184,5 +189,28 @@ describe('TaskScreen session binding', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('defaults to terminal mode and honors the mode=chat entry param', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    const first = renderSessionScreen();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('terminal');
+    first.unmount();
+
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', mode: 'chat' };
+    renderSessionScreen();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
+  });
+
+  it('pushes the changes route from the header chip', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    fireEvent.press(screen.getByTestId('task-header-changes'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/task/[taskId]/changes',
+      params: { taskId: 'task-1', projectId: 'project-1' },
+    });
   });
 });

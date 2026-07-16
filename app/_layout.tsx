@@ -50,7 +50,8 @@ function RootStack(): React.JSX.Element {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="task/[taskId]" options={{ headerShown: false }} />
+        <Stack.Screen name="task/[taskId]/index" options={{ headerShown: false }} />
+        <Stack.Screen name="task/[taskId]/changes" options={{ headerShown: false }} />
         <Stack.Screen name="file-diff" options={{ title: 'Changes' }} />
         <Stack.Screen name="pair" options={{ title: 'Pair a device' }} />
         <Stack.Screen name="pair-confirm" options={{ title: 'Confirm pairing' }} />

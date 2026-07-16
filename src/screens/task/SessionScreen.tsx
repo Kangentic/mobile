@@ -1,27 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
-import { Screen, SegmentedTabBar, useTheme } from '@/components';
+import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
 import { useActivityStore } from '@/state/activityStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { openSessionScreen, closeSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
-import { ConversationTab, ConversationFooter } from './ConversationTab';
-import { TerminalTab, TerminalFooter } from './TerminalTab';
-import { ChangesTab } from './ChangesTab';
+import { ChatPane } from './ChatPane';
+import { TerminalTab } from './TerminalTab';
 import { SessionEndedState } from './SessionEndedState';
+import { SessionInputBar } from './SessionInputBar';
+import { ModeToggleHint } from './ModeToggleHint';
 import { resolveCurrentSessionId } from './sessionResolution';
+import type { SessionMode } from './SessionModeToggle';
 
-type TaskTabKey = 'conversation' | 'terminal' | 'changes';
-
-const TAB_ITEMS: { key: TaskTabKey; label: string }[] = [
-  { key: 'conversation', label: 'Conversation' },
-  { key: 'terminal', label: 'Terminal' },
-  { key: 'changes', label: 'Changes' },
-];
-
-const TAB_INDEX_BY_KEY: Record<TaskTabKey, number> = { conversation: 0, terminal: 1, changes: 2 };
+const MODE_PAGE_INDEX: Record<SessionMode, number> = { terminal: 0, chat: 1 };
 
 /**
  * How long a 'rejected' stream feed must persist before the screen declares
@@ -32,16 +27,17 @@ const TAB_INDEX_BY_KEY: Record<TaskTabKey, number> = { conversation: 0, terminal
 const REJECTED_FEED_GRACE_MS = 1500;
 
 /**
- * The full-screen task view: Conversation-terminal / Terminal / Changes on
- * a non-swipe pager (all three stay mounted so the xterm WebView never
- * reloads and the conversation keeps scroll position; tab switching is
- * tap-only to keep gestures unambiguous with the terminal's pan), with the
- * active tab's footer (composer or quick keys) and the tab bar inside one
- * KeyboardAvoidingView so the keyboard lifts them together.
+ * The task's SESSION view: one live session, two lenses. Terminal (the raw
+ * 1:1 desktop mirror, the default) and Chat (the readable feed) share a
+ * non-swipe pager - both stay mounted so the xterm WebView never reloads
+ * and the conversation keeps scroll position; switching is tap-only via the
+ * mode pill in the input bar (swipe belongs to the terminal's pan). The one
+ * footer is mode-aware: PTY keystrokes in Terminal, agent messages in Chat.
+ * Changes is its own pushed destination (the header chip).
  */
-export function TaskScreen(): React.JSX.Element {
-  const theme = useTheme();
-  const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string }>();
+export function SessionScreen(): React.JSX.Element {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string; mode?: string }>();
   const taskId = params.taskId;
 
   // Select primitives, never the object findTaskById builds: returning a
@@ -59,11 +55,10 @@ export function TaskScreen(): React.JSX.Element {
   // gap before the first board snapshot. See sessionResolution.ts.
   const sessionId = resolveCurrentSessionId({ taskLocated, locatedSessionId, paramSessionId });
 
-  const [activeTab, setActiveTab] = useState<TaskTabKey>('conversation');
+  // Terminal is the headline default; needs-you entry points pass mode=chat
+  // so prompt answering lands on the answerable side.
+  const [mode, setMode] = useState<SessionMode>(params.mode === 'chat' ? 'chat' : 'terminal');
   const pagerRef = useRef<PagerView>(null);
-  // The terminal pane mounts lazily on first visit (a WebView per task
-  // screen is not free), then stays alive.
-  const [terminalVisited, setTerminalVisited] = useState(false);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -100,49 +95,66 @@ export function TaskScreen(): React.JSX.Element {
     (taskLocated && sessionId === null && lastBoundSessionId !== null) ||
     (sessionId !== null && feedStatus === 'rejected' && gracePassedForSessionId === sessionId);
 
-  const onTabChange = useCallback((key: string) => {
-    const tabKey = key as TaskTabKey;
-    setActiveTab(tabKey);
-    if (tabKey === 'terminal') setTerminalVisited(true);
-    pagerRef.current?.setPage(TAB_INDEX_BY_KEY[tabKey]);
+  // The Chat segment's needs-you dot: a prompt is pending and the user is
+  // looking at the terminal. Never auto-switch a surface someone types into.
+  const awaitedPromptId = useActivityStore((state) =>
+    sessionId !== null ? (state.bySessionId[sessionId]?.awaitedPromptId ?? null) : null,
+  );
+  const chatAttention = mode === 'terminal' && awaitedPromptId !== null;
+
+  const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
+  const settingsHydrated = useSettingsStore((state) => state.hydrated);
+  const showModeHint = settingsHydrated && !hasSeenSessionModeHint && !sessionEnded && sessionId !== null;
+  const dismissModeHint = useCallback(() => {
+    void useSettingsStore.getState().markSessionModeHintSeen();
   }, []);
 
+  const onModeChange = useCallback(
+    (nextMode: SessionMode) => {
+      setMode(nextMode);
+      pagerRef.current?.setPage(MODE_PAGE_INDEX[nextMode]);
+      dismissModeHint();
+    },
+    [dismissModeHint],
+  );
+
+  const openChanges = useCallback(() => {
+    router.push({
+      pathname: '/task/[taskId]/changes',
+      params: { taskId, ...(projectId ? { projectId } : {}) },
+    });
+  }, [router, taskId, projectId]);
+
   return (
-    <Screen testID="task-screen">
-      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} />
+    <Screen testID="session-screen">
+      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} onOpenChanges={openChanges} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.flex}>
-          <PagerView ref={pagerRef} style={styles.flex} initialPage={0} scrollEnabled={false} offscreenPageLimit={2}>
-            <View key="conversation" style={styles.flex} testID="task-tab-conversation">
-              <ConversationTab
-                key={sessionId ?? 'no-session'}
-                taskId={taskId}
-                sessionId={sessionId}
-                projectId={projectId}
-              />
+          <PagerView
+            ref={pagerRef}
+            style={styles.flex}
+            initialPage={MODE_PAGE_INDEX[mode]}
+            scrollEnabled={false}
+            offscreenPageLimit={1}
+          >
+            <View key="terminal" style={styles.flex} testID="session-pane-terminal">
+              <TerminalTab sessionId={sessionId} active={mode === 'terminal'} />
             </View>
-            <View key="terminal" style={styles.flex} testID="task-tab-terminal">
-              <TerminalTab sessionId={sessionId} mounted={terminalVisited} active={activeTab === 'terminal'} />
-            </View>
-            <View key="changes" style={styles.flex} testID="task-tab-changes">
-              <ChangesTab taskId={taskId} projectId={projectId} isActive={activeTab === 'changes'} />
+            <View key="chat" style={styles.flex} testID="session-pane-chat">
+              <ChatPane taskId={taskId} sessionId={sessionId} projectId={projectId} />
             </View>
           </PagerView>
 
-          {sessionEnded && activeTab !== 'changes' ? (
-            <SessionEndedState onViewChanges={() => onTabChange('changes')} />
-          ) : null}
+          {sessionEnded ? <SessionEndedState onViewChanges={openChanges} /> : null}
         </View>
 
-        {!sessionEnded && activeTab === 'conversation' ? <ConversationFooter sessionId={sessionId} /> : null}
-        {!sessionEnded && activeTab === 'terminal' ? <TerminalFooter sessionId={sessionId} /> : null}
-
-        <View style={{ paddingBottom: theme.spacing.xs, backgroundColor: theme.colors.surface }}>
-          <SegmentedTabBar items={TAB_ITEMS} activeKey={activeTab} onChange={onTabChange} testID="task-tab-bar" />
-        </View>
+        {showModeHint ? <ModeToggleHint onDismiss={dismissModeHint} /> : null}
+        {!sessionEnded ? (
+          <SessionInputBar sessionId={sessionId} mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />
+        ) : null}
       </KeyboardAvoidingView>
     </Screen>
   );
