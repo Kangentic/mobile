@@ -70,27 +70,32 @@ describe('transcriptStore', () => {
     expect(session.entries[0]).toBe(before.entries[0]);
   });
 
-  it('replaces a mutating tail entry in place (streaming turn) and preserves identity for content-identical upserts', () => {
+  it('replaces a mutating tail entry in place, and preserves identity for stable mid-window upserts', () => {
     const { retainSession, applyWindow, applyTranscript } = useTranscriptStore.getState();
     retainSession('sess-1');
-    const original = assistantEntryFixture({ uuid: 'a-1' });
-    applyWindow('sess-1', windowPayload(1, 2, 0, [userEntryFixture({ uuid: 'u-0' }), original]));
+    const midEntry = assistantEntryFixture({ uuid: 'a-1' });
+    const tailEntry = assistantEntryFixture({ uuid: 'a-2' });
+    applyWindow('sess-1', windowPayload(1, 3, 0, [userEntryFixture({ uuid: 'u-0' }), midEntry, tailEntry]));
 
-    const grown = assistantEntryFixture({
-      uuid: 'a-1',
+    // The streaming tail (index 2) grows token by token. It is replaced in place
+    // with the new object: we intentionally skip the O(entry-size) content
+    // compare on the tail (it changes by definition every delta), so a re-send
+    // of the tail does NOT preserve identity - that saves the per-delta stringify
+    // and only costs one row re-render.
+    const grownTail = assistantEntryFixture({
+      uuid: 'a-2',
       blocks: [
         { type: 'text', text: 'working on it' },
         { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'ls' } },
       ],
     });
-    applyTranscript(deltaEvent('sess-1', 2, 2, [{ index: 1, entry: grown }]));
+    applyTranscript(deltaEvent('sess-1', 2, 3, [{ index: 2, entry: grownTail }]));
+    expect(useTranscriptStore.getState().bySessionId['sess-1'].entries[2]).toBe(grownTail);
 
-    const session = useTranscriptStore.getState().bySessionId['sess-1'];
-    expect(session.entries[1]).toBe(grown);
-
-    // A byte-identical re-send keeps the previous object.
-    applyTranscript(deltaEvent('sess-1', 3, 2, [{ index: 1, entry: JSON.parse(JSON.stringify(grown)) }]));
-    expect(useTranscriptStore.getState().bySessionId['sess-1'].entries[1]).toBe(grown);
+    // A stable mid-window entry (index 1) re-sent byte-identical keeps its object
+    // identity so memoized rows skip re-render.
+    applyTranscript(deltaEvent('sess-1', 3, 3, [{ index: 1, entry: JSON.parse(JSON.stringify(midEntry)) }]));
+    expect(useTranscriptStore.getState().bySessionId['sess-1'].entries[1]).toBe(midEntry);
   });
 
   it('ignores stale deltas whose revision is behind the window', () => {

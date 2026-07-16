@@ -139,8 +139,14 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
       const position = upsert.index - previous.startIndex;
       if (position < entries.length) {
         if (entries === previous.entries) entries = [...previous.entries];
-        entries[position] = preserveIdentity(previous.entries[position], upsert.entry);
-        if (upsert.index >= windowEnd - 1) tailGrew = true;
+        const isTail = upsert.index >= windowEnd - 1;
+        // The streaming tail entry changes on every delta by definition, so the
+        // O(entry-size) JSON.stringify identity check in preserveIdentity is pure
+        // waste there (it always returns the new entry, and the tail entry grows
+        // token by token). Only run it for stable mid-window entries, where an
+        // unchanged upsert should reuse the object so memoized rows skip re-render.
+        entries[position] = isTail ? upsert.entry : preserveIdentity(previous.entries[position], upsert.entry);
+        if (isTail) tailGrew = true;
       } else if (position === entries.length) {
         if (entries === previous.entries) entries = [...previous.entries];
         entries.push(upsert.entry);
