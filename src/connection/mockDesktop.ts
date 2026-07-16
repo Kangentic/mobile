@@ -152,7 +152,7 @@ export function createMockDesktop(): MockDesktop {
   // Mutable scenario state, reset whenever the connection reopens (the
   // module is re-instantiated per openConnection).
   const tasks = initialTasks();
-  const transcript = baseTranscript();
+  let transcript = baseTranscript();
   let transcriptRevision = 1;
   let streamSubscribed = false;
   let feedTick = 0;
@@ -162,6 +162,11 @@ export function createMockDesktop(): MockDesktop {
   let feedTimer: ReturnType<typeof setInterval> | null = null;
   let ptyDimensions = { ...MOCK_DESKTOP_PTY_DIMENSIONS };
   const oneShotTimers = new Set<ReturnType<typeof setTimeout>>();
+  // Session-lifecycle simulation (the /respawn and /end-session magic
+  // composer commands): the streaming task's CURRENT session id, mirroring
+  // the desktop respawning a task's agent under a fresh id.
+  let activeSessionId: string | null = MOCK_SESSION_ID;
+  let respawnCounter = 1;
 
   function emit(event: BridgeEvent): void {
     if (!peer.isEstablished) return;
@@ -169,7 +174,8 @@ export function createMockDesktop(): MockDesktop {
   }
 
   function emitPtyResize(): void {
-    emit({ kind: 'terminal-resize', sessionId: MOCK_SESSION_ID, taskId: MOCK_TASK_ID, payload: { ...ptyDimensions } });
+    if (activeSessionId === null) return;
+    emit({ kind: 'terminal-resize', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { ...ptyDimensions } });
   }
 
   function later(delayMs: number, action: () => void): void {
@@ -182,11 +188,12 @@ export function createMockDesktop(): MockDesktop {
 
   /** Appends an entry and streams it as a protocol-v2 indexed delta, exactly like the real bridge. */
   function appendTranscriptEntry(entry: TranscriptEntryWire): void {
+    if (activeSessionId === null) return;
     transcript.push(entry);
     transcriptRevision += 1;
     emit({
       kind: 'transcript',
-      sessionId: MOCK_SESSION_ID,
+      sessionId: activeSessionId,
       taskId: MOCK_TASK_ID,
       payload: {
         mode: 'delta',
@@ -198,22 +205,72 @@ export function createMockDesktop(): MockDesktop {
   }
 
   function emitActivity(state: 'thinking' | 'idle' | 'permission'): void {
+    if (activeSessionId === null) return;
     const reason = state === 'permission' ? { kind: 'permission' as const } : state === 'idle' ? { kind: 'idle' as const } : { kind: 'turn-active' as const };
-    emit({ kind: 'activity', sessionId: MOCK_SESSION_ID, taskId: MOCK_TASK_ID, payload: { type: 'activity', state, reason } });
+    emit({ kind: 'activity', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { type: 'activity', state, reason } });
   }
 
   function raisePrompt(promptId: string): void {
+    if (activeSessionId === null) return;
     pendingPromptId = promptId;
-    emit({ kind: 'activity', sessionId: MOCK_SESSION_ID, taskId: MOCK_TASK_ID, payload: { type: 'permission', promptId, pending: true } });
+    emit({ kind: 'activity', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { type: 'permission', promptId, pending: true } });
     emitActivity('permission');
   }
 
   function clearPrompt(promptId: string): void {
     pendingPromptId = null;
     later(50, () => {
-      emit({ kind: 'activity', sessionId: MOCK_SESSION_ID, taskId: MOCK_TASK_ID, payload: { type: 'permission', promptId, pending: false } });
+      if (activeSessionId === null) return;
+      emit({ kind: 'activity', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { type: 'permission', promptId, pending: false } });
       emitActivity('thinking');
     });
+  }
+
+  /** Points the streaming task at a session id (or none) and pushes the board change, like the real desktop's lifecycle feed. */
+  function setTaskSession(nextSessionId: string | null): void {
+    const streamingTask = tasks.find((candidate) => candidate.id === MOCK_TASK_ID);
+    if (streamingTask) {
+      streamingTask.session_id = nextSessionId;
+      streamingTask.updated_at = new Date().toISOString();
+    }
+    later(50, () => {
+      emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: MOCK_TASK_ID, payload: { change: 'task-updated', ids: [MOCK_TASK_ID] } });
+    });
+  }
+
+  /**
+   * The /end-session magic command: the desktop stops running a session for
+   * the task. Subsequent read-stream subscribes for the dead id fail exactly
+   * like the real bridge once the registry entry is gone.
+   */
+  function endActiveSession(): void {
+    pendingPromptId = null;
+    activeSessionId = null;
+    streamSubscribed = false;
+    setTaskSession(null);
+  }
+
+  /**
+   * The /respawn magic command: the desktop restarts the task's agent under
+   * a FRESH session id (a model switch). The transcript resets (a new
+   * process has a new transcript) with a marker entry Maestro can assert on.
+   */
+  function respawnActiveSession(): void {
+    respawnCounter += 1;
+    const successorSessionId = `mock-session-${respawnCounter}`;
+    pendingPromptId = null;
+    activeSessionId = successorSessionId;
+    streamSubscribed = false;
+    transcript = [
+      {
+        kind: 'assistant',
+        uuid: `mock-respawn-marker-${respawnCounter}`,
+        ts: Date.now(),
+        blocks: [{ type: 'text', text: `Respawned session online (${successorSessionId}).` }],
+      },
+    ];
+    transcriptRevision = 1;
+    setTaskSession(successorSessionId);
   }
 
   function raiseQuestionPrompt(): void {
@@ -253,11 +310,11 @@ export function createMockDesktop(): MockDesktop {
   function startFeed(): void {
     if (feedTimer) return;
     feedTimer = setInterval(() => {
-      if (!peer.isEstablished || !streamSubscribed) return;
+      if (!peer.isEstablished || !streamSubscribed || activeSessionId === null) return;
       feedTick += 1;
       emit({
         kind: 'terminal',
-        sessionId: MOCK_SESSION_ID,
+        sessionId: activeSessionId,
         taskId: MOCK_TASK_ID,
         payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` },
       });
@@ -313,7 +370,9 @@ export function createMockDesktop(): MockDesktop {
           streamSubscribed = false;
           return ok(request);
         }
-        if (payload.sessionId !== MOCK_SESSION_ID) return failWith(request, `No such session: ${payload.sessionId}`);
+        if (activeSessionId === null || payload.sessionId !== activeSessionId) {
+          return failWith(request, `No such session: ${payload.sessionId}`);
+        }
         if (payload.action === 'transcript-window') {
           const end = Math.min(payload.beforeIndex ?? transcript.length, transcript.length);
           const start = Math.max(0, end - (payload.limit ?? 60));
@@ -344,6 +403,16 @@ export function createMockDesktop(): MockDesktop {
       }
       case 'send-user-message': {
         const payload = parseCapabilityRequestPayload('send-user-message', request.payload);
+        // Magic dev commands for exercising session-lifecycle paths that a
+        // real desktop only hits on a model switch or process exit.
+        if (payload.text.trim() === '/respawn') {
+          respawnActiveSession();
+          return ok(request, { delivered: true });
+        }
+        if (payload.text.trim() === '/end-session') {
+          endActiveSession();
+          return ok(request, { delivered: true });
+        }
         entryCounter += 1;
         appendTranscriptEntry({ kind: 'user', uuid: `mock-user-sent-${entryCounter}`, ts: Date.now(), text: payload.text });
         emitActivity('thinking');
@@ -399,9 +468,10 @@ export function createMockDesktop(): MockDesktop {
           emitPtyResize();
           return ok(request, { released: true });
         }
+        if (activeSessionId === null) return failWith(request, 'No active session');
         emit({
           kind: 'terminal',
-          sessionId: MOCK_SESSION_ID,
+          sessionId: activeSessionId,
           taskId: MOCK_TASK_ID,
           payload: { data: payload.data.replace(/\r/g, '\r\n') },
         });

@@ -4,11 +4,14 @@ import { useLocalSearchParams } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { Screen, SegmentedTabBar, useTheme } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
+import { useActivityStore } from '@/state/activityStore';
 import { openSessionScreen, closeSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
 import { ConversationTab, ConversationFooter } from './ConversationTab';
 import { TerminalTab, TerminalFooter } from './TerminalTab';
 import { ChangesTab } from './ChangesTab';
+import { SessionEndedState } from './SessionEndedState';
+import { resolveCurrentSessionId } from './sessionResolution';
 
 type TaskTabKey = 'conversation' | 'terminal' | 'changes';
 
@@ -19,6 +22,14 @@ const TAB_ITEMS: { key: TaskTabKey; label: string }[] = [
 ];
 
 const TAB_INDEX_BY_KEY: Record<TaskTabKey, number> = { conversation: 0, terminal: 1, changes: 2 };
+
+/**
+ * How long a 'rejected' stream feed must persist before the screen declares
+ * the session dead. A respawn races the board snapshot against the old
+ * stream's rejection; the grace window keeps the ended state from flashing
+ * when the successor sessionId is about to arrive.
+ */
+const REJECTED_FEED_GRACE_MS = 1500;
 
 /**
  * The full-screen task view: Conversation-terminal / Terminal / Changes on
@@ -39,10 +50,14 @@ export function TaskScreen(): React.JSX.Element {
   const locatedTaskTitle = useBoardStore((state) => findTaskById(state, taskId)?.task.title ?? null);
   const locatedProjectId = useBoardStore((state) => findTaskById(state, taskId)?.projectId ?? null);
   const locatedSessionId = useBoardStore((state) => findTaskById(state, taskId)?.task.session_id ?? null);
+  const taskLocated = useBoardStore((state) => findTaskById(state, taskId) !== null);
   const taskTitle = locatedTaskTitle ?? 'Task';
   const projectId = params.projectId && params.projectId.length > 0 ? params.projectId : locatedProjectId;
   const paramSessionId = params.sessionId && params.sessionId.length > 0 ? params.sessionId : null;
-  const sessionId = paramSessionId ?? locatedSessionId;
+  // The board is authoritative once it has located the task (a respawn swaps
+  // the task's session_id under a mounted screen); the param only bridges the
+  // gap before the first board snapshot. See sessionResolution.ts.
+  const sessionId = resolveCurrentSessionId({ taskLocated, locatedSessionId, paramSessionId });
 
   const [activeTab, setActiveTab] = useState<TaskTabKey>('conversation');
   const pagerRef = useRef<PagerView>(null);
@@ -55,6 +70,35 @@ export function TaskScreen(): React.JSX.Element {
     openSessionScreen(sessionId);
     return () => closeSessionScreen(sessionId);
   }, [sessionId]);
+
+  // SESSION-DEATH DETECTION. Two signals, both scoped to the CURRENT binding:
+  // 1. The board located the task but reports no session, after this screen
+  //    had one: the session ended with no successor (authoritative).
+  // 2. The stream feed for the bound session sits 'rejected' past a grace
+  //    window: the desktop refused the subscribe (dead session on a desktop
+  //    that predates the session-ended event) and no successor arrived.
+  // "Had one before" is state adjusted during render (the sanctioned
+  // derive-from-props pattern), not a ref read in render.
+  const [lastBoundSessionId, setLastBoundSessionId] = useState<string | null>(null);
+  if (sessionId !== null && sessionId !== lastBoundSessionId) {
+    setLastBoundSessionId(sessionId);
+  }
+  const feedStatus = useActivityStore((state) =>
+    sessionId !== null ? (state.bySessionId[sessionId]?.feedStatus ?? null) : null,
+  );
+  // The grace flag records WHICH session outlived the window, so leaving the
+  // rejected state needs no synchronous reset: the derived check below simply
+  // stops matching.
+  const [gracePassedForSessionId, setGracePassedForSessionId] = useState<string | null>(null);
+  useEffect(() => {
+    if (feedStatus !== 'rejected' || sessionId === null) return;
+    const rejectedSessionId = sessionId;
+    const graceTimer = setTimeout(() => setGracePassedForSessionId(rejectedSessionId), REJECTED_FEED_GRACE_MS);
+    return () => clearTimeout(graceTimer);
+  }, [feedStatus, sessionId]);
+  const sessionEnded =
+    (taskLocated && sessionId === null && lastBoundSessionId !== null) ||
+    (sessionId !== null && feedStatus === 'rejected' && gracePassedForSessionId === sessionId);
 
   const onTabChange = useCallback((key: string) => {
     const tabKey = key as TaskTabKey;
@@ -70,20 +114,31 @@ export function TaskScreen(): React.JSX.Element {
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <PagerView ref={pagerRef} style={styles.flex} initialPage={0} scrollEnabled={false} offscreenPageLimit={2}>
-          <View key="conversation" style={styles.flex} testID="task-tab-conversation">
-            <ConversationTab taskId={taskId} sessionId={sessionId} projectId={projectId} />
-          </View>
-          <View key="terminal" style={styles.flex} testID="task-tab-terminal">
-            <TerminalTab sessionId={sessionId} mounted={terminalVisited} active={activeTab === 'terminal'} />
-          </View>
-          <View key="changes" style={styles.flex} testID="task-tab-changes">
-            <ChangesTab taskId={taskId} projectId={projectId} isActive={activeTab === 'changes'} />
-          </View>
-        </PagerView>
+        <View style={styles.flex}>
+          <PagerView ref={pagerRef} style={styles.flex} initialPage={0} scrollEnabled={false} offscreenPageLimit={2}>
+            <View key="conversation" style={styles.flex} testID="task-tab-conversation">
+              <ConversationTab
+                key={sessionId ?? 'no-session'}
+                taskId={taskId}
+                sessionId={sessionId}
+                projectId={projectId}
+              />
+            </View>
+            <View key="terminal" style={styles.flex} testID="task-tab-terminal">
+              <TerminalTab sessionId={sessionId} mounted={terminalVisited} active={activeTab === 'terminal'} />
+            </View>
+            <View key="changes" style={styles.flex} testID="task-tab-changes">
+              <ChangesTab taskId={taskId} projectId={projectId} isActive={activeTab === 'changes'} />
+            </View>
+          </PagerView>
 
-        {activeTab === 'conversation' ? <ConversationFooter sessionId={sessionId} /> : null}
-        {activeTab === 'terminal' ? <TerminalFooter sessionId={sessionId} /> : null}
+          {sessionEnded && activeTab !== 'changes' ? (
+            <SessionEndedState onViewChanges={() => onTabChange('changes')} />
+          ) : null}
+        </View>
+
+        {!sessionEnded && activeTab === 'conversation' ? <ConversationFooter sessionId={sessionId} /> : null}
+        {!sessionEnded && activeTab === 'terminal' ? <TerminalFooter sessionId={sessionId} /> : null}
 
         <View style={{ paddingBottom: theme.spacing.xs, backgroundColor: theme.colors.surface }}>
           <SegmentedTabBar items={TAB_ITEMS} activeKey={activeTab} onChange={onTabChange} testID="task-tab-bar" />

@@ -209,6 +209,21 @@ export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.
     }
   }, [isActive, terminalReady, postInit, clearFlushTimer]);
 
+  // Session swap under a mounted pane (the desktop respawned the task's
+  // session): the WebView survives but its grid belongs to the dead session.
+  // Drop anything queued and re-init from the NEW session's ring immediately;
+  // waiting for a 'seed' event is not enough because the successor's seed may
+  // have landed while this pane was bound to the old session.
+  const previousSessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (previousSessionIdRef.current === sessionId) return;
+    previousSessionIdRef.current = sessionId;
+    if (!terminalReady) return;
+    pendingChunksRef.current = [];
+    clearFlushTimer();
+    postInit();
+  }, [sessionId, terminalReady, postInit, clearFlushTimer]);
+
   // Drop this session's DECCKM state on unmount. There is nothing to release -
   // the mirror never resized the PTY.
   useEffect(() => {
@@ -242,7 +257,6 @@ export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.
         // Observability, mirroring the desktop's renderer report: WebGL is the
         // fast path; a 'dom' report means WebGL was unavailable or its context
         // was lost. Logged for now; a future devtools surface can read it.
-        // eslint-disable-next-line no-console -- intentional renderer-status breadcrumb
         console.log(`[terminal] renderer for ${sessionId}: ${message.renderer}`);
         return;
       }
