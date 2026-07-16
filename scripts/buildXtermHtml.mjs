@@ -22,11 +22,12 @@ const xtermJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', '
 const xtermCss = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'), 'utf8');
 const xtermFitJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'), 'utf8');
 const xtermWebglJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-webgl', 'lib', 'addon-webgl.js'), 'utf8');
-const xtermSerializeJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-serialize', 'lib', 'addon-serialize.js'), 'utf8');
 // @xterm/headless ships a CJS-only bundle (assigns to `exports`, no UMD); the
 // wrapper below fakes `exports` and captures the module as a page global. It
 // backs the clean feed: a PARSER-ONLY second terminal (no renderer at all),
-// far cheaper than a hidden DOM terminal for the same job.
+// far cheaper than a hidden DOM terminal for the same job. The frame is read
+// straight from the parsed buffer as PLAIN CELL TEXT (translateToString), so
+// no escape sequence can ever leak into the reading view.
 const xtermHeadlessJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'headless', 'lib-headless', 'xterm-headless.js'), 'utf8');
 const xtermVersion = JSON.parse(readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'package.json'), 'utf8')).version;
 
@@ -70,7 +71,6 @@ const bridgeGlue = `
   // readable lines to the host. Off unless init says cleanFeed: true.
   var cleanFeedEnabled = false;
   var cleanTerminal = null;
-  var cleanSerializer = null;
   var cleanDebounceTimer = null;
   var cleanLastLines = [];
   var CLEAN_FEED_DEBOUNCE_MS = 48;
@@ -252,10 +252,6 @@ const bridgeGlue = `
       clearTimeout(cleanDebounceTimer);
       cleanDebounceTimer = null;
     }
-    if (cleanSerializer) {
-      try { cleanSerializer.dispose(); } catch (disposeError) { /* already gone */ }
-      cleanSerializer = null;
-    }
     if (cleanTerminal) {
       try { cleanTerminal.dispose(); } catch (disposeError) { /* already gone */ }
       cleanTerminal = null;
@@ -272,8 +268,21 @@ const bridgeGlue = `
       scrollback: CLEAN_FEED_SCROLLBACK,
       allowProposedApi: true,
     });
-    cleanSerializer = new window.SerializeAddon.SerializeAddon();
-    cleanTerminal.loadAddon(cleanSerializer);
+  }
+
+  // The parsed frame as PLAIN cell text: every buffer line (scrollback +
+  // screen) via translateToString(trimRight) - escape codes never reach
+  // cells, so the reading view gets pure text by construction. Fullscreen
+  // TUIs live in the ALT buffer, and buffer.active follows them, which is
+  // exactly what a reader wants to read.
+  function cleanFeedFrameText() {
+    var activeBuffer = cleanTerminal.buffer.active;
+    var frameLines = [];
+    for (var lineIndex = 0; lineIndex < activeBuffer.length; lineIndex += 1) {
+      var bufferLine = activeBuffer.getLine(lineIndex);
+      frameLines.push(bufferLine ? bufferLine.translateToString(true) : '');
+    }
+    return frameLines.join('\n');
   }
 
   function cleanFeedWrite(data) {
@@ -285,18 +294,18 @@ const bridgeGlue = `
 
   function flushCleanFeed() {
     cleanDebounceTimer = null;
-    if (!cleanTerminal || !cleanSerializer) return;
+    if (!cleanTerminal) return;
     // xterm parses write() asynchronously; a zero-length write's callback is
     // the flush barrier (the desktop's headless frame buffer uses the same).
     cleanTerminal.write('', function () {
-      if (!cleanTerminal || !cleanSerializer) return;
-      var serialized;
+      if (!cleanTerminal) return;
+      var frameText;
       try {
-        serialized = cleanSerializer.serialize({ excludeModes: true, excludeAltBuffer: true });
-      } catch (serializeError) {
+        frameText = cleanFeedFrameText();
+      } catch (frameError) {
         return;
       }
-      var result = diffCleanLines(cleanLastLines, serialized);
+      var result = diffCleanLines(cleanLastLines, frameText);
       cleanLastLines = result.nextLines;
       if (result.lines.length === 0 && !result.reset) return;
       postToHost({ type: 'clean-lines', lines: result.lines, reset: result.reset });
@@ -493,9 +502,6 @@ ${xtermFitJs}
 </script>
 <script>
 ${xtermWebglJs}
-</script>
-<script>
-${xtermSerializeJs}
 </script>
 <script>
 var HeadlessXterm = (function () { var exports = {}; ${xtermHeadlessJs}
