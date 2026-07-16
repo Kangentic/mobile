@@ -9,7 +9,6 @@ import {
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import type { TranscriptEntryWire } from '@kangentic/protocol';
 import { Stack, Text, useTheme } from '@/components';
-import { ComposerBar } from '@/components/composer/ComposerBar';
 import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCard';
 import { LiveTailCell } from '@/components/conversation/LiveTailCell';
 import { MarkdownCell } from '@/components/conversation/MarkdownCell';
@@ -268,16 +267,6 @@ function renderConversationCell(cell: ConversationCell, sessionId: string): Reac
     case 'ask-user-question':
       return <AskUserQuestionCard sessionId={sessionId} prompt={cell.prompt} />;
   }
-}
-
-export interface ConversationFooterProps {
-  sessionId: string | null;
-}
-
-/** The conversation tab's footer: the composer when a session exists. */
-export function ConversationFooter({ sessionId }: ConversationFooterProps): React.JSX.Element | null {
-  if (sessionId === null) return null;
-  return <ComposerBar sessionId={sessionId} />;
 }
 
 const styles = StyleSheet.create({
