@@ -6,6 +6,7 @@ import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
 import { useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
+import { useTranscriptStore } from '@/state/transcriptStore';
 import { openSessionScreen, closeSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
@@ -102,6 +103,17 @@ export function SessionScreen(): React.JSX.Element {
   );
   const chatAttention = mode === 'terminal' && awaitedPromptId !== null;
 
+  // Chat-fallback predicate (agent-agnostic): a loaded-but-empty transcript
+  // means this agent has no structured feed, so the chat lens shows the
+  // cleaned reading view and the WebView runs its clean-feed parser. A
+  // structured session flips over automatically when its first entry lands.
+  const chatFallbackActive = useTranscriptStore((state) => {
+    if (sessionId === null) return false;
+    const transcriptWindow = state.bySessionId[sessionId];
+    return transcriptWindow !== undefined && transcriptWindow.totalEntries === 0;
+  });
+  const agentLabel = useBoardStore((state) => findTaskById(state, taskId)?.task.agent ?? null);
+
   const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
   const settingsHydrated = useSettingsStore((state) => state.hydrated);
   const showModeHint = settingsHydrated && !hasSeenSessionModeHint && !sessionEnded && sessionId !== null;
@@ -141,10 +153,10 @@ export function SessionScreen(): React.JSX.Element {
             offscreenPageLimit={1}
           >
             <View key="terminal" style={styles.flex} testID="session-pane-terminal">
-              <TerminalTab sessionId={sessionId} active={mode === 'terminal'} />
+              <TerminalTab sessionId={sessionId} active={mode === 'terminal'} cleanFeedEnabled={chatFallbackActive} />
             </View>
             <View key="chat" style={styles.flex} testID="session-pane-chat">
-              <ChatPane taskId={taskId} sessionId={sessionId} projectId={projectId} />
+              <ChatPane taskId={taskId} sessionId={sessionId} projectId={projectId} agentLabel={agentLabel} />
             </View>
           </PagerView>
 

@@ -22,6 +22,12 @@ const xtermJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', '
 const xtermCss = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'), 'utf8');
 const xtermFitJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'), 'utf8');
 const xtermWebglJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-webgl', 'lib', 'addon-webgl.js'), 'utf8');
+const xtermSerializeJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-serialize', 'lib', 'addon-serialize.js'), 'utf8');
+// @xterm/headless ships a CJS-only bundle (assigns to `exports`, no UMD); the
+// wrapper below fakes `exports` and captures the module as a page global. It
+// backs the clean feed: a PARSER-ONLY second terminal (no renderer at all),
+// far cheaper than a hidden DOM terminal for the same job.
+const xtermHeadlessJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'headless', 'lib-headless', 'xterm-headless.js'), 'utf8');
 const xtermVersion = JSON.parse(readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'package.json'), 'utf8')).version;
 
 const bridgeGlue = `
@@ -58,6 +64,17 @@ const bridgeGlue = `
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
   var CELL_HEIGHT_RATIO = 1.2;
+  // CLEAN FEED (the chat reading view for agents without a structured
+  // transcript): a second, HEADLESS terminal (parser + buffer, no renderer)
+  // consumes the same bytes; a debounced serialize -> line diff posts
+  // readable lines to the host. Off unless init says cleanFeed: true.
+  var cleanFeedEnabled = false;
+  var cleanTerminal = null;
+  var cleanSerializer = null;
+  var cleanDebounceTimer = null;
+  var cleanLastLines = [];
+  var CLEAN_FEED_DEBOUNCE_MS = 48;
+  var CLEAN_FEED_SCROLLBACK = 200;
 
   function postToHost(message) {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -203,12 +220,98 @@ const bridgeGlue = `
     postToHost({ type: 'renderer', renderer: webglAddon ? 'webgl' : 'dom' });
   }
 
+  // --- Clean feed ---------------------------------------------------------
+  // Hand-mirrors src/terminal/cleanFeedDiff.ts (this page cannot import TS);
+  // tests/unit/cleanFeedDiff extracts this copy from the generated file and
+  // asserts both implementations agree, so they cannot drift silently.
+  function diffCleanLines(previousLines, serialized) {
+    var newLines = serialized.split('\\n').map(function (line) { return line.replace(/\\s+$/, ''); });
+    while (newLines.length > 0 && newLines[newLines.length - 1] === '') {
+      newLines.pop();
+    }
+    var commonPrefixLength = 0;
+    var comparableLength = Math.min(newLines.length, previousLines.length);
+    for (var index = 0; index < comparableLength; index += 1) {
+      if (newLines[index] === previousLines[index]) commonPrefixLength += 1;
+      else break;
+    }
+    if (commonPrefixLength === newLines.length && newLines.length === previousLines.length) {
+      return { lines: [], reset: false, nextLines: newLines };
+    }
+    var reset = commonPrefixLength < previousLines.length;
+    var candidateLines = reset ? newLines : newLines.slice(commonPrefixLength);
+    var decorative = /^[\\u2500-\\u257F\\s\\-=_\\u00B7\\u2022]+$/;
+    var emitted = candidateLines.filter(function (line) {
+      return line.length > 0 && !decorative.test(line);
+    });
+    return { lines: emitted, reset: reset, nextLines: newLines };
+  }
+
+  function teardownCleanFeed() {
+    if (cleanDebounceTimer !== null) {
+      clearTimeout(cleanDebounceTimer);
+      cleanDebounceTimer = null;
+    }
+    if (cleanSerializer) {
+      try { cleanSerializer.dispose(); } catch (disposeError) { /* already gone */ }
+      cleanSerializer = null;
+    }
+    if (cleanTerminal) {
+      try { cleanTerminal.dispose(); } catch (disposeError) { /* already gone */ }
+      cleanTerminal = null;
+    }
+    cleanLastLines = [];
+  }
+
+  function setupCleanFeed(colsForClean, rowsForClean) {
+    teardownCleanFeed();
+    if (!cleanFeedEnabled) return;
+    cleanTerminal = new HeadlessXterm.Terminal({
+      cols: colsForClean,
+      rows: rowsForClean,
+      scrollback: CLEAN_FEED_SCROLLBACK,
+      allowProposedApi: true,
+    });
+    cleanSerializer = new window.SerializeAddon.SerializeAddon();
+    cleanTerminal.loadAddon(cleanSerializer);
+  }
+
+  function cleanFeedWrite(data) {
+    if (!cleanTerminal || typeof data !== 'string' || data.length === 0) return;
+    cleanTerminal.write(data);
+    if (cleanDebounceTimer !== null) clearTimeout(cleanDebounceTimer);
+    cleanDebounceTimer = setTimeout(flushCleanFeed, CLEAN_FEED_DEBOUNCE_MS);
+  }
+
+  function flushCleanFeed() {
+    cleanDebounceTimer = null;
+    if (!cleanTerminal || !cleanSerializer) return;
+    // xterm parses write() asynchronously; a zero-length write's callback is
+    // the flush barrier (the desktop's headless frame buffer uses the same).
+    cleanTerminal.write('', function () {
+      if (!cleanTerminal || !cleanSerializer) return;
+      var serialized;
+      try {
+        serialized = cleanSerializer.serialize({ excludeModes: true, excludeAltBuffer: true });
+      } catch (serializeError) {
+        return;
+      }
+      var result = diffCleanLines(cleanLastLines, serialized);
+      cleanLastLines = result.nextLines;
+      if (result.lines.length === 0 && !result.reset) return;
+      postToHost({ type: 'clean-lines', lines: result.lines, reset: result.reset });
+    });
+  }
+  // --- end clean feed -----------------------------------------------------
+
   function createTerminal(initMessage) {
     knownCols = initMessage.cols;
     knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
     currentFontSizePx = initMessage.fontSizePx;
     lastAppCursorMode = false;
     manualPanUntil = 0;
+    cleanFeedEnabled = initMessage.cleanFeed === true;
+    setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
     autoFitFontToScreen();
     terminal = new window.Terminal({
       cols: knownCols,
@@ -247,6 +350,7 @@ const bridgeGlue = `
         applyGeometry();
         afterWriteFlushed();
       });
+      cleanFeedWrite(initMessage.scrollback);
     } else {
       applyGeometry();
     }
@@ -291,7 +395,10 @@ const bridgeGlue = `
       }
       createTerminal(message);
     } else if (message.type === 'write') {
-      if (terminal && typeof message.data === 'string') terminal.write(message.data, afterWriteFlushed);
+      if (terminal && typeof message.data === 'string') {
+        terminal.write(message.data, afterWriteFlushed);
+        cleanFeedWrite(message.data);
+      }
     } else if (message.type === 'set-font-size') {
       if (typeof message.fontSizePx === 'number') applyFontSize(message.fontSizePx);
     } else if (message.type === 'resize') {
@@ -302,6 +409,7 @@ const bridgeGlue = `
         knownCols = message.cols;
         knownRows = message.rows;
         manualPanUntil = 0;
+        if (cleanTerminal) cleanTerminal.resize(knownCols, knownRows);
         autoFitFontToScreen();
         applyGeometry();
       }
@@ -385,6 +493,13 @@ ${xtermFitJs}
 </script>
 <script>
 ${xtermWebglJs}
+</script>
+<script>
+${xtermSerializeJs}
+</script>
+<script>
+var HeadlessXterm = (function () { var exports = {}; ${xtermHeadlessJs}
+return exports; })();
 </script>
 <script>
 ${bridgeGlue}

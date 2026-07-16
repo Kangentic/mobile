@@ -17,6 +17,7 @@ describe('host -> terminal round-trip', () => {
       rows: 30,
       fontSizePx: 13,
       theme: { background: '#101014', foreground: '#e6e6e6', cursor: '#e6e6e6', black: '#000000' },
+      cleanFeed: false,
     };
     expect(decodeHostMessage(encodeHostMessage(knownDims))).toEqual(knownDims);
 
@@ -27,6 +28,7 @@ describe('host -> terminal round-trip', () => {
       rows: null,
       fontSizePx: 12,
       theme: {},
+      cleanFeed: true,
     };
     expect(decodeHostMessage(encodeHostMessage(legacy))).toEqual(legacy);
   });
@@ -68,6 +70,13 @@ describe('terminal -> host round-trip', () => {
     const dom: TerminalToHostMessage = { type: 'renderer', renderer: 'dom' };
     expect(decodeTerminalMessage(encodeTerminalMessage(dom))).toEqual(dom);
   });
+
+  it('round-trips clean-lines messages (append and reset)', () => {
+    const append: TerminalToHostMessage = { type: 'clean-lines', lines: ['one', 'two'], reset: false };
+    expect(decodeTerminalMessage(encodeTerminalMessage(append))).toEqual(append);
+    const reset: TerminalToHostMessage = { type: 'clean-lines', lines: [], reset: true };
+    expect(decodeTerminalMessage(encodeTerminalMessage(reset))).toEqual(reset);
+  });
 });
 
 describe('decodeTerminalMessage - malformed input', () => {
@@ -93,6 +102,12 @@ describe('decodeTerminalMessage - malformed input', () => {
     expect(decodeTerminalMessage('{"type":"font-size","fontSizePx":"7"}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"renderer","renderer":"vulkan"}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"renderer"}')).toBeNull();
+  });
+
+  it('returns null for malformed clean-lines messages', () => {
+    expect(decodeTerminalMessage('{"type":"clean-lines","lines":["a",1],"reset":false}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"clean-lines","lines":"a","reset":false}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"clean-lines","lines":[]}')).toBeNull();
   });
 });
 

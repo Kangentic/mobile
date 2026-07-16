@@ -11,6 +11,7 @@ import {
 } from '@/terminal/terminalBridge';
 import { parseColsFromScrollback } from '@/terminal/liveTail';
 import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state/terminalFeed';
+import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { writeTerminal } from '@/connection/actions';
 
@@ -24,6 +25,13 @@ export interface TerminalPaneProps {
    * ring to catch up.
    */
   isActive: boolean;
+  /**
+   * Enables the WebView's clean feed (a headless second parser posting
+   * readable lines into the readingViewStore) - the chat reading view for
+   * sessions whose agent has no structured transcript. Off by default; a
+   * flip re-inits the terminal with the flag.
+   */
+  cleanFeedEnabled?: boolean;
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
@@ -91,7 +99,7 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
  * out as 'input' and is written to the PTY (the one thing the phone sends);
  * pinch zoom adjusts the local font between 6 and 24 px.
  */
-export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.JSX.Element {
+export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
   const webViewRef = useRef<WebView>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
@@ -141,8 +149,9 @@ export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.
       rows: ptyDimensions ? ptyDimensions.rows : null,
       fontSizePx: fontSizePxRef.current,
       theme: buildXtermTheme(theme.terminalPalette, theme.colors),
+      cleanFeed: cleanFeedEnabled,
     });
-  }, [postToTerminal, sessionId, theme]);
+  }, [postToTerminal, sessionId, theme, cleanFeedEnabled]);
 
   const flushPendingChunks = useCallback(() => {
     const joinedData = pendingChunksRef.current.join('');
@@ -213,22 +222,25 @@ export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.
   // session): the WebView survives but its grid belongs to the dead session.
   // Drop anything queued and re-init from the NEW session's ring immediately;
   // waiting for a 'seed' event is not enough because the successor's seed may
-  // have landed while this pane was bound to the old session.
-  const previousSessionIdRef = useRef(sessionId);
+  // have landed while this pane was bound to the old session. A clean-feed
+  // flip re-inits the same way (the flag only takes effect at init).
+  const previousInitKeyRef = useRef(`${sessionId}:${cleanFeedEnabled}`);
   useEffect(() => {
-    if (previousSessionIdRef.current === sessionId) return;
-    previousSessionIdRef.current = sessionId;
+    const initKey = `${sessionId}:${cleanFeedEnabled}`;
+    if (previousInitKeyRef.current === initKey) return;
+    previousInitKeyRef.current = initKey;
     if (!terminalReady) return;
     pendingChunksRef.current = [];
     clearFlushTimer();
     postInit();
-  }, [sessionId, terminalReady, postInit, clearFlushTimer]);
+  }, [sessionId, cleanFeedEnabled, terminalReady, postInit, clearFlushTimer]);
 
-  // Drop this session's DECCKM state on unmount. There is nothing to release -
-  // the mirror never resized the PTY.
+  // Drop this session's DECCKM + reading-view state on unmount. There is
+  // nothing to release - the mirror never resized the PTY.
   useEffect(() => {
     return () => {
       useTerminalUiStore.getState().clearSession(sessionId);
+      useReadingViewStore.getState().clearSession(sessionId);
     };
   }, [sessionId]);
 
@@ -258,6 +270,10 @@ export function TerminalPane({ sessionId, isActive }: TerminalPaneProps): React.
         // fast path; a 'dom' report means WebGL was unavailable or its context
         // was lost. Logged for now; a future devtools surface can read it.
         console.log(`[terminal] renderer for ${sessionId}: ${message.renderer}`);
+        return;
+      }
+      if (message.type === 'clean-lines') {
+        useReadingViewStore.getState().applyCleanLines(sessionId, message.lines, message.reset);
         return;
       }
       // 'input': keys typed inside the xterm WebView go to the desktop PTY.

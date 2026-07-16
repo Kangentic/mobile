@@ -50,6 +50,9 @@ export interface MockDesktop {
 const MOCK_PROJECT = { id: 'mock-project', name: 'Mock Project' };
 const MOCK_SESSION_ID = 'mock-session-1';
 const MOCK_TASK_ID = 'mock-task-1';
+/** A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat reading-view fallback. */
+const MOCK_CODEX_SESSION_ID = 'mock-session-codex';
+const MOCK_CODEX_TASK_ID = 'mock-task-codex';
 const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
@@ -80,7 +83,35 @@ function initialTasks(): BoardTaskWire[] {
       created_at: nowIso,
       updated_at: nowIso,
     }),
+    boardTaskFixture({
+      id: MOCK_CODEX_TASK_ID,
+      display_id: 3,
+      title: 'Codex refactor (no structured transcript)',
+      description: 'Exercises the chat reading-view fallback.',
+      swimlane_id: 'lane-doing',
+      position: 1,
+      agent: 'codex',
+      session_id: MOCK_CODEX_SESSION_ID,
+      branch_name: 'feature/codex-refactor',
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
   ];
+}
+
+/** A codex-style fullscreen TUI frame: cursor-home + full rewrite each paint. */
+function codexTuiFrame(paintTick: number): string {
+  const spinnerGlyphs = ['|', '/', '-', '\\'];
+  const spinner = spinnerGlyphs[paintTick % spinnerGlyphs.length];
+  const statusLine = paintTick % 2 === 0 ? 'Refactoring src/billing/invoice.ts' : 'Running the affected tests';
+  return (
+    '\x1b[H\x1b[2J' +
+    'codex session (mock)\r\n' +
+    '╭────────────────────────╮\r\n' +
+    `${statusLine} ${spinner}\r\n` +
+    '╰────────────────────────╯\r\n' +
+    `files touched: ${3 + (paintTick % 4)} · tests: ${12 + paintTick}\r\n`
+  );
 }
 
 function mockColumns() {
@@ -167,6 +198,7 @@ export function createMockDesktop(): MockDesktop {
   // the desktop respawning a task's agent under a fresh id.
   let activeSessionId: string | null = MOCK_SESSION_ID;
   let respawnCounter = 1;
+  let codexStreamSubscribed = false;
 
   function emit(event: BridgeEvent): void {
     if (!peer.isEstablished) return;
@@ -310,8 +342,19 @@ export function createMockDesktop(): MockDesktop {
   function startFeed(): void {
     if (feedTimer) return;
     feedTimer = setInterval(() => {
-      if (!peer.isEstablished || !streamSubscribed || activeSessionId === null) return;
+      if (!peer.isEstablished) return;
       feedTick += 1;
+      // The codex session repaints its fullscreen TUI every other tick - the
+      // reading-view fallback's demo source.
+      if (codexStreamSubscribed && feedTick % 2 === 0) {
+        emit({
+          kind: 'terminal',
+          sessionId: MOCK_CODEX_SESSION_ID,
+          taskId: MOCK_CODEX_TASK_ID,
+          payload: { data: codexTuiFrame(feedTick / 2) },
+        });
+      }
+      if (!streamSubscribed || activeSessionId === null) return;
       emit({
         kind: 'terminal',
         sessionId: activeSessionId,
@@ -367,8 +410,26 @@ export function createMockDesktop(): MockDesktop {
       case 'read-stream': {
         const payload = parseCapabilityRequestPayload('read-stream', request.payload);
         if (payload.action === 'unsubscribe') {
-          streamSubscribed = false;
+          if (payload.sessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
+          else streamSubscribed = false;
           return ok(request);
+        }
+        if (payload.sessionId === MOCK_CODEX_SESSION_ID) {
+          if (payload.action === 'transcript-window') {
+            // No structured transcript: the loaded-but-empty window is what
+            // flips the phone's chat lens to the reading view.
+            return ok(request, { revision: 1, totalEntries: 0, startIndex: 0, entries: [] } as unknown as JsonValue);
+          }
+          codexStreamSubscribed = true;
+          startFeed();
+          const codexSnapshot: ReadStreamResponsePayload = {
+            scrollback: codexTuiFrame(0),
+            activity: { state: 'thinking', reason: { kind: 'turn-active' } },
+            usage: null,
+            awaitedPromptId: null,
+            ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+          };
+          return ok(request, codexSnapshot as unknown as JsonValue);
         }
         if (activeSessionId === null || payload.sessionId !== activeSessionId) {
           return failWith(request, `No such session: ${payload.sessionId}`);
