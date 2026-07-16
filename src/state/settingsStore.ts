@@ -2,12 +2,25 @@ import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 
 export type DictationMode = 'auto-send' | 'manual-send' | 'off';
+/**
+ * Background notification behavior: 'foreground-service' keeps the secure
+ * channel alive in the background with instant local alerts (plus remote
+ * push as the killed-app backstop); 'push-only' closes the channel on
+ * background and relies on remote push alone; 'off' disables both.
+ */
+export type BackgroundNotificationsMode = 'foreground-service' | 'push-only' | 'off';
 
 const DICTATION_MODE_STORAGE_KEY = 'settings.dictationMode';
 const SESSION_MODE_HINT_STORAGE_KEY = 'settings.hasSeenSessionModeHint';
+const HAPTICS_ENABLED_STORAGE_KEY = 'settings.hapticsEnabled';
+const BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY = 'settings.backgroundNotificationsMode';
 
 function isDictationMode(value: string | null): value is DictationMode {
   return value === 'auto-send' || value === 'manual-send' || value === 'off';
+}
+
+function isBackgroundNotificationsMode(value: string | null): value is BackgroundNotificationsMode {
+  return value === 'foreground-service' || value === 'push-only' || value === 'off';
 }
 
 interface SettingsStoreState {
@@ -15,10 +28,15 @@ interface SettingsStoreState {
   dictationMode: DictationMode;
   /** True once the one-time session mode-toggle tooltip has been dismissed. */
   hasSeenSessionModeHint: boolean;
+  /** Haptic feedback on meaningful actions (prompt answered, task moved, pairing succeeded). */
+  hapticsEnabled: boolean;
+  backgroundNotificationsMode: BackgroundNotificationsMode;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setDictationMode: (mode: DictationMode) => Promise<void>;
   markSessionModeHintSeen: () => Promise<void>;
+  setHapticsEnabled: (enabled: boolean) => Promise<void>;
+  setBackgroundNotificationsMode: (mode: BackgroundNotificationsMode) => Promise<void>;
 }
 
 /**
@@ -30,14 +48,24 @@ interface SettingsStoreState {
 export const useSettingsStore = create<SettingsStoreState>((set) => ({
   dictationMode: 'auto-send',
   hasSeenSessionModeHint: false,
+  hapticsEnabled: true,
+  backgroundNotificationsMode: 'foreground-service',
   hydrated: false,
 
   hydrate: async () => {
-    const storedDictationMode = await SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY);
-    const storedModeHintSeen = await SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY);
+    const [storedDictationMode, storedModeHintSeen, storedHapticsEnabled, storedBackgroundMode] = await Promise.all([
+      SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
+      SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
+      SecureStore.getItemAsync(HAPTICS_ENABLED_STORAGE_KEY),
+      SecureStore.getItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
+    ]);
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
       hasSeenSessionModeHint: storedModeHintSeen === 'true',
+      hapticsEnabled: storedHapticsEnabled !== 'false',
+      backgroundNotificationsMode: isBackgroundNotificationsMode(storedBackgroundMode)
+        ? storedBackgroundMode
+        : 'foreground-service',
       hydrated: true,
     });
   },
@@ -50,5 +78,15 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   markSessionModeHintSeen: async () => {
     set({ hasSeenSessionModeHint: true });
     await SecureStore.setItemAsync(SESSION_MODE_HINT_STORAGE_KEY, 'true');
+  },
+
+  setHapticsEnabled: async (enabled) => {
+    set({ hapticsEnabled: enabled });
+    await SecureStore.setItemAsync(HAPTICS_ENABLED_STORAGE_KEY, enabled ? 'true' : 'false');
+  },
+
+  setBackgroundNotificationsMode: async (mode) => {
+    set({ backgroundNotificationsMode: mode });
+    await SecureStore.setItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY, mode);
   },
 }));
