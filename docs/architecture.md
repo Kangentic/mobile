@@ -115,9 +115,10 @@ excluded desktop-side, and the protocol package's `BOARD_TOOL_READ_NAMES`/
 
 ```
 app/              # expo-router route wrappers (thin - render the src/screens/ implementation)
-  task/[taskId]   # full-screen task view; file-diff.tsx hosts the per-file diff on the stack
+  task/[taskId]/  # index = the Session view (terminal/chat lenses); changes = the diff
+                  #   destination; file-diff.tsx hosts the per-file diff on the stack
 src/
-  screens/        # TriageHome, Board, task/ (TaskScreen + Conversation/Terminal/Changes tabs),
+  screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen + lenses),
                   #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
   components/      # Design system + conversation/ cells and prompt cards, terminal/ pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells

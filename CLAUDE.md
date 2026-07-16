@@ -26,40 +26,46 @@ this tree and the rule `paths:` globs together.
 app.config.ts                 # Expo config; CNG - config plugins only, no checked-in native projects
 eas.json                      # EAS Build/Submit/Workflows profiles (development/preview/production)
 app/                           # expo-router route wrappers (thin - render the src/screens/ implementation)
-  _layout.tsx, (tabs)/         # root Stack + bottom Tabs (Home, Board); boots the connection lifecycle
-  task/[taskId].tsx             # full-screen task view (Conversation-terminal / Terminal / Changes)
-  file-diff.tsx                 # per-file unified diff, pushed over the task view
+  _layout.tsx, (tabs)/         # root Stack + bottom Tabs (Home, Board); boots connection + notifications + splash
+  task/[taskId]/               # index.tsx = the SESSION view (terminal/chat lenses); changes.tsx = the diff destination
+  file-diff.tsx                 # per-file unified diff, pushed over the changes screen
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen (OS deep-link routing of kangentic-pair:// is a later phase)
   settings.tsx, devices.tsx
-plugins/                      # Local Expo config plugins (NSE injection, keychain access group, notifee) - later phase
+assets/brand/                 # Synced identity rasters (icon/splash/adaptive) - scripts/syncBranding.mjs owns them
+plugins/                      # Local Expo config plugins (withAndroidPushService: notification permissions + FGS type)
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
-  screens/        # TriageHome, Board, task/ (TaskScreen + tab implementations), FileDiff,
-                  #   Pairing (Scan/Confirm), Settings, Devices
-  components/     # Design system primitives + conversation/ cells and prompt cards, terminal/
-                  #   xterm pane + quick keys, board/ move+create sheets, composer/, diff/ cells
+  screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
+                  #   input bar, ChatPane, ChangesScreen), FileDiff, Pairing (Scan/Confirm), Settings, Devices
+  components/     # Design system primitives + brand/ (Overseer, Brandmark, EmptyState), motion/
+                  #   (presets, Skeleton, PressScale), conversation/ cells and prompt cards, terminal/
+                  #   xterm pane + quick keys, board/ sheets (actions/move/create/edit), composer/, diff/ cells
+  brand/          # Generated brand data (brandmark XML, Overseer frames) - syncBranding.mjs owns them
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
-  connection/     # Lifecycle composer: AppState connect/dispose, bootstrap, store feed glue,
+  connection/     # Lifecycle composer: AppState connect/background policy, bootstrap, store feed glue,
                   #   the actions API screens call (accountless-core scoped), dev-only
                   #   mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
-  devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures -
-                  #   shared by tests/unit and the mock desktop
-  terminal/       # Pure liveTail PTY cleaner, key sequences, WebView bridge, generated xterm.html
+  devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures, and the
+                  #   dev-only inspect bridge (EXPO_PUBLIC_KANGENTIC_INSPECT) - shared by tests + rigs
+  terminal/       # Pure liveTail PTY cleaner, clean-feed differ, key sequences, WebView bridge,
+                  #   generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
-  notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
-  state/          # Zustand stores (activity/board/transcript/diff/channel/settings, all channel-fed,
-                  #   in-memory) + the non-Zustand terminalFeed PTY ring buffers
+  notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
+                  #   local notifier, foreground service, tap routing (Android display; iOS NSE later)
+  state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
+                  #   channel-fed, in-memory) + the non-Zustand terminalFeed PTY ring buffers
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
-  lib/            # Shared pure utilities (crypto polyfills)
+  lib/            # Shared pure utilities (crypto polyfills, haptics)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, devRig.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
+scripts/          # bash-guard.js, devRig.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
+                  #   mobileInspect.mjs, syncBranding.mjs + repo scripts
 ```
 
 ## Commands
@@ -111,7 +117,12 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   read-only four plus `register-push` (which only lets the desktop send the device encrypted
   notifications), and every write/control verb needs an explicit per-verb grant on the desktop.
   **There is no shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**
-- **Transcript-terminal rendering:** the primary session view renders the transcript styled as a
+- **Session view (two lenses):** a task's screen is one SESSION with a terminal/chat mode pill
+  in the input bar - Terminal (the raw mirror, the default) and Chat (the readable feed) - plus
+  a separate pushed Changes destination. Chat renders the structured transcript when the agent
+  has one, and degrades agent-agnostically to a cleaned live reading view derived from the
+  terminal (a headless xterm in the WebView) when it does not.
+- **Transcript-terminal rendering:** the chat lens renders the transcript styled as a
   terminal, reflowed to phone width, with `AskUserQuestion`/permission prompts as tappable
   cards; the in-progress turn streams token-by-token as a cleaned tail of the raw PTY feed
   (`src/terminal/liveTail.ts`), replaced when the next transcript revision lands. The raw
