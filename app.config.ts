@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ExpoConfig } from 'expo/config';
 
 /**
@@ -30,6 +32,13 @@ const config: ExpoConfig = {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
     },
+    // FCM config for remote push, picked up only once the developer drops
+    // google-services.json at the repo root (gitignored; see the Firebase
+    // section of docs/developer-guide.md). Builds stay green without it -
+    // remote push simply stays unverifiable until the file lands.
+    ...(existsSync(join(__dirname, 'google-services.json'))
+      ? { googleServicesFile: './google-services.json' }
+      : {}),
   },
   plugins: [
     'expo-router',
@@ -37,21 +46,36 @@ const config: ExpoConfig = {
     'expo-secure-store',
     'expo-font',
     'expo-asset',
-    // READY TO UNCOMMENT in the Stage 0 native batch, right after
-    // `npx expo install expo-splash-screen` lands in the one dev-client
-    // rebuild. It cannot go live earlier: a plugin entry for a not-yet-
-    // installed package fails config evaluation (verified with
-    // `npx expo config --type public`: PluginError "Failed to resolve plugin
-    // for module expo-splash-screen"), which would break `expo start`.
-    // [
-    //   'expo-splash-screen',
-    //   {
-    //     image: './assets/brand/splash-icon.png',
-    //     imageWidth: 200,
-    //     resizeMode: 'contain',
-    //     backgroundColor: BRAND_BACKGROUND_COLOR,
-    //   },
-    // ],
+    [
+      'expo-splash-screen',
+      {
+        image: './assets/brand/splash-icon.png',
+        imageWidth: 200,
+        resizeMode: 'contain',
+        backgroundColor: BRAND_BACKGROUND_COLOR,
+      },
+    ],
+    [
+      'expo-notifications',
+      {
+        // The small status-bar icon must be a white-on-transparent asset;
+        // the adaptive foreground doubles as a serviceable v1 (the OS masks
+        // and tints it). Revisit with a dedicated mono glyph later.
+        icon: './assets/brand/adaptive-icon-foreground.png',
+        color: BRAND_BACKGROUND_COLOR,
+      },
+    ],
+    [
+      'expo-build-properties',
+      {
+        android: {
+          // Notifee ships its core AAR inside the npm package; this is its
+          // documented Expo integration (no hand-edited android/, per CNG).
+          extraMavenRepos: ['../../node_modules/@notifee/react-native/android/libs'],
+        },
+      },
+    ],
+    './plugins/withAndroidPushService.ts',
     [
       'expo-camera',
       {
