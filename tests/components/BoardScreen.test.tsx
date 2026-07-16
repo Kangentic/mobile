@@ -212,6 +212,55 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-column-lane-doing-empty')).toBeTruthy();
   });
 
+  it('the header title switches the active project via the project sheet', () => {
+    useBoardStore.setState({
+      projects: [
+        { id: 'project-1', name: 'Alpha' },
+        { id: 'project-2', name: 'Beta' },
+      ],
+      boardsByProjectId: {
+        'project-1': {
+          columns: [column('lane-todo', 'To Do', 0)],
+          tasksById: {
+            'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, 'sess-1'),
+          },
+          backlog: [],
+          snapshotAt: 0,
+        },
+        'project-2': {
+          columns: [column('lane-review', 'Review', 0)],
+          tasksById: {
+            'task-2': baseTask('task-2', 'Ship the beta banner', 'lane-review', 0, 'sess-2'),
+          },
+          backlog: [],
+          snapshotAt: 0,
+        },
+      },
+      pendingMoves: [],
+    });
+
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('Alpha')).toBeTruthy();
+    expect(screen.queryByTestId('board-project-sheet')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('board-header-title'));
+    expect(screen.getByTestId('board-project-sheet')).toBeTruthy();
+    expect(screen.getByTestId('board-project-project-1')).toBeTruthy();
+    expect(screen.getByTestId('board-project-project-2')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('board-project-project-2'));
+
+    expect(screen.queryByTestId('board-project-sheet')).toBeNull();
+    expect(screen.getByTestId('board-column-lane-review')).toBeTruthy();
+    expect(screen.getByText('Ship the beta banner')).toBeTruthy();
+    expect(screen.queryByText('Fix the login bug')).toBeNull();
+  });
+
   it('shows the disconnected empty state when no boards are cached', () => {
     useBoardStore.setState({ projects: [], boardsByProjectId: {}, pendingMoves: [] });
     render(
