@@ -60,9 +60,9 @@ export function IconButton({
       ]}
     >
       {isFab ? (
-        // The fab glyph sits on the accent fill, so it uses the theme
-        // background color directly (same pattern as Button's primary label).
-        <Icon name={iconName} size={FAB_ICON_SIZE} style={{ color: theme.colors.background }} />
+        // The fab glyph sits on the accent fill, so it uses onAccent (same
+        // pattern as Button's primary label).
+        <Icon name={iconName} size={FAB_ICON_SIZE} style={{ color: theme.colors.onAccent }} />
       ) : (
         <Icon name={iconName} color="primary" />
       )}

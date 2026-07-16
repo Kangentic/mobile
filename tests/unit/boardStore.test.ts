@@ -4,10 +4,12 @@
  * selector the bootstrap keys on.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { ReadBoardProjectSummary } from '@kangentic/protocol';
 import {
   findTaskById,
   selectColumnsOrdered,
   selectLiveSessionIds,
+  selectProjectAccentColor,
   selectTasksForColumn,
   useBoardStore,
 } from '@/state/boardStore';
@@ -107,5 +109,54 @@ describe('boardStore', () => {
     useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
     expect(findTaskById(useBoardStore.getState(), 'task-2')?.projectId).toBe('project-1');
     expect(findTaskById(useBoardStore.getState(), 'task-ghost')).toBeNull();
+  });
+
+  describe('selectProjectAccentColor', () => {
+    // The protocol summary does not carry a color field yet (it ships as an
+    // additive field in a later release); these fixtures model both the
+    // current wire shape and the future one via intersection types.
+    const plainProject: ReadBoardProjectSummary = { id: 'project-plain', name: 'Plain' };
+    const coloredProject: ReadBoardProjectSummary & { color: string } = {
+      id: 'project-colored',
+      name: 'Colored',
+      color: '#5da9e0',
+    };
+    const alternateKeyProject: ReadBoardProjectSummary & { projectColor: string } = {
+      id: 'project-alternate',
+      name: 'Alternate',
+      projectColor: '#c792ea',
+    };
+    const nonStringColorProject: ReadBoardProjectSummary & { color: number } = {
+      id: 'project-nonstring',
+      name: 'NonString',
+      color: 42,
+    };
+    const emptyColorProject: ReadBoardProjectSummary & { color: string } = {
+      id: 'project-empty',
+      name: 'Empty',
+      color: '',
+    };
+
+    it('returns null for an unknown project or one without a color field', () => {
+      const state = { projects: [plainProject] };
+      expect(selectProjectAccentColor(state, 'project-missing')).toBeNull();
+      expect(selectProjectAccentColor(state, 'project-plain')).toBeNull();
+    });
+
+    it('passes through a string color field when the wire ships one', () => {
+      const state = { projects: [coloredProject] };
+      expect(selectProjectAccentColor(state, 'project-colored')).toBe('#5da9e0');
+    });
+
+    it('accepts the alternate projectColor key', () => {
+      const state = { projects: [alternateKeyProject] };
+      expect(selectProjectAccentColor(state, 'project-alternate')).toBe('#c792ea');
+    });
+
+    it('ignores non-string and empty color values', () => {
+      const state = { projects: [nonStringColorProject, emptyColorProject] };
+      expect(selectProjectAccentColor(state, 'project-nonstring')).toBeNull();
+      expect(selectProjectAccentColor(state, 'project-empty')).toBeNull();
+    });
   });
 });
