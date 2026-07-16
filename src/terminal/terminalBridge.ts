@@ -39,7 +39,9 @@ export type TerminalToHostMessage =
   /** DECCKM report: arrows need SS3 (application cursor mode) instead of CSI. */
   | { type: 'modes'; applicationCursorKeys: boolean }
   /** The glue changed the font size autonomously (fit-to-screen zoom); keeps the host's pinch base in sync. */
-  | { type: 'font-size'; fontSizePx: number };
+  | { type: 'font-size'; fontSizePx: number }
+  /** Which renderer backs the terminal: WebGL (GPU) or the DOM fallback. Observability for a degraded terminal. */
+  | { type: 'renderer'; renderer: 'webgl' | 'dom' };
 
 export function encodeHostMessage(message: HostToTerminalMessage): string {
   return JSON.stringify(message);
@@ -95,6 +97,9 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
   }
   if (parsedObject.type === 'font-size' && isFiniteNumber(parsedObject.fontSizePx)) {
     return { type: 'font-size', fontSizePx: parsedObject.fontSizePx };
+  }
+  if (parsedObject.type === 'renderer' && (parsedObject.renderer === 'webgl' || parsedObject.renderer === 'dom')) {
+    return { type: 'renderer', renderer: parsedObject.renderer };
   }
   return null;
 }

@@ -61,6 +61,13 @@ describe('terminal -> host round-trip', () => {
     const fontSize: TerminalToHostMessage = { type: 'font-size', fontSizePx: 7 };
     expect(decodeTerminalMessage(encodeTerminalMessage(fontSize))).toEqual(fontSize);
   });
+
+  it('round-trips a renderer report (webgl and dom)', () => {
+    const webgl: TerminalToHostMessage = { type: 'renderer', renderer: 'webgl' };
+    expect(decodeTerminalMessage(encodeTerminalMessage(webgl))).toEqual(webgl);
+    const dom: TerminalToHostMessage = { type: 'renderer', renderer: 'dom' };
+    expect(decodeTerminalMessage(encodeTerminalMessage(dom))).toEqual(dom);
+  });
 });
 
 describe('decodeTerminalMessage - malformed input', () => {
@@ -81,9 +88,11 @@ describe('decodeTerminalMessage - malformed input', () => {
     expect(decodeTerminalMessage('{"type":"input","data":7}')).toBeNull();
   });
 
-  it('returns null for malformed modes and font-size messages', () => {
+  it('returns null for malformed modes, font-size, and renderer messages', () => {
     expect(decodeTerminalMessage('{"type":"modes","applicationCursorKeys":"yes"}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"font-size","fontSizePx":"7"}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"renderer","renderer":"vulkan"}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"renderer"}')).toBeNull();
   });
 });
 
