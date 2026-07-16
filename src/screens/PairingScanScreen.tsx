@@ -23,6 +23,7 @@ const PAIRING_DEVICE_NAME = 'Kangentic Mobile';
 
 export function PairingScanScreen(): React.JSX.Element {
   const router = useRouter();
+  const theme = useTheme();
   const [permission, requestPermission] = useCameraPermissions();
   const [pastedLink, setPastedLink] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -67,7 +68,7 @@ export function PairingScanScreen(): React.JSX.Element {
   if (!permission.granted) {
     return (
       <Screen testID="pairing-scan-screen">
-        <Stack gap="lg" style={styles.centered}>
+        <Stack gap="lg" style={[styles.centered, { padding: theme.spacing.lg }]}>
           <Text variant="body" color="secondary">
             Camera access is needed to scan a desktop pairing code.
           </Text>
@@ -91,7 +92,7 @@ export function PairingScanScreen(): React.JSX.Element {
         barcodeScannerSettings={BARCODE_SCANNER_SETTINGS}
         onBarcodeScanned={isProcessing ? undefined : handleBarcodeScanned}
       />
-      <Stack gap="sm" style={styles.footer}>
+      <Stack gap="sm" style={{ padding: theme.spacing.lg }}>
         <PasteLinkFallback pastedLink={pastedLink} setPastedLink={setPastedLink} onSubmit={handleUri} />
         {errorMessage ? (
           <Text testID="pairing-scan-error" variant="caption" color="danger">
@@ -126,6 +127,7 @@ function PasteLinkFallback({ pastedLink, setPastedLink, onSubmit }: PasteLinkFal
           placeholderTextColor={theme.colors.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
+          keyboardAppearance="dark"
           style={{
             color: theme.colors.textPrimary,
             backgroundColor: theme.colors.surfaceRaised,
@@ -147,12 +149,8 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
   },
-  footer: {
-    padding: 16,
-  },
   centered: {
     flex: 1,
     justifyContent: 'center',
-    padding: 16,
   },
 });

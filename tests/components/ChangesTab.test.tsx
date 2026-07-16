@@ -118,4 +118,30 @@ describe('ChangesTab', () => {
     renderChangesTab(true);
     expect(screen.getByTestId('changes-refreshing')).toBeTruthy();
   });
+
+  it('shows the row skeleton while the file list is loading', () => {
+    useDiffStore.getState().reset();
+    renderChangesTab(true);
+    expect(screen.getByTestId('changes-skeleton')).toBeTruthy();
+    expect(screen.queryByTestId('changes-file-list')).toBeNull();
+  });
+
+  it('shows the Overseer empty state when there are no changes', () => {
+    useDiffStore.setState({
+      byTaskId: {
+        'task-1': {
+          scope: 'working',
+          fileList: { files: [], totalInsertions: 0, totalDeletions: 0 },
+          fileListStatus: 'idle',
+          contentByPath: {},
+          stale: false,
+        },
+      },
+    });
+    renderChangesTab(true);
+    expect(screen.getByTestId('changes-empty')).toBeTruthy();
+    expect(screen.getByText('No changes')).toBeTruthy();
+    // The mascot subtree is hidden from accessibility (decorative art).
+    expect(screen.getByTestId('changes-empty-overseer', { includeHiddenElements: true })).toBeTruthy();
+  });
 });

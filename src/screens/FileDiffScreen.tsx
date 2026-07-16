@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import type { ReadDiffScope } from '@kangentic/protocol';
-import { MonoText, Screen, Stack, Text, useTheme } from '@/components';
+import { MonoText, Screen, Skeleton, Stack, Text, useTheme } from '@/components';
 import { DiffLineCell } from '@/components/diff/DiffLineCell';
 import { buildUnifiedDiffLines, maxLineLength, type DiffLine } from '@/diff/diffLines';
 import { useDiffStore } from '@/state/diffStore';
@@ -14,6 +14,14 @@ const DIFF_CONTEXT_LINES = 3;
 const MONO_CHARACTER_WIDTH_PX = 7.2;
 /** Two line-number gutter columns (34px each) plus their padding. */
 const LINE_NUMBER_GUTTER_TOTAL_WIDTH_PX = 76;
+/**
+ * Varying widths (percent of the pane) for the loading skeleton's mono lines,
+ * shaped like a code diff rather than uniform bars. Fixed, not random, so the
+ * loading state never shimmers differently between visits.
+ */
+const LOADING_SKELETON_LINE_WIDTHS = ['92%', '68%', '80%', '44%', '74%', '58%', '86%', '38%', '70%', '62%', '50%', '78%'] as const;
+/** Skeleton bar height matching the 12px mono diff line. */
+const LOADING_SKELETON_LINE_HEIGHT = 12;
 
 function isReadDiffScope(value: string | undefined): value is ReadDiffScope {
   return value === 'working' || value === 'staged' || value === 'branch';
@@ -52,13 +60,27 @@ export function FileDiffScreen(): React.JSX.Element {
   );
 
   let body: React.JSX.Element;
-  if (content === null) {
+  if (content === null && fetchFailed) {
     body = (
       <Stack gap="sm" style={styles.centered}>
-        <Text variant="body" color={fetchFailed ? 'danger' : 'secondary'}>
-          {fetchFailed ? 'Could not load this diff' : 'Diff loading...'}
+        <Text variant="body" color="danger">
+          Could not load this diff
         </Text>
       </Stack>
+    );
+  } else if (content === null) {
+    body = (
+      <View
+        testID="file-diff-skeleton"
+        style={[
+          styles.flex,
+          { backgroundColor: theme.colors.codeBackground, padding: theme.spacing.md, gap: theme.spacing.sm },
+        ]}
+      >
+        {LOADING_SKELETON_LINE_WIDTHS.map((lineWidth, lineIndex) => (
+          <Skeleton key={`file-diff-skeleton-line-${lineIndex}`} width={lineWidth} height={LOADING_SKELETON_LINE_HEIGHT} />
+        ))}
+      </View>
     );
   } else if (lines.length === 0) {
     body = (

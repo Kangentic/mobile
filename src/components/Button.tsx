@@ -1,7 +1,8 @@
 import React from 'react';
-import { Pressable, StyleSheet, type GestureResponderEvent } from 'react-native';
+import { StyleSheet, type GestureResponderEvent } from 'react-native';
 import { useTheme } from './theme/ThemeProvider';
 import { Text } from './Text';
+import { PressScale } from './motion/PressScale';
 
 export type ButtonVariant = 'primary' | 'ghost' | 'danger';
 
@@ -20,14 +21,16 @@ export function Button({ label, onPress, testID, variant = 'primary', disabled =
   // accent and semantic fills; only the transparent ghost uses textPrimary.
   const textColor = variant === 'ghost' ? theme.colors.textPrimary : theme.colors.onAccent;
 
+  // Pressed depth comes from PressScale's scale transform; opacity only
+  // signals the disabled state.
   return (
-    <Pressable
+    <PressScale
       accessibilityRole="button"
       accessibilityState={{ disabled }}
       testID={testID}
       onPress={onPress}
       disabled={disabled}
-      style={({ pressed }) => [
+      style={[
         styles.base,
         {
           minHeight: theme.minTouchSize,
@@ -35,14 +38,14 @@ export function Button({ label, onPress, testID, variant = 'primary', disabled =
           paddingHorizontal: theme.spacing.lg,
           borderRadius: theme.radii.md,
           backgroundColor,
-          opacity: disabled ? 0.5 : pressed ? 0.8 : 1,
+          opacity: disabled ? 0.5 : 1,
         },
       ]}
     >
       <Text variant="bodyStrong" style={{ color: textColor }}>
         {label}
       </Text>
-    </Pressable>
+    </PressScale>
   );
 }
 

@@ -82,7 +82,7 @@ describe('FileDiffScreen', () => {
     });
   });
 
-  it('shows the loading state when no content is stored yet', () => {
+  it('shows the mono-line skeleton while no content is stored yet', () => {
     useDiffStore.getState().reset();
 
     render(
@@ -91,6 +91,7 @@ describe('FileDiffScreen', () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByText('Diff loading...')).toBeTruthy();
+    expect(screen.getByTestId('file-diff-skeleton')).toBeTruthy();
+    expect(screen.queryByTestId('file-diff-lines')).toBeNull();
   });
 });

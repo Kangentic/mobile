@@ -1,6 +1,17 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react-native';
+import * as Haptics from 'expo-haptics';
 import { ThemeProvider, SegmentedTabBar } from '@/components';
+
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn().mockResolvedValue(undefined),
+  notificationAsync: jest.fn().mockResolvedValue(undefined),
+  selectionAsync: jest.fn().mockResolvedValue(undefined),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
+}));
+
+const mockSelectionAsync = jest.mocked(Haptics.selectionAsync);
 
 const items = [
   { key: 'chat', label: 'Chat' },
@@ -9,6 +20,10 @@ const items = [
 ];
 
 describe('SegmentedTabBar', () => {
+  beforeEach(() => {
+    mockSelectionAsync.mockClear();
+  });
+
   it('renders every item with its label and per-item testID', () => {
     render(
       <ThemeProvider>
@@ -36,6 +51,23 @@ describe('SegmentedTabBar', () => {
 
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith('diff');
+  });
+
+  it('fires the modeToggled selection haptic only on an actual change', () => {
+    const onChange = jest.fn();
+    render(
+      <ThemeProvider>
+        <SegmentedTabBar items={items} activeKey="chat" onChange={onChange} testID="session-tabs" />
+      </ThemeProvider>,
+    );
+
+    fireEvent.press(screen.getByTestId('session-tabs-diff'));
+    expect(mockSelectionAsync).toHaveBeenCalledTimes(1);
+
+    // Re-tapping the already-active segment stays silent (but still notifies).
+    fireEvent.press(screen.getByTestId('session-tabs-chat'));
+    expect(mockSelectionAsync).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
   it('marks only the active item as selected', () => {

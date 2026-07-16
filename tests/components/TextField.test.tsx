@@ -27,4 +27,14 @@ describe('TextField', () => {
     expect(onChangeText).toHaveBeenCalledTimes(1);
     expect(onChangeText).toHaveBeenCalledWith('run the tests');
   });
+
+  it('defaults the iOS keyboard to the dark appearance', () => {
+    render(
+      <ThemeProvider>
+        <TextField testID="composer-input" />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('composer-input').props.keyboardAppearance).toBe('dark');
+  });
 });

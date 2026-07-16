@@ -1,8 +1,10 @@
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useChannelStore } from '@/state/channelStore';
 import { useTheme } from './theme/ThemeProvider';
 import { Text } from './Text';
+import { useMotionPresets } from './motion/presets';
 
 /**
  * Slim full-width channel-status bar. Hidden while the secure channel is fully
@@ -15,6 +17,7 @@ import { Text } from './Text';
  */
 export function ConnectionBanner(): React.JSX.Element | null {
   const theme = useTheme();
+  const motionPresets = useMotionPresets();
   const transportState = useChannelStore((state) => state.transportState);
   const established = useChannelStore((state) => state.established);
 
@@ -32,8 +35,10 @@ export function ConnectionBanner(): React.JSX.Element | null {
   const message = isConnecting ? 'Connecting to desktop...' : 'Offline - showing last known state';
 
   return (
-    <View
+    <Animated.View
       testID="connection-banner"
+      entering={motionPresets.bannerIn}
+      exiting={motionPresets.bannerOut}
       style={[
         styles.bar,
         {
@@ -46,7 +51,7 @@ export function ConnectionBanner(): React.JSX.Element | null {
       <Text variant="caption" style={{ color: theme.colors.onAccent }}>
         {message}
       </Text>
-    </View>
+    </Animated.View>
   );
 }
 

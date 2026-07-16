@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import * as Haptics from 'expo-haptics';
 import { ThemeProvider } from '@/components';
 import { PermissionPromptCard } from '@/components/conversation/PermissionPromptCard';
 import { answerPermissionPrompt } from '@/connection/actions';
@@ -9,7 +10,16 @@ jest.mock('@/connection/actions', () => ({
   answerPermissionPrompt: jest.fn(),
 }));
 
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn().mockResolvedValue(undefined),
+  notificationAsync: jest.fn().mockResolvedValue(undefined),
+  selectionAsync: jest.fn().mockResolvedValue(undefined),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
+}));
+
 const mockAnswerPermissionPrompt = jest.mocked(answerPermissionPrompt);
+const mockImpactAsync = jest.mocked(Haptics.impactAsync);
 
 const bashPrompt: PendingPromptDescriptor = {
   promptId: 'sess-1:tool-1',
@@ -31,6 +41,7 @@ describe('PermissionPromptCard', () => {
   beforeEach(() => {
     mockAnswerPermissionPrompt.mockReset();
     mockAnswerPermissionPrompt.mockResolvedValue(undefined);
+    mockImpactAsync.mockClear();
   });
 
   it('renders the full Bash command being approved', () => {
@@ -55,6 +66,20 @@ describe('PermissionPromptCard', () => {
     renderCard();
     fireEvent.press(screen.getByTestId('permission-deny'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '\u001b');
+  });
+
+  it('fires the promptAnswered haptic on approve', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('permission-approve'));
+    expect(mockImpactAsync).toHaveBeenCalledTimes(1);
+    expect(mockImpactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Medium);
+  });
+
+  it('fires the promptAnswered haptic on deny', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('permission-deny'));
+    expect(mockImpactAsync).toHaveBeenCalledTimes(1);
+    expect(mockImpactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Medium);
   });
 
   it('disables both buttons while the answer is pending', () => {

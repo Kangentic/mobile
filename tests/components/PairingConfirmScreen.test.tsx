@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react-native';
+import * as Haptics from 'expo-haptics';
 import { usePairingStore } from '@/state/pairingStore';
 import { PairingConfirmScreen } from '@/screens/PairingConfirmScreen';
 
@@ -16,6 +17,20 @@ jest.mock('@/connection/connectionManager', () => ({
 jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: jest.fn() }),
 }));
+
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn().mockResolvedValue(undefined),
+  notificationAsync: jest.fn().mockResolvedValue(undefined),
+  selectionAsync: jest.fn().mockResolvedValue(undefined),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
+}));
+
+const mockNotificationAsync = jest.mocked(Haptics.notificationAsync);
+
+// The Overseer subtree is hidden from accessibility (decorative art), which
+// also hides it from default RNTL queries.
+const HIDDEN = { includeHiddenElements: true } as const;
 
 describe('PairingConfirmScreen', () => {
   beforeEach(() => {
@@ -67,6 +82,38 @@ describe('PairingConfirmScreen', () => {
     fireEvent.press(screen.getByTestId('sas-reject'));
 
     expect(rejectActivePairing).toHaveBeenCalledTimes(1);
+    // Rejecting is the destructive confirm: warning haptic.
+    expect(mockNotificationAsync).toHaveBeenCalledWith(Haptics.NotificationFeedbackType.Warning);
+  });
+
+  it('fires the pairingSucceeded haptic once the accept completes', async () => {
+    usePairingStore.getState().setMachineState({
+      status: 'awaiting-sas',
+      sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
+    });
+
+    render(<PairingConfirmScreen />);
+    fireEvent.press(screen.getByTestId('sas-accept'));
+
+    await waitFor(() => expect(mockNotificationAsync).toHaveBeenCalledWith(Haptics.NotificationFeedbackType.Success));
+  });
+
+  it('shows the blinking Overseer while connecting', () => {
+    usePairingStore.getState().setMachineState({ status: 'connecting' });
+
+    render(<PairingConfirmScreen />);
+
+    expect(screen.getByText('Connecting to the desktop...')).toBeTruthy();
+    expect(screen.getByTestId('pairing-connecting-overseer', HIDDEN)).toBeTruthy();
+  });
+
+  it('shows the waving Overseer on the paired success state', () => {
+    usePairingStore.getState().setMachineState({ status: 'paired' });
+
+    render(<PairingConfirmScreen />);
+
+    expect(screen.getByText('Pairing complete.')).toBeTruthy();
+    expect(screen.getByTestId('pairing-success-overseer', HIDDEN)).toBeTruthy();
   });
 
   it('shows the error message and no SAS controls on a handshake failure', () => {

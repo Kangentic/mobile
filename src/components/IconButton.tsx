@@ -1,7 +1,8 @@
 import React from 'react';
-import { Pressable, StyleSheet, type GestureResponderEvent } from 'react-native';
+import { StyleSheet, type GestureResponderEvent } from 'react-native';
 import { useTheme } from './theme/ThemeProvider';
 import { Icon, type IconProps } from './Icon';
+import { PressScale } from './motion/PressScale';
 
 export type IconButtonVariant = 'plain' | 'fab';
 
@@ -33,20 +34,22 @@ export function IconButton({
   const isFab = variant === 'fab';
   const fabDiameter = theme.minTouchSize + theme.spacing.md;
 
+  // Pressed depth comes from PressScale's scale transform; opacity only
+  // signals the disabled state.
   return (
-    <Pressable
+    <PressScale
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled }}
       testID={testID}
       onPress={onPress}
       disabled={disabled}
-      style={({ pressed }) => [
+      style={[
         styles.base,
         {
           minHeight: theme.minTouchSize,
           minWidth: theme.minTouchSize,
-          opacity: disabled ? 0.5 : pressed ? 0.7 : 1,
+          opacity: disabled ? 0.5 : 1,
         },
         isFab && [
           styles.fabShadow,
@@ -66,7 +69,7 @@ export function IconButton({
       ) : (
         <Icon name={iconName} color="primary" />
       )}
-    </Pressable>
+    </PressScale>
   );
 }
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { triggerHaptic } from '@/lib/haptics';
 import { useTheme } from './theme/ThemeProvider';
 import { MonoText } from './MonoText';
 import { Badge } from './Badge';
@@ -39,7 +40,12 @@ export function SegmentedTabBar({ items, activeKey, onChange, testID, compact = 
             testID={`${testID}-${item.key}`}
             accessibilityRole="tab"
             accessibilityState={{ selected: isActive }}
-            onPress={() => onChange(item.key)}
+            onPress={() => {
+              // Selection-changed haptic only on an actual change; re-tapping
+              // the active segment stays silent.
+              if (!isActive) triggerHaptic('modeToggled');
+              onChange(item.key);
+            }}
             style={({ pressed }) => [
               styles.segment,
               {

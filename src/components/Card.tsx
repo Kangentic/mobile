@@ -1,7 +1,8 @@
 import React from 'react';
-import { Pressable, StyleSheet, View, type GestureResponderEvent, type ViewProps } from 'react-native';
+import { StyleSheet, View, type GestureResponderEvent, type ViewProps } from 'react-native';
 import { useTheme } from './theme/ThemeProvider';
 import type { Theme } from './theme/tokens';
+import { PressScale } from './motion/PressScale';
 
 interface CardBaseProps extends ViewProps {
   children: React.ReactNode;
@@ -32,16 +33,18 @@ export function Card({ children, style, onPress, onLongPress, ...rest }: CardPro
   const surfaceStyle = surfaceStyleForTheme(theme);
 
   if (onPress !== undefined || onLongPress !== undefined) {
+    // Pressed depth comes from PressScale's scale transform (the design
+    // system's one pressed-state signal), not an opacity dim.
     return (
-      <Pressable
+      <PressScale
         accessibilityRole="button"
         onPress={onPress}
         onLongPress={onLongPress}
-        style={({ pressed }) => [styles.base, surfaceStyle, { opacity: pressed ? 0.7 : 1 }, style]}
+        style={[styles.base, surfaceStyle, style]}
         {...rest}
       >
         {children}
-      </Pressable>
+      </PressScale>
     );
   }
 
