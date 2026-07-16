@@ -172,6 +172,15 @@ export function selectTriageRows(state: { bySessionId: Record<string, SessionAct
     section,
     entries: entries
       .filter((entry) => sectionForEntry(entry) === section)
-      .sort((first, second) => second.lastEventAt - first.lastEventAt),
+      .sort((first, second) => {
+        // Within Idle, unread sessions surface first (finished work the user
+        // has not seen outranks quiet idles); recency breaks ties everywhere.
+        if (section === 'idle') {
+          const firstHasUnread = first.unreadCount > 0 ? 1 : 0;
+          const secondHasUnread = second.unreadCount > 0 ? 1 : 0;
+          if (firstHasUnread !== secondHasUnread) return secondHasUnread - firstHasUnread;
+        }
+        return second.lastEventAt - first.lastEventAt;
+      }),
   }));
 }

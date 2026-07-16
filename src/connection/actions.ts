@@ -1,4 +1,5 @@
 import type { JsonValue, ReadDiffScope } from '@kangentic/protocol';
+import { findAwaitedToolUse, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
@@ -138,6 +139,29 @@ export function closeSessionScreen(sessionId: string): void {
   // (raw PTY bytes are the heavy part).
   releaseTerminal(sessionId);
   useActivityStore.getState().markRead(sessionId);
+}
+
+/** How many newest transcript entries a prompt peek scans; the awaited tool_use is almost always in the last one. */
+const PROMPT_PEEK_WINDOW = 12;
+const PROMPT_PEEK_CACHE_CAP = 100;
+const awaitedPromptPeekCache = new Map<string, AwaitedToolUse | null>();
+
+/**
+ * One-shot lookup of the awaited prompt's tool_use for a session the Home
+ * feed is NOT retaining a transcript for: fetches a small newest window
+ * directly (no store writes) and caches by promptId so a list re-render
+ * never refetches. The needs-you card renders a generic Approve/Deny
+ * immediately (answering needs only the promptId) and upgrades when this
+ * resolves.
+ */
+export async function peekAwaitedPrompt(sessionId: string, awaitedPromptId: string): Promise<AwaitedToolUse | null> {
+  const cached = awaitedPromptPeekCache.get(awaitedPromptId);
+  if (cached !== undefined) return cached;
+  const transcriptWindow = await requireVerbClient().readTranscriptWindow(sessionId, { limit: PROMPT_PEEK_WINDOW });
+  const awaitedToolUse = findAwaitedToolUse(transcriptWindow.entries, sessionId, awaitedPromptId);
+  if (awaitedPromptPeekCache.size >= PROMPT_PEEK_CACHE_CAP) awaitedPromptPeekCache.clear();
+  awaitedPromptPeekCache.set(awaitedPromptId, awaitedToolUse);
+  return awaitedToolUse;
 }
 
 /** Pull-to-refresh: re-run the bootstrap (re-subscribes replace desktop-side, so this is snapshot refresh everywhere). */

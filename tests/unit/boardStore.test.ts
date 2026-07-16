@@ -112,11 +112,12 @@ describe('boardStore', () => {
   });
 
   describe('selectProjectAccentColor', () => {
-    // The protocol summary does not carry a color field yet (it ships as an
-    // additive field in a later release); these fixtures model both the
-    // current wire shape and the future one via intersection types.
+    // protocol 0.5.0 ships `color?: string` on the summary; the selector
+    // still narrows defensively (an older desktop, or hostile wire data,
+    // must pass through as null rather than crash - hence the unsafe-cast
+    // fixtures below modeling shapes the type forbids).
     const plainProject: ReadBoardProjectSummary = { id: 'project-plain', name: 'Plain' };
-    const coloredProject: ReadBoardProjectSummary & { color: string } = {
+    const coloredProject: ReadBoardProjectSummary = {
       id: 'project-colored',
       name: 'Colored',
       color: '#5da9e0',
@@ -126,12 +127,12 @@ describe('boardStore', () => {
       name: 'Alternate',
       projectColor: '#c792ea',
     };
-    const nonStringColorProject: ReadBoardProjectSummary & { color: number } = {
+    const nonStringColorProject = {
       id: 'project-nonstring',
       name: 'NonString',
       color: 42,
-    };
-    const emptyColorProject: ReadBoardProjectSummary & { color: string } = {
+    } as unknown as ReadBoardProjectSummary;
+    const emptyColorProject: ReadBoardProjectSummary = {
       id: 'project-empty',
       name: 'Empty',
       color: '',

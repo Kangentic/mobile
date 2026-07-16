@@ -11,8 +11,11 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
 }));
 
+const mockPeekAwaitedPrompt = jest.fn();
 jest.mock('@/connection/actions', () => ({
   refreshSnapshots: jest.fn().mockResolvedValue(undefined),
+  peekAwaitedPrompt: (sessionId: string, promptId: string) => mockPeekAwaitedPrompt(sessionId, promptId),
+  answerPermissionPrompt: jest.fn().mockResolvedValue(undefined),
 }));
 
 function seedStores(): void {
@@ -62,45 +65,45 @@ function seedStores(): void {
   });
 }
 
+function renderHome(): void {
+  render(
+    <ThemeProvider>
+      <TriageHomeScreen />
+    </ThemeProvider>,
+  );
+}
+
 describe('TriageHomeScreen', () => {
   beforeEach(() => {
     mockPush.mockClear();
+    mockPeekAwaitedPrompt.mockReset();
+    mockPeekAwaitedPrompt.mockResolvedValue(null);
     seedStores();
   });
 
-  it('renders the three triage sections', () => {
-    render(
-      <ThemeProvider>
-        <TriageHomeScreen />
-      </ThemeProvider>,
-    );
+  it('renders only non-empty sections (attention leads the feed)', () => {
+    renderHome();
     expect(screen.getByText('Needs you')).toBeTruthy();
-    expect(screen.getByText('Working')).toBeTruthy();
-    expect(screen.getByText('Idle')).toBeTruthy();
+    expect(screen.queryByText('Working')).toBeNull();
+    expect(screen.queryByText('Idle')).toBeNull();
   });
 
-  it('renders a needs-you card from live store state and navigates on tap', () => {
-    render(
-      <ThemeProvider>
-        <TriageHomeScreen />
-      </ThemeProvider>,
-    );
+  it('renders an inline-answerable needs-you card and navigates to chat on body tap', async () => {
+    renderHome();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
-    expect(screen.getByText('Waiting for your approval')).toBeTruthy();
+    expect(await screen.findByText('Waiting for your approval')).toBeTruthy();
+    // The embedded prompt card answers inline without leaving Home.
+    expect(screen.getByTestId('permission-approve')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('activity-row-sess-1'));
+    fireEvent.press(screen.getByTestId('needs-you-card-sess-1'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/task/[taskId]',
-      params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1' },
+      params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1', mode: 'chat' },
     });
   });
 
   it('reacts to store changes (a session moving sections re-renders)', () => {
-    render(
-      <ThemeProvider>
-        <TriageHomeScreen />
-      </ThemeProvider>,
-    );
+    renderHome();
     expect(screen.getByText('Waiting for your approval')).toBeTruthy();
 
     act(() => {
@@ -112,15 +115,18 @@ describe('TriageHomeScreen', () => {
       });
     });
     expect(screen.getByText('Running Bash')).toBeTruthy();
+    expect(screen.getByText('Working')).toBeTruthy();
+  });
+
+  it('shows the all-quiet state when connected with no sessions', () => {
+    useActivityStore.getState().reset();
+    renderHome();
+    expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
   });
 
   it('shows the pairing CTA when unpaired', () => {
     useChannelStore.setState({ pairedState: 'unpaired' });
-    render(
-      <ThemeProvider>
-        <TriageHomeScreen />
-      </ThemeProvider>,
-    );
+    renderHome();
     expect(screen.getByTestId('triage-pair-cta')).toBeTruthy();
   });
 });
