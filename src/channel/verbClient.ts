@@ -20,6 +20,8 @@ import {
   type ReadDiffScope,
   type ReadStreamRequestPayload,
   type ReadStreamResponsePayload,
+  type RegisterPushRequestPayload,
+  type RegisterPushResponsePayload,
   type SendUserMessageRequestPayload,
   type SendUserMessageResponsePayload,
   type TranscriptWindowResponsePayload,
@@ -188,6 +190,15 @@ export class VerbClient {
     return this.parsePayload('interactive-terminal', response, (value) => {
       if (!isRecord(value) || typeof value.written !== 'boolean') throw new Error('interactive-terminal response is missing "written"');
       return { written: value.written };
+    });
+  }
+
+  /** Registers (or unregisters) this device for E2E-encrypted push; see src/notifications/pushRegistration.ts. */
+  async registerPush(payload: RegisterPushRequestPayload): Promise<RegisterPushResponsePayload> {
+    const response = await this.requireOk('register-push', asRequestJson(payload));
+    return this.parsePayload('register-push', response, (value) => {
+      if (!isRecord(value) || typeof value.registered !== 'boolean') throw new Error('register-push response is missing "registered"');
+      return { registered: value.registered };
     });
   }
 

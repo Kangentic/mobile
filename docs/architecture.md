@@ -98,6 +98,7 @@ decides *what* it may do:
 | `interactive-terminal` | Raw keystroke write to the session PTY (full terminal parity) |
 | `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...) |
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
+| `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (in the DEFAULT pairing grant: it only lets the desktop send the device ciphertext) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
@@ -129,7 +130,8 @@ src/
   terminal/        # Pure liveTail PTY cleaner, key sequences, WebView bridge protocol,
                   #   the generated self-contained xterm.html asset
   diff/            # Pure unified-diff line computation (jsdiff) + path display helpers
-  notifications/   # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
+  notifications/   # Push registration, E2E blob decrypt, notifee channels, local notifier,
+                  #   foreground service, background push task, tap routing (Android; iOS NSE later)
   state/           # Zustand stores (activity/board/transcript/diff/channel/settings) +
                   #   the non-Zustand terminalFeed PTY ring buffers
   voice/           # Dictation hook over the OS speech engines
@@ -154,7 +156,10 @@ conversation keeps scroll position; tab switching is tap-only.
 
 The connection lifecycle (`src/connection/connectionManager.ts`) connects while the app is
 foregrounded and paired, and disposes on background: iOS suspends sockets within seconds
-anyway, and background awareness is Phase 3's push notifications. Reconnects re-subscribe and
+anyway, and remote E2E push covers the away-from-app case. The one exception is Android with
+`backgroundNotificationsMode: 'foreground-service'` (the default): with an established
+connection, backgrounding keeps the channel alive under a notifee foreground service and starts
+the local notifier instead of disposing. Reconnects re-subscribe and
 re-snapshot everything (the wire has no cursors by design); the triage home follows board
 snapshots - every task with a non-null `session_id` gets a `read-stream` subscription, and
 terminal bytes for sessions not open on screen are dropped at the phone's buffer boundary.
@@ -212,14 +217,31 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
 4. Presence suppression: when the app is foregrounded with the channel up, the desktop notifies
    over the socket and skips the push.
 
+Phone side (`src/notifications/`; DISPLAY is Android-only in this phase, while registration is
+deliberately platform-agnostic - an iOS device registers its key/token ahead of the NSE shipping,
+and its pushes safely degrade to the generic placeholder until then): the 32-byte push key is
+generated on-device and exchanged via the `register-push` verb on every established bootstrap
+(`pushRegistration.ts` - idempotent, re-sent on Expo token rotation, and non-fatal without FCM
+credentials or against an older desktop; `getPushRegistrationStatus()` feeds the Settings UI).
+`pushDecrypt.ts` opens envelopes with the phone's static public key as the AAD and maps the four
+categories (permission-needed / agent-question / turn-complete / session-failed) onto three
+notifee channels (needs-attention / completions / failures); any failure degrades to the generic
+placeholder. Killed-app data messages run through a headless expo-notifications background task
+(`backgroundPushTask.ts`, registered from `index.js` outside React). While backgrounded in
+foreground-service mode, `localNotifier.ts` turns activity-store transitions into the same
+notifications locally (30s per-session-per-kind cooldown, suppressed while foregrounded), and
+`foregroundService.ts` owns the ongoing LOW-importance connection notification. Taps route to
+the task screen via `tapRouter.ts`.
+
 ## Later phases (future, not built yet)
 
 - **WebRTC data channel upgrade**: direct P2P for the majority of network pairs, with signaling
   over the already-secure channel and DTLS fingerprints pinned at pairing time. The relay
   remains the permanent fallback.
 - **Tailscale "bring your own network"** detection for users who already run a tailnet.
-- **Android foreground-service local mode**: an opt-in mode that holds a socket open in the
-  background (iOS cannot do this; see `docs/security.md`'s notification discussion).
+- **iOS Notification Service Extension**: the on-device decrypt path for APNs pushes (the
+  Android half of the pipeline above is built; iOS cannot hold a background socket, so it
+  relies entirely on remote push).
 
 ## See Also
 

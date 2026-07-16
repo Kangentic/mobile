@@ -105,11 +105,12 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   initiates the KK handshake and owns the ~2 minute rekey timer; the phone is the responder.
   Version negotiation is bound into the prologue to close downgrade attacks.
 - **Capability allowlist:** the channel proves which device is connected; a desktop-enforced
-  allowlist decides what it may do. Nine verbs (`read-stream`, `read-board`, `read-diff`,
+  allowlist decides what it may do. Ten verbs (`read-stream`, `read-board`, `read-diff`,
   `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
-  `board-tool-read`, `board-tool-write`); the default pairing grant is the read-only four, and
-  every write/control verb needs an explicit per-verb grant on the desktop. **There is no
-  shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**
+  `board-tool-read`, `board-tool-write`, `register-push`); the default pairing grant is the
+  read-only four plus `register-push` (which only lets the desktop send the device encrypted
+  notifications), and every write/control verb needs an explicit per-verb grant on the desktop.
+  **There is no shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**
 - **Transcript-terminal rendering:** the primary session view renders the transcript styled as a
   terminal, reflowed to phone width, with `AskUserQuestion`/permission prompts as tappable
   cards; the in-progress turn streams token-by-token as a cleaned tail of the raw PTY feed

@@ -1,10 +1,19 @@
-import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { ChannelController, SubscriptionManager, type VerbClient } from '@/channel';
 import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
+import { setActivePushIdentityPublicKey } from '@/notifications/pushIdentity';
 import { useChannelStore } from '@/state/channelStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { bindFeedToStores, createSnapshotSinks } from './storeFeed';
 import { runBootstrap } from './bootstrap';
+
+// The notifee-backed notification modules (foreground service, local
+// notifier, push registration) load lazily: notifee throws at import time
+// when its native module is absent (Jest component tests reach this file
+// through actions.ts), and the lifecycle only needs them at established/
+// background time anyway. pushIdentity stays static - it is pure TS over
+// the already-imported device identity.
 
 /**
  * The app's one connection lifecycle owner, a module-level singleton
@@ -13,11 +22,16 @@ import { runBootstrap } from './bootstrap';
  * Screens read channelStore (which this feeds) and call actions.ts (which
  * reads the active connection from here).
  *
- * Lifecycle policy: connect while the app is foregrounded and paired;
- * dispose immediately on background (iOS suspends the socket within
- * seconds anyway, the desktop treats a vanished phone fine - relay close
- * tears its subscriptions down - and background awareness is Phase 3's
- * push notifications). iOS 'inactive' (app switcher, permission dialogs)
+ * Lifecycle policy: connect while the app is foregrounded and paired.
+ * On background it depends on settings: with backgroundNotificationsMode
+ * 'foreground-service' (Android only) and an established connection, the
+ * channel stays alive under a notifee foreground service and the local
+ * notifier turns activity transitions into notifications; in every other
+ * case ('push-only', 'off', iOS, or no established connection) the
+ * connection is disposed immediately as before (iOS suspends the socket
+ * within seconds anyway, the desktop treats a vanished phone fine - relay
+ * close tears its subscriptions down - and remote E2E push covers the
+ * away-from-app case). iOS 'inactive' (app switcher, permission dialogs)
  * counts as still-active.
  *
  * This module composes pairing (trust anchor), channel, and stores, so it
@@ -100,6 +114,9 @@ async function openConnection(): Promise<void> {
   }
   useChannelStore.getState().setPairedState('paired');
   const identity = mockDesktop ? mockDesktop.identity : devPairing ? devPairing.identity : await deviceIdentityManager.getIdentity();
+  // The AAD every push envelope is sealed against - whichever identity
+  // this connection actually pairs under (mock/dev identities included).
+  setActivePushIdentityPublicKey(identity.publicKey);
   // A background/dispose (or a second open) raced our secure-store reads.
   if (generation !== connectGeneration || activeConnection) {
     mockDesktop?.dispose();
@@ -144,6 +161,16 @@ async function openConnection(): Promise<void> {
       // Bootstrap failures (a request timing out mid-rekey) self-heal on
       // the next established handshake; the stores keep their last state.
     });
+    // Fire-and-forget push registration on every established handshake
+    // (idempotent; re-hits the wire only on first run or token rotation).
+    // Never fatal: registerPushWithDesktop records a status instead.
+    if (useSettingsStore.getState().backgroundNotificationsMode !== 'off') {
+      void import('@/notifications/pushRegistration')
+        .then(({ registerPushWithDesktop }) => registerPushWithDesktop(controller.verbs))
+        .catch(() => {
+          // Registration is best-effort; the status surface stays 'pending'.
+        });
+    }
   });
 
   useChannelStore.getState().setRelayUrl(anchor.relayAddress);
@@ -175,11 +202,62 @@ function closeConnection(): void {
   useChannelStore.getState().reset();
 }
 
+let stopLocalNotifier: (() => void) | null = null;
+let backgroundKeepaliveActive = false;
+let keepaliveGeneration = 0;
+
+/** Foreground service + local notifier while backgrounded with the channel alive (Android, mode 'foreground-service'). */
+function startBackgroundKeepalive(): void {
+  if (backgroundKeepaliveActive) return;
+  backgroundKeepaliveActive = true;
+  keepaliveGeneration += 1;
+  const generation = keepaliveGeneration;
+  void import('@/notifications/foregroundService')
+    .then(({ startConnectedForegroundService }) => {
+      // A foreground bounce can beat the import; never start a stale service.
+      if (generation !== keepaliveGeneration) return;
+      return startConnectedForegroundService();
+    })
+    .catch(() => {
+      // The service notification failing to post (permission denied) leaves
+      // a plain background socket; the OS may reap it sooner, nothing worse.
+    });
+  void import('@/notifications/localNotifier')
+    .then(({ startLocalNotifier }) => {
+      if (generation !== keepaliveGeneration) return;
+      stopLocalNotifier = startLocalNotifier();
+    })
+    .catch(() => {
+      // Without the notifier the channel still stays alive; store state
+      // simply surfaces on the next foreground instead.
+    });
+}
+
+function stopBackgroundKeepalive(): void {
+  if (!backgroundKeepaliveActive) return;
+  backgroundKeepaliveActive = false;
+  keepaliveGeneration += 1;
+  stopLocalNotifier?.();
+  stopLocalNotifier = null;
+  void import('@/notifications/foregroundService')
+    .then(({ stopConnectedForegroundService }) => stopConnectedForegroundService())
+    .catch(() => {
+      // Already stopped or never started; nothing to clean up.
+    });
+}
+
 function onAppStateChange(status: AppStateStatus): void {
   if (status === 'active') {
+    stopBackgroundKeepalive();
     void openConnection();
   } else if (status === 'background') {
-    closeConnection();
+    const backgroundMode = useSettingsStore.getState().backgroundNotificationsMode;
+    const hasEstablishedConnection = activeConnection?.controller.session.isEstablished === true;
+    if (Platform.OS === 'android' && backgroundMode === 'foreground-service' && hasEstablishedConnection) {
+      startBackgroundKeepalive();
+    } else {
+      closeConnection();
+    }
   }
   // 'inactive' (iOS app switcher / permission dialog) is still-active.
 }
@@ -200,6 +278,7 @@ export function startConnectionLifecycle(): void {
 export function stopConnectionLifecycle(): void {
   appStateSubscription?.remove();
   appStateSubscription = null;
+  stopBackgroundKeepalive();
   closeConnection();
 }
 
