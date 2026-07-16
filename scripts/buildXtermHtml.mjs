@@ -282,7 +282,7 @@ const bridgeGlue = `
       var bufferLine = activeBuffer.getLine(lineIndex);
       frameLines.push(bufferLine ? bufferLine.translateToString(true) : '');
     }
-    return frameLines.join('\n');
+    return frameLines.join('\\n');
   }
 
   function cleanFeedWrite(data) {
