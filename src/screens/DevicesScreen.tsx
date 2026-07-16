@@ -54,8 +54,7 @@ export function DevicesScreen(): React.JSX.Element {
   return (
     <Screen testID="devices-screen">
       <Stack gap="md" style={{ padding: theme.spacing.lg }}>
-        <Text variant="heading">Paired devices</Text>
-
+        {/* The native stack header already titles this screen. */}
         {pairedInfo.status === 'loading' ? (
           <Text variant="body" color="secondary">
             Loading...

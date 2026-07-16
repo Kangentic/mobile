@@ -91,8 +91,7 @@ export function SettingsScreen(): React.JSX.Element {
   return (
     <Screen testID="settings-screen">
       <Stack gap="md" style={{ padding: theme.spacing.lg }}>
-        <Text variant="heading">Settings</Text>
-
+        {/* The native stack header already titles this screen. */}
         <Text variant="title">Connection</Text>
         <Stack gap="xs">
           <Row gap="sm" style={styles.connectionRow}>
@@ -122,7 +121,7 @@ export function SettingsScreen(): React.JSX.Element {
             </Text>
             <Icon name="chevron-forward" color="secondary" size={16} />
           </Pressable>
-          <Button testID="settings-pair-device" label="Pair a device" variant="ghost" onPress={() => router.push('/pair')} />
+          <Button testID="settings-pair-device" label="Pair a device" onPress={() => router.push('/pair')} />
         </Stack>
 
         <Text variant="title">Notifications</Text>

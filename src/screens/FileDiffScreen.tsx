@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { Stack as RouterStack, useLocalSearchParams } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import type { ReadDiffScope } from '@kangentic/protocol';
 import { MonoText, Screen, Skeleton, Stack, Text, useTheme } from '@/components';
@@ -106,8 +106,12 @@ export function FileDiffScreen(): React.JSX.Element {
     );
   }
 
+  // The header names the file; the banner keeps the full repo-relative path.
+  const fileName = filePath.split('/').pop() ?? filePath;
+
   return (
     <Screen testID="file-diff-screen">
+      <RouterStack.Screen options={{ title: fileName.length > 0 ? fileName : 'Changes' }} />
       <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
         <MonoText size="caption" color="secondary" numberOfLines={1} testID="file-diff-path">
           {filePath}
