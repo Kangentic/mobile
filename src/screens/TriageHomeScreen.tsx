@@ -13,6 +13,8 @@ import {
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { refreshSnapshots } from '@/connection/actions';
+import { AllQuietEmptyState } from './home/AllQuietEmptyState';
+import { NeedsYouCard } from './home/NeedsYouCard';
 
 type TriageListRow =
   | { kind: 'section-header'; section: TriageSection; title: string }
@@ -53,6 +55,9 @@ export function TriageHomeScreen(): React.JSX.Element {
   const rows = useMemo<TriageListRow[]>(() => {
     const sections = selectTriageRows({ bySessionId });
     return sections.flatMap((section) => {
+      // Empty sections render nothing: the feed leads with what matters
+      // instead of three headers over blank space.
+      if (section.entries.length === 0) return [];
       const header: TriageListRow = { kind: 'section-header', section: section.section, title: SECTION_TITLES[section.section] };
       const activityRows: TriageListRow[] = section.entries.map((entry) => ({ kind: 'activity', entry }));
       return [header, ...activityRows];
@@ -66,10 +71,21 @@ export function TriageHomeScreen(): React.JSX.Element {
       .finally(() => setRefreshing(false));
   }, []);
 
+  const established = useChannelStore((state) => state.established);
+
   if (pairedState === 'unpaired') {
     return (
       <Screen>
         <UnpairedEmptyState />
+      </Screen>
+    );
+  }
+
+  if (rows.length === 0 && established) {
+    return (
+      <Screen>
+        <ConnectionBanner />
+        <AllQuietEmptyState />
       </Screen>
     );
   }
@@ -82,13 +98,17 @@ export function TriageHomeScreen(): React.JSX.Element {
         data={rows}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.textSecondary} />}
         keyExtractor={(row) => (row.kind === 'section-header' ? `section-${row.section}` : row.entry.sessionId)}
-        getItemType={(row) => row.kind}
+        getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : sectionForEntry(row.entry) === 'needs-you' ? 'needs-you' : 'activity')}
         renderItem={({ item }) =>
           item.kind === 'section-header' ? (
             <SectionHeader title={item.title} testID={`section-header-${item.section}`} />
           ) : (
             <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-              <ActivityRow entry={item.entry} />
+              {sectionForEntry(item.entry) === 'needs-you' ? (
+                <NeedsYouCard entry={item.entry} />
+              ) : (
+                <ActivityRow entry={item.entry} />
+              )}
             </View>
           )
         }
