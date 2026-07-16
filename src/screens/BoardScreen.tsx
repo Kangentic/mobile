@@ -1,10 +1,11 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { FlashList } from '@shopify/flash-list';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { AppHeader, Badge, Card, ConnectionBanner, IconButton, Row, Screen, Sheet, Stack, Text, useTheme } from '@/components';
+import { AppHeader, Badge, Card, ConnectionBanner, EmptyState, IconButton, Row, Screen, Sheet, Stack, Text, useTheme } from '@/components';
+import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { CreateTaskSheet } from '@/components/board/CreateTaskSheet';
 import { EditTaskSheet } from '@/components/board/EditTaskSheet';
@@ -13,7 +14,7 @@ import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type Project
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
 import { StatusDot } from '@/components/StatusDot';
 import { CapabilityError } from '@/channel';
-import { archiveTask, createTask, deleteTaskFromBoard, moveTaskOptimistic, updateTaskFields } from '@/connection/actions';
+import { archiveTask, createTask, deleteTaskFromBoard, moveTaskOptimistic, refreshSnapshots, updateTaskFields } from '@/connection/actions';
 import { triggerHaptic } from '@/lib/haptics';
 
 function messageForActionError(error: unknown, fallback: string): string {
@@ -32,7 +33,24 @@ export function BoardScreen(): React.JSX.Element {
   const projectId = selectedProjectId ?? projects[0]?.id ?? null;
   const board: ProjectBoard | null = projectId ? (boardsByProjectId[projectId] ?? null) : null;
   const columns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
+  const taskCounts = useMemo(
+    () => columns.map((column) => (board ? selectTasksForColumn(board, column.id).length : 0)),
+    [columns, board],
+  );
   const projectName = projects.find((project) => project.id === projectId)?.name ?? null;
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    void refreshSnapshots()
+      .catch(() => undefined)
+      .finally(() => setRefreshing(false));
+  }, []);
+  const selectColumn = useCallback((columnIndex: number) => {
+    setVisiblePageIndex(columnIndex);
+    // Jest's PagerView stub has no imperative API; on-device it always does.
+    const pager = pagerRef.current;
+    if (pager && typeof pager.setPage === 'function') pager.setPage(columnIndex);
+  }, []);
 
   const [actionsTarget, setActionsTarget] = useState<BoardTaskWire | null>(null);
   const [actionsInFlight, setActionsInFlight] = useState(false);
@@ -141,13 +159,22 @@ export function BoardScreen(): React.JSX.Element {
       <ConnectionBanner />
 
       {columns.length === 0 ? (
-        <Stack gap="sm" style={[styles.emptyState, { padding: theme.spacing.xl }]}>
-          <Text variant="body" color="secondary" style={styles.centeredText}>
-            {projects.length === 0 ? 'Connect to your desktop to see the board.' : 'This board has no columns yet.'}
-          </Text>
-        </Stack>
+        <EmptyState
+          testID="board-empty-state"
+          title={projects.length === 0 ? 'No board yet' : 'No columns yet'}
+          caption={
+            projects.length === 0
+              ? 'Connect to your desktop to see the board.'
+              : 'This board has no columns yet. Add them from the desktop.'
+          }
+          overseerSize={54}
+          overseerAnimate="blink-loop"
+        />
       ) : (
         <>
+          <View style={{ paddingVertical: theme.spacing.xs }}>
+            <ColumnChipBar columns={columns} taskCounts={taskCounts} activeIndex={visiblePageIndex} onSelect={selectColumn} />
+          </View>
           <PagerView
             ref={pagerRef}
             testID="board-pager"
@@ -165,22 +192,12 @@ export function BoardScreen(): React.JSX.Element {
                     setActionsTarget(task);
                   }}
                   projectId={projectId ?? ''}
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
                 />
               </View>
             ))}
           </PagerView>
-          <Row gap="xs" style={[styles.pageDots, { paddingBottom: theme.spacing.sm }]}>
-            {columns.map((column, columnIndex) => (
-              <View
-                key={column.id}
-                testID={`board-page-dot-${columnIndex}`}
-                style={[
-                  styles.pageDot,
-                  { backgroundColor: columnIndex === visiblePageIndex ? theme.colors.accent : theme.colors.border },
-                ]}
-              />
-            ))}
-          </Row>
         </>
       )}
 
@@ -274,34 +291,47 @@ function ColumnPage({
   board,
   projectId,
   onTaskLongPress,
+  refreshing,
+  onRefresh,
 }: {
   column: BoardColumnWire;
   board: ProjectBoard | null;
   projectId: string;
   onTaskLongPress: (task: BoardTaskWire) => void;
+  refreshing: boolean;
+  onRefresh: () => void;
 }): React.JSX.Element {
   const theme = useTheme();
   const tasks = useMemo(() => (board ? selectTasksForColumn(board, column.id) : []), [board, column.id]);
 
-  return (
-    <>
-      <Row gap="sm" style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, alignItems: 'center' }}>
-        <Text variant="title" style={styles.flex}>
-          {column.name}
-        </Text>
-        <Badge label={String(tasks.length)} color="secondary" />
-      </Row>
-      <FlashList<BoardTaskWire>
-        testID={`board-column-${column.id}-list`}
-        data={tasks}
-        keyExtractor={(task) => task.id}
-        renderItem={({ item }) => (
-          <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-            <TaskCard task={item} projectId={projectId} onLongPress={() => onTaskLongPress(item)} />
-          </View>
-        )}
+  // The chip bar already names the column and carries its count; the page
+  // itself is all tasks. An empty column states itself plainly instead of
+  // rendering silent blank space under the pager.
+  if (tasks.length === 0) {
+    return (
+      <EmptyState
+        testID={`board-column-${column.id}-empty`}
+        title="Nothing here"
+        caption={`No tasks in ${column.name}. Create one with the + button.`}
+        overseerSize={54}
+        overseerAnimate="none"
       />
-    </>
+    );
+  }
+
+  return (
+    <FlashList<BoardTaskWire>
+      testID={`board-column-${column.id}-list`}
+      data={tasks}
+      keyExtractor={(task) => task.id}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.textSecondary} />}
+      contentContainerStyle={{ paddingTop: theme.spacing.xs }}
+      renderItem={({ item }) => (
+        <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
+          <TaskCard task={item} projectId={projectId} onLongPress={() => onTaskLongPress(item)} />
+        </View>
+      )}
+    />
   );
 }
 
@@ -332,6 +362,7 @@ const TaskCard = React.memo(function TaskCard({
           <Text variant="bodyStrong" style={styles.flex} numberOfLines={2}>
             {task.title}
           </Text>
+          {task.agent ? <Badge label={task.agent} color="secondary" /> : null}
         </Row>
         <Row gap="sm">
           <Text variant="caption" color="muted">
@@ -361,23 +392,7 @@ const styles = StyleSheet.create({
   spaceBetween: {
     justifyContent: 'space-between',
   },
-  pageDots: {
-    justifyContent: 'center',
-  },
-  pageDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
   fabContainer: {
     position: 'absolute',
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  centeredText: {
-    textAlign: 'center',
   },
 });
