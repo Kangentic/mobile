@@ -2,7 +2,7 @@ import React, { type ComponentProps } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import type { Tabs } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { House, SquareKanban } from 'lucide-react-native';
+import { Bot, SquareKanban } from 'lucide-react-native';
 import { StatusDot } from '../StatusDot';
 import { Text } from '../Text';
 import { useTheme } from '../theme/ThemeProvider';
@@ -19,11 +19,14 @@ type BottomTabBarProps = Parameters<NonNullable<TabsProps['tabBar']>>[0];
 
 interface TabVisual {
   label: string;
-  Icon: typeof House;
+  Icon: typeof Bot;
 }
 
+// The first tab is the AGENTS feed (the product's home): every agent
+// session top-down by priority - needs-you, then active, then idle,
+// newest first within each group.
 const TAB_VISUALS: Record<string, TabVisual> = {
-  index: { label: 'Home', Icon: House },
+  index: { label: 'Agents', Icon: Bot },
   board: { label: 'Board', Icon: SquareKanban },
 };
 
@@ -55,7 +58,7 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
       {state.routes.map((route, routeIndex) => {
         const { options } = descriptors[route.key];
         const isFocused = state.index === routeIndex;
-        const visual = TAB_VISUALS[route.name] ?? { label: options.title ?? route.name, Icon: House };
+        const visual = TAB_VISUALS[route.name] ?? { label: options.title ?? route.name, Icon: Bot };
         const showAttentionDot = route.name === 'index' && hasNeedsYou && !isFocused;
 
         const onPress = (): void => {

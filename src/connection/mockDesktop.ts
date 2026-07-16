@@ -48,11 +48,16 @@ export interface MockDesktop {
 }
 
 const MOCK_PROJECT = { id: 'mock-project', name: 'Mock Project' };
+/** A second project: exercises the board project switcher and cross-project Home rows. */
+const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'Relay' };
 const MOCK_SESSION_ID = 'mock-session-1';
 const MOCK_TASK_ID = 'mock-task-1';
 /** A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat reading-view fallback. */
 const MOCK_CODEX_SESSION_ID = 'mock-session-codex';
 const MOCK_CODEX_TASK_ID = 'mock-task-codex';
+/** An IDLE session in the second project: exercises the Home feed's Idle section. */
+const MOCK_IDLE_SESSION_ID = 'mock-session-idle';
+const MOCK_IDLE_TASK_ID = 'mock-task-idle';
 const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
@@ -122,6 +127,40 @@ function mockColumns() {
   ];
 }
 
+function mockColumns2() {
+  return [
+    boardColumnFixture({ id: 'lane2-backlog', name: 'Backlog', role: 'todo', position: 0, color: '#58a6ff' }),
+    boardColumnFixture({ id: 'lane2-progress', name: 'In Progress', role: null, position: 1, color: '#d29922' }),
+    boardColumnFixture({ id: 'lane2-shipped', name: 'Shipped', role: 'done', position: 2, color: '#3fb950' }),
+  ];
+}
+
+function initialTasks2(): BoardTaskWire[] {
+  const nowIso = new Date().toISOString();
+  return [
+    boardTaskFixture({
+      id: MOCK_IDLE_TASK_ID,
+      display_id: 1,
+      title: 'Relay load-test follow-ups',
+      description: 'An idle agent session: exercises the Home Idle section.',
+      swimlane_id: 'lane2-progress',
+      session_id: MOCK_IDLE_SESSION_ID,
+      branch_name: 'perf/load-test',
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    boardTaskFixture({
+      id: 'mock-task-relay-2',
+      display_id: 2,
+      title: 'Document the metrics endpoint',
+      description: 'A quiet second-project card.',
+      swimlane_id: 'lane2-backlog',
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+  ];
+}
+
 function baseTranscript(): TranscriptEntryWire[] {
   const now = Date.now();
   return [
@@ -183,6 +222,7 @@ export function createMockDesktop(): MockDesktop {
   // Mutable scenario state, reset whenever the connection reopens (the
   // module is re-instantiated per openConnection).
   const tasks = initialTasks();
+  const tasks2 = initialTasks2();
   let transcript = baseTranscript();
   let transcriptRevision = 1;
   let streamSubscribed = false;
@@ -390,7 +430,15 @@ export function createMockDesktop(): MockDesktop {
     return { type: 'capability-response', requestId: request.requestId, ok: false, error };
   }
 
-  function boardSnapshot(): JsonValue {
+  function boardSnapshot(projectId: string): JsonValue {
+    if (projectId === MOCK_PROJECT_2.id) {
+      return {
+        projectId: MOCK_PROJECT_2.id,
+        columns: mockColumns2(),
+        tasks: [...tasks2],
+        backlog: [],
+      } as unknown as JsonValue;
+    }
     return {
       projectId: MOCK_PROJECT.id,
       columns: mockColumns(),
@@ -399,20 +447,58 @@ export function createMockDesktop(): MockDesktop {
     } as unknown as JsonValue;
   }
 
+  /** Board write verbs address tasks by id only; resolve which project owns one. */
+  function locateTask(taskId: string | undefined): { task: BoardTaskWire; taskList: BoardTaskWire[]; projectId: string } | null {
+    const inFirst = tasks.find((candidate) => candidate.id === taskId);
+    if (inFirst) return { task: inFirst, taskList: tasks, projectId: MOCK_PROJECT.id };
+    const inSecond = tasks2.find((candidate) => candidate.id === taskId);
+    if (inSecond) return { task: inSecond, taskList: tasks2, projectId: MOCK_PROJECT_2.id };
+    return null;
+  }
+
   peer.setRequestHandler((request) => {
     switch (request.verb) {
       case 'read-board': {
         const payload = parseCapabilityRequestPayload('read-board', request.payload);
-        if (!payload.projectId) return ok(request, { projects: [MOCK_PROJECT] });
+        if (!payload.projectId) return ok(request, { projects: [MOCK_PROJECT, MOCK_PROJECT_2] });
         if (payload.action === 'unsubscribe') return ok(request);
-        return ok(request, boardSnapshot());
+        return ok(request, boardSnapshot(payload.projectId));
       }
       case 'read-stream': {
         const payload = parseCapabilityRequestPayload('read-stream', request.payload);
         if (payload.action === 'unsubscribe') {
           if (payload.sessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
-          else streamSubscribed = false;
+          else if (payload.sessionId !== MOCK_IDLE_SESSION_ID) streamSubscribed = false;
           return ok(request);
+        }
+        if (payload.sessionId === MOCK_IDLE_SESSION_ID) {
+          // A finished, quiet session: static scrollback, idle activity, a
+          // small settled transcript. Nothing ever streams from it.
+          if (payload.action === 'transcript-window') {
+            const idleTranscript: TranscriptEntryWire[] = [
+              { kind: 'user', uuid: 'mock-idle-user-1', ts: Date.now() - 3_600_000, text: 'Summarize the relay load-test results.' },
+              {
+                kind: 'assistant',
+                uuid: 'mock-idle-assistant-1',
+                ts: Date.now() - 3_540_000,
+                blocks: [{ type: 'text', text: 'Done. p50 relay-added latency held at 0.79ms across 50 pairs; summary written to the task notes.' }],
+              },
+            ];
+            return ok(request, {
+              revision: 1,
+              totalEntries: idleTranscript.length,
+              startIndex: 0,
+              entries: idleTranscript,
+            } as unknown as JsonValue);
+          }
+          const idleSnapshot: ReadStreamResponsePayload = {
+            scrollback: 'relay perf worktree\r\n$ claude\r\n> Load-test summary written. Session is idle.\r\n',
+            activity: { state: 'idle', reason: { kind: 'idle' } },
+            usage: null,
+            awaitedPromptId: null,
+            ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+          };
+          return ok(request, idleSnapshot as unknown as JsonValue);
         }
         if (payload.sessionId === MOCK_CODEX_SESSION_ID) {
           if (payload.action === 'transcript-window') {
@@ -490,13 +576,13 @@ export function createMockDesktop(): MockDesktop {
       }
       case 'move-task': {
         const payload = parseCapabilityRequestPayload('move-task', request.payload);
-        const task = tasks.find((candidate) => candidate.id === payload.taskId);
-        if (!task) return failWith(request, `No such task: ${payload.taskId}`);
-        task.swimlane_id = payload.targetSwimlaneId;
-        task.position = payload.targetPosition;
-        task.updated_at = new Date().toISOString();
+        const located = locateTask(payload.taskId);
+        if (!located) return failWith(request, `No such task: ${payload.taskId}`);
+        located.task.swimlane_id = payload.targetSwimlaneId;
+        located.task.position = payload.targetPosition;
+        located.task.updated_at = new Date().toISOString();
         later(50, () => {
-          emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: task.id, payload: { change: 'task-updated', ids: [task.id] } });
+          emit({ kind: 'board', projectId: located.projectId, taskId: located.task.id, payload: { change: 'task-updated', ids: [located.task.id] } });
         });
         return ok(request, { ok: true });
       }

@@ -34,8 +34,14 @@ through EAS cloud builds and a physical device or TestFlight, never a local simu
        requires a deliberate system-image/API-level choice.
      - If the user passed `--avd <name>`, use that one (error if it isn't in the list).
      - Otherwise use the first AVD listed.
-   - Launch it in the background: `emulator -avd <name> -no-snapshot-load` (use
-     `run_in_background: true` - this process stays alive for the life of the emulator window).
+   - Launch it in the background: `emulator -avd <name> -no-snapshot-load -gpu angle_indirect`
+     (use `run_in_background: true` - this process stays alive for the life of the emulator
+     window). The `-gpu angle_indirect` flag is deliberate: the default `auto` host-GPU path
+     repeatedly wedges the emulator's Qt window on this Windows host (stale frames while the
+     device runs on; clicks land invisibly), and ANGLE-over-D3D11 is the stable backend. If a
+     running emulator shows a frozen frame, diagnose with a device-side
+     `node scripts/mobileInspect.mjs screenshot` (device fine + window stale = the wedge), then
+     `adb -s emulator-5554 emu kill` and relaunch with this flag.
    - Wait for it to come up: `adb wait-for-device`.
    - Wait for it to finish booting (not just the ADB bridge):
      `adb wait-for-device shell "while [[ -z \$(getprop sys.boot_completed) ]]; do sleep 1; done; echo booted"`.
