@@ -1,0 +1,36 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# /end-session makes the stub drop the task's session with no successor:
+# the screen must show the honest ended state (never a frozen frame), and
+# its View-changes escape hatch must land on the Changes screen.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 20000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- assertVisible:
+    id: "session-screen"
+- tapOn:
+    id: "session-mode-chat"
+- extendedWaitUntil:
+    visible:
+      id: "composer-input"
+    timeout: 10000
+- tapOn:
+    id: "composer-input"
+- inputText: "/end-session"
+- tapOn:
+    id: "composer-send"
+- extendedWaitUntil:
+    visible:
+      id: "session-ended-state"
+    timeout: 20000
+- tapOn:
+    id: "session-ended-view-changes"
+- extendedWaitUntil:
+    visible:
+      id: "changes-screen"
+    timeout: 10000

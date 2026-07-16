@@ -1,0 +1,35 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# The Session view opens on the TERMINAL lens (quick keys + PTY composer);
+# the mode pill flips to CHAT (message composer) and back. WebView content
+# is never asserted - only RN-side testIDs.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 20000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- assertVisible:
+    id: "session-screen"
+- extendedWaitUntil:
+    visible:
+      id: "quick-key-esc"
+    timeout: 15000
+- assertVisible:
+    id: "terminal-input"
+- tapOn:
+    id: "session-mode-chat"
+- extendedWaitUntil:
+    visible:
+      id: "composer-input"
+    timeout: 10000
+- assertNotVisible:
+    id: "terminal-input"
+- tapOn:
+    id: "session-mode-terminal"
+- extendedWaitUntil:
+    visible:
+      id: "terminal-input"
+    timeout: 10000

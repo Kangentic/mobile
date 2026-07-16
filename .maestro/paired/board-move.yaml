@@ -1,8 +1,8 @@
 appId: com.kangentic.mobile
 ---
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
-# Long-press a board card, move it to Done; the stub acks move-task and its
-# console logs the received verb.
+# Long-press a board card, move it to Done through the actions-sheet hop;
+# the stub's board is stateful, so the card lands in the Done column.
 - launchApp
 - tapOn:
     id: "board-tab"
@@ -12,6 +12,10 @@ appId: com.kangentic.mobile
     timeout: 20000
 - longPressOn:
     id: "board-card-stub-task-1"
+- assertVisible:
+    id: "task-actions-sheet"
+- tapOn:
+    id: "task-action-move"
 - assertVisible:
     id: "move-task-sheet"
 - tapOn:

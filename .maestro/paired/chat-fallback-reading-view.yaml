@@ -1,0 +1,26 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# The stub's codex session has NO structured transcript: its chat lens must
+# degrade to the cleaned reading view (derived live from the terminal), with
+# the honest caption and real content lines.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-codex"
+    timeout: 25000
+- tapOn:
+    id: "activity-row-stub-session-codex"
+- assertVisible:
+    id: "session-screen"
+- tapOn:
+    id: "session-mode-chat"
+- extendedWaitUntil:
+    visible:
+      id: "reading-view-caption"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: "reading-view-line-0"
+    timeout: 15000
+- assertVisible: "codex session (stub)"

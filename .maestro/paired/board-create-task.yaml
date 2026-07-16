@@ -1,0 +1,30 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# The FAB create flow against the stub's stateful board: the created card
+# appears in the To Do column after the board push.
+- launchApp
+- tapOn:
+    id: "board-tab"
+- extendedWaitUntil:
+    visible:
+      id: "board-card-stub-task-1"
+    timeout: 20000
+- tapOn:
+    id: "board-create-task"
+- assertVisible:
+    id: "create-task-sheet"
+- tapOn:
+    id: "create-task-title"
+- inputText: "Created from Maestro"
+- tapOn:
+    id: "create-task-column-To Do"
+- tapOn:
+    id: "create-task-confirm"
+- extendedWaitUntil:
+    notVisible:
+      id: "create-task-sheet"
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "Created from Maestro"
+    timeout: 15000
