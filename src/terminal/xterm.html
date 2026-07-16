@@ -293,13 +293,14 @@
 }
 
 html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow: hidden; }
-/* Flex column with the terminal centered by margin:auto: the whole faithful frame is centered
-   (balanced letterbox) when it fits, and pans symmetrically once pinch-zoomed larger than the
-   viewport. align-items:flex-start keeps the terminal its natural (max-content) width so a frame
-   wider than the viewport still overflows-and-pans; margin:auto overrides the cross-axis
-   alignment to center it. */
-#scroll-container { width: 100%; height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; align-items: flex-start; }
-#terminal { width: max-content; margin: auto; }
+/* The grid fills the phone HEIGHT (autoFitFontToScreen sizes the font to the row
+   count) and is pinned top/left: column 0, row 0 start at the top-left corner. A
+   wide grid overflows the width and pans right inside #scroll-container (follow-
+   the-cursor tracks the active column); a grid taller than the viewport pans down.
+   width:max-content keeps the terminal its natural grid width so the overflow is
+   real and scrollable rather than wrapped. */
+#scroll-container { width: 100%; height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
+#terminal { width: max-content; }
 </style>
 </head>
 <body>
@@ -336,9 +337,9 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
   var MANUAL_PAN_PAUSE_MS = 4000;
   var manualPanUntil = 0;
   var MIN_AUTO_FONT_PX = 6;
-  // Cap the fit-to-screen font so a small grid does not balloon; pinch zoom
-  // goes higher on demand.
-  var MAX_CONTAIN_FONT_PX = 20;
+  // Cap the fill-to-height font so a very short grid does not produce absurd
+  // glyphs; pinch zoom goes higher or lower on demand.
+  var MAX_FILL_FONT_PX = 48;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -371,16 +372,17 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
     if (wasAtBottom) terminal.scrollToBottom();
   }
 
-  // Pick the largest font at which the WHOLE desktop grid (all cols AND all
-  // rows) fits the phone screen, so the frame is shown with nothing cut off
-  // (letterboxed like a video). Pinch zoom goes larger from there. Reported to
-  // the host so its pinch baseline matches.
+  // Pick the font so the desktop grid's ROWS fill the FULL phone height,
+  // maximizing vertical use of the screen. A wide grid then overflows the width
+  // and pans horizontally (follow-the-cursor keeps the active column in view);
+  // pinch zoom adjusts from there. Recomputed on rotation so it fills the height
+  // in portrait AND landscape. Reported to the host so its pinch baseline
+  // matches (no jump on the first pinch).
   function autoFitFontToScreen() {
     if (knownRows === null || knownRows < 1 || knownCols < 1) return;
-    var forWidth = window.innerWidth / (knownCols * CELL_WIDTH_RATIO);
     var forHeight = window.innerHeight / (knownRows * CELL_HEIGHT_RATIO);
-    var fitted = Math.floor(Math.min(forWidth, forHeight));
-    var next = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_CONTAIN_FONT_PX, fitted));
+    var fitted = Math.floor(forHeight);
+    var next = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_FILL_FONT_PX, fitted));
     if (next !== currentFontSizePx) {
       currentFontSizePx = next;
       if (terminal) terminal.options.fontSize = next;
@@ -390,8 +392,8 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
 
   // Render the desktop's EXACT grid 1:1. Legacy (no dims reported yet) falls
   // back to inferred cols + a viewport-height row estimate until real dims
-  // arrive. #terminal { margin: auto } centers the frame; a grid larger than
-  // the screen (zoomed in) pans inside #scroll-container.
+  // arrive. The grid is top/left-aligned; a grid wider (or taller) than the
+  // screen pans inside #scroll-container.
   function applyGeometry() {
     if (!terminal) return;
     resizePreservingBottom(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
