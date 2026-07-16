@@ -13,7 +13,7 @@ export default function TabsLayout(): React.JSX.Element {
       tabBar={(tabBarProps) => <AppTabBar {...tabBarProps} />}
       screenOptions={{ headerShown: false }}
     >
-      <Tabs.Screen name="index" options={{ title: 'Home', tabBarButtonTestID: 'home-tab' }} />
+      <Tabs.Screen name="index" options={{ title: 'Agents', tabBarButtonTestID: 'home-tab' }} />
       <Tabs.Screen name="board" options={{ title: 'Board', tabBarButtonTestID: 'board-tab' }} />
     </Tabs>
   );

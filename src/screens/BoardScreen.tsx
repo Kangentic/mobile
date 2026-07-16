@@ -154,6 +154,7 @@ export function BoardScreen(): React.JSX.Element {
         title={projectName ?? 'Board'}
         subtitle={projectName ? 'Board' : undefined}
         onTitlePress={projects.length > 0 ? () => setProjectPickerVisible(true) : undefined}
+        divider={columns.length === 0}
         testID="board-header"
       />
       <ConnectionBanner />
@@ -172,7 +173,18 @@ export function BoardScreen(): React.JSX.Element {
         />
       ) : (
         <>
-          <View style={{ paddingVertical: theme.spacing.xs }}>
+          {/* The chip row extends the header block: same surface, and it
+              carries the divider so header + chips read as one anchored
+              navigation surface (Material app-bar-with-tabs). */}
+          <View
+            style={{
+              paddingTop: theme.spacing.xs,
+              paddingBottom: theme.spacing.sm,
+              backgroundColor: theme.colors.surface,
+              borderBottomWidth: StyleSheet.hairlineWidth,
+              borderBottomColor: theme.colors.border,
+            }}
+          >
             <ColumnChipBar columns={columns} taskCounts={taskCounts} activeIndex={visiblePageIndex} onSelect={selectColumn} />
           </View>
           <PagerView

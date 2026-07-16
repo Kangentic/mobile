@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
-import { AppHeader, Screen, Card, ConnectionBanner, EmptyState, Icon, MonoText, Row, Stack, Text, Badge, Button, StatusDot, SectionHeader, useTheme } from '@/components';
+import { AgentStatusIcon, AppHeader, Screen, Card, ConnectionBanner, EmptyState, Icon, Row, Stack, Text, Badge, Button, SectionHeader, useTheme } from '@/components';
 import {
   selectTriageRows,
   sectionForEntry,
@@ -20,19 +20,27 @@ type TriageListRow =
   | { kind: 'section-header'; section: TriageSection; title: string }
   | { kind: 'activity'; entry: SessionActivityEntry };
 
-// House vocabulary: sessions are Active or Idle (matching the desktop).
-// Prompt-pending sessions render as attention cards pinned at the top of
-// Active rather than under a separate header.
-const SECTION_TITLES: Record<TriageSection, string> = {
-  'needs-you': 'Active',
-  working: 'Active',
+// Kangentic's Active/Idle is TURN-based, not presence-based: a session is
+// Active while a turn is in flight (thinking, tools, subagents, background
+// shells, or a pending prompt) and Idle once the turn ends and the agent
+// waits on the user. Idle therefore ranks ABOVE Active in the feed - idle
+// means it is the user's move. Prompt cards outrank everything and render
+// headerless at the very top (their amber treatment is the header).
+// Desktop vocabulary (the project tooltip counts "N thinking, N idle").
+const SECTION_ORDER: TriageSection[] = ['needs-you', 'idle', 'working'];
+const SECTION_TITLES: Record<TriageSection, string | null> = {
+  'needs-you': null,
   idle: 'Idle',
+  working: 'Thinking',
 };
 
 function statusLabelForEntry(entry: SessionActivityEntry): string {
   if (entry.state === 'permission') return 'Waiting for your approval';
+  // Idle is a turn-based state, not presence: the turn ended and the agent
+  // waits on the user. Say what that means for them.
+  const idleLabel = entry.unreadCount > 0 ? 'Finished - results to review' : 'Waiting for your next message';
   const reason = entry.reason;
-  if (!reason) return entry.state === 'thinking' ? 'Working' : 'Idle';
+  if (!reason) return entry.state === 'thinking' ? 'Thinking' : idleLabel;
   switch (reason.kind) {
     case 'tool':
       return reason.currentTool ? `Running ${reason.currentTool}` : 'Running tools';
@@ -45,7 +53,7 @@ function statusLabelForEntry(entry: SessionActivityEntry): string {
     case 'permission':
       return 'Waiting for your approval';
     case 'idle':
-      return 'Idle';
+      return idleLabel;
   }
 }
 
@@ -58,16 +66,13 @@ export function TriageHomeScreen(): React.JSX.Element {
   const rows = useMemo<TriageListRow[]>(() => {
     const sections = selectTriageRows({ bySessionId });
     const listRows: TriageListRow[] = [];
-    const emittedTitles = new Set<string>();
-    for (const section of sections) {
+    for (const sectionKind of SECTION_ORDER) {
+      const section = sections.find((candidate) => candidate.section === sectionKind);
       // Empty sections render nothing: the feed leads with what matters
-      // instead of headers over blank space. Sections sharing a title
-      // (needs-you + working = Active) share one header; needs-you entries
-      // arrive first from the selector, so attention cards pin to the top.
-      if (section.entries.length === 0) continue;
+      // instead of headers over blank space.
+      if (!section || section.entries.length === 0) continue;
       const title = SECTION_TITLES[section.section];
-      if (!emittedTitles.has(title)) {
-        emittedTitles.add(title);
+      if (title !== null) {
         listRows.push({ kind: 'section-header', section: section.section, title });
       }
       for (const entry of section.entries) listRows.push({ kind: 'activity', entry });
@@ -87,7 +92,7 @@ export function TriageHomeScreen(): React.JSX.Element {
   if (pairedState === 'unpaired') {
     return (
       <Screen edges={['left', 'right']}>
-        <AppHeader title="Home" />
+        <AppHeader title="Agents" />
         <UnpairedEmptyState />
       </Screen>
     );
@@ -96,7 +101,7 @@ export function TriageHomeScreen(): React.JSX.Element {
   if (rows.length === 0 && established) {
     return (
       <Screen edges={['left', 'right']}>
-        <AppHeader title="Home" />
+        <AppHeader title="Agents" />
         <ConnectionBanner />
         <AllQuietEmptyState />
       </Screen>
@@ -105,7 +110,7 @@ export function TriageHomeScreen(): React.JSX.Element {
 
   return (
     <Screen edges={['left', 'right']}>
-      <AppHeader title="Home" />
+      <AppHeader title="Agents" />
       <ConnectionBanner />
       <FlashList<TriageListRow>
         testID="triage-home-list"
@@ -170,11 +175,14 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
 
   const section = sectionForEntry(entry);
   const working = section === 'working';
+  // Desktop-parity status treatment: green spinner while the agent works,
+  // yellow mail while an idle session holds unread results.
+  const statusKind = working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
       <Stack gap="xs">
         <Row gap="sm" style={styles.spaceBetween}>
-          <StatusDot variant={section} testID={`activity-row-${entry.sessionId}-status`} />
+          <AgentStatusIcon kind={statusKind} testID={`activity-row-${entry.sessionId}-status`} />
           <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
             {taskTitle ?? 'Untitled task'}
           </Text>
@@ -187,12 +195,6 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
           </Text>
         ) : null}
         <Row gap="xs" style={styles.statusRow}>
-          {/* A live terminal glyph gives Working rows their pulse; idle rows stay quiet. */}
-          {working ? (
-            <MonoText size="caption" color="success">
-              {'>_'}
-            </MonoText>
-          ) : null}
           <Text variant="caption" color={working ? 'secondary' : 'muted'} style={styles.flex} numberOfLines={1}>
             {statusLabelForEntry(entry)}
           </Text>

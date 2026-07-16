@@ -15,6 +15,12 @@ export interface AppHeaderProps {
   subtitle?: string;
   /** When set, the title block becomes a pressable switcher and grows a chevron. */
   onTitlePress?: () => void;
+  /**
+   * False when a sibling row (e.g. the board's column chips) extends the
+   * header block and carries the divider itself, so the two rows read as
+   * ONE anchored navigation surface.
+   */
+  divider?: boolean;
   testID?: string;
 }
 
@@ -25,7 +31,7 @@ const BRANDMARK_SIZE = 28;
  * settings affordance. Owns the status-bar inset so screens keep their
  * no-top-edge SafeArea discipline.
  */
-export function AppHeader({ title, subtitle, onTitlePress, testID = 'app-header' }: AppHeaderProps): React.JSX.Element {
+export function AppHeader({ title, subtitle, onTitlePress, divider = true, testID = 'app-header' }: AppHeaderProps): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -58,6 +64,7 @@ export function AppHeader({ title, subtitle, onTitlePress, testID = 'app-header'
           paddingHorizontal: theme.spacing.md,
           backgroundColor: theme.colors.surface,
           borderBottomColor: theme.colors.border,
+          borderBottomWidth: divider ? StyleSheet.hairlineWidth : 0,
         },
       ]}
     >
@@ -98,7 +105,6 @@ export function AppHeader({ title, subtitle, onTitlePress, testID = 'app-header'
 const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   titlePressable: {
     flex: 1,

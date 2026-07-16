@@ -39,7 +39,7 @@ export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: Co
       horizontal
       showsHorizontalScrollIndicator={false}
       testID="board-column-chips"
-      contentContainerStyle={{ paddingHorizontal: theme.spacing.md, gap: theme.spacing.xs }}
+      contentContainerStyle={{ paddingHorizontal: theme.spacing.md, gap: theme.spacing.sm }}
       style={styles.bar}
     >
       {columns.map((column, columnIndex) => {

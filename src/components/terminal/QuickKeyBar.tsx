@@ -89,7 +89,9 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
       </ScrollView>
       {/* Ctrl+C by name: an unlabeled red ^C says nothing to most users.
           'Stop' says exactly what it does - interrupt the running agent.
-          Pinned outside the scroll so the safety control is always visible. */}
+          Pinned outside the scroll so the safety control is always visible;
+          it shares the key-chip family (same surface, no border) and lets
+          the danger color on the icon + label carry the meaning. */}
       <Pressable
         testID="quick-key-ctrl-c"
         accessibilityRole="button"
@@ -104,7 +106,6 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
             minHeight: theme.minTouchSize,
             borderRadius: theme.radii.sm,
             backgroundColor: theme.colors.surfaceRaised,
-            borderColor: theme.colors.danger,
             paddingHorizontal: theme.spacing.md,
             gap: theme.spacing.xs,
             opacity: pressed ? 0.7 : 1,
@@ -112,7 +113,7 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
         ]}
       >
         <OctagonX size={16} color={theme.colors.danger} />
-        <Text variant="caption" color="danger">
+        <Text variant="caption" color="danger" style={styles.stopLabel}>
           Stop
         </Text>
       </Pressable>
@@ -133,6 +134,8 @@ const styles = StyleSheet.create({
   },
   stopKey: {
     flexDirection: 'row',
-    borderWidth: StyleSheet.hairlineWidth,
+  },
+  stopLabel: {
+    fontWeight: '600',
   },
 });

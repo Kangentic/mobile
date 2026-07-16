@@ -140,5 +140,8 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
+    // Android top-aligns multiline text; center it so the placeholder and a
+    // single typed line sit mid-field like every chat composer.
+    textAlignVertical: 'center',
   },
 });

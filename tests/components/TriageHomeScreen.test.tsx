@@ -87,11 +87,14 @@ describe('TriageHomeScreen', () => {
     seedStores();
   });
 
-  it('renders only non-empty sections with house vocabulary (Active leads the feed)', () => {
+  it('renders prompt cards headerless on top and no empty section headers', () => {
     renderHome();
-    expect(screen.getAllByText('Active')).toHaveLength(1);
+    // The lone session is prompt-pending: its card renders with NO section
+    // header (the amber card treatment is the header), and the empty
+    // Thinking/Idle sections render nothing.
+    expect(screen.getByTestId('needs-you-card-sess-1')).toBeTruthy();
+    expect(screen.queryByText('Thinking')).toBeNull();
     expect(screen.queryByText('Needs you')).toBeNull();
-    expect(screen.queryByText('Working')).toBeNull();
     expect(screen.queryByText('Idle')).toBeNull();
   });
 
@@ -124,7 +127,7 @@ describe('TriageHomeScreen', () => {
       });
     });
     expect(screen.getByText('Running Bash')).toBeTruthy();
-    expect(screen.getAllByText('Active')).toHaveLength(1);
+    expect(screen.getAllByText('Thinking')).toHaveLength(1);
   });
 
   it('shows the all-quiet state when connected with no sessions', () => {
