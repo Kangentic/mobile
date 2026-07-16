@@ -16,6 +16,12 @@ jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn().mockResolvedValue(undefined),
 }));
 
+// The notifications barrel statically pulls notifee, which throws at import
+// time without its native module; the screen only reads the status snapshot.
+jest.mock('@/notifications', () => ({
+  getPushRegistrationStatus: jest.fn().mockReturnValue('not-connected'),
+}));
+
 function renderSettings(): void {
   render(
     <ThemeProvider>

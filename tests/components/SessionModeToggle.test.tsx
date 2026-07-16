@@ -20,12 +20,13 @@ describe('SessionModeToggle', () => {
     expect(screen.getByTestId('session-mode-chat').props.accessibilityState).toEqual({ selected: false });
   });
 
-  it('reports segment taps', () => {
+  it('reports a tap on the inactive segment and ignores the active one', () => {
     const onModeChange = renderToggle('terminal');
     fireEvent.press(screen.getByTestId('session-mode-chat'));
     expect(onModeChange).toHaveBeenCalledWith('chat');
+    onModeChange.mockClear();
     fireEvent.press(screen.getByTestId('session-mode-terminal'));
-    expect(onModeChange).toHaveBeenCalledWith('terminal');
+    expect(onModeChange).not.toHaveBeenCalled();
   });
 
   it('shows the needs-you dot on the chat segment only when flagged', () => {

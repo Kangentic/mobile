@@ -14,6 +14,7 @@ import { useActivityStore, sectionForEntry } from '@/state/activityStore';
 import { StatusDot } from '@/components/StatusDot';
 import { CapabilityError } from '@/channel';
 import { archiveTask, createTask, deleteTaskFromBoard, moveTaskOptimistic, updateTaskFields } from '@/connection/actions';
+import { triggerHaptic } from '@/lib/haptics';
 
 function messageForActionError(error: unknown, fallback: string): string {
   return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
@@ -60,7 +61,10 @@ export function BoardScreen(): React.JSX.Element {
         targetSwimlaneId,
         targetPosition: position === 'top' ? 0 : targetCount,
       })
-        .then(() => setMoveTarget(null))
+        .then(() => {
+          triggerHaptic('taskMoved');
+          setMoveTarget(null);
+        })
         .catch((error: unknown) => {
           setMoveError(error instanceof CapabilityError ? error.message : 'Move failed - check the connection');
         })
@@ -75,7 +79,10 @@ export function BoardScreen(): React.JSX.Element {
       setCreateInFlight(true);
       setCreateError(null);
       void createTask({ projectId, ...input })
-        .then(() => setCreateVisible(false))
+        .then(() => {
+          triggerHaptic('taskCreated');
+          setCreateVisible(false);
+        })
         .catch((error: unknown) => {
           setCreateError(error instanceof CapabilityError ? error.message : 'Create failed - check the connection');
         })
@@ -112,7 +119,10 @@ export function BoardScreen(): React.JSX.Element {
     setActionsInFlight(true);
     setActionsError(null);
     void deleteTaskFromBoard({ projectId, taskId: actionsTarget.id })
-      .then(() => setActionsTarget(null))
+      .then(() => {
+        triggerHaptic('destructiveConfirmed');
+        setActionsTarget(null);
+      })
       .catch((error: unknown) => setActionsError(messageForActionError(error, 'Delete failed - check the connection')))
       .finally(() => setActionsInFlight(false));
   }, [actionsTarget, projectId]);
