@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateX25519KeyPair, randomBytes, type PairingQrPayload } from '@kangentic/protocol';
+import { generateX25519KeyPair, PROTOCOL_VERSION, randomBytes, type PairingQrPayload } from '@kangentic/protocol';
 import { PairingMachine, type PairingMachineState } from '@/pairing/pairingMachine';
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubPairingResponder } from '@/devsupport/stubDesktopPeer';
@@ -36,7 +36,7 @@ describe('PairingMachine', () => {
       pairingToken,
       relayAddress: 'wss://relay.example.com',
       expiresAt: futureIsoTimestamp(600),
-      protocolVersion: '1',
+      protocolVersion: PROTOCOL_VERSION,
     };
 
     const machine = new PairingMachine({
@@ -74,7 +74,7 @@ describe('PairingMachine', () => {
       pairingToken: realToken,
       relayAddress: 'wss://relay.example.com',
       expiresAt: futureIsoTimestamp(600),
-      protocolVersion: '1',
+      protocolVersion: PROTOCOL_VERSION,
     };
 
     const machine = new PairingMachine({
@@ -103,7 +103,7 @@ describe('PairingMachine', () => {
       pairingToken,
       relayAddress: 'wss://relay.example.com',
       expiresAt: futureIsoTimestamp(600),
-      protocolVersion: '1',
+      protocolVersion: PROTOCOL_VERSION,
     };
 
     const machine = new PairingMachine({
@@ -135,7 +135,7 @@ describe('PairingMachine', () => {
       pairingToken,
       relayAddress: 'wss://relay.example.com',
       expiresAt: futureIsoTimestamp(600),
-      protocolVersion: '1',
+      protocolVersion: PROTOCOL_VERSION,
     };
 
     const machine = new PairingMachine({ identity: phoneIdentity, payload, transport: phoneTransport, deviceName: 'test-phone' });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import { Icon, MonoText, Row, StatusDot, Text, useTheme } from '@/components';
+import { triggerHaptic } from '@/lib/haptics';
 
 export type SessionMode = 'terminal' | 'chat';
 
@@ -24,6 +25,12 @@ export interface SessionModeToggleProps {
  */
 export function SessionModeToggle({ mode, onModeChange, chatAttention }: SessionModeToggleProps): React.JSX.Element {
   const theme = useTheme();
+
+  function selectMode(nextMode: SessionMode): void {
+    if (nextMode === mode) return;
+    triggerHaptic('modeToggled');
+    onModeChange(nextMode);
+  }
 
   function segmentStyle(segment: SessionMode): object[] {
     const isActive = mode === segment;
@@ -55,7 +62,7 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
         accessibilityState={{ selected: mode === 'terminal' }}
         accessibilityLabel="Terminal view"
         testID="session-mode-terminal"
-        onPress={() => onModeChange('terminal')}
+        onPress={() => selectMode('terminal')}
         style={segmentStyle('terminal')}
       >
         <Row gap="xs" style={styles.segmentContent}>
@@ -72,7 +79,7 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
         accessibilityState={{ selected: mode === 'chat' }}
         accessibilityLabel="Chat view"
         testID="session-mode-chat"
-        onPress={() => onModeChange('chat')}
+        onPress={() => selectMode('chat')}
         style={segmentStyle('chat')}
       >
         <Row gap="xs" style={styles.segmentContent}>

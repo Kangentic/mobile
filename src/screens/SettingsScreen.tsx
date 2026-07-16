@@ -1,13 +1,22 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Icon, MonoText, Row, Screen, Stack, StatusDot, Text, useTheme } from '@/components';
+import { getPushRegistrationStatus, type PushRegistrationStatus } from '@/notifications';
 import { useChannelStore } from '@/state/channelStore';
 import {
   useSettingsStore,
   type BackgroundNotificationsMode,
   type DictationMode,
 } from '@/state/settingsStore';
+
+const PUSH_STATUS_LABELS: Record<PushRegistrationStatus, string> = {
+  registered: 'Remote push: registered with your desktop',
+  'unavailable-no-fcm': 'Remote push: unavailable on this build (FCM credentials not configured)',
+  'capability-denied': 'Remote push: your desktop has not granted this device push access',
+  'not-connected': 'Remote push: registers when the desktop connects',
+  pending: 'Remote push: registering...',
+};
 
 const DICTATION_OPTIONS: { mode: DictationMode; label: string; description: string; testID: string }[] = [
   {
@@ -128,6 +137,7 @@ export function SettingsScreen(): React.JSX.Element {
               onPress={() => void setBackgroundNotificationsMode(option.mode)}
             />
           ))}
+          <PushRegistrationStatusLine />
         </Stack>
 
         <Text variant="title">Feel</Text>
@@ -167,6 +177,24 @@ export function SettingsScreen(): React.JSX.Element {
         </Stack>
       </Stack>
     </Screen>
+  );
+}
+
+function PushRegistrationStatusLine(): React.JSX.Element {
+  const established = useChannelStore((state) => state.established);
+  // The status is a module-level snapshot, not a store: re-read it when the
+  // channel state changes (registration rides established bootstraps).
+  const [status, setStatus] = useState<PushRegistrationStatus>(() => getPushRegistrationStatus());
+  useEffect(() => {
+    // A beat after the channel establishes, registration has usually run.
+    const refreshTimer = setTimeout(() => setStatus(getPushRegistrationStatus()), 1500);
+    return () => clearTimeout(refreshTimer);
+  }, [established]);
+
+  return (
+    <Text variant="caption" color="muted" testID="settings-push-status">
+      {PUSH_STATUS_LABELS[status]}
+    </Text>
   );
 }
 

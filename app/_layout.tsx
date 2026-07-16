@@ -3,9 +3,18 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { ThemeProvider, useTheme } from '@/components';
 import { startConnectionLifecycle } from '@/connection/connectionManager';
+import { initializeNotifications } from '@/notifications';
 import { useSettingsStore } from '@/state/settingsStore';
+
+// Hold the native splash until settings hydrate, then fade it out instead
+// of the default hard cut - the brand mark hands off to the themed UI.
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // Already hidden (fast refresh): nothing to hold.
+});
+SplashScreen.setOptions({ fade: true, duration: 220 });
 
 // Dev-only inspect loop: the route probe mirrors the current router
 // location for `mobileInspect state route`. The compile-time-false gate in
@@ -17,8 +26,16 @@ const LazyInspectRouteProbe =
 
 export default function RootLayout(): React.JSX.Element {
   useEffect(() => {
+    // Idempotent backstop: the real registration point is index.js (entry
+    // scope, outside React, present in headless launches too).
+    initializeNotifications();
     startConnectionLifecycle();
-    void useSettingsStore.getState().hydrate();
+    void useSettingsStore
+      .getState()
+      .hydrate()
+      .finally(() => {
+        void SplashScreen.hideAsync().catch(() => undefined);
+      });
   }, []);
 
   return (
