@@ -87,15 +87,15 @@ describe('TriageHomeScreen', () => {
     seedStores();
   });
 
-  it('renders prompt cards headerless on top and no empty section headers', () => {
+  it('files prompt cards under Idle (the user\'s move) and hides empty sections', () => {
     renderHome();
-    // The lone session is prompt-pending: its card renders with NO section
-    // header (the amber card treatment is the header), and the empty
-    // Thinking/Idle sections render nothing.
+    // The lone session is prompt-pending: desktop semantics count it in the
+    // idle bucket, so its card sits under one Idle header; the empty
+    // Thinking section renders nothing.
     expect(screen.getByTestId('needs-you-card-sess-1')).toBeTruthy();
+    expect(screen.getAllByText('Idle')).toHaveLength(1);
     expect(screen.queryByText('Thinking')).toBeNull();
     expect(screen.queryByText('Needs you')).toBeNull();
-    expect(screen.queryByText('Idle')).toBeNull();
   });
 
   it('renders a needs-you summary card (no inline controls) and routes to chat on tap', async () => {
