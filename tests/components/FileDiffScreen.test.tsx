@@ -11,6 +11,8 @@ jest.mock('expo-router', () => ({
     path: 'src/alpha.ts',
     scope: 'working',
   }),
+  // The screen sets its native header title (the file name) via Stack.Screen.
+  Stack: { Screen: () => null },
 }));
 
 jest.mock('@/connection/actions', () => ({
