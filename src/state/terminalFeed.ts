@@ -119,6 +119,25 @@ export function subscribeChunks(sessionId: string, listener: (event: TerminalFee
   };
 }
 
+export interface TerminalFeedStats {
+  sessionId: string;
+  chunks: number;
+  totalBytes: number;
+  dims: TerminalDimensionsWire | null;
+  listeners: number;
+}
+
+/** Per-retained-session ring stats, for the dev inspect bridge. */
+export function getTerminalFeedStats(): TerminalFeedStats[] {
+  return [...ringsBySessionId.entries()].map(([sessionId, ring]) => ({
+    sessionId,
+    chunks: ring.chunks.length,
+    totalBytes: ring.totalBytes,
+    dims: ring.dims ? { ...ring.dims } : null,
+    listeners: ring.listeners.size,
+  }));
+}
+
 export function resetTerminalFeed(): void {
   ringsBySessionId.clear();
 }

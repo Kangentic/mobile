@@ -74,6 +74,7 @@
     "jest-expo": "^57.0.1",
     "react-test-renderer": "^19.2.3",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "ws": "^8.19.0"
   }
 }

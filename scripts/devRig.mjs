@@ -54,6 +54,9 @@ const STATE_FILE = join(repoRoot, '.devrig.local.json');
 const APP_PACKAGE = 'com.kangentic.mobile';
 const RELAY_PORT = 8080;
 const METRO_PORT = 8081;
+// The dev inspect loop (scripts/mobileInspect.mjs state dumps): the app's
+// dev-only bridge dials out to 127.0.0.1:8791 via adb reverse.
+const INSPECT_PORT = 8791;
 const RELAY_URL = `ws://127.0.0.1:${RELAY_PORT}`;
 // Until every local relay checkout carries the widened default, always start
 // the relay with the session slot length allowed (32-hex session slot plus
@@ -384,6 +387,17 @@ function ensureAdbReverse() {
   log(`adb reverse tcp:${RELAY_PORT} in place`);
 }
 
+function ensureInspectAdbReverse() {
+  // Every mode gets the inspect loop's reverse (mock mode has no relay but
+  // still wants state dumps). Non-fatal: the loop is a dev nicety.
+  const result = run('adb', ['reverse', `tcp:${INSPECT_PORT}`, `tcp:${INSPECT_PORT}`]);
+  if (result.status !== 0) {
+    warn(`adb reverse tcp:${INSPECT_PORT} failed (inspect state dumps unavailable): ${result.stderr?.trim() || result.stdout?.trim()}`);
+    return;
+  }
+  log(`adb reverse tcp:${INSPECT_PORT} in place (inspect loop)`);
+}
+
 function devClientInstalled() {
   const result = run('adb', ['shell', 'pm', 'list', 'packages']);
   return result.status === 0 && result.stdout.includes(APP_PACKAGE);
@@ -454,7 +468,10 @@ function startMetro(flags, extraEnv = {}) {
   freeStaleMetro();
   const args = ['expo', 'start', '--android'];
   if (flags.clear) args.push('--clear');
-  const metro = spawnPrefixed('metro', 'npx', args, { env: extraEnv });
+  // Every rig mode enables the dev inspect bridge (dev builds only; the
+  // module is stripped from prod bundles). Inlined at bundle time like the
+  // mock flag, hence the one-time --clear main() forces when it first flips.
+  const metro = spawnPrefixed('metro', 'npx', args, { env: { EXPO_PUBLIC_KANGENTIC_INSPECT: '1', ...extraEnv } });
   // Keep Metro's interactive keys (r = reload, j = devtools) working.
   process.stdin.pipe(metro.stdin);
 }
@@ -644,6 +661,12 @@ async function main() {
   // Link the sibling protocol build into node_modules; a change forces a
   // clean Metro cache so the bundler re-resolves the dependency.
   const protocolRelinked = ensureLocalProtocol(kangenticRepo, flags);
+  ensureInspectAdbReverse();
+  // The inspect env flag is inlined at bundle time; force one clean Metro
+  // cache the first time a rig run enables it so existing bundles pick it up.
+  const inspectEnvFirstEnabled = loadState().inspectEnvEnabled !== true;
+  if (inspectEnvFirstEnabled) saveState({ inspectEnvEnabled: true });
+  flags.clear = flags.clear || inspectEnvFirstEnabled;
 
   if (needsRelay) {
     await ensureRelay(relayRepo);

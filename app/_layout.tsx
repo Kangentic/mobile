@@ -7,6 +7,14 @@ import { ThemeProvider, useTheme } from '@/components';
 import { startConnectionLifecycle } from '@/connection/connectionManager';
 import { useSettingsStore } from '@/state/settingsStore';
 
+// Dev-only inspect loop: the route probe mirrors the current router
+// location for `mobileInspect state route`. The compile-time-false gate in
+// production strips the lazy module from the bundle entirely.
+const LazyInspectRouteProbe =
+  __DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_INSPECT === '1'
+    ? React.lazy(() => import('@/devsupport/InspectRouteProbe'))
+    : null;
+
 export default function RootLayout(): React.JSX.Element {
   useEffect(() => {
     startConnectionLifecycle();
@@ -18,6 +26,11 @@ export default function RootLayout(): React.JSX.Element {
       <SafeAreaProvider>
         <ThemeProvider>
           <RootStack />
+          {LazyInspectRouteProbe ? (
+            <React.Suspense fallback={null}>
+              <LazyInspectRouteProbe />
+            </React.Suspense>
+          ) : null}
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
