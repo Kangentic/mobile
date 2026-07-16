@@ -16,4 +16,17 @@ export { SegmentedTabBar, type SegmentedTabBarProps, type SegmentedTabBarItem } 
 export { ConnectionBanner } from './ConnectionBanner';
 export { MarkdownBlock, type MarkdownBlockProps } from './MarkdownBlock';
 export { ThemeProvider, useTheme } from './theme/ThemeProvider';
-export { darkTerminalTheme, type Theme, type TerminalPalette } from './theme/tokens';
+export {
+  darkTerminalTheme,
+  brandTokens,
+  motionTokens,
+  type Theme,
+  type ColorTokens,
+  type TerminalPalette,
+  type BrandTokens,
+  type MotionTokens,
+  type MotionEasingBezier,
+} from './theme/tokens';
+export { parseHexColor, relativeLuminance, contrastRatio, mixHex, type RgbColor } from './theme/color';
+export { applyProjectAccent, deriveAccentFamily, type AccentFamily } from './theme/projectAccent';
+export { ProjectAccentBoundary, type ProjectAccentBoundaryProps } from './theme/ProjectAccentBoundary';

@@ -22,6 +22,8 @@
     "lint": "eslint . --max-warnings 0",
     "test:unit": "vitest run tests/unit",
     "test:components": "jest tests/components",
+    "sync:branding": "node scripts/syncBranding.mjs",
+    "sync:branding:check": "node scripts/syncBranding.mjs --check",
     "build:dev": "eas build --profile development --platform android",
     "build:preview": "eas build --profile preview --platform android",
     "build:prod": "eas build --profile production --platform android"
@@ -59,6 +61,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@kangentic/branding": "^2.2.0",
     "@react-native/jest-preset": "^0.86.0",
     "@testing-library/react-native": "^13.3.3",
     "@types/diff": "^7.0.2",
@@ -67,6 +70,8 @@
     "@typescript-eslint/eslint-plugin": "^8.63.0",
     "@typescript-eslint/parser": "^8.63.0",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0",
     "@xterm/xterm": "^6.0.0",
     "eslint": "^9.39.5",
     "eslint-config-expo": "^57.0.0",

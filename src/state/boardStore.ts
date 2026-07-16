@@ -151,6 +151,30 @@ export function selectLiveSessionIds(state: { boardsByProjectId: Record<string, 
   return liveSessionIds;
 }
 
+/**
+ * The project's desktop-provided accent color, or null when absent or not a
+ * string. The protocol's ReadBoardProjectSummary does not carry a color field
+ * yet (it ships as an additive `color`/`projectColor` field in a later
+ * protocol release), so this narrows defensively with `in` + typeof checks:
+ * it compiles and passes through cleanly against desktops that never send it.
+ * Hex validation is NOT done here; the theme layer's projectAccent guardrails
+ * own rejecting unusable values.
+ */
+export function selectProjectAccentColor(
+  state: { projects: ReadBoardProjectSummary[] },
+  projectId: string,
+): string | null {
+  const project = state.projects.find((candidate) => candidate.id === projectId);
+  if (!project) return null;
+  if ('color' in project && typeof project.color === 'string' && project.color.length > 0) {
+    return project.color;
+  }
+  if ('projectColor' in project && typeof project.projectColor === 'string' && project.projectColor.length > 0) {
+    return project.projectColor;
+  }
+  return null;
+}
+
 /** Locates a task (and its project) by id across cached boards - the task screen's param fallback. */
 export function findTaskById(
   state: { boardsByProjectId: Record<string, ProjectBoard> },

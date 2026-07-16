@@ -144,7 +144,9 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
             {projectName}
           </Text>
         ) : null}
-        <Text variant="caption" color={section === 'needs-you' ? 'warning' : 'muted'}>
+        {/* Needs-you is the attention state, and attention is the brand amber
+            (accent), not the caution yellow - see the two-hue rule in tokens.ts. */}
+        <Text variant="caption" color={section === 'needs-you' ? 'accent' : 'muted'}>
           {statusLabelForEntry(entry)}
         </Text>
       </Stack>

@@ -16,7 +16,9 @@ export interface ButtonProps {
 export function Button({ label, onPress, testID, variant = 'primary', disabled = false }: ButtonProps): React.JSX.Element {
   const theme = useTheme();
   const backgroundColor = backgroundForVariant(variant, theme.colors);
-  const textColor = variant === 'ghost' ? theme.colors.textPrimary : theme.colors.background;
+  // Tinted fills (primary/danger) carry onAccent ink, guaranteed readable on
+  // accent and semantic fills; only the transparent ghost uses textPrimary.
+  const textColor = variant === 'ghost' ? theme.colors.textPrimary : theme.colors.onAccent;
 
   return (
     <Pressable

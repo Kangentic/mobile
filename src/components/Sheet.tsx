@@ -38,7 +38,7 @@ export function Sheet({ visible, onClose, testID, title, children }: SheetProps)
           testID={testID}
           entering={SlideInDown.duration(SLIDE_IN_DURATION_MS)}
           style={{
-            backgroundColor: theme.colors.surfaceRaised,
+            backgroundColor: theme.colors.surfaceOverlay,
             borderTopLeftRadius: theme.radii.lg,
             borderTopRightRadius: theme.radii.lg,
             padding: theme.spacing.lg,

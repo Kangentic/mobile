@@ -43,7 +43,7 @@ export function ConnectionBanner(): React.JSX.Element | null {
         },
       ]}
     >
-      <Text variant="caption" style={{ color: theme.colors.background }}>
+      <Text variant="caption" style={{ color: theme.colors.onAccent }}>
         {message}
       </Text>
     </View>
