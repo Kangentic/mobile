@@ -369,14 +369,28 @@ export function createMockDesktop(): MockDesktop {
           id: QUESTION_TOOL_ID,
           name: 'AskUserQuestion',
           input: {
+            // Shape mirrored from a REAL Claude Code AskUserQuestion tool_use
+            // (session 3f4dd05b, "Auto-approve kill"): questions[] of
+            // {question, header, multiSelect, options[{label, description,
+            // preview?}]}. Four options exercises the digit-select ceiling;
+            // the TUI adds its own implicit fifth "type your own answer".
             questions: [
               {
                 question: 'Where should the redirect regression test live?',
                 header: 'Test tier',
                 multiSelect: false,
                 options: [
-                  { label: 'Unit (vitest)', description: 'Fast, pure redirect-builder coverage.' },
+                  {
+                    label: 'Unit (vitest) (recommended)',
+                    description: 'Fast, pure redirect-builder coverage; no RN runtime.',
+                    preview: 'tests/unit/loginRedirect.test.ts\nexpect(buildRedirect(path)).toContain("next=")',
+                  },
                   { label: 'Component (RTL)', description: 'Covers the login form wiring too.' },
+                  {
+                    label: 'Both tiers',
+                    description: 'Unit for the builder plus a component test for the form wiring.',
+                  },
+                  { label: 'E2E only', description: 'One Maestro flow through the real login screen.' },
                 ],
               },
             ],

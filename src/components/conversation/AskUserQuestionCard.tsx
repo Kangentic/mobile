@@ -5,6 +5,7 @@ import { triggerHaptic } from '@/lib/haptics';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
 import { parseAskUserQuestionInput } from '@/conversation/pendingPromptSummary';
 import { askUserQuestionOptionKeystrokes } from '@/conversation/promptKeystrokes';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { PermissionPromptCard } from './PermissionPromptCard';
 import { usePromptAnswer } from './usePromptAnswer';
 
@@ -88,6 +89,34 @@ export function AskUserQuestionCard({ sessionId, prompt }: AskUserQuestionCardPr
               More questions follow on the desktop after this one
             </Text>
           ) : null}
+          {/* The agent-agnostic escape hatch for the TUI's implicit "type
+              your own answer" option (and multi-select): one tap lands the
+              user at the real prompt in the terminal lens. Free text is
+              NEVER sent as keystrokes into a numbered select. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: optionsDisabled }}
+            testID="ask-answer-in-terminal"
+            disabled={optionsDisabled}
+            onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal')}
+            style={({ pressed }) => [
+              styles.optionRow,
+              {
+                minHeight: theme.minTouchSize,
+                borderColor: theme.colors.border,
+                borderRadius: theme.radii.sm,
+                padding: theme.spacing.sm,
+                opacity: optionsDisabled ? 0.5 : pressed ? 0.7 : 1,
+              },
+            ]}
+          >
+            <Text variant="bodyStrong" color="secondary">
+              Type your own answer...
+            </Text>
+            <Text variant="caption" color="muted">
+              Opens the terminal at this prompt
+            </Text>
+          </Pressable>
           {answeredNote !== null ? (
             <Text variant="caption" color="secondary">
               {answeredNote}
