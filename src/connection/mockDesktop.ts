@@ -73,7 +73,7 @@ function initialTasks(): BoardTaskWire[] {
       display_id: 1,
       title: 'Streaming mock session',
       description: 'Served by the in-app mock desktop peer.',
-      swimlane_id: 'lane-doing',
+      swimlane_id: 'lane-executing',
       session_id: MOCK_SESSION_ID,
       branch_name: 'feature/mock-work',
       labels: ['auth', 'wave-4'],
@@ -98,7 +98,7 @@ function initialTasks(): BoardTaskWire[] {
       display_id: 3,
       title: 'Codex refactor (no structured transcript)',
       description: 'Exercises the chat reading-view fallback.',
-      swimlane_id: 'lane-doing',
+      swimlane_id: 'lane-executing',
       position: 1,
       agent: 'codex',
       session_id: MOCK_CODEX_SESSION_ID,
@@ -124,11 +124,17 @@ function codexTuiFrame(paintTick: number): string {
   );
 }
 
+// Mirrors the real Kangentic default board so mock mode exercises the
+// chip bar and sectioned scroll at true column scale.
 function mockColumns() {
   return [
-    boardColumnFixture({ id: 'lane-todo', name: 'To Do', role: 'todo', position: 0, color: '#3fb950' }),
-    boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, position: 1, color: '#d29922' }),
-    boardColumnFixture({ id: 'lane-done', name: 'Done', role: 'done', position: 2, color: '#8957e5' }),
+    boardColumnFixture({ id: 'lane-todo', name: 'To Do', role: 'todo', position: 0, color: '#8b949e' }),
+    boardColumnFixture({ id: 'lane-planning', name: 'Planning', role: null, position: 1, color: '#8957e5' }),
+    boardColumnFixture({ id: 'lane-executing', name: 'Executing', role: null, position: 2, color: '#58a6ff' }),
+    boardColumnFixture({ id: 'lane-code-review', name: 'Code Review', role: null, position: 3, color: '#d29922' }),
+    boardColumnFixture({ id: 'lane-testing', name: 'Testing', role: null, position: 4, color: '#39c5cf' }),
+    boardColumnFixture({ id: 'lane-merge', name: 'Merge', role: null, position: 5, color: '#f0883e' }),
+    boardColumnFixture({ id: 'lane-done', name: 'Done', role: 'done', position: 6, color: '#3fb950' }),
   ];
 }
 

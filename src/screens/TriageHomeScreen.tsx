@@ -20,16 +20,15 @@ type TriageListRow =
   | { kind: 'section-header'; section: TriageSection; title: string }
   | { kind: 'activity'; entry: SessionActivityEntry };
 
-// Kangentic's Active/Idle is TURN-based, not presence-based: a session is
-// Active while a turn is in flight (thinking, tools, subagents, background
-// shells, or a pending prompt) and Idle once the turn ends and the agent
-// waits on the user. Idle therefore ranks ABOVE Active in the feed - idle
-// means it is the user's move. Prompt cards outrank everything and render
-// headerless at the very top (their amber treatment is the header).
-// Desktop vocabulary (the project tooltip counts "N thinking, N idle").
+// Kangentic's Thinking/Idle is TURN-based, not presence-based (desktop
+// vocabulary: the project tooltip counts "N thinking, N idle"). A session
+// is Thinking while a turn is in flight; Idle once the turn ends OR a
+// prompt waits on the user (desktop counts permission in the idle bucket:
+// both mean it is the user's move). Idle therefore ranks ABOVE Thinking,
+// and prompt cards render at the top of Idle under the shared header.
 const SECTION_ORDER: TriageSection[] = ['needs-you', 'idle', 'working'];
-const SECTION_TITLES: Record<TriageSection, string | null> = {
-  'needs-you': null,
+const SECTION_TITLES: Record<TriageSection, string> = {
+  'needs-you': 'Idle',
   idle: 'Idle',
   working: 'Thinking',
 };
@@ -66,13 +65,16 @@ export function TriageHomeScreen(): React.JSX.Element {
   const rows = useMemo<TriageListRow[]>(() => {
     const sections = selectTriageRows({ bySessionId });
     const listRows: TriageListRow[] = [];
+    const emittedTitles = new Set<string>();
     for (const sectionKind of SECTION_ORDER) {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       // Empty sections render nothing: the feed leads with what matters
-      // instead of headers over blank space.
+      // instead of headers over blank space. needs-you + idle share the
+      // Idle header (one title, prompt cards first).
       if (!section || section.entries.length === 0) continue;
       const title = SECTION_TITLES[section.section];
-      if (title !== null) {
+      if (!emittedTitles.has(title)) {
+        emittedTitles.add(title);
         listRows.push({ kind: 'section-header', section: section.section, title });
       }
       for (const entry of section.entries) listRows.push({ kind: 'activity', entry });
