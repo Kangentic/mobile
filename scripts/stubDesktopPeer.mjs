@@ -195,12 +195,12 @@ function stubTask(id, displayId, title, swimlaneId, position, sessionId) {
   };
 }
 
-function stubBoardSnapshot() {
+function stubBoardSnapshot(activeSessionId) {
   return {
     projectId: STUB_PROJECT.id,
     columns: stubColumns(),
     tasks: [
-      stubTask(STUB_TASK_ID, 1, 'Streaming stub session', 'lane-doing', 0, STUB_SESSION_ID),
+      stubTask(STUB_TASK_ID, 1, 'Streaming stub session', 'lane-doing', 0, activeSessionId),
       stubTask('stub-task-2', 2, 'A quiet backlog-ish card', 'lane-todo', 0, null),
     ],
     backlog: [],
@@ -259,8 +259,13 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     // Protocol v2: the transcript never ships wholesale. This array is the
     // stub's authoritative conversation; appends stream as indexed deltas
     // and history loads via the read-stream transcript-window action.
-    const transcriptEntries = stubTranscript();
+    let transcriptEntries = stubTranscript();
     let transcriptRevision = 1;
+    // Session-lifecycle simulation (the /respawn and /end-session magic
+    // composer commands): the streaming task's CURRENT session id, mirroring
+    // the desktop respawning a task's agent under a fresh id.
+    let activeSessionId = STUB_SESSION_ID;
+    let respawnCounter = 1;
 
     function send(message) {
       if (!streams) throw new Error('session not established yet');
@@ -273,17 +278,18 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     }
 
     function emitPtyResize() {
-      if (!streamSubscribed) return;
-      sendEvent({ kind: 'terminal-resize', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { ...ptyDimensions } });
+      if (!streamSubscribed || activeSessionId === null) return;
+      sendEvent({ kind: 'terminal-resize', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { ...ptyDimensions } });
     }
 
     function appendTranscriptEntry(entry) {
+      if (activeSessionId === null) return;
       transcriptEntries.push(entry);
       transcriptRevision += 1;
       if (!streamSubscribed) return;
       sendEvent({
         kind: 'transcript',
-        sessionId: STUB_SESSION_ID,
+        sessionId: activeSessionId,
         taskId: STUB_TASK_ID,
         payload: {
           mode: 'delta',
@@ -294,15 +300,52 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
       });
     }
 
+    function emitBoardTaskUpdated() {
+      sendEvent({ kind: 'board', projectId: STUB_PROJECT.id, taskId: STUB_TASK_ID, payload: { change: 'task-updated', ids: [STUB_TASK_ID] } });
+    }
+
+    // The /end-session magic command: the desktop stops running a session
+    // for the task; subsequent subscribes to the dead id fail like the real
+    // bridge once the registry entry is gone.
+    function endActiveSession() {
+      permissionPending = false;
+      activeSessionId = null;
+      streamSubscribed = false;
+      console.log('[lifecycle] /end-session: task now has no session');
+      emitBoardTaskUpdated();
+    }
+
+    // The /respawn magic command: the desktop restarts the task's agent
+    // under a FRESH session id (a model switch). The transcript resets with
+    // a marker entry Maestro can assert on.
+    function respawnActiveSession() {
+      respawnCounter += 1;
+      const successorSessionId = `stub-session-${respawnCounter}`;
+      permissionPending = false;
+      activeSessionId = successorSessionId;
+      streamSubscribed = false;
+      transcriptEntries = [
+        {
+          kind: 'assistant',
+          uuid: `stub-respawn-marker-${respawnCounter}`,
+          ts: Date.now(),
+          blocks: [{ type: 'text', text: `Respawned session online (${successorSessionId}).` }],
+        },
+      ];
+      transcriptRevision = 1;
+      console.log(`[lifecycle] /respawn: task now runs ${successorSessionId}`);
+      emitBoardTaskUpdated();
+    }
+
     // A little agent-life simulator: terminal chunks stream continuously;
     // every ~12 ticks the transcript grows a turn (streamed as a delta); at
     // tick 20 a permission prompt raises and stays pending until answered.
     function startFeed() {
       if (feedTimer) return;
       feedTimer = setInterval(() => {
-        if (!streams || !streamSubscribed) return;
+        if (!streams || !streamSubscribed || activeSessionId === null) return;
         feedTick += 1;
-        sendEvent({ kind: 'terminal', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` } });
+        sendEvent({ kind: 'terminal', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` } });
         if (feedTick % 12 === 0) {
           appendTranscriptEntry({
             kind: 'assistant',
@@ -328,8 +371,8 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
             ts: Date.now(),
             blocks: [{ type: 'tool_use', id: 'stub-tool-2', name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
           });
-          sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: true } });
-          sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'permission', reason: { kind: 'permission' } } });
+          sendEvent({ kind: 'activity', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: true } });
+          sendEvent({ kind: 'activity', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'permission', reason: { kind: 'permission' } } });
           console.log('[feed] raised a permission prompt (answer it from the phone)');
         }
       }, 1000);
@@ -345,10 +388,10 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         case 'read-board':
           if (!payload.projectId) return ok({ projects: [STUB_PROJECT] });
           if (payload.action === 'unsubscribe') return ok();
-          return ok(stubBoardSnapshot());
+          return ok(stubBoardSnapshot(activeSessionId));
         case 'read-stream': {
           if (payload.action === 'unsubscribe') { streamSubscribed = false; return ok(); }
-          if (payload.sessionId !== STUB_SESSION_ID) return fail(`No such session: ${payload.sessionId}`);
+          if (activeSessionId === null || payload.sessionId !== activeSessionId) return fail(`No such session: ${payload.sessionId}`);
           if (payload.action === 'transcript-window') {
             const end = Math.min(payload.beforeIndex ?? transcriptEntries.length, transcriptEntries.length);
             const start = Math.max(0, end - (payload.limit ?? 60));
@@ -375,6 +418,14 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
           return ok(stubDiffFileList());
         case 'send-user-message':
           console.log(`[message] phone says: ${payload.text}`);
+          if (payload.text.trim() === '/respawn') {
+            respawnActiveSession();
+            return ok({ delivered: true });
+          }
+          if (payload.text.trim() === '/end-session') {
+            endActiveSession();
+            return ok({ delivered: true });
+          }
           return ok({ delivered: true });
         case 'move-task':
           return ok({ ok: true });
@@ -385,8 +436,9 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
           permissionPending = false;
           console.log(`[prompt] answered with keystrokes ${JSON.stringify(payload.keystrokes)}`);
           setTimeout(() => {
-            sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: false } });
-            sendEvent({ kind: 'activity', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } } });
+            if (activeSessionId === null) return;
+            sendEvent({ kind: 'activity', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: false } });
+            sendEvent({ kind: 'activity', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } } });
           }, 50);
           return ok({ answered: true });
         case 'interactive-terminal':
@@ -404,7 +456,8 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
             return ok({ released: true });
           }
           console.log(`[pty] phone wrote ${JSON.stringify(payload.data)}`);
-          sendEvent({ kind: 'terminal', sessionId: STUB_SESSION_ID, taskId: STUB_TASK_ID, payload: { data: payload.data.replace(/\r/g, '\r\n') } });
+          if (activeSessionId === null) return fail('No active session');
+          sendEvent({ kind: 'terminal', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { data: payload.data.replace(/\r/g, '\r\n') } });
           return ok({ written: true });
         case 'board-tool-read':
           return ok({ result: { note: `stub answered ${payload.tool}` } });
