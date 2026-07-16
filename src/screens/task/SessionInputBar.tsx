@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Stack, useTheme } from '@/components';
+import { Row, Stack, useTheme } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
 import { QuickKeyBar } from '@/components/terminal/QuickKeyBar';
 import { TerminalInputRow } from '@/components/terminal/TerminalInputRow';
@@ -14,10 +14,12 @@ export interface SessionInputBarProps {
 }
 
 /**
- * The session's ONE mode-aware footer: the mode pill sits directly above the
- * input row it re-programs. Terminal mode = quick keys + the PTY line
- * composer (interactive-terminal); Chat mode = the agent message composer
- * (send-user-message). Same spot, behavior follows the mode.
+ * The session's ONE mode-aware footer. The bottom row is identical in both
+ * modes - compact mode pill at the left, the input beside it - so toggling
+ * the lens never shifts what the thumb is resting on. Terminal mode adds
+ * the quick-key strip ABOVE that row (additive: the bottom row itself
+ * never moves); chat mode simply has no strip and gives the height back
+ * to the conversation.
  */
 export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }: SessionInputBarProps): React.JSX.Element | null {
   const theme = useTheme();
@@ -25,29 +27,32 @@ export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }
   return (
     <Stack
       gap="xs"
+      testID="session-input-bar"
       style={{
         backgroundColor: theme.colors.surface,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: theme.colors.border,
         paddingHorizontal: theme.spacing.sm,
         paddingTop: theme.spacing.xs,
+        paddingBottom: theme.spacing.xs,
       }}
     >
-      <View style={styles.toggleRow} testID="session-input-bar">
+      {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}
+      <Row gap="sm" style={styles.inputRow}>
         <SessionModeToggle mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />
-      </View>
-      {mode === 'terminal' ? (
-        <Stack gap="xs">
-          <QuickKeyBar sessionId={sessionId} />
-          <TerminalInputRow sessionId={sessionId} />
-        </Stack>
-      ) : (
-        <ComposerBar sessionId={sessionId} />
-      )}
+        <View style={styles.flex}>
+          {mode === 'terminal' ? <TerminalInputRow sessionId={sessionId} /> : <ComposerBar sessionId={sessionId} />}
+        </View>
+      </Row>
     </Stack>
   );
 }
 
 const styles = StyleSheet.create({
-  toggleRow: {
-    flexDirection: 'row',
+  inputRow: {
+    alignItems: 'flex-end',
+  },
+  flex: {
+    flex: 1,
   },
 });

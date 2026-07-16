@@ -1,13 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Badge, Card, Row, Stack, StatusDot, Text, useTheme } from '@/components';
-import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCard';
-import { PermissionPromptCard } from '@/components/conversation/PermissionPromptCard';
+import { Badge, Card, Icon, MonoText, Row, Stack, StatusDot, Text, useTheme } from '@/components';
 import { peekAwaitedPrompt } from '@/connection/actions';
 import { buildPendingPromptSummary } from '@/conversation/pendingPromptSummary';
 import type { AwaitedToolUse } from '@/conversation/pendingPromptSummary';
-import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
 import type { SessionActivityEntry } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 
@@ -16,14 +13,12 @@ export interface NeedsYouCardProps {
 }
 
 /**
- * The Home feed's headline card: a session waiting on the user, answerable
- * INLINE. It embeds the same PermissionPromptCard / AskUserQuestionCard the
- * conversation renders (identical lifecycle, stale-prompt handling
- * included). The awaited tool_use details live in the transcript, which
- * background sessions do not retain, so the card renders a generic
- * Approve/Deny immediately and upgrades when a one-shot peek resolves.
- * Tapping the card body opens the task's Session view in CHAT mode (the
- * answerable side).
+ * The Home feed's headline card: a session waiting on the user. It TEASES
+ * the decision (the exact command or question, via a one-shot transcript
+ * peek) inside an amber attention block, and the tap opens the Session
+ * view's chat lens where the REAL prompt card - the full context and the
+ * approve/deny controls - lives. Answering deliberately does not happen
+ * from Home: the prompt experience stays one thing, in one place.
  */
 export function NeedsYouCard({ entry }: NeedsYouCardProps): React.JSX.Element {
   const theme = useTheme();
@@ -31,6 +26,10 @@ export function NeedsYouCard({ entry }: NeedsYouCardProps): React.JSX.Element {
   const taskTitle = useBoardStore((state) => {
     const board = state.boardsByProjectId[entry.projectId];
     return board?.tasksById[entry.taskId]?.title ?? null;
+  });
+  const agentName = useBoardStore((state) => {
+    const board = state.boardsByProjectId[entry.projectId];
+    return board?.tasksById[entry.taskId]?.agent ?? null;
   });
   const projectName = useBoardStore(
     (state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null,
@@ -51,7 +50,7 @@ export function NeedsYouCard({ entry }: NeedsYouCardProps): React.JSX.Element {
         if (!cancelled) setPeekedPrompt({ promptId: awaitedPromptId, toolUse: awaitedToolUse });
       })
       .catch(() => {
-        // Not connected / a just-died session: the generic card still answers.
+        // Not connected / a just-died session: the generic summary still teases.
       });
     return () => {
       cancelled = true;
@@ -65,56 +64,73 @@ export function NeedsYouCard({ entry }: NeedsYouCardProps): React.JSX.Element {
     });
   };
 
-  const prompt: PendingPromptDescriptor | null =
-    awaitedPromptId === null
-      ? null
-      : {
-          promptId: awaitedPromptId,
-          sessionId: entry.sessionId,
-          toolUseId: peekedToolUse?.toolUseId ?? null,
-          toolName: peekedToolUse?.name ?? null,
-          input: peekedToolUse?.input ?? null,
-        };
+  const isQuestion = peekedToolUse?.name === 'AskUserQuestion';
+  const summary = buildPendingPromptSummary(peekedToolUse);
 
   return (
     <Card testID={`needs-you-card-${entry.sessionId}`} onPress={openTask}>
-      <Stack gap="xs">
-        <Row gap="sm" style={styles.spaceBetween}>
-          <StatusDot variant="needs-you" testID={`needs-you-card-${entry.sessionId}-status`} />
-          <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
-            {taskTitle ?? 'Untitled task'}
-          </Text>
-          {entry.unreadCount > 0 ? <Badge label={String(entry.unreadCount)} color="accent" /> : null}
-        </Row>
-        {projectName ? (
-          <Text variant="caption" color="secondary">
-            {projectName}
-          </Text>
-        ) : null}
-        {/* The one-line summary carries the card only until the peek
-            resolves; the specific prompt card then says it all itself. */}
-        {peekedToolUse === null ? (
-          <Text variant="caption" color="accent">
-            {buildPendingPromptSummary(null)}
-          </Text>
-        ) : null}
-        {prompt ? (
-          <View style={{ marginTop: theme.spacing.xs }}>
-            {prompt.toolName === 'AskUserQuestion' ? (
-              <AskUserQuestionCard sessionId={entry.sessionId} prompt={prompt} />
-            ) : (
-              <PermissionPromptCard sessionId={entry.sessionId} prompt={prompt} />
-            )}
+      <Row gap="sm" style={styles.cardBody}>
+        {/* The amber attention rail: the brand hue IS the needs-you signal. */}
+        <View style={[styles.attentionRail, { backgroundColor: theme.colors.accent, borderRadius: theme.radii.sm }]} />
+        <Stack gap="xs" style={styles.flex}>
+          <Row gap="sm" style={styles.spaceBetween}>
+            <StatusDot variant="needs-you" testID={`needs-you-card-${entry.sessionId}-status`} />
+            <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
+              {taskTitle ?? 'Untitled task'}
+            </Text>
+            {entry.unreadCount > 0 ? <Badge label={String(entry.unreadCount)} color="accent" /> : null}
+          </Row>
+          {projectName || agentName ? (
+            <Text variant="caption" color="secondary" numberOfLines={1}>
+              {[projectName, agentName].filter((part) => part !== null).join(' · ')}
+            </Text>
+          ) : null}
+          <View
+            testID={`needs-you-card-${entry.sessionId}-summary`}
+            style={{
+              backgroundColor: theme.colors.accentSubtle,
+              borderRadius: theme.radii.md,
+              paddingHorizontal: theme.spacing.md,
+              paddingVertical: theme.spacing.sm,
+            }}
+          >
+            <Row gap="sm" style={styles.summaryRow}>
+              <Icon name={isQuestion ? 'help-circle' : 'shield-half'} color="accent" size={18} />
+              <MonoText size="caption" style={styles.flex} numberOfLines={2}>
+                {summary}
+              </MonoText>
+            </Row>
           </View>
-        ) : null}
-      </Stack>
+          <Row gap="xs" style={styles.reviewRow}>
+            <Text variant="caption" color="accent">
+              {isQuestion ? 'Answer in session' : 'Review and approve'}
+            </Text>
+            <Icon name="chevron-forward" color="accent" size={14} />
+          </Row>
+        </Stack>
+      </Row>
     </Card>
   );
 }
 
 const styles = StyleSheet.create({
+  cardBody: {
+    alignItems: 'stretch',
+  },
+  attentionRail: {
+    width: 4,
+    alignSelf: 'stretch',
+  },
   spaceBetween: {
     justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  summaryRow: {
+    alignItems: 'center',
+  },
+  reviewRow: {
+    alignItems: 'center',
+    justifyContent: 'flex-end',
   },
   flex: {
     flex: 1,

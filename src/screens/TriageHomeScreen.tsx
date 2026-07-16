@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
-import { Screen, Card, ConnectionBanner, EmptyState, Row, Stack, Text, Badge, Button, StatusDot, SectionHeader, useTheme } from '@/components';
+import { AppHeader, Screen, Card, ConnectionBanner, EmptyState, Icon, MonoText, Row, Stack, Text, Badge, Button, StatusDot, SectionHeader, useTheme } from '@/components';
 import {
   selectTriageRows,
   sectionForEntry,
@@ -20,9 +20,12 @@ type TriageListRow =
   | { kind: 'section-header'; section: TriageSection; title: string }
   | { kind: 'activity'; entry: SessionActivityEntry };
 
+// House vocabulary: sessions are Active or Idle (matching the desktop).
+// Prompt-pending sessions render as attention cards pinned at the top of
+// Active rather than under a separate header.
 const SECTION_TITLES: Record<TriageSection, string> = {
-  'needs-you': 'Needs you',
-  working: 'Working',
+  'needs-you': 'Active',
+  working: 'Active',
   idle: 'Idle',
 };
 
@@ -54,14 +57,22 @@ export function TriageHomeScreen(): React.JSX.Element {
 
   const rows = useMemo<TriageListRow[]>(() => {
     const sections = selectTriageRows({ bySessionId });
-    return sections.flatMap((section) => {
+    const listRows: TriageListRow[] = [];
+    const emittedTitles = new Set<string>();
+    for (const section of sections) {
       // Empty sections render nothing: the feed leads with what matters
-      // instead of three headers over blank space.
-      if (section.entries.length === 0) return [];
-      const header: TriageListRow = { kind: 'section-header', section: section.section, title: SECTION_TITLES[section.section] };
-      const activityRows: TriageListRow[] = section.entries.map((entry) => ({ kind: 'activity', entry }));
-      return [header, ...activityRows];
-    });
+      // instead of headers over blank space. Sections sharing a title
+      // (needs-you + working = Active) share one header; needs-you entries
+      // arrive first from the selector, so attention cards pin to the top.
+      if (section.entries.length === 0) continue;
+      const title = SECTION_TITLES[section.section];
+      if (!emittedTitles.has(title)) {
+        emittedTitles.add(title);
+        listRows.push({ kind: 'section-header', section: section.section, title });
+      }
+      for (const entry of section.entries) listRows.push({ kind: 'activity', entry });
+    }
+    return listRows;
   }, [bySessionId]);
 
   const onRefresh = useCallback(() => {
@@ -75,7 +86,8 @@ export function TriageHomeScreen(): React.JSX.Element {
 
   if (pairedState === 'unpaired') {
     return (
-      <Screen>
+      <Screen edges={['left', 'right']}>
+        <AppHeader title="Home" />
         <UnpairedEmptyState />
       </Screen>
     );
@@ -83,7 +95,8 @@ export function TriageHomeScreen(): React.JSX.Element {
 
   if (rows.length === 0 && established) {
     return (
-      <Screen>
+      <Screen edges={['left', 'right']}>
+        <AppHeader title="Home" />
         <ConnectionBanner />
         <AllQuietEmptyState />
       </Screen>
@@ -91,7 +104,8 @@ export function TriageHomeScreen(): React.JSX.Element {
   }
 
   return (
-    <Screen>
+    <Screen edges={['left', 'right']}>
+      <AppHeader title="Home" />
       <ConnectionBanner />
       <FlashList<TriageListRow>
         testID="triage-home-list"
@@ -133,10 +147,15 @@ function UnpairedEmptyState(): React.JSX.Element {
 }
 
 const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionActivityEntry }): React.JSX.Element {
+  const theme = useTheme();
   const router = useRouter();
   const taskTitle = useBoardStore((state) => {
     const board = state.boardsByProjectId[entry.projectId];
     return board?.tasksById[entry.taskId]?.title ?? null;
+  });
+  const agentName = useBoardStore((state) => {
+    const board = state.boardsByProjectId[entry.projectId];
+    return board?.tasksById[entry.taskId]?.agent ?? null;
   });
   const projectName = useBoardStore(
     (state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null,
@@ -150,6 +169,7 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
   }, [router, entry.taskId, entry.sessionId, entry.projectId]);
 
   const section = sectionForEntry(entry);
+  const working = section === 'working';
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
       <Stack gap="xs">
@@ -158,6 +178,7 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
           <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
             {taskTitle ?? 'Untitled task'}
           </Text>
+          {agentName ? <Badge label={agentName} color="secondary" /> : null}
           {entry.unreadCount > 0 ? <Badge label={String(entry.unreadCount)} color="accent" /> : null}
         </Row>
         {projectName ? (
@@ -165,11 +186,18 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
             {projectName}
           </Text>
         ) : null}
-        {/* Needs-you is the attention state, and attention is the brand amber
-            (accent), not the caution yellow - see the two-hue rule in tokens.ts. */}
-        <Text variant="caption" color={section === 'needs-you' ? 'accent' : 'muted'}>
-          {statusLabelForEntry(entry)}
-        </Text>
+        <Row gap="xs" style={styles.statusRow}>
+          {/* A live terminal glyph gives Working rows their pulse; idle rows stay quiet. */}
+          {working ? (
+            <MonoText size="caption" color="success">
+              {'>_'}
+            </MonoText>
+          ) : null}
+          <Text variant="caption" color={working ? 'secondary' : 'muted'} style={styles.flex} numberOfLines={1}>
+            {statusLabelForEntry(entry)}
+          </Text>
+          <Icon name="chevron-forward" color="muted" size={14} style={{ marginRight: -theme.spacing.xs }} />
+        </Row>
       </Stack>
     </Card>
   );
@@ -178,6 +206,9 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
 const styles = StyleSheet.create({
   spaceBetween: {
     justifyContent: 'space-between',
+  },
+  statusRow: {
+    alignItems: 'center',
   },
   flex: {
     flex: 1,

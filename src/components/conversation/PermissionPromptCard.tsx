@@ -1,7 +1,7 @@
 import React from 'react';
-import { ScrollView, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { isRecord, type JsonValue } from '@kangentic/protocol';
-import { Badge, Button, Card, MarkdownBlock, MonoText, Row, Stack, Text, useTheme } from '@/components';
+import { Badge, Button, Card, Icon, MarkdownBlock, MonoText, Row, Stack, Text, useTheme } from '@/components';
 import { triggerHaptic } from '@/lib/haptics';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
@@ -101,10 +101,32 @@ function PermissionPromptBody({ toolName, input }: { toolName: string; input: Js
   return <MonoBlock text={JSON.stringify(input, null, 2)} maxHeight={BODY_MAX_HEIGHT} color="secondary" />;
 }
 
+/** The Claude-Code-style framing line: say what approving actually does. */
+function framingLineForTool(toolName: string): string {
+  switch (toolName) {
+    case 'Bash':
+      return 'The agent wants to run this command';
+    case 'Edit':
+      return 'The agent wants to make this edit';
+    case 'Write':
+    case 'NotebookEdit':
+      return 'The agent wants to write this file';
+    case 'Read':
+      return 'The agent wants to read this file';
+    case 'ExitPlanMode':
+      return 'The agent finished planning';
+    default:
+      return `The agent wants to use ${toolName}`;
+  }
+}
+
 /**
- * The pending permission prompt as a warning-bordered card. The body shows
- * exactly what approving grants; Approve/Deny answer over the interactive
- * terminal keystroke path and stay disabled once an answer is in flight.
+ * The pending permission prompt, styled like the desktop's own prompt
+ * moment rather than a form: an amber-railed card with a framing line
+ * ("The agent wants to run this command"), the exact grant as the body,
+ * a full-width Approve, and a deliberately quieter Deny (denying is the
+ * escape hatch, not a co-equal call to action). Answers ride the
+ * interactive-terminal keystroke path and disable once in flight.
  */
 export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCardProps): React.JSX.Element {
   const theme = useTheme();
@@ -113,55 +135,85 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
 
   return (
     <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
-      <Card testID="permission-prompt-card" style={{ borderColor: theme.colors.warning, borderWidth: 1 }}>
-        <Stack gap="sm">
-          <Row gap="sm">
-            <Text variant="bodyStrong" color="warning">
-              Permission requested
-            </Text>
-            {prompt.toolName !== null ? <Badge label={prompt.toolName} color="warning" /> : null}
-          </Row>
-          {prompt.toolName === null ? (
-            <Text variant="body" color="secondary">
-              Waiting for prompt details
-            </Text>
-          ) : (
-            <PermissionPromptBody toolName={prompt.toolName} input={prompt.input} />
-          )}
-          {answeredNote !== null ? (
-            <Text variant="caption" color="secondary">
-              {answeredNote}
-            </Text>
-          ) : null}
-          {errorNote !== null ? (
-            <Text variant="caption" color="danger">
-              {errorNote}
-            </Text>
-          ) : null}
-          <Row gap="sm">
-            <Button
-              label="Approve"
-              variant="primary"
-              testID="permission-approve"
-              disabled={buttonsDisabled}
-              onPress={() => {
-                triggerHaptic('promptAnswered');
-                submit(approvePermissionKeystrokes());
-              }}
-            />
-            <Button
-              label="Deny"
-              variant="danger"
-              testID="permission-deny"
-              disabled={buttonsDisabled}
-              onPress={() => {
-                triggerHaptic('promptAnswered');
-                submit(denyPermissionKeystrokes());
-              }}
-            />
-          </Row>
-        </Stack>
+      <Card testID="permission-prompt-card" style={{ borderColor: theme.colors.accentMuted, borderWidth: 1 }}>
+        <Row gap="sm" style={styles.promptBody}>
+          <View style={[styles.attentionRail, { backgroundColor: theme.colors.accent, borderRadius: theme.radii.sm }]} />
+          <Stack gap="sm" style={styles.flex}>
+            <Row gap="sm" style={styles.headerRow}>
+              <Icon name="shield-half" color="accent" size={18} />
+              <Text variant="bodyStrong" color="accent" style={styles.flex}>
+                Permission requested
+              </Text>
+              {prompt.toolName !== null ? <Badge label={prompt.toolName} color="secondary" /> : null}
+            </Row>
+            {prompt.toolName === null ? (
+              <Text variant="body" color="secondary">
+                Waiting for prompt details
+              </Text>
+            ) : (
+              <>
+                <Text variant="caption" color="secondary">
+                  {framingLineForTool(prompt.toolName)}
+                </Text>
+                <PermissionPromptBody toolName={prompt.toolName} input={prompt.input} />
+              </>
+            )}
+            {answeredNote !== null ? (
+              <Text variant="caption" color="secondary">
+                {answeredNote}
+              </Text>
+            ) : null}
+            {errorNote !== null ? (
+              <Text variant="caption" color="danger">
+                {errorNote}
+              </Text>
+            ) : null}
+            <Row gap="sm" style={styles.actionRow}>
+              <View style={styles.flex}>
+                <Button
+                  label={answering ? 'Approving...' : 'Approve'}
+                  variant="primary"
+                  testID="permission-approve"
+                  disabled={buttonsDisabled}
+                  onPress={() => {
+                    triggerHaptic('promptAnswered');
+                    submit(approvePermissionKeystrokes());
+                  }}
+                />
+              </View>
+              <Button
+                label="Deny"
+                variant="ghost"
+                testID="permission-deny"
+                disabled={buttonsDisabled}
+                onPress={() => {
+                  triggerHaptic('promptAnswered');
+                  submit(denyPermissionKeystrokes());
+                }}
+              />
+            </Row>
+          </Stack>
+        </Row>
       </Card>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  promptBody: {
+    alignItems: 'stretch',
+  },
+  attentionRail: {
+    width: 4,
+    alignSelf: 'stretch',
+  },
+  headerRow: {
+    alignItems: 'center',
+  },
+  actionRow: {
+    alignItems: 'center',
+  },
+  flex: {
+    flex: 1,
+  },
+});

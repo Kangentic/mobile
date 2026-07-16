@@ -93,16 +93,11 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
   const showMicButton = dictationMode !== 'off' && dictation.available;
   const sendDisabled = sending || !established || text.trim().length === 0;
 
+  // The parent footer (SessionInputBar) owns the border and outer padding so
+  // the terminal/chat input rows sit at IDENTICAL geometry - toggling the
+  // lens must not shift the bottom rows by a pixel.
   return (
-    <View
-      style={{
-        backgroundColor: theme.colors.surface,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: theme.colors.border,
-        paddingHorizontal: theme.spacing.sm,
-        paddingVertical: theme.spacing.xs,
-      }}
-    >
+    <View>
       {errorNote !== null ? (
         <Text variant="caption" color="danger" style={{ paddingHorizontal: theme.spacing.xs }}>
           {errorNote}

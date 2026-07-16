@@ -11,6 +11,12 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
 }));
 
+// The AppHeader reads the status-bar inset.
+jest.mock('react-native-safe-area-context', () =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('react-native-safe-area-context/jest/mock').default,
+);
+
 const mockPeekAwaitedPrompt = jest.fn();
 jest.mock('@/connection/actions', () => ({
   refreshSnapshots: jest.fn().mockResolvedValue(undefined),
@@ -81,19 +87,22 @@ describe('TriageHomeScreen', () => {
     seedStores();
   });
 
-  it('renders only non-empty sections (attention leads the feed)', () => {
+  it('renders only non-empty sections with house vocabulary (Active leads the feed)', () => {
     renderHome();
-    expect(screen.getByText('Needs you')).toBeTruthy();
+    expect(screen.getAllByText('Active')).toHaveLength(1);
+    expect(screen.queryByText('Needs you')).toBeNull();
     expect(screen.queryByText('Working')).toBeNull();
     expect(screen.queryByText('Idle')).toBeNull();
   });
 
-  it('renders an inline-answerable needs-you card and navigates to chat on body tap', async () => {
+  it('renders a needs-you summary card (no inline controls) and routes to chat on tap', async () => {
     renderHome();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
     expect(await screen.findByText('Waiting for your approval')).toBeTruthy();
-    // The embedded prompt card answers inline without leaving Home.
-    expect(screen.getByTestId('permission-approve')).toBeTruthy();
+    // The card TEASES the decision; answering lives in the session's own
+    // prompt card, so Home never shows approve/deny.
+    expect(screen.queryByTestId('permission-approve')).toBeNull();
+    expect(screen.getByText('Review and approve')).toBeTruthy();
 
     fireEvent.press(screen.getByTestId('needs-you-card-sess-1'));
     expect(mockPush).toHaveBeenCalledWith({
@@ -115,7 +124,7 @@ describe('TriageHomeScreen', () => {
       });
     });
     expect(screen.getByText('Running Bash')).toBeTruthy();
-    expect(screen.getByText('Working')).toBeTruthy();
+    expect(screen.getAllByText('Active')).toHaveLength(1);
   });
 
   it('shows the all-quiet state when connected with no sessions', () => {
