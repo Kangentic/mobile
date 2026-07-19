@@ -64,6 +64,12 @@ const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
 const QUESTION_PROMPT_ID = `${MOCK_SESSION_ID}:${QUESTION_TOOL_ID}`;
 /** The mock desktop pane's grid; a fit-mode resize overrides it until release-size restores it. */
 const MOCK_DESKTOP_PTY_DIMENSIONS = { cols: 120, rows: 30 };
+/** The real Claude Code permission-dialog trio, as the desktop's PTY probe would publish it. */
+const MOCK_PERMISSION_OPTIONS = [
+  'Yes',
+  "Yes, and don't ask again for this command",
+  'No, and tell Claude what to do differently',
+];
 
 function initialTasks(): BoardTaskWire[] {
   const nowIso = new Date().toISOString();
@@ -296,7 +302,20 @@ export function createMockDesktop(): MockDesktop {
   function raisePrompt(promptId: string): void {
     if (activeSessionId === null) return;
     pendingPromptId = promptId;
-    emit({ kind: 'activity', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { type: 'permission', promptId, pending: true } });
+    emit({
+      kind: 'activity',
+      sessionId: activeSessionId,
+      taskId: MOCK_TASK_ID,
+      payload: {
+        type: 'permission',
+        promptId,
+        pending: true,
+        // The empirical Claude Code permission trio, as the desktop's PTY
+        // probe publishes it (protocol 0.6.0): the question prompt keeps
+        // its own AskUserQuestion options and gets none here.
+        ...(promptId === PERMISSION_PROMPT_ID ? { options: MOCK_PERMISSION_OPTIONS } : {}),
+      },
+    });
     emitActivity('permission');
   }
 
@@ -563,6 +582,7 @@ export function createMockDesktop(): MockDesktop {
           activity: pendingPromptId ? { state: 'permission', reason: { kind: 'permission' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
           usage: null,
           awaitedPromptId: pendingPromptId,
+          awaitedPromptOptions: pendingPromptId === PERMISSION_PROMPT_ID ? MOCK_PERMISSION_OPTIONS : null,
           ptyDimensions: { ...ptyDimensions },
         };
         return ok(request, snapshot as unknown as JsonValue);

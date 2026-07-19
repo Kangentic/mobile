@@ -54,6 +54,27 @@ describe('activityStore', () => {
     expect(entry.awaitedPromptId).toBeNull();
   });
 
+  it('permission events carry, replace, and clear the probed option labels', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+
+    const optionLabels = ['Yes', "Yes, and don't ask again for this command", 'No, and tell Claude what to do differently'];
+    useActivityStore
+      .getState()
+      .applyActivityEvent(activityEvent('sess-1', { type: 'permission', promptId: 'sess-1:tool-9', pending: true, options: optionLabels }));
+    expect(useActivityStore.getState().bySessionId['sess-1'].awaitedPromptOptions).toEqual(optionLabels);
+
+    // A new prompt WITHOUT probed options must not inherit the old labels.
+    useActivityStore
+      .getState()
+      .applyActivityEvent(activityEvent('sess-1', { type: 'permission', promptId: 'sess-1:tool-10', pending: true }));
+    expect(useActivityStore.getState().bySessionId['sess-1'].awaitedPromptOptions).toBeNull();
+
+    useActivityStore
+      .getState()
+      .applyActivityEvent(activityEvent('sess-1', { type: 'permission', promptId: 'sess-1:tool-10', pending: false }));
+    expect(useActivityStore.getState().bySessionId['sess-1'].awaitedPromptOptions).toBeNull();
+  });
+
   it('an activity state leaving permission clears a stale awaited prompt', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'permission', promptId: 'sess-1:tool-9', pending: true }));
