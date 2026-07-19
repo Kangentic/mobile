@@ -5,7 +5,7 @@ import { Badge, Button, Card, Icon, MarkdownBlock, MonoText, Row, Stack, Text, u
 import { triggerHaptic } from '@/lib/haptics';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
-import { approvePermissionKeystrokes, denyPermissionKeystrokes } from '@/conversation/promptKeystrokes';
+import { approvePermissionKeystrokes, denyPermissionKeystrokes, permissionOptionKeystrokes } from '@/conversation/promptKeystrokes';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { InlineDiff } from './InlineDiff';
 import { MonoBlock } from './MonoBlock';
@@ -169,30 +169,53 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                 {errorNote}
               </Text>
             ) : null}
-            <Row gap="sm" style={styles.actionRow}>
-              <View style={styles.flex}>
+            {prompt.options !== null && prompt.options.length >= 2 ? (
+              // FULL-FIDELITY MODE: the desktop's PTY probe published the
+              // dialog's actual numbered options; render every one as a
+              // digit-keystroke button. Option 1 is always plain-approve in
+              // Claude's dialogs, so it keeps the primary treatment (and the
+              // approve testID for flow continuity).
+              <Stack gap="xs">
+                {prompt.options.map((optionLabel, optionIndex) => (
+                  <Button
+                    key={optionIndex}
+                    label={answering && optionIndex === 0 ? 'Answering...' : optionLabel}
+                    variant={optionIndex === 0 ? 'primary' : 'ghost'}
+                    testID={optionIndex === 0 ? 'permission-approve' : `permission-option-${optionIndex}`}
+                    disabled={buttonsDisabled || optionIndex > 8}
+                    onPress={() => {
+                      triggerHaptic('promptAnswered');
+                      submit(permissionOptionKeystrokes(optionIndex));
+                    }}
+                  />
+                ))}
+              </Stack>
+            ) : (
+              <Row gap="sm" style={styles.actionRow}>
+                <View style={styles.flex}>
+                  <Button
+                    label={answering ? 'Approving...' : 'Approve'}
+                    variant="primary"
+                    testID="permission-approve"
+                    disabled={buttonsDisabled}
+                    onPress={() => {
+                      triggerHaptic('promptAnswered');
+                      submit(approvePermissionKeystrokes());
+                    }}
+                  />
+                </View>
                 <Button
-                  label={answering ? 'Approving...' : 'Approve'}
-                  variant="primary"
-                  testID="permission-approve"
+                  label="Deny"
+                  variant="ghost"
+                  testID="permission-deny"
                   disabled={buttonsDisabled}
                   onPress={() => {
                     triggerHaptic('promptAnswered');
-                    submit(approvePermissionKeystrokes());
+                    submit(denyPermissionKeystrokes());
                   }}
                 />
-              </View>
-              <Button
-                label="Deny"
-                variant="ghost"
-                testID="permission-deny"
-                disabled={buttonsDisabled}
-                onPress={() => {
-                  triggerHaptic('promptAnswered');
-                  submit(denyPermissionKeystrokes());
-                }}
-              />
-            </Row>
+              </Row>
+            )}
             {/* The agent-agnostic escape hatch: some dialogs carry options
                 this card cannot see ("always allow", free text). One tap
                 lands the user at the real prompt in the terminal lens. */}

@@ -36,3 +36,18 @@ export function askUserQuestionOptionKeystrokes(optionIndex: number): string {
   }
   return String(optionIndex + 1);
 }
+
+/**
+ * Select a permission-dialog option by zero-based index. Mirrors the
+ * approve pattern the desktop's own tests drive ('1\r' = digit + confirm),
+ * generalized to any numbered option the desktop's PTY probe detected.
+ * Same 1-9 digit-select ceiling as AskUserQuestion.
+ */
+export function permissionOptionKeystrokes(optionIndex: number): string {
+  if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 8) {
+    throw new RangeError(
+      `Permission option index must be an integer in 0..8, got ${optionIndex}`,
+    );
+  }
+  return `${optionIndex + 1}\r`;
+}

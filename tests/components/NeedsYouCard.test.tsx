@@ -24,6 +24,7 @@ function entryFixture(overrides: Partial<SessionActivityEntry> = {}): SessionAct
     reason: { kind: 'permission' },
     usage: null,
     awaitedPromptId: 'sess-1:tool-1',
+    awaitedPromptOptions: null,
     lastEventAt: 0,
     unreadCount: 0,
     feedStatus: 'live',

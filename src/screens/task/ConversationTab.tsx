@@ -158,6 +158,7 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   // PENDING PROMPT: the awaited tool_use may not have arrived in the
   // transcript yet; the card renders a generic state until it does.
   const awaitedPromptId = activityEntry?.awaitedPromptId ?? null;
+  const awaitedPromptOptions = activityEntry?.awaitedPromptOptions ?? null;
   const pendingPrompt = useMemo<PendingPromptDescriptor | null>(() => {
     if (awaitedPromptId === null) return null;
     const awaitedToolUse = findAwaitedToolUse(entries, sessionId, awaitedPromptId);
@@ -167,8 +168,9 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
       toolUseId: awaitedToolUse?.toolUseId ?? null,
       toolName: awaitedToolUse?.name ?? null,
       input: awaitedToolUse?.input ?? null,
+      options: awaitedPromptOptions,
     };
-  }, [awaitedPromptId, entries, sessionId]);
+  }, [awaitedPromptId, entries, sessionId, awaitedPromptOptions]);
 
   const liveTailLinesForCells = activityEntry?.state === 'thinking' ? liveTailLines : null;
   const cells = useMemo(

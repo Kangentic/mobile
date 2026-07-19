@@ -39,6 +39,7 @@ const questionPrompt: PendingPromptDescriptor = {
       },
     ],
   },
+  options: null,
 };
 
 function renderCard(prompt: PendingPromptDescriptor = questionPrompt): void {
