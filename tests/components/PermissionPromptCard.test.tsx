@@ -27,6 +27,7 @@ const bashPrompt: PendingPromptDescriptor = {
   toolUseId: 'tool-1',
   toolName: 'Bash',
   input: { command: 'npm run lint\nnpm run test:unit' },
+  options: null,
 };
 
 function renderCard(prompt: PendingPromptDescriptor = bashPrompt): void {
@@ -66,6 +67,25 @@ describe('PermissionPromptCard', () => {
     renderCard();
     fireEvent.press(screen.getByTestId('permission-deny'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '\u001b');
+  });
+
+  it('renders every probed option as a digit button when options are present', () => {
+    renderCard({
+      ...bashPrompt,
+      options: ['Yes', "Yes, and don't ask again for this command", 'No, and tell Claude what to do differently'],
+    });
+    // Option 1 keeps the approve identity; the rest are numbered options.
+    expect(screen.getByText('Yes')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('permission-option-1'));
+    expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '2\r');
+    // The binary Deny is replaced by the dialog's own reject option.
+    expect(screen.queryByTestId('permission-deny')).toBeNull();
+  });
+
+  it('option 1 keeps the approve identity and its digit keystrokes', () => {
+    renderCard({ ...bashPrompt, options: ['Yes', 'No'] });
+    fireEvent.press(screen.getByTestId('permission-approve'));
+    expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '1\r');
   });
 
   it('fires the promptAnswered haptic on approve', () => {

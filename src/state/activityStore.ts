@@ -18,6 +18,8 @@ export interface SessionActivityEntry {
   usage: SessionUsageWire | null;
   /** The live outstanding prompt id (permission prompts AND AskUserQuestion/ExitPlanMode pauses), or null. */
   awaitedPromptId: string | null;
+  /** The prompt dialog's numbered option labels from the desktop's PTY probe (protocol 0.6.0), or null when unknown. */
+  awaitedPromptOptions: string[] | null;
   /** Epoch ms of the last snapshot/event touching this session. */
   lastEventAt: number;
   /** Session events since the last markRead (the triage unread badge). */
@@ -46,6 +48,10 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     reason: null,
     usage: null,
     awaitedPromptId: null,
+    // Populated from protocol 0.6.0's awaitedPromptOptions (snapshot) and
+    // permission-event options once the bumped package links; until then
+    // the 0.5.x parsers strip the fields and this stays null.
+    awaitedPromptOptions: null,
     lastEventAt: Date.now(),
     unreadCount: 0,
     feedStatus: 'pending',

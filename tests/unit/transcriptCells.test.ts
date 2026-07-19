@@ -163,6 +163,7 @@ describe('buildConversationCells', () => {
       toolUseId: 'toolu_1',
       toolName: 'Bash',
       input: { command: 'rm -rf build' },
+      options: null,
     };
 
     const cells = buildConversationCells(buildEntries(), {
@@ -185,6 +186,7 @@ describe('buildConversationCells', () => {
       toolUseId: 'toolu_q',
       toolName: 'AskUserQuestion',
       input: { questions: [] },
+      options: null,
     };
 
     const cells = buildConversationCells([], { liveTailLines: null, pendingPrompt: prompt });
@@ -199,6 +201,7 @@ describe('buildConversationCells', () => {
       toolUseId: null,
       toolName: null,
       input: null,
+      options: null,
     };
 
     const cells = buildConversationCells([], { liveTailLines: null, pendingPrompt: prompt });

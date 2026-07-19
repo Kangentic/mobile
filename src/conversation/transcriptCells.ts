@@ -18,6 +18,12 @@ export interface PendingPromptDescriptor {
   toolUseId: string | null;
   toolName: string | null;
   input: JsonValue | null;
+  /**
+   * The dialog's numbered option labels as detected by the desktop's PTY
+   * probe (protocol 0.6.0 `awaitedPromptOptions`/`options`). Null = unknown:
+   * the card falls back to plain Approve/Deny + the terminal escape hatch.
+   */
+  options: string[] | null;
 }
 
 type UserEntryWire = Extract<TranscriptEntryWire, { kind: 'user' }>;
