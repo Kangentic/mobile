@@ -85,6 +85,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
             reason: snapshot.activity.reason,
             usage: snapshot.usage,
             awaitedPromptId: snapshot.awaitedPromptId,
+            awaitedPromptOptions: snapshot.awaitedPromptOptions ?? null,
             lastEventAt: Date.now(),
             feedStatus: 'live',
           },
@@ -105,7 +106,10 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           // The engine leaving 'permission' means the prompt resolved; the
           // dedicated permission event usually races ahead of this, but a
           // missed one must not leave a stale answerable prompt behind.
-          if (payload.state !== 'permission') updated.awaitedPromptId = null;
+          if (payload.state !== 'permission') {
+            updated.awaitedPromptId = null;
+            updated.awaitedPromptOptions = null;
+          }
           break;
         case 'usage':
           updated.usage = payload.usage;
@@ -115,6 +119,9 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           break;
         case 'permission':
           updated.awaitedPromptId = payload.pending ? payload.promptId : null;
+          // Options belong to THIS prompt: replaced on a new pending prompt
+          // (absent = desktop probed nothing), cleared when it resolves.
+          updated.awaitedPromptOptions = payload.pending ? (payload.options ?? null) : null;
           if (payload.pending) updated.state = 'permission';
           break;
       }
