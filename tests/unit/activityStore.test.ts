@@ -95,6 +95,31 @@ describe('activityStore', () => {
     expect(useActivityStore.getState().bySessionId['sess-1'].unreadCount).toBe(0);
   });
 
+  it('marks sectionChangedAt only when an event actually changes the triage section', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    expect(useActivityStore.getState().bySessionId['sess-1'].sectionChangedAt).toBeNull();
+
+    // idle -> working: a section change.
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+    const changedAt = useActivityStore.getState().bySessionId['sess-1'].sectionChangedAt;
+    expect(changedAt).not.toBeNull();
+
+    // Still working: unread bumps and usage updates keep the section.
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'event', event: { ts: 1, type: 'tool_start' } }));
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'usage', usage: usageFixture() }));
+    expect(useActivityStore.getState().bySessionId['sess-1'].sectionChangedAt).toBe(changedAt);
+  });
+
+  it('applySnapshot never marks a section change (mass refreshes stay silent)', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    // The fixture snapshot reports 'thinking': a section change relative to
+    // the idle default, but snapshot-driven, so no pulse marker.
+    useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture());
+    const entry = useActivityStore.getState().bySessionId['sess-1'];
+    expect(entry.state).toBe('thinking');
+    expect(entry.sectionChangedAt).toBeNull();
+  });
+
   it('selectTriageRows buckets by state and sorts each section by recency', () => {
     const { registerSession, applyActivityEvent } = useActivityStore.getState();
     registerSession('sess-idle', 'task-a', 'project-1');
