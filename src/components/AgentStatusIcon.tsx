@@ -36,26 +36,34 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
   const spinTurns = useSharedValue(0);
 
   useEffect(() => {
-    if (reducedMotion || kind !== 'working') return;
+    if (!reducedMotion && kind === 'working') {
+      spinTurns.value = 0;
+      spinTurns.value = withRepeat(withTiming(1, { duration: SPIN_DURATION_MS, easing: Easing.linear }), -1, false);
+      return () => {
+        cancelAnimation(spinTurns);
+        // List recycling reuses this view for the next row: a cancelled
+        // spin must never leave a frozen mid-rotation transform behind
+        // (the "tilted envelope" artifact).
+        spinTurns.value = 0;
+      };
+    }
+    cancelAnimation(spinTurns);
     spinTurns.value = 0;
-    spinTurns.value = withRepeat(withTiming(1, { duration: SPIN_DURATION_MS, easing: Easing.linear }), -1, false);
-    return () => {
-      cancelAnimation(spinTurns);
-    };
   }, [kind, reducedMotion, spinTurns]);
 
+  // Applied on EVERY branch so the reset actually reaches the native view
+  // when a recycled row switches from spinner to envelope.
   const spinStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${spinTurns.value * 360}deg` }] }));
 
-  if (kind === 'working') {
-    return (
-      <Animated.View style={reducedMotion ? undefined : spinStyle} testID={testID ?? 'agent-status-working'}>
-        <LoaderCircle size={size} color={theme.colors.statusWorking} />
-      </Animated.View>
-    );
-  }
+  const fallbackTestID =
+    kind === 'working' ? 'agent-status-working' : kind === 'idle-unread' ? 'agent-status-idle-unread' : 'agent-status-idle';
   return (
-    <Animated.View testID={testID ?? (kind === 'idle-unread' ? 'agent-status-idle-unread' : 'agent-status-idle')}>
-      <Mail size={size} color={theme.colors.warning} />
+    <Animated.View style={reducedMotion ? undefined : spinStyle} testID={testID ?? fallbackTestID}>
+      {kind === 'working' ? (
+        <LoaderCircle size={size} color={theme.colors.statusWorking} />
+      ) : (
+        <Mail size={size} color={theme.colors.warning} />
+      )}
     </Animated.View>
   );
 }
