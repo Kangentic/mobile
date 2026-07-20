@@ -495,11 +495,25 @@ const TaskCard = React.memo(function TaskCard({
           </Row>
         ) : null}
         {contextWindowTrusted ? (
-          <Row gap="sm" style={styles.usageRow} testID={`board-card-${task.id}-usage`}>
-            <Text variant="caption" color="muted">
-              {usage.model.displayName}
-            </Text>
-            <View style={[styles.usageTrack, { backgroundColor: theme.colors.border }]}>
+          // Desktop parity: model + percent on one line, the bar full-width
+          // beneath, separated from the card content by a hairline (the
+          // same utility-strip treatment as the Agents feed rows).
+          <View
+            style={[
+              styles.usageStrip,
+              { borderTopColor: theme.colors.border, marginTop: theme.spacing.xs, paddingTop: theme.spacing.sm },
+            ]}
+            testID={`board-card-${task.id}-usage`}
+          >
+            <Row gap="sm" style={styles.spaceBetween}>
+              <Text variant="caption" color="muted">
+                {usage.model.displayName}
+              </Text>
+              <Text variant="caption" color="secondary">
+                {usedPercentage}%
+              </Text>
+            </Row>
+            <View style={[styles.usageTrack, { backgroundColor: theme.colors.border, marginTop: theme.spacing.xs }]}>
               <View
                 style={[
                   styles.usageFill,
@@ -507,10 +521,7 @@ const TaskCard = React.memo(function TaskCard({
                 ]}
               />
             </View>
-            <Text variant="caption" color="secondary">
-              {usedPercentage}%
-            </Text>
-          </Row>
+          </View>
         ) : null}
       </Stack>
     </Card>
@@ -532,12 +543,11 @@ const styles = StyleSheet.create({
   metaItem: {
     alignItems: 'center',
   },
-  usageRow: {
-    alignItems: 'center',
+  usageStrip: {
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   usageTrack: {
     borderRadius: 2,
-    flex: 1,
     height: 4,
     overflow: 'hidden',
   },
