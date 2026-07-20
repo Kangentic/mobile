@@ -58,6 +58,7 @@ function seedStores(): void {
         },
         backlog: [],
         snapshotAt: 0,
+        showTicketNumbers: true,
       },
     },
     pendingMoves: [],

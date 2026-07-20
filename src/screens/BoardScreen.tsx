@@ -4,7 +4,8 @@ import { useRouter } from 'expo-router';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { GitPullRequest, Paperclip } from 'lucide-react-native';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { AgentStatusIcon, AppHeader, Badge, Card, ConnectionBanner, EmptyState, IconButton, Row, Screen, Sheet, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
+import { AgentStatusIcon, AppHeader, Badge, Card, ConnectionBanner, EmptyState, IconButton, MonoText, Row, Screen, Sheet, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
+import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { CreateTaskSheet } from '@/components/board/CreateTaskSheet';
@@ -394,6 +395,14 @@ function prStateColor(theme: ReturnType<typeof useTheme>, prState: string | null
 }
 
 const CARD_LABEL_LIMIT = 3;
+const CARD_DESCRIPTION_LINES = 3;
+
+/** Context-usage tint thresholds, mirroring the desktop card's progress color ramp. */
+function contextUsageColor(theme: ReturnType<typeof useTheme>, usedPercentage: number): string {
+  if (usedPercentage >= 90) return theme.colors.danger;
+  if (usedPercentage >= 70) return theme.colors.warning;
+  return theme.colors.statusWorking;
+}
 
 const TaskCard = React.memo(function TaskCard({
   task,
@@ -407,6 +416,7 @@ const TaskCard = React.memo(function TaskCard({
   const theme = useTheme();
   const router = useRouter();
   const activityEntry = useActivityStore((state) => (task.session_id ? (state.bySessionId[task.session_id] ?? null) : null));
+  const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[projectId]?.showTicketNumbers ?? true);
 
   const openTask = useCallback(() => {
     router.push({
@@ -427,6 +437,16 @@ const TaskCard = React.memo(function TaskCard({
   const visibleLabels = task.labels.slice(0, CARD_LABEL_LIMIT);
   const hiddenLabelCount = task.labels.length - visibleLabels.length;
   const hasMetaRow = visibleLabels.length > 0 || task.pr_number !== null || task.attachment_count > 0;
+  const descriptionPreview = task.description.length > 0 ? collapseToSnippetText(task.description) : '';
+
+  // Desktop parity: the model + context bar renders only when the session
+  // reports a trustworthy window (a sane size the used tokens fit inside).
+  const usage = activityEntry?.usage ?? null;
+  const contextWindowTrusted =
+    usage !== null &&
+    usage.contextWindow.contextWindowSize > 0 &&
+    usage.contextWindow.usedTokens <= usage.contextWindow.contextWindowSize;
+  const usedPercentage = contextWindowTrusted ? Math.round(usage.contextWindow.usedPercentage) : 0;
 
   return (
     <Card testID={`board-card-${task.id}`} onPress={openTask} onLongPress={onLongPress}>
@@ -437,17 +457,17 @@ const TaskCard = React.memo(function TaskCard({
             {task.title}
           </Text>
           {task.agent ? <Badge label={task.agent} color="secondary" /> : null}
-        </Row>
-        <Row gap="sm">
-          <Text variant="caption" color="muted">
-            #{task.display_id}
-          </Text>
-          {task.branch_name ? (
-            <Text variant="caption" color="secondary" numberOfLines={1} style={styles.flex}>
-              {task.branch_name}
-            </Text>
+          {showTicketNumbers ? (
+            <MonoText size="caption" color="muted" testID={`board-card-${task.id}-display-id`}>
+              #{task.display_id}
+            </MonoText>
           ) : null}
         </Row>
+        {descriptionPreview.length > 0 ? (
+          <Text variant="caption" color="muted" numberOfLines={CARD_DESCRIPTION_LINES}>
+            {descriptionPreview}
+          </Text>
+        ) : null}
         {hasMetaRow ? (
           <Row gap="sm" style={styles.metaRow}>
             {visibleLabels.map((label) => (
@@ -473,6 +493,24 @@ const TaskCard = React.memo(function TaskCard({
             ) : null}
           </Row>
         ) : null}
+        {contextWindowTrusted ? (
+          <Row gap="sm" style={styles.usageRow} testID={`board-card-${task.id}-usage`}>
+            <Text variant="caption" color="muted">
+              {usage.model.displayName}
+            </Text>
+            <View style={[styles.usageTrack, { backgroundColor: theme.colors.border }]}>
+              <View
+                style={[
+                  styles.usageFill,
+                  { backgroundColor: contextUsageColor(theme, usedPercentage), width: `${usedPercentage}%` },
+                ]}
+              />
+            </View>
+            <Text variant="caption" color="secondary">
+              {usedPercentage}%
+            </Text>
+          </Row>
+        ) : null}
       </Stack>
     </Card>
   );
@@ -492,6 +530,19 @@ const styles = StyleSheet.create({
   },
   metaItem: {
     alignItems: 'center',
+  },
+  usageRow: {
+    alignItems: 'center',
+  },
+  usageTrack: {
+    borderRadius: 2,
+    flex: 1,
+    height: 4,
+    overflow: 'hidden',
+  },
+  usageFill: {
+    borderRadius: 2,
+    height: '100%',
   },
   columnDivider: {
     alignItems: 'center',

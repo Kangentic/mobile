@@ -2,6 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { BoardScreen } from '@/screens/BoardScreen';
+import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 
@@ -81,6 +82,7 @@ function seedBoard(): void {
         },
         backlog: [],
         snapshotAt: 0,
+        showTicketNumbers: true,
       },
     },
     pendingMoves: [],
@@ -109,6 +111,50 @@ describe('BoardScreen', () => {
       pathname: '/task/[taskId]',
       params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1' },
     });
+  });
+
+  it('shows the ticket number only when the board setting is on', () => {
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('board-card-task-1-display-id')).toBeTruthy();
+
+    act(() => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': { ...state.boardsByProjectId['project-1'], showTicketNumbers: false },
+        },
+      }));
+    });
+    expect(screen.queryByTestId('board-card-task-1-display-id')).toBeNull();
+  });
+
+  it('renders the model + context-usage row for a session with trusted usage', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: {
+        type: 'usage',
+        usage: {
+          contextWindow: { usedPercentage: 47, usedTokens: 94000, cacheTokens: 0, totalInputTokens: 94000, totalOutputTokens: 4000, contextWindowSize: 200000 },
+          cost: { totalCostUsd: 2.5, totalDurationMs: 120000 },
+          model: { id: 'claude-fable-5', displayName: 'Fable 5' },
+        },
+      },
+    });
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('board-card-task-1-usage')).toBeTruthy();
+    expect(screen.getByText('Fable 5')).toBeTruthy();
+    expect(screen.getByText('47%')).toBeTruthy();
   });
 
   it('long-press opens the actions sheet; Move routes to the move sheet and calls the optimistic move', async () => {
@@ -226,6 +272,7 @@ describe('BoardScreen', () => {
           },
           backlog: [],
           snapshotAt: 0,
+          showTicketNumbers: true,
         },
         'project-2': {
           columns: [column('lane-review', 'Review', 0)],
@@ -234,6 +281,7 @@ describe('BoardScreen', () => {
           },
           backlog: [],
           snapshotAt: 0,
+          showTicketNumbers: true,
         },
       },
       pendingMoves: [],
