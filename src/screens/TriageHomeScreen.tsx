@@ -253,7 +253,7 @@ const ActivityRow = React.memo(function ActivityRow({
           gap="sm"
           style={[
             styles.timeRow,
-            { borderTopColor: theme.colors.border, paddingTop: theme.spacing.xs, marginTop: theme.spacing.xs },
+            { borderTopColor: theme.colors.border, paddingTop: theme.spacing.sm, marginTop: theme.spacing.xs },
           ]}
         >
           <Text variant="caption" color="muted" style={styles.flex} testID={`activity-row-${entry.sessionId}-time`}>
