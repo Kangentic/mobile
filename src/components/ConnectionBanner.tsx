@@ -68,7 +68,7 @@ export function ConnectionBanner(): React.JSX.Element | null {
           {
             backgroundColor,
             borderRadius: theme.radii.sm,
-            top: theme.spacing.xs,
+            bottom: theme.spacing.md,
             left: theme.spacing.md,
             right: theme.spacing.md,
             paddingVertical: theme.spacing.xs,
@@ -85,13 +85,15 @@ export function ConnectionBanner(): React.JSX.Element | null {
 }
 
 const styles = StyleSheet.create({
-  // Zero-height: the pill overlays the content below instead of occupying
-  // layout, so its arrival never shifts the feed. The pill is absolutely
-  // positioned so the anchor's zero height cannot squash its measure.
+  // An absolute overlay covering the host Screen: the pill floats
+  // snackbar-style just above the footer, never occupying layout, so its
+  // arrival shifts nothing and stays out of the header's way.
   overlayAnchor: {
-    height: 0,
-    overflow: 'visible',
-    width: '100%',
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
     zIndex: 10,
   },
   pill: {
