@@ -61,6 +61,7 @@ const bridgeGlue = `
   // Cap the fill-to-height font so a very short grid does not produce absurd
   // glyphs; pinch zoom goes higher or lower on demand.
   var MAX_FILL_FONT_PX = 48;
+  var MAX_AUTO_FIT_FONT_PX = 20;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -113,7 +114,11 @@ const bridgeGlue = `
     if (knownRows === null || knownRows < 1 || knownCols < 1) return;
     var forHeight = window.innerHeight / (knownRows * CELL_HEIGHT_RATIO);
     var fitted = Math.floor(forHeight);
-    var next = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_FILL_FONT_PX, fitted));
+    // AUTO-fit gets a far lower ceiling than pinch: a SHORT desktop grid
+    // (a fresh session with ten rows) would otherwise blow up to poster
+    // print - a giant prompt glyph filling the phone. Pinch can still go
+    // to MAX_FILL_FONT_PX for detail work.
+    var next = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
     if (next !== currentFontSizePx) {
       currentFontSizePx = next;
       if (terminal) terminal.options.fontSize = next;

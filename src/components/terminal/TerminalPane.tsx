@@ -13,7 +13,7 @@ import { parseColsFromScrollback } from '@/terminal/liveTail';
 import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
-import { writeTerminal } from '@/connection/actions';
+import { refreshTerminalStream, writeTerminal } from '@/connection/actions';
 import { DirectKeyInput, type DirectKeyInputHandle } from './DirectKeyInput';
 
 export interface TerminalPaneProps {
@@ -343,7 +343,13 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
             variant="raised"
             testID="terminal-refit"
             accessibilityLabel="Fit the terminal to the screen"
-            onPress={() => postToTerminal({ type: 'refit' })}
+            onPress={() => {
+              // Local refit AND a fresh frame from the desktop: the one
+              // button that unsticks a wedged mirror (missed resize,
+              // stale seed) as well as resetting zoom.
+              postToTerminal({ type: 'refit' });
+              refreshTerminalStream(sessionId);
+            }}
           />
         </View>
       </View>
