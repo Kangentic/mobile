@@ -109,6 +109,14 @@ Production bundles never contain the bridge: the boot site is `__DEV__`-and-env 
 module loads via dynamic import, the same stripping arrangement as the mock desktop. Wire
 shapes live in `src/devsupport/inspectProtocol.ts`; the script mirrors them by hand.
 
+When the TERMINAL looks wrong but every RN-side probe says the state is fine, go one layer
+deeper: `node scripts/webviewEval.mjs "<expression>"` evaluates JavaScript inside the terminal
+WebView itself over the Chrome DevTools Protocol (the dev build exposes a
+`webview_devtools_remote` socket; the script discovers and forwards it). Measuring
+`.xterm-screen` geometry against the on-screen pixels this way is how the GPU
+`MAX_TEXTURE_SIZE` canvas clamp was diagnosed - the layout was correct and only the painted
+scale was wrong, which no RN-side probe could see.
+
 ## Developing @kangentic/protocol
 
 `@kangentic/protocol` (the wire format, Noise handshakes, capability verbs, and event types) is
