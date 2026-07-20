@@ -58,7 +58,7 @@ export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: Co
             style={[
               styles.chip,
               {
-                minHeight: theme.minTouchSize - theme.spacing.xs,
+                minHeight: theme.minTouchSize,
                 borderRadius: theme.radii.md,
                 paddingHorizontal: theme.spacing.md,
                 backgroundColor: isActive ? theme.colors.surfaceRaised : 'transparent',
