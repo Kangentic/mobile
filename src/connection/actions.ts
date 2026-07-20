@@ -4,7 +4,8 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
-import { releaseTerminal, retainTerminal } from '@/state/terminalFeed';
+import { isTerminalRetained, releaseTerminal, retainTerminal } from '@/state/terminalFeed';
+import { stripAnsiPreservingLayout } from '@/terminal/liveTail';
 import { getActiveConnection, requireSubscriptions, requireVerbClient } from './connectionManager';
 import { runBootstrap } from './bootstrap';
 
@@ -221,6 +222,7 @@ export async function peekAwaitedPrompt(sessionId: string, awaitedPromptId: stri
 }
 
 const lastMessagePeekCache = new Map<string, string | null>();
+const lastTerminalLinePeekCache = new Map<string, string | null>();
 
 /**
  * One-shot inbox snippet for an Agents-feed row: the last assistant text
@@ -236,6 +238,32 @@ export async function peekLastAssistantMessage(sessionId: string, cacheKeySuffix
   const snippet = lastAssistantText(transcriptWindow.entries);
   if (lastMessagePeekCache.size >= PROMPT_PEEK_CACHE_CAP) lastMessagePeekCache.clear();
   lastMessagePeekCache.set(cacheKey, snippet);
+  return snippet;
+}
+
+const TERMINAL_LINE_SNIPPET_MAX_LENGTH = 200;
+
+/**
+ * Snippet fallback for TRANSCRIPT-LESS sessions (codex-style agents): the
+ * last readable line of the session's PTY scrollback, from a fresh
+ * read-stream snapshot (re-subscribe is replace semantics desktop-side,
+ * so this never duplicates the feed). Skipped while the session screen
+ * retains the terminal - that surface owns the live feed.
+ */
+export async function peekLastTerminalLine(sessionId: string, cacheKeySuffix: number): Promise<string | null> {
+  if (isTerminalRetained(sessionId)) return null;
+  const cacheKey = `${sessionId}:${cacheKeySuffix}`;
+  const cached = lastTerminalLinePeekCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const snapshot = await requireVerbClient().readStreamSubscribe(sessionId);
+  const cleanedLines = stripAnsiPreservingLayout(snapshot.scrollback)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const snippet =
+    cleanedLines.length > 0 ? cleanedLines[cleanedLines.length - 1].slice(0, TERMINAL_LINE_SNIPPET_MAX_LENGTH) : null;
+  if (lastTerminalLinePeekCache.size >= PROMPT_PEEK_CACHE_CAP) lastTerminalLinePeekCache.clear();
+  lastTerminalLinePeekCache.set(cacheKey, snippet);
   return snippet;
 }
 

@@ -12,7 +12,7 @@ import {
 } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
-import { peekAwaitedPrompt, peekLastAssistantMessage, refreshSnapshots } from '@/connection/actions';
+import { peekAwaitedPrompt, peekLastAssistantMessage, peekLastTerminalLine, refreshSnapshots } from '@/connection/actions';
 import { buildPendingPromptSummary } from '@/conversation/pendingPromptSummary';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 
@@ -201,7 +201,11 @@ const ActivityRow = React.memo(function ActivityRow({
     const peek =
       isPermission && awaitedPromptId !== null
         ? peekAwaitedPrompt(entry.sessionId, awaitedPromptId).then((toolUse) => buildPendingPromptSummary(toolUse))
-        : peekLastAssistantMessage(entry.sessionId, entry.unreadCount);
+        : peekLastAssistantMessage(entry.sessionId, entry.unreadCount).then(
+            // Transcript-less agents (codex-style) still stream a PTY:
+            // fall back to the last readable terminal line.
+            (messageText) => messageText ?? peekLastTerminalLine(entry.sessionId, entry.unreadCount),
+          );
     void peek
       .then((snippetText) => {
         if (!cancelled) setPeekedSnippet({ key: currentKey, text: snippetText });
@@ -218,12 +222,12 @@ const ActivityRow = React.memo(function ActivityRow({
   // and the icon already say the state. The row is title + project pill +
   // a two-line last-message snippet + recency.
   //
-  // FIXED GEOMETRY: every card is the same height regardless of what data
-  // has arrived. The snippet block always reserves exactly two caption
-  // lines (empty until the peek lands) and the title row has a constant
-  // min-height that fits the pills, so an async update can never shift a
-  // card - or the cards below it - out from under the user's thumb.
-  const snippetBlockHeight = theme.typography.caption.lineHeight * 2;
+  // PREDICTABLE GEOMETRY: the snippet always renders (one reserved line
+  // minimum, flexing to two when the message needs it) and the title row
+  // has a constant min-height that fits the pills, so an async update
+  // adjusts a card at most once - and never collapses a slot a thumb is
+  // heading for.
+  const snippetLineHeight = theme.typography.caption.lineHeight;
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
       <Stack gap="xs">
@@ -239,12 +243,19 @@ const ActivityRow = React.memo(function ActivityRow({
           variant="caption"
           color="muted"
           numberOfLines={2}
-          style={{ height: snippetBlockHeight }}
+          style={{ minHeight: snippetLineHeight }}
           testID={`activity-row-${entry.sessionId}-snippet`}
         >
           {snippet ?? ''}
         </Text>
-        <Row gap="sm" style={styles.timeRow}>
+        {/* The utility strip: separated from content by a hairline. */}
+        <Row
+          gap="sm"
+          style={[
+            styles.timeRow,
+            { borderTopColor: theme.colors.border, paddingTop: theme.spacing.xs, marginTop: theme.spacing.xs },
+          ]}
+        >
           <Text variant="caption" color="muted" style={styles.flex} testID={`activity-row-${entry.sessionId}-time`}>
             {relativeTimeLabel(entry.lastEventAt, nowMs)}
           </Text>
@@ -261,6 +272,7 @@ const styles = StyleSheet.create({
   },
   timeRow: {
     alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   flex: {
     flex: 1,
