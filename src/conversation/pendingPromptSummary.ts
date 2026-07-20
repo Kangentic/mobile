@@ -37,6 +37,27 @@ export interface AwaitedToolUse {
   input: JsonValue;
 }
 
+const SNIPPET_MAX_LENGTH = 200;
+
+/**
+ * The last assistant text in a transcript window, whitespace-collapsed to
+ * a short inbox-style snippet, or null when the window has no assistant
+ * text. Powers the Agents feed's idle-card message preview.
+ */
+export function lastAssistantText(entries: TranscriptEntryWire[]): string | null {
+  for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex--) {
+    const entry = entries[entryIndex];
+    if (entry.kind !== 'assistant') continue;
+    for (let blockIndex = entry.blocks.length - 1; blockIndex >= 0; blockIndex--) {
+      const block = entry.blocks[blockIndex];
+      if (block.type === 'text' && block.text.trim().length > 0) {
+        return block.text.trim().replace(/\s+/g, ' ').slice(0, SNIPPET_MAX_LENGTH);
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Scan the transcript BACKWARDS (the awaited tool_use is almost always in
  * the final assistant entry) for the assistant tool_use block whose id

@@ -1,5 +1,5 @@
 import type { JsonValue, ReadDiffScope } from '@kangentic/protocol';
-import { findAwaitedToolUse, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
+import { findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
@@ -218,6 +218,25 @@ export async function peekAwaitedPrompt(sessionId: string, awaitedPromptId: stri
   if (awaitedPromptPeekCache.size >= PROMPT_PEEK_CACHE_CAP) awaitedPromptPeekCache.clear();
   awaitedPromptPeekCache.set(awaitedPromptId, awaitedToolUse);
   return awaitedToolUse;
+}
+
+const lastMessagePeekCache = new Map<string, string | null>();
+
+/**
+ * One-shot inbox snippet for an Agents-feed row: the last assistant text
+ * from a session the feed is NOT retaining a transcript for. Cache keyed
+ * by sessionId + unreadCount so a new message (which bumps the unread
+ * counter) refetches while plain list re-renders never do.
+ */
+export async function peekLastAssistantMessage(sessionId: string, cacheKeySuffix: number): Promise<string | null> {
+  const cacheKey = `${sessionId}:${cacheKeySuffix}`;
+  const cached = lastMessagePeekCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const transcriptWindow = await requireVerbClient().readTranscriptWindow(sessionId, { limit: PROMPT_PEEK_WINDOW });
+  const snippet = lastAssistantText(transcriptWindow.entries);
+  if (lastMessagePeekCache.size >= PROMPT_PEEK_CACHE_CAP) lastMessagePeekCache.clear();
+  lastMessagePeekCache.set(cacheKey, snippet);
+  return snippet;
 }
 
 /** Pull-to-refresh: re-run the bootstrap (re-subscribes replace desktop-side, so this is snapshot refresh everywhere). */

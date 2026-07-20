@@ -123,11 +123,12 @@ function framingLineForTool(toolName: string): string {
 
 /**
  * The pending permission prompt, styled like the desktop's own prompt
- * moment rather than a form: an amber-railed card with a framing line
- * ("The agent wants to run this command"), the exact grant as the body,
- * a full-width Approve, and a deliberately quieter Deny (denying is the
- * escape hatch, not a co-equal call to action). Answers ride the
- * interactive-terminal keystroke path and disable once in flight.
+ * moment rather than a form: an amber-bordered card (no rails - the
+ * design avoids left accent bars) with a framing line ("The agent wants
+ * to run this command"), the exact grant as the body, a full-width
+ * Approve, and a deliberately quieter Deny (denying is the escape hatch,
+ * not a co-equal call to action). Answers ride the interactive-terminal
+ * keystroke path and disable once in flight.
  */
 export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCardProps): React.JSX.Element {
   const theme = useTheme();
@@ -137,9 +138,7 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
   return (
     <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
       <Card testID="permission-prompt-card" style={{ borderColor: theme.colors.accentMuted, borderWidth: 1 }}>
-        <Row gap="sm" style={styles.promptBody}>
-          <View style={[styles.attentionRail, { backgroundColor: theme.colors.accent, borderRadius: theme.radii.sm }]} />
-          <Stack gap="sm" style={styles.flex}>
+        <Stack gap="sm">
             <Row gap="sm" style={styles.headerRow}>
               <Icon name="shield-half" color="accent" size={18} />
               <Text variant="bodyStrong" color="accent" style={styles.flex}>
@@ -226,21 +225,13 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
               disabled={answering}
               onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal')}
             />
-          </Stack>
-        </Row>
+        </Stack>
       </Card>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  promptBody: {
-    alignItems: 'stretch',
-  },
-  attentionRail: {
-    width: 4,
-    alignSelf: 'stretch',
-  },
   headerRow: {
     alignItems: 'center',
   },
