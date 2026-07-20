@@ -161,6 +161,8 @@ export interface RadiusTokens {
   sm: number;
   md: number;
   lg: number;
+  /** Stadium/pill shape: fully rounded ends regardless of element height. */
+  full: number;
 }
 
 export interface Theme {
@@ -290,6 +292,7 @@ export const darkTerminalTheme: Theme = {
     sm: 4,
     md: 8,
     lg: 12,
+    full: 999,
   },
   minTouchSize: 44,
   fontFamilyMono: 'monospace',

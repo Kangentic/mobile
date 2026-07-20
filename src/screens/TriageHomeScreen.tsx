@@ -128,7 +128,17 @@ export function TriageHomeScreen(): React.JSX.Element {
       <FlashList<TriageListRow>
         testID="triage-home-list"
         data={rows}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.textSecondary} />}
+        refreshControl={
+          // tintColor styles iOS; colors + progressBackgroundColor style
+          // Android (stock is a white circle, jarring on the warm theme).
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={theme.colors.textSecondary}
+            colors={[theme.colors.accent]}
+            progressBackgroundColor={theme.colors.surfaceOverlay}
+          />
+        }
         keyExtractor={(row) => (row.kind === 'section-header' ? `section-${row.section}` : row.entry.sessionId)}
         getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : 'activity')}
         renderItem={({ item }) =>
