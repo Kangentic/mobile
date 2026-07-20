@@ -6,10 +6,12 @@ import { Text, type TextColorRole } from './Text';
 export interface BadgeProps {
   label: string;
   color?: TextColorRole;
+  /** A hairline border for pills that must read against the card surface (surfaceRaised alone is subtle). */
+  outlined?: boolean;
   testID?: string;
 }
 
-export function Badge({ label, color = 'secondary', testID }: BadgeProps): React.JSX.Element {
+export function Badge({ label, color = 'secondary', outlined = false, testID }: BadgeProps): React.JSX.Element {
   const theme = useTheme();
   return (
     <View
@@ -21,6 +23,8 @@ export function Badge({ label, color = 'secondary', testID }: BadgeProps): React
           borderRadius: theme.radii.sm,
           paddingHorizontal: theme.spacing.sm,
           paddingVertical: theme.spacing.xs / 2,
+          borderWidth: outlined ? StyleSheet.hairlineWidth : 0,
+          borderColor: theme.colors.border,
         },
       ]}
     >
