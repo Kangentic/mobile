@@ -221,48 +221,90 @@ export async function peekAwaitedPrompt(sessionId: string, awaitedPromptId: stri
   return awaitedToolUse;
 }
 
-const lastMessagePeekCache = new Map<string, string | null>();
-const lastTerminalLinePeekCache = new Map<string, string | null>();
+/**
+ * The message peek scans fewer entries than the prompt peek: the last
+ * assistant text is nearly always within the newest few, and window
+ * entries are heavy (full tool inputs and results ride along).
+ */
+const MESSAGE_PEEK_WINDOW = 8;
+
+interface SnippetPeekRecord {
+  fetchedAtMs: number;
+  text: string | null;
+}
+
+const lastMessagePeekBySession = new Map<string, SnippetPeekRecord>();
+const inFlightMessagePeeks = new Map<string, Promise<string | null>>();
 
 /**
- * One-shot inbox snippet for an Agents-feed row: the last assistant text
- * from a session the feed is NOT retaining a transcript for. Cache keyed
- * by sessionId + unreadCount so a new message (which bumps the unread
- * counter) refetches while plain list re-renders never do.
+ * Inbox snippet for an Agents-feed row: the last assistant text from a
+ * session the feed is NOT retaining a transcript for. THROTTLED per
+ * session: an actively-working session bumps its unread counter on every
+ * engine event, and a long-lived session's transcript window can run to
+ * megabytes, so the caller passes `minFreshnessMs` - a result younger
+ * than that is returned without a wire fetch (pass 0 to force fresh, the
+ * idle-row case where the final message just landed). Concurrent calls
+ * share one in-flight fetch.
  */
-export async function peekLastAssistantMessage(sessionId: string, cacheKeySuffix: number): Promise<string | null> {
-  const cacheKey = `${sessionId}:${cacheKeySuffix}`;
-  const cached = lastMessagePeekCache.get(cacheKey);
-  if (cached !== undefined) return cached;
-  const transcriptWindow = await requireVerbClient().readTranscriptWindow(sessionId, { limit: PROMPT_PEEK_WINDOW });
-  const snippet = lastAssistantText(transcriptWindow.entries);
-  if (lastMessagePeekCache.size >= PROMPT_PEEK_CACHE_CAP) lastMessagePeekCache.clear();
-  lastMessagePeekCache.set(cacheKey, snippet);
-  return snippet;
+export async function peekLastAssistantMessage(sessionId: string, minFreshnessMs: number): Promise<string | null> {
+  const record = lastMessagePeekBySession.get(sessionId);
+  if (record !== undefined && minFreshnessMs > 0 && Date.now() - record.fetchedAtMs < minFreshnessMs) {
+    return record.text;
+  }
+  const inFlight = inFlightMessagePeeks.get(sessionId);
+  if (inFlight !== undefined) return inFlight;
+  const fetchPromise = (async () => {
+    const transcriptWindow = await requireVerbClient().readTranscriptWindow(sessionId, { limit: MESSAGE_PEEK_WINDOW });
+    const snippet = lastAssistantText(transcriptWindow.entries);
+    if (lastMessagePeekBySession.size >= PROMPT_PEEK_CACHE_CAP) lastMessagePeekBySession.clear();
+    lastMessagePeekBySession.set(sessionId, { fetchedAtMs: Date.now(), text: snippet });
+    return snippet;
+  })();
+  inFlightMessagePeeks.set(sessionId, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightMessagePeeks.delete(sessionId);
+  }
 }
 
 const TERMINAL_LINE_SNIPPET_MAX_LENGTH = 200;
+
+const lastTerminalLinePeekBySession = new Map<string, SnippetPeekRecord>();
+const inFlightTerminalLinePeeks = new Map<string, Promise<string | null>>();
 
 /**
  * Snippet fallback for TRANSCRIPT-LESS sessions (codex-style agents): the
  * last readable line of the session's PTY scrollback, from a fresh
  * read-stream snapshot (re-subscribe is replace semantics desktop-side,
  * so this never duplicates the feed). Skipped while the session screen
- * retains the terminal - that surface owns the live feed.
+ * retains the terminal - that surface owns the live feed. Throttled per
+ * session exactly like peekLastAssistantMessage.
  */
-export async function peekLastTerminalLine(sessionId: string, cacheKeySuffix: number): Promise<string | null> {
+export async function peekLastTerminalLine(sessionId: string, minFreshnessMs: number): Promise<string | null> {
   if (isTerminalRetained(sessionId)) return null;
-  const cacheKey = `${sessionId}:${cacheKeySuffix}`;
-  const cached = lastTerminalLinePeekCache.get(cacheKey);
-  if (cached !== undefined) return cached;
-  const snapshot = await requireVerbClient().readStreamSubscribe(sessionId);
-  // Content, not chrome: skip status/spinner lines and context bars so
-  // the snippet reads like the agent's most recent message.
-  const contentLine = lastContentLineFromScrollback(snapshot.scrollback);
-  const snippet = contentLine !== null ? contentLine.slice(0, TERMINAL_LINE_SNIPPET_MAX_LENGTH) : null;
-  if (lastTerminalLinePeekCache.size >= PROMPT_PEEK_CACHE_CAP) lastTerminalLinePeekCache.clear();
-  lastTerminalLinePeekCache.set(cacheKey, snippet);
-  return snippet;
+  const record = lastTerminalLinePeekBySession.get(sessionId);
+  if (record !== undefined && minFreshnessMs > 0 && Date.now() - record.fetchedAtMs < minFreshnessMs) {
+    return record.text;
+  }
+  const inFlight = inFlightTerminalLinePeeks.get(sessionId);
+  if (inFlight !== undefined) return inFlight;
+  const fetchPromise = (async () => {
+    const snapshot = await requireVerbClient().readStreamSubscribe(sessionId);
+    // Content, not chrome: skip status/spinner lines and context bars so
+    // the snippet reads like the agent's most recent message.
+    const contentLine = lastContentLineFromScrollback(snapshot.scrollback);
+    const snippet = contentLine !== null ? contentLine.slice(0, TERMINAL_LINE_SNIPPET_MAX_LENGTH) : null;
+    if (lastTerminalLinePeekBySession.size >= PROMPT_PEEK_CACHE_CAP) lastTerminalLinePeekBySession.clear();
+    lastTerminalLinePeekBySession.set(sessionId, { fetchedAtMs: Date.now(), text: snippet });
+    return snippet;
+  })();
+  inFlightTerminalLinePeeks.set(sessionId, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightTerminalLinePeeks.delete(sessionId);
+  }
 }
 
 /** Pull-to-refresh: re-run the bootstrap (re-subscribes replace desktop-side, so this is snapshot refresh everywhere). */
