@@ -12,9 +12,9 @@ import {
 } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
-import { peekLastAssistantMessage, refreshSnapshots } from '@/connection/actions';
+import { peekAwaitedPrompt, peekLastAssistantMessage, refreshSnapshots } from '@/connection/actions';
+import { buildPendingPromptSummary } from '@/conversation/pendingPromptSummary';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
-import { NeedsYouCard } from './home/NeedsYouCard';
 
 type TriageListRow =
   | { kind: 'section-header'; section: TriageSection; title: string }
@@ -119,17 +119,13 @@ export function TriageHomeScreen(): React.JSX.Element {
         data={rows}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.textSecondary} />}
         keyExtractor={(row) => (row.kind === 'section-header' ? `section-${row.section}` : row.entry.sessionId)}
-        getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : sectionForEntry(row.entry) === 'needs-you' ? 'needs-you' : 'activity')}
+        getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : 'activity')}
         renderItem={({ item }) =>
           item.kind === 'section-header' ? (
             <SectionHeader title={item.title} testID={`section-header-${item.section}`} />
           ) : (
             <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-              {sectionForEntry(item.entry) === 'needs-you' ? (
-                <NeedsYouCard entry={item.entry} />
-              ) : (
-                <ActivityRow entry={item.entry} />
-              )}
+              <ActivityRow entry={item.entry} />
             </View>
           )
         }
@@ -168,31 +164,45 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
     (state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null,
   );
 
+  const section = sectionForEntry(entry);
+  const working = section === 'working';
+  const isPermission = section === 'needs-you';
+
   const openTask = useCallback(() => {
     router.push({
       pathname: '/task/[taskId]',
-      params: { taskId: entry.taskId, sessionId: entry.sessionId, projectId: entry.projectId },
+      // A prompt-pending row lands on the chat lens, where the answerable
+      // prompt card lives; everything else opens the terminal default.
+      params: isPermission
+        ? { taskId: entry.taskId, sessionId: entry.sessionId, projectId: entry.projectId, mode: 'chat' }
+        : { taskId: entry.taskId, sessionId: entry.sessionId, projectId: entry.projectId },
     });
-  }, [router, entry.taskId, entry.sessionId, entry.projectId]);
+  }, [router, entry.taskId, entry.sessionId, entry.projectId, isPermission]);
 
-  const section = sectionForEntry(entry);
-  const working = section === 'working';
   // Desktop-parity status treatment: green spinner while the agent works,
-  // yellow mail while an idle session holds unread results.
+  // the yellow mail envelope for EVERY idle session (a pending prompt is
+  // idle too - all idle rows are equal priority, first come first served).
   const statusKind = working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
 
-  // Inbox-style snippet: idle rows preview the agent's last message. The
-  // peek result records WHICH refresh key it belongs to (unreadCount bumps
-  // on new messages), the same derived-match pattern as the prompt peek.
-  const snippetKey = `${entry.sessionId}:${entry.unreadCount}`;
+  // Inbox-style snippet, identical slot for every idle row: the pending
+  // decision when a prompt waits, otherwise the agent's last message. The
+  // peek result records WHICH refresh key it belongs to (the prompt id, or
+  // unreadCount which bumps on new messages), so re-renders never refetch.
+  const awaitedPromptId = entry.awaitedPromptId;
+  const snippetKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
   const [peekedSnippet, setPeekedSnippet] = useState<{ key: string; text: string | null } | null>(null);
   const snippet = peekedSnippet !== null && peekedSnippet.key === snippetKey ? peekedSnippet.text : null;
   useEffect(() => {
     if (working) return;
     let cancelled = false;
-    void peekLastAssistantMessage(entry.sessionId, entry.unreadCount)
+    const currentKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
+    const peek =
+      isPermission && awaitedPromptId !== null
+        ? peekAwaitedPrompt(entry.sessionId, awaitedPromptId).then((toolUse) => buildPendingPromptSummary(toolUse))
+        : peekLastAssistantMessage(entry.sessionId, entry.unreadCount);
+    void peek
       .then((snippetText) => {
-        if (!cancelled) setPeekedSnippet({ key: `${entry.sessionId}:${entry.unreadCount}`, text: snippetText });
+        if (!cancelled) setPeekedSnippet({ key: currentKey, text: snippetText });
       })
       .catch(() => {
         // Not connected / no transcript: the row simply has no preview.
@@ -200,7 +210,7 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
     return () => {
       cancelled = true;
     };
-  }, [entry.sessionId, entry.unreadCount, working]);
+  }, [entry.sessionId, entry.unreadCount, working, isPermission, awaitedPromptId]);
 
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>

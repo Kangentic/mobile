@@ -1,19 +1,20 @@
 appId: com.kangentic.mobile
 ---
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
-# The stub raises a permission prompt ~20s in. Home's needs-you card is a
-# summary teaser (no inline approve/deny); tapping it opens the session in
-# chat mode where the real permission card answers the prompt.
+# The stub raises a permission prompt ~20s in. A prompt-pending session is
+# a normal Idle row (uniform inbox styling, no inline approve/deny);
+# tapping it opens the session in chat mode where the real permission card
+# answers the prompt.
 - launchApp
 - extendedWaitUntil:
     visible:
-      id: "needs-you-card-stub-session-1"
+      id: "activity-row-stub-session-1"
     timeout: 45000
 # No inline controls on Home: the approve button must NOT be on this screen.
 - assertNotVisible:
     id: "permission-approve"
 - tapOn:
-    id: "needs-you-card-stub-session-1"
+    id: "activity-row-stub-session-1"
 # Lands in the session with the chat lens active and the prompt card showing.
 - extendedWaitUntil:
     visible:
