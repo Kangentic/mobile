@@ -23,8 +23,8 @@ interface QuickKey {
 }
 
 // Every key visible at once, no scrolling: only keys the soft keyboard
-// CANNOT type ('/' and letters belong to the input row). Stop is Ctrl+C -
-// interrupt the running agent - and sits in the row as an equal member.
+// CANNOT type. The interrupt is labeled literally - Ctrl+C - because
+// "Stop" hid what it actually sends (the interrupt character, SIGINT).
 const QUICK_KEYS: QuickKey[] = [
   { id: 'esc', label: 'Esc', accessibilityLabel: 'Escape', sequence: ESCAPE },
   { id: 'tab', label: 'Tab', accessibilityLabel: 'Tab', sequence: TAB },
@@ -33,7 +33,7 @@ const QUICK_KEYS: QuickKey[] = [
   { id: 'left', label: '←', accessibilityLabel: 'Arrow left', arrow: 'left', glyph: true },
   { id: 'right', label: '→', accessibilityLabel: 'Arrow right', arrow: 'right', glyph: true },
   { id: 'enter', label: 'Enter', accessibilityLabel: 'Enter', sequence: ENTER },
-  { id: 'ctrl-c', label: 'Stop', accessibilityLabel: 'Stop the running agent (Ctrl+C)', sequence: CTRL_C, danger: true },
+  { id: 'ctrl-c', label: 'Ctrl+C', accessibilityLabel: 'Interrupt the running agent (Ctrl+C)', sequence: CTRL_C, danger: true },
 ];
 
 const KEY_LABEL_FONT_SIZE = 13;

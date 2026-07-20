@@ -77,6 +77,11 @@ describe('terminal -> host round-trip', () => {
     const reset: TerminalToHostMessage = { type: 'clean-lines', lines: [], reset: true };
     expect(decodeTerminalMessage(encodeTerminalMessage(reset))).toEqual(reset);
   });
+
+  it('round-trips the tapped message (keyboard toggle)', () => {
+    const tapped: TerminalToHostMessage = { type: 'tapped' };
+    expect(decodeTerminalMessage(encodeTerminalMessage(tapped))).toEqual(tapped);
+  });
 });
 
 describe('decodeTerminalMessage - malformed input', () => {

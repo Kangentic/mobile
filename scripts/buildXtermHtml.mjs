@@ -468,11 +468,46 @@ const bridgeGlue = `
   // visible.
   window.addEventListener('resize', refit);
 
+  // Clean-tap detection (tap toggles the host-side keyboard; drags, pans,
+  // and pinches never do): a single touch that ends within the slop radius
+  // and time budget posts 'tapped' to the host. Any second finger or real
+  // movement marks the gesture dirty.
+  var TAP_SLOP_PX = 12;
+  var TAP_MAX_MS = 350;
+  var tapStartX = 0;
+  var tapStartY = 0;
+  var tapStartAt = 0;
+  var tapDirty = true;
+
   window.addEventListener('load', function () {
     var container = scrollContainer();
     if (container) {
-      container.addEventListener('touchstart', function () {
+      container.addEventListener('touchstart', function (touchEvent) {
         manualPanUntil = Date.now() + MANUAL_PAN_PAUSE_MS;
+        if (touchEvent.touches.length === 1) {
+          tapDirty = false;
+          tapStartX = touchEvent.touches[0].clientX;
+          tapStartY = touchEvent.touches[0].clientY;
+          tapStartAt = Date.now();
+        } else {
+          tapDirty = true;
+        }
+      }, { passive: true });
+      container.addEventListener('touchmove', function (touchEvent) {
+        if (tapDirty || touchEvent.touches.length !== 1) {
+          tapDirty = true;
+          return;
+        }
+        var deltaX = touchEvent.touches[0].clientX - tapStartX;
+        var deltaY = touchEvent.touches[0].clientY - tapStartY;
+        if (deltaX * deltaX + deltaY * deltaY > TAP_SLOP_PX * TAP_SLOP_PX) tapDirty = true;
+      }, { passive: true });
+      container.addEventListener('touchend', function (touchEvent) {
+        if (touchEvent.touches.length > 0) return;
+        if (!tapDirty && Date.now() - tapStartAt <= TAP_MAX_MS) {
+          postToHost({ type: 'tapped' });
+        }
+        tapDirty = true;
       }, { passive: true });
       container.addEventListener('click', function () {
         if (terminal) terminal.focus();
