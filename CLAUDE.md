@@ -184,6 +184,8 @@ names its enforcement (live now, or planned for App Phase 1).
   (`src/pairing/`, `src/channel/`, `src/notifications/`, `src/state/`).
 - `ui-conventions.md` - shared primitives, font floor, FlashList, testIDs (`src/screens/`,
   `src/components/`).
+- `ui-copy-brevity.md` - labels name the action, context names the object; one-line
+  descriptions; a11y labels exempt (`src/screens/`, `src/components/`).
 - `docs-stay-in-sync.md` - update docs when changing anchor source files.
 
 **Local overrides:** there is no per-rule local file. Put machine-specific instruction overrides
