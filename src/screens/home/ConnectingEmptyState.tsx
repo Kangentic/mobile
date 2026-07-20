@@ -10,8 +10,8 @@ export function ConnectingEmptyState(): React.JSX.Element {
   return (
     <EmptyState
       testID="connecting-empty-state"
-      title="Connecting to your desktop..."
-      caption="Agents appear as soon as the link is up."
+      title="Connecting to your desktop…"
+      caption="Your agents appear here once it connects."
       overseerSize={90}
       overseerAnimate="blink-loop"
     />
