@@ -149,6 +149,9 @@ function UnpairedEmptyState(): React.JSX.Element {
 /** Title-row height: fits the pills/badges so their arrival never reflows. */
 const ROW_TITLE_MIN_HEIGHT = 24;
 
+/** How long a row waits before retrying a failed snippet peek. */
+const SNIPPET_PEEK_RETRY_MS = 6000;
+
 const ActivityRow = React.memo(function ActivityRow({
   entry,
   nowMs,
@@ -194,29 +197,48 @@ const ActivityRow = React.memo(function ActivityRow({
   const awaitedPromptId = entry.awaitedPromptId;
   const snippetKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
   const [peekedSnippet, setPeekedSnippet] = useState<{ key: string; text: string | null } | null>(null);
+  const [peekRetryNonce, setPeekRetryNonce] = useState(0);
   const snippet = peekedSnippet !== null && peekedSnippet.key === snippetKey ? peekedSnippet.text : null;
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const currentKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
     const peek =
       isPermission && awaitedPromptId !== null
         ? peekAwaitedPrompt(entry.sessionId, awaitedPromptId).then((toolUse) => buildPendingPromptSummary(toolUse))
-        : peekLastAssistantMessage(entry.sessionId, entry.unreadCount).then(
-            // Transcript-less agents (codex-style) still stream a PTY:
-            // fall back to the last readable terminal line.
-            (messageText) => messageText ?? peekLastTerminalLine(entry.sessionId, entry.unreadCount),
-          );
+        : (async () => {
+            // Transcript-less agents (codex-style) still stream a PTY, and
+            // a huge session's window fetch can fail outright: either way
+            // fall back to the last readable terminal line, and treat a
+            // failed fetch with no fallback as retryable, not as "no
+            // preview" (successes cache, so a stuck blank never heals on
+            // its own).
+            let messagePeekFailed = false;
+            const messageText = await peekLastAssistantMessage(entry.sessionId, entry.unreadCount).catch(() => {
+              messagePeekFailed = true;
+              return null;
+            });
+            const snippetText = messageText ?? (await peekLastTerminalLine(entry.sessionId, entry.unreadCount));
+            if (snippetText === null && messagePeekFailed) throw new Error('snippet peek failed');
+            return snippetText;
+          })();
     void peek
       .then((snippetText) => {
         if (!cancelled) setPeekedSnippet({ key: currentKey, text: snippetText });
       })
       .catch(() => {
-        // Not connected / no transcript: the row simply has no preview.
+        // Not connected yet or a transient fetch failure: retry shortly.
+        // The loop self-terminates on the first resolved peek (results
+        // cache by key, so repeat runs after that are free).
+        if (!cancelled) {
+          retryTimer = setTimeout(() => setPeekRetryNonce((nonce) => nonce + 1), SNIPPET_PEEK_RETRY_MS);
+        }
       });
     return () => {
       cancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
     };
-  }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId]);
+  }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce]);
 
   // No status filler ("Thinking", "Waiting for..."): the section header
   // and the icon already say the state. The row is title + project pill +

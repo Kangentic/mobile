@@ -39,10 +39,43 @@ export interface AwaitedToolUse {
 
 const SNIPPET_MAX_LENGTH = 200;
 
+/** A line that is pure decoration: markdown rules, box-drawing, table borders. */
+const DECORATION_ONLY_LINE = /^[\s\-=_*~#>│─━┄┈┉╌|+:.]+$/;
+/** A code-fence delimiter line (```ts, ~~~), stripped so fences never leak into snippets. */
+const CODE_FENCE_LINE = /^(?:`{3,}|~{3,})[\w-]*$/;
+/** Leading markdown structure markers: headings, blockquotes, bullets, ordered lists. */
+const LEADING_STRUCTURE_MARKERS = /^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d{1,3}[.)]\s+)+/;
+
 /**
- * The last assistant text in a transcript window, whitespace-collapsed to
- * a short inbox-style snippet, or null when the window has no assistant
- * text. Powers the Agents feed's idle-card message preview.
+ * Collapse markdown prose to plain inbox-snippet text: decoration-only
+ * lines (horizontal rules render literally as line glyphs on the feed
+ * card, seen live), fence markers, structure markers, emphasis, and link
+ * syntax all drop; what survives is the words. Empty string when the text
+ * was decoration through and through.
+ */
+export function collapseToSnippetText(text: string): string {
+  const keptLines: string[] = [];
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+    if (CODE_FENCE_LINE.test(line)) continue;
+    if (DECORATION_ONLY_LINE.test(line)) continue;
+    keptLines.push(line.replace(LEADING_STRUCTURE_MARKERS, ''));
+  }
+  return keptLines
+    .join(' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*|`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The last assistant text in a transcript window that still says something
+ * after markdown decoration is stripped, capped to an inbox-style snippet;
+ * null when the window has no readable assistant text. Blocks that were
+ * decoration-only (a closing horizontal rule, a bare fence) are skipped in
+ * favor of earlier real prose. Powers the Agents feed's message preview.
  */
 export function lastAssistantText(entries: TranscriptEntryWire[]): string | null {
   for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex--) {
@@ -50,9 +83,9 @@ export function lastAssistantText(entries: TranscriptEntryWire[]): string | null
     if (entry.kind !== 'assistant') continue;
     for (let blockIndex = entry.blocks.length - 1; blockIndex >= 0; blockIndex--) {
       const block = entry.blocks[blockIndex];
-      if (block.type === 'text' && block.text.trim().length > 0) {
-        return block.text.trim().replace(/\s+/g, ' ').slice(0, SNIPPET_MAX_LENGTH);
-      }
+      if (block.type !== 'text') continue;
+      const snippetText = collapseToSnippetText(block.text);
+      if (snippetText.length > 0) return snippetText.slice(0, SNIPPET_MAX_LENGTH);
     }
   }
   return null;
