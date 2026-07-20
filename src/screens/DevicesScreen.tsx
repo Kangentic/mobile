@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Card, MonoText, Row, Screen, Stack, StatusDot, Text, useTheme } from '@/components';
+import { wipeDesktopContent } from '@/connection/actions';
 import { reconnectNow } from '@/connection/connectionManager';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
 import { useChannelStore } from '@/state/channelStore';
@@ -43,6 +44,10 @@ export function DevicesScreen(): React.JSX.Element {
     void trustAnchorStore
       .clear()
       .then(() => {
+        // Revoking trust also revokes what was fetched under it: every
+        // store and cache holding the desktop's content is cleared so
+        // nothing readable outlives the pairing on an unlocked phone.
+        wipeDesktopContent();
         reconnectNow();
         router.back();
       })

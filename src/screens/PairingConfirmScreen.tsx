@@ -4,6 +4,7 @@ import { Screen, Stack, Row, Text, Button, Overseer, useTheme } from '@/componen
 import { triggerHaptic } from '@/lib/haptics';
 import { usePairingStore } from '@/state/pairingStore';
 import { confirmActivePairing, rejectActivePairing, resetActivePairing } from '@/pairing/activePairing';
+import { wipeDesktopContent } from '@/connection/actions';
 import { reconnectNow } from '@/connection/connectionManager';
 
 const CONNECTING_OVERSEER_SIZE = 72;
@@ -37,6 +38,9 @@ export function PairingConfirmScreen(): React.JSX.Element {
     try {
       await confirmActivePairing();
       triggerHaptic('pairingSucceeded');
+      // A new pairing replaces the trust context: clear the previous
+      // desktop's content before the fresh bootstrap repopulates.
+      wipeDesktopContent();
       // Pick the freshly saved trust anchor up without an app restart.
       reconnectNow();
       // Let the success state's Overseer wave land before leaving; the store
