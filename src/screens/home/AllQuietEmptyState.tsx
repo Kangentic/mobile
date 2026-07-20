@@ -10,7 +10,7 @@ export function AllQuietEmptyState(): React.JSX.Element {
     <EmptyState
       testID="all-quiet-empty-state"
       title="All quiet"
-      caption="Nothing needs you right now. Start an agent on your desktop and it shows up here."
+      caption="Agents you start on the desktop show up here."
       overseerSize={90}
       overseerAnimate="blink-loop"
     />

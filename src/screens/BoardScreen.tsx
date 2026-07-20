@@ -212,11 +212,7 @@ export function BoardScreen(): React.JSX.Element {
         <EmptyState
           testID="board-empty-state"
           title={projects.length === 0 ? 'No board yet' : 'No columns yet'}
-          caption={
-            projects.length === 0
-              ? 'Connect to your desktop to see the board.'
-              : 'This board has no columns yet. Add them from the desktop.'
-          }
+          caption={projects.length === 0 ? 'Connect to your desktop to see the board.' : 'Add columns from the desktop.'}
           overseerSize={54}
           overseerAnimate="blink-loop"
         />

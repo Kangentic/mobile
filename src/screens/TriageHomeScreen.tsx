@@ -137,7 +137,7 @@ function UnpairedEmptyState(): React.JSX.Element {
     <EmptyState
       testID="unpaired-empty-state"
       title="No desktop paired"
-      caption="Pair this phone with your desktop Kangentic app to triage and steer your agents from anywhere."
+      caption="Steer your agents from anywhere."
       overseerSize={90}
       overseerAnimate="blink-loop"
     >

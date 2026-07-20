@@ -62,8 +62,7 @@ export function DevicesScreen(): React.JSX.Element {
         ) : pairedInfo.status === 'unpaired' ? (
           <Stack gap="sm">
             <Text variant="body" color="secondary">
-              No desktop is paired on this phone yet (dev-rig connections bypass pairing and do not
-              appear here).
+              No desktop paired yet.
             </Text>
             <Button label="Pair with your desktop" onPress={() => router.push('/pair')} testID="devices-pair-cta" />
           </Stack>
@@ -124,7 +123,7 @@ export function DevicesScreen(): React.JSX.Element {
             </Stack>
 
             <Button
-              label={unpairing ? 'Unpairing...' : unpairArmed ? 'Tap again to unpair' : 'Unpair this desktop'}
+              label={unpairing ? 'Unpairing...' : unpairArmed ? 'Tap again to confirm' : 'Unpair'}
               variant="danger"
               onPress={onUnpairPress}
               disabled={unpairing}
@@ -134,7 +133,7 @@ export function DevicesScreen(): React.JSX.Element {
         )}
 
         <Text variant="caption" color="muted">
-          {"To revoke a phone's access to your desktop, remove it in the desktop app's Mobile Devices settings; the desktop's signed device roster is the authority."}
+          {"Revoke phones from the desktop app's Mobile Devices settings."}
         </Text>
         {relayUrl && pairedInfo.status !== 'paired' ? (
           <LabeledValue label="Active relay">
