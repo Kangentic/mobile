@@ -87,27 +87,28 @@ describe('TriageHomeScreen', () => {
     seedStores();
   });
 
-  it('files prompt cards under Idle (the user\'s move) and hides empty sections', () => {
+  it('files prompt-pending rows under Idle (the user\'s move) and hides empty sections', () => {
     renderHome();
     // The lone session is prompt-pending: desktop semantics count it in the
-    // idle bucket, so its card sits under one Idle header; the empty
-    // Thinking section renders nothing.
-    expect(screen.getByTestId('needs-you-card-sess-1')).toBeTruthy();
+    // idle bucket, so its row sits under one Idle header - styled exactly
+    // like every other idle row - and the empty Thinking section renders
+    // nothing.
+    expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
     expect(screen.getAllByText('Idle')).toHaveLength(1);
     expect(screen.queryByText('Thinking')).toBeNull();
     expect(screen.queryByText('Needs you')).toBeNull();
   });
 
-  it('renders a needs-you summary card (no inline controls) and routes to chat on tap', async () => {
+  it('prompt-pending rows carry no inline controls and route to chat on tap', () => {
     renderHome();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
-    expect(await screen.findByText('Waiting for your approval')).toBeTruthy();
-    // The card TEASES the decision; answering lives in the session's own
-    // prompt card, so Home never shows approve/deny.
+    expect(screen.getByText('Waiting for your approval')).toBeTruthy();
+    // The row TEASES the decision in its snippet; answering lives in the
+    // session's own prompt card, so Home never shows approve/deny.
     expect(screen.queryByTestId('permission-approve')).toBeNull();
-    expect(screen.getByText('Review and approve')).toBeTruthy();
+    expect(screen.queryByText('Review and approve')).toBeNull();
 
-    fireEvent.press(screen.getByTestId('needs-you-card-sess-1'));
+    fireEvent.press(screen.getByTestId('activity-row-sess-1'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/task/[taskId]',
       params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1', mode: 'chat' },

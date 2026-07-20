@@ -178,25 +178,90 @@ function initialTasks2(): BoardTaskWire[] {
   ];
 }
 
+/**
+ * Mirrored from a REAL Claude Code session's transcript (the App Phase 1
+ * overnight run) so mock parity matches genuine session shapes: an Edit
+ * with real multi-line old/new strings, real command outputs, and real
+ * assistant prose lengths. Machine paths sanitized to C:\Users\dev per
+ * the no-personal-info rule; content is recorded data otherwise.
+ */
 function baseTranscript(): TranscriptEntryWire[] {
   const now = Date.now();
   return [
-    { kind: 'user', uuid: 'mock-user-1', ts: now - 60000, text: 'Fix the login redirect bug and add a regression test.' },
+    {
+      kind: 'user',
+      uuid: 'mock-user-1',
+      ts: now - 300000,
+      text: 'Update the Commands section in CLAUDE.md to match the new EAS build profiles, then verify the suites still pass.',
+    },
     {
       kind: 'assistant',
       uuid: 'mock-assistant-1',
-      ts: now - 55000,
+      ts: now - 280000,
       blocks: [
-        { type: 'text', text: 'Looking at the auth flow now. The redirect drops the `next` parameter on **expired-session** logins.' },
-        { type: 'tool_use', id: 'mock-tool-1', name: 'Bash', input: { command: 'rg -n "next=" src/auth' } },
+        {
+          type: 'text',
+          text: 'Reading the current Commands list, then updating the build entries to the **dev/preview/prod** profile split.',
+        },
+        {
+          type: 'tool_use',
+          id: 'mock-tool-1',
+          name: 'Edit',
+          input: {
+            replace_all: false,
+            file_path: 'C:\\Users\\dev\\Documents\\GitHub\\kangentic-mobile\\CLAUDE.md',
+            old_string:
+              '- `eas build --profile development --platform android` - Build a dev-client for local iteration\n- `eas build --profile production --platform ios` - Build for the App Store (cloud, no Mac needed)\n- `npm run typecheck` - `tsc --noEmit`',
+            new_string:
+              '- `eas build --profile development --platform android` (`npm run build:dev`) - Build a dev-client\n  for local iteration in the cloud, no local Android SDK build required\n- `eas build --profile preview --platform android` (`npm run build:preview`) - Internal\n  distribution build\n- `eas build --profile production --platform android` (`npm run build:prod`) - Store-release build\n- `eas build --profile production --platform ios` - Build for the App Store (cloud, no Mac needed)\n- `npm run typecheck` - `tsc --noEmit`',
+          },
+        },
       ],
     },
     {
       kind: 'tool_result',
       uuid: 'mock-result-1',
-      ts: now - 50000,
+      ts: now - 270000,
       toolUseId: 'mock-tool-1',
-      content: 'src/auth/login.ts:42: redirect(`/login?next=${encodeURIComponent(path)}`)',
+      content:
+        'The file C:\\Users\\dev\\Documents\\GitHub\\kangentic-mobile\\CLAUDE.md has been updated successfully.',
+    },
+    {
+      kind: 'assistant',
+      uuid: 'mock-assistant-2',
+      ts: now - 260000,
+      blocks: [{ type: 'tool_use', id: 'mock-tool-tc', name: 'Bash', input: { command: 'npm run typecheck' } }],
+    },
+    {
+      kind: 'tool_result',
+      uuid: 'mock-result-tc',
+      ts: now - 250000,
+      toolUseId: 'mock-tool-tc',
+      content: '> @kangentic/mobile@0.1.0 typecheck\n> tsc --noEmit',
+    },
+    {
+      kind: 'assistant',
+      uuid: 'mock-assistant-3',
+      ts: now - 240000,
+      blocks: [{ type: 'tool_use', id: 'mock-tool-vt', name: 'Bash', input: { command: 'npx vitest run tests/unit' } }],
+    },
+    {
+      kind: 'tool_result',
+      uuid: 'mock-result-vt',
+      ts: now - 230000,
+      toolUseId: 'mock-tool-vt',
+      content: ' Test Files  38 passed (38)\n      Tests  305 passed (305)\n   Duration  2.72s',
+    },
+    {
+      kind: 'assistant',
+      uuid: 'mock-assistant-4',
+      ts: now - 220000,
+      blocks: [
+        {
+          type: 'text',
+          text: 'Typecheck and the unit suite are green; the Commands section now documents all three EAS profiles. Running the component tier next needs your approval.',
+        },
+      ],
     },
   ];
 }
@@ -447,11 +512,21 @@ export function createMockDesktop(): MockDesktop {
       });
       if (feedTick % 12 === 0 && pendingPromptId === null) {
         entryCounter += 1;
+        // Varied realistic commands (real sessions never repeat one Bash
+        // cell verbatim), mirroring the repo's actual verification loop.
+        const tickCommands = ['npm run typecheck', 'npm run lint', 'npx vitest run tests/unit'];
         appendTranscriptEntry({
           kind: 'assistant',
           uuid: `mock-assistant-tick-${entryCounter}`,
           ts: Date.now(),
-          blocks: [{ type: 'tool_use', id: `mock-tool-tick-${entryCounter}`, name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
+          blocks: [
+            {
+              type: 'tool_use',
+              id: `mock-tool-tick-${entryCounter}`,
+              name: 'Bash',
+              input: { command: tickCommands[entryCounter % tickCommands.length] },
+            },
+          ],
         });
       }
       if (feedTick === 20 && pendingPromptId === null && !questionRaised) {
@@ -459,7 +534,7 @@ export function createMockDesktop(): MockDesktop {
           kind: 'assistant',
           uuid: 'mock-assistant-permission',
           ts: Date.now(),
-          blocks: [{ type: 'tool_use', id: PERMISSION_TOOL_ID, name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
+          blocks: [{ type: 'tool_use', id: PERMISSION_TOOL_ID, name: 'Bash', input: { command: 'npx jest tests/components' } }],
         });
         raisePrompt(PERMISSION_PROMPT_ID);
       }
