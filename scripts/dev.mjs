@@ -366,19 +366,21 @@ async function ensureEmulator(avdName) {
   if (!listed.stdout.split('\n').map((name) => name.trim()).includes(avdName)) {
     fail(`AVD "${avdName}" not found. Available: ${listed.stdout.trim().split('\n').join(', ') || '(none)'}`);
   }
-  log(`booting emulator ${avdName} (host GPU)...`);
+  log(`booting emulator ${avdName} (host GPU, cold boot)...`);
   // Explicit host GPU: an AVD with hw.gpu.enabled=no renders in software
   // and degrades over long sessions (progressive input + window lag).
   // NOTE emulator 36.x rejects the old angle_indirect value (silently
   // falls back to auto); the valid accelerated mode is 'host'. The AVD
   // config carries hw.gpu.mode=host for boots that bypass the rig; the
-  // flag here overrides whatever the config says.
-  const emulatorChild = spawn('emulator', ['-avd', avdName, '-gpu', 'host'], {
+  // flag here overrides whatever the config says. ALWAYS cold boot
+  // (-no-snapshot-load): resuming a Quick Boot snapshot taken under a
+  // different GPU config wedges the guest with adb reporting offline.
+  const emulatorChild = spawn('emulator', ['-avd', avdName, '-no-snapshot-load', '-gpu', 'host'], {
     detached: true,
     stdio: 'ignore',
   });
   emulatorChild.unref();
-  const deadline = Date.now() + 180_000;
+  const deadline = Date.now() + 300_000;
   while (Date.now() < deadline) {
     const boot = run('adb', ['shell', 'getprop', 'sys.boot_completed']);
     if (boot.stdout?.trim() === '1') {
@@ -709,7 +711,14 @@ async function main() {
     log('restarting the emulator (fresh process cures long-session lag)...');
     if (attachedEmulator()) {
       run('adb', ['emu', 'kill']);
-      await sleep(6000);
+      // Wait for the dying instance to actually DETACH before booting the
+      // next one, or the boot races the AVD lock and the boot-completed
+      // poll can bind to the corpse.
+      const detachDeadline = Date.now() + 20_000;
+      while (attachedEmulator() && Date.now() < detachDeadline) {
+        await sleep(1000);
+      }
+      await sleep(2000);
     }
     await ensureEmulator(avdName);
     ensureAdbReverse();
