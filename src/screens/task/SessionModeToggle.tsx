@@ -18,8 +18,6 @@ export interface SessionModeToggleProps {
 }
 
 const SEGMENT_ICON_SIZE = 20;
-/** Same fixed stadium geometry as the app tab bar's active indicator. */
-const SEGMENT_PILL_HEIGHT = 30;
 
 interface SegmentVisual {
   mode: SessionMode;
@@ -57,7 +55,7 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
         {
           borderColor: theme.colors.border,
           borderRadius: theme.radii.lg,
-          paddingVertical: theme.spacing.xs / 2,
+          padding: theme.spacing.xs / 2,
         },
       ]}
     >
@@ -71,18 +69,18 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
             accessibilityLabel={segment.accessibilityLabel}
             testID={`session-mode-${segment.mode}`}
             onPress={() => selectMode(segment.mode)}
-            style={styles.segment}
+            style={[
+              styles.segment,
+              {
+                // The WHOLE segment tints when active, not just the icon:
+                // one glance says which surface is on.
+                backgroundColor: isActive ? theme.colors.accentSubtle : 'transparent',
+                borderRadius: theme.radii.lg - theme.spacing.xs / 2,
+                paddingVertical: theme.spacing.xs,
+              },
+            ]}
           >
-            <View
-              style={[
-                styles.iconPill,
-                {
-                  borderRadius: SEGMENT_PILL_HEIGHT / 2,
-                  paddingHorizontal: theme.spacing.lg,
-                  backgroundColor: isActive ? theme.colors.accentSubtle : 'transparent',
-                },
-              ]}
-            >
+            <View style={styles.iconHolder}>
               <segment.Icon
                 size={SEGMENT_ICON_SIZE}
                 color={isActive ? theme.colors.accent : theme.colors.textMuted}
@@ -106,24 +104,24 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
 
 const styles = StyleSheet.create({
   // The outline binds the three segments into one visible toggle group.
+  // No flex here: as a column child it stretches to full width on its own,
+  // and flexBasis 0 would crush the row's height.
   bar: {
     borderWidth: StyleSheet.hairlineWidth,
-    flex: 1,
   },
   segment: {
     alignItems: 'center',
     flex: 1,
     justifyContent: 'center',
   },
-  iconPill: {
+  iconHolder: {
     alignItems: 'center',
-    height: SEGMENT_PILL_HEIGHT,
     justifyContent: 'center',
   },
   attentionDot: {
     position: 'absolute',
-    right: 6,
-    top: 0,
+    right: -10,
+    top: -2,
   },
   label: {
     fontWeight: '600',
