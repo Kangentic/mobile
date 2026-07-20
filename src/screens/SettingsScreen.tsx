@@ -49,13 +49,13 @@ const NOTIFICATION_MODE_OPTIONS: {
   {
     mode: 'foreground-service',
     label: 'Stay connected',
-    description: 'Instant alerts via a quiet ongoing notification',
+    description: 'Instant alerts via a quiet notification',
     testID: 'settings-notifications-foreground-service',
   },
   {
     mode: 'push-only',
     label: 'Push only',
-    description: 'Encrypted push wakes the app when an agent needs you',
+    description: 'Encrypted push wakes the app when needed',
     testID: 'settings-notifications-push-only',
   },
   {
