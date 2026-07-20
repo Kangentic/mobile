@@ -140,6 +140,14 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
   });
 
+  it('shows the connecting state (Overseer, not a void) while paired but not established', () => {
+    useActivityStore.getState().reset();
+    useChannelStore.setState({ established: false, transportState: 'connecting' });
+    renderHome();
+    expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
+    expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
+  });
+
   it('shows the pairing CTA when unpaired', () => {
     useChannelStore.setState({ pairedState: 'unpaired' });
     renderHome();

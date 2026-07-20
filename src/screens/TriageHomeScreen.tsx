@@ -16,6 +16,7 @@ import { useChannelStore } from '@/state/channelStore';
 import { peekAwaitedPrompt, peekLastAssistantMessage, peekLastTerminalLine, refreshSnapshots } from '@/connection/actions';
 import { buildPendingPromptSummary } from '@/conversation/pendingPromptSummary';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
+import { ConnectingEmptyState } from './home/ConnectingEmptyState';
 
 type TriageListRow =
   | { kind: 'section-header'; section: TriageSection; title: string }
@@ -104,6 +105,18 @@ export function TriageHomeScreen(): React.JSX.Element {
         <AppHeader title="Agents" />
         <ConnectionBanner />
         <AllQuietEmptyState />
+      </Screen>
+    );
+  }
+
+  // Paired with nothing to show while the channel comes up: the Overseer
+  // holds the center (the banner still escalates a long outage to Offline).
+  if (rows.length === 0) {
+    return (
+      <Screen edges={['left', 'right']}>
+        <AppHeader title="Agents" />
+        <ConnectionBanner />
+        <ConnectingEmptyState />
       </Screen>
     );
   }
