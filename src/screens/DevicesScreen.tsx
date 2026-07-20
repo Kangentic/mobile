@@ -109,6 +109,20 @@ export function DevicesScreen(): React.JSX.Element {
               </Stack>
             </Card>
 
+            {/* This phone holds ONE desktop trust anchor: pairing again is
+                a REPLACEMENT, so it sits here with unpair and says so. */}
+            <Stack gap="xs">
+              <Button
+                label="Pair a different desktop"
+                variant="ghost"
+                onPress={() => router.push('/pair')}
+                testID="devices-pair-different"
+              />
+              <Text variant="caption" color="muted" style={styles.centered}>
+                Replaces the pairing on this phone
+              </Text>
+            </Stack>
+
             <Button
               label={unpairing ? 'Unpairing...' : unpairArmed ? 'Tap again to unpair' : 'Unpair this desktop'}
               variant="danger"
@@ -146,6 +160,9 @@ function LabeledValue({ label, children }: { label: string; children: React.Reac
 }
 
 const styles = StyleSheet.create({
+  centered: {
+    textAlign: 'center',
+  },
   spaceBetween: {
     justifyContent: 'space-between',
   },

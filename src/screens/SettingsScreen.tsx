@@ -130,23 +130,11 @@ export function SettingsScreen(): React.JSX.Element {
               </Pressable>
               {pairedState === 'unpaired' ? (
                 // Unpaired is the setup moment: the pair CTA is the hero.
-                <Button testID="settings-pair-device" label="Pair a device" onPress={() => router.push('/pair')} />
-              ) : (
-                <>
-                  <RowDivider />
-                  <Pressable
-                    accessibilityRole="button"
-                    testID="settings-pair-device"
-                    onPress={() => router.push('/pair')}
-                    style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
-                  >
-                    <Text variant="body" color="primary">
-                      Pair another device
-                    </Text>
-                    <Icon name="chevron-forward" color="muted" size={16} />
-                  </Pressable>
-                </>
-              )}
+                // Once paired, this phone holds exactly ONE desktop trust
+                // anchor - re-pairing REPLACES it, so that action lives in
+                // the Devices screen next to unpair, stated as a replace.
+                <Button testID="settings-pair-device" label="Pair with your desktop" onPress={() => router.push('/pair')} />
+              ) : null}
             </Stack>
           </Card>
         </Stack>
