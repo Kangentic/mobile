@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Button, Icon, MonoText, Row, Screen, Stack, StatusDot, Text, useTheme } from '@/components';
+import Constants from 'expo-constants';
+import { Brandmark, Button, Card, Icon, MonoText, Row, Screen, SectionHeader, Stack, StatusDot, Text, useTheme } from '@/components';
 import { getPushRegistrationStatus, type PushRegistrationStatus } from '@/notifications';
 import { useChannelStore } from '@/state/channelStore';
 import {
@@ -11,10 +12,10 @@ import {
 } from '@/state/settingsStore';
 
 const PUSH_STATUS_LABELS: Record<PushRegistrationStatus, string> = {
-  registered: 'Remote push: registered with your desktop',
-  'unavailable-no-fcm': 'Remote push: unavailable on this build (FCM credentials not configured)',
-  'capability-denied': 'Remote push: your desktop has not granted this device push access',
-  'not-connected': 'Remote push: registers when the desktop connects',
+  registered: 'Remote push: registered',
+  'unavailable-no-fcm': 'Remote push: not configured on this build',
+  'capability-denied': 'Remote push: not granted by your desktop',
+  'not-connected': 'Remote push: registers on connect',
   pending: 'Remote push: registering...',
 };
 
@@ -22,19 +23,19 @@ const DICTATION_OPTIONS: { mode: DictationMode; label: string; description: stri
   {
     mode: 'auto-send',
     label: 'Auto-send',
-    description: 'Send dictated text as soon as you finish speaking',
+    description: 'Sends when you stop speaking',
     testID: 'settings-dictation-auto-send',
   },
   {
     mode: 'manual-send',
     label: 'Review before sending',
-    description: 'Dictation fills the composer; you tap send',
+    description: 'Fills the composer; you tap send',
     testID: 'settings-dictation-manual-send',
   },
   {
     mode: 'off',
     label: 'Off',
-    description: 'Hide the microphone button',
+    description: 'Hides the microphone button',
     testID: 'settings-dictation-off',
   },
 ];
@@ -48,19 +49,19 @@ const NOTIFICATION_MODE_OPTIONS: {
   {
     mode: 'foreground-service',
     label: 'Stay connected',
-    description: 'Keeps the secure channel alive in the background for instant alerts (a quiet ongoing notification anchors it)',
+    description: 'Instant alerts via a quiet ongoing notification',
     testID: 'settings-notifications-foreground-service',
   },
   {
     mode: 'push-only',
     label: 'Push only',
-    description: 'Disconnects in the background; encrypted push wakes the app when an agent needs you',
+    description: 'Encrypted push wakes the app when an agent needs you',
     testID: 'settings-notifications-push-only',
   },
   {
     mode: 'off',
     label: 'Off',
-    description: 'No background alerts of any kind',
+    description: 'No background alerts',
     testID: 'settings-notifications-off',
   },
 ];
@@ -88,95 +89,160 @@ export function SettingsScreen(): React.JSX.Element {
           ? 'Not connected'
           : transportState;
 
+  const appVersion = Constants.expoConfig?.version ?? null;
+
   return (
     <Screen testID="settings-screen">
-      <Stack gap="md" style={{ padding: theme.spacing.lg }}>
-        {/* The native stack header already titles this screen. */}
-        <Text variant="title">Connection</Text>
+      {/* Grouped settings cards: each concern in one surface, footnotes
+          under their card, generous rhythm between groups. */}
+      <ScrollView contentContainerStyle={{ padding: theme.spacing.lg, paddingTop: theme.spacing.sm, gap: theme.spacing.lg }}>
         <Stack gap="xs">
-          <Row gap="sm" style={styles.connectionRow}>
-            <StatusDot variant={established ? 'working' : 'idle'} testID="settings-connection-dot" />
-            <Text variant="body" testID="settings-connection-label">
-              {connectionLabel}
-            </Text>
-          </Row>
-          {relayUrl ? (
-            <View>
-              <Text variant="caption" color="muted">
-                Relay
-              </Text>
-              <MonoText size="caption" numberOfLines={1} testID="settings-relay-url">
-                {relayUrl}
-              </MonoText>
-            </View>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            testID="settings-devices-row"
-            onPress={() => router.push('/devices')}
-            style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
-          >
-            <Text variant="body" color="accent">
-              Paired devices
-            </Text>
-            <Icon name="chevron-forward" color="secondary" size={16} />
-          </Pressable>
-          <Button testID="settings-pair-device" label="Pair a device" onPress={() => router.push('/pair')} />
+          <SectionHeader title="Connection" testID="settings-section-connection" />
+          <Card>
+            <Stack gap="sm">
+              <Row gap="sm" style={styles.connectionRow}>
+                <StatusDot variant={established ? 'working' : 'idle'} testID="settings-connection-dot" />
+                <Text variant="bodyStrong" style={styles.flex} testID="settings-connection-label">
+                  {connectionLabel}
+                </Text>
+              </Row>
+              {relayUrl ? (
+                <View>
+                  <Text variant="caption" color="muted">
+                    Relay
+                  </Text>
+                  <MonoText size="caption" numberOfLines={1} testID="settings-relay-url">
+                    {relayUrl}
+                  </MonoText>
+                </View>
+              ) : null}
+              <RowDivider />
+              <Pressable
+                accessibilityRole="button"
+                testID="settings-devices-row"
+                onPress={() => router.push('/devices')}
+                style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
+              >
+                <Text variant="body" color="primary">
+                  Paired devices
+                </Text>
+                <Icon name="chevron-forward" color="muted" size={16} />
+              </Pressable>
+              {pairedState === 'unpaired' ? (
+                // Unpaired is the setup moment: the pair CTA is the hero.
+                <Button testID="settings-pair-device" label="Pair a device" onPress={() => router.push('/pair')} />
+              ) : (
+                <>
+                  <RowDivider />
+                  <Pressable
+                    accessibilityRole="button"
+                    testID="settings-pair-device"
+                    onPress={() => router.push('/pair')}
+                    style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
+                  >
+                    <Text variant="body" color="primary">
+                      Pair another device
+                    </Text>
+                    <Icon name="chevron-forward" color="muted" size={16} />
+                  </Pressable>
+                </>
+              )}
+            </Stack>
+          </Card>
         </Stack>
 
-        <Text variant="title">Notifications</Text>
         <Stack gap="xs">
-          {NOTIFICATION_MODE_OPTIONS.map((option) => (
-            <RadioRow
-              key={option.mode}
-              label={option.label}
-              description={option.description}
-              selected={option.mode === backgroundNotificationsMode}
-              testID={option.testID}
-              onPress={() => void setBackgroundNotificationsMode(option.mode)}
-            />
-          ))}
+          <SectionHeader title="Notifications" testID="settings-section-notifications" />
+          <Card>
+            <Stack gap="xs">
+              {NOTIFICATION_MODE_OPTIONS.map((option, optionIndex) => (
+                <React.Fragment key={option.mode}>
+                  {optionIndex > 0 ? <RowDivider /> : null}
+                  <RadioRow
+                    label={option.label}
+                    description={option.description}
+                    selected={option.mode === backgroundNotificationsMode}
+                    testID={option.testID}
+                    onPress={() => void setBackgroundNotificationsMode(option.mode)}
+                  />
+                </React.Fragment>
+              ))}
+            </Stack>
+          </Card>
           <PushRegistrationStatusLine />
         </Stack>
 
-        <Text variant="title">Feel</Text>
-        <Pressable
-          accessibilityRole="switch"
-          accessibilityState={{ checked: hapticsEnabled }}
-          testID="settings-haptics-toggle"
-          onPress={() => void setHapticsEnabled(!hapticsEnabled)}
-          style={({ pressed }) => [styles.radioRow, { minHeight: theme.minTouchSize, gap: theme.spacing.sm, opacity: pressed ? 0.7 : 1 }]}
-        >
-          <Icon
-            name={hapticsEnabled ? 'checkbox' : 'square-outline'}
-            color={hapticsEnabled ? 'accent' : 'secondary'}
-          />
-          <View style={styles.radioLabels}>
-            <Text variant="body" color="primary">
-              Haptic feedback
-            </Text>
-            <Text variant="caption" color="secondary">
-              A light tap on meaningful actions (answering prompts, moving tasks)
-            </Text>
-          </View>
-        </Pressable>
-
-        <Text variant="title">Dictation</Text>
         <Stack gap="xs">
-          {DICTATION_OPTIONS.map((option) => (
-            <RadioRow
-              key={option.mode}
-              label={option.label}
-              description={option.description}
-              selected={option.mode === dictationMode}
-              testID={option.testID}
-              onPress={() => void setDictationMode(option.mode)}
-            />
-          ))}
+          <SectionHeader title="Feedback" testID="settings-section-feedback" />
+          <Card>
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: hapticsEnabled }}
+              testID="settings-haptics-toggle"
+              onPress={() => void setHapticsEnabled(!hapticsEnabled)}
+              style={({ pressed }) => [styles.switchRow, { minHeight: theme.minTouchSize, gap: theme.spacing.sm, opacity: pressed ? 0.7 : 1 }]}
+            >
+              <View style={styles.radioLabels}>
+                <Text variant="body" color="primary">
+                  Haptic feedback
+                </Text>
+                <Text variant="caption" color="secondary">
+                  A light tap on meaningful actions
+                </Text>
+              </View>
+              <Switch
+                value={hapticsEnabled}
+                onValueChange={(nextEnabled) => void setHapticsEnabled(nextEnabled)}
+                trackColor={{ false: theme.colors.border, true: theme.colors.accentMuted }}
+                thumbColor={hapticsEnabled ? theme.colors.accent : theme.colors.textMuted}
+              />
+            </Pressable>
+          </Card>
         </Stack>
-      </Stack>
+
+        <Stack gap="xs">
+          <SectionHeader title="Dictation" testID="settings-section-dictation" />
+          <Card>
+            <Stack gap="xs">
+              {DICTATION_OPTIONS.map((option, optionIndex) => (
+                <React.Fragment key={option.mode}>
+                  {optionIndex > 0 ? <RowDivider /> : null}
+                  <RadioRow
+                    label={option.label}
+                    description={option.description}
+                    selected={option.mode === dictationMode}
+                    testID={option.testID}
+                    onPress={() => void setDictationMode(option.mode)}
+                  />
+                </React.Fragment>
+              ))}
+            </Stack>
+          </Card>
+        </Stack>
+
+        <Stack gap="xs">
+          <SectionHeader title="About" testID="settings-section-about" />
+          <Card>
+            <Row gap="md" style={styles.aboutRow} testID="settings-about-row">
+              <Brandmark size={40} testID="settings-about-brandmark" />
+              <View style={styles.flex}>
+                <Text variant="bodyStrong">Kangentic Mobile</Text>
+                <Text variant="caption" color="muted">
+                  {appVersion !== null ? `Version ${appVersion}` : 'Development build'}
+                </Text>
+              </View>
+            </Row>
+          </Card>
+        </Stack>
+      </ScrollView>
     </Screen>
   );
+}
+
+/** Hairline separator between rows inside one settings card. */
+function RowDivider(): React.JSX.Element {
+  const theme = useTheme();
+  return <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />;
 }
 
 function PushRegistrationStatusLine(): React.JSX.Element {
@@ -245,6 +311,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   radioLabels: {
     flex: 1,
   },
@@ -255,5 +325,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  aboutRow: {
+    alignItems: 'center',
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+  },
+  flex: {
+    flex: 1,
   },
 });
