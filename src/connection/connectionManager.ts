@@ -282,7 +282,12 @@ export function stopConnectionLifecycle(): void {
   closeConnection();
 }
 
-/** For the pairing flow: pick up a freshly saved trust anchor without an app restart. */
+/**
+ * For the pairing flow: pick up a freshly saved trust anchor without an app
+ * restart. Callers reacting to a CHANGED trust context (unpair, a completed
+ * pairing) must call actions.ts's wipeDesktopContent() first - this only
+ * swaps the connection, it does not clear the previous desktop's content.
+ */
 export function reconnectNow(): void {
   closeConnection();
   void openConnection();
