@@ -89,7 +89,13 @@ node scripts/mobileInspect.mjs key <ANDROID_KEYCODE>       # adb input keyevent
 node scripts/mobileInspect.mjs logcat [--lines n] [--tag t]  # dumped ReactNativeJS log tail
 node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route>
 node scripts/mobileInspect.mjs serve                       # long-lived server, logs app hellos
+node scripts/mobileInspect.mjs relaunch                    # force-stop + launch, VERIFIED foregrounded
 ```
+
+`relaunch` is the recovery command for a wedged app state: a dead Fast Refresh socket (edits
+stop applying), a stale bundle, or a launch that raced onto the home screen. It force-stops,
+fires the launcher intent, polls window focus, and RETRIES the launch until the app actually
+holds the foreground - the blind `am force-stop` + `monkey` pair loses that race routinely.
 
 `screenshot`/`tap`/`text`/`key`/`logcat` are plain adb and work even when the JS bundle is
 broken. `state` interrogates the app's **dev-only inspect bridge**
