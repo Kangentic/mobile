@@ -26,6 +26,16 @@ describe('lastContentLineFromScrollback', () => {
     expect(lastContentLineFromScrollback('───\n| Working (3s · esc to interrupt)\n')).toBeNull();
   });
 
+  it('skips status-area tip lines in favor of the real action above them (recorded feed-card artifact)', () => {
+    // Seen live 2026-07-20: the snippet read "Tip: Use /btw to ask a quick
+    // side question..." while the current tool action sat right above it.
+    const frame =
+      'Update(src/components/theme/tokens.ts)\n' +
+      '* Galloping... (1m 27s · ↓ 2.1k tokens · thinking with xhigh effort)\n' +
+      "  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work\n";
+    expect(lastContentLineFromScrollback(frame)).toBe('Update(src/components/theme/tokens.ts)');
+  });
+
   it('skips single-token label lines like the worktree tag (recorded feed-card artifact)', () => {
     // Seen live 2026-07-20: the snippet showed "kangentic-mobile-v1-overnight"
     // with a trailing arrow - the TUI's worktree tag, not a message.

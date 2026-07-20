@@ -348,6 +348,8 @@ const DECORATION_GLYPH_RUN = /[+|_=~.\-*#·‒-―…−⋯⎯⏤─-╿▀-▟�
 const WORKING_STATUS_LINE = /esc to interrupt|working\s*\(|thinking\s*\(/i;
 /** Agent context bars: "Codex CLI · GPT-5 Codex · high · [up]8.2k [down]420"-style token/meta strips. */
 const CONTEXT_BAR_LINE = /[↑↓].*\d|·.*·.*·/;
+/** Status-area hint lines ("Tip: Use /btw to ask a quick side question..."): help chrome, not the agent's work. */
+const TIP_LINE = /^tip:\s/i;
 
 /**
  * The last CONTENT line of a scrollback capture: strips ANSI, removes TUI
@@ -359,17 +361,21 @@ const CONTEXT_BAR_LINE = /[↑↓].*\d|·.*·.*·/;
 export function lastContentLineFromScrollback(scrollback: string): string | null {
   const lines = stripAnsiPreservingLayout(scrollback).split('\n');
   for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
-    const withoutBorders = lines[lineIndex].replace(/^[\s│║|]+|[\s│║|]+$/g, '').trim();
+    // Edge strip covers box borders AND result-connector glyphs (the
+    // "⎿ ..." tool-result indent), so the classifiers below see the text.
+    const withoutBorders = lines[lineIndex].replace(/^[\s│║|⎿└├]+|[\s│║|]+$/g, '').trim();
     if (withoutBorders.length === 0) continue;
     if (CHROME_ONLY_LINE.test(withoutBorders)) continue;
     if (WORKING_STATUS_LINE.test(withoutBorders)) continue;
     if (CONTEXT_BAR_LINE.test(withoutBorders)) continue;
+    if (TIP_LINE.test(withoutBorders)) continue;
     // A single token once decoration and arrows are stripped is a LABEL
     // (a worktree tag, branch name, or path pinned into the TUI chrome),
     // not the agent's message - seen live as a feed snippet reading
-    // "kangentic-mobile-v1-overnight" with a trailing arrow.
+    // "kangentic-mobile-v1-overnight" with a trailing arrow. Tokens with
+    // call/colon structure ("Update(src/...)") are tool actions, kept.
     const prose = withoutBorders.replace(DECORATION_GLYPH_RUN, '').replace(/\s+/g, ' ').trim();
-    if (prose.length === 0 || !prose.includes(' ')) continue;
+    if (prose.length === 0 || (!prose.includes(' ') && !/[(:]/.test(prose))) continue;
     return withoutBorders;
   }
   return null;

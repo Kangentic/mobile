@@ -83,7 +83,8 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
               style={[
                 styles.iconPill,
                 {
-                  borderRadius: theme.radii.lg,
+                  // M3 active indicator: a full stadium, not a rounded box.
+                  borderRadius: theme.radii.full,
                   paddingHorizontal: theme.spacing.lg,
                   paddingVertical: theme.spacing.xs,
                   backgroundColor: isFocused ? theme.colors.accentSubtle : 'transparent',
