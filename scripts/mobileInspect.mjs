@@ -11,6 +11,7 @@
  *   node scripts/mobileInspect.mjs logcat [--lines <n>] [--tag <tag>]
  *   node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route>
  *   node scripts/mobileInspect.mjs serve
+ *   node scripts/mobileInspect.mjs relaunch
  *
  * screenshot/tap/text/key/logcat are plain adb and need NO app cooperation
  * (they keep working when the JS bundle is broken). `state` hosts a local
@@ -154,6 +155,45 @@ function commandServe() {
   });
 }
 
+const APP_PACKAGE = 'com.kangentic.mobile';
+
+function appIsForegrounded() {
+  const result = runAdb(['shell', 'dumpsys', 'window']);
+  const focusLine = result.stdout.split('\n').find((line) => line.includes('mCurrentFocus'));
+  return focusLine !== undefined && focusLine.includes(APP_PACKAGE);
+}
+
+function sleepMs(milliseconds) {
+  // Synchronous sleep keeps the command sequential without async plumbing.
+  const buffer = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(buffer), 0, 0, milliseconds);
+}
+
+/**
+ * Force-stop + launch + VERIFY the app reached the foreground, retrying the
+ * launch when the intent races the process teardown (the classic "app lands
+ * on the home screen" failure). One command that always ends with the app
+ * actually on screen - the recovery step for a dead Fast Refresh socket, a
+ * stale bundle, or any wedged app state.
+ */
+function commandRelaunch() {
+  runAdb(['shell', 'am', 'force-stop', APP_PACKAGE]);
+  sleepMs(500);
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    runAdb(['shell', 'monkey', '-p', APP_PACKAGE, '-c', 'android.intent.category.LAUNCHER', '1']);
+    // Poll for the app to take window focus; a lost race leaves the launcher
+    // focused and we simply fire the intent again.
+    for (let poll = 0; poll < 10; poll++) {
+      sleepMs(500);
+      if (appIsForegrounded()) {
+        console.log(`[inspect] relaunched; ${APP_PACKAGE} is foregrounded (attempt ${attempt})`);
+        return;
+      }
+    }
+  }
+  fail(`relaunch: ${APP_PACKAGE} never reached the foreground after 4 launch attempts`);
+}
+
 const [command, ...rest] = process.argv.slice(2);
 switch (command) {
   case 'screenshot':
@@ -177,6 +217,9 @@ switch (command) {
   case 'serve':
     commandServe();
     break;
+  case 'relaunch':
+    commandRelaunch();
+    break;
   default:
-    fail('usage: mobileInspect <screenshot|tap|text|key|logcat|state|serve> [...]');
+    fail('usage: mobileInspect <screenshot|tap|text|key|logcat|state|serve|relaunch> [...]');
 }
