@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
@@ -12,7 +12,7 @@ import {
 } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
-import { refreshSnapshots } from '@/connection/actions';
+import { peekLastAssistantMessage, refreshSnapshots } from '@/connection/actions';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { NeedsYouCard } from './home/NeedsYouCard';
 
@@ -180,6 +180,28 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
   // Desktop-parity status treatment: green spinner while the agent works,
   // yellow mail while an idle session holds unread results.
   const statusKind = working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
+
+  // Inbox-style snippet: idle rows preview the agent's last message. The
+  // peek result records WHICH refresh key it belongs to (unreadCount bumps
+  // on new messages), the same derived-match pattern as the prompt peek.
+  const snippetKey = `${entry.sessionId}:${entry.unreadCount}`;
+  const [peekedSnippet, setPeekedSnippet] = useState<{ key: string; text: string | null } | null>(null);
+  const snippet = peekedSnippet !== null && peekedSnippet.key === snippetKey ? peekedSnippet.text : null;
+  useEffect(() => {
+    if (working) return;
+    let cancelled = false;
+    void peekLastAssistantMessage(entry.sessionId, entry.unreadCount)
+      .then((snippetText) => {
+        if (!cancelled) setPeekedSnippet({ key: `${entry.sessionId}:${entry.unreadCount}`, text: snippetText });
+      })
+      .catch(() => {
+        // Not connected / no transcript: the row simply has no preview.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entry.sessionId, entry.unreadCount, working]);
+
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
       <Stack gap="xs">
@@ -194,6 +216,16 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
         {projectName ? (
           <Text variant="caption" color="secondary">
             {projectName}
+          </Text>
+        ) : null}
+        {snippet !== null && !working ? (
+          <Text
+            variant="caption"
+            color="muted"
+            numberOfLines={2}
+            testID={`activity-row-${entry.sessionId}-snippet`}
+          >
+            {snippet}
           </Text>
         ) : null}
         <Row gap="xs" style={styles.statusRow}>

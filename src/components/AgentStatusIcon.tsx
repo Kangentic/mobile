@@ -42,7 +42,9 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
       spinTurns.value = withRepeat(withTiming(1, { duration: SPIN_DURATION_MS, easing: Easing.linear }), -1, false);
     }
     if (kind === 'idle-unread') {
-      pulseOpacity.value = withRepeat(withTiming(0.45, { duration: PULSE_DURATION_MS, easing: Easing.inOut(Easing.quad) }), -1, true);
+      // Default easing: reanimated's Jest mock has no Easing.inOut, and an
+      // opacity breathe reads the same either way.
+      pulseOpacity.value = withRepeat(withTiming(0.45, { duration: PULSE_DURATION_MS }), -1, true);
     }
     return () => {
       cancelAnimation(spinTurns);
