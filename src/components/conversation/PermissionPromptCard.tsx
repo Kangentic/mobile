@@ -7,6 +7,7 @@ import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
 import { approvePermissionKeystrokes, denyPermissionKeystrokes, permissionOptionKeystrokes } from '@/conversation/promptKeystrokes';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
+import { PromptOptionRow } from './PromptOptionRow';
 import { InlineDiff } from './InlineDiff';
 import { MonoBlock } from './MonoBlock';
 import { usePromptAnswer } from './usePromptAnswer';
@@ -170,16 +171,15 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
             ) : null}
             {prompt.options !== null && prompt.options.length >= 2 ? (
               // FULL-FIDELITY MODE: the desktop's PTY probe published the
-              // dialog's actual numbered options; render every one as a
-              // digit-keystroke button. Option 1 is always plain-approve in
-              // Claude's dialogs, so it keeps the primary treatment (and the
-              // approve testID for flow continuity).
+              // dialog's actual numbered options; render every one as an
+              // identical outlined row (no primary emphasis - the choice is
+              // the user's, none is blessed). Option 1 keeps the approve
+              // testID for flow continuity.
               <Stack gap="xs">
                 {prompt.options.map((optionLabel, optionIndex) => (
-                  <Button
+                  <PromptOptionRow
                     key={optionIndex}
-                    label={answering && optionIndex === 0 ? 'Answering...' : optionLabel}
-                    variant={optionIndex === 0 ? 'primary' : 'ghost'}
+                    label={optionLabel}
                     testID={optionIndex === 0 ? 'permission-approve' : `permission-option-${optionIndex}`}
                     disabled={buttonsDisabled || optionIndex > 8}
                     onPress={() => {
@@ -218,9 +218,10 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
             {/* The agent-agnostic escape hatch: some dialogs carry options
                 this card cannot see ("always allow", free text). One tap
                 lands the user at the real prompt in the terminal lens. */}
-            <Button
+            <PromptOptionRow
               label="More options in terminal"
-              variant="ghost"
+              description="Opens the terminal at this prompt"
+              muted
               testID="permission-answer-in-terminal"
               disabled={answering}
               onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal')}
