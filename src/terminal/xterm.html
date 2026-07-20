@@ -732,6 +732,13 @@ return exports; })();
       }
     } else if (message.type === 'set-font-size') {
       if (typeof message.fontSizePx === 'number') applyFontSize(message.fontSizePx);
+    } else if (message.type === 'refit') {
+      // Snap back to the fitted view: drop any manual pan and recompute the
+      // fit-to-screen font (which reports the new size back to the host so
+      // the pinch baseline stays in sync).
+      manualPanUntil = 0;
+      autoFitFontToScreen();
+      applyGeometry();
     } else if (message.type === 'resize') {
       // The desktop's authoritative grid (snapshot, or a desktop-side refit, or
       // the FIRST time dims arrive when they lost the race with init). Adopt it

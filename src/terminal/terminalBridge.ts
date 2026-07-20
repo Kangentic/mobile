@@ -37,6 +37,8 @@ export type HostToTerminalMessage =
     }
   | { type: 'write'; data: string }
   | { type: 'set-font-size'; fontSizePx: number }
+  /** Snap back to the fitted view: recompute the fit-to-screen font and reset pan. */
+  | { type: 'refit' }
   /** The authoritative PTY grid changed (desktop refit); adopt it and re-fit the frame to screen. */
   | { type: 'resize'; cols: number; rows: number };
 
@@ -144,6 +146,9 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
   }
   if (parsedObject.type === 'set-font-size' && isFiniteNumber(parsedObject.fontSizePx)) {
     return { type: 'set-font-size', fontSizePx: parsedObject.fontSizePx };
+  }
+  if (parsedObject.type === 'refit') {
+    return { type: 'refit' };
   }
   if (parsedObject.type === 'resize' && isFiniteNumber(parsedObject.cols) && isFiniteNumber(parsedObject.rows)) {
     return { type: 'resize', cols: parsedObject.cols, rows: parsedObject.rows };

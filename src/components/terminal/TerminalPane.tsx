@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { Asset } from 'expo-asset';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { MonoText, useTheme, type TerminalPalette, type Theme } from '@/components';
+import { IconButton, MonoText, useTheme, type TerminalPalette, type Theme } from '@/components';
 import {
   decodeTerminalMessage,
   encodeHostMessage,
@@ -337,6 +337,15 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
         />
         <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />
+        <View style={styles.refitButton}>
+          <IconButton
+            iconName="contract-outline"
+            variant="raised"
+            testID="terminal-refit"
+            accessibilityLabel="Fit the terminal to the screen"
+            onPress={() => postToTerminal({ type: 'refit' })}
+          />
+        </View>
       </View>
     </GestureDetector>
   );
@@ -345,6 +354,11 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  refitButton: {
+    bottom: 12,
+    position: 'absolute',
+    right: 12,
   },
   loading: {
     flex: 1,

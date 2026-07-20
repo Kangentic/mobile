@@ -42,7 +42,7 @@ export function TerminalMicButton({ sessionId }: TerminalMicButtonProps): React.
   return (
     <IconButton
       iconName={dictation.listening ? 'mic' : 'mic-outline'}
-      variant={dictation.listening ? 'fab' : 'plain'}
+      variant={dictation.listening ? 'fab' : 'raised'}
       testID={dictation.listening ? 'terminal-mic-active' : 'terminal-mic'}
       accessibilityLabel={dictation.listening ? 'Stop dictating into the terminal' : 'Dictate into the terminal'}
       onPress={onMicPress}

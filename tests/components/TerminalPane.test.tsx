@@ -25,6 +25,17 @@ jest.mock('expo-asset', () => ({
   },
 }));
 
+// The refit IconButton renders an Ionicons glyph, whose font loader does
+// `instanceof` against expo-asset's Asset class - which the mock above
+// replaces with a plain object. Stub the icon set out entirely.
+jest.mock('@expo/vector-icons', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const ReactModule = require('react');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const { View } = require('react-native');
+  return { Ionicons: (props: object) => ReactModule.createElement(View, props) };
+});
+
 // The pinch gesture is device-only behavior; a chainable stub keeps the
 // component renderable while the real zoom is covered by the E2E checklist.
 jest.mock('react-native-gesture-handler', () => {
