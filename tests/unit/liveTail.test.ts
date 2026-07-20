@@ -1,9 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import {
   createLiveTailBuffer,
+  lastContentLineFromScrollback,
   parseColsFromScrollback,
   stripAnsiPreservingLayout,
 } from '@/terminal/liveTail';
+
+describe('lastContentLineFromScrollback', () => {
+  it('returns the boxed content line, skipping borders, spinner status, and context bars', () => {
+    const frame =
+      '\x1b[H\x1b[2J' +
+      '/ Working (12s · esc to interrupt)\n' +
+      '╭────────╮\n' +
+      '│ Refactoring src/billing/invoice.ts │\n' +
+      '╰────────╯\n' +
+      'Codex CLI · GPT-5 Codex · high · ↑8.2k ↓420\n';
+    expect(lastContentLineFromScrollback(frame)).toBe('Refactoring src/billing/invoice.ts');
+  });
+
+  it('returns plain shell output untouched', () => {
+    expect(lastContentLineFromScrollback('$ npm run typecheck\n> tsc --noEmit\n')).toBe('> tsc --noEmit');
+  });
+
+  it('returns null for chrome-only frames', () => {
+    expect(lastContentLineFromScrollback('───\n| Working (3s · esc to interrupt)\n')).toBeNull();
+  });
+});
 
 describe('createLiveTailBuffer - line-identity emulation', () => {
   it('accumulates plain text lines split by newlines', () => {

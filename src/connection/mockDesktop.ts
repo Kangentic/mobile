@@ -115,18 +115,25 @@ function initialTasks(): BoardTaskWire[] {
   ];
 }
 
-/** A codex-style fullscreen TUI frame: cursor-home + full rewrite each paint. */
+/**
+ * A codex-style fullscreen TUI frame: cursor-home + full rewrite each
+ * paint. Chrome mirrors the REAL Codex CLI: a working spinner line and
+ * the `Codex CLI · model · effort · token` context bar (format recorded
+ * from a live session; the bar is the frame's last readable line, so it
+ * is what the Agents feed's terminal-line snippet surfaces).
+ */
 function codexTuiFrame(paintTick: number): string {
   const spinnerGlyphs = ['|', '/', '-', '\\'];
   const spinner = spinnerGlyphs[paintTick % spinnerGlyphs.length];
   const statusLine = paintTick % 2 === 0 ? 'Refactoring src/billing/invoice.ts' : 'Running the affected tests';
+  const upTokens = (8.2 + paintTick * 0.1).toFixed(1);
   return (
     '\x1b[H\x1b[2J' +
-    'codex session (mock)\r\n' +
-    '╭────────────────────────╮\r\n' +
-    `${statusLine} ${spinner}\r\n` +
-    '╰────────────────────────╯\r\n' +
-    `files touched: ${3 + (paintTick % 4)} · tests: ${12 + paintTick}\r\n`
+    `${spinner} Working (${paintTick}s · esc to interrupt)\r\n` +
+    '╭──────────────────────────────────────╮\r\n' +
+    `│ ${statusLine} │\r\n` +
+    '╰──────────────────────────────────────╯\r\n' +
+    `Codex CLI · GPT-5 Codex · high · ↑${upTokens}k ↓${420 + paintTick}\r\n`
   );
 }
 
