@@ -1,9 +1,10 @@
 appId: com.kangentic.mobile
 ---
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
-# The Session view opens on the TERMINAL lens (quick keys + PTY composer);
-# the mode pill flips to CHAT (message composer) and back. WebView content
-# is never asserted - only RN-side testIDs.
+# The Session view opens on the TERMINAL lens (quick keys + dictation mic;
+# typing happens directly in the terminal, no staging field); the mode pill
+# flips to CHAT (message composer), then CHANGES (diff pane), and back.
+# WebView content is never asserted - only RN-side testIDs.
 - launchApp
 - extendedWaitUntil:
     visible:
@@ -17,8 +18,6 @@ appId: com.kangentic.mobile
     visible:
       id: "quick-key-esc"
     timeout: 15000
-- assertVisible:
-    id: "terminal-input"
 - tapOn:
     id: "session-mode-chat"
 - extendedWaitUntil:
@@ -26,10 +25,18 @@ appId: com.kangentic.mobile
       id: "composer-input"
     timeout: 10000
 - assertNotVisible:
-    id: "terminal-input"
+    id: "quick-key-esc"
+- tapOn:
+    id: "session-mode-changes"
+- extendedWaitUntil:
+    visible:
+      id: "changes-scope"
+    timeout: 10000
+- assertNotVisible:
+    id: "composer-input"
 - tapOn:
     id: "session-mode-terminal"
 - extendedWaitUntil:
     visible:
-      id: "terminal-input"
+      id: "quick-key-esc"
     timeout: 10000

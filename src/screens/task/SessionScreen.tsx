@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
@@ -11,6 +11,7 @@ import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { openSessionScreen, closeSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
+import { ChangesTab } from './ChangesTab';
 import { TerminalTab } from './TerminalTab';
 import { SessionEndedState } from './SessionEndedState';
 import { SessionInputBar } from './SessionInputBar';
@@ -18,7 +19,7 @@ import { ModeToggleHint } from './ModeToggleHint';
 import { resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
 
-const MODE_PAGE_INDEX: Record<SessionMode, number> = { terminal: 0, chat: 1 };
+const MODE_PAGE_INDEX: Record<SessionMode, number> = { terminal: 0, chat: 1, changes: 2 };
 
 /**
  * How long a 'rejected' stream feed must persist before the screen declares
@@ -29,16 +30,16 @@ const MODE_PAGE_INDEX: Record<SessionMode, number> = { terminal: 0, chat: 1 };
 const REJECTED_FEED_GRACE_MS = 1500;
 
 /**
- * The task's SESSION view: one live session, two lenses. Terminal (the raw
- * 1:1 desktop mirror, the default) and Chat (the readable feed) share a
- * non-swipe pager - both stay mounted so the xterm WebView never reloads
- * and the conversation keeps scroll position; switching is tap-only via the
- * mode pill in the input bar (swipe belongs to the terminal's pan). The one
- * footer is mode-aware: PTY keystrokes in Terminal, agent messages in Chat.
- * Changes is its own pushed destination (the header chip).
+ * The task's SESSION view: one live session, three surfaces. Terminal (the
+ * raw 1:1 desktop mirror, the default), Chat (the readable feed), and
+ * Changes (the diff) share a non-swipe pager - all stay mounted so the
+ * xterm WebView never reloads and the conversation keeps scroll position;
+ * switching is tap-only via the mode pill in the footer (swipe belongs to
+ * the terminal's pan). The footer is mode-aware: quick keys + dictation in
+ * Terminal (typing happens directly in the terminal - tap it for the
+ * keyboard), the composer in Chat, nothing extra in Changes.
  */
 export function SessionScreen(): React.JSX.Element {
-  const router = useRouter();
   const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string; mode?: string }>();
   const taskId = params.taskId;
 
@@ -62,9 +63,14 @@ export function SessionScreen(): React.JSX.Element {
   // gap before the first board snapshot. See sessionResolution.ts.
   const sessionId = resolveCurrentSessionId({ taskLocated, locatedSessionId, paramSessionId });
 
-  // Terminal is the headline default; needs-you entry points pass mode=chat
-  // so prompt answering lands on the answerable side.
-  const [mode, setMode] = useState<SessionMode>(params.mode === 'chat' ? 'chat' : 'terminal');
+  // Mode priority: an explicit route param (needs-you rows land on chat)
+  // beats the task's remembered lens beats the terminal default. The
+  // remembered lens is read once at mount - later store writes must not
+  // yank the surface the user is looking at.
+  const [mode, setMode] = useState<SessionMode>(() => {
+    if (params.mode === 'chat' || params.mode === 'changes') return params.mode;
+    return useSettingsStore.getState().preferredSessionLensByTaskId[taskId] ?? 'terminal';
+  });
   const pagerRef = useRef<PagerView>(null);
 
   useEffect(() => {
@@ -150,20 +156,23 @@ export function SessionScreen(): React.JSX.Element {
       setMode(nextMode);
       pagerRef.current?.setPage(MODE_PAGE_INDEX[nextMode]);
       dismissModeHint();
+      // Remember the task's lens (terminal/chat only: Changes is a
+      // destination the user visits, not a preferred way to watch the
+      // agent).
+      if (nextMode === 'terminal' || nextMode === 'chat') {
+        void useSettingsStore.getState().setPreferredSessionLens(taskId, nextMode);
+      }
     },
-    [dismissModeHint],
+    [dismissModeHint, taskId],
   );
 
   const openChanges = useCallback(() => {
-    router.push({
-      pathname: '/task/[taskId]/changes',
-      params: { taskId, ...(projectId ? { projectId } : {}) },
-    });
-  }, [router, taskId, projectId]);
+    onModeChange('changes');
+  }, [onModeChange]);
 
   return (
     <Screen testID="session-screen">
-      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} displayId={locatedDisplayId} onOpenChanges={openChanges} />
+      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} displayId={locatedDisplayId} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -174,13 +183,16 @@ export function SessionScreen(): React.JSX.Element {
             style={styles.flex}
             initialPage={MODE_PAGE_INDEX[mode]}
             scrollEnabled={false}
-            offscreenPageLimit={1}
+            offscreenPageLimit={2}
           >
             <View key="terminal" style={styles.flex} testID="session-pane-terminal">
               <TerminalTab sessionId={sessionId} active={mode === 'terminal'} cleanFeedEnabled={chatFallbackActive} />
             </View>
             <View key="chat" style={styles.flex} testID="session-pane-chat">
               <ChatPane taskId={taskId} sessionId={sessionId} projectId={projectId} agentLabel={agentLabel} />
+            </View>
+            <View key="changes" style={styles.flex} testID="session-pane-changes">
+              <ChangesTab taskId={taskId} projectId={projectId} isActive={mode === 'changes'} />
             </View>
           </PagerView>
 
