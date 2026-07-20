@@ -22,6 +22,14 @@ export interface SessionActivityEntry {
   awaitedPromptOptions: string[] | null;
   /** Epoch ms of the last snapshot/event touching this session. */
   lastEventAt: number;
+  /**
+   * Epoch ms of the last EVENT-driven triage-section change (thinking to
+   * idle, a prompt arriving), or null. Drives the feed's landing pulse so
+   * the eye can track a row that just moved. Snapshot re-applies
+   * (reconnect, pull-to-refresh) deliberately never set it: a mass
+   * reshuffle should snap silently, not light up the whole feed.
+   */
+  sectionChangedAt: number | null;
   /** Session events since the last markRead (the triage unread badge). */
   unreadCount: number;
   /** 'pending' until the first snapshot lands; 'rejected' when the desktop refused the stream subscribe. */
@@ -53,6 +61,7 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     // the 0.5.x parsers strip the fields and this stays null.
     awaitedPromptOptions: null,
     lastEventAt: Date.now(),
+    sectionChangedAt: null,
     unreadCount: 0,
     feedStatus: 'pending',
   };
@@ -124,6 +133,9 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           updated.awaitedPromptOptions = payload.pending ? (payload.options ?? null) : null;
           if (payload.pending) updated.state = 'permission';
           break;
+      }
+      if (sectionForEntry(updated) !== sectionForEntry(existing)) {
+        updated.sectionChangedAt = Date.now();
       }
       return { bySessionId: { ...state.bySessionId, [event.sessionId]: updated } };
     }),

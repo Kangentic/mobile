@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
+import Animated, { ReduceMotion, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import { AgentStatusIcon, AppHeader, Screen, Card, ConnectionBanner, EmptyState, Icon, Row, Stack, Text, Badge, Button, SectionHeader, useTheme } from '@/components';
@@ -161,6 +162,16 @@ const SNIPPET_PEEK_RETRY_MS = 6000;
  */
 const WORKING_SNIPPET_FRESHNESS_MS = 20_000;
 
+/**
+ * The landing pulse: a row that just changed sections tints briefly at
+ * its new position so the eye can track the move. Marked event-side only
+ * (see activityStore.sectionChangedAt), so a reconnect snapshot that
+ * reshuffles everything stays silent.
+ */
+const SECTION_PULSE_WINDOW_MS = 3000;
+const SECTION_PULSE_MAX_OPACITY = 0.16;
+const SECTION_PULSE_FADE_MS = 700;
+
 const ActivityRow = React.memo(function ActivityRow({
   entry,
   nowMs,
@@ -197,6 +208,23 @@ const ActivityRow = React.memo(function ActivityRow({
   // the yellow mail envelope for EVERY idle session (a pending prompt is
   // idle too - all idle rows are equal priority, first come first served).
   const statusKind = working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
+
+  // One subtle tint fade when the row lands in a new section. The cleanup
+  // zeroes the shared value: FlashList recycles row instances, and a
+  // reused card must never inherit a mid-flight pulse.
+  const sectionChangedAt = entry.sectionChangedAt;
+  const pulseOpacity = useSharedValue(0);
+  useEffect(() => {
+    if (sectionChangedAt !== null && Date.now() - sectionChangedAt < SECTION_PULSE_WINDOW_MS) {
+      pulseOpacity.value = SECTION_PULSE_MAX_OPACITY;
+      pulseOpacity.value = withTiming(0, { duration: SECTION_PULSE_FADE_MS, reduceMotion: ReduceMotion.System });
+    }
+    return () => {
+      cancelAnimation(pulseOpacity);
+      pulseOpacity.value = 0;
+    };
+  }, [sectionChangedAt, pulseOpacity]);
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: pulseOpacity.value }));
 
   // Inbox-style snippet, the row's body for EVERY state: the pending
   // decision when a prompt waits, otherwise the agent's last message
@@ -266,6 +294,15 @@ const ActivityRow = React.memo(function ActivityRow({
   const snippetLineHeight = theme.typography.caption.lineHeight;
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
+      <Animated.View
+        pointerEvents="none"
+        testID={`activity-row-${entry.sessionId}-pulse`}
+        style={[
+          styles.pulseOverlay,
+          { backgroundColor: theme.colors.accent, borderRadius: theme.radii.md },
+          pulseStyle,
+        ]}
+      />
       <Stack gap="xs">
         <Row gap="sm" style={[styles.spaceBetween, { minHeight: ROW_TITLE_MIN_HEIGHT }]}>
           <AgentStatusIcon kind={statusKind} testID={`activity-row-${entry.sessionId}-status`} />
@@ -303,6 +340,13 @@ const ActivityRow = React.memo(function ActivityRow({
 });
 
 const styles = StyleSheet.create({
+  pulseOverlay: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
   spaceBetween: {
     justifyContent: 'space-between',
   },
