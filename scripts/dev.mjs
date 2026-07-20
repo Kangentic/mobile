@@ -67,7 +67,7 @@ const RELAY_URL = `ws://127.0.0.1:${RELAY_PORT}`;
 // the 64-hex pairing slot). Harmless once the relay default matches.
 const RELAY_SLOT_PATTERN = '^([0-9a-f]{32}|[0-9a-f]{64})$';
 const DEFAULT_AVD = 'kangentic_pixel';
-const MODES = ['mock', 'live', 'pair', 'stub', 'doctor'];
+const MODES = ['mock', 'live', 'pair', 'stub', 'doctor', 'emu'];
 
 const spawnedChildren = [];
 
@@ -675,6 +675,29 @@ async function main() {
     const failures = await doctor({ relayRepo, avdName, needsRelay: false });
     log(failures === 0 ? 'all checks passed' : `${failures} check(s) need attention`);
     process.exit(failures === 0 ? 0 : 1);
+  }
+
+  if (mode === 'emu') {
+    // Emulator hygiene in one command: the qemu process degrades over long
+    // sessions under sustained WebGL load (progressive lag), and the cure
+    // is a fresh process. Kill, reboot, restore the reverses the reboot
+    // wiped, and put the app back on screen.
+    if (!commandExists('adb', ['version'])) fail('adb is not on PATH');
+    log('restarting the emulator (fresh process cures long-session lag)...');
+    if (attachedEmulator()) {
+      run('adb', ['emu', 'kill']);
+      await sleep(6000);
+    }
+    await ensureEmulator(avdName);
+    ensureAdbReverse();
+    ensureInspectAdbReverse();
+    const relaunch = spawnSync('node', [join(repoRoot, 'scripts', 'mobileInspect.mjs'), 'relaunch'], { encoding: 'utf8' });
+    if (relaunch.status === 0) {
+      log('app relaunched and foregrounded');
+    } else {
+      warn(`app relaunch failed: ${relaunch.stderr?.trim() || relaunch.stdout?.trim()}`);
+    }
+    process.exit(relaunch.status === 0 ? 0 : 1);
   }
 
   log(`mode: ${mode}`);

@@ -41,8 +41,10 @@ export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }
         paddingHorizontal: theme.spacing.sm,
         paddingTop: theme.spacing.xs,
         // The session screen has no tab bar beneath: the footer owns the
-        // gesture-nav inset so the segment labels never sit under the pill.
-        paddingBottom: insets.bottom + theme.spacing.xs,
+        // gesture-nav inset so the segment labels never sit under the
+        // pill - but only the clearance actually needed, or the full inset
+        // reads as a dead band under the labels.
+        paddingBottom: Math.max(theme.spacing.xs, insets.bottom - theme.spacing.sm),
       }}
     >
       {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}

@@ -51,7 +51,16 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
   }
 
   return (
-    <Row style={styles.bar}>
+    <Row
+      style={[
+        styles.bar,
+        {
+          borderColor: theme.colors.border,
+          borderRadius: theme.radii.lg,
+          paddingVertical: theme.spacing.xs / 2,
+        },
+      ]}
+    >
       {SEGMENTS.map((segment) => {
         const isActive = mode === segment.mode;
         return (
@@ -96,7 +105,9 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
 }
 
 const styles = StyleSheet.create({
+  // The outline binds the three segments into one visible toggle group.
   bar: {
+    borderWidth: StyleSheet.hairlineWidth,
     flex: 1,
   },
   segment: {
