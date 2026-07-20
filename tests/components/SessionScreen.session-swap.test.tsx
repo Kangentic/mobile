@@ -80,6 +80,7 @@ function seedTaskWithSession(sessionId: string | null): void {
         },
         backlog: [],
         snapshotAt: 0,
+        showTicketNumbers: true,
       },
     },
     pendingMoves: [],

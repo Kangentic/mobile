@@ -13,6 +13,8 @@ export interface ProjectBoard {
   backlog: BacklogItemWire[];
   /** Epoch ms when this snapshot was applied. */
   snapshotAt: number;
+  /** The desktop's Layout "Ticket Numbers" setting; absent on the wire (pre-0.6.0 desktop) means true, the desktop default. */
+  showTicketNumbers: boolean;
 }
 
 export interface PendingMove {
@@ -116,6 +118,7 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
         tasksById: Object.fromEntries(snapshot.tasks.map((task) => [task.id, task])),
         backlog: snapshot.backlog,
         snapshotAt: Date.now(),
+        showTicketNumbers: snapshot.showTicketNumbers ?? true,
       };
       // Re-apply in-flight optimistic mutations on top, so a snapshot racing
       // one does not visibly bounce the card before the mutation commits.
