@@ -395,7 +395,7 @@ function prStateColor(theme: ReturnType<typeof useTheme>, prState: string | null
 }
 
 const CARD_LABEL_LIMIT = 3;
-const CARD_DESCRIPTION_LINES = 3;
+const CARD_DESCRIPTION_LINES = 2;
 
 /** Context-usage tint thresholds, mirroring the desktop card's progress color ramp. */
 function contextUsageColor(theme: ReturnType<typeof useTheme>, usedPercentage: number): string {
@@ -453,10 +453,11 @@ const TaskCard = React.memo(function TaskCard({
       <Stack gap="xs">
         <Row gap="sm" style={styles.spaceBetween}>
           {statusKind ? <AgentStatusIcon kind={statusKind} testID={`board-card-${task.id}-status`} /> : null}
-          <Text variant="bodyStrong" style={styles.flex} numberOfLines={2}>
+          {/* Desktop parity: single-line truncating title, no agent badge
+              (the agent shows inside the session, not on the card). */}
+          <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
             {task.title}
           </Text>
-          {task.agent ? <Badge label={task.agent} color="secondary" /> : null}
           {showTicketNumbers ? (
             <MonoText size="caption" color="muted" testID={`board-card-${task.id}-display-id`}>
               #{task.display_id}
