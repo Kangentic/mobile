@@ -54,7 +54,9 @@ export type TerminalToHostMessage =
    * reset=false appends to what the reader already shows; reset=true
    * REPLACES it (a fullscreen repaint rewrote content above the tail).
    */
-  | { type: 'clean-lines'; lines: string[]; reset: boolean };
+  | { type: 'clean-lines'; lines: string[]; reset: boolean }
+  /** A clean tap on the terminal (no drag, no pinch): the host toggles the soft keyboard for direct typing. */
+  | { type: 'tapped' };
 
 export function encodeHostMessage(message: HostToTerminalMessage): string {
   return JSON.stringify(message);
@@ -121,6 +123,9 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
     typeof parsedObject.reset === 'boolean'
   ) {
     return { type: 'clean-lines', lines: parsedObject.lines as string[], reset: parsedObject.reset };
+  }
+  if (parsedObject.type === 'tapped') {
+    return { type: 'tapped' };
   }
   return null;
 }

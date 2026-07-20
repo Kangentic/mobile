@@ -14,6 +14,7 @@ import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { writeTerminal } from '@/connection/actions';
+import { DirectKeyInput, type DirectKeyInputHandle } from './DirectKeyInput';
 
 export interface TerminalPaneProps {
   sessionId: string;
@@ -102,6 +103,7 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
 export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
   const webViewRef = useRef<WebView>(null);
+  const directKeyRef = useRef<DirectKeyInputHandle>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
   // Read inside the live-feed listener so pausing takes effect without
@@ -276,6 +278,12 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         useReadingViewStore.getState().applyCleanLines(sessionId, message.lines, message.reset);
         return;
       }
+      if (message.type === 'tapped') {
+        // A clean tap (never a drag or pinch - the WebView's own gesture
+        // code decides) toggles the soft keyboard for direct typing.
+        directKeyRef.current?.toggle();
+        return;
+      }
       // 'input': keys typed inside the xterm WebView go to the desktop PTY.
       // Failures (not connected, capability revoked) are dropped silently -
       // the connection banner is the surface for that state.
@@ -328,6 +336,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
           onMessage={onWebViewMessage}
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
         />
+        <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />
       </View>
     </GestureDetector>
   );
