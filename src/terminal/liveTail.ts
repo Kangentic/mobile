@@ -342,6 +342,8 @@ export function stripAnsiPreservingLayout(text: string): string {
  * separators - a line of any of these is chrome, never a snippet.
  */
 const CHROME_ONLY_LINE = /^[\s+|_=~.\-*#·‒-―…−⋯⎯⏤─-╿▀-▟]*$/;
+/** The decoration family plus arrow glyphs, as runs, for the label test below. */
+const DECORATION_GLYPH_RUN = /[+|_=~.\-*#·‒-―…−⋯⎯⏤─-╿▀-▟←-⇿➔-➾❯›]+/g;
 /** Spinner/status chrome: "| Working (12s · esc to interrupt)" and kin. */
 const WORKING_STATUS_LINE = /esc to interrupt|working\s*\(|thinking\s*\(/i;
 /** Agent context bars: "Codex CLI · GPT-5 Codex · high · [up]8.2k [down]420"-style token/meta strips. */
@@ -362,6 +364,12 @@ export function lastContentLineFromScrollback(scrollback: string): string | null
     if (CHROME_ONLY_LINE.test(withoutBorders)) continue;
     if (WORKING_STATUS_LINE.test(withoutBorders)) continue;
     if (CONTEXT_BAR_LINE.test(withoutBorders)) continue;
+    // A single token once decoration and arrows are stripped is a LABEL
+    // (a worktree tag, branch name, or path pinned into the TUI chrome),
+    // not the agent's message - seen live as a feed snippet reading
+    // "kangentic-mobile-v1-overnight" with a trailing arrow.
+    const prose = withoutBorders.replace(DECORATION_GLYPH_RUN, '').replace(/\s+/g, ' ').trim();
+    if (prose.length === 0 || !prose.includes(' ')) continue;
     return withoutBorders;
   }
   return null;

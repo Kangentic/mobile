@@ -26,6 +26,13 @@ describe('lastContentLineFromScrollback', () => {
     expect(lastContentLineFromScrollback('───\n| Working (3s · esc to interrupt)\n')).toBeNull();
   });
 
+  it('skips single-token label lines like the worktree tag (recorded feed-card artifact)', () => {
+    // Seen live 2026-07-20: the snippet showed "kangentic-mobile-v1-overnight"
+    // with a trailing arrow - the TUI's worktree tag, not a message.
+    const frame = 'The real last message.\nkangentic-mobile-v1-overnight ──➤\n';
+    expect(lastContentLineFromScrollback(frame)).toBe('The real last message.');
+  });
+
   it('skips separator rules from the wider dash family (recorded feed-card artifact)', () => {
     // Seen live 2026-07-20: the Agents-feed snippet rendered as literal
     // horizontal lines because a TUI separator line survived the chrome
