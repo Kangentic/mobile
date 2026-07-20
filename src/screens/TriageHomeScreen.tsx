@@ -152,6 +152,15 @@ const ROW_TITLE_MIN_HEIGHT = 24;
 /** How long a row waits before retrying a failed snippet peek. */
 const SNIPPET_PEEK_RETRY_MS = 6000;
 
+/**
+ * While a session is actively working its unread counter bumps on every
+ * engine event; a snippet this old is still honest context, and the
+ * throttle keeps a busy session from refetching a heavy transcript
+ * window per event. Idle rows pass 0: the final message just landed and
+ * must be fresh.
+ */
+const WORKING_SNIPPET_FRESHNESS_MS = 20_000;
+
 const ActivityRow = React.memo(function ActivityRow({
   entry,
   nowMs,
@@ -199,6 +208,11 @@ const ActivityRow = React.memo(function ActivityRow({
   const [peekedSnippet, setPeekedSnippet] = useState<{ key: string; text: string | null } | null>(null);
   const [peekRetryNonce, setPeekRetryNonce] = useState(0);
   const snippet = peekedSnippet !== null && peekedSnippet.key === snippetKey ? peekedSnippet.text : null;
+  // While working, a slightly stale snippet is fine (the throttle stops a
+  // busy session from refetching a heavy window on every event); at idle
+  // the final message must be fresh, and the freshness flip on the
+  // working-to-idle transition refires the effect to fetch it.
+  const snippetFreshnessMs = working ? WORKING_SNIPPET_FRESHNESS_MS : 0;
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -214,11 +228,11 @@ const ActivityRow = React.memo(function ActivityRow({
             // preview" (successes cache, so a stuck blank never heals on
             // its own).
             let messagePeekFailed = false;
-            const messageText = await peekLastAssistantMessage(entry.sessionId, entry.unreadCount).catch(() => {
+            const messageText = await peekLastAssistantMessage(entry.sessionId, snippetFreshnessMs).catch(() => {
               messagePeekFailed = true;
               return null;
             });
-            const snippetText = messageText ?? (await peekLastTerminalLine(entry.sessionId, entry.unreadCount));
+            const snippetText = messageText ?? (await peekLastTerminalLine(entry.sessionId, snippetFreshnessMs));
             if (snippetText === null && messagePeekFailed) throw new Error('snippet peek failed');
             return snippetText;
           })();
@@ -238,7 +252,7 @@ const ActivityRow = React.memo(function ActivityRow({
       cancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
-  }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce]);
+  }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce, snippetFreshnessMs]);
 
   // No status filler ("Thinking", "Waiting for..."): the section header
   // and the icon already say the state. The row is title + project pill +
