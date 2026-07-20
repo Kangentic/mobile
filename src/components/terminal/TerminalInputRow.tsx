@@ -41,6 +41,9 @@ export function TerminalInputRow({ sessionId }: TerminalInputRowProps): React.JS
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="send"
+          // Terminals fire consecutive commands: keep the keyboard up after
+          // the return key submits (default blurAndSubmit would dismiss it).
+          submitBehavior="submit"
           onSubmitEditing={send}
           style={styles.flex}
         />
