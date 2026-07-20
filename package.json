@@ -26,7 +26,8 @@
     "sync:branding:check": "node scripts/syncBranding.mjs --check",
     "build:dev": "eas build --profile development --platform android",
     "build:preview": "eas build --profile preview --platform android",
-    "build:prod": "eas build --profile production --platform android"
+    "build:prod": "eas build --profile production --platform android",
+    "dev:emu": "node scripts/dev.mjs emu"
   },
   "dependencies": {
     "@bacons/text-decoder": "^0.0.0",
