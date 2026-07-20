@@ -64,7 +64,7 @@ tests/
   components/     # Jest + React Native Testing Library
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, devRig.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
+scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
                   #   mobileInspect.mjs, syncBranding.mjs + repo scripts
 ```
 
@@ -73,7 +73,7 @@ scripts/          # bash-guard.js, devRig.mjs, stubDesktopPeer.mjs, buildXtermHt
 - `npm install` - Install dependencies
 - `npx expo start --dev-client` (`npm start`) - Start the dev server against a dev-client build
 - `npm run dev:mock` / `dev:live` / `dev:pair` / `dev:stub` / `dev:doctor` - The local dev rig
-  (`scripts/devRig.mjs`): emulator + adb reverse + relay + Metro in one command, in mock
+  (`scripts/dev.mjs`): emulator + adb reverse + relay + Metro in one command, in mock
   (in-app fake desktop), live (real desktop dev instance), pair (pairing-ceremony testing),
   or stub (Maestro E2E rig) mode; doctor is a read-only preflight. See
   [docs/developer-guide.md](docs/developer-guide.md)'s Local Dev Rig section.

@@ -29,7 +29,7 @@ For anything beyond a bare Metro session, use the dev rig below.
 
 ## Local Dev Rig
 
-`scripts/devRig.mjs` is one command that wires up everything a preview needs - emulator boot,
+`scripts/dev.mjs` is one command that wires up everything a preview needs - emulator boot,
 `adb reverse`, a local relay, optionally the stub desktop peer, and Metro:
 
 | Command | What you get |
@@ -171,7 +171,7 @@ tests/unit/       # vitest
 tests/components/ # Jest + RNTL
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, devRig.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
+scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
 ```
 
 See `CLAUDE.md`'s Project Structure section; the tree there and this one move together.
@@ -227,7 +227,7 @@ Dev-only variables:
 
 - `EXPO_PUBLIC_KANGENTIC_MOCK=1` - enables the in-app mock desktop peer (dev builds only; the
   code path is stripped from production bundles). Set by `npm run dev:mock`, not by hand.
-- `KANGENTIC_RELAY_REPO` - where `scripts/devRig.mjs` finds the relay checkout; never read by
+- `KANGENTIC_RELAY_REPO` - where `scripts/dev.mjs` finds the relay checkout; never read by
   the app bundle.
 
 ## Conventions

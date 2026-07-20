@@ -4,19 +4,19 @@
  * emulator, adb reverse, a local kangentic-relay, optionally the stub
  * desktop peer, and Metro - in one of four modes:
  *
- *   node scripts/devRig.mjs mock     Fake in-app desktop peer; no relay, no
+ *   node scripts/dev.mjs mock     Fake in-app desktop peer; no relay, no
  *                                    desktop, no pairing. UI/UX iteration.
- *   node scripts/devRig.mjs live     (default) Connect to your real running
+ *   node scripts/dev.mjs live     (default) Connect to your real running
  *                                    Kangentic desktop dev instance through a
  *                                    local relay. Dogfooding.
- *   node scripts/devRig.mjs pair     Reset the app to unpaired (pm clear) and
+ *   node scripts/dev.mjs pair     Reset the app to unpaired (pm clear) and
  *                                    exercise the pairing ceremony. Add --stub
  *                                    to pair against the stub peer instead of
  *                                    the live desktop.
- *   node scripts/devRig.mjs stub     Relay + scripts/stubDesktopPeer.mjs, the
+ *   node scripts/dev.mjs stub     Relay + scripts/stubDesktopPeer.mjs, the
  *                                    Maestro E2E rig. Reuses the saved phone
  *                                    key for a no-re-pair session when it can.
- *   node scripts/devRig.mjs doctor   Preflight checks only.
+ *   node scripts/dev.mjs doctor   Preflight checks only.
  *
  * Flags: --avd <name>, --relay-repo <path>, --kangentic-repo <path>, --clear,
  *        --no-metro, --no-protocol-link, --stub (pair mode),
