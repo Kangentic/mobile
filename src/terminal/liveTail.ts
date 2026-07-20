@@ -335,8 +335,13 @@ export function stripAnsiPreservingLayout(text: string): string {
     .replace(/[\0-\x08\x0b-\x1f\x7f]/g, '');
 }
 
-/** Box-drawing and block glyphs that make up TUI borders/frames, not content. */
-const CHROME_ONLY_LINE = /^[\s─-╿▀-▟+|_=~.-]*$/;
+/**
+ * Box-drawing and block glyphs that make up TUI borders/frames, not
+ * content, plus the wider dash/rule family (em/en dashes, horizontal
+ * bars, minus, ellipses) that agent TUIs and rendered markdown use for
+ * separators - a line of any of these is chrome, never a snippet.
+ */
+const CHROME_ONLY_LINE = /^[\s+|_=~.\-*#·‒-―…−⋯⎯⏤─-╿▀-▟]*$/;
 /** Spinner/status chrome: "| Working (12s · esc to interrupt)" and kin. */
 const WORKING_STATUS_LINE = /esc to interrupt|working\s*\(|thinking\s*\(/i;
 /** Agent context bars: "Codex CLI · GPT-5 Codex · high · [up]8.2k [down]420"-style token/meta strips. */

@@ -25,6 +25,15 @@ describe('lastContentLineFromScrollback', () => {
   it('returns null for chrome-only frames', () => {
     expect(lastContentLineFromScrollback('───\n| Working (3s · esc to interrupt)\n')).toBeNull();
   });
+
+  it('skips separator rules from the wider dash family (recorded feed-card artifact)', () => {
+    // Seen live 2026-07-20: the Agents-feed snippet rendered as literal
+    // horizontal lines because a TUI separator line survived the chrome
+    // filter. Em-dash, horizontal-bar, double-line, and underscore runs
+    // are all chrome.
+    const frame = 'The real last message.\n——————————————\n⎯⎯⎯⎯⎯⎯⎯⎯ ⎯⎯⎯⎯⎯⎯ …\n═══════════\n____________\n';
+    expect(lastContentLineFromScrollback(frame)).toBe('The real last message.');
+  });
 });
 
 describe('createLiveTailBuffer - line-identity emulation', () => {

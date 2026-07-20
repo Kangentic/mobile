@@ -1,5 +1,5 @@
 import type { JsonValue, ReadDiffScope } from '@kangentic/protocol';
-import { findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
+import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
@@ -292,9 +292,11 @@ export async function peekLastTerminalLine(sessionId: string, minFreshnessMs: nu
   const fetchPromise = (async () => {
     const snapshot = await requireVerbClient().readStreamSubscribe(sessionId);
     // Content, not chrome: skip status/spinner lines and context bars so
-    // the snippet reads like the agent's most recent message.
+    // the snippet reads like the agent's most recent message, and collapse
+    // decoration so a separator run never renders as literal lines.
     const contentLine = lastContentLineFromScrollback(snapshot.scrollback);
-    const snippet = contentLine !== null ? contentLine.slice(0, TERMINAL_LINE_SNIPPET_MAX_LENGTH) : null;
+    const collapsedLine = contentLine !== null ? collapseToSnippetText(contentLine) : '';
+    const snippet = collapsedLine.length > 0 ? collapsedLine.slice(0, TERMINAL_LINE_SNIPPET_MAX_LENGTH) : null;
     if (lastTerminalLinePeekBySession.size >= PROMPT_PEEK_CACHE_CAP) lastTerminalLinePeekBySession.clear();
     lastTerminalLinePeekBySession.set(sessionId, { fetchedAtMs: Date.now(), text: snippet });
     return snippet;
