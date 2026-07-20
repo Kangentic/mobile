@@ -95,6 +95,14 @@ const TRANSCRIPT_COALESCE_MS = 100;
 const USAGE_COALESCE_MS = 500;
 
 export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionManager): Unsubscribe {
+  // A desktop-side PTY resize reflows the desktop terminal, so the phone's
+  // ring holds scrollback laid out for the OLD grid - mixing it with
+  // new-width deltas renders garble. Re-subscribing fetches a fresh
+  // serialized frame at the new grid (replace semantics desktop-side) and
+  // the pane re-seeds. Debounced per session: a drag-resize emits a burst.
+  const RESIZE_RESEED_DEBOUNCE_MS = 300;
+  const resizeReseedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
   let pendingTranscriptEvents: TranscriptEvent[] = [];
   let transcriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
   const flushTranscriptEvents = (): void => {
@@ -134,6 +142,17 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
     }),
     feed.on('terminal-resize', (event) => {
       setTerminalDimensions(event.sessionId, event.payload);
+      if (isTerminalRetained(event.sessionId)) {
+        const existingTimer = resizeReseedTimers.get(event.sessionId);
+        if (existingTimer !== undefined) clearTimeout(existingTimer);
+        resizeReseedTimers.set(
+          event.sessionId,
+          setTimeout(() => {
+            resizeReseedTimers.delete(event.sessionId);
+            subscriptions.refreshStream(event.sessionId);
+          }, RESIZE_RESEED_DEBOUNCE_MS),
+        );
+      }
     }),
     feed.on('activity', (event) => {
       if (event.payload.type === 'usage') {
@@ -157,6 +176,8 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
     }),
   ];
   return () => {
+    for (const reseedTimer of resizeReseedTimers.values()) clearTimeout(reseedTimer);
+    resizeReseedTimers.clear();
     if (transcriptFlushTimer !== null) {
       clearTimeout(transcriptFlushTimer);
       transcriptFlushTimer = null;

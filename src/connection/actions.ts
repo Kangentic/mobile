@@ -309,6 +309,15 @@ export async function peekLastTerminalLine(sessionId: string, minFreshnessMs: nu
   }
 }
 
+/**
+ * Re-subscribe one session's stream for a fresh serialized frame (replace
+ * semantics desktop-side). The terminal refit button's "unstick" half: a
+ * mirror wedged by a missed resize or a corrupted seed re-seeds from truth.
+ */
+export function refreshTerminalStream(sessionId: string): void {
+  getActiveConnection()?.subscriptions.refreshStream(sessionId);
+}
+
 /** Pull-to-refresh: re-run the bootstrap (re-subscribes replace desktop-side, so this is snapshot refresh everywhere). */
 export async function refreshSnapshots(): Promise<void> {
   const connection = getActiveConnection();
