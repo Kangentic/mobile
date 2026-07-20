@@ -322,7 +322,8 @@ const ActivityRow = React.memo(function ActivityRow({
           <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
             {taskTitle ?? 'Untitled task'}
           </Text>
-          {entry.unreadCount > 0 ? <Badge label={String(entry.unreadCount)} color="accent" /> : null}
+          {/* No unread counter: activity volume while working is noise, and
+              the snippet already carries what happened. */}
           {projectName ? <Badge label={projectName} color="primary" outlined /> : null}
         </Row>
         <Text
