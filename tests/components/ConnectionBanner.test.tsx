@@ -23,11 +23,23 @@ function passGraceWindow(): void {
 describe('ConnectionBanner', () => {
   beforeEach(() => {
     jest.useFakeTimers();
+    // The banner only arms after the launch's first establishment; these
+    // tests exercise the degraded states of a link that WAS working.
+    act(() => useChannelStore.setState({ everEstablished: true }));
   });
 
   afterEach(() => {
-    act(() => useChannelStore.setState({ transportState: 'idle', established: false }));
+    act(() => useChannelStore.setState({ transportState: 'idle', established: false, everEstablished: false }));
     jest.useRealTimers();
+  });
+
+  it('never appears before the first establishment of the launch (cold start)', () => {
+    act(() => useChannelStore.setState({ transportState: 'connecting', established: false, everEstablished: false }));
+
+    renderBanner();
+    passGraceWindow();
+
+    expect(screen.queryByTestId('connection-banner')).toBeNull();
   });
 
   it('renders nothing while connected and established', () => {

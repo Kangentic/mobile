@@ -27,6 +27,7 @@ export function ConnectionBanner(): React.JSX.Element | null {
   const motionPresets = useMotionPresets();
   const transportState = useChannelStore((state) => state.transportState);
   const established = useChannelStore((state) => state.established);
+  const everEstablished = useChannelStore((state) => state.everEstablished);
 
   const healthy = transportState === 'connected' && established;
 
@@ -39,7 +40,11 @@ export function ConnectionBanner(): React.JSX.Element | null {
     return () => clearTimeout(graceTimer);
   }, [healthy]);
 
-  if (healthy || !showDegraded) {
+  // The banner warns about a REGRESSION of a working link. Startup - the
+  // first connect of the launch, which can honestly take a few seconds -
+  // is narrated by the screens' connecting states instead, so the pill
+  // never flickers in during a normal cold start or foreground return.
+  if (!everEstablished || healthy || !showDegraded) {
     return null;
   }
 
