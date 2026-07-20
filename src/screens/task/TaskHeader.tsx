@@ -3,7 +3,7 @@ import { Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GitCompareArrows } from 'lucide-react-native';
-import { ConnectionBanner, IconButton, MonoText, Row, StatusDot, Text, useTheme } from '@/components';
+import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, Text, useTheme } from '@/components';
 import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 
 export interface TaskHeaderProps {
@@ -36,7 +36,14 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, onOpenChang
         ]}
       >
         <IconButton iconName="chevron-back" onPress={() => router.back()} testID="task-back-button" accessibilityLabel="Back" />
-        {activityEntry ? <StatusDot variant={sectionForEntry(activityEntry)} testID="task-header-status" /> : null}
+        {/* The same status language as the feed and board cards: green
+            spinner while working, yellow mail for every idle state. */}
+        {activityEntry ? (
+          <AgentStatusIcon
+            kind={sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'}
+            testID="task-header-status"
+          />
+        ) : null}
         <Text variant="bodyStrong" numberOfLines={1} style={styles.title}>
           {taskTitle}
         </Text>
