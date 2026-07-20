@@ -10,6 +10,13 @@ import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 import { triggerHaptic } from '@/lib/haptics';
 
 const TAB_ICON_SIZE = 22;
+/**
+ * Fixed pill geometry: Android renders a borderRadius far beyond the
+ * view's size inconsistently across re-renders (the stadium collapsed to
+ * a box after a tab switch), so the radius is pinned to half a known
+ * height instead of an oversized token.
+ */
+const TAB_PILL_HEIGHT = 32;
 
 // The renderer props for expo-router's JS tabs bar, derived from the public
 // Tabs component surface (the underlying react-navigation type is vendored
@@ -84,9 +91,8 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                 styles.iconPill,
                 {
                   // M3 active indicator: a full stadium, not a rounded box.
-                  borderRadius: theme.radii.full,
+                  borderRadius: TAB_PILL_HEIGHT / 2,
                   paddingHorizontal: theme.spacing.lg,
-                  paddingVertical: theme.spacing.xs,
                   backgroundColor: isFocused ? theme.colors.accentSubtle : 'transparent',
                 },
               ]}
@@ -125,6 +131,7 @@ const styles = StyleSheet.create({
   },
   iconPill: {
     alignItems: 'center',
+    height: TAB_PILL_HEIGHT,
     justifyContent: 'center',
   },
   attentionDot: {

@@ -17,11 +17,16 @@ export function ChangesScreen(): React.JSX.Element {
   const locatedTaskTitle = useBoardStore((state) => findTaskById(state, taskId)?.task.title ?? null);
   const locatedProjectId = useBoardStore((state) => findTaskById(state, taskId)?.projectId ?? null);
   const locatedSessionId = useBoardStore((state) => findTaskById(state, taskId)?.task.session_id ?? null);
+  const locatedDisplayId = useBoardStore((state) => {
+    const located = findTaskById(state, taskId);
+    if (!located) return null;
+    return (state.boardsByProjectId[located.projectId]?.showTicketNumbers ?? true) ? located.task.display_id : null;
+  });
   const projectId = params.projectId && params.projectId.length > 0 ? params.projectId : locatedProjectId;
 
   return (
     <Screen testID="changes-screen">
-      <TaskHeader taskTitle={locatedTaskTitle ?? 'Changes'} sessionId={locatedSessionId} />
+      <TaskHeader taskTitle={locatedTaskTitle ?? 'Changes'} sessionId={locatedSessionId} displayId={locatedDisplayId} />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ChangesTab taskId={taskId} projectId={projectId} isActive={true} />
       </KeyboardAvoidingView>
