@@ -346,8 +346,12 @@ const CHROME_ONLY_LINE = /^[\s+|_=~.\-*#·‒-―…−⋯⎯⏤─-╿▀-▟]*
 const DECORATION_GLYPH_RUN = /[+|_=~.\-*#·‒-―…−⋯⎯⏤─-╿▀-▟←-⇿➔-➾❯›]+/g;
 /** Spinner/status chrome: "| Working (12s · esc to interrupt)" and kin. */
 const WORKING_STATUS_LINE = /esc to interrupt|working\s*\(|thinking\s*\(/i;
-/** Agent context bars: "Codex CLI · GPT-5 Codex · high · [up]8.2k [down]420"-style token/meta strips. */
-const CONTEXT_BAR_LINE = /[↑↓].*\d|·.*·.*·/;
+/**
+ * Agent context/status bars: "Codex CLI · GPT-5 Codex · high · [up]8.2k"
+ * and "auto mode on · PR #4 · 1 shell"-style middot-joined meta strips.
+ * Two middots suffice - prose almost never chains them, status bars always do.
+ */
+const CONTEXT_BAR_LINE = /[↑↓].*\d|·.*·/;
 /** Status-area hint lines ("Tip: Use /btw to ask a quick side question..."): help chrome, not the agent's work. */
 const TIP_LINE = /^tip:\s/i;
 
