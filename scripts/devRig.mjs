@@ -38,11 +38,15 @@
  *
  * The rig adopts healthy already-running pieces (relay via /healthz, Metro
  * via port 8081, emulator via adb devices) and only tears down children it
- * spawned itself. Ctrl-C stops relay/stub/Metro; the emulator stays up.
+ * spawned itself. Ctrl-C stops stub/Metro; the RELAY is spawned detached
+ * (logs in the OS temp dir) so it outlives the rig and whatever terminal
+ * or agent session launched it - the desktop's bridge and the phone both
+ * depend on it, and neither should die with a dev-loop restart. The
+ * emulator stays up too.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
@@ -430,11 +434,22 @@ async function ensureRelay(relayRepo) {
   if (!existsSync(join(relayRepo, 'node_modules'))) {
     fail(`relay repo at ${relayRepo} has no node_modules - run npm install there first`);
   }
-  log(`starting the relay from ${relayRepo}...`);
-  spawnPrefixed('relay', 'npm', ['run', 'dev'], {
+  log(`starting the relay from ${relayRepo} (detached - it outlives this rig)...`);
+  // Detached on purpose: the desktop's bridge and the phone both hold
+  // sessions through this relay, and a rig or agent-session restart must
+  // not sever them. Later rig runs adopt it via /healthz.
+  const relayLogPath = join(tmpdir(), 'kangentic-relay-dev.log');
+  const relayLogFd = openSync(relayLogPath, 'a');
+  const relayChild = spawn('npm run dev', {
     cwd: relayRepo,
-    env: { SLOT_ID_PATTERN: RELAY_SLOT_PATTERN },
+    env: { ...process.env, SLOT_ID_PATTERN: RELAY_SLOT_PATTERN },
+    shell: true,
+    detached: true,
+    stdio: ['ignore', relayLogFd, relayLogFd],
+    windowsHide: true,
   });
+  relayChild.unref();
+  log(`relay logs: ${relayLogPath}`);
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if ((await probeHealthz()) === 'relay') {

@@ -65,9 +65,11 @@ Details worth knowing:
 - **`adb reverse tcp:8080 tcp:8080`** is required for any relay connectivity - the app only
   accepts `ws://` for loopback hosts - and is wiped on every emulator reboot. The rig re-applies
   it on every run.
-- **Lifecycle:** relay/stub/Metro run as supervised children (Ctrl-C stops them; the emulator
-  stays up). Healthy already-running pieces are adopted, not restarted. Metro's interactive keys
-  (`r`, `j`) pass through.
+- **Lifecycle:** stub/Metro run as supervised children (Ctrl-C stops them; the emulator stays
+  up). The **relay is spawned detached** and deliberately outlives the rig (its logs land in
+  the OS temp dir as `kangentic-relay-dev.log`): the desktop's bridge and the phone both hold
+  sessions through it, and a dev-loop restart must not sever them. Healthy already-running
+  pieces are adopted, not restarted. Metro's interactive keys (`r`, `j`) pass through.
 - **Stale stub pairing:** if `dev:stub` shows no `[session] established` within ~20s, the saved
   phone key or the stub identity (in the OS temp dir) is stale - `npm run dev:pair -- --stub`
   re-pairs fresh and re-captures the key.
