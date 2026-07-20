@@ -119,6 +119,10 @@ const bridgeGlue = `
     // print - a giant prompt glyph filling the phone. Pinch can still go
     // to MAX_FILL_FONT_PX for detail work.
     var next = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
+    // The texture cap outranks the fill floor: a very wide desktop grid (the
+    // desktop's bottom terminal panel parks sessions around 300 cols) must
+    // render small and CORRECT rather than large and clamped-blurry.
+    next = textureCappedFontPx(next, knownCols, knownRows);
     if (next !== currentFontSizePx) {
       currentFontSizePx = next;
       if (terminal) terminal.options.fontSize = next;
@@ -321,7 +325,9 @@ const bridgeGlue = `
   function createTerminal(initMessage) {
     knownCols = initMessage.cols;
     knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
-    currentFontSizePx = initMessage.fontSizePx;
+    // Capped even on the legacy no-dims path (autoFitFontToScreen early-returns
+    // there, so this is the only guard between a wide grid and the GPU limit).
+    currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
     lastAppCursorMode = false;
     manualPanUntil = 0;
     cleanFeedEnabled = initMessage.cleanFeed === true;
@@ -382,8 +388,15 @@ const bridgeGlue = `
 
   function applyFontSize(fontSizePx) {
     if (!terminal) return;
-    currentFontSizePx = fontSizePx;
-    terminal.options.fontSize = fontSizePx;
+    // Pinch obeys the texture cap too: past it the GPU clamps the canvas and
+    // the right side of the grid becomes undrawable, so the zoom ceiling is
+    // the honest limit. (On real devices the limit is 8k-16k and the ceiling
+    // is far above MAX_FILL_FONT_PX; a 4096 limit is an emulator trait.)
+    var capped = textureCappedFontPx(fontSizePx, knownCols, knownRows !== null ? knownRows : terminal.rows);
+    currentFontSizePx = capped;
+    terminal.options.fontSize = capped;
+    // Keep the host's pinch baseline honest when the cap engaged.
+    if (capped !== fontSizePx) postToHost({ type: 'font-size', fontSizePx: capped });
     // Pinch changed the cell size; the grid (cols/rows) is unchanged.
     applyGeometry();
   }
@@ -407,6 +420,38 @@ const bridgeGlue = `
     if (Math.abs(next - currentLineHeight) > 0.005) {
       terminal.options.lineHeight = next;
     }
+  }
+
+  // The GPU's max texture edge, probed once. A canvas wider (or taller) than
+  // this gets silently allocated at the clamped size and stretched back over
+  // the element: the right side of the grid is never drawn and the left side
+  // paints magnified and blurry (observed live: a 308-col desktop grid at
+  // font 20 wants a 9548-device-px canvas on a 4096-limit WebView, so the
+  // phone showed ~13 giant columns). Conservative default if probing fails.
+  var maxGlTextureSize = 4096;
+  (function probeMaxGlTextureSize() {
+    try {
+      var probeCanvas = document.createElement('canvas');
+      var gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
+      if (gl) {
+        var reported = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+        if (typeof reported === 'number' && reported >= 1024) maxGlTextureSize = reported;
+        var loseExtension = gl.getExtension('WEBGL_lose_context');
+        if (loseExtension) loseExtension.loseContext();
+      }
+    } catch (probeError) { /* keep the conservative default */ }
+  })();
+
+  // Largest font at which the grid's canvas still fits inside the GPU texture
+  // limit on BOTH axes. The 0.97 margin absorbs the cell-ratio guess erring
+  // small against the renderer's true metrics.
+  function textureCappedFontPx(fontPx, cols, rows) {
+    var effectiveRows = rows !== null && rows >= 1 ? rows : fallbackRowCount(fontPx);
+    var budget = maxGlTextureSize * 0.97;
+    var widthCap = budget / (cols * CELL_WIDTH_RATIO * window.devicePixelRatio);
+    var heightCap = budget / (effectiveRows * CELL_HEIGHT_RATIO * window.devicePixelRatio);
+    var cap = Math.floor(Math.min(widthCap, heightCap));
+    return Math.min(fontPx, Math.max(1, cap));
   }
 
   // Re-fit the font to the CURRENT viewport height, then re-apply the grid.
