@@ -16,8 +16,9 @@ const EXPECTED_SEQUENCES: { testID: string; sequence: string }[] = [
   { testID: 'quick-key-left', sequence: '\x1b[D' },
   { testID: 'quick-key-right', sequence: '\x1b[C' },
   { testID: 'quick-key-enter', sequence: '\r' },
+  // Stop = Ctrl+C. No slash key: the soft keyboard types '/' itself, and
+  // the row shows every key at once with no scrolling.
   { testID: 'quick-key-ctrl-c', sequence: '\x03' },
-  { testID: 'quick-key-slash', sequence: '/' },
 ];
 
 // In application-cursor mode (DECCKM) the four arrows switch from CSI to SS3.

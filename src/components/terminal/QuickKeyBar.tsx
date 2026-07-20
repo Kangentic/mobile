@@ -1,8 +1,7 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet } from 'react-native';
-import { OctagonX } from 'lucide-react-native';
+import { Pressable, StyleSheet } from 'react-native';
 import { MonoText, Row, Text, useTheme } from '@/components';
-import { arrowKeySequence, CTRL_C, ENTER, ESCAPE, SLASH, TAB, type ArrowKeyDirection } from '@/terminal/keySequences';
+import { arrowKeySequence, CTRL_C, ENTER, ESCAPE, TAB, type ArrowKeyDirection } from '@/terminal/keySequences';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { writeTerminal } from '@/connection/actions';
 
@@ -19,8 +18,13 @@ interface QuickKey {
   arrow?: ArrowKeyDirection;
   /** Arrow glyphs read small at label size; render them larger. */
   glyph?: boolean;
+  /** Danger treatment (the interrupt). */
+  danger?: boolean;
 }
 
+// Every key visible at once, no scrolling: only keys the soft keyboard
+// CANNOT type ('/' and letters belong to the input row). Stop is Ctrl+C -
+// interrupt the running agent - and sits in the row as an equal member.
 const QUICK_KEYS: QuickKey[] = [
   { id: 'esc', label: 'Esc', accessibilityLabel: 'Escape', sequence: ESCAPE },
   { id: 'tab', label: 'Tab', accessibilityLabel: 'Tab', sequence: TAB },
@@ -29,18 +33,20 @@ const QUICK_KEYS: QuickKey[] = [
   { id: 'left', label: '←', accessibilityLabel: 'Arrow left', arrow: 'left', glyph: true },
   { id: 'right', label: '→', accessibilityLabel: 'Arrow right', arrow: 'right', glyph: true },
   { id: 'enter', label: 'Enter', accessibilityLabel: 'Enter', sequence: ENTER },
-  { id: 'slash', label: '/', accessibilityLabel: 'Slash', sequence: SLASH },
+  { id: 'ctrl-c', label: 'Stop', accessibilityLabel: 'Stop the running agent (Ctrl+C)', sequence: CTRL_C, danger: true },
 ];
 
-const KEY_LABEL_FONT_SIZE = 15;
-const KEY_GLYPH_FONT_SIZE = 22;
+const KEY_LABEL_FONT_SIZE = 13;
+const KEY_GLYPH_FONT_SIZE = 20;
 
 /**
- * The terminal quick-key row: the control keys a phone keyboard cannot type,
- * each writing its raw byte sequence to the desktop PTY. Arrows respect the
- * session's DECCKM state (reported by the xterm pane) so full-screen
- * programs in application cursor mode get SS3 instead of CSI. Failures are
- * dropped silently (the connection banner is the surface for that state).
+ * The terminal quick-key row: the control keys a phone keyboard cannot
+ * type, each writing its raw byte sequence to the desktop PTY. All keys
+ * share one flex-distributed row so everything usable is always visible.
+ * Arrows respect the session's DECCKM state (reported by the xterm pane)
+ * so full-screen programs in application cursor mode get SS3 instead of
+ * CSI. Failures are dropped silently (the connection banner is the
+ * surface for that state).
  */
 export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element {
   const theme = useTheme();
@@ -49,30 +55,31 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
   );
   return (
     <Row gap="xs" style={styles.bar}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={styles.scroll}>
-        <Row gap="xs">
-          {QUICK_KEYS.map((quickKey) => (
-          <Pressable
-            key={quickKey.id}
-            testID={`quick-key-${quickKey.id}`}
-            accessibilityRole="button"
-            accessibilityLabel={quickKey.accessibilityLabel}
-            onPress={() => {
-              const sequence = quickKey.arrow ? arrowKeySequence(quickKey.arrow, applicationCursorMode) : (quickKey.sequence ?? '');
-              void writeTerminal(sessionId, sequence).catch(() => undefined);
-            }}
-            style={({ pressed }) => [
-              styles.key,
-              {
-                minWidth: theme.minTouchSize,
-                minHeight: theme.minTouchSize,
-                borderRadius: theme.radii.sm,
-                backgroundColor: theme.colors.surfaceRaised,
-                paddingHorizontal: theme.spacing.sm,
-                opacity: pressed ? 0.7 : 1,
-              },
-            ]}
-          >
+      {QUICK_KEYS.map((quickKey) => (
+        <Pressable
+          key={quickKey.id}
+          testID={`quick-key-${quickKey.id}`}
+          accessibilityRole="button"
+          accessibilityLabel={quickKey.accessibilityLabel}
+          onPress={() => {
+            const sequence = quickKey.arrow ? arrowKeySequence(quickKey.arrow, applicationCursorMode) : (quickKey.sequence ?? '');
+            void writeTerminal(sessionId, sequence).catch(() => undefined);
+          }}
+          style={({ pressed }) => [
+            styles.key,
+            {
+              minHeight: theme.minTouchSize,
+              borderRadius: theme.radii.sm,
+              backgroundColor: theme.colors.surfaceRaised,
+              opacity: pressed ? 0.7 : 1,
+            },
+          ]}
+        >
+          {quickKey.danger ? (
+            <Text variant="caption" color="danger" style={styles.dangerLabel}>
+              {quickKey.label}
+            </Text>
+          ) : (
             <MonoText
               color="primary"
               style={{
@@ -80,43 +87,12 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
                 lineHeight: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE + 2,
                 fontWeight: '600',
               }}
-              >
-                {quickKey.label}
-              </MonoText>
-            </Pressable>
-          ))}
-        </Row>
-      </ScrollView>
-      {/* Ctrl+C by name: an unlabeled red ^C says nothing to most users.
-          'Stop' says exactly what it does - interrupt the running agent.
-          Pinned outside the scroll so the safety control is always visible;
-          it shares the key-chip family (same surface, no border) and lets
-          the danger color on the icon + label carry the meaning. */}
-      <Pressable
-        testID="quick-key-ctrl-c"
-        accessibilityRole="button"
-        accessibilityLabel="Stop the running agent (Ctrl+C)"
-        onPress={() => {
-          void writeTerminal(sessionId, CTRL_C).catch(() => undefined);
-        }}
-        style={({ pressed }) => [
-          styles.key,
-          styles.stopKey,
-          {
-            minHeight: theme.minTouchSize,
-            borderRadius: theme.radii.sm,
-            backgroundColor: theme.colors.surfaceRaised,
-            paddingHorizontal: theme.spacing.md,
-            gap: theme.spacing.xs,
-            opacity: pressed ? 0.7 : 1,
-          },
-        ]}
-      >
-        <OctagonX size={16} color={theme.colors.danger} />
-        <Text variant="caption" color="danger" style={styles.stopLabel}>
-          Stop
-        </Text>
-      </Pressable>
+            >
+              {quickKey.label}
+            </MonoText>
+          )}
+        </Pressable>
+      ))}
     </Row>
   );
 }
@@ -125,17 +101,12 @@ const styles = StyleSheet.create({
   bar: {
     alignItems: 'center',
   },
-  scroll: {
-    flex: 1,
-  },
   key: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stopKey: {
-    flexDirection: 'row',
-  },
-  stopLabel: {
+  dangerLabel: {
     fontWeight: '600',
   },
 });
