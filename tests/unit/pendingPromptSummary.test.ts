@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { TranscriptEntryWire } from '@kangentic/protocol';
 import {
   buildPendingPromptSummary,
+  collapseToSnippetText,
   extractAwaitedToolUseId,
   findAwaitedToolUse,
+  lastAssistantText,
   parseAskUserQuestionInput,
 } from '@/conversation/pendingPromptSummary';
 
@@ -210,5 +212,73 @@ describe('buildPendingPromptSummary', () => {
     expect(summary.length).toBe(80);
     expect(summary.endsWith('...')).toBe(true);
     expect(summary.startsWith('Approve: xxx')).toBe(true);
+  });
+});
+
+describe('collapseToSnippetText', () => {
+  it('flattens markdown prose to plain words', () => {
+    const text = [
+      '**The live pairing test is complete.** What was validated:',
+      '',
+      '- **Connection stack:** quick-pair -> relay -> `Noise KK` established.',
+      '- **Board:** see [the docs](docs/architecture.md) for detail.',
+    ].join('\n');
+    expect(collapseToSnippetText(text)).toBe(
+      'The live pairing test is complete. What was validated: Connection stack: quick-pair -> relay -> Noise KK established. Board: see the docs for detail.',
+    );
+  });
+
+  it('drops decoration-only lines instead of rendering them as glyphs', () => {
+    // Recorded from the live feed card: rules and underscore runs render
+    // as literal horizontal lines on the phone.
+    expect(collapseToSnippetText('---')).toBe('');
+    expect(collapseToSnippetText('____________________')).toBe('');
+    expect(collapseToSnippetText('────────────────────\n────────────────────')).toBe('');
+    expect(collapseToSnippetText('Done.\n\n---')).toBe('Done.');
+  });
+
+  it('strips heading, quote, and fence markers but keeps their content', () => {
+    const text = ['## Summary', '> quoted note', '```ts', 'const answer = 42;', '```', '1. first step'].join('\n');
+    expect(collapseToSnippetText(text)).toBe('Summary quoted note const answer = 42; first step');
+  });
+});
+
+describe('lastAssistantText', () => {
+  const assistantEntry = (uuid: string, ts: number, texts: string[]): TranscriptEntryWire => ({
+    kind: 'assistant',
+    uuid,
+    ts,
+    blocks: texts.map((text) => ({ type: 'text', text })),
+  });
+
+  it('returns the newest assistant text as a collapsed snippet', () => {
+    const entries: TranscriptEntryWire[] = [
+      assistantEntry('a1', 1, ['Older message.']),
+      { kind: 'user', uuid: 'u1', ts: 2, text: 'go on' },
+      assistantEntry('a2', 3, ['**Newest** message with `code`.']),
+    ];
+    expect(lastAssistantText(entries)).toBe('Newest message with code.');
+  });
+
+  it('walks past decoration-only blocks to earlier real prose', () => {
+    const entries: TranscriptEntryWire[] = [
+      assistantEntry('a1', 1, ['The real content.']),
+      assistantEntry('a2', 2, ['────────────────────']),
+    ];
+    expect(lastAssistantText(entries)).toBe('The real content.');
+  });
+
+  it('returns null when the window has no readable assistant text', () => {
+    const entries: TranscriptEntryWire[] = [
+      { kind: 'user', uuid: 'u1', ts: 1, text: 'hello' },
+      assistantEntry('a1', 2, ['---']),
+      { kind: 'tool_result', uuid: 'r1', ts: 3, toolUseId: 'toolu_1', content: 'output' },
+    ];
+    expect(lastAssistantText(entries)).toBeNull();
+  });
+
+  it('caps the snippet at 200 characters', () => {
+    const entries = [assistantEntry('a1', 1, [`start ${'word '.repeat(60)}`])];
+    expect(lastAssistantText(entries)?.length).toBe(200);
   });
 });
