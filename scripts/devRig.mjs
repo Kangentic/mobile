@@ -366,8 +366,14 @@ async function ensureEmulator(avdName) {
   if (!listed.stdout.split('\n').map((name) => name.trim()).includes(avdName)) {
     fail(`AVD "${avdName}" not found. Available: ${listed.stdout.trim().split('\n').join(', ') || '(none)'}`);
   }
-  log(`booting emulator ${avdName}...`);
-  const emulatorChild = spawn('emulator', ['-avd', avdName], {
+  log(`booting emulator ${avdName} (host GPU)...`);
+  // Explicit host GPU: an AVD with hw.gpu.enabled=no renders in software
+  // and degrades over long sessions (progressive input + window lag).
+  // NOTE emulator 36.x rejects the old angle_indirect value (silently
+  // falls back to auto); the valid accelerated mode is 'host'. The AVD
+  // config carries hw.gpu.mode=host for boots that bypass the rig; the
+  // flag here overrides whatever the config says.
+  const emulatorChild = spawn('emulator', ['-avd', avdName, '-gpu', 'host'], {
     detached: true,
     stdio: 'ignore',
   });
@@ -543,8 +549,11 @@ async function doctor({ relayRepo, avdName, needsRelay }) {
 
   const configPath = avdConfigPath(avdName);
   if (existsSync(configPath)) {
-    const keyboardEnabled = /hw\.keyboard\s*=\s*yes/.test(readFileSync(configPath, 'utf8'));
+    const avdConfig = readFileSync(configPath, 'utf8');
+    const keyboardEnabled = /hw\.keyboard\s*=\s*yes/.test(avdConfig);
     add(keyboardEnabled, 'AVD hardware keyboard enabled (hw.keyboard=yes)', `set hw.keyboard=yes in ${configPath} (emulator stopped) or typing from the host keyboard will not reach the app`);
+    const gpuAccelerated = /hw\.gpu\.enabled\s*=\s*yes/.test(avdConfig) && /hw\.gpu\.mode\s*=\s*host/.test(avdConfig);
+    add(gpuAccelerated, 'AVD GPU accelerated (hw.gpu.enabled=yes, hw.gpu.mode=host)', `set both in ${configPath} (emulator stopped) or the emulator renders in software and degrades over long sessions`);
   }
 
   add(existsSync(join(relayRepo, 'package.json')), `relay repo at ${relayRepo}`, 'clone kangentic-relay as a sibling or set KANGENTIC_RELAY_REPO');
