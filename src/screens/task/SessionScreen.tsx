@@ -46,6 +46,11 @@ export function SessionScreen(): React.JSX.Element {
   // fresh { task, projectId } from a Zustand selector changes identity every
   // render and drives useSyncExternalStore into an infinite re-render loop.
   const locatedTaskTitle = useBoardStore((state) => findTaskById(state, taskId)?.task.title ?? null);
+  const locatedDisplayId = useBoardStore((state) => {
+    const located = findTaskById(state, taskId);
+    if (!located) return null;
+    return (state.boardsByProjectId[located.projectId]?.showTicketNumbers ?? true) ? located.task.display_id : null;
+  });
   const locatedProjectId = useBoardStore((state) => findTaskById(state, taskId)?.projectId ?? null);
   const locatedSessionId = useBoardStore((state) => findTaskById(state, taskId)?.task.session_id ?? null);
   const taskLocated = useBoardStore((state) => findTaskById(state, taskId) !== null);
@@ -158,7 +163,7 @@ export function SessionScreen(): React.JSX.Element {
 
   return (
     <Screen testID="session-screen">
-      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} onOpenChanges={openChanges} />
+      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} displayId={locatedDisplayId} onOpenChanges={openChanges} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

@@ -3,17 +3,19 @@ import { Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GitCompareArrows } from 'lucide-react-native';
-import { ConnectionBanner, IconButton, Row, StatusDot, Text, useTheme } from '@/components';
+import { ConnectionBanner, IconButton, MonoText, Row, StatusDot, Text, useTheme } from '@/components';
 import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 
 export interface TaskHeaderProps {
   taskTitle: string;
   sessionId: string | null;
+  /** The task's #N, shown top-right when the board's Ticket Numbers setting is on (pass null to hide). */
+  displayId?: number | null;
   /** When set, the header shows the Changes chip (the Session screen's second destination). */
   onOpenChanges?: () => void;
 }
 
-export function TaskHeader({ taskTitle, sessionId, onOpenChanges }: TaskHeaderProps): React.JSX.Element {
+export function TaskHeader({ taskTitle, sessionId, displayId = null, onOpenChanges }: TaskHeaderProps): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -35,9 +37,14 @@ export function TaskHeader({ taskTitle, sessionId, onOpenChanges }: TaskHeaderPr
       >
         <IconButton iconName="chevron-back" onPress={() => router.back()} testID="task-back-button" accessibilityLabel="Back" />
         {activityEntry ? <StatusDot variant={sectionForEntry(activityEntry)} testID="task-header-status" /> : null}
-        <Text variant="title" numberOfLines={1} style={styles.title}>
+        <Text variant="bodyStrong" numberOfLines={1} style={styles.title}>
           {taskTitle}
         </Text>
+        {displayId !== null ? (
+          <MonoText size="caption" color="muted" testID="task-header-display-id">
+            #{displayId}
+          </MonoText>
+        ) : null}
         {onOpenChanges ? (
           // Icon-only with a full touch target: the title keeps its room and
           // the affordance still reads as a button (raised circle, pressed dim).
