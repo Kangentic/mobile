@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -204,14 +204,14 @@ describe('SessionScreen session binding', () => {
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
   });
 
-  it('pushes the changes route from the header chip', () => {
+  it('changes is an inline pager pane, not a header chip or pushed route', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
     seedTaskWithSession('sess-a');
     renderSessionScreen();
-    fireEvent.press(screen.getByTestId('task-header-changes'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/task/[taskId]/changes',
-      params: { taskId: 'task-1', projectId: 'project-1' },
-    });
+    // No header chip anymore; the pane is mounted in the pager (the footer
+    // switcher, stubbed in this suite, switches to it in place).
+    expect(screen.queryByTestId('task-header-changes')).toBeNull();
+    expect(screen.getByTestId('session-pane-changes')).toBeTruthy();
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });

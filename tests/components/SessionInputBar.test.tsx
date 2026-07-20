@@ -4,6 +4,12 @@ import { ThemeProvider } from '@/components';
 import { SessionInputBar } from '@/screens/task/SessionInputBar';
 import type { SessionMode } from '@/screens/task/SessionModeToggle';
 
+// The footer owns the gesture-nav bottom inset.
+jest.mock('react-native-safe-area-context', () =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  require('react-native-safe-area-context/jest/mock').default,
+);
+
 // ComposerBar pulls in the dictation engine.
 jest.mock('expo-speech-recognition', () => ({
   ExpoSpeechRecognitionModule: {
@@ -24,24 +30,36 @@ function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): void
 }
 
 describe('SessionInputBar', () => {
-  it('renders the quick keys and PTY composer in terminal mode', () => {
+  it('renders quick keys and the dictation mic in terminal mode (no staging field)', () => {
     renderBar('terminal');
     expect(screen.getByTestId('quick-key-esc')).toBeTruthy();
-    expect(screen.getByTestId('terminal-input')).toBeTruthy();
+    expect(screen.getByTestId('terminal-mic')).toBeTruthy();
+    // Typing happens directly in the terminal (tap raises the keyboard);
+    // there is no staging text field and no composer.
+    expect(screen.queryByTestId('terminal-input')).toBeNull();
     expect(screen.queryByTestId('composer-input')).toBeNull();
   });
 
   it('renders the agent composer in chat mode', () => {
     renderBar('chat');
     expect(screen.getByTestId('composer-input')).toBeTruthy();
-    expect(screen.queryByTestId('terminal-input')).toBeNull();
+    expect(screen.queryByTestId('terminal-mic')).toBeNull();
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
   });
 
-  it('renders the mode pill in both modes', () => {
+  it('renders only the switcher in changes mode', () => {
+    renderBar('changes');
+    expect(screen.getByTestId('session-mode-changes')).toBeTruthy();
+    expect(screen.queryByTestId('composer-input')).toBeNull();
+    expect(screen.queryByTestId('quick-key-esc')).toBeNull();
+    expect(screen.queryByTestId('terminal-mic')).toBeNull();
+  });
+
+  it('renders the mode pill segments in every mode', () => {
     renderBar('terminal');
     expect(screen.getByTestId('session-mode-terminal')).toBeTruthy();
     expect(screen.getByTestId('session-mode-chat')).toBeTruthy();
+    expect(screen.getByTestId('session-mode-changes')).toBeTruthy();
   });
 
   it('renders nothing without a session', () => {

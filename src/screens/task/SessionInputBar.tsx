@@ -1,9 +1,10 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Row, Stack, useTheme } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
 import { QuickKeyBar } from '@/components/terminal/QuickKeyBar';
-import { TerminalInputRow } from '@/components/terminal/TerminalInputRow';
+import { TerminalMicButton } from '@/components/terminal/TerminalMicButton';
 import { SessionModeToggle, type SessionMode } from './SessionModeToggle';
 
 export interface SessionInputBarProps {
@@ -13,16 +14,21 @@ export interface SessionInputBarProps {
   chatAttention: boolean;
 }
 
+/** The reserved right-slot width: the switcher keeps identical geometry whether or not a mic is showing. */
+const RIGHT_SLOT_WIDTH = 52;
+
 /**
- * The session's ONE mode-aware footer. The bottom row is identical in both
- * modes - compact mode pill at the left, the input beside it - so toggling
- * the lens never shifts what the thumb is resting on. Terminal mode adds
- * the quick-key strip ABOVE that row (additive: the bottom row itself
- * never moves); chat mode simply has no strip and gives the height back
- * to the conversation.
+ * The session's ONE mode-aware footer. The switcher row is UNIFORM across
+ * every mode - full-width flexed segments on the left, a hairline
+ * separator, and a reserved right slot that holds the PTY dictation mic
+ * in terminal mode (chat's mic lives in the composer row with the input
+ * and send; changes needs no input at all). Terminal adds the quick-key
+ * strip above; chat adds the composer row below. Typing in terminal
+ * happens directly in the terminal - tap it to raise the keyboard.
  */
 export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }: SessionInputBarProps): React.JSX.Element | null {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   if (sessionId === null) return null;
   return (
     <Stack
@@ -34,25 +40,34 @@ export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }
         borderTopColor: theme.colors.border,
         paddingHorizontal: theme.spacing.sm,
         paddingTop: theme.spacing.xs,
-        paddingBottom: theme.spacing.xs,
+        // The session screen has no tab bar beneath: the footer owns the
+        // gesture-nav inset so the segment labels never sit under the pill.
+        paddingBottom: insets.bottom + theme.spacing.xs,
       }}
     >
       {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}
-      <Row gap="sm" style={styles.inputRow}>
+      <Row gap="sm" style={styles.switcherRow}>
         <SessionModeToggle mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />
-        <View style={styles.flex}>
-          {mode === 'terminal' ? <TerminalInputRow sessionId={sessionId} /> : <ComposerBar sessionId={sessionId} />}
-        </View>
+        <View style={[styles.separator, { backgroundColor: theme.colors.border }]} />
+        <View style={styles.rightSlot}>{mode === 'terminal' ? <TerminalMicButton sessionId={sessionId} /> : null}</View>
       </Row>
+      {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}
     </Stack>
   );
 }
 
 const styles = StyleSheet.create({
-  inputRow: {
-    alignItems: 'flex-end',
+  switcherRow: {
+    alignItems: 'center',
   },
-  flex: {
-    flex: 1,
+  separator: {
+    alignSelf: 'stretch',
+    marginVertical: 6,
+    width: StyleSheet.hairlineWidth,
+  },
+  rightSlot: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: RIGHT_SLOT_WIDTH,
   },
 });
