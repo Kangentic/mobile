@@ -48,7 +48,14 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, onOpenChang
           {taskTitle}
         </Text>
         {displayId !== null ? (
-          <MonoText size="caption" color="muted" testID="task-header-display-id">
+          // The header row's own padding is only xs; without the extra margin
+          // the number kisses the screen edge.
+          <MonoText
+            size="caption"
+            color="muted"
+            style={{ marginRight: theme.spacing.sm }}
+            testID="task-header-display-id"
+          >
             #{displayId}
           </MonoText>
         ) : null}
