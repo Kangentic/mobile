@@ -21,6 +21,7 @@ const mockPeekAwaitedPrompt = jest.fn();
 jest.mock('@/connection/actions', () => ({
   refreshSnapshots: jest.fn().mockResolvedValue(undefined),
   peekAwaitedPrompt: (sessionId: string, promptId: string) => mockPeekAwaitedPrompt(sessionId, promptId),
+  peekLastAssistantMessage: jest.fn().mockResolvedValue(null),
   answerPermissionPrompt: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -99,14 +100,16 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByText('Needs you')).toBeNull();
   });
 
-  it('prompt-pending rows carry no inline controls and route to chat on tap', () => {
+  it('prompt-pending rows carry no inline controls or status filler and route to chat on tap', () => {
     renderHome();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
-    expect(screen.getByText('Waiting for your approval')).toBeTruthy();
-    // The row TEASES the decision in its snippet; answering lives in the
-    // session's own prompt card, so Home never shows approve/deny.
+    // No filler status lines and no inline answering: the section + icon
+    // say the state, the snippet teases the decision, and answering lives
+    // in the session's own prompt card.
+    expect(screen.queryByText('Waiting for your approval')).toBeNull();
     expect(screen.queryByTestId('permission-approve')).toBeNull();
     expect(screen.queryByText('Review and approve')).toBeNull();
+    expect(screen.getByTestId('activity-row-sess-1-time')).toBeTruthy();
 
     fireEvent.press(screen.getByTestId('activity-row-sess-1'));
     expect(mockPush).toHaveBeenCalledWith({
@@ -117,7 +120,7 @@ describe('TriageHomeScreen', () => {
 
   it('reacts to store changes (a session moving sections re-renders)', () => {
     renderHome();
-    expect(screen.getByText('Waiting for your approval')).toBeTruthy();
+    expect(screen.getAllByText('Idle')).toHaveLength(1);
 
     act(() => {
       useActivityStore.getState().applyActivityEvent({
@@ -127,8 +130,8 @@ describe('TriageHomeScreen', () => {
         payload: { type: 'activity', state: 'thinking', reason: { kind: 'tool', pendingCount: 1, currentTool: 'Bash' } },
       });
     });
-    expect(screen.getByText('Running Bash')).toBeTruthy();
     expect(screen.getAllByText('Thinking')).toHaveLength(1);
+    expect(screen.queryByText('Idle')).toBeNull();
   });
 
   it('shows the all-quiet state when connected with no sessions', () => {

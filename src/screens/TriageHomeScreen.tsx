@@ -33,27 +33,15 @@ const SECTION_TITLES: Record<TriageSection, string> = {
   working: 'Thinking',
 };
 
-function statusLabelForEntry(entry: SessionActivityEntry): string {
-  if (entry.state === 'permission') return 'Waiting for your approval';
-  // Idle is a turn-based state, not presence: the turn ended and the agent
-  // waits on the user. Say what that means for them.
-  const idleLabel = entry.unreadCount > 0 ? 'Finished - results to review' : 'Waiting for your next message';
-  const reason = entry.reason;
-  if (!reason) return entry.state === 'thinking' ? 'Thinking' : idleLabel;
-  switch (reason.kind) {
-    case 'tool':
-      return reason.currentTool ? `Running ${reason.currentTool}` : 'Running tools';
-    case 'subagent':
-      return `Subagent working (depth ${reason.depth})`;
-    case 'background-shell':
-      return reason.count === 1 ? 'Background shell running' : `${reason.count} background shells running`;
-    case 'turn-active':
-      return 'Thinking';
-    case 'permission':
-      return 'Waiting for your approval';
-    case 'idle':
-      return idleLabel;
-  }
+/** Compact inbox recency: seconds round to 'now', then minutes/hours/days. */
+function relativeTimeLabel(epochMs: number, nowMs: number): string {
+  const elapsedMs = Math.max(0, nowMs - epochMs);
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 export function TriageHomeScreen(): React.JSX.Element {
@@ -61,6 +49,14 @@ export function TriageHomeScreen(): React.JSX.Element {
   const bySessionId = useActivityStore((state) => state.bySessionId);
   const pairedState = useChannelStore((state) => state.pairedState);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Recency labels tick once a minute (Date.now is impure in render, so
+  // the clock lives in state and updates from the interval callback).
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const ticker = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(ticker);
+  }, []);
 
   const rows = useMemo<TriageListRow[]>(() => {
     const sections = selectTriageRows({ bySessionId });
@@ -125,7 +121,7 @@ export function TriageHomeScreen(): React.JSX.Element {
             <SectionHeader title={item.title} testID={`section-header-${item.section}`} />
           ) : (
             <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-              <ActivityRow entry={item.entry} />
+              <ActivityRow entry={item.entry} nowMs={nowMs} />
             </View>
           )
         }
@@ -149,16 +145,17 @@ function UnpairedEmptyState(): React.JSX.Element {
   );
 }
 
-const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionActivityEntry }): React.JSX.Element {
-  const theme = useTheme();
+const ActivityRow = React.memo(function ActivityRow({
+  entry,
+  nowMs,
+}: {
+  entry: SessionActivityEntry;
+  nowMs: number;
+}): React.JSX.Element {
   const router = useRouter();
   const taskTitle = useBoardStore((state) => {
     const board = state.boardsByProjectId[entry.projectId];
     return board?.tasksById[entry.taskId]?.title ?? null;
-  });
-  const agentName = useBoardStore((state) => {
-    const board = state.boardsByProjectId[entry.projectId];
-    return board?.tasksById[entry.taskId]?.agent ?? null;
   });
   const projectName = useBoardStore(
     (state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null,
@@ -184,16 +181,16 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
   // idle too - all idle rows are equal priority, first come first served).
   const statusKind = working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
 
-  // Inbox-style snippet, identical slot for every idle row: the pending
-  // decision when a prompt waits, otherwise the agent's last message. The
-  // peek result records WHICH refresh key it belongs to (the prompt id, or
-  // unreadCount which bumps on new messages), so re-renders never refetch.
+  // Inbox-style snippet, the row's body for EVERY state: the pending
+  // decision when a prompt waits, otherwise the agent's last message
+  // (context for thinking rows too). The peek result records WHICH
+  // refresh key it belongs to (the prompt id, or unreadCount which bumps
+  // on new messages), so re-renders never refetch.
   const awaitedPromptId = entry.awaitedPromptId;
   const snippetKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
   const [peekedSnippet, setPeekedSnippet] = useState<{ key: string; text: string | null } | null>(null);
   const snippet = peekedSnippet !== null && peekedSnippet.key === snippetKey ? peekedSnippet.text : null;
   useEffect(() => {
-    if (working) return;
     let cancelled = false;
     const currentKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
     const peek =
@@ -210,8 +207,11 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
     return () => {
       cancelled = true;
     };
-  }, [entry.sessionId, entry.unreadCount, working, isPermission, awaitedPromptId]);
+  }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId]);
 
+  // No status filler ("Thinking", "Waiting for..."): the section header
+  // and the icon already say the state. The row is title + project pill +
+  // a two-line last-message snippet + recency.
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
       <Stack gap="xs">
@@ -220,29 +220,29 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
           <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
             {taskTitle ?? 'Untitled task'}
           </Text>
-          {agentName ? <Badge label={agentName} color="secondary" /> : null}
           {entry.unreadCount > 0 ? <Badge label={String(entry.unreadCount)} color="accent" /> : null}
+          {projectName ? <Badge label={projectName} color="secondary" /> : null}
         </Row>
-        {projectName ? (
-          <Text variant="caption" color="secondary">
-            {projectName}
-          </Text>
-        ) : null}
-        {snippet !== null && !working ? (
-          <Text
-            variant="caption"
-            color="muted"
-            numberOfLines={2}
-            testID={`activity-row-${entry.sessionId}-snippet`}
-          >
-            {snippet}
-          </Text>
-        ) : null}
-        <Row gap="xs" style={styles.statusRow}>
-          <Text variant="caption" color={working ? 'secondary' : 'muted'} style={styles.flex} numberOfLines={1}>
-            {statusLabelForEntry(entry)}
-          </Text>
-          <Icon name="chevron-forward" color="muted" size={14} style={{ marginRight: -theme.spacing.xs }} />
+        <Row gap="sm" style={styles.snippetRow}>
+          {snippet !== null ? (
+            <Text
+              variant="caption"
+              color="muted"
+              numberOfLines={2}
+              style={styles.flex}
+              testID={`activity-row-${entry.sessionId}-snippet`}
+            >
+              {snippet}
+            </Text>
+          ) : (
+            <View style={styles.flex} />
+          )}
+          <Row gap="xs" style={styles.timeRow}>
+            <Text variant="caption" color="muted" testID={`activity-row-${entry.sessionId}-time`}>
+              {relativeTimeLabel(entry.lastEventAt, nowMs)}
+            </Text>
+            <Icon name="chevron-forward" color="muted" size={14} />
+          </Row>
         </Row>
       </Stack>
     </Card>
@@ -253,7 +253,10 @@ const styles = StyleSheet.create({
   spaceBetween: {
     justifyContent: 'space-between',
   },
-  statusRow: {
+  snippetRow: {
+    alignItems: 'flex-end',
+  },
+  timeRow: {
     alignItems: 'center',
   },
   flex: {
