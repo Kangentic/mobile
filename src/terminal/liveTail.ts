@@ -335,6 +335,33 @@ export function stripAnsiPreservingLayout(text: string): string {
     .replace(/[\0-\x08\x0b-\x1f\x7f]/g, '');
 }
 
+/** Box-drawing and block glyphs that make up TUI borders/frames, not content. */
+const CHROME_ONLY_LINE = /^[\s─-╿▀-▟+|_=~.-]*$/;
+/** Spinner/status chrome: "| Working (12s · esc to interrupt)" and kin. */
+const WORKING_STATUS_LINE = /esc to interrupt|working\s*\(|thinking\s*\(/i;
+/** Agent context bars: "Codex CLI · GPT-5 Codex · high · [up]8.2k [down]420"-style token/meta strips. */
+const CONTEXT_BAR_LINE = /[↑↓].*\d|·.*·.*·/;
+
+/**
+ * The last CONTENT line of a scrollback capture: strips ANSI, removes TUI
+ * box borders from line edges, and skips chrome (border-only lines,
+ * working/spinner status lines, agent context bars) so the result reads
+ * like the agent's most recent message rather than a status strip. Null
+ * when nothing readable remains.
+ */
+export function lastContentLineFromScrollback(scrollback: string): string | null {
+  const lines = stripAnsiPreservingLayout(scrollback).split('\n');
+  for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+    const withoutBorders = lines[lineIndex].replace(/^[\s│║|]+|[\s│║|]+$/g, '').trim();
+    if (withoutBorders.length === 0) continue;
+    if (CHROME_ONLY_LINE.test(withoutBorders)) continue;
+    if (WORKING_STATUS_LINE.test(withoutBorders)) continue;
+    if (CONTEXT_BAR_LINE.test(withoutBorders)) continue;
+    return withoutBorders;
+  }
+  return null;
+}
+
 const MIN_PARSED_COLUMNS = 40;
 const MAX_PARSED_COLUMNS = 300;
 const DEFAULT_PARSED_COLUMNS = 80;

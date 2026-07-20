@@ -5,7 +5,7 @@ import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, retainTerminal } from '@/state/terminalFeed';
-import { stripAnsiPreservingLayout } from '@/terminal/liveTail';
+import { lastContentLineFromScrollback } from '@/terminal/liveTail';
 import { getActiveConnection, requireSubscriptions, requireVerbClient } from './connectionManager';
 import { runBootstrap } from './bootstrap';
 
@@ -256,12 +256,10 @@ export async function peekLastTerminalLine(sessionId: string, cacheKeySuffix: nu
   const cached = lastTerminalLinePeekCache.get(cacheKey);
   if (cached !== undefined) return cached;
   const snapshot = await requireVerbClient().readStreamSubscribe(sessionId);
-  const cleanedLines = stripAnsiPreservingLayout(snapshot.scrollback)
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  const snippet =
-    cleanedLines.length > 0 ? cleanedLines[cleanedLines.length - 1].slice(0, TERMINAL_LINE_SNIPPET_MAX_LENGTH) : null;
+  // Content, not chrome: skip status/spinner lines and context bars so
+  // the snippet reads like the agent's most recent message.
+  const contentLine = lastContentLineFromScrollback(snapshot.scrollback);
+  const snippet = contentLine !== null ? contentLine.slice(0, TERMINAL_LINE_SNIPPET_MAX_LENGTH) : null;
   if (lastTerminalLinePeekCache.size >= PROMPT_PEEK_CACHE_CAP) lastTerminalLinePeekCache.clear();
   lastTerminalLinePeekCache.set(cacheKey, snippet);
   return snippet;
