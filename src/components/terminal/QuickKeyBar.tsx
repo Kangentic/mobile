@@ -76,12 +76,15 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
           ]}
         >
           {quickKey.danger ? (
-            <Text variant="caption" color="danger" style={styles.dangerLabel}>
+            <Text variant="caption" color="danger" style={styles.dangerLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
               {quickKey.label}
             </Text>
           ) : (
             <MonoText
               color="primary"
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
               style={{
                 fontSize: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE,
                 lineHeight: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE + 2,
