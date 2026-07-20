@@ -27,7 +27,8 @@
     "build:dev": "eas build --profile development --platform android",
     "build:preview": "eas build --profile preview --platform android",
     "build:prod": "eas build --profile production --platform android",
-    "dev:emu": "node scripts/dev.mjs emu"
+    "dev:emu": "node scripts/dev.mjs emu",
+    "dev:adb": "node scripts/dev.mjs adb"
   },
   "dependencies": {
     "@bacons/text-decoder": "^0.0.0",

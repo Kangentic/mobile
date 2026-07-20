@@ -67,7 +67,7 @@ const RELAY_URL = `ws://127.0.0.1:${RELAY_PORT}`;
 // the 64-hex pairing slot). Harmless once the relay default matches.
 const RELAY_SLOT_PATTERN = '^([0-9a-f]{32}|[0-9a-f]{64})$';
 const DEFAULT_AVD = 'kangentic_pixel';
-const MODES = ['mock', 'live', 'pair', 'stub', 'doctor', 'emu'];
+const MODES = ['mock', 'live', 'pair', 'stub', 'doctor', 'emu', 'adb'];
 
 const spawnedChildren = [];
 
@@ -675,6 +675,29 @@ async function main() {
     const failures = await doctor({ relayRepo, avdName, needsRelay: false });
     log(failures === 0 ? 'all checks passed' : `${failures} check(s) need attention`);
     process.exit(failures === 0 ? 0 : 1);
+  }
+
+  if (mode === 'adb') {
+    // The adb SERVER wedge: reverses look listed, sockets show established,
+    // but no data flows and the phone reconnect-loops while relay and
+    // desktop are healthy. The cure is a fresh adb server; the app then
+    // needs a relaunch because its retry loops can stall through the
+    // outage. (Windows: adb.exe must be force-killed - kill-server hangs
+    // against a wedged server.)
+    log('restarting the adb server (forwarding wedge recovery)...');
+    spawnSync('taskkill', ['/IM', 'adb.exe', '/F'], { encoding: 'utf8' });
+    await sleep(1000);
+    const started = run('adb', ['start-server']);
+    if (started.status !== 0) fail(`adb start-server failed: ${started.stderr?.trim() ?? ''}`);
+    ensureAdbReverse();
+    ensureInspectAdbReverse();
+    const relaunched = spawnSync('node', [join(repoRoot, 'scripts', 'mobileInspect.mjs'), 'relaunch'], { encoding: 'utf8' });
+    if (relaunched.status === 0) {
+      log('app relaunched and foregrounded');
+    } else {
+      warn(`app relaunch failed: ${relaunched.stderr?.trim() || relaunched.stdout?.trim()}`);
+    }
+    process.exit(relaunched.status === 0 ? 0 : 1);
   }
 
   if (mode === 'emu') {
