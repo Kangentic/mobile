@@ -39,8 +39,12 @@ export interface AwaitedToolUse {
 
 const SNIPPET_MAX_LENGTH = 200;
 
-/** A line that is pure decoration: markdown rules, box-drawing, table borders. */
-const DECORATION_ONLY_LINE = /^[\s\-=_*~#>│─━┄┈┉╌|+:.]+$/;
+/**
+ * A line that is pure decoration: markdown rules, box-drawing, table
+ * borders, and the wider dash/rule family (em/en dashes, horizontal
+ * bars, minus, ellipses) that rendered output uses for separators.
+ */
+const DECORATION_ONLY_LINE = /^[\s\-=_*~#>|+:.·‒-―…−⋯⎯⏤─-╿▀-▟]+$/;
 /** A code-fence delimiter line (```ts, ~~~), stripped so fences never leak into snippets. */
 const CODE_FENCE_LINE = /^(?:`{3,}|~{3,})[\w-]*$/;
 /** Leading markdown structure markers: headings, blockquotes, bullets, ordered lists. */
@@ -66,6 +70,9 @@ export function collapseToSnippetText(text: string): string {
     .join(' ')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\*\*|`/g, '')
+    // Inline separator runs (4+ rule glyphs between words) collapse too:
+    // line-level filters only catch decoration-ONLY lines.
+    .replace(/[‒-―−⋯⎯⏤─-╿▀-▟_=~-]{4,}/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }

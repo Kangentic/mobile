@@ -235,6 +235,13 @@ describe('collapseToSnippetText', () => {
     expect(collapseToSnippetText('____________________')).toBe('');
     expect(collapseToSnippetText('────────────────────\n────────────────────')).toBe('');
     expect(collapseToSnippetText('Done.\n\n---')).toBe('Done.');
+    // The wider dash family: em-dash, horizontal bar, double-line,
+    // ellipsis runs (seen live 2026-07-20).
+    expect(collapseToSnippetText('———————— ————— …')).toBe('');
+    expect(collapseToSnippetText('⎯⎯⎯⎯⎯⎯⎯⎯\n═══════════')).toBe('');
+    // Inline runs on a line WITH words collapse to a space (the line-level
+    // filter cannot catch these).
+    expect(collapseToSnippetText('Done ────────────── next steps below')).toBe('Done next steps below');
   });
 
   it('strips heading, quote, and fence markers but keeps their content', () => {
