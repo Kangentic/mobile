@@ -15,12 +15,12 @@ through EAS cloud builds and a physical device or TestFlight, never a local simu
 
 0. **If a mode was given (`mock`, `live`, or `pair`), or the user asks for a connected preview**
    (mentions the relay, the stub peer, pairing, or their live desktop board), delegate to the
-   dev rig instead of the manual steps: run `node scripts/devRig.mjs <mode>` (pass `--clear` /
+   dev rig instead of the manual steps: run `node scripts/dev.mjs <mode>` (pass `--clear` /
    `--avd <name>` through) with `run_in_background: true` and monitor its output. The rig
    performs steps 1-4 of this skill itself (emulator boot, port-8081 hygiene, Metro) plus
    everything connectivity needs (relay startup with the widened slot pattern, `adb reverse`,
    pm clear for pair mode, mock env for mock mode). When the rig reports Metro up, continue at
-   step 5 (foreground verification). `node scripts/devRig.mjs doctor` diagnoses a broken setup.
+   step 5 (foreground verification). `node scripts/dev.mjs doctor` diagnoses a broken setup.
    Mode meanings: `mock` = in-app fake desktop, no peers needed; `live` = the user's real
    running Kangentic desktop through a local relay; `pair` = reset to unpaired and exercise the
    pairing ceremony. For a plain UI preview with no mode, follow steps 1-6 as written.
