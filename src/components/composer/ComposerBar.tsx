@@ -103,11 +103,11 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
           {errorNote}
         </Text>
       ) : null}
-      <Row gap="xs" style={styles.inputRow}>
+      <Row gap="sm" style={styles.inputRow}>
         {showMicButton ? (
           <IconButton
             iconName={dictation.listening ? 'mic' : 'mic-outline'}
-            variant={dictation.listening ? 'fab' : 'plain'}
+            variant={dictation.listening ? 'fab' : 'raised'}
             testID={dictation.listening ? 'composer-mic-active' : 'composer-mic'}
             accessibilityLabel={dictation.listening ? 'Stop dictation' : 'Start dictation'}
             onPress={onMicPress}
@@ -124,6 +124,7 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
         />
         <IconButton
           iconName="send"
+          variant="raised"
           testID="composer-send"
           accessibilityLabel="Send message"
           disabled={sendDisabled}

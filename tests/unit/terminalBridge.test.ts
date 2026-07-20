@@ -82,6 +82,10 @@ describe('terminal -> host round-trip', () => {
     const tapped: TerminalToHostMessage = { type: 'tapped' };
     expect(decodeTerminalMessage(encodeTerminalMessage(tapped))).toEqual(tapped);
   });
+
+  it('round-trips the refit host message (snap back to the fitted view)', () => {
+    expect(decodeHostMessage(encodeHostMessage({ type: 'refit' }))).toEqual({ type: 'refit' });
+  });
 });
 
 describe('decodeTerminalMessage - malformed input', () => {

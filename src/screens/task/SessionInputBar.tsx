@@ -45,11 +45,13 @@ export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }
       }}
     >
       {mode === 'terminal' ? (
+        // Mic on the LEFT, mirroring the chat composer's mic position, so
+        // dictation lives in the same spot in both modes.
         <Row gap="sm" style={styles.modeRow}>
+          <TerminalMicButton sessionId={sessionId} />
           <View style={styles.flex}>
             <QuickKeyBar sessionId={sessionId} />
           </View>
-          <TerminalMicButton sessionId={sessionId} />
         </Row>
       ) : null}
       {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}

@@ -4,7 +4,7 @@ import { useTheme } from './theme/ThemeProvider';
 import { Icon, type IconProps } from './Icon';
 import { PressScale } from './motion/PressScale';
 
-export type IconButtonVariant = 'plain' | 'fab';
+export type IconButtonVariant = 'plain' | 'raised' | 'fab';
 
 export interface IconButtonProps {
   iconName: IconProps['name'];
@@ -18,9 +18,11 @@ export interface IconButtonProps {
 const FAB_ICON_SIZE = 24;
 
 /**
- * A 44pt-minimum icon-only button. `plain` is a transparent tap target for
- * toolbars and rows; `fab` is an accent circular raised action button meant to
- * be absolutely positioned by its parent.
+ * A 44pt-minimum icon-only button. `raised` is the DEFAULT-look for icon
+ * actions per ui-conventions.md (visible tap targets): a circular raised
+ * surface with a hairline outline. `plain` is a transparent target for
+ * dense toolbars where the container already frames the control; `fab` is
+ * the accent circular action button meant to be absolutely positioned.
  */
 export function IconButton({
   iconName,
@@ -32,6 +34,7 @@ export function IconButton({
 }: IconButtonProps): React.JSX.Element {
   const theme = useTheme();
   const isFab = variant === 'fab';
+  const isRaised = variant === 'raised';
   const fabDiameter = theme.minTouchSize + theme.spacing.md;
 
   // Pressed depth comes from PressScale's scale transform; opacity only
@@ -50,6 +53,12 @@ export function IconButton({
           minHeight: theme.minTouchSize,
           minWidth: theme.minTouchSize,
           opacity: disabled ? 0.5 : 1,
+        },
+        isRaised && {
+          backgroundColor: theme.colors.surfaceRaised,
+          borderColor: theme.colors.border,
+          borderRadius: theme.minTouchSize / 2,
+          borderWidth: StyleSheet.hairlineWidth,
         },
         isFab && [
           styles.fabShadow,

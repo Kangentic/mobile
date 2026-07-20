@@ -17,6 +17,10 @@ one-off components, tiny fonts, and slow lists unless these are stated.
   (`text-[11px]` scale note: the desktop convention's numeric floor, kept identical here),
   reserved for badges and dense labels. Never below 11px without explicit approval.
 - **Touch targets:** interactive elements are at least 44x44pt.
+- **Visible tap targets:** every tappable control shows a bounded surface - a raised fill, a
+  hairline outline, or a tinted segment - so where to tap is visible before touching. No
+  naked-glyph buttons; `IconButton` uses its `raised` variant unless a containing group
+  (a toolbar pill, a segmented control) already frames the control.
 - **Lists:** use FlashList for any feed, transcript, or board list. Never `FlatList` or a
   `.map()` inside a `ScrollView` for a list that can grow.
 - **Test selectors:** every interactive element gets a stable `testID` (Maestro's selector
