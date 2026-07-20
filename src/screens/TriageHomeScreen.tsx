@@ -33,15 +33,16 @@ const SECTION_TITLES: Record<TriageSection, string> = {
   working: 'Thinking',
 };
 
-/** Compact inbox recency: seconds round to 'now', then minutes/hours/days. */
+/** Inbox recency, long form: 'just now', then minutes/hours/days ago. */
 function relativeTimeLabel(epochMs: number, nowMs: number): string {
   const elapsedMs = Math.max(0, nowMs - epochMs);
   const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) return 'now';
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? '1 day ago' : `${days} days ago`;
 }
 
 export function TriageHomeScreen(): React.JSX.Element {
@@ -145,6 +146,9 @@ function UnpairedEmptyState(): React.JSX.Element {
   );
 }
 
+/** Title-row height: fits the pills/badges so their arrival never reflows. */
+const ROW_TITLE_MIN_HEIGHT = 24;
+
 const ActivityRow = React.memo(function ActivityRow({
   entry,
   nowMs,
@@ -152,6 +156,7 @@ const ActivityRow = React.memo(function ActivityRow({
   entry: SessionActivityEntry;
   nowMs: number;
 }): React.JSX.Element {
+  const theme = useTheme();
   const router = useRouter();
   const taskTitle = useBoardStore((state) => {
     const board = state.boardsByProjectId[entry.projectId];
@@ -212,37 +217,38 @@ const ActivityRow = React.memo(function ActivityRow({
   // No status filler ("Thinking", "Waiting for..."): the section header
   // and the icon already say the state. The row is title + project pill +
   // a two-line last-message snippet + recency.
+  //
+  // FIXED GEOMETRY: every card is the same height regardless of what data
+  // has arrived. The snippet block always reserves exactly two caption
+  // lines (empty until the peek lands) and the title row has a constant
+  // min-height that fits the pills, so an async update can never shift a
+  // card - or the cards below it - out from under the user's thumb.
+  const snippetBlockHeight = theme.typography.caption.lineHeight * 2;
   return (
     <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
       <Stack gap="xs">
-        <Row gap="sm" style={styles.spaceBetween}>
+        <Row gap="sm" style={[styles.spaceBetween, { minHeight: ROW_TITLE_MIN_HEIGHT }]}>
           <AgentStatusIcon kind={statusKind} testID={`activity-row-${entry.sessionId}-status`} />
           <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
             {taskTitle ?? 'Untitled task'}
           </Text>
           {entry.unreadCount > 0 ? <Badge label={String(entry.unreadCount)} color="accent" /> : null}
-          {projectName ? <Badge label={projectName} color="secondary" /> : null}
+          {projectName ? <Badge label={projectName} color="primary" outlined /> : null}
         </Row>
-        <Row gap="sm" style={styles.snippetRow}>
-          {snippet !== null ? (
-            <Text
-              variant="caption"
-              color="muted"
-              numberOfLines={2}
-              style={styles.flex}
-              testID={`activity-row-${entry.sessionId}-snippet`}
-            >
-              {snippet}
-            </Text>
-          ) : (
-            <View style={styles.flex} />
-          )}
-          <Row gap="xs" style={styles.timeRow}>
-            <Text variant="caption" color="muted" testID={`activity-row-${entry.sessionId}-time`}>
-              {relativeTimeLabel(entry.lastEventAt, nowMs)}
-            </Text>
-            <Icon name="chevron-forward" color="muted" size={14} />
-          </Row>
+        <Text
+          variant="caption"
+          color="muted"
+          numberOfLines={2}
+          style={{ height: snippetBlockHeight }}
+          testID={`activity-row-${entry.sessionId}-snippet`}
+        >
+          {snippet ?? ''}
+        </Text>
+        <Row gap="sm" style={styles.timeRow}>
+          <Text variant="caption" color="muted" style={styles.flex} testID={`activity-row-${entry.sessionId}-time`}>
+            {relativeTimeLabel(entry.lastEventAt, nowMs)}
+          </Text>
+          <Icon name="chevron-forward" color="muted" size={14} />
         </Row>
       </Stack>
     </Card>
@@ -252,9 +258,6 @@ const ActivityRow = React.memo(function ActivityRow({
 const styles = StyleSheet.create({
   spaceBetween: {
     justifyContent: 'space-between',
-  },
-  snippetRow: {
-    alignItems: 'flex-end',
   },
   timeRow: {
     alignItems: 'center',

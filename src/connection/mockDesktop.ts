@@ -47,9 +47,9 @@ export interface MockDesktop {
   dispose(): void;
 }
 
-const MOCK_PROJECT = { id: 'mock-project', name: 'Mock Project' };
+const MOCK_PROJECT = { id: 'mock-project', name: 'Project 1' };
 /** A second project: exercises the board project switcher and cross-project Home rows. */
-const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'Relay' };
+const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'Project 2' };
 const MOCK_SESSION_ID = 'mock-session-1';
 const MOCK_TASK_ID = 'mock-task-1';
 /** A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat reading-view fallback. */
