@@ -26,6 +26,11 @@ describe('lastContentLineFromScrollback', () => {
     expect(lastContentLineFromScrollback('───\n| Working (3s · esc to interrupt)\n')).toBeNull();
   });
 
+  it('skips middot-joined status bars like "auto mode on · PR #4 · 1 shell" (recorded feed-card artifact)', () => {
+    const frame = 'Committed the UI refinements.\n▶▶ auto mode on · PR #4 · 1 shell\n';
+    expect(lastContentLineFromScrollback(frame)).toBe('Committed the UI refinements.');
+  });
+
   it('skips status-area tip lines in favor of the real action above them (recorded feed-card artifact)', () => {
     // Seen live 2026-07-20: the snippet read "Tip: Use /btw to ask a quick
     // side question..." while the current tool action sat right above it.
