@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SettingsScreen } from '@/screens/SettingsScreen';
 import { useChannelStore } from '@/state/channelStore';
@@ -22,6 +22,11 @@ jest.mock('@/notifications', () => ({
   getPushRegistrationStatus: jest.fn().mockReturnValue('not-connected'),
 }));
 
+const mockResyncPushRegistrationCategories = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/connection/connectionManager', () => ({
+  resyncPushRegistrationCategories: () => mockResyncPushRegistrationCategories(),
+}));
+
 function renderSettings(): void {
   render(
     <ThemeProvider>
@@ -38,6 +43,13 @@ describe('SettingsScreen', () => {
       hasSeenSessionModeHint: false,
       hapticsEnabled: true,
       backgroundNotificationsMode: 'foreground-service',
+      pushCategoriesEnabled: {
+        'input-required': true,
+        'turn-complete': true,
+        'session-failed': true,
+        'plan-complete': true,
+        'spawn-stalled': true,
+      },
       hydrated: true,
     });
     useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true, relayUrl: 'ws://127.0.0.1:8080' });
@@ -71,5 +83,45 @@ describe('SettingsScreen', () => {
     renderSettings();
     fireEvent.press(screen.getByTestId('settings-dictation-off'));
     expect(useSettingsStore.getState().dictationMode).toBe('off');
+  });
+
+  it('toggles a push category without disturbing the others', () => {
+    renderSettings();
+    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
+      'input-required': true,
+      'turn-complete': true,
+      'session-failed': true,
+      'plan-complete': true,
+      'spawn-stalled': false,
+    });
+  });
+
+  it('resyncs the desktop registration when a category toggle changes', async () => {
+    renderSettings();
+    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
+    // waitFor, not a bare `await fireEvent.press`: the resync fires after
+    // setPushCategoryEnabled's awaited SecureStore write resolves, so a
+    // single-microtask await couples this assertion to the exact number of
+    // promise hops in the implementation and goes red on a harmless refactor.
+    await waitFor(() => expect(mockResyncPushRegistrationCategories).toHaveBeenCalled());
+  });
+
+  it('round-trips a category switch off then on, on both the store and the row accessibilityState', () => {
+    renderSettings();
+    // SwitchRow's inner native Switch is presentational (pointerEvents="none",
+    // hidden from the a11y tree); the wrapping Pressable owns the switch
+    // role AND accessibilityState, so assert against the element carrying
+    // the testID, not a nested Switch node.
+    const row = screen.getByTestId('settings-category-spawn-stalled');
+    expect(row.props.accessibilityState.checked).toBe(true);
+
+    fireEvent.press(row);
+    expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(false);
+    expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(false);
+
+    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
+    expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(true);
+    expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(true);
   });
 });

@@ -12,7 +12,19 @@ import notifee from '@notifee/react-native';
 import { startLocalNotifier } from '@/notifications/localNotifier';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+
+// settingsStore.ts persists via expo-secure-store; mocked (not the store
+// itself) so the REAL zustand store still runs, matching this file's
+// "real stores" design - the per-category toggle gate is a fresh, in-memory
+// default (every category enabled) unless a test explicitly flips one.
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: vi.fn(async () => null),
+  setItemAsync: vi.fn(async () => undefined),
+  deleteItemAsync: vi.fn(async () => undefined),
+  WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'whenUnlockedThisDeviceOnly',
+}));
 
 const appStateMock = vi.hoisted(() => {
   const listeners = new Set<(status: string) => void>();
@@ -83,6 +95,9 @@ describe('startLocalNotifier', () => {
     displayNotification.mockClear();
     useActivityStore.getState().reset();
     useBoardStore.getState().reset();
+    useSettingsStore.setState({
+      pushCategoriesEnabled: { 'input-required': true, 'turn-complete': true, 'session-failed': true, 'plan-complete': true, 'spawn-stalled': true },
+    });
     appStateMock.emit('active');
   });
 
@@ -102,7 +117,7 @@ describe('startLocalNotifier', () => {
 
     expect(displayNotification).toHaveBeenCalledTimes(1);
     const notification = displayNotification.mock.calls[0][0];
-    expect(notification.title).toBe('Agent needs your attention');
+    expect(notification.title).toBe('Agent needs your input');
     expect(notification.body).toBe('Ship the release');
     expect(notification.android?.channelId).toBe('needs-attention');
     expect(notification.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
@@ -162,6 +177,54 @@ describe('startLocalNotifier', () => {
 
     useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
     expect(displayNotification.mock.calls[0][0].body).toBe('Agent session');
+  });
+
+  it('a category disabled in settings never fires locally, even backgrounded and off cooldown', () => {
+    seedSession();
+    useSettingsStore.getState().setPushCategoryEnabled('input-required', false);
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    expect(displayNotification).not.toHaveBeenCalled();
+
+    // A different, still-enabled category is unaffected.
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('a disabled turn-complete category never fires locally on a thinking-to-idle transition', () => {
+    seedSession();
+    useSettingsStore.getState().setPushCategoryEnabled('turn-complete', false);
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    expect(displayNotification).not.toHaveBeenCalled();
+  });
+
+  it('reads the settings store live: disabling then re-enabling a category during the same run suppresses then resumes firing', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useSettingsStore.getState().setPushCategoryEnabled('input-required', false);
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    expect(displayNotification).not.toHaveBeenCalled();
+
+    // Past the cooldown window so a re-fire on the same session/category is
+    // not itself suppressed by the cooldown rather than the toggle.
+    nowMs += 31_000;
+    useSettingsStore.getState().setPushCategoryEnabled('input-required', true);
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-2'));
+
+    // If fire() had snapshotted the store at startLocalNotifier() time
+    // instead of reading it live, this re-enable would never take effect
+    // for the rest of this run and the notification would stay suppressed.
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    expect(displayNotification.mock.calls[0][0].title).toBe('Agent needs your input');
   });
 
   it('stops firing after the returned stop function runs', () => {

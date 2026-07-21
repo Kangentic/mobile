@@ -77,6 +77,54 @@ export function requireSubscriptions(): SubscriptionManager {
   return activeConnection.subscriptions;
 }
 
+/**
+ * Unpairing must leave the old desktop unable to push: send the unregister
+ * request while the channel is still up (called from DevicesScreen BEFORE
+ * the trust anchor is cleared and the connection torn down), then wipe the
+ * local push key so a stale key can never open a future envelope. Lives
+ * here (not in the screen) so its dynamic imports follow this module's own
+ * lazy-load convention (notifee/expo-notifications throw at import time
+ * without their native module, which the Jest component tier hits with no
+ * dynamic-import support). Best-effort: a failure here must never block
+ * the rest of unpairing.
+ */
+export async function revokePushRegistrationForUnpair(): Promise<void> {
+  // Two independent try blocks on purpose: the local key wipe is the half
+  // that actually secures THIS device, so it must not be reachable only
+  // when the network unregister succeeds. Sharing one block would let a
+  // throw from the import or the verb call skip the wipe entirely and
+  // leave a usable push key behind on an unpaired phone.
+  try {
+    const { unregisterPushWithDesktop } = await import('@/notifications/pushRegistration');
+    await unregisterPushWithDesktop(activeConnection?.verbs ?? null);
+  } catch {
+    // Best-effort; the desktop's own roster revocation is the backstop.
+  }
+  try {
+    const { clearPushRegistration } = await import('@/notifications/pushKeys');
+    await clearPushRegistration();
+  } catch {
+    // Best-effort; see the doc comment above.
+  }
+}
+
+/**
+ * Re-sends the register-push payload after the user changes a category
+ * toggle in Settings, so the desktop's filter reflects the new preference
+ * immediately rather than waiting for the next reconnect. Fire-and-forget,
+ * best-effort, and a no-op while disconnected (the next established
+ * bootstrap already sends the current preference set). Lives here for the
+ * same lazy-load reason as revokePushRegistrationForUnpair above.
+ */
+export async function resyncPushRegistrationCategories(): Promise<void> {
+  try {
+    const { registerPushWithDesktop } = await import('@/notifications/pushRegistration');
+    await registerPushWithDesktop(activeConnection?.verbs ?? null);
+  } catch {
+    // Best-effort; the next established bootstrap retries.
+  }
+}
+
 async function openConnection(): Promise<void> {
   if (activeConnection) return;
   const generation = connectGeneration;

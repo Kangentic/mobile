@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Card, MonoText, Row, Screen, Stack, StatusDot, Text, useTheme } from '@/components';
 import { wipeDesktopContent } from '@/connection/actions';
-import { reconnectNow } from '@/connection/connectionManager';
+import { reconnectNow, revokePushRegistrationForUnpair } from '@/connection/connectionManager';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
 import { useChannelStore } from '@/state/channelStore';
 import { formatKeyFingerprint, usePairedDesktopInfo } from './usePairedDesktopInfo';
@@ -41,8 +41,8 @@ export function DevicesScreen(): React.JSX.Element {
       return;
     }
     setUnpairing(true);
-    void trustAnchorStore
-      .clear()
+    void revokePushRegistrationForUnpair()
+      .then(() => trustAnchorStore.clear())
       .then(() => {
         // Revoking trust also revokes what was fetched under it: every
         // store and cache holding the desktop's content is cleared so

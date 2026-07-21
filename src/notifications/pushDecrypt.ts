@@ -1,6 +1,7 @@
 import { openPushEnvelope, type PushCategory } from '@kangentic/protocol';
 import { getPushKeyIfExists } from './pushKeys';
 import { getPushIdentityPublicKey } from './pushIdentity';
+import { titleForCategory } from './categoryCopy';
 
 /**
  * On-device decryption of a push envelope blob. Everything the OS-visible
@@ -24,19 +25,6 @@ export interface DecryptedPushNotification {
     projectId: string;
     sessionId: string;
   };
-}
-
-function titleForCategory(category: PushCategory): string {
-  switch (category) {
-    case 'permission-needed':
-      return 'Agent needs your approval';
-    case 'agent-question':
-      return 'Agent has a question';
-    case 'turn-complete':
-      return 'Turn complete';
-    case 'session-failed':
-      return 'Session stopped';
-  }
 }
 
 export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotification | null> {

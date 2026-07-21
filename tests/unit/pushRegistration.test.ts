@@ -38,10 +38,12 @@ vi.mock('expo-notifications', () => ({
 
 type PushRegistrationModule = typeof import('@/notifications/pushRegistration');
 type VerbClientModule = typeof import('@/channel/verbClient');
+type SettingsStoreModule = typeof import('@/state/settingsStore');
 
 interface Harness {
   pushRegistration: PushRegistrationModule;
   verbClientModule: VerbClientModule;
+  settingsStoreModule: SettingsStoreModule;
   registerPush: ReturnType<typeof vi.fn<(payload: RegisterPushRequestPayload) => Promise<RegisterPushResponsePayload>>>;
   verbs: { registerPush: (payload: RegisterPushRequestPayload) => Promise<RegisterPushResponsePayload> };
 }
@@ -49,10 +51,12 @@ interface Harness {
 async function loadHarness(): Promise<Harness> {
   const pushRegistration = await import('@/notifications/pushRegistration');
   // Imported from the SAME fresh module graph so instanceof CapabilityError
-  // inside the module matches the class this test constructs.
+  // (and the settings store singleton) inside the module matches what this
+  // test constructs/reads.
   const verbClientModule = await import('@/channel/verbClient');
+  const settingsStoreModule = await import('@/state/settingsStore');
   const registerPush = vi.fn<(payload: RegisterPushRequestPayload) => Promise<RegisterPushResponsePayload>>();
-  return { pushRegistration, verbClientModule, registerPush, verbs: { registerPush } };
+  return { pushRegistration, verbClientModule, settingsStoreModule, registerPush, verbs: { registerPush } };
 }
 
 describe('registerPushWithDesktop', () => {
@@ -146,5 +150,93 @@ describe('registerPushWithDesktop', () => {
 
     await pushRegistration.registerPushWithDesktop(verbs);
     expect(pushRegistration.getPushRegistrationStatus()).toBe('capability-denied');
+  });
+
+  it('sends every category by default, and re-registers (not idempotent-skipped) when a category is toggled off', async () => {
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, settingsStoreModule, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: true });
+
+    await pushRegistration.registerPushWithDesktop(verbs);
+    expect(registerPush.mock.calls[0][0].categories).toEqual([
+      'input-required',
+      'turn-complete',
+      'session-failed',
+      'plan-complete',
+      'spawn-stalled',
+    ]);
+
+    await settingsStoreModule.useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', false);
+    await pushRegistration.registerPushWithDesktop(verbs);
+
+    expect(registerPush).toHaveBeenCalledTimes(2); // NOT skipped by the token-unchanged idempotence guard
+    expect(registerPush.mock.calls[1][0].categories).toEqual(['input-required', 'turn-complete', 'session-failed', 'plan-complete']);
+
+    // Revert the toggle: sameCategories compares the CURRENT category list
+    // against whatever was registered last (now the 4-category list from the
+    // call above), not against some remembered "have I ever seen this exact
+    // set" latch. Turning spawn-stalled back on makes the current list (5
+    // categories) unequal to the last-registered list (4), so this must hit
+    // the wire again - a one-way latch that only re-registers on the FIRST
+    // change away from the default would instead skip this call.
+    await settingsStoreModule.useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', true);
+    await pushRegistration.registerPushWithDesktop(verbs);
+
+    expect(registerPush).toHaveBeenCalledTimes(3);
+    expect(registerPush.mock.calls[2][0].categories).toEqual([
+      'input-required',
+      'turn-complete',
+      'session-failed',
+      'plan-complete',
+      'spawn-stalled',
+    ]);
+  });
+});
+
+describe('unregisterPushWithDesktop', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    secureStoreState.storedValues.clear();
+    expoNotificationsState.getExpoPushTokenAsync.mockReset();
+  });
+
+  it('sends the unregister action and resets local status to pending', async () => {
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: true });
+    await pushRegistration.registerPushWithDesktop(verbs);
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('registered');
+    registerPush.mockClear();
+
+    registerPush.mockResolvedValue({ registered: false });
+    await pushRegistration.unregisterPushWithDesktop(verbs);
+
+    expect(registerPush).toHaveBeenCalledWith({ action: 'unregister' });
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('pending');
+  });
+
+  it('is a no-op that still resets status when there is no verb client', async () => {
+    const { pushRegistration } = await loadHarness();
+    await expect(pushRegistration.unregisterPushWithDesktop(null)).resolves.toBeUndefined();
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('pending');
+  });
+
+  it('never throws even when the desktop rejects the unregister call', async () => {
+    const { pushRegistration, verbClientModule, registerPush, verbs } = await loadHarness();
+    registerPush.mockRejectedValue(new verbClientModule.CapabilityError('register-push', 'transport closed'));
+    await expect(pushRegistration.unregisterPushWithDesktop(verbs)).resolves.toBeUndefined();
+  });
+
+  it('resets registeredThisProcess so a same-process re-register hits the wire again', async () => {
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: true });
+    await pushRegistration.registerPushWithDesktop(verbs);
+    await pushRegistration.unregisterPushWithDesktop(verbs);
+    registerPush.mockClear();
+    registerPush.mockResolvedValue({ registered: true });
+
+    await pushRegistration.registerPushWithDesktop(verbs);
+    expect(registerPush).toHaveBeenCalledTimes(1); // not skipped by stale "already registered" bookkeeping
   });
 });

@@ -221,18 +221,38 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
 Phone side (`src/notifications/`; DISPLAY is Android-only in this phase, while registration is
 deliberately platform-agnostic - an iOS device registers its key/token ahead of the NSE shipping,
 and its pushes safely degrade to the generic placeholder until then): the 32-byte push key is
-generated on-device and exchanged via the `register-push` verb on every established bootstrap
-(`pushRegistration.ts` - idempotent, re-sent on Expo token rotation, and non-fatal without FCM
-credentials or against an older desktop; `getPushRegistrationStatus()` feeds the Settings UI).
-`pushDecrypt.ts` opens envelopes with the phone's static public key as the AAD and maps the four
-categories (permission-needed / agent-question / turn-complete / session-failed) onto three
-notifee channels (needs-attention / completions / failures); any failure degrades to the generic
-placeholder. Killed-app data messages run through a headless expo-notifications background task
-(`backgroundPushTask.ts`, registered from `index.js` outside React). While backgrounded in
-foreground-service mode, `localNotifier.ts` turns activity-store transitions into the same
-notifications locally (30s per-session-per-kind cooldown, suppressed while foregrounded), and
-`foregroundService.ts` owns the ongoing LOW-importance connection notification. Taps route to
-the task screen via `tapRouter.ts`.
+generated on-device and exchanged via the `register-push` verb on every established bootstrap,
+alongside the device's enabled `categories` (`pushRegistration.ts` - idempotent, re-sent on Expo
+token rotation or a category-preference change, and non-fatal without FCM credentials or against
+an older desktop; `getPushRegistrationStatus()` feeds the Settings UI). Preferences are enforced
+**desktop-side**: the desktop filters outgoing notifications to the device's registered set
+before sealing, so a future iOS Notification Service Extension never needs to know about them.
+`pushDecrypt.ts` opens envelopes with the phone's static public key as the AAD and maps the five
+categories (`categoryCopy.ts` - `input-required` / `turn-complete` / `session-failed` /
+`plan-complete` / `spawn-stalled`, named for cross-vendor task-lifecycle vocabulary rather than
+any one agent's terms) onto four notifee channels (needs-attention / completions / failures /
+stalls); any failure degrades to the generic placeholder.
+
+| Category | Placeholder title (`titleForCategory`) |
+|----------|------------------------------------------|
+| `input-required` | "Agent needs your input" |
+| `turn-complete` | "Turn complete" |
+| `session-failed` | "Session stopped" |
+| `plan-complete` | "Plan complete" |
+| `spawn-stalled` | "Still preparing" |
+
+Killed-app data messages run through a
+headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`
+outside React). While backgrounded in foreground-service mode, `localNotifier.ts` turns
+activity-store transitions into the same notifications locally (three of the five categories have
+an activity-store signal to fire from; 30s per-session-per-category cooldown, suppressed while
+foregrounded, and gated by the same per-category Settings toggle as remote push), and
+`foregroundService.ts` owns the ongoing LOW-importance connection notification. Taps route to the
+task screen via `tapRouter.ts`. Unpairing sends `register-push` with `action: 'unregister'` while
+the channel is still up and wipes the local push key (`pushKeys.clearPushRegistration()`), so the
+previously paired desktop can no longer push anything this phone can decrypt - delivery through
+Expo/FCM still reaches the OS-level token, but every attempt now degrades to the generic
+placeholder, on the same failure path as a tampered or wrong-key blob.
 
 ## Later phases (future, not built yet)
 

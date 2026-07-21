@@ -35,7 +35,7 @@ async function loadModules(): Promise<{ pushDecrypt: PushDecryptModule; pushIden
 
 function plaintextFixture(overrides: Partial<PushEnvelopePlaintext> = {}): PushEnvelopePlaintext {
   return {
-    category: 'permission-needed',
+    category: 'input-required',
     projectId: 'project-1',
     taskId: 'task-1',
     sessionId: 'sess-1',
@@ -63,9 +63,9 @@ describe('decryptPushBlob', () => {
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
     expect(decrypted).not.toBeNull();
-    expect(decrypted?.title).toBe('Agent needs your approval');
+    expect(decrypted?.title).toBe('Agent needs your input');
     expect(decrypted?.body).toBe('Fix the flaky test - Bash: npm run test');
-    expect(decrypted?.category).toBe('permission-needed');
+    expect(decrypted?.category).toBe('input-required');
     expect(decrypted?.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
   });
 
@@ -77,10 +77,11 @@ describe('decryptPushBlob', () => {
     pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
 
     const expectedTitles = {
-      'permission-needed': 'Agent needs your approval',
-      'agent-question': 'Agent has a question',
+      'input-required': 'Agent needs your input',
       'turn-complete': 'Turn complete',
       'session-failed': 'Session stopped',
+      'plan-complete': 'Plan complete',
+      'spawn-stalled': 'Still preparing',
     } as const;
     for (const [category, expectedTitle] of Object.entries(expectedTitles)) {
       const blob = sealPushEnvelope(
