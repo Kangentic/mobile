@@ -27,8 +27,10 @@ jest.mock('@/pairing/trustAnchor', () => ({
 }));
 
 const mockReconnectNow = jest.fn();
+const mockRevokePushRegistrationForUnpair = jest.fn().mockResolvedValue(undefined);
 jest.mock('@/connection/connectionManager', () => ({
   reconnectNow: () => mockReconnectNow(),
+  revokePushRegistrationForUnpair: () => mockRevokePushRegistrationForUnpair(),
 }));
 
 function renderDevices(): void {
@@ -69,9 +71,14 @@ describe('DevicesScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
     });
+    expect(mockRevokePushRegistrationForUnpair).toHaveBeenCalled();
     expect(mockClear).toHaveBeenCalled();
     expect(mockReconnectNow).toHaveBeenCalled();
     expect(mockBack).toHaveBeenCalled();
+    // Push revocation happens BEFORE the trust anchor is cleared, while the
+    // channel (and thus the desktop connection to send "unregister" over)
+    // is still up.
+    expect(mockRevokePushRegistrationForUnpair.mock.invocationCallOrder[0]).toBeLessThan(mockClear.mock.invocationCallOrder[0]);
   });
 
   it('shows the pairing CTA when nothing is paired', () => {

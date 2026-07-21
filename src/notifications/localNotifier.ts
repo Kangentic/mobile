@@ -1,8 +1,10 @@
 import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import notifee from '@notifee/react-native';
+import type { PushCategory } from '@kangentic/protocol';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
-import { COMPLETIONS_CHANNEL_ID, FAILURES_CHANNEL_ID, NEEDS_ATTENTION_CHANNEL_ID } from './channels';
+import { useSettingsStore } from '@/state/settingsStore';
+import { channelIdForCategory, titleForCategory } from './categoryCopy';
 
 /**
  * The foreground-service mode's local alerting: while the app is
@@ -13,11 +15,16 @@ import { COMPLETIONS_CHANNEL_ID, FAILURES_CHANNEL_ID, NEEDS_ATTENTION_CHANNEL_ID
  * suppressed while the app is foregrounded - the in-app UI is the surface
  * there - and the desktop suppresses its remote push while this phone's
  * channel is established, so local and remote never double-fire.
+ *
+ * Reuses the PushCategory vocabulary (titleForCategory / channelIdForCategory
+ * from categoryCopy.ts, re-exported by channels.ts for its notifee-backed
+ * callers) rather than a separate local kind set, so a remote push
+ * and a local alert for the same event class always agree on copy and
+ * channel. Only three categories have an activity-store signal to fire
+ * from; plan-complete and spawn-stalled are push-only.
  */
 
-type LocalNotificationKind = 'permission' | 'turn-complete' | 'session-ended';
-
-/** Matches the desktop's own per-(session, kind) push cooldown. */
+/** Matches the desktop's own per-(session, category) push cooldown. */
 const LOCAL_NOTIFICATION_COOLDOWN_MS = 30_000;
 
 /**
@@ -28,44 +35,22 @@ const LOCAL_NOTIFICATION_COOLDOWN_MS = 30_000;
  */
 type FeedStatusMaybeEnded = SessionActivityEntry['feedStatus'] | 'ended';
 
-function titleForKind(kind: LocalNotificationKind): string {
-  switch (kind) {
-    case 'permission':
-      return 'Agent needs your attention';
-    case 'turn-complete':
-      return 'Turn complete';
-    case 'session-ended':
-      return 'Session stopped';
-  }
-}
-
-function channelIdForKind(kind: LocalNotificationKind): string {
-  switch (kind) {
-    case 'permission':
-      return NEEDS_ATTENTION_CHANNEL_ID;
-    case 'turn-complete':
-      return COMPLETIONS_CHANNEL_ID;
-    case 'session-ended':
-      return FAILURES_CHANNEL_ID;
-  }
-}
-
 function resolveTaskTitle(entry: SessionActivityEntry): string {
   const boardTask = useBoardStore.getState().boardsByProjectId[entry.projectId]?.tasksById[entry.taskId];
   return boardTask && boardTask.title.length > 0 ? boardTask.title : 'Agent session';
 }
 
-function kindsForTransition(entry: SessionActivityEntry, previousEntry: SessionActivityEntry | undefined): LocalNotificationKind[] {
-  const kinds: LocalNotificationKind[] = [];
+function categoriesForTransition(entry: SessionActivityEntry, previousEntry: SessionActivityEntry | undefined): PushCategory[] {
+  const categories: PushCategory[] = [];
   const enteredPermission = entry.state === 'permission' && previousEntry?.state !== 'permission';
   const promptChanged =
     entry.state === 'permission' && entry.awaitedPromptId !== null && previousEntry?.awaitedPromptId !== entry.awaitedPromptId;
-  if (enteredPermission || promptChanged) kinds.push('permission');
-  if (previousEntry?.state === 'thinking' && entry.state === 'idle') kinds.push('turn-complete');
+  if (enteredPermission || promptChanged) categories.push('input-required');
+  if (previousEntry?.state === 'thinking' && entry.state === 'idle') categories.push('turn-complete');
   const feedStatus = entry.feedStatus as FeedStatusMaybeEnded;
   const previousFeedStatus = (previousEntry?.feedStatus ?? 'pending') as FeedStatusMaybeEnded;
-  if (feedStatus === 'ended' && previousFeedStatus !== 'ended') kinds.push('session-ended');
-  return kinds;
+  if (feedStatus === 'ended' && previousFeedStatus !== 'ended') categories.push('session-failed');
+  return categories;
 }
 
 /**
@@ -80,19 +65,23 @@ export function startLocalNotifier(): () => void {
     appStateStatus = status;
   });
 
-  const fire = (kind: LocalNotificationKind, entry: SessionActivityEntry): void => {
-    const cooldownKey = `${entry.sessionId}:${kind}`;
+  const fire = (category: PushCategory, entry: SessionActivityEntry): void => {
+    // The same per-category toggle that filters remote push must also gate
+    // the local alert - otherwise disabling a category in Settings still
+    // fires it locally in foreground-service mode.
+    if (useSettingsStore.getState().pushCategoriesEnabled[category] === false) return;
+    const cooldownKey = `${entry.sessionId}:${category}`;
     const now = Date.now();
     const lastFiredAt = lastFiredAtByKey.get(cooldownKey);
     if (lastFiredAt !== undefined && now - lastFiredAt < LOCAL_NOTIFICATION_COOLDOWN_MS) return;
     lastFiredAtByKey.set(cooldownKey, now);
     void notifee
       .displayNotification({
-        title: titleForKind(kind),
+        title: titleForCategory(category),
         body: resolveTaskTitle(entry),
         data: { taskId: entry.taskId, projectId: entry.projectId, sessionId: entry.sessionId },
         android: {
-          channelId: channelIdForKind(kind),
+          channelId: channelIdForCategory(category),
           pressAction: { id: 'default', launchActivity: 'default' },
         },
       })
@@ -112,7 +101,7 @@ export function startLocalNotifier(): () => void {
     // while backgrounded: the in-app UI is the foreground surface.
     if (appStateStatus !== 'background') return;
     for (const entry of Object.values(currentBySessionId)) {
-      for (const kind of kindsForTransition(entry, previous[entry.sessionId])) fire(kind, entry);
+      for (const category of categoriesForTransition(entry, previous[entry.sessionId])) fire(category, entry);
     }
   });
 

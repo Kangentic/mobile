@@ -138,6 +138,13 @@ this phone's static public key as the AAD, opened with a 24h staleness / 5min fu
 window, and any failure (missing key, wrong key, wrong recipient, tamper, malformed, stale)
 returns the placeholder. Decrypted content is never logged.
 
+Unpairing revokes push, not just trust: `DevicesScreen` calls
+`connectionManager.revokePushRegistrationForUnpair()` while the channel is still up, which sends
+`register-push` with `action: 'unregister'` and then wipes the local push key
+(`pushKeys.clearPushRegistration()`) before the trust anchor is cleared. Without this, an
+unpaired desktop would retain a valid `(expoPushToken, pushKey)` pair and could still push
+notifications this phone would decrypt and display.
+
 ## Reporting a vulnerability
 
 See [SECURITY.md](../SECURITY.md).

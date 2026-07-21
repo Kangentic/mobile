@@ -33,7 +33,7 @@ describe('notification channels', () => {
     notifeeState.requestPermission.mockReset();
   });
 
-  it('creates the four channels once, with the right importance levels', async () => {
+  it('creates the five channels once, with the right importance levels', async () => {
     const channels = await loadChannels();
     await channels.createNotificationChannels();
     await channels.createNotificationChannels();
@@ -45,16 +45,27 @@ describe('notification channels', () => {
       'needs-attention': 4,
       completions: 3,
       failures: 4,
+      stalls: 3,
       connection: 2,
     });
   });
 
   it('maps push categories onto the channels', async () => {
     const channels = await loadChannels();
-    expect(channels.channelIdForCategory('permission-needed')).toBe('needs-attention');
-    expect(channels.channelIdForCategory('agent-question')).toBe('needs-attention');
+    expect(channels.channelIdForCategory('input-required')).toBe('needs-attention');
     expect(channels.channelIdForCategory('turn-complete')).toBe('completions');
     expect(channels.channelIdForCategory('session-failed')).toBe('failures');
+    expect(channels.channelIdForCategory('plan-complete')).toBe('completions');
+    expect(channels.channelIdForCategory('spawn-stalled')).toBe('stalls');
+  });
+
+  it('titleForCategory names each category, shared with the local notifier', async () => {
+    const channels = await loadChannels();
+    expect(channels.titleForCategory('input-required')).toBe('Agent needs your input');
+    expect(channels.titleForCategory('turn-complete')).toBe('Turn complete');
+    expect(channels.titleForCategory('session-failed')).toBe('Session stopped');
+    expect(channels.titleForCategory('plan-complete')).toBe('Plan complete');
+    expect(channels.titleForCategory('spawn-stalled')).toBe('Still preparing');
   });
 
   it('requestNotificationPermission maps the notifee authorization status to a boolean', async () => {

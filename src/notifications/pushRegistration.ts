@@ -1,8 +1,9 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
-import type { RegisterPushRequestPayload } from '@kangentic/protocol';
+import { PUSH_CATEGORIES, type PushCategory, type RegisterPushRequestPayload } from '@kangentic/protocol';
 import { CapabilityError, type VerbClient } from '@/channel/verbClient';
+import { useSettingsStore } from '@/state/settingsStore';
 import { base64UrlEncode, getLastRegisteredExpoToken, getOrCreatePushKey, setLastRegisteredExpoToken } from './pushKeys';
 
 /**
@@ -26,10 +27,25 @@ export type PushRegistrarVerbs = Pick<VerbClient, 'registerPush'>;
 
 let registrationStatus: PushRegistrationStatus = 'pending';
 let registeredThisProcess = false;
+let lastRegisteredCategories: PushCategory[] | null = null;
 
 /** For the Settings UI (workstream B7). */
 export function getPushRegistrationStatus(): PushRegistrationStatus {
   return registrationStatus;
+}
+
+/** The categories the user currently wants pushed, in PUSH_CATEGORIES order. */
+function enabledCategories(): PushCategory[] {
+  const enabledMap = useSettingsStore.getState().pushCategoriesEnabled;
+  return PUSH_CATEGORIES.filter((category) => enabledMap[category] !== false);
+}
+
+function sameCategories(currentCategories: PushCategory[], registeredCategories: PushCategory[] | null): boolean {
+  return (
+    registeredCategories !== null &&
+    currentCategories.length === registeredCategories.length &&
+    currentCategories.every((category, index) => category === registeredCategories[index])
+  );
 }
 
 function resolveEasProjectId(): string | undefined {
@@ -67,8 +83,16 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
       return;
     }
 
+    const categories = enabledCategories();
     const lastRegisteredToken = await getLastRegisteredExpoToken();
-    if (registeredThisProcess && registrationStatus === 'registered' && lastRegisteredToken === expoPushToken) return;
+    if (
+      registeredThisProcess &&
+      registrationStatus === 'registered' &&
+      lastRegisteredToken === expoPushToken &&
+      sameCategories(categories, lastRegisteredCategories)
+    ) {
+      return;
+    }
 
     const pushKey = await getOrCreatePushKey();
     const payload: RegisterPushRequestPayload = {
@@ -76,6 +100,7 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
       expoPushToken,
       pushKeyBase64: base64UrlEncode(pushKey),
       platform: Platform.OS === 'ios' ? 'ios' : 'android',
+      categories,
     };
 
     try {
@@ -83,6 +108,7 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
       if (response.registered) {
         registrationStatus = 'registered';
         registeredThisProcess = true;
+        lastRegisteredCategories = categories;
         await setLastRegisteredExpoToken(expoPushToken);
       } else {
         registrationStatus = 'capability-denied';
@@ -95,5 +121,26 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
   } catch {
     // A SecureStore failure loading/persisting the key or token cache:
     // stay at the current status; the next established bootstrap retries.
+  }
+}
+
+/**
+ * Best-effort unregister, sent while the channel is still up (before the
+ * unpair flow tears down the connection). Always resets local state so a
+ * re-pair in the same process registers fresh rather than short-circuiting
+ * on stale "already registered" bookkeeping. Never throws - the local key
+ * wipe (pushKeys.clearPushRegistration) is what actually matters for this
+ * device; if the unregister message never lands, the desktop's own
+ * DeviceNotRegistered handling or roster revocation cleans it up.
+ */
+export async function unregisterPushWithDesktop(verbs: PushRegistrarVerbs | null): Promise<void> {
+  registrationStatus = 'pending';
+  registeredThisProcess = false;
+  lastRegisteredCategories = null;
+  if (!verbs) return;
+  try {
+    await verbs.registerPush({ action: 'unregister' });
+  } catch {
+    // Best-effort; see the doc comment above.
   }
 }

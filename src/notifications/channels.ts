@@ -1,18 +1,35 @@
 import notifee, { AndroidImportance, AuthorizationStatus } from '@notifee/react-native';
-import type { PushCategory } from '@kangentic/protocol';
+import {
+  NEEDS_ATTENTION_CHANNEL_ID,
+  COMPLETIONS_CHANNEL_ID,
+  FAILURES_CHANNEL_ID,
+  STALLS_CHANNEL_ID,
+  CONNECTION_CHANNEL_ID,
+  channelIdForCategory,
+  titleForCategory,
+} from './categoryCopy';
 
 /**
  * Android notification channels, mirroring the desktop's push channel
- * names (needs-attention / completions / failures) so local and remote
- * notifications for the same event class land under one user-controllable
- * channel. 'connection' is phone-only: the LOW-importance ongoing
- * foreground-service notification.
+ * names (needs-attention / completions / failures / stalls) so local and
+ * remote notifications for the same event class land under one
+ * user-controllable channel. 'connection' is phone-only: the
+ * LOW-importance ongoing foreground-service notification.
+ *
+ * The category -> channel-id / title mapping itself lives in
+ * categoryCopy.ts (no notifee import there); re-exported here so existing
+ * callers of this module keep working.
  */
 
-export const NEEDS_ATTENTION_CHANNEL_ID = 'needs-attention';
-export const COMPLETIONS_CHANNEL_ID = 'completions';
-export const FAILURES_CHANNEL_ID = 'failures';
-export const CONNECTION_CHANNEL_ID = 'connection';
+export {
+  NEEDS_ATTENTION_CHANNEL_ID,
+  COMPLETIONS_CHANNEL_ID,
+  FAILURES_CHANNEL_ID,
+  STALLS_CHANNEL_ID,
+  CONNECTION_CHANNEL_ID,
+  channelIdForCategory,
+  titleForCategory,
+};
 
 let channelsCreated = false;
 
@@ -30,7 +47,7 @@ export async function createNotificationChannels(): Promise<void> {
     {
       id: COMPLETIONS_CHANNEL_ID,
       name: 'Completions',
-      description: 'An agent finished its turn.',
+      description: 'An agent finished its turn or a plan was approved.',
       importance: AndroidImportance.DEFAULT,
     },
     {
@@ -40,25 +57,18 @@ export async function createNotificationChannels(): Promise<void> {
       importance: AndroidImportance.HIGH,
     },
     {
+      id: STALLS_CHANNEL_ID,
+      name: 'Slow starts',
+      description: 'A task is taking a while to start.',
+      importance: AndroidImportance.DEFAULT,
+    },
+    {
       id: CONNECTION_CHANNEL_ID,
       name: 'Desktop connection',
       description: 'Shown while Kangentic keeps the secure channel to your desktop alive in the background.',
       importance: AndroidImportance.LOW,
     },
   ]);
-}
-
-/** The channel a decrypted (or locally observed) event class lands on. */
-export function channelIdForCategory(category: PushCategory): string {
-  switch (category) {
-    case 'permission-needed':
-    case 'agent-question':
-      return NEEDS_ATTENTION_CHANNEL_ID;
-    case 'turn-complete':
-      return COMPLETIONS_CHANNEL_ID;
-    case 'session-failed':
-      return FAILURES_CHANNEL_ID;
-  }
 }
 
 /** Android 13+ runtime notification permission (POST_NOTIFICATIONS), via notifee. */

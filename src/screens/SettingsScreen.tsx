@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
+import type { PushCategory } from '@kangentic/protocol';
 import { Brandmark, Button, Card, Icon, MonoText, Row, Screen, SectionHeader, Stack, StatusDot, Text, useTheme } from '@/components';
+import { resyncPushRegistrationCategories } from '@/connection/connectionManager';
 import { getPushRegistrationStatus, type PushRegistrationStatus } from '@/notifications';
 import { useChannelStore } from '@/state/channelStore';
 import {
@@ -66,6 +68,39 @@ const NOTIFICATION_MODE_OPTIONS: {
   },
 ];
 
+const PUSH_CATEGORY_OPTIONS: { category: PushCategory; label: string; description: string; testID: string }[] = [
+  {
+    category: 'input-required',
+    label: 'Needs your input',
+    description: 'Approvals and questions',
+    testID: 'settings-category-input-required',
+  },
+  {
+    category: 'turn-complete',
+    label: 'Turn complete',
+    description: 'An agent finished its turn',
+    testID: 'settings-category-turn-complete',
+  },
+  {
+    category: 'session-failed',
+    label: 'Session failed',
+    description: 'A session stopped unexpectedly',
+    testID: 'settings-category-session-failed',
+  },
+  {
+    category: 'plan-complete',
+    label: 'Plan complete',
+    description: 'A plan was approved',
+    testID: 'settings-category-plan-complete',
+  },
+  {
+    category: 'spawn-stalled',
+    label: 'Slow starts',
+    description: 'A task is taking a while to start',
+    testID: 'settings-category-spawn-stalled',
+  },
+];
+
 export function SettingsScreen(): React.JSX.Element {
   const router = useRouter();
   const theme = useTheme();
@@ -75,6 +110,8 @@ export function SettingsScreen(): React.JSX.Element {
   const setBackgroundNotificationsMode = useSettingsStore((state) => state.setBackgroundNotificationsMode);
   const hapticsEnabled = useSettingsStore((state) => state.hapticsEnabled);
   const setHapticsEnabled = useSettingsStore((state) => state.setHapticsEnabled);
+  const pushCategoriesEnabled = useSettingsStore((state) => state.pushCategoriesEnabled);
+  const setPushCategoryEnabled = useSettingsStore((state) => state.setPushCategoryEnabled);
   const transportState = useChannelStore((state) => state.transportState);
   const established = useChannelStore((state) => state.established);
   const relayUrl = useChannelStore((state) => state.relayUrl);
@@ -161,30 +198,37 @@ export function SettingsScreen(): React.JSX.Element {
         </Stack>
 
         <Stack gap="xs">
+          <SectionHeader title="Alert me for" testID="settings-section-categories" />
+          <Card>
+            <Stack gap="xs">
+              {PUSH_CATEGORY_OPTIONS.map((option, optionIndex) => (
+                <React.Fragment key={option.category}>
+                  {optionIndex > 0 ? <RowDivider /> : null}
+                  <SwitchRow
+                    label={option.label}
+                    description={option.description}
+                    checked={pushCategoriesEnabled[option.category] !== false}
+                    testID={option.testID}
+                    onValueChange={(enabled) =>
+                      void setPushCategoryEnabled(option.category, enabled).then(() => resyncPushRegistrationCategories())
+                    }
+                  />
+                </React.Fragment>
+              ))}
+            </Stack>
+          </Card>
+        </Stack>
+
+        <Stack gap="xs">
           <SectionHeader title="Feedback" testID="settings-section-feedback" />
           <Card>
-            <Pressable
-              accessibilityRole="switch"
-              accessibilityState={{ checked: hapticsEnabled }}
+            <SwitchRow
+              label="Haptic feedback"
+              description="A light tap on meaningful actions"
+              checked={hapticsEnabled}
               testID="settings-haptics-toggle"
-              onPress={() => void setHapticsEnabled(!hapticsEnabled)}
-              style={({ pressed }) => [styles.switchRow, { minHeight: theme.minTouchSize, gap: theme.spacing.sm, opacity: pressed ? 0.7 : 1 }]}
-            >
-              <View style={styles.radioLabels}>
-                <Text variant="body" color="primary">
-                  Haptic feedback
-                </Text>
-                <Text variant="caption" color="secondary">
-                  A light tap on meaningful actions
-                </Text>
-              </View>
-              <Switch
-                value={hapticsEnabled}
-                onValueChange={(nextEnabled) => void setHapticsEnabled(nextEnabled)}
-                trackColor={{ false: theme.colors.border, true: theme.colors.accentMuted }}
-                thumbColor={hapticsEnabled ? theme.colors.accent : theme.colors.textMuted}
-              />
-            </Pressable>
+              onValueChange={(enabled) => void setHapticsEnabled(enabled)}
+            />
           </Card>
         </Stack>
 
@@ -248,6 +292,56 @@ function PushRegistrationStatusLine(): React.JSX.Element {
     <Text variant="caption" color="muted" testID="settings-push-status">
       {PUSH_STATUS_LABELS[status]}
     </Text>
+  );
+}
+
+function SwitchRow({
+  label,
+  description,
+  checked,
+  testID,
+  onValueChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  testID: string;
+  onValueChange: (enabled: boolean) => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked }}
+      testID={testID}
+      onPress={() => onValueChange(!checked)}
+      style={({ pressed }) => [styles.switchRow, { minHeight: theme.minTouchSize, gap: theme.spacing.sm, opacity: pressed ? 0.7 : 1 }]}
+    >
+      <View style={styles.radioLabels}>
+        <Text variant="body" color="primary">
+          {label}
+        </Text>
+        <Text variant="caption" color="secondary">
+          {description}
+        </Text>
+      </View>
+      {/*
+        Presentational only: the wrapping Pressable owns the switch role,
+        the checked state, and the tap. Letting the native Switch keep its
+        own touch handling and accessibility node would put two switch
+        nodes in one row (duplicate screen-reader announcements) and let a
+        tap on the thumb fire both handlers - a doubled SecureStore write
+        and a doubled register-push resync per tap.
+      */}
+      <Switch
+        value={checked}
+        pointerEvents="none"
+        importantForAccessibility="no-hide-descendants"
+        accessibilityElementsHidden
+        trackColor={{ false: theme.colors.border, true: theme.colors.accentMuted }}
+        thumbColor={checked ? theme.colors.accent : theme.colors.textMuted}
+      />
+    </Pressable>
   );
 }
 

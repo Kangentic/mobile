@@ -10,9 +10,11 @@ export { setActivePushIdentityPublicKey } from './pushIdentity';
 export {
   getPushRegistrationStatus,
   registerPushWithDesktop,
+  unregisterPushWithDesktop,
   type PushRegistrarVerbs,
   type PushRegistrationStatus,
 } from './pushRegistration';
+export { clearPushRegistration } from './pushKeys';
 export { startLocalNotifier } from './localNotifier';
 export { startConnectedForegroundService, stopConnectedForegroundService } from './foregroundService';
 

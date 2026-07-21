@@ -19,6 +19,11 @@ const DEVICE_BOUND_STORAGE_OPTIONS: SecureStore.SecureStoreOptions = {
 
 let cachedPushKey: Uint8Array | null = null;
 let inFlightPushKey: Promise<Uint8Array> | null = null;
+/**
+ * Bumped by clearPushRegistration so a load that was already in flight when
+ * the wipe landed cannot write its now-deleted key back into the cache.
+ */
+let pushKeyGeneration = 0;
 
 /**
  * Base64url (RFC 4648 section 5, unpadded) - the encoding
@@ -53,9 +58,13 @@ export function base64UrlEncode(bytes: Uint8Array): string {
 export async function getOrCreatePushKey(): Promise<Uint8Array> {
   if (cachedPushKey) return cachedPushKey;
   if (!inFlightPushKey) {
+    const generationAtLoadStart = pushKeyGeneration;
     inFlightPushKey = loadOrGeneratePushKey()
       .then((pushKey) => {
-        cachedPushKey = pushKey;
+        // An unpair that landed mid-load wins: caching here unconditionally
+        // would resurrect the just-wiped key in memory and hand it back to
+        // the next getOrCreatePushKey caller in this process.
+        if (generationAtLoadStart === pushKeyGeneration) cachedPushKey = pushKey;
         return pushKey;
       })
       .finally(() => {
@@ -92,6 +101,21 @@ export async function getLastRegisteredExpoToken(): Promise<string | null> {
 
 export async function setLastRegisteredExpoToken(expoPushToken: string): Promise<void> {
   await SecureStore.setItemAsync(LAST_REGISTERED_EXPO_TOKEN_STORAGE_KEY, expoPushToken, DEVICE_BOUND_STORAGE_OPTIONS);
+}
+
+/**
+ * Unpair must leave the old desktop unable to push: without this, the
+ * desktop still holds a valid (expoPushToken, pushKey) pair after
+ * unpairing and can send notifications this phone will happily decrypt
+ * and display. Clears both secure-store entries and the in-memory cache
+ * so a subsequent re-pair on this process generates a fresh key rather
+ * than reusing the wiped one.
+ */
+export async function clearPushRegistration(): Promise<void> {
+  pushKeyGeneration += 1;
+  cachedPushKey = null;
+  await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY);
+  await SecureStore.deleteItemAsync(LAST_REGISTERED_EXPO_TOKEN_STORAGE_KEY);
 }
 
 async function loadOrGeneratePushKey(): Promise<Uint8Array> {

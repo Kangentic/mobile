@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
+import { PUSH_CATEGORIES, type PushCategory } from '@kangentic/protocol';
 
 export type DictationMode = 'auto-send' | 'manual-send' | 'off';
 /**
@@ -15,6 +16,7 @@ const SESSION_MODE_HINT_STORAGE_KEY = 'settings.hasSeenSessionModeHint';
 const HAPTICS_ENABLED_STORAGE_KEY = 'settings.hapticsEnabled';
 const BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY = 'settings.backgroundNotificationsMode';
 const PREFERRED_SESSION_LENS_STORAGE_KEY = 'settings.preferredSessionLensByTaskId';
+const PUSH_CATEGORIES_ENABLED_STORAGE_KEY = 'settings.pushCategoriesEnabled';
 
 /** The remembered per-task lens is capped so the map cannot grow unboundedly. */
 const PREFERRED_SESSION_LENS_CAP = 50;
@@ -37,6 +39,33 @@ function parsePreferredLensMap(raw: string | null): Record<string, PreferredSess
   }
 }
 
+function defaultPushCategoriesEnabled(): Record<PushCategory, boolean> {
+  const defaults = {} as Record<PushCategory, boolean>;
+  for (const category of PUSH_CATEGORIES) defaults[category] = true;
+  return defaults;
+}
+
+/**
+ * Missing keys default to enabled (a category added after this map was
+ * last written must not silently go dark), matching the desktop's
+ * `RegisterPushRequestPayload.categories` absent-means-all convention.
+ */
+function parsePushCategoriesEnabled(raw: string | null): Record<PushCategory, boolean> {
+  const parsed = defaultPushCategoriesEnabled();
+  if (raw === null) return parsed;
+  try {
+    const stored: unknown = JSON.parse(raw);
+    if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return parsed;
+    for (const category of PUSH_CATEGORIES) {
+      const storedValue = (stored as Record<string, unknown>)[category];
+      if (typeof storedValue === 'boolean') parsed[category] = storedValue;
+    }
+    return parsed;
+  } catch {
+    return parsed;
+  }
+}
+
 function isDictationMode(value: string | null): value is DictationMode {
   return value === 'auto-send' || value === 'manual-send' || value === 'off';
 }
@@ -55,6 +84,8 @@ interface SettingsStoreState {
   backgroundNotificationsMode: BackgroundNotificationsMode;
   /** Last lens the user chose per task (terminal is the unset default). */
   preferredSessionLensByTaskId: Record<string, PreferredSessionLens>;
+  /** Per-category push + local-notification opt-in; all categories default enabled. */
+  pushCategoriesEnabled: Record<PushCategory, boolean>;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setDictationMode: (mode: DictationMode) => Promise<void>;
@@ -62,6 +93,7 @@ interface SettingsStoreState {
   setHapticsEnabled: (enabled: boolean) => Promise<void>;
   setBackgroundNotificationsMode: (mode: BackgroundNotificationsMode) => Promise<void>;
   setPreferredSessionLens: (taskId: string, lens: PreferredSessionLens) => Promise<void>;
+  setPushCategoryEnabled: (category: PushCategory, enabled: boolean) => Promise<void>;
 }
 
 /**
@@ -76,16 +108,18 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   hapticsEnabled: true,
   backgroundNotificationsMode: 'foreground-service',
   preferredSessionLensByTaskId: {},
+  pushCategoriesEnabled: defaultPushCategoriesEnabled(),
   hydrated: false,
 
   hydrate: async () => {
-    const [storedDictationMode, storedModeHintSeen, storedHapticsEnabled, storedBackgroundMode, storedLensMap] =
+    const [storedDictationMode, storedModeHintSeen, storedHapticsEnabled, storedBackgroundMode, storedLensMap, storedPushCategoriesEnabled] =
       await Promise.all([
         SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
         SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
         SecureStore.getItemAsync(HAPTICS_ENABLED_STORAGE_KEY),
         SecureStore.getItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
         SecureStore.getItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY),
+        SecureStore.getItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
       ]);
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
@@ -95,6 +129,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
         ? storedBackgroundMode
         : 'foreground-service',
       preferredSessionLensByTaskId: parsePreferredLensMap(storedLensMap),
+      pushCategoriesEnabled: parsePushCategoriesEnabled(storedPushCategoriesEnabled),
       hydrated: true,
     });
   },
@@ -133,5 +168,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     }
     set({ preferredSessionLensByTaskId: nextMap });
     await SecureStore.setItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY, JSON.stringify(nextMap));
+  },
+
+  setPushCategoryEnabled: async (category, enabled) => {
+    const nextMap = { ...get().pushCategoriesEnabled, [category]: enabled };
+    set({ pushCategoriesEnabled: nextMap });
+    await SecureStore.setItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY, JSON.stringify(nextMap));
   },
 }));

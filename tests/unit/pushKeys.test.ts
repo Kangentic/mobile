@@ -87,4 +87,55 @@ describe('pushKeys', () => {
     await pushKeys.setLastRegisteredExpoToken('ExponentPushToken[rotated]');
     expect(await pushKeys.getLastRegisteredExpoToken()).toBe('ExponentPushToken[rotated]');
   });
+
+  it('clearPushRegistration deletes both secure-store entries and the in-memory key cache', async () => {
+    const pushKeys = await loadPushKeys();
+    const originalKey = await pushKeys.getOrCreatePushKey();
+    await pushKeys.setLastRegisteredExpoToken('ExponentPushToken[old]');
+    expect(secureStoreState.storedValues.has('push.decrypt.key')).toBe(true);
+
+    await pushKeys.clearPushRegistration();
+
+    expect(secureStoreState.storedValues.has('push.decrypt.key')).toBe(false);
+    expect(secureStoreState.storedValues.has('push.expoToken.lastRegistered')).toBe(false);
+    expect(await pushKeys.getLastRegisteredExpoToken()).toBeNull();
+
+    // The in-memory cache is cleared too: a fresh key is generated next, not
+    // the wiped one (an old desktop must not still be able to seal for it).
+    const nextKey = await pushKeys.getOrCreatePushKey();
+    expect(Array.from(nextKey)).not.toEqual(Array.from(originalKey));
+  });
+
+  it('a key load already in flight when clearPushRegistration runs cannot resurrect the wiped key', async () => {
+    // Seed and persist a key, then drop the module so the next call really
+    // hits SecureStore instead of the in-memory cache.
+    const seedingModule = await loadPushKeys();
+    const originalKey = await seedingModule.getOrCreatePushKey();
+    const originalKeyHex = secureStoreState.storedValues.get('push.decrypt.key') ?? null;
+
+    vi.resetModules();
+    // Both imports must come from the SAME fresh module graph, or the mock
+    // instance this test stubs is not the one pushKeys actually calls.
+    const SecureStore = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    // Hold the read open so the load is still in flight when the wipe lands.
+    let releaseLoad: () => void = () => {};
+    vi.mocked(SecureStore.getItemAsync).mockImplementationOnce(
+      () =>
+        new Promise<string | null>((resolve) => {
+          releaseLoad = () => resolve(originalKeyHex);
+        }),
+    );
+
+    const inFlightLoad = pushKeys.getOrCreatePushKey();
+    await pushKeys.clearPushRegistration();
+    releaseLoad();
+    await inFlightLoad;
+
+    // Without the generation guard the in-flight .then would have written the
+    // just-wiped key back into the cache, and this would hand it straight back.
+    const nextKey = await pushKeys.getOrCreatePushKey();
+    expect(Array.from(nextKey)).not.toEqual(Array.from(originalKey));
+  });
 });
