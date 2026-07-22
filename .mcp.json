@@ -8,6 +8,14 @@
         "-y",
         "@upstash/context7-mcp"
       ]
+    },
+    "maestro": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "maestro",
+        "mcp"
+      ]
     }
   }
 }
