@@ -25,13 +25,6 @@ anti-flake patterns. This skill does not re-implement that knowledge inline.
 
 **Selected mode:** $ARGUMENTS
 
-## Step 0: Phase 0 guard
-
-If `package.json` does not exist yet, report "the test harness lands in App Phase 1; nothing to
-run yet" and stop. This applies to every run mode below.
-
----
-
 ## Mode: Full gate (`/test`)
 
 1. **Typecheck (gate).** Run `npm run typecheck`. If it fails, report and **stop**.

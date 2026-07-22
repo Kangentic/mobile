@@ -16,10 +16,10 @@ New code is TypeScript strict mode. Two style rules are load-bearing for maintai
 
 ## Enforcement (self-maintaining)
 
-- **Lint (planned, App Phase 1):** ESLint `@typescript-eslint/no-explicit-any` set to `error`
-  once `eslint.config.mjs` is scaffolded.
-- **Type system (planned, App Phase 1):** `tsc --noEmit` (`npm run typecheck`) once `tsconfig.json`
-  is scaffolded.
+- **Lint (live now):** ESLint `@typescript-eslint/no-explicit-any` set to `error` in
+  `eslint.config.mjs`, gated by `npm run lint` in `.github/workflows/ci.yml`.
+- **Type system (live now):** `tsc --noEmit` (`npm run typecheck`), gated in
+  `.github/workflows/ci.yml`.
 - **Review (live now):** `/code-review` and the `expo-rn-reviewer` agent flag `any` and shorthand
   names. Shorthand names are review-only (not reliably mechanizable).
 

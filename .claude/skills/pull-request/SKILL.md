@@ -19,17 +19,16 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
 
 ## Mobile differences from the desktop repo's flow
 
-- **CI is incomplete until App Phase 1.** Until `ci.yml` lands, the only PR check is
-  `CLA Assistant`. Do not `--watch` waiting for checks that do not exist: if `CLA Assistant` is
-  the only check and it is green, treat that as all-green and go to Step 8. The intended Phase 1
-  named checks (document these to the user when relevant): `Lint (ESLint)`, `Type check (tsc)`,
-  `Unit tests (Vitest)`, `Component tests (Jest + RNTL)`, `E2E tests (Maestro / Android)` (GitHub
-  Actions), `E2E tests (Maestro / iOS simulator)` (EAS Workflows, cloud - the only iOS E2E path;
-  there is never a local iOS simulator, no Mac).
-- **Local gate degrades gracefully.** Run `npm run typecheck` and `npm run lint` only if
-  `package.json` exists; if it does not yet (Phase 0), skip straight to commit and push.
-- **Coverage pass is gated** the same way: only runs once `package.json` and the test harness
-  exist.
+- **CI is live.** `.github/workflows/ci.yml` runs a `fast-tiers` job (typecheck, lint, unit
+  tests, component tests) on every pull request, alongside `CLA Assistant`. Never treat
+  `CLA Assistant` alone as all-green: confirm the registered check names with
+  `gh pr checks <branch>` and wait for every one of them. A real check can take a moment to
+  register after a push, so if only `CLA Assistant` appears, re-poll rather than concluding no
+  other check is coming. Maestro E2E is **not** in `ci.yml` today; it runs locally only, and
+  iOS E2E on EAS Workflows cloud simulators remains a future addition (there is never a local
+  iOS simulator, no Mac).
+- **Local gate.** Run `npm run typecheck` and `npm run lint` before pushing.
+- **Coverage pass** runs against the live test harness.
 
 ## Pre-flight Checks
 
@@ -56,13 +55,10 @@ to worktree mode only.
 
 The point of this skill is to offload checks to CI. Keep the local gate fast:
 
-1. If `node_modules` is missing (a fresh worktree does not share it with the main repo) and
-   `package.json` exists, run `npm install` first.
-2. If `package.json` exists, run `npm run typecheck`; stop on failure.
-3. If `package.json` exists and an ESLint config exists, run `npm run lint`; stop on error
-   (warnings do not block).
-4. If `package.json` does not exist yet, skip straight to Step 1 (Phase 0: governance/docs-only
-   changes).
+1. If `node_modules` is missing (a fresh worktree does not share it with the main repo), run
+   `npm install` first.
+2. Run `npm run typecheck`; stop on failure.
+3. Run `npm run lint`; stop on error (warnings do not block).
 
 ## Step 1 - Commit changes
 
@@ -143,8 +139,9 @@ link once it reconnects. If it never returns this run, report the PR number prom
 
 `gh pr checks <branch> --watch --fail-fast --interval 30`, Bash `timeout` at its max (600000ms).
 Treat a non-zero exit while checks are pending as status, not a tool failure; re-run the same
-`--watch` command if the timeout fires with checks still only pending. If only `CLA Assistant`
-is registered and it passes, treat that as all-green and go to Step 8.
+`--watch` command if the timeout fires with checks still only pending. If `CLA Assistant` is the
+only check registered, do not call that all-green: the `fast-tiers` CI check may not have
+registered yet, so re-poll before concluding it is genuinely the only one.
 
 ## Step 7 - Auto-fix loop (max 3 rounds, fully automatic)
 

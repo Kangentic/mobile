@@ -69,7 +69,20 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:nodejs.org)",
-      "Skill"
+      "Skill",
+      "mcp__maestro__list_devices",
+      "mcp__maestro__inspect_screen",
+      "mcp__maestro__take_screenshot",
+      "mcp__maestro__cheat_sheet"
+    ],
+    "ask": [
+      "mcp__plugin_expo_expo__build_run",
+      "mcp__plugin_expo_expo__build_submit",
+      "mcp__plugin_expo_expo__workflow_run",
+      "mcp__plugin_expo_expo__appstore_reply_review",
+      "mcp__plugin_expo_expo__appstore_delete_review_response",
+      "mcp__plugin_expo_expo__playstore_reply_review",
+      "mcp__maestro__run_on_cloud"
     ],
     "deny": []
   },
