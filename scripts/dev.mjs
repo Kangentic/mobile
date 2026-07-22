@@ -369,7 +369,7 @@ async function ensureEmulator(avdName) {
   log(`booting emulator ${avdName} (host GPU, cold boot)...`);
   // Explicit host GPU: an AVD with hw.gpu.enabled=no renders in software
   // and degrades over long sessions (progressive input + window lag).
-  // NOTE emulator 36.x rejects the old angle_indirect value (silently
+  // NOTE emulator 36.6.11.0 rejects the old angle_indirect value (silently
   // falls back to auto); the valid accelerated mode is 'host'. The AVD
   // config carries hw.gpu.mode=host for boots that bypass the rig; the
   // flag here overrides whatever the config says. ALWAYS cold boot

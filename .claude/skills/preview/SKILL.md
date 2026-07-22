@@ -34,12 +34,17 @@ through EAS cloud builds and a physical device or TestFlight, never a local simu
        requires a deliberate system-image/API-level choice.
      - If the user passed `--avd <name>`, use that one (error if it isn't in the list).
      - Otherwise use the first AVD listed.
-   - Launch it in the background: `emulator -avd <name> -no-snapshot-load -gpu angle_indirect`
+   - Launch it in the background: `emulator -avd <name> -no-snapshot-load -gpu host`
      (use `run_in_background: true` - this process stays alive for the life of the emulator
-     window). The `-gpu angle_indirect` flag is deliberate: the default `auto` host-GPU path
-     repeatedly wedges the emulator's Qt window on this Windows host (stale frames while the
-     device runs on; clicks land invisibly), and ANGLE-over-D3D11 is the stable backend. If a
-     running emulator shows a frozen frame, diagnose with a device-side
+     window). The `-gpu host` flag is deliberate: it pins the accelerated host GPU renderer
+     (the same flag `scripts/dev.mjs` passes) instead of leaving it to the AVD config or
+     `auto`, which can leave the emulator in software rendering that degrades over long
+     sessions. Verified against Android emulator 36.6.11.0 - that version rejects the older
+     `angle_indirect` option name (silently falling back to `auto`), and its only remaining
+     ANGLE mode (`swangle`) is software, not a hardware backend, so `host` is the accelerated
+     option. This flag does not guarantee against the emulator's Qt window occasionally
+     wedging on this Windows host (stale frames while the device keeps running; clicks land
+     invisibly) - if a running emulator shows a frozen frame, diagnose with a device-side
      `node scripts/mobileInspect.mjs screenshot` (device fine + window stale = the wedge), then
      `adb -s emulator-5554 emu kill` and relaunch with this flag.
    - Wait for it to come up: `adb wait-for-device`.
