@@ -11,7 +11,9 @@ Windows-first: this project develops without a Mac in the loop.
 - **JDK 17** and **Android Studio** with an Android Virtual Device (emulator) configured. The
   emulator is the daily local target.
 - **`eas-cli`** (`npm install -g eas-cli`), for cloud builds, including all iOS builds.
-- **Maestro CLI**, installable on Windows, for E2E flows against the emulator.
+- **Maestro CLI**, installable on Windows, for E2E flows against the emulator and for the
+  Maestro MCP server; see "Agent tooling (MCP servers)" below for the PATH setup and a gotcha
+  worth reading before you hit it.
 - No Mac, no Xcode, no local iOS Simulator: iOS builds and iOS E2E both happen in the cloud via
   EAS (see "iOS without a Mac" below).
 
@@ -116,6 +118,44 @@ WebView itself over the Chrome DevTools Protocol (the dev build exposes a
 `.xterm-screen` geometry against the on-screen pixels this way is how the GPU
 `MAX_TEXTURE_SIZE` canvas clamp was diagnosed - the layout was correct and only the painted
 scale was wrong, which no RN-side probe could see.
+
+## Agent tooling (MCP servers)
+
+Agent sessions in this repo get MCP tools from two different mechanisms. `.mcp.json` wires two
+servers: `context7` (library documentation lookup, no setup needed) and `maestro` (the Maestro
+CLI's built-in `maestro mcp` server). Separately, `.claude/settings.json`'s `enabledPlugins`
+turns on the official Expo plugin, enabled in this repo only. `maestro` and the Expo plugin each
+need one-time setup on a fresh clone.
+
+- **Maestro CLI on PATH.** `.mcp.json` starts the server with `cmd /c maestro mcp`, resolved via
+  PATH deliberately rather than an absolute path (an absolute path would violate
+  `.claude/rules/no-personal-info.md`, which forbids machine-specific paths in committed files).
+  Install the Maestro CLI, add its `bin` directory to PATH, and verify with `maestro --version`.
+- **The gotcha that costs an evening.** Claude Code sessions inherit the environment of the
+  desktop app (or terminal) that spawned them. After changing PATH, restart the **host app**, not
+  just the Claude Code session, or the MCP server keeps failing even though the CLI is installed
+  and `maestro --version` works in a fresh terminal. Symptom: `/mcp` shows `maestro` failed to
+  connect, or a session-local `maestro`/PATH lookup fails while a brand-new terminal succeeds.
+- **Never use `setx PATH "%PATH%;..."` on Windows to fix this.** `setx` truncates at 1024
+  characters and silently overwrites the entire user `PATH`, not just appends to it - this has
+  wiped a user PATH before. Snapshot the current value first, then use
+  `[Environment]::SetEnvironmentVariable("Path", "<existing>;<new-entry>", "User")` in PowerShell.
+- **Expo plugin OAuth.** Run `/mcp` and complete the Expo login flow. Each contributor
+  authenticates individually as their own personal Expo account; no credentials are committed.
+- **Two Expo auth paths, deliberately distinct - do not mix them up:**
+
+  | Path | Credential | Where |
+  |------|-----------|-------|
+  | Local agent tooling (Expo MCP) | Personal Expo account, via `/mcp` OAuth | Developer machine only |
+  | CI (GitHub Actions) | Org-scoped `EXPO_TOKEN` secret | GitHub Actions only. The personal login is never used in CI |
+
+- **Cost and public-write guard.** The Expo MCP's `build_run`/`build_submit`/`workflow_run` spend
+  EAS cloud build credits, and its store-review-reply tools post publicly and irreversibly; the
+  Maestro MCP's `run_on_cloud` bills Maestro Cloud minutes. See `CLAUDE.md`'s "Cloud-spend and
+  public-write MCP tools" section for the full list; it is backed by `permissions.ask` in
+  `.claude/settings.json`, which prompts for confirmation on every call in every normal
+  permission mode (a bypass mode skips the prompt, so the written policy is the real guard).
+- **Optional:** set `MAESTRO_CLI_NO_ANALYTICS=1` to opt out of Maestro's anonymous CLI analytics.
 
 ## Developing @kangentic/protocol
 

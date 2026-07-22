@@ -93,6 +93,32 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 - `maestro test .maestro/` - E2E flows against the Android emulator
 - `eas update` - Push a JS-only OTA update
 
+## Cloud-spend and public-write MCP tools
+
+Three MCP servers are wired in: `context7` and `maestro` from `.mcp.json`, plus the official Expo
+plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is documentation-only and
+unguarded; the Expo plugin and `maestro` expose tools with consequences outside this machine,
+gated by `permissions.ask` in `.claude/settings.json` (a prompt on every call in every normal
+permission mode; a bypass mode skips it, so this section, not the prompt, is the real guard) -
+never call these without an explicit user request, and re-check this list against `/mcp` when
+either server is upgraded.
+
+- **Never without an explicit request - spends money or quota:** `build_run`, `build_submit`,
+  `workflow_run` (Expo MCP), `run_on_cloud` (Maestro MCP). `build_run` also cuts against board
+  task #5 ("CI: GitHub Actions build workflow"), a **planned, not yet built** move of build
+  execution to `eas build --local` on GitHub Actions runners, to preserve the Expo Free allowance
+  of 15 iOS + 15 Android cloud builds per month. EAS itself is not going away; only *cloud* build
+  execution is what #5 would avoid, and `build_submit` may remain a legitimate path later (#5
+  does not move store submission off EAS), so treat it as "explicit request only" rather than
+  "never our path". The Expo MCP also authenticates as the individual developer's **personal**
+  Expo account via `/mcp` OAuth, not the org-scoped `EXPO_TOKEN` CI uses, so any build it fires
+  spends the org's quota under the wrong identity (see the auth table in
+  [docs/developer-guide.md](docs/developer-guide.md)'s Agent tooling section).
+- **Never without an explicit request, higher bar - posts publicly and is effectively
+  irreversible:** `appstore_reply_review`, `appstore_delete_review_response`,
+  `playstore_reply_review` (Expo MCP). These write to real App Store and Play Store listings
+  under the company identity. Confirm the exact text with the user before posting, every time.
+
 ## Architecture
 
 Full detail lives in [docs/architecture.md](docs/architecture.md) and
@@ -149,11 +175,12 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
 - Running tests you just added or modified, scoped to those files.
 
 **Never run unless the user explicitly asks, or `/test` is executing:**
-- An unscoped full-tier run (`npx vitest run` with no path, `maestro test .maestro/` for the
-  full suite).
+- An unscoped full-tier run, however invoked - shell command (`npx vitest run` with no path,
+  `maestro test .maestro/` for the full suite) or MCP tool (the Maestro MCP `run` tool pointed at
+  a directory or the whole suite is the same violation as `maestro test .maestro/`).
 
-If a run would execute tests you did not add or modify, it is a full-tier run: stop and let
-`/test` handle it.
+If a run would execute tests you did not add or modify, it is a full-tier run regardless of
+mechanism: stop and let `/test` handle it.
 
 **Maestro note:** `.maestro/smoke.yaml` runs against a fresh (unpaired) install; the flows under
 `.maestro/paired/` need a running relay plus `node scripts/stubDesktopPeer.mjs` and a completed
@@ -163,7 +190,7 @@ pairing first (each flow's header documents the setup).
 
 Enforceable standards live as focused, auto-loaded rules in `.claude/rules/`. Rules without a
 `paths:` header load every session; rules with one load when you touch matching files. Each rule
-names its enforcement (live now, or planned for App Phase 1).
+names its enforcement (live now, or planned where mechanical coverage does not exist yet).
 
 **Always-on rules:**
 - `bash-single-command.md` - one command per Bash tool call; no `&&` `||` `|` `;` or redirects.
@@ -178,8 +205,9 @@ names its enforcement (live now, or planned for App Phase 1).
   (`src/pairing/`, `src/channel/`, `src/connection/`, `src/notifications/`).
 - `e2e-notification-privacy.md` - push payloads are ciphertext plus placeholder only
   (`src/notifications/`, `plugins/`, `targets/`).
-- `expo-cng.md` - no hand-edited `ios/`/`android/`; native config via config plugins
-  (`app.json`, `app.config.*`, `eas.json`, `plugins/`, `ios/`, `android/`).
+- `expo-cng.md` - no hand-edited `ios/`/`android/`; native config via config plugins; SDK-resolved
+  dependency installs via `expo install` (`app.json`, `app.config.*`, `eas.json`, `plugins/`,
+  `ios/`, `android/`, `package.json`, `package-lock.json`).
 - `secure-storage.md` - long-lived secrets in `expo-secure-store`, never AsyncStorage
   (`src/pairing/`, `src/channel/`, `src/notifications/`, `src/state/`).
 - `ui-conventions.md` - shared primitives, font floor, FlashList, testIDs (`src/screens/`,
@@ -224,14 +252,18 @@ ones:
    (prescriptive), `## Enforcement (self-maintaining)`, and `## Scope`.
 5. **Name an enforcement, strongest available.** A hook blocks 100%; a test or lint rule runs in
    CI; a review-time auditor agent or `/code-review` is the probabilistic fallback. Flag
-   explicitly where mechanical coverage is missing (most of this repo's rules are review-only
-   until App Phase 1 adds the test harness).
+   explicitly where mechanical coverage is missing - the harness exists (vitest, Jest + RNTL,
+   Maestro, ESLint, `tsc`, all gated in `ci.yml`), so "planned" now means not yet written, not
+   impossible. Only a few conventions (shorthand names, UI copy brevity) resist mechanization
+   outright and stay review-only by design.
 6. **Update the index above** with a one-line pointer, and add a backlink from the enforcing
    agent or skill so the rule stays the single source of truth.
 7. **Route agents deliberately.** When authoring or updating a skill, decide whether it needs a
    fresh context (a review or audit skill) or should fork the current session (continuing an
    in-flight task); never route a mutating skill to a read-only agent type.
 
-**Linting:** planned for App Phase 1 (`eslint src/ --max-warnings 0` wired into CI). Until then,
-the conventions above are enforced by review (`/code-review`, `crypto-pairing-auditor`,
-`expo-rn-reviewer`) rather than mechanically.
+**Linting:** live. `npm run lint` (`eslint . --max-warnings 0`) runs in
+`.github/workflows/ci.yml` alongside `npm run typecheck`, `npm run test:unit`, and
+`npm run test:components`. Conventions with no mechanical check of their own (shorthand names,
+em-dashes, personal info, UI copy brevity) remain enforced by review (`/code-review`,
+`crypto-pairing-auditor`, `expo-rn-reviewer`) rather than mechanically.
