@@ -9,17 +9,6 @@ jest.mock('react-native-safe-area-context', () =>
   require('react-native-safe-area-context/jest/mock').default,
 );
 
-// DictationTextField pulls in the dictation engine.
-jest.mock('expo-speech-recognition', () => ({
-  ExpoSpeechRecognitionModule: {
-    isRecognitionAvailable: jest.fn().mockReturnValue(false),
-    requestPermissionsAsync: jest.fn().mockResolvedValue({ granted: false }),
-    start: jest.fn(),
-    stop: jest.fn(),
-  },
-  useSpeechRecognitionEvent: jest.fn(),
-}));
-
 function renderSheet(onSave: jest.Mock): void {
   render(
     <ThemeProvider>

@@ -30,17 +30,6 @@ jest.mock('@/connection/actions', () => ({
   refreshSnapshots: jest.fn().mockResolvedValue(undefined),
 }));
 
-// The create/edit description fields carry the dictation mic.
-jest.mock('expo-speech-recognition', () => ({
-  ExpoSpeechRecognitionModule: {
-    isRecognitionAvailable: jest.fn().mockReturnValue(false),
-    requestPermissionsAsync: jest.fn().mockResolvedValue({ granted: false }),
-    start: jest.fn(),
-    stop: jest.fn(),
-  },
-  useSpeechRecognitionEvent: jest.fn(),
-}));
-
 function baseTask(id: string, title: string, swimlaneId: string, position: number, sessionId: string | null) {
   return {
     id,
@@ -256,6 +245,20 @@ describe('BoardScreen', () => {
 
     // The empty Doing column states itself instead of blank space.
     expect(screen.getByTestId('board-column-lane-doing-empty')).toBeTruthy();
+  });
+
+  it('a pager swipe moves the active chip highlight (swipe -> chip sync)', () => {
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: true });
+
+    fireEvent(screen.getByTestId('board-list'), 'pageSelected', { nativeEvent: { position: 1 } });
+
+    expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: true });
+    expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: false });
   });
 
   it('the header title switches the active project via the project sheet', () => {

@@ -1,16 +1,17 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { FlashList, type FlashListRef } from '@shopify/flash-list';
-import { GitPullRequest, Paperclip } from 'lucide-react-native';
+import PagerView from 'react-native-pager-view';
+import { FlashList } from '@shopify/flash-list';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { AgentStatusIcon, AppHeader, Badge, Card, ConnectionBanner, EmptyState, IconButton, MonoText, Row, Screen, Sheet, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
+import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, Sheet, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { CreateTaskSheet } from '@/components/board/CreateTaskSheet';
 import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
+import { TaskCard } from '@/components/board/TaskCard';
 import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
 import { CapabilityError } from '@/channel';
@@ -21,10 +22,8 @@ function messageForActionError(error: unknown, fallback: string): string {
   return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
 }
 
-type BoardListRow =
-  | { kind: 'column-header'; column: BoardColumnWire; count: number }
-  | { kind: 'column-empty'; column: BoardColumnWire }
-  | { kind: 'task'; task: BoardTaskWire; columnId: string };
+/** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
+const NO_TASKS: BoardTaskWire[] = [];
 
 export function BoardScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -33,14 +32,24 @@ export function BoardScreen(): React.JSX.Element {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectPickerVisible, setProjectPickerVisible] = useState(false);
   const [activeColumnId, setActiveColumnId] = useState<string | null>(null);
-  const listRef = useRef<FlashListRef<BoardListRow>>(null);
+  const pagerRef = useRef<PagerView>(null);
 
   const projectId = selectedProjectId ?? projects[0]?.id ?? null;
   const board: ProjectBoard | null = projectId ? (boardsByProjectId[projectId] ?? null) : null;
   const columns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
+  // Derived once per board/column change, not per render: selectTasksForColumn
+  // filters + sorts the whole task map, and calling it inline in the render
+  // body handed every column's FlashList a brand-new `data` array on every
+  // unrelated BoardScreen state change (opening a sheet, pull-to-refresh).
+  // The counts read off the same map rather than repeating the derivation.
+  const tasksByColumnId = useMemo(() => {
+    const byColumnId = new Map<string, BoardTaskWire[]>();
+    for (const column of columns) byColumnId.set(column.id, board ? selectTasksForColumn(board, column.id) : []);
+    return byColumnId;
+  }, [columns, board]);
   const taskCounts = useMemo(
-    () => columns.map((column) => (board ? selectTasksForColumn(board, column.id).length : 0)),
-    [columns, board],
+    () => columns.map((column) => tasksByColumnId.get(column.id)?.length ?? 0),
+    [columns, tasksByColumnId],
   );
   const projectName = projects.find((project) => project.id === projectId)?.name ?? null;
   const [refreshing, setRefreshing] = useState(false);
@@ -50,57 +59,54 @@ export function BoardScreen(): React.JSX.Element {
       .catch(() => undefined)
       .finally(() => setRefreshing(false));
   }, []);
-  // The whole board is ONE vertical list: a section (divider header +
-  // cards) per column, scannable at a glance. Chips are quick filters that
-  // jump-scroll to their column; scrolling moves the chip highlight back.
-  const boardRows = useMemo<BoardListRow[]>(() => {
-    if (!board) return [];
-    const rows: BoardListRow[] = [];
-    for (const column of columns) {
-      const columnTasks = selectTasksForColumn(board, column.id);
-      rows.push({ kind: 'column-header', column, count: columnTasks.length });
-      if (columnTasks.length === 0) rows.push({ kind: 'column-empty', column });
-      for (const task of columnTasks) rows.push({ kind: 'task', task, columnId: column.id });
-    }
-    return rows;
-  }, [board, columns]);
-
-  const headerIndexByColumnId = useMemo(() => {
-    const indexMap = new Map<string, number>();
-    boardRows.forEach((row, rowIndex) => {
-      if (row.kind === 'column-header') indexMap.set(row.column.id, rowIndex);
-    });
-    return indexMap;
-  }, [boardRows]);
 
   const activeColumnIndex = Math.max(
     0,
     columns.findIndex((candidate) => candidate.id === activeColumnId),
   );
 
-  // Stable viewability callback (FlashList requires it not to change): it
-  // only records WHICH column tops the viewport; the index is derived at
-  // render time so no ref juggling is needed.
-  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: { item: unknown }[] }) => {
-    const firstRow = viewableItems[0]?.item as BoardListRow | undefined;
-    if (!firstRow) return;
-    setActiveColumnId(firstRow.kind === 'task' ? firstRow.columnId : firstRow.column.id);
-  }, []);
+  // The column set changed under the active id (add/remove/reorder while
+  // viewing): follow the same column when it still exists, otherwise fall
+  // back to the first column instead of stranding the pager on a stale index.
+  // Adjusted synchronously during render (comparing against the previous
+  // render's columns) rather than in an effect - React re-renders immediately
+  // on a setState called this way, without committing the stale frame first.
+  const [prevColumns, setPrevColumns] = useState(columns);
+  if (columns !== prevColumns) {
+    setPrevColumns(columns);
+    if (columns.length > 0 && !columns.some((column) => column.id === activeColumnId)) {
+      setActiveColumnId(columns[0]?.id ?? null);
+    }
+  }
 
+  // Chip tap only sets intent; the sync effect below is the sole setPage
+  // caller, so a tap and a swipe converge on the exact same code path.
   const selectColumn = useCallback(
     (columnIndex: number) => {
       const column = columns[columnIndex];
-      if (!column) return;
-      setActiveColumnId(column.id);
-      const headerIndex = headerIndexByColumnId.get(column.id);
-      // Jest's FlashList stub has no imperative API; on-device it always does.
-      const list = listRef.current;
-      if (headerIndex !== undefined && list && typeof list.scrollToIndex === 'function') {
-        list.scrollToIndex({ index: headerIndex, animated: true });
-      }
+      if (column) setActiveColumnId(column.id);
     },
-    [columns, headerIndexByColumnId],
+    [columns],
   );
+
+  // Swipe -> chip sync. Reads the CURRENT columns (not a stale closure) so a
+  // swipe lands on the right column even if the set changed underneath.
+  const onPageSelected = useCallback(
+    (event: { nativeEvent: { position: number } }) => {
+      const column = columns[event.nativeEvent.position];
+      if (column) setActiveColumnId(column.id);
+    },
+    [columns],
+  );
+
+  // Chip tap -> pager sync (the only setPage call site). The jest mock
+  // forwards the ref to a plain View with no imperative API; on-device it
+  // always has one. After a real swipe this is a no-op (the pager already
+  // shows activeColumnIndex).
+  useEffect(() => {
+    const pager = pagerRef.current;
+    if (pager && typeof pager.setPage === 'function') pager.setPage(activeColumnIndex);
+  }, [activeColumnIndex]);
 
   const [actionsTarget, setActionsTarget] = useState<BoardTaskWire | null>(null);
   const [actionsInFlight, setActionsInFlight] = useState(false);
@@ -116,6 +122,14 @@ export function BoardScreen(): React.JSX.Element {
   const [createError, setCreateError] = useState<string | null>(null);
 
   const archiveAvailable = columns.some((column) => column.role === 'done');
+
+  // Stable identity: an inline arrow here would be a fresh prop on every
+  // BoardScreen render, which defeats BoardTaskCard's React.memo for every
+  // visible card in every column.
+  const onLongPressTask = useCallback((task: BoardTaskWire) => {
+    setActionsError(null);
+    setActionsTarget(task);
+  }, []);
 
   const onMove = useCallback(
     (targetSwimlaneId: string, position: 'top' | 'bottom') => {
@@ -233,57 +247,28 @@ export function BoardScreen(): React.JSX.Element {
           >
             <ColumnChipBar columns={columns} taskCounts={taskCounts} activeIndex={activeColumnIndex} onSelect={selectColumn} />
           </View>
-          <FlashList<BoardListRow>
-            ref={listRef}
+          <PagerView
+            ref={pagerRef}
+            key={projectId}
             testID="board-list"
-            data={boardRows}
-            refreshControl={
-              // tintColor styles iOS; colors + progressBackgroundColor style
-              // Android (stock is a white circle, jarring on the warm theme).
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor={theme.colors.textSecondary}
-                colors={[theme.colors.accent]}
-                progressBackgroundColor={theme.colors.surfaceOverlay}
-              />
-            }
-            keyExtractor={(row) =>
-              row.kind === 'column-header'
-                ? `header-${row.column.id}`
-                : row.kind === 'column-empty'
-                  ? `empty-${row.column.id}`
-                  : row.task.id
-            }
-            getItemType={(row) => row.kind}
-            onViewableItemsChanged={onViewableItemsChanged}
-            contentContainerStyle={{ paddingBottom: theme.spacing.xxl }}
-            renderItem={({ item }) =>
-              item.kind === 'column-header' ? (
-                <ColumnDividerRow column={item.column} count={item.count} />
-              ) : item.kind === 'column-empty' ? (
-                <Text
-                  variant="caption"
-                  color="muted"
-                  testID={`board-column-${item.column.id}-empty`}
-                  style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}
-                >
-                  No tasks in {item.column.name}.
-                </Text>
-              ) : (
-                <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-                  <TaskCard
-                    task={item.task}
-                    projectId={projectId ?? ''}
-                    onLongPress={() => {
-                      setActionsError(null);
-                      setActionsTarget(item.task);
-                    }}
-                  />
-                </View>
-              )
-            }
-          />
+            style={styles.flex}
+            initialPage={activeColumnIndex}
+            offscreenPageLimit={1}
+            onPageSelected={onPageSelected}
+          >
+            {columns.map((column) => (
+              <View key={column.id} testID={`board-column-${column.id}`} style={styles.flex}>
+                <ColumnPage
+                  column={column}
+                  tasks={tasksByColumnId.get(column.id) ?? NO_TASKS}
+                  projectId={projectId ?? ''}
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  onLongPressTask={onLongPressTask}
+                />
+              </View>
+            ))}
+          </PagerView>
         </>
       )}
 
@@ -340,7 +325,7 @@ export function BoardScreen(): React.JSX.Element {
       <CreateTaskSheet
         visible={createVisible}
         columns={columns}
-        initialColumnName={columns[activeColumnIndex]?.name ?? null}
+        defaultColumnName={columns[0]?.name ?? null}
         onClose={() => setCreateVisible(false)}
         onCreate={onCreate}
         createInFlight={createInFlight}
@@ -372,59 +357,98 @@ export function BoardScreen(): React.JSX.Element {
   );
 }
 
-/** A column's section divider: color dot, name, and count - the at-a-glance anchor row. */
-function ColumnDividerRow({ column, count }: { column: BoardColumnWire; count: number }): React.JSX.Element {
+/**
+ * One board page: a column's tasks, or a styled empty state when it has
+ * none. Pull-to-refresh works on both branches - the FlashList and the
+ * empty-state ScrollView call the same global refreshSnapshots(), so an
+ * empty column is not a dead end for the gesture.
+ */
+function ColumnPage({
+  column,
+  tasks,
+  projectId,
+  refreshing,
+  onRefresh,
+  onLongPressTask,
+}: {
+  column: BoardColumnWire;
+  tasks: BoardTaskWire[];
+  projectId: string;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onLongPressTask: (task: BoardTaskWire) => void;
+}): React.JSX.Element {
   const theme = useTheme();
+  // Stable across renders so FlashList's row components keep their memo:
+  // an inline renderItem rebuilds every row's props on every parent render.
+  const renderTask = useCallback(
+    ({ item }: { item: BoardTaskWire }) => (
+      <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
+        <BoardTaskCard task={item} projectId={projectId} onLongPressTask={onLongPressTask} />
+      </View>
+    ),
+    [theme.spacing.md, theme.spacing.sm, projectId, onLongPressTask],
+  );
+  const refreshControl = (
+    // tintColor styles iOS; colors + progressBackgroundColor style Android
+    // (stock is a white circle, jarring on the warm theme).
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      tintColor={theme.colors.textSecondary}
+      colors={[theme.colors.accent]}
+      progressBackgroundColor={theme.colors.surfaceOverlay}
+    />
+  );
+
+  if (tasks.length === 0) {
+    return (
+      <ScrollView contentContainerStyle={styles.flex} refreshControl={refreshControl}>
+        <EmptyState
+          testID={`board-column-${column.id}-empty`}
+          title="No tasks"
+          overseerSize={54}
+          overseerAnimate="blink-loop"
+        />
+      </ScrollView>
+    );
+  }
+
   return (
-    <Row
-      gap="sm"
-      testID={`board-column-${column.id}`}
-      style={[
-        styles.columnDivider,
-        {
-          paddingHorizontal: theme.spacing.md,
-          paddingTop: theme.spacing.lg,
-          paddingBottom: theme.spacing.sm,
-        },
-      ]}
-    >
-      {column.color ? <View style={[styles.columnDividerDot, { backgroundColor: column.color }]} /> : null}
-      <Text variant="title" style={styles.flex}>
-        {column.name}
-      </Text>
-      <Badge label={String(count)} color="secondary" />
-    </Row>
+    <FlashList<BoardTaskWire>
+      testID={`board-column-${column.id}-list`}
+      data={tasks}
+      keyExtractor={(task) => task.id}
+      getItemType={() => 'task'}
+      refreshControl={refreshControl}
+      contentContainerStyle={{ paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.xxl }}
+      renderItem={renderTask}
+    />
   );
 }
 
-/** Desktop-parity PR state colors (GitHub convention, from our tokens). */
-function prStateColor(theme: ReturnType<typeof useTheme>, prState: string | null): string {
-  if (prState === 'merged') return theme.colors.info;
-  if (prState === 'closed') return theme.colors.danger;
-  return theme.colors.success;
-}
-
-const CARD_LABEL_LIMIT = 3;
 const CARD_DESCRIPTION_LINES = 2;
 
-/** Context-usage tint thresholds, mirroring the desktop card's progress color ramp. */
-function contextUsageColor(theme: ReturnType<typeof useTheme>, usedPercentage: number): string {
-  if (usedPercentage >= 90) return theme.colors.danger;
-  if (usedPercentage >= 70) return theme.colors.warning;
-  return theme.colors.statusWorking;
-}
-
-const TaskCard = React.memo(function TaskCard({
+/**
+ * The board's per-item connector: reads the session's activity/usage and
+ * the project's ticket-number setting, then hands off to the shared
+ * TaskCard (@/components/board/TaskCard) - the exact same card the Agents
+ * feed renders, minus its extra project row (the board already establishes
+ * project context by which board you're viewing).
+ */
+const BoardTaskCard = React.memo(function BoardTaskCard({
   task,
   projectId,
-  onLongPress,
+  onLongPressTask,
 }: {
   task: BoardTaskWire;
   projectId: string;
-  onLongPress: () => void;
+  onLongPressTask: (task: BoardTaskWire) => void;
 }): React.JSX.Element {
-  const theme = useTheme();
   const router = useRouter();
+  // Built here rather than per-row in renderItem: the parent hands down one
+  // stable callback, so this card's props stay identical between renders.
+  const onLongPress = useCallback(() => onLongPressTask(task), [onLongPressTask, task]);
   const activityEntry = useActivityStore((state) => (task.session_id ? (state.bySessionId[task.session_id] ?? null) : null));
   const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[projectId]?.showTicketNumbers ?? true);
 
@@ -444,134 +468,26 @@ const TaskCard = React.memo(function TaskCard({
         ? 'idle-unread'
         : 'idle'
     : null;
-  const visibleLabels = task.labels.slice(0, CARD_LABEL_LIMIT);
-  const hiddenLabelCount = task.labels.length - visibleLabels.length;
-  const hasMetaRow = visibleLabels.length > 0 || task.pr_number !== null || task.attachment_count > 0;
   const descriptionPreview = task.description.length > 0 ? collapseToSnippetText(task.description) : '';
 
-  // Desktop parity: the model + context bar renders only when the session
-  // reports a trustworthy window (a sane size the used tokens fit inside).
-  const usage = activityEntry?.usage ?? null;
-  const contextWindowTrusted =
-    usage !== null &&
-    usage.contextWindow.contextWindowSize > 0 &&
-    usage.contextWindow.usedTokens <= usage.contextWindow.contextWindowSize;
-  const usedPercentage = contextWindowTrusted ? Math.round(usage.contextWindow.usedPercentage) : 0;
-
   return (
-    <Card testID={`board-card-${task.id}`} onPress={openTask} onLongPress={onLongPress}>
-      <Stack gap="xs">
-        <Row gap="sm" style={styles.spaceBetween}>
-          {statusKind ? <AgentStatusIcon kind={statusKind} testID={`board-card-${task.id}-status`} /> : null}
-          {/* Desktop parity: single-line truncating title, no agent badge
-              (the agent shows inside the session, not on the card). */}
-          <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
-            {task.title}
-          </Text>
-          {showTicketNumbers ? (
-            <MonoText size="caption" color="muted" testID={`board-card-${task.id}-display-id`}>
-              #{task.display_id}
-            </MonoText>
-          ) : null}
-        </Row>
-        {descriptionPreview.length > 0 ? (
-          <Text variant="caption" color="muted" numberOfLines={CARD_DESCRIPTION_LINES}>
-            {descriptionPreview}
-          </Text>
-        ) : null}
-        {hasMetaRow ? (
-          <Row gap="sm" style={styles.metaRow}>
-            {visibleLabels.map((label) => (
-              <Badge key={label} label={label} color="secondary" />
-            ))}
-            {hiddenLabelCount > 0 ? <Badge label={`+${hiddenLabelCount}`} color="secondary" /> : null}
-            <View style={styles.flex} />
-            {task.pr_number !== null ? (
-              <Row gap="xs" style={styles.metaItem} testID={`board-card-${task.id}-pr`}>
-                <GitPullRequest size={12} color={prStateColor(theme, task.pr_state)} />
-                <Text variant="caption" color="secondary">
-                  #{task.pr_number}
-                </Text>
-              </Row>
-            ) : null}
-            {task.attachment_count > 0 ? (
-              <Row gap="xs" style={styles.metaItem}>
-                <Paperclip size={12} color={theme.colors.textMuted} />
-                <Text variant="caption" color="muted">
-                  {task.attachment_count}
-                </Text>
-              </Row>
-            ) : null}
-          </Row>
-        ) : null}
-        {contextWindowTrusted ? (
-          // Desktop parity: model + percent on one line, the bar full-width
-          // beneath, separated from the card content by a hairline (the
-          // same utility-strip treatment as the Agents feed rows).
-          <View
-            style={[
-              styles.usageStrip,
-              { borderTopColor: theme.colors.border, marginTop: theme.spacing.xs, paddingTop: theme.spacing.sm },
-            ]}
-            testID={`board-card-${task.id}-usage`}
-          >
-            <Row gap="sm" style={styles.spaceBetween}>
-              <Text variant="caption" color="muted">
-                {usage.model.displayName}
-              </Text>
-              <Text variant="caption" color="secondary">
-                {usedPercentage}%
-              </Text>
-            </Row>
-            <View style={[styles.usageTrack, { backgroundColor: theme.colors.border, marginTop: theme.spacing.xs }]}>
-              <View
-                style={[
-                  styles.usageFill,
-                  { backgroundColor: contextUsageColor(theme, usedPercentage), width: `${usedPercentage}%` },
-                ]}
-              />
-            </View>
-          </View>
-        ) : null}
-      </Stack>
-    </Card>
+    <TaskCard
+      testID={`board-card-${task.id}`}
+      task={task}
+      statusKind={statusKind}
+      showTicketNumbers={showTicketNumbers}
+      usage={activityEntry?.usage ?? null}
+      bodyText={descriptionPreview}
+      bodyNumberOfLines={CARD_DESCRIPTION_LINES}
+      onPress={openTask}
+      onLongPress={onLongPress}
+    />
   );
 });
-
-const COLUMN_DIVIDER_DOT_SIZE = 10;
 
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
-  },
-  spaceBetween: {
-    justifyContent: 'space-between',
-  },
-  metaRow: {
-    alignItems: 'center',
-  },
-  metaItem: {
-    alignItems: 'center',
-  },
-  usageStrip: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  usageTrack: {
-    borderRadius: 2,
-    height: 4,
-    overflow: 'hidden',
-  },
-  usageFill: {
-    borderRadius: 2,
-    height: '100%',
-  },
-  columnDivider: {
-    alignItems: 'center',
-  },
-  columnDividerDot: {
-    width: COLUMN_DIVIDER_DOT_SIZE,
-    height: COLUMN_DIVIDER_DOT_SIZE,
-    borderRadius: COLUMN_DIVIDER_DOT_SIZE / 2,
   },
   fabContainer: {
     position: 'absolute',

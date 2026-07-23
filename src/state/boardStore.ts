@@ -46,6 +46,15 @@ export interface PendingTaskRemoval {
 interface BoardStoreState {
   projects: ReadBoardProjectSummary[];
   boardsByProjectId: Record<string, ProjectBoard>;
+  /**
+   * Latched true the first time any board snapshot lands. Bootstrap flips
+   * `channelStore.established` before the first snapshot arrives, so the
+   * home feed gates its "All quiet" empty state on this flag too - otherwise
+   * it flashes "All quiet" during the window between channel-up and
+   * first-snapshot. Reset alongside the rest of the board on `reset()`
+   * (unpair), so a fresh pairing gets the same cold-start gating.
+   */
+  hasHydratedSnapshot: boolean;
   pendingMoves: PendingMove[];
   pendingEdits: PendingTaskEdit[];
   pendingRemovals: PendingTaskRemoval[];
@@ -105,6 +114,7 @@ function removeTaskFromBoard(board: ProjectBoard, taskId: string): ProjectBoard 
 export const useBoardStore = create<BoardStoreState>((set, get) => ({
   projects: [],
   boardsByProjectId: {},
+  hasHydratedSnapshot: false,
   pendingMoves: [],
   pendingEdits: [],
   pendingRemovals: [],
@@ -137,7 +147,10 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
           board = removeTaskFromBoard(board, pendingRemoval.removedTask.id);
         }
       }
-      return { boardsByProjectId: { ...state.boardsByProjectId, [snapshot.projectId]: board } };
+      return {
+        boardsByProjectId: { ...state.boardsByProjectId, [snapshot.projectId]: board },
+        hasHydratedSnapshot: true,
+      };
     }),
 
   applyOptimisticMove: (move) => {
@@ -262,7 +275,15 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       };
     }),
 
-  reset: () => set({ projects: [], boardsByProjectId: {}, pendingMoves: [], pendingEdits: [], pendingRemovals: [] }),
+  reset: () =>
+    set({
+      projects: [],
+      boardsByProjectId: {},
+      hasHydratedSnapshot: false,
+      pendingMoves: [],
+      pendingEdits: [],
+      pendingRemovals: [],
+    }),
 }));
 
 /** Visible columns in board order (archived and ghost columns are desktop-internal). */

@@ -96,7 +96,7 @@ export function AppHeader({ title, subtitle, onTitlePress, divider = true, testI
           justifyContent: 'center',
         }}
       >
-        <Icon name="settings-outline" color="secondary" />
+        <Icon name="settings" color="secondary" />
       </Pressable>
     </Row>
   );

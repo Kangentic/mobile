@@ -106,7 +106,7 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
       <Row gap="sm" style={styles.inputRow}>
         {showMicButton ? (
           <IconButton
-            iconName={dictation.listening ? 'mic' : 'mic-outline'}
+            iconName="mic"
             variant={dictation.listening ? 'fab' : 'raised'}
             testID={dictation.listening ? 'composer-mic-active' : 'composer-mic'}
             accessibilityLabel={dictation.listening ? 'Stop dictation' : 'Start dictation'}

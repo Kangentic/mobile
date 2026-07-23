@@ -5,6 +5,8 @@ import { writeTerminal } from '@/connection/actions';
 export interface DirectKeyInputHandle {
   /** Raise the soft keyboard if hidden, dismiss it if showing. */
   toggle: () => void;
+  /** Raise the soft keyboard unconditionally (a no-op if already focused). */
+  focus: () => void;
   blur: () => void;
 }
 
@@ -42,6 +44,7 @@ export const DirectKeyInput = forwardRef<DirectKeyInputHandle, DirectKeyInputPro
         inputRef.current?.focus();
       }
     },
+    focus: () => inputRef.current?.focus(),
     blur: () => inputRef.current?.blur(),
   }));
 

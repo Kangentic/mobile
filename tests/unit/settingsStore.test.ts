@@ -145,3 +145,60 @@ describe('settingsStore - per-category push preferences', () => {
     });
   });
 });
+
+describe('settingsStore - collapsed triage section', () => {
+  beforeEach(() => {
+    storedValues.clear();
+    useSettingsStore.setState({ collapsedTriageSection: null });
+  });
+
+  it('collapses a section by title and persists it', async () => {
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
+
+    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Idle');
+    expect(storedValues.get('settings.collapsedTriageSection')).toBe(JSON.stringify('Idle'));
+  });
+
+  it('toggles the same title back to expanded (null)', async () => {
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
+
+    expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
+    expect(storedValues.get('settings.collapsedTriageSection')).toBe(JSON.stringify(null));
+  });
+
+  it('collapsing a different title replaces the collapsed section rather than accumulating', async () => {
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Needs you');
+
+    // A two-state accordion: collapsing a different section leaves ONLY that
+    // section collapsed, not a set of both.
+    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Needs you');
+    expect(storedValues.get('settings.collapsedTriageSection')).toBe(JSON.stringify('Needs you'));
+  });
+
+  it('hydrate restores a stored string value', async () => {
+    storedValues.set('settings.collapsedTriageSection', JSON.stringify('Idle'));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Idle');
+  });
+
+  it('hydrate falls back to null on malformed JSON', async () => {
+    storedValues.set('settings.collapsedTriageSection', 'not json');
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
+  });
+
+  it.each([
+    ['a bare number', '5'],
+    ['null', 'null'],
+    ['an array', '[1,2]'],
+  ])('hydrate falls back to null when the stored JSON parses to %s, not a string', async (_description, raw) => {
+    storedValues.set('settings.collapsedTriageSection', raw);
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
+  });
+});

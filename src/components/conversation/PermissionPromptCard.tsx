@@ -224,7 +224,7 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
               muted
               testID="permission-answer-in-terminal"
               disabled={answering}
-              onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal')}
+              onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal', { focusKeyboard: true })}
             />
         </Stack>
       </Card>

@@ -246,6 +246,21 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     };
   }, [sessionId]);
 
+  // The prompt cards' "Answer in terminal" escape hatch: consume the
+  // one-shot keyboard-focus request only once this pane is actually the
+  // visible page AND the WebView has finished construction - firing it
+  // earlier would focus a hidden or not-yet-ready input. Not tied to a
+  // manual lens toggle (SessionScreen's onModeChange never sets this flag),
+  // so switching to Terminal by hand never pops the keyboard.
+  const focusKeyboardRequested = useTerminalUiStore(
+    (state) => state.focusKeyboardRequestBySessionId[sessionId] ?? false,
+  );
+  useEffect(() => {
+    if (!focusKeyboardRequested || !isActive || !terminalReady) return;
+    directKeyRef.current?.focus();
+    useTerminalUiStore.getState().consumeFocusKeyboardRequest(sessionId);
+  }, [focusKeyboardRequested, isActive, terminalReady, sessionId]);
+
   const onWebViewMessage = useCallback(
     (event: WebViewMessageEvent) => {
       const message = decodeTerminalMessage(event.nativeEvent.data);
@@ -339,7 +354,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />
         <View style={styles.refitButton}>
           <IconButton
-            iconName="contract-outline"
+            iconName="contract"
             variant="raised"
             testID="terminal-refit"
             accessibilityLabel="Fit the terminal to the screen"

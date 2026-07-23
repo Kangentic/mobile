@@ -17,6 +17,7 @@ const HAPTICS_ENABLED_STORAGE_KEY = 'settings.hapticsEnabled';
 const BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY = 'settings.backgroundNotificationsMode';
 const PREFERRED_SESSION_LENS_STORAGE_KEY = 'settings.preferredSessionLensByTaskId';
 const PUSH_CATEGORIES_ENABLED_STORAGE_KEY = 'settings.pushCategoriesEnabled';
+const COLLAPSED_TRIAGE_SECTION_STORAGE_KEY = 'settings.collapsedTriageSection';
 
 /** The remembered per-task lens is capped so the map cannot grow unboundedly. */
 const PREFERRED_SESSION_LENS_CAP = 50;
@@ -36,6 +37,22 @@ function parsePreferredLensMap(raw: string | null): Record<string, PreferredSess
     return lensMap;
   } catch {
     return {};
+  }
+}
+
+/**
+ * The single Agents-feed section (by display TITLE, e.g. "Idle") the user
+ * has collapsed - with only two sections, this is a two-state accordion
+ * (exactly one collapsed at most), not independent per-section booleans:
+ * collapsing one always leaves the other expanded.
+ */
+function parseCollapsedTriageSection(raw: string | null): string | null {
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'string' ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -86,6 +103,8 @@ interface SettingsStoreState {
   preferredSessionLensByTaskId: Record<string, PreferredSessionLens>;
   /** Per-category push + local-notification opt-in; all categories default enabled. */
   pushCategoriesEnabled: Record<PushCategory, boolean>;
+  /** The one Agents-feed section (by title) the user has collapsed, or null if both are expanded. */
+  collapsedTriageSection: string | null;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setDictationMode: (mode: DictationMode) => Promise<void>;
@@ -94,6 +113,7 @@ interface SettingsStoreState {
   setBackgroundNotificationsMode: (mode: BackgroundNotificationsMode) => Promise<void>;
   setPreferredSessionLens: (taskId: string, lens: PreferredSessionLens) => Promise<void>;
   setPushCategoryEnabled: (category: PushCategory, enabled: boolean) => Promise<void>;
+  toggleTriageSectionCollapsed: (title: string) => Promise<void>;
 }
 
 /**
@@ -109,18 +129,27 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   backgroundNotificationsMode: 'foreground-service',
   preferredSessionLensByTaskId: {},
   pushCategoriesEnabled: defaultPushCategoriesEnabled(),
+  collapsedTriageSection: null,
   hydrated: false,
 
   hydrate: async () => {
-    const [storedDictationMode, storedModeHintSeen, storedHapticsEnabled, storedBackgroundMode, storedLensMap, storedPushCategoriesEnabled] =
-      await Promise.all([
-        SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
-        SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
-        SecureStore.getItemAsync(HAPTICS_ENABLED_STORAGE_KEY),
-        SecureStore.getItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
-        SecureStore.getItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY),
-        SecureStore.getItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
-      ]);
+    const [
+      storedDictationMode,
+      storedModeHintSeen,
+      storedHapticsEnabled,
+      storedBackgroundMode,
+      storedLensMap,
+      storedPushCategoriesEnabled,
+      storedCollapsedTriageSection,
+    ] = await Promise.all([
+      SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
+      SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
+      SecureStore.getItemAsync(HAPTICS_ENABLED_STORAGE_KEY),
+      SecureStore.getItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
+      SecureStore.getItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY),
+      SecureStore.getItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
+      SecureStore.getItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
+    ]);
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
       hasSeenSessionModeHint: storedModeHintSeen === 'true',
@@ -130,6 +159,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
         : 'foreground-service',
       preferredSessionLensByTaskId: parsePreferredLensMap(storedLensMap),
       pushCategoriesEnabled: parsePushCategoriesEnabled(storedPushCategoriesEnabled),
+      collapsedTriageSection: parseCollapsedTriageSection(storedCollapsedTriageSection),
       hydrated: true,
     });
   },
@@ -174,5 +204,13 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     const nextMap = { ...get().pushCategoriesEnabled, [category]: enabled };
     set({ pushCategoriesEnabled: nextMap });
     await SecureStore.setItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY, JSON.stringify(nextMap));
+  },
+
+  toggleTriageSectionCollapsed: async (title) => {
+    // At most one section is ever collapsed: collapsing one always leaves
+    // the other expanded, so this is a single nullable value, not a map.
+    const next = get().collapsedTriageSection === title ? null : title;
+    set({ collapsedTriageSection: next });
+    await SecureStore.setItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY, JSON.stringify(next));
   },
 }));

@@ -25,17 +25,6 @@ jest.mock('expo-asset', () => ({
   },
 }));
 
-// The refit IconButton renders an Ionicons glyph, whose font loader does
-// `instanceof` against expo-asset's Asset class - which the mock above
-// replaces with a plain object. Stub the icon set out entirely.
-jest.mock('@expo/vector-icons', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  const ReactModule = require('react');
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  const { View } = require('react-native');
-  return { Ionicons: (props: object) => ReactModule.createElement(View, props) };
-});
-
 // The pinch gesture is device-only behavior; a chainable stub keeps the
 // component renderable while the real zoom is covered by the E2E checklist.
 jest.mock('react-native-gesture-handler', () => {
@@ -75,13 +64,38 @@ jest.mock('react-native-webview', () => {
   };
 });
 
+// Mocked so the keyboard-focus escape hatch (item 1) can be asserted as a
+// call, not a real native focus event RNTL cannot observe.
+jest.mock('@/components/terminal/DirectKeyInput', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const mockReact = require('react');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const { View } = require('react-native');
+  const focusMock = jest.fn();
+  const toggleMock = jest.fn();
+  const blurMock = jest.fn();
+  const MockDirectKeyInput = mockReact.forwardRef(function MockDirectKeyInput(
+    props: { sessionId: string },
+    ref: unknown,
+  ) {
+    mockReact.useImperativeHandle(ref, () => ({ toggle: toggleMock, focus: focusMock, blur: blurMock }));
+    return mockReact.createElement(View, { testID: 'terminal-direct-key-input' });
+  });
+  return { __esModule: true, DirectKeyInput: MockDirectKeyInput, __focusMock: focusMock };
+});
+
 interface WebViewMockModule {
   __postMessageMock: jest.Mock;
   __capturedProps: { current: { onMessage?: (event: { nativeEvent: { data: string } }) => void } | null };
 }
 
+interface DirectKeyInputMockModule {
+  __focusMock: jest.Mock;
+}
+
 const webViewMock = jest.requireMock<WebViewMockModule>('react-native-webview');
 const actionsMock = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
+const directKeyInputMock = jest.requireMock<DirectKeyInputMockModule>('@/components/terminal/DirectKeyInput');
 
 async function renderPaneAndReady(isActive = true): Promise<ReturnType<typeof render>> {
   const result = render(
@@ -117,7 +131,7 @@ describe('TerminalPane (faithful mirror)', () => {
     jest.clearAllMocks();
     resetTerminalFeed();
     webViewMock.__capturedProps.current = null;
-    useTerminalUiStore.setState({ applicationCursorModeBySessionId: {} });
+    useTerminalUiStore.setState({ applicationCursorModeBySessionId: {}, focusKeyboardRequestBySessionId: {} });
   });
 
   it('inits at the exact PTY grid when the desktop reported dimensions', async () => {
@@ -213,5 +227,33 @@ describe('TerminalPane (faithful mirror)', () => {
 
     expect(webViewMock.__postMessageMock).not.toHaveBeenCalled();
     expect(actionsMock.writeTerminal).not.toHaveBeenCalled();
+  });
+
+  it('focuses the direct-key input once ready when a keyboard-focus request is pending (the "Answer in terminal" escape hatch)', async () => {
+    retainTerminal('sess-1');
+    useTerminalUiStore.getState().requestSessionMode('sess-1', 'terminal', { focusKeyboard: true });
+
+    render(
+      <ThemeProvider>
+        <TerminalPane sessionId="sess-1" isActive />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+    // Not ready yet: the request must wait, never fire against a
+    // not-yet-constructed WebView.
+    expect(directKeyInputMock.__focusMock).not.toHaveBeenCalled();
+
+    postFromWebView(JSON.stringify({ type: 'ready' }));
+
+    await waitFor(() => expect(directKeyInputMock.__focusMock).toHaveBeenCalledTimes(1));
+    // Consumed once: the store no longer carries the request.
+    expect(useTerminalUiStore.getState().focusKeyboardRequestBySessionId['sess-1']).toBeUndefined();
+  });
+
+  it('never focuses the keyboard on an ordinary render (no pending focus request, e.g. a manual lens toggle)', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
+
+    expect(directKeyInputMock.__focusMock).not.toHaveBeenCalled();
   });
 });

@@ -194,6 +194,150 @@ describe('buildConversationCells', () => {
     expect(cells).toEqual([{ kind: 'ask-user-question', key: 'prompt-sess:toolu_q', prompt }]);
   });
 
+  it('suppresses the awaited tool_use\'s plain tool-call cell while its prompt is pending (no duplicate Bash card)', () => {
+    const entries: TranscriptEntryWire[] = [
+      {
+        kind: 'assistant',
+        uuid: 'a1',
+        ts: 1,
+        blocks: [{ type: 'tool_use', id: 'toolu_pending', name: 'Bash', input: { command: 'npx jest' } }],
+      },
+    ];
+    const prompt: PendingPromptDescriptor = {
+      promptId: 'sess:toolu_pending',
+      sessionId: 'sess',
+      toolUseId: 'toolu_pending',
+      toolName: 'Bash',
+      input: { command: 'npx jest' },
+      options: null,
+    };
+
+    const cells = buildConversationCells(entries, { liveTailLines: null, pendingPrompt: prompt });
+
+    // Exactly the prompt card - not a duplicate tool-call cell for the same command.
+    expect(cells).toEqual([{ kind: 'permission-prompt', key: 'prompt-sess:toolu_pending', prompt }]);
+  });
+
+  it('does not suppress an unrelated tool-call cell while a different tool_use is pending', () => {
+    const entries: TranscriptEntryWire[] = [
+      {
+        kind: 'assistant',
+        uuid: 'a1',
+        ts: 1,
+        blocks: [{ type: 'tool_use', id: 'toolu_other', name: 'Read', input: { file_path: 'x' } }],
+      },
+    ];
+    const prompt: PendingPromptDescriptor = {
+      promptId: 'sess:toolu_pending',
+      sessionId: 'sess',
+      toolUseId: 'toolu_pending',
+      toolName: 'Bash',
+      input: { command: 'npx jest' },
+      options: null,
+    };
+
+    const cells = buildConversationCells(entries, { liveTailLines: null, pendingPrompt: prompt });
+
+    expect(cells.map((cell) => cell.kind)).toEqual(['tool-call', 'permission-prompt']);
+  });
+
+  it('the suppressed tool-call cell reappears WITH its result once the prompt is answered', () => {
+    const entries: TranscriptEntryWire[] = [
+      {
+        kind: 'assistant',
+        uuid: 'a1',
+        ts: 1,
+        blocks: [{ type: 'tool_use', id: 'toolu_pending', name: 'Bash', input: { command: 'npx jest' } }],
+      },
+      { kind: 'tool_result', uuid: 'r1', ts: 2, toolUseId: 'toolu_pending', content: '3 passed' },
+    ];
+    const prompt: PendingPromptDescriptor = {
+      promptId: 'sess:toolu_pending',
+      sessionId: 'sess',
+      toolUseId: 'toolu_pending',
+      toolName: 'Bash',
+      input: { command: 'npx jest' },
+      options: null,
+    };
+
+    // While pending: only the prompt card, the result has not landed yet either.
+    const pendingCells = buildConversationCells(entries.slice(0, 1), { liveTailLines: null, pendingPrompt: prompt });
+    expect(pendingCells).toEqual([{ kind: 'permission-prompt', key: 'prompt-sess:toolu_pending', prompt }]);
+
+    // Answered: pendingPrompt goes null, the result has landed - the same
+    // tool-call cell (same key) reappears, now completed, as the turn's
+    // sole (solo) cell with its header restored.
+    const answeredCells = buildConversationCells(entries, { liveTailLines: null, pendingPrompt: null });
+    expect(answeredCells).toEqual([
+      {
+        kind: 'tool-call',
+        key: 'a1:0',
+        entryUuid: 'a1',
+        toolUseId: 'toolu_pending',
+        toolName: 'Bash',
+        input: { command: 'npx jest' },
+        result: { content: '3 passed', isError: false },
+        turn: { role: 'assistant', position: 'solo', header: { agentName: null, model: null, ts: 1 } },
+      },
+    ]);
+  });
+
+  it('groups a multi-block assistant turn into first/middle/last positions sharing one header', () => {
+    const cells = buildConversationCells(buildEntries(), NO_EXTRAS);
+
+    const markdownCell = cells.find((cell) => cell.kind === 'markdown');
+    const thinkingCell = cells.find((cell) => cell.kind === 'thinking');
+    const toolCallCell = cells.find((cell) => cell.kind === 'tool-call');
+    if (markdownCell?.kind !== 'markdown' || thinkingCell?.kind !== 'thinking' || toolCallCell?.kind !== 'tool-call') {
+      throw new Error('unreachable');
+    }
+
+    expect(markdownCell.turn).toEqual({
+      role: 'assistant',
+      position: 'first',
+      header: { agentName: null, model: 'claude-fable-5', ts: 2 },
+    });
+    expect(thinkingCell.turn).toEqual({ role: 'assistant', position: 'middle' });
+    expect(toolCallCell.turn).toEqual({ role: 'assistant', position: 'last' });
+  });
+
+  it('marks a single-block assistant turn solo, not first-and-last', () => {
+    const entries: TranscriptEntryWire[] = [
+      {
+        kind: 'assistant',
+        uuid: 'a1',
+        ts: 1,
+        agentName: 'Claude Code',
+        blocks: [{ type: 'text', text: 'Done.' }],
+      },
+    ];
+
+    const cells = buildConversationCells(entries, NO_EXTRAS);
+
+    expect(cells).toHaveLength(1);
+    if (cells[0].kind !== 'markdown') throw new Error('unreachable');
+    expect(cells[0].turn).toEqual({
+      role: 'assistant',
+      position: 'solo',
+      header: { agentName: 'Claude Code', model: null, ts: 1 },
+    });
+  });
+
+  it('marks every user turn solo with a header (null agentName/model - the badge renders a fixed "You")', () => {
+    const entries: TranscriptEntryWire[] = [{ kind: 'user', uuid: 'u1', ts: 1, text: 'hi' }];
+
+    const cells = buildConversationCells(entries, NO_EXTRAS);
+
+    expect(cells).toEqual([
+      {
+        kind: 'user-message',
+        key: 'u1',
+        entry: entries[0],
+        turn: { role: 'user', position: 'solo', header: { agentName: null, model: null, ts: 1 } },
+      },
+    ]);
+  });
+
   it('falls back to permission-prompt when the awaited tool is unknown', () => {
     const prompt: PendingPromptDescriptor = {
       promptId: 'sess:mystery',

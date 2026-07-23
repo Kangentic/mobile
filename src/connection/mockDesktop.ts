@@ -9,6 +9,7 @@ import {
   type DiffFileListWire,
   type JsonValue,
   type ReadStreamResponsePayload,
+  type SessionUsageWire,
   type TranscriptWindowResponsePayload,
   type Transport,
   type TranscriptEntryWire,
@@ -47,9 +48,12 @@ export interface MockDesktop {
   dispose(): void;
 }
 
-const MOCK_PROJECT = { id: 'mock-project', name: 'Project 1' };
+// `color` exercises the project accent theme (the whole app's active accent
+// derives from it while browsing that project) - two distinct hues so
+// switching projects visibly re-themes rather than coincidentally matching.
+const MOCK_PROJECT = { id: 'mock-project', name: 'Project 1', color: '#58a6ff' };
 /** A second project: exercises the board project switcher and cross-project Home rows. */
-const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'Project 2' };
+const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'Project 2', color: '#3fb950' };
 const MOCK_SESSION_ID = 'mock-session-1';
 const MOCK_TASK_ID = 'mock-task-1';
 /** A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat reading-view fallback. */
@@ -58,12 +62,152 @@ const MOCK_CODEX_TASK_ID = 'mock-task-codex';
 /** An IDLE session in the second project: exercises the Home feed's Idle section. */
 const MOCK_IDLE_SESSION_ID = 'mock-session-idle';
 const MOCK_IDLE_TASK_ID = 'mock-task-idle';
+/**
+ * A "paused" session sitting in Executing: the protocol has no paused
+ * ActivityStateWire (only 'thinking' | 'idle' | 'permission' - see
+ * .claude/rules/protocol-types-from-package.md, no local stand-in types),
+ * so this reports 'idle' - the closest real state - and communicates
+ * "paused" only through its snippet text, for display/testing purposes.
+ */
+const MOCK_PAUSED_SESSION_ID = 'mock-session-paused';
+const MOCK_PAUSED_TASK_ID = 'mock-task-paused';
 const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
 const QUESTION_PROMPT_ID = `${MOCK_SESSION_ID}:${QUESTION_TOOL_ID}`;
 /** The mock desktop pane's grid; a fit-mode resize overrides it until release-size restores it. */
 const MOCK_DESKTOP_PTY_DIMENSIONS = { cols: 120, rows: 30 };
+const MOCK_CONTEXT_WINDOW_SIZE = 200_000;
+// Model variety across the mock's sessions - both the Agents feed and the
+// board read the SAME activityStore usage data per session, so varying it
+// here is automatically consistent across both screens (one source of
+// truth, no separate wiring needed).
+const MOCK_MODEL_SONNET = { id: 'claude-sonnet-5', displayName: 'Sonnet 5' };
+const MOCK_MODEL_OPUS = { id: 'claude-opus-4-8', displayName: 'Opus 4.8' };
+const MOCK_MODEL_FABLE = { id: 'claude-fable-5', displayName: 'Fable 5' };
+/** Matches the codex session's `agent: 'codex'` - an OpenAI Codex-family model, not a Claude one. */
+const MOCK_MODEL_CODEX = { id: 'gpt-5-codex', displayName: 'GPT-5 Codex' };
+/** After this many tick-driven Bash cells, the mock stops growing the transcript further - see tickEntryCount. */
+const MOCK_MAX_TICK_ENTRIES = 20;
+
+/** A plausible, growing usage snapshot - the mock's stand-in for the desktop's real per-turn token accounting. */
+function mockUsage(usedTokens: number, model: SessionUsageWire['model']): SessionUsageWire {
+  const clampedUsedTokens = Math.min(usedTokens, MOCK_CONTEXT_WINDOW_SIZE);
+  return {
+    contextWindow: {
+      usedPercentage: (clampedUsedTokens / MOCK_CONTEXT_WINDOW_SIZE) * 100,
+      usedTokens: clampedUsedTokens,
+      cacheTokens: Math.round(clampedUsedTokens * 0.3),
+      totalInputTokens: clampedUsedTokens,
+      totalOutputTokens: Math.round(clampedUsedTokens * 0.08),
+      contextWindowSize: MOCK_CONTEXT_WINDOW_SIZE,
+    },
+    cost: {
+      totalCostUsd: clampedUsedTokens * 0.000003,
+      totalDurationMs: clampedUsedTokens * 8,
+    },
+    model,
+  };
+}
+
+interface MockExtraThinkingSessionSpec {
+  sessionId: string;
+  taskId: string;
+  displayId: number;
+  swimlaneId: string;
+  title: string;
+  userText: string;
+  assistantText: string;
+  scrollback: string;
+  model: SessionUsageWire['model'];
+  usedTokens: number;
+}
+
+/**
+ * Extra static "thinking" sessions (no ticker, nothing ever streams from
+ * them) - purely to give the Agents feed's Thinking section enough volume
+ * to feel real scrolling and justify a collapsible-section UI, for
+ * display/testing purposes.
+ */
+const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
+  {
+    sessionId: 'mock-session-thinking-2',
+    taskId: 'mock-task-thinking-2',
+    displayId: 6,
+    swimlaneId: 'lane-executing',
+    title: "Refactor the diff viewer's syntax highlighter for large files",
+    userText: 'The diff view chokes on files over 2000 lines - can you speed up the highlighter?',
+    // Deliberately long - a design-review stress test for how the Agents
+    // feed's snippet line truncates once the last message runs well past
+    // its two-line cap (bodyNumberOfLines on TaskCard).
+    assistantText:
+      'Swapped the line-by-line tokenizer for a streaming one that processes files in fixed-size chunks instead of loading everything into memory at once; benchmarking against the 10k-line fixture next to confirm the P95 render time actually drops below our 200ms target.',
+    scrollback: '$ claude\r\n> Refactoring src/diff/syntaxHighlight.ts...\r\n',
+    model: MOCK_MODEL_SONNET,
+    usedTokens: 55_000,
+  },
+  {
+    sessionId: 'mock-session-thinking-3',
+    taskId: 'mock-task-thinking-3',
+    displayId: 7,
+    swimlaneId: 'lane-code-review',
+    title: 'Investigate the flaky Maestro pairing flow on CI',
+    userText: 'paired/pairing-ceremony.yaml fails about 1 in 5 runs on CI - can you dig in?',
+    assistantText: 'Reproduced it locally - the QR-scan step races the relay handshake. Adding a settle wait before the scan.',
+    scrollback: '$ claude\r\n> Reproducing the flaky pairing-ceremony flow...\r\n',
+    model: MOCK_MODEL_OPUS,
+    usedTokens: 88_000,
+  },
+  {
+    sessionId: 'mock-session-thinking-4',
+    taskId: 'mock-task-thinking-4',
+    displayId: 8,
+    swimlaneId: 'lane-testing',
+    title: 'Write the relay self-host deployment guide',
+    userText: 'Draft a guide for someone standing up their own relay - Docker, env vars, the works.',
+    assistantText: 'First draft covers Docker Compose and bare-metal; adding the reverse-proxy/TLS section now.',
+    scrollback: '$ claude\r\n> Drafting docs/self-host-relay.md...\r\n',
+    model: MOCK_MODEL_FABLE,
+    usedTokens: 33_000,
+  },
+  {
+    sessionId: 'mock-session-thinking-5',
+    taskId: 'mock-task-thinking-5',
+    displayId: 9,
+    swimlaneId: 'lane-executing',
+    title: 'Tune the terminal font-fit heuristic for tablet-sized screens',
+    userText: 'On a tablet the terminal font ends up tiny - can you adjust the fit heuristic?',
+    assistantText: 'Adding a width-aware floor so the font never drops below 10px regardless of the PTY grid width.',
+    scrollback: 'Codex CLI · tuning the font-fit heuristic...\r\n',
+    model: MOCK_MODEL_CODEX,
+    usedTokens: 12_000,
+  },
+];
+
+function extraThinkingSnapshot(spec: MockExtraThinkingSessionSpec): ReadStreamResponsePayload {
+  return {
+    scrollback: spec.scrollback,
+    activity: { state: 'thinking', reason: { kind: 'turn-active' } },
+    usage: mockUsage(spec.usedTokens, spec.model),
+    awaitedPromptId: null,
+    ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+  };
+}
+
+function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): TranscriptEntryWire[] {
+  return [
+    { kind: 'user', uuid: `${spec.sessionId}-user-1`, ts: Date.now() - 600_000, text: spec.userText },
+    {
+      kind: 'assistant',
+      uuid: `${spec.sessionId}-assistant-1`,
+      ts: Date.now() - 540_000,
+      agentName: spec.model === MOCK_MODEL_CODEX ? 'Codex' : 'Claude Code',
+      model: spec.model.displayName,
+      blocks: [{ type: 'text', text: spec.assistantText }],
+    },
+  ];
+}
+
 /** The real Claude Code permission-dialog trio, as the desktop's PTY probe would publish it. */
 const MOCK_PERMISSION_OPTIONS = [
   'Yes',
@@ -78,8 +222,16 @@ function initialTasks(): BoardTaskWire[] {
       id: MOCK_TASK_ID,
       display_id: 1,
       title: 'Streaming mock session',
-      description: 'Served by the in-app mock desktop peer.',
+      // Deliberately long - a design-review stress test for how the body
+      // text truncates against the ticket number, project pill, and PR pill
+      // sharing its rows.
+      description:
+        'Served by the in-app mock desktop peer, streaming a fabricated login-redirect fix through every phase - permission prompts, a follow-up question, and a context-usage bar that climbs as the fake turns pile up.',
       swimlane_id: 'lane-executing',
+      // Executing scales light -> heavy: Codex refactor (lightest, position
+      // 0) first, this one (medium) second, the "full card" (position 2)
+      // last.
+      position: 1,
       session_id: MOCK_SESSION_ID,
       branch_name: 'feature/mock-work',
       labels: ['auth', 'wave-4'],
@@ -105,13 +257,60 @@ function initialTasks(): BoardTaskWire[] {
       title: 'Codex refactor (no structured transcript)',
       description: 'Exercises the chat reading-view fallback.',
       swimlane_id: 'lane-executing',
-      position: 1,
+      position: 0,
       agent: 'codex',
       session_id: MOCK_CODEX_SESSION_ID,
       branch_name: 'feature/codex-refactor',
+      // No labels on this one - exercises the PR pill with nothing else in
+      // the meta row (design-review demo: does the pill still read fine
+      // alone, not just alongside label tags).
+      pr_number: 17,
+      pr_state: 'open',
       created_at: nowIso,
       updated_at: nowIso,
     }),
+    boardTaskFixture({
+      id: MOCK_PAUSED_TASK_ID,
+      display_id: 5,
+      // The "full card": every element the card supports, at once - long
+      // title AND long description (both truncate), a PR (in a state we
+      // haven't shown elsewhere - 'merged', not 'open'), more labels than
+      // the 3-visible cap (exercises the "+N" overflow pill), attachments,
+      // and a priority (inert on the card today, ready for the future
+      // detail-view addition). The single comprehensive stress-test card.
+      title: 'Migrate the legacy push-notification registration pipeline to the new capability-scoped token flow',
+      description:
+        'Replaces the old device-token registration path with the new register-push capability grant, keeping backward compatibility for phones still running the previous protocol version while the rollout completes across both platforms.',
+      swimlane_id: 'lane-executing',
+      position: 2,
+      // A session, not a bodiless board card: Executing implies an agent is
+      // always either running or paused there. Fable 5 - a 4th distinct
+      // model, rounding out Sonnet/Opus/Codex already in use.
+      agent: 'claude',
+      session_id: MOCK_PAUSED_SESSION_ID,
+      branch_name: 'feature/push-token-migration',
+      labels: ['backend', 'notifications', 'migration', 'breaking-change', 'p0'],
+      pr_number: 103,
+      pr_state: 'merged',
+      attachment_count: 3,
+      priority: 2,
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    // Volume for the Thinking section - see MOCK_EXTRA_THINKING_SESSIONS.
+    ...MOCK_EXTRA_THINKING_SESSIONS.map((spec) =>
+      boardTaskFixture({
+        id: spec.taskId,
+        display_id: spec.displayId,
+        title: spec.title,
+        description: spec.assistantText,
+        swimlane_id: spec.swimlaneId,
+        agent: spec.model === MOCK_MODEL_CODEX ? 'codex' : 'claude',
+        session_id: spec.sessionId,
+        created_at: nowIso,
+        updated_at: nowIso,
+      }),
+    ),
   ];
 }
 
@@ -141,12 +340,15 @@ function codexTuiFrame(paintTick: number): string {
 // chip bar and sectioned scroll at true column scale.
 function mockColumns() {
   return [
+    // 'To Do' and 'Done' leave `icon` null to exercise the role-default
+    // fallback (layers / circle-check-big); the rest carry explicit
+    // desktop-picked icons, mirroring a real project's board.
     boardColumnFixture({ id: 'lane-todo', name: 'To Do', role: 'todo', position: 0, color: '#8b949e' }),
-    boardColumnFixture({ id: 'lane-planning', name: 'Planning', role: null, position: 1, color: '#8957e5' }),
-    boardColumnFixture({ id: 'lane-executing', name: 'Executing', role: null, position: 2, color: '#58a6ff' }),
-    boardColumnFixture({ id: 'lane-code-review', name: 'Code Review', role: null, position: 3, color: '#d29922' }),
-    boardColumnFixture({ id: 'lane-testing', name: 'Testing', role: null, position: 4, color: '#39c5cf' }),
-    boardColumnFixture({ id: 'lane-merge', name: 'Merge', role: null, position: 5, color: '#f0883e' }),
+    boardColumnFixture({ id: 'lane-planning', name: 'Planning', role: null, position: 1, color: '#8957e5', icon: 'notebook-pen' }),
+    boardColumnFixture({ id: 'lane-executing', name: 'Executing', role: null, position: 2, color: '#58a6ff', icon: 'square-code' }),
+    boardColumnFixture({ id: 'lane-code-review', name: 'Code Review', role: null, position: 3, color: '#d29922', icon: 'git-pull-request' }),
+    boardColumnFixture({ id: 'lane-testing', name: 'Testing', role: null, position: 4, color: '#39c5cf', icon: 'flask-conical' }),
+    boardColumnFixture({ id: 'lane-merge', name: 'Merge', role: null, position: 5, color: '#f0883e', icon: 'git-merge' }),
     boardColumnFixture({ id: 'lane-done', name: 'Done', role: 'done', position: 6, color: '#3fb950' }),
   ];
 }
@@ -205,6 +407,8 @@ function baseTranscript(): TranscriptEntryWire[] {
       kind: 'assistant',
       uuid: 'mock-assistant-1',
       ts: now - 280000,
+      agentName: 'Claude Code',
+      model: MOCK_MODEL_SONNET.displayName,
       blocks: [
         {
           type: 'text',
@@ -237,6 +441,8 @@ function baseTranscript(): TranscriptEntryWire[] {
       kind: 'assistant',
       uuid: 'mock-assistant-2',
       ts: now - 260000,
+      agentName: 'Claude Code',
+      model: MOCK_MODEL_SONNET.displayName,
       blocks: [{ type: 'tool_use', id: 'mock-tool-tc', name: 'Bash', input: { command: 'npm run typecheck' } }],
     },
     {
@@ -250,6 +456,8 @@ function baseTranscript(): TranscriptEntryWire[] {
       kind: 'assistant',
       uuid: 'mock-assistant-3',
       ts: now - 240000,
+      agentName: 'Claude Code',
+      model: MOCK_MODEL_SONNET.displayName,
       blocks: [{ type: 'tool_use', id: 'mock-tool-vt', name: 'Bash', input: { command: 'npx vitest run tests/unit' } }],
     },
     {
@@ -263,6 +471,8 @@ function baseTranscript(): TranscriptEntryWire[] {
       kind: 'assistant',
       uuid: 'mock-assistant-4',
       ts: now - 220000,
+      agentName: 'Claude Code',
+      model: MOCK_MODEL_SONNET.displayName,
       blocks: [
         {
           type: 'text',
@@ -319,6 +529,14 @@ export function createMockDesktop(): MockDesktop {
   let pendingPromptId: string | null = null;
   let questionRaised = false;
   let entryCounter = 0;
+  // Caps the tick-driven Bash cells specifically (below) - separate from
+  // entryCounter, which also numbers user-sent messages and created tasks
+  // and must keep incrementing for uuid uniqueness regardless of this cap.
+  // Without a cap the mock streamed a new cell every 12 ticks forever, so a
+  // long-running mock session (e.g. left open through an hours-long design
+  // review) grew the transcript - and the Chat lens's rendering work -
+  // without bound.
+  let tickEntryCount = 0;
   let feedTimer: ReturnType<typeof setInterval> | null = null;
   let ptyDimensions = { ...MOCK_DESKTOP_PTY_DIMENSIONS };
   const oneShotTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -369,6 +587,17 @@ export function createMockDesktop(): MockDesktop {
     if (activeSessionId === null) return;
     const reason = state === 'permission' ? { kind: 'permission' as const } : state === 'idle' ? { kind: 'idle' as const } : { kind: 'turn-active' as const };
     emit({ kind: 'activity', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { type: 'activity', state, reason } });
+  }
+
+  /** Grows with feedTick so the board card's context bar visibly advances during a mock session, like a real one. */
+  function emitUsage(): void {
+    if (activeSessionId === null) return;
+    emit({
+      kind: 'activity',
+      sessionId: activeSessionId,
+      taskId: MOCK_TASK_ID,
+      payload: { type: 'usage', usage: mockUsage(42_000 + feedTick * 900, MOCK_MODEL_SONNET) },
+    });
   }
 
   function raisePrompt(promptId: string): void {
@@ -517,7 +746,25 @@ export function createMockDesktop(): MockDesktop {
         taskId: MOCK_TASK_ID,
         payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` },
       });
-      if (feedTick % 12 === 0 && pendingPromptId === null) {
+      if (feedTick % 5 === 0) {
+        // Grows the board card's context bar over the session, like a real
+        // one - not tied to any other cadence, just a steady drip.
+        emitUsage();
+      }
+      if (
+        feedTick === 30 &&
+        ptyDimensions.cols === MOCK_DESKTOP_PTY_DIMENSIONS.cols &&
+        ptyDimensions.rows === MOCK_DESKTOP_PTY_DIMENSIONS.rows
+      ) {
+        // Parity with scripts/stubDesktopPeer.mjs: simulate the desktop user
+        // drag-resizing their pane, so mock mode exercises the phone's
+        // read-only adopt-resize path (it never sends a resize back) the
+        // same way the CLI stub does.
+        ptyDimensions = { cols: 100, rows: 28 };
+        emitPtyResize();
+      }
+      if (feedTick % 12 === 0 && pendingPromptId === null && tickEntryCount < MOCK_MAX_TICK_ENTRIES) {
+        tickEntryCount += 1;
         entryCounter += 1;
         // Varied realistic commands (real sessions never repeat one Bash
         // cell verbatim), mirroring the repo's actual verification loop.
@@ -526,6 +773,8 @@ export function createMockDesktop(): MockDesktop {
           kind: 'assistant',
           uuid: `mock-assistant-tick-${entryCounter}`,
           ts: Date.now(),
+          agentName: 'Claude Code',
+          model: MOCK_MODEL_SONNET.displayName,
           blocks: [
             {
               type: 'tool_use',
@@ -541,6 +790,8 @@ export function createMockDesktop(): MockDesktop {
           kind: 'assistant',
           uuid: 'mock-assistant-permission',
           ts: Date.now(),
+          agentName: 'Claude Code',
+          model: MOCK_MODEL_SONNET.displayName,
           blocks: [{ type: 'tool_use', id: PERMISSION_TOOL_ID, name: 'Bash', input: { command: 'npx jest tests/components' } }],
         });
         raisePrompt(PERMISSION_PROMPT_ID);
@@ -563,6 +814,10 @@ export function createMockDesktop(): MockDesktop {
         columns: mockColumns2(),
         tasks: [...tasks2],
         backlog: [],
+        projectColor: MOCK_PROJECT_2.color,
+        // Exercises the desktop's "hide ticket numbers" layout setting -
+        // Project 1 leaves it at the true default, Project 2 turns it off.
+        showTicketNumbers: false,
       } as unknown as JsonValue;
     }
     return {
@@ -570,6 +825,8 @@ export function createMockDesktop(): MockDesktop {
       columns: mockColumns(),
       tasks: [...tasks],
       backlog: [],
+      projectColor: MOCK_PROJECT.color,
+      showTicketNumbers: true,
     } as unknown as JsonValue;
   }
 
@@ -594,8 +851,53 @@ export function createMockDesktop(): MockDesktop {
         const payload = parseCapabilityRequestPayload('read-stream', request.payload);
         if (payload.action === 'unsubscribe') {
           if (payload.sessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
-          else if (payload.sessionId !== MOCK_IDLE_SESSION_ID) streamSubscribed = false;
+          else if (
+            payload.sessionId !== MOCK_IDLE_SESSION_ID &&
+            payload.sessionId !== MOCK_PAUSED_SESSION_ID &&
+            !MOCK_EXTRA_THINKING_SESSIONS.some((spec) => spec.sessionId === payload.sessionId)
+          ) {
+            streamSubscribed = false;
+          }
           return ok(request);
+        }
+        const extraThinkingSpec = MOCK_EXTRA_THINKING_SESSIONS.find((spec) => spec.sessionId === payload.sessionId);
+        if (extraThinkingSpec) {
+          if (payload.action === 'transcript-window') {
+            const entries = extraThinkingTranscript(extraThinkingSpec);
+            return ok(request, { revision: 1, totalEntries: entries.length, startIndex: 0, entries } as unknown as JsonValue);
+          }
+          return ok(request, extraThinkingSnapshot(extraThinkingSpec) as unknown as JsonValue);
+        }
+        if (payload.sessionId === MOCK_PAUSED_SESSION_ID) {
+          // "Paused": the protocol has no paused ActivityStateWire, so this
+          // reports 'idle' (the closest real state) and communicates
+          // "paused" only through the transcript/scrollback text. Static
+          // like the idle session - nothing ever streams from it.
+          if (payload.action === 'transcript-window') {
+            const pausedTranscript: TranscriptEntryWire[] = [
+              { kind: 'user', uuid: 'mock-paused-user-1', ts: Date.now() - 900_000, text: 'Pause here - I want to review the token schema before you continue.' },
+              {
+                kind: 'assistant',
+                uuid: 'mock-paused-assistant-1',
+                ts: Date.now() - 840_000,
+                blocks: [{ type: 'text', text: 'Paused midway through the migration, right before the token-schema change - resume from the terminal when ready.' }],
+              },
+            ];
+            return ok(request, {
+              revision: 1,
+              totalEntries: pausedTranscript.length,
+              startIndex: 0,
+              entries: pausedTranscript,
+            } as unknown as JsonValue);
+          }
+          const pausedSnapshot: ReadStreamResponsePayload = {
+            scrollback: 'push-token migration worktree\r\n$ claude\r\n> Paused - resume from the terminal when ready.\r\n',
+            activity: { state: 'idle', reason: { kind: 'idle' } },
+            usage: mockUsage(61_000, MOCK_MODEL_FABLE),
+            awaitedPromptId: null,
+            ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+          };
+          return ok(request, pausedSnapshot as unknown as JsonValue);
         }
         if (payload.sessionId === MOCK_IDLE_SESSION_ID) {
           // A finished, quiet session: static scrollback, idle activity, a
@@ -620,7 +922,7 @@ export function createMockDesktop(): MockDesktop {
           const idleSnapshot: ReadStreamResponsePayload = {
             scrollback: 'relay perf worktree\r\n$ claude\r\n> Load-test summary written. Session is idle.\r\n',
             activity: { state: 'idle', reason: { kind: 'idle' } },
-            usage: null,
+            usage: mockUsage(28_000, MOCK_MODEL_OPUS),
             awaitedPromptId: null,
             ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
           };
@@ -637,7 +939,7 @@ export function createMockDesktop(): MockDesktop {
           const codexSnapshot: ReadStreamResponsePayload = {
             scrollback: codexTuiFrame(0),
             activity: { state: 'thinking', reason: { kind: 'turn-active' } },
-            usage: null,
+            usage: mockUsage(15_000, MOCK_MODEL_CODEX),
             awaitedPromptId: null,
             ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
           };
@@ -662,7 +964,7 @@ export function createMockDesktop(): MockDesktop {
         const snapshot: ReadStreamResponsePayload = {
           scrollback: 'kangentic mock desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n',
           activity: pendingPromptId ? { state: 'permission', reason: { kind: 'permission' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
-          usage: null,
+          usage: mockUsage(42_000 + feedTick * 900, MOCK_MODEL_SONNET),
           awaitedPromptId: pendingPromptId,
           awaitedPromptOptions: pendingPromptId === PERMISSION_PROMPT_ID ? MOCK_PERMISSION_OPTIONS : null,
           ptyDimensions: { ...ptyDimensions },

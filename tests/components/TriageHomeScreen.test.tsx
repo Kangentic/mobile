@@ -5,6 +5,7 @@ import { TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
+import { boardSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -29,6 +30,7 @@ function seedStores(): void {
   useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true });
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
+    hasHydratedSnapshot: true,
     boardsByProjectId: {
       'project-1': {
         columns: [],
@@ -110,13 +112,52 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByText('Waiting for your approval')).toBeNull();
     expect(screen.queryByTestId('permission-approve')).toBeNull();
     expect(screen.queryByText('Review and approve')).toBeNull();
-    expect(screen.getByTestId('activity-row-sess-1-time')).toBeTruthy();
 
     fireEvent.press(screen.getByTestId('activity-row-sess-1'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/task/[taskId]',
       params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1', mode: 'chat' },
     });
+  });
+
+  it('renders board-card parity (project name, no ticket number) and the context-usage bar', () => {
+    renderHome();
+    // The project name shares the title row as quiet muted text.
+    expect(screen.getByTestId('activity-row-sess-1-project')).toBeTruthy();
+    expect(screen.getByText('Alpha')).toBeTruthy();
+    // No ticket number here: a triage feed cares about status/title/last
+    // message/recency, not the ticket ID - the board is that view.
+    expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
+    // No usage yet: the bar stays hidden rather than showing an untrusted 0%.
+    expect(screen.queryByTestId('activity-row-sess-1-usage')).toBeNull();
+
+    act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: {
+          type: 'usage',
+          usage: {
+            contextWindow: { usedPercentage: 47, usedTokens: 94000, cacheTokens: 0, totalInputTokens: 94000, totalOutputTokens: 4000, contextWindowSize: 200000 },
+            cost: { totalCostUsd: 2.5, totalDurationMs: 120000 },
+            model: { id: 'claude-sonnet-5', displayName: 'Sonnet 5' },
+          },
+        },
+      });
+    });
+    expect(screen.getByTestId('activity-row-sess-1-usage')).toBeTruthy();
+    expect(screen.getByText('Sonnet 5')).toBeTruthy();
+    expect(screen.getByText('47%')).toBeTruthy();
+  });
+
+  it('falls back to a minimal card when a session outlives its board task entry', () => {
+    useBoardStore.setState((state) => ({
+      boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...state.boardsByProjectId['project-1'], tasksById: {} } },
+    }));
+    renderHome();
+    expect(screen.getByText('Untitled task')).toBeTruthy();
+    expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
   });
 
   it('reacts to store changes (a session moving sections re-renders)', () => {
@@ -147,6 +188,23 @@ describe('TriageHomeScreen', () => {
     renderHome();
     expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
     expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
+  });
+
+  it('stays on Connecting (not a flash of All quiet) once established but before the first board snapshot lands', () => {
+    // The exact bootstrap-ordering window: channel-established flips true
+    // before any board snapshot has arrived, so hasHydratedSnapshot is
+    // still false even though established is already true.
+    useActivityStore.getState().reset();
+    useBoardStore.setState({ hasHydratedSnapshot: false });
+    renderHome();
+    expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
+    expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
+
+    act(() => {
+      useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', columns: [], tasks: [] }));
+    });
+    expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
+    expect(screen.queryByTestId('connecting-empty-state')).toBeNull();
   });
 
   it('shows the pairing CTA when unpaired', () => {

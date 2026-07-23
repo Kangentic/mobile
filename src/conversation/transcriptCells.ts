@@ -33,10 +33,31 @@ export interface ToolCallResult {
   isError: boolean;
 }
 
+/**
+ * A shared header (role badge, model, sent time) for the whole turn - only
+ * populated on the turn's first/solo cell (every user turn is solo). A turn
+ * is one user entry or the run of visible blocks from one assistant entry,
+ * so a multi-block assistant turn (text + several tool calls) reads as ONE
+ * bordered card with the header on top, not one card per block. `agentName`
+ * and `model` are null on a user turn - the header renders a fixed "You"
+ * badge instead.
+ */
+export interface TurnHeaderInfo {
+  agentName: string | null;
+  model: string | null;
+  ts: number;
+}
+
+export interface TurnMeta {
+  role: 'user' | 'assistant';
+  position: 'solo' | 'first' | 'middle' | 'last';
+  header?: TurnHeaderInfo;
+}
+
 export type ConversationCell =
-  | { kind: 'user-message'; key: string; entry: UserEntryWire }
-  | { kind: 'markdown'; key: string; entryUuid: string; text: string }
-  | { kind: 'thinking'; key: string; entryUuid: string; text: string }
+  | { kind: 'user-message'; key: string; entry: UserEntryWire; turn: TurnMeta }
+  | { kind: 'markdown'; key: string; entryUuid: string; text: string; turn: TurnMeta }
+  | { kind: 'thinking'; key: string; entryUuid: string; text: string; turn: TurnMeta }
   | {
       kind: 'tool-call';
       key: string;
@@ -45,12 +66,21 @@ export type ConversationCell =
       toolName: string;
       input: JsonValue;
       result: ToolCallResult | null;
+      turn: TurnMeta;
     }
   | { kind: 'tool-result-orphan'; key: string; content: string; isError: boolean }
   | { kind: 'system-divider'; key: string; subtype: TranscriptSystemSubtypeWire; text: string }
   | { kind: 'live-tail'; key: 'live-tail'; lines: string[] }
   | { kind: 'permission-prompt'; key: string; prompt: PendingPromptDescriptor }
   | { kind: 'ask-user-question'; key: string; prompt: PendingPromptDescriptor };
+
+/** Only a multi-block turn needs first/middle/last; a single visible block is always `solo`. */
+function turnPositionFor(index: number, length: number): TurnMeta['position'] {
+  if (length <= 1) return 'solo';
+  if (index === 0) return 'first';
+  if (index === length - 1) return 'last';
+  return 'middle';
+}
 
 export interface BuildConversationCellsOptions {
   liveTailLines: string[] | null;
@@ -108,10 +138,32 @@ export function buildConversationCells(
     const entry = entries[entryIndex];
     switch (entry.kind) {
       case 'user': {
-        cells.push({ kind: 'user-message', key: entry.uuid, entry });
+        cells.push({
+          kind: 'user-message',
+          key: entry.uuid,
+          entry,
+          turn: { role: 'user', position: 'solo', header: { agentName: null, model: null, ts: entry.ts } },
+        });
         break;
       }
       case 'assistant': {
+        // Two passes: first collect the entry's VISIBLE blocks (skipping
+        // empty text/thinking and the awaited-pending tool_use, same as
+        // before), then assign first/middle/last from that visible list so
+        // the whole run renders as one bordered turn card, not one per block.
+        type AssistantBlockDraft =
+          | { kind: 'markdown'; key: string; entryUuid: string; text: string }
+          | { kind: 'thinking'; key: string; entryUuid: string; text: string }
+          | {
+              kind: 'tool-call';
+              key: string;
+              entryUuid: string;
+              toolUseId: string;
+              toolName: string;
+              input: JsonValue;
+              result: ToolCallResult | null;
+            };
+        const drafts: AssistantBlockDraft[] = [];
         for (let blockIndex = 0; blockIndex < entry.blocks.length; blockIndex++) {
           const block = entry.blocks[blockIndex];
           // Keys use the ORIGINAL block index so skipping empty blocks never
@@ -121,14 +173,24 @@ export function buildConversationCells(
             if (block.text.trim().length === 0) {
               continue;
             }
-            cells.push({ kind: 'markdown', key: blockKey, entryUuid: entry.uuid, text: block.text });
+            drafts.push({ kind: 'markdown', key: blockKey, entryUuid: entry.uuid, text: block.text });
           } else if (block.type === 'thinking') {
             if (block.text.trim().length === 0) {
               continue;
             }
-            cells.push({ kind: 'thinking', key: blockKey, entryUuid: entry.uuid, text: block.text });
+            drafts.push({ kind: 'thinking', key: blockKey, entryUuid: entry.uuid, text: block.text });
           } else {
-            cells.push({
+            // The awaited tool_use lands in the transcript before the prompt
+            // is raised (so the prompt card can show the exact command) -
+            // suppress its plain tool-call cell while the prompt is pending,
+            // or it renders twice: once as a normal call, once as the
+            // prompt card. Once answered, pendingPrompt goes null and this
+            // same cell reappears with its result (the natural consequence
+            // of keying on the live pending prompt, not a special case).
+            if (options.pendingPrompt !== null && options.pendingPrompt.toolUseId === block.id) {
+              continue;
+            }
+            drafts.push({
               kind: 'tool-call',
               key: blockKey,
               entryUuid: entry.uuid,
@@ -138,6 +200,18 @@ export function buildConversationCells(
               result: findResultAfter(block.id, entryIndex),
             });
           }
+        }
+        for (let draftIndex = 0; draftIndex < drafts.length; draftIndex++) {
+          const position = turnPositionFor(draftIndex, drafts.length);
+          const turn: TurnMeta =
+            draftIndex === 0
+              ? {
+                  role: 'assistant',
+                  position,
+                  header: { agentName: entry.agentName ?? null, model: entry.model ?? null, ts: entry.ts },
+                }
+              : { role: 'assistant', position };
+          cells.push({ ...drafts[draftIndex], turn });
         }
         break;
       }

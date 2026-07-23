@@ -3,7 +3,9 @@ import { RefreshControl, StyleSheet, View } from 'react-native';
 import Animated, { ReduceMotion, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
-import { AgentStatusIcon, AppHeader, Screen, Card, ConnectionBanner, EmptyState, Icon, Row, Stack, Text, Badge, Button, SectionHeader, useTheme } from '@/components';
+import type { BoardTaskWire } from '@kangentic/protocol';
+import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, SectionHeader, useTheme } from '@/components';
+import { TaskCard } from '@/components/board/TaskCard';
 import {
   selectTriageRows,
   sectionForEntry,
@@ -13,13 +15,44 @@ import {
 } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { peekAwaitedPrompt, peekLastAssistantMessage, peekLastTerminalLine, refreshSnapshots } from '@/connection/actions';
 import { buildPendingPromptSummary } from '@/conversation/pendingPromptSummary';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
 
+/**
+ * A session can briefly outlive its task's board entry (e.g. a snapshot
+ * race on cold start), so a located-but-absent task falls back to this
+ * minimal stand-in rather than crashing the shared TaskCard.
+ */
+function fallbackTask(entry: SessionActivityEntry): BoardTaskWire {
+  return {
+    id: entry.taskId,
+    display_id: 0,
+    title: 'Untitled task',
+    description: '',
+    swimlane_id: '',
+    position: 0,
+    agent: null,
+    session_id: entry.sessionId,
+    worktree_path: null,
+    branch_name: null,
+    pr_number: null,
+    pr_url: null,
+    pr_state: null,
+    base_branch: null,
+    labels: [],
+    priority: 0,
+    attachment_count: 0,
+    archived_at: null,
+    created_at: '',
+    updated_at: '',
+  };
+}
+
 type TriageListRow =
-  | { kind: 'section-header'; section: TriageSection; title: string }
+  | { kind: 'section-header'; section: TriageSection; title: string; count: number }
   | { kind: 'activity'; entry: SessionActivityEntry };
 
 // Kangentic's Thinking/Idle is TURN-based, not presence-based (desktop
@@ -35,34 +68,26 @@ const SECTION_TITLES: Record<TriageSection, string> = {
   working: 'Thinking',
 };
 
-/** Inbox recency, long form: 'just now', then minutes/hours/days ago. */
-function relativeTimeLabel(epochMs: number, nowMs: number): string {
-  const elapsedMs = Math.max(0, nowMs - epochMs);
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ago`;
-  const days = Math.floor(hours / 24);
-  return days === 1 ? '1 day ago' : `${days} days ago`;
-}
-
 export function TriageHomeScreen(): React.JSX.Element {
   const theme = useTheme();
   const bySessionId = useActivityStore((state) => state.bySessionId);
   const pairedState = useChannelStore((state) => state.pairedState);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Recency labels tick once a minute (Date.now is impure in render, so
-  // the clock lives in state and updates from the interval callback).
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const ticker = setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => clearInterval(ticker);
-  }, []);
+  const collapsedTriageSection = useSettingsStore((state) => state.collapsedTriageSection);
 
   const rows = useMemo<TriageListRow[]>(() => {
     const sections = selectTriageRows({ bySessionId });
+    // Total per TITLE first (needs-you + idle share the "Idle" title), so
+    // the header shows the right count even when only one of the two
+    // sections underneath it has entries.
+    const countByTitle = new Map<string, number>();
+    for (const sectionKind of SECTION_ORDER) {
+      const section = sections.find((candidate) => candidate.section === sectionKind);
+      if (!section) continue;
+      const title = SECTION_TITLES[sectionKind];
+      countByTitle.set(title, (countByTitle.get(title) ?? 0) + section.entries.length);
+    }
     const listRows: TriageListRow[] = [];
     const emittedTitles = new Set<string>();
     for (const sectionKind of SECTION_ORDER) {
@@ -74,12 +99,17 @@ export function TriageHomeScreen(): React.JSX.Element {
       const title = SECTION_TITLES[section.section];
       if (!emittedTitles.has(title)) {
         emittedTitles.add(title);
-        listRows.push({ kind: 'section-header', section: section.section, title });
+        listRows.push({ kind: 'section-header', section: section.section, title, count: countByTitle.get(title) ?? 0 });
       }
+      // The header row always renders (so it stays tappable to re-expand);
+      // a collapsed title just skips the rows underneath it. No exception
+      // for needs-you - a user may want to defer even a pending prompt
+      // until they're back at their desk.
+      if (collapsedTriageSection === title) continue;
       for (const entry of section.entries) listRows.push({ kind: 'activity', entry });
     }
     return listRows;
-  }, [bySessionId]);
+  }, [bySessionId, collapsedTriageSection]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -89,6 +119,11 @@ export function TriageHomeScreen(): React.JSX.Element {
   }, []);
 
   const established = useChannelStore((state) => state.established);
+  // Gates "All quiet" on real data, not just channel-up: `established` flips
+  // true before the first board snapshot lands (bootstrap runs after
+  // establishment), so without this the empty feed briefly reads "All
+  // quiet" on cold start before the desktop's actual sessions populate it.
+  const hasHydratedSnapshot = useBoardStore((state) => state.hasHydratedSnapshot);
 
   if (pairedState === 'unpaired') {
     return (
@@ -99,7 +134,7 @@ export function TriageHomeScreen(): React.JSX.Element {
     );
   }
 
-  if (rows.length === 0 && established) {
+  if (rows.length === 0 && established && hasHydratedSnapshot) {
     return (
       <Screen edges={['left', 'right']}>
         <AppHeader title="Agents" />
@@ -143,10 +178,16 @@ export function TriageHomeScreen(): React.JSX.Element {
         getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : 'activity')}
         renderItem={({ item }) =>
           item.kind === 'section-header' ? (
-            <SectionHeader title={item.title} testID={`section-header-${item.section}`} />
+            <SectionHeader
+              title={item.title}
+              testID={`section-header-${item.section}`}
+              count={item.count}
+              collapsed={collapsedTriageSection === item.title}
+              onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}
+            />
           ) : (
             <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-              <ActivityRow entry={item.entry} nowMs={nowMs} />
+              <ActivityRow entry={item.entry} />
             </View>
           )
         }
@@ -170,9 +211,6 @@ function UnpairedEmptyState(): React.JSX.Element {
   );
 }
 
-/** Title-row height: fits the pills/badges so their arrival never reflows. */
-const ROW_TITLE_MIN_HEIGHT = 24;
-
 /** How long a row waits before retrying a failed snippet peek. */
 const SNIPPET_PEEK_RETRY_MS = 6000;
 
@@ -195,19 +233,22 @@ const SECTION_PULSE_WINDOW_MS = 3000;
 const SECTION_PULSE_MAX_OPACITY = 0.16;
 const SECTION_PULSE_FADE_MS = 700;
 
-const ActivityRow = React.memo(function ActivityRow({
-  entry,
-  nowMs,
-}: {
-  entry: SessionActivityEntry;
-  nowMs: number;
-}): React.JSX.Element {
+const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionActivityEntry }): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
-  const taskTitle = useBoardStore((state) => {
-    const board = state.boardsByProjectId[entry.projectId];
-    return board?.tasksById[entry.taskId]?.title ?? null;
-  });
+  // The full task (not just title): the Agents feed renders the EXACT SAME
+  // card as the board - labels, PR, attachments, usage bar - via the same
+  // shared TaskCard, plus the project name sharing the title row (the
+  // board's only structural addition). The ticket number is the one
+  // deliberate exception: a triage feed cares about status/title/last
+  // message, not the ticket ID, so it is always off here regardless of the
+  // board's own showTicketNumbers setting (the board is the ticket-reference
+  // view). That also keeps the fallback stand-in's placeholder display_id
+  // off screen. A session can outlive its task's board entry briefly (e.g. a
+  // snapshot race), so a located-but-absent task falls back to that minimal
+  // stand-in rather than crashing.
+  const locatedTask = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.tasksById[entry.taskId] ?? null);
+  const task = locatedTask ?? fallbackTask(entry);
   const projectName = useBoardStore(
     (state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null,
   );
@@ -306,60 +347,31 @@ const ActivityRow = React.memo(function ActivityRow({
   }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce, snippetFreshnessMs]);
 
   // No status filler ("Thinking", "Waiting for..."): the section header
-  // and the icon already say the state. The row is title + project pill +
-  // a two-line last-message snippet + recency.
-  //
-  // PREDICTABLE GEOMETRY: the snippet always renders (one reserved line
-  // minimum, flexing to two when the message needs it) and the title row
-  // has a constant min-height that fits the pills, so an async update
-  // adjusts a card at most once - and never collapses a slot a thumb is
-  // heading for.
+  // and the icon already say the state. PREDICTABLE GEOMETRY: the snippet
+  // always renders (one reserved line minimum, flexing to two when the
+  // message needs it), so an async update adjusts a card at most once -
+  // and never collapses a slot a thumb is heading for.
   const snippetLineHeight = theme.typography.caption.lineHeight;
+  const testID = `activity-row-${entry.sessionId}`;
   return (
-    <Card testID={`activity-row-${entry.sessionId}`} onPress={openTask}>
-      <Animated.View
-        pointerEvents="none"
-        testID={`activity-row-${entry.sessionId}-pulse`}
-        style={[
-          styles.pulseOverlay,
-          { backgroundColor: theme.colors.accent, borderRadius: theme.radii.md },
-          pulseStyle,
-        ]}
-      />
-      <Stack gap="xs">
-        <Row gap="sm" style={[styles.spaceBetween, { minHeight: ROW_TITLE_MIN_HEIGHT }]}>
-          <AgentStatusIcon kind={statusKind} testID={`activity-row-${entry.sessionId}-status`} />
-          <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
-            {taskTitle ?? 'Untitled task'}
-          </Text>
-          {/* No unread counter: activity volume while working is noise, and
-              the snippet already carries what happened. */}
-          {projectName ? <Badge label={projectName} color="primary" outlined /> : null}
-        </Row>
-        <Text
-          variant="caption"
-          color="muted"
-          numberOfLines={2}
-          style={{ minHeight: snippetLineHeight }}
-          testID={`activity-row-${entry.sessionId}-snippet`}
-        >
-          {snippet ?? ''}
-        </Text>
-        {/* The utility strip: separated from content by a hairline. */}
-        <Row
-          gap="sm"
-          style={[
-            styles.timeRow,
-            { borderTopColor: theme.colors.border, paddingTop: theme.spacing.sm, marginTop: theme.spacing.xs },
-          ]}
-        >
-          <Text variant="caption" color="muted" style={styles.flex} testID={`activity-row-${entry.sessionId}-time`}>
-            {relativeTimeLabel(entry.lastEventAt, nowMs)}
-          </Text>
-          <Icon name="chevron-forward" color="muted" size={14} />
-        </Row>
-      </Stack>
-    </Card>
+    <TaskCard
+      testID={testID}
+      task={task}
+      statusKind={statusKind}
+      showTicketNumbers={false}
+      usage={entry.usage}
+      projectName={projectName}
+      bodyText={snippet ?? ''}
+      bodyMinHeight={snippetLineHeight}
+      onPress={openTask}
+      overlay={
+        <Animated.View
+          pointerEvents="none"
+          testID={`${testID}-pulse`}
+          style={[styles.pulseOverlay, { backgroundColor: theme.colors.accent, borderRadius: theme.radii.md }, pulseStyle]}
+        />
+      }
+    />
   );
 });
 
@@ -370,15 +382,5 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
     top: 0,
-  },
-  spaceBetween: {
-    justifyContent: 'space-between',
-  },
-  timeRow: {
-    alignItems: 'center',
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  flex: {
-    flex: 1,
   },
 });
