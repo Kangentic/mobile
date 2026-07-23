@@ -5,6 +5,7 @@ import { ThemeProvider } from '@/components';
 import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCard';
 import { answerPermissionPrompt } from '@/connection/actions';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 
 jest.mock('@/connection/actions', () => ({
   answerPermissionPrompt: jest.fn(),
@@ -55,6 +56,7 @@ describe('AskUserQuestionCard', () => {
     mockAnswerPermissionPrompt.mockReset();
     mockAnswerPermissionPrompt.mockResolvedValue(undefined);
     mockImpactAsync.mockClear();
+    useTerminalUiStore.setState({ requestedModeBySessionId: {}, focusKeyboardRequestBySessionId: {} });
   });
 
   it('renders the first question with its header and options', () => {
@@ -114,5 +116,16 @@ describe('AskUserQuestionCard', () => {
       },
     });
     expect(screen.getByText('More questions follow on the desktop after this one')).toBeTruthy();
+  });
+
+  it('"Type your own answer..." flips the lens and requests keyboard focus, sending no keystrokes', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('ask-answer-in-terminal'));
+
+    expect(useTerminalUiStore.getState().requestedModeBySessionId['sess-1']).toBe('terminal');
+    expect(useTerminalUiStore.getState().focusKeyboardRequestBySessionId['sess-1']).toBe(true);
+    // The invariant: free text is NEVER sent as a keystroke into the
+    // numbered select.
+    expect(mockAnswerPermissionPrompt).not.toHaveBeenCalled();
   });
 });

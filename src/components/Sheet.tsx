@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Animated, { FadeOut, ReduceMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from './theme/ThemeProvider';
@@ -20,6 +20,14 @@ export interface SheetProps {
  * the last exit frames are never clipped by the Modal teardown.
  */
 const EXIT_UNMOUNT_GRACE_MS = 80;
+
+/**
+ * The sheet never grows past this fraction of the screen. Exported so a
+ * sheet with its own internally-scrolling element (e.g. CreateTaskSheet's
+ * description field) can size that element to fill the same budget, rather
+ * than hardcoding a second, possibly-drifting copy of this number.
+ */
+export const SHEET_MAX_HEIGHT_FRACTION = 0.75;
 
 /**
  * Bottom sheet on a transparent RN Modal: a fading dimmed backdrop that
@@ -44,7 +52,20 @@ export function Sheet({ visible, onClose, testID, title, children }: SheetProps)
   }
 
   return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+    <Modal
+      visible
+      transparent
+      animationType="none"
+      onRequestClose={onClose}
+      // Android's Dialog-backed Modal otherwise stops short of the app's own
+      // edge-to-edge chrome (the custom tab bar), leaving it visible and
+      // tappable beneath the sheet - these draw the dialog window fully
+      // edge-to-edge so the backdrop and sheet genuinely cover it, matching
+      // a native drawer. The sheet's own content still respects the real
+      // safe-area inset via `insets.bottom` below.
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <View style={styles.overlay}>
         {visible ? (
           <Animated.View
@@ -67,16 +88,35 @@ export function Sheet({ visible, onClose, testID, title, children }: SheetProps)
             entering={motionPresets.sheetSlideIn}
             exiting={motionPresets.sheetSlideOut}
             style={{
+              // Capped so unbounded content (a long typed description, a
+              // long project/column list) scrolls internally instead of
+              // pushing the sheet - and whatever's at its bottom, like a
+              // submit button - off the edge of the screen entirely.
+              maxHeight: `${SHEET_MAX_HEIGHT_FRACTION * 100}%`,
               backgroundColor: theme.colors.surfaceOverlay,
               borderTopLeftRadius: theme.radii.lg,
               borderTopRightRadius: theme.radii.lg,
-              padding: theme.spacing.lg,
+              paddingTop: theme.spacing.lg,
               paddingBottom: theme.spacing.lg + insets.bottom,
-              gap: theme.spacing.md,
             }}
           >
-            {title !== undefined && <Text variant="title">{title}</Text>}
-            {children}
+            {title !== undefined ? (
+              <Text variant="title" style={{ paddingHorizontal: theme.spacing.lg, marginBottom: theme.spacing.md }}>
+                {title}
+              </Text>
+            ) : null}
+            <ScrollView
+              // flexShrink (not flex/flexGrow): a short sheet still sizes
+              // snugly to its content; only once the content would exceed
+              // the SHEET_MAX_HEIGHT_FRACTION cap does this shrink to the
+              // available space and start scrolling internally instead of
+              // pushing past it.
+              style={styles.scrollShrink}
+              contentContainerStyle={{ paddingHorizontal: theme.spacing.lg, gap: theme.spacing.md }}
+              keyboardShouldPersistTaps="handled"
+            >
+              {children}
+            </ScrollView>
           </Animated.View>
         ) : null}
       </View>
@@ -88,5 +128,8 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',
+  },
+  scrollShrink: {
+    flexShrink: 1,
   },
 });

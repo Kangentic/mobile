@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
 import { Text, useTheme } from '@/components';
 import type { ConversationCell } from '@/conversation/transcriptCells';
+import { TurnFrame } from './TurnFrame';
 
 type ThinkingCellModel = Extract<ConversationCell, { kind: 'thinking' }>;
 
@@ -12,6 +13,8 @@ export interface ThinkingCellProps {
 /**
  * An assistant thinking block, collapsed by default to a single dim italic
  * caption line; tapping the 44pt row toggles the full text at caption size.
+ * No inner box (matches the desktop's left-rule-only treatment) - it just
+ * flows inside the turn's shared card like a bare text block.
  */
 export function ThinkingCell({ cell }: ThinkingCellProps): React.JSX.Element {
   const theme = useTheme();
@@ -24,7 +27,7 @@ export function ThinkingCell({ cell }: ThinkingCellProps): React.JSX.Element {
   }
 
   return (
-    <View style={{ paddingHorizontal: theme.spacing.md }}>
+    <TurnFrame turn={cell.turn}>
       <Pressable
         accessibilityRole="button"
         testID={`thinking-toggle-${cell.key.replace(/:/g, '-')}`}
@@ -36,11 +39,11 @@ export function ThinkingCell({ cell }: ThinkingCellProps): React.JSX.Element {
         </Text>
       </Pressable>
       {expanded ? (
-        <Text variant="caption" color="secondary" style={{ paddingBottom: theme.spacing.sm }}>
+        <Text variant="caption" color="secondary">
           {cell.text}
         </Text>
       ) : null}
-    </View>
+    </TurnFrame>
   );
 }
 

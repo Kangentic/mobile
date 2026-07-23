@@ -14,9 +14,19 @@ interface TerminalUiStoreState {
    * SessionScreen consumes and clears it.
    */
   requestedModeBySessionId: Record<string, 'terminal' | 'chat'>;
+  /**
+   * A one-shot request to raise the OS keyboard once the terminal lens is
+   * visible and ready, raised alongside a `requestSessionMode('terminal')`
+   * from the escape hatch only - never set on a manual lens toggle, so
+   * switching to Terminal by hand never pops the keyboard. TerminalPane
+   * consumes and clears it once it can actually focus (pane active and the
+   * WebView ready).
+   */
+  focusKeyboardRequestBySessionId: Record<string, boolean>;
   setApplicationCursorMode: (sessionId: string, enabled: boolean) => void;
-  requestSessionMode: (sessionId: string, mode: 'terminal' | 'chat') => void;
+  requestSessionMode: (sessionId: string, mode: 'terminal' | 'chat', options?: { focusKeyboard?: boolean }) => void;
   consumeRequestedMode: (sessionId: string) => void;
+  consumeFocusKeyboardRequest: (sessionId: string) => void;
   clearSession: (sessionId: string) => void;
 }
 
@@ -28,6 +38,7 @@ interface TerminalUiStoreState {
 export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
   applicationCursorModeBySessionId: {},
   requestedModeBySessionId: {},
+  focusKeyboardRequestBySessionId: {},
 
   setApplicationCursorMode: (sessionId, enabled) =>
     set((state) => {
@@ -37,9 +48,12 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
       };
     }),
 
-  requestSessionMode: (sessionId, mode) =>
+  requestSessionMode: (sessionId, mode, options) =>
     set((state) => ({
       requestedModeBySessionId: { ...state.requestedModeBySessionId, [sessionId]: mode },
+      focusKeyboardRequestBySessionId: options?.focusKeyboard
+        ? { ...state.focusKeyboardRequestBySessionId, [sessionId]: true }
+        : state.focusKeyboardRequestBySessionId,
     })),
 
   consumeRequestedMode: (sessionId) =>
@@ -50,15 +64,30 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
       return { requestedModeBySessionId: next };
     }),
 
+  consumeFocusKeyboardRequest: (sessionId) =>
+    set((state) => {
+      if (!(sessionId in state.focusKeyboardRequestBySessionId)) return state;
+      const next = { ...state.focusKeyboardRequestBySessionId };
+      delete next[sessionId];
+      return { focusKeyboardRequestBySessionId: next };
+    }),
+
   clearSession: (sessionId) =>
     set((state) => {
       const hasCursorMode = sessionId in state.applicationCursorModeBySessionId;
       const hasRequestedMode = sessionId in state.requestedModeBySessionId;
-      if (!hasCursorMode && !hasRequestedMode) return state;
+      const hasFocusRequest = sessionId in state.focusKeyboardRequestBySessionId;
+      if (!hasCursorMode && !hasRequestedMode && !hasFocusRequest) return state;
       const nextCursorModes = { ...state.applicationCursorModeBySessionId };
       delete nextCursorModes[sessionId];
       const nextRequestedModes = { ...state.requestedModeBySessionId };
       delete nextRequestedModes[sessionId];
-      return { applicationCursorModeBySessionId: nextCursorModes, requestedModeBySessionId: nextRequestedModes };
+      const nextFocusRequests = { ...state.focusKeyboardRequestBySessionId };
+      delete nextFocusRequests[sessionId];
+      return {
+        applicationCursorModeBySessionId: nextCursorModes,
+        requestedModeBySessionId: nextRequestedModes,
+        focusKeyboardRequestBySessionId: nextFocusRequests,
+      };
     }),
 }));

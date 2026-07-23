@@ -72,14 +72,14 @@ export function TaskActionsSheet({
         />
         <ActionRow
           label="Edit task"
-          iconName="create-outline"
+          iconName="create"
           onPress={onEdit}
           disabled={actionInFlight}
           testID="task-action-edit"
         />
         <ActionRow
           label="Archive (move to Done)"
-          iconName="archive-outline"
+          iconName="archive"
           onPress={onArchive}
           disabled={actionInFlight || !archiveAvailable}
           caption={archiveAvailable ? null : 'No Done column on this board'}
@@ -87,7 +87,7 @@ export function TaskActionsSheet({
         />
         <ActionRow
           label={deleteArmed ? 'Tap again to delete' : 'Delete task'}
-          iconName="trash-outline"
+          iconName="trash"
           color="danger"
           onPress={onDeletePress}
           disabled={actionInFlight}

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { PixelRatio, StyleSheet, View } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import {
   OVERSEER_GRID_COLUMNS,
@@ -106,19 +106,32 @@ export function Overseer({ size, animate = 'none', testID = 'overseer' }: Overse
 
   const rectViews = useMemo(
     () =>
-      overseerFrames[frameName].map((rect, rectIndex) => (
-        <View
-          key={`${frameName}-${rectIndex}`}
-          style={{
-            position: 'absolute',
-            left: rect.x * pixelScale,
-            top: rect.y * pixelScale,
-            width: rect.width * pixelScale,
-            height: rect.height * pixelScale,
-            backgroundColor: colorForRole(rect.role, theme.brand),
-          }}
-        />
-      )),
+      overseerFrames[frameName].map((rect, rectIndex) => {
+        // Round each EDGE (not width/height independently) to the nearest
+        // physical pixel. Two rects sharing a grid boundary compute the same
+        // edge from the same input, so they land on the identical physical
+        // pixel and abut exactly - fixing the hairline seams that show the
+        // background through between adjacent rows/columns (most visible at
+        // the head's stacked single-rect rows and the multi-rect eye/feet
+        // rows) when the device's pixel ratio doesn't divide evenly.
+        const left = PixelRatio.roundToNearestPixel(rect.x * pixelScale);
+        const top = PixelRatio.roundToNearestPixel(rect.y * pixelScale);
+        const right = PixelRatio.roundToNearestPixel((rect.x + rect.width) * pixelScale);
+        const bottom = PixelRatio.roundToNearestPixel((rect.y + rect.height) * pixelScale);
+        return (
+          <View
+            key={`${frameName}-${rectIndex}`}
+            style={{
+              position: 'absolute',
+              left,
+              top,
+              width: right - left,
+              height: bottom - top,
+              backgroundColor: colorForRole(rect.role, theme.brand),
+            }}
+          />
+        );
+      }),
     [frameName, pixelScale, theme.brand],
   );
 

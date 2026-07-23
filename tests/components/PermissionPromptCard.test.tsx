@@ -5,6 +5,7 @@ import { ThemeProvider } from '@/components';
 import { PermissionPromptCard } from '@/components/conversation/PermissionPromptCard';
 import { answerPermissionPrompt } from '@/connection/actions';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 
 jest.mock('@/connection/actions', () => ({
   answerPermissionPrompt: jest.fn(),
@@ -43,6 +44,7 @@ describe('PermissionPromptCard', () => {
     mockAnswerPermissionPrompt.mockReset();
     mockAnswerPermissionPrompt.mockResolvedValue(undefined);
     mockImpactAsync.mockClear();
+    useTerminalUiStore.setState({ requestedModeBySessionId: {}, focusKeyboardRequestBySessionId: {} });
   });
 
   it('renders the full Bash command being approved', () => {
@@ -135,5 +137,16 @@ describe('PermissionPromptCard', () => {
     fireEvent.press(screen.getByTestId('permission-approve'));
     expect(await screen.findByText('Relay unreachable')).toBeTruthy();
     expect(screen.getByTestId('permission-approve').props.accessibilityState.disabled).toBe(false);
+  });
+
+  it('"More options in terminal" flips the lens and requests keyboard focus, sending no keystrokes', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('permission-answer-in-terminal'));
+
+    expect(useTerminalUiStore.getState().requestedModeBySessionId['sess-1']).toBe('terminal');
+    expect(useTerminalUiStore.getState().focusKeyboardRequestBySessionId['sess-1']).toBe(true);
+    // The invariant: the escape hatch never sends free text (or anything
+    // else) as a numbered-select keystroke.
+    expect(mockAnswerPermissionPrompt).not.toHaveBeenCalled();
   });
 });

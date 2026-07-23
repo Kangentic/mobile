@@ -98,7 +98,7 @@ export function AskUserQuestionCard({ sessionId, prompt }: AskUserQuestionCardPr
             accessibilityState={{ disabled: optionsDisabled }}
             testID="ask-answer-in-terminal"
             disabled={optionsDisabled}
-            onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal')}
+            onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal', { focusKeyboard: true })}
             style={({ pressed }) => [
               styles.optionRow,
               {

@@ -14,9 +14,11 @@ export interface ToolResultBlockProps {
 }
 
 /**
- * A tool result: a two-line '⎿ ' mono preview that expands on tap to the
- * full content (height-capped with its own scroll). Error results carry a
- * danger-tinted left border and danger text.
+ * A tool result: a two-line mono preview that expands on tap to the full
+ * content (height-capped with its own scroll). The left border alone marks
+ * it as nested under the tool call above - no leading glyph needed on top
+ * of that (would just duplicate the same "this is nested" cue).  Error
+ * results carry a danger-tinted left border and danger text.
  */
 export function ToolResultBlock({ content, isError, testID }: ToolResultBlockProps): React.JSX.Element {
   const theme = useTheme();
@@ -28,7 +30,7 @@ export function ToolResultBlock({ content, isError, testID }: ToolResultBlockPro
     setExpanded(false);
   }
 
-  const displayText = `⎿ ${content.trimEnd()}`;
+  const displayText = content.trimEnd();
   const textColor = isError ? ('danger' as const) : ('secondary' as const);
 
   return (

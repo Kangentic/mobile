@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { isRecord, type JsonValue } from '@kangentic/protocol';
-import { Card, MonoText, useTheme } from '@/components';
+import { MonoText, useTheme } from '@/components';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import { splitPathForDisplay } from '@/diff/pathDisplay';
 import type { ConversationCell } from '@/conversation/transcriptCells';
 import { InlineDiff } from './InlineDiff';
 import { MonoBlock } from './MonoBlock';
 import { ToolResultBlock } from './ToolResultCell';
+import { TurnFrame } from './TurnFrame';
 
 type ToolCallCellModel = Extract<ConversationCell, { kind: 'tool-call' }>;
 
@@ -47,7 +48,10 @@ function summaryForTool(toolName: string, input: JsonValue): React.JSX.Element |
     if (filePath === null) return null;
     const { directory, basename } = splitPathForDisplay(filePath);
     return (
-      <MonoText size="caption" numberOfLines={1}>
+      // ellipsizeMode="head" trims the directory prefix first on a long
+      // path, not the filename at the end - the filename is the one piece
+      // of this summary a user actually needs to see.
+      <MonoText size="caption" numberOfLines={1} ellipsizeMode="head">
         <MonoText size="caption" color="muted">
           {directory}
         </MonoText>
@@ -106,7 +110,11 @@ function ExpandedToolInput({ toolName, input }: { toolName: string; input: JsonV
 /**
  * A tool_use block with its merged result: status glyph + tool name + a
  * per-tool one-line summary, tap to expand the input (Edit shows an inline
- * old/new diff), and a collapsed expandable result preview underneath.
+ * old/new diff), and a collapsed expandable result preview underneath. No
+ * box of its own - it flows as plain content inside the turn's shared band,
+ * same as a text block; the mono font, status glyph, and the result's own
+ * left-border indent are enough to mark it as a tool call without stacking
+ * another border on top.
  */
 export function ToolCallCard({ cell }: ToolCallCardProps): React.JSX.Element {
   const theme = useTheme();
@@ -122,18 +130,18 @@ export function ToolCallCard({ cell }: ToolCallCardProps): React.JSX.Element {
   const statusColor = cell.result === null ? ('secondary' as const) : cell.result.isError ? ('danger' as const) : ('success' as const);
 
   return (
-    <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs }}>
-      <Card>
+    <TurnFrame turn={cell.turn}>
+      <View>
         <Pressable
           accessibilityRole="button"
           testID={`tool-call-${cell.toolUseId}`}
           onPress={() => setExpanded((previousExpanded) => !previousExpanded)}
           style={[styles.headerRow, { minHeight: theme.minTouchSize, gap: theme.spacing.sm }]}
         >
-          <MonoText size="body" color={statusColor}>
+          <MonoText size="caption" color={statusColor}>
             {statusGlyph}
           </MonoText>
-          <MonoText size="body" color="primary">
+          <MonoText size="caption" color="primary">
             {cell.toolName}
           </MonoText>
           <View style={styles.flex}>{summaryForTool(cell.toolName, cell.input)}</View>
@@ -146,8 +154,8 @@ export function ToolCallCard({ cell }: ToolCallCardProps): React.JSX.Element {
             testID={`tool-result-${cell.toolUseId}`}
           />
         ) : null}
-      </Card>
-    </View>
+      </View>
+    </TurnFrame>
   );
 }
 

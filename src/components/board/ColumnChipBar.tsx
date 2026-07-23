@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
-import { Row, Text, useTheme } from '@/components';
+import { Badge, Row, Text, useTheme } from '@/components';
+import { getColumnIcon } from './columnIcons';
 
 export interface ColumnChipBarProps {
   columns: BoardColumnWire[];
@@ -12,14 +13,15 @@ export interface ColumnChipBarProps {
 }
 
 const CHIP_DOT_SIZE = 8;
+const CHIP_ICON_SIZE = 14;
 
 /**
  * The board's column navigator: one named chip per column with its task
  * count, the active chip filled. Replaces anonymous page dots - the user
  * always sees WHERE they are and can jump straight to a named column
- * instead of swiping blind. Two-way synced with the pager: tapping a chip
- * pages the board, swiping the board moves the highlight (and scrolls the
- * active chip into view).
+ * instead of swiping blind. Two-way synced with the board's PagerView:
+ * tapping a chip pages the board, swiping the board moves the highlight
+ * (and scrolls the active chip into view).
  */
 export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: ColumnChipBarProps): React.JSX.Element {
   const theme = useTheme();
@@ -44,6 +46,7 @@ export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: Co
     >
       {columns.map((column, columnIndex) => {
         const isActive = columnIndex === activeIndex;
+        const ColumnIcon = getColumnIcon(column);
         return (
           <Pressable
             key={column.id}
@@ -66,17 +69,27 @@ export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: Co
               },
             ]}
           >
-            <Row gap="xs" style={styles.chipContent}>
-              {/* The desktop's column color, as recorded data (a dot, never a fill). */}
-              {column.color ? (
-                <View style={[styles.colorDot, { backgroundColor: column.color }]} />
-              ) : null}
-              <Text variant="caption" color={isActive ? 'accent' : 'secondary'}>
-                {column.name}
-              </Text>
-              <Text variant="caption" color="muted">
-                {taskCounts[columnIndex] ?? 0}
-              </Text>
+            <Row gap="sm" style={styles.chipContent}>
+              <Row gap="xs" style={styles.chipIdentity}>
+                {/* The desktop's column icon (its own icon picker, tinted
+                    with the column's color), falling back to a plain color
+                    dot for a column with neither a custom icon nor a
+                    matching role default - never a fill, always a small
+                    tinted glyph. */}
+                {ColumnIcon !== null ? (
+                  <ColumnIcon size={CHIP_ICON_SIZE} color={column.color} strokeWidth={2} />
+                ) : column.color ? (
+                  <View style={[styles.colorDot, { backgroundColor: column.color }]} />
+                ) : null}
+                <Text variant="caption" color={isActive ? 'accent' : 'secondary'}>
+                  {column.name}
+                </Text>
+              </Row>
+              {/* The count reads as a neutral tally, not a second accented
+                  element - active state is already carried by the chip's
+                  border and the name's color, so the pill stays flat and
+                  unbordered (no double hairline against the chip's own). */}
+              <Badge label={String(taskCounts[columnIndex] ?? 0)} color="muted" shape="pill" outlined={false} />
             </Row>
           </Pressable>
         );
@@ -94,6 +107,9 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   chipContent: {
+    alignItems: 'center',
+  },
+  chipIdentity: {
     alignItems: 'center',
   },
   colorDot: {

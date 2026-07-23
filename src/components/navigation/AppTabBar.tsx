@@ -1,11 +1,13 @@
-import React, { type ComponentProps } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import React, { useEffect, type ComponentProps } from 'react';
+import { StyleSheet, View } from 'react-native';
 import type { Tabs } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Bot, SquareKanban } from 'lucide-react-native';
+import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { StatusDot } from '../StatusDot';
 import { Text } from '../Text';
 import { useTheme } from '../theme/ThemeProvider';
+import { PressScale } from '../motion/PressScale';
 import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 import { triggerHaptic } from '@/lib/haptics';
 
@@ -77,44 +79,109 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
         };
 
         return (
-          <Pressable
+          <TabBarItem
             key={route.key}
             testID={options.tabBarButtonTestID}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: isFocused }}
-            accessibilityLabel={visual.label}
+            isFocused={isFocused}
+            visual={visual}
+            showAttentionDot={showAttentionDot}
+            attentionTestID={`tab-${route.name}-attention`}
             onPress={onPress}
-            style={styles.item}
-          >
-            <View
-              style={[
-                styles.iconPill,
-                {
-                  // M3 active indicator: a full stadium, not a rounded box.
-                  borderRadius: TAB_PILL_HEIGHT / 2,
-                  paddingHorizontal: theme.spacing.lg,
-                  backgroundColor: isFocused ? theme.colors.accentSubtle : 'transparent',
-                },
-              ]}
-            >
-              <visual.Icon
-                size={TAB_ICON_SIZE}
-                color={isFocused ? theme.colors.accent : theme.colors.textMuted}
-                strokeWidth={isFocused ? 2.4 : 1.8}
-              />
-              {showAttentionDot ? (
-                <View style={styles.attentionDot}>
-                  <StatusDot variant="needs-you" testID={`tab-${route.name}-attention`} />
-                </View>
-              ) : null}
-            </View>
-            <Text variant="caption" color={isFocused ? 'accent' : 'muted'} style={styles.label}>
-              {visual.label}
-            </Text>
-          </Pressable>
+          />
         );
       })}
     </View>
+  );
+}
+
+/**
+ * One tab: a PressScale depth press plus the M3 active-pill fill, which
+ * grows/fades in on focus instead of an instant color swap - reanimated
+ * `withTiming` at the motion tokens' base duration and decelerate easing
+ * (the same "entering" feel as the rest of the app), honoring
+ * `ReduceMotion.System` like every other animated primitive here.
+ */
+function TabBarItem({
+  testID,
+  isFocused,
+  visual,
+  showAttentionDot,
+  attentionTestID,
+  onPress,
+}: {
+  testID: string | undefined;
+  isFocused: boolean;
+  visual: TabVisual;
+  showAttentionDot: boolean;
+  attentionTestID: string;
+  onPress: () => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  const { durations, easing } = theme.motion;
+  // Starts already at its resting value so the initially-focused tab renders
+  // a filled pill with no animate-in flash.
+  const focusProgress = useSharedValue(isFocused ? 1 : 0);
+
+  useEffect(() => {
+    focusProgress.set(
+      withTiming(isFocused ? 1 : 0, {
+        duration: durations.base,
+        easing: Easing.bezier(easing.decelerate.x1, easing.decelerate.y1, easing.decelerate.x2, easing.decelerate.y2),
+        reduceMotion: ReduceMotion.System,
+      }),
+    );
+  }, [isFocused, focusProgress, durations.base, easing.decelerate]);
+
+  const pillFillStyle = useAnimatedStyle(() => ({
+    opacity: focusProgress.get(),
+    transform: [{ scale: 0.85 + 0.15 * focusProgress.get() }],
+  }));
+
+  return (
+    <PressScale
+      testID={testID}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: isFocused }}
+      accessibilityLabel={visual.label}
+      onPress={onPress}
+      style={styles.item}
+    >
+      <View
+        style={[
+          styles.iconPill,
+          {
+            height: TAB_PILL_HEIGHT,
+            paddingHorizontal: theme.spacing.lg,
+          },
+        ]}
+      >
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.pillFill,
+            pillFillStyle,
+            {
+              // M3 active indicator: a full stadium, not a rounded box.
+              borderRadius: TAB_PILL_HEIGHT / 2,
+              backgroundColor: theme.colors.accentSubtle,
+            },
+          ]}
+        />
+        <visual.Icon
+          size={TAB_ICON_SIZE}
+          color={isFocused ? theme.colors.accent : theme.colors.textMuted}
+          strokeWidth={isFocused ? 2.4 : 1.8}
+        />
+        {showAttentionDot ? (
+          <View style={styles.attentionDot}>
+            <StatusDot variant="needs-you" testID={attentionTestID} />
+          </View>
+        ) : null}
+      </View>
+      <Text variant="caption" color={isFocused ? 'accent' : 'muted'} style={styles.label}>
+        {visual.label}
+      </Text>
+    </PressScale>
   );
 }
 
@@ -131,8 +198,14 @@ const styles = StyleSheet.create({
   },
   iconPill: {
     alignItems: 'center',
-    height: TAB_PILL_HEIGHT,
     justifyContent: 'center',
+  },
+  pillFill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
   },
   attentionDot: {
     position: 'absolute',

@@ -47,6 +47,16 @@ describe('boardStore', () => {
     expect(selectTasksForColumn(board, 'lane-doing')).toEqual([]);
   });
 
+  it('hasHydratedSnapshot latches true on the first snapshot and resets with the rest of the board', () => {
+    expect(useBoardStore.getState().hasHydratedSnapshot).toBe(false);
+
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    expect(useBoardStore.getState().hasHydratedSnapshot).toBe(true);
+
+    useBoardStore.getState().reset();
+    expect(useBoardStore.getState().hasHydratedSnapshot).toBe(false);
+  });
+
   it('selectLiveSessionIds unions non-archived tasks with a session across boards', () => {
     useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
     // task-3 has a session but is archived - excluded.

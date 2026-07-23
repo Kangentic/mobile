@@ -16,6 +16,7 @@ function makeCell(overrides: Partial<ToolCallCellModel>): ToolCallCellModel {
     toolName: 'Bash',
     input: { command: 'npm run lint\nnpm run test:unit' },
     result: null,
+    turn: { role: 'assistant', position: 'solo' },
     ...overrides,
   };
 }
@@ -79,7 +80,7 @@ describe('ToolCallCard', () => {
     const result: ToolCallResult = { content: 'lint passed', isError: false };
     renderCard(makeCell({ result }));
     expect(screen.getByText('✓')).toBeTruthy();
-    expect(screen.getByText('⎿ lint passed')).toBeTruthy();
+    expect(screen.getByText('lint passed')).toBeTruthy();
   });
 
   it('tints an error result with the danger border and glyph', () => {
@@ -94,6 +95,6 @@ describe('ToolCallCard', () => {
     const result: ToolCallResult = { content: 'line one\nline two\nline three', isError: false };
     renderCard(makeCell({ result }));
     fireEvent.press(screen.getByTestId('tool-result-tool-1'));
-    expect(screen.getByText('⎿ line one\nline two\nline three')).toBeTruthy();
+    expect(screen.getByText('line one\nline two\nline three')).toBeTruthy();
   });
 });
