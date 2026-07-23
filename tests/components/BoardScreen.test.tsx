@@ -261,6 +261,50 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: false });
   });
 
+  it('resets the active column id (not just the clamped display index) when it disappears, so a later re-add does not re-select it', () => {
+    // The chip highlight alone (activeIndex === columnIndex) cannot tell
+    // this apart from a naive Math.max(0, ...) clamp with no id reset: both
+    // show column 0 the instant the active column vanishes. The two
+    // diverge only once the vanished column REAPPEARS - only the id-level
+    // reset stays on the fallback column instead of snapping back.
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
+    expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: true });
+
+    // Doing disappears from the board entirely (e.g. the desktop deletes
+    // the column while the phone is viewing it).
+    act(() => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': { ...state.boardsByProjectId['project-1'], columns: [column('lane-todo', 'To Do', 0)] },
+        },
+      }));
+    });
+    expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: true });
+
+    // Doing reappears at the same position. A stale activeColumnId would
+    // now resolve back to it (its index is real again); the reconciled id
+    // ('lane-todo') stays put instead.
+    act(() => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': {
+            ...state.boardsByProjectId['project-1'],
+            columns: [column('lane-todo', 'To Do', 0), column('lane-doing', 'Doing', 1)],
+          },
+        },
+      }));
+    });
+    expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: true });
+    expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: false });
+  });
+
   it('the header title switches the active project via the project sheet', () => {
     useBoardStore.setState({
       projects: [
