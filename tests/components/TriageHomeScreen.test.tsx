@@ -1,10 +1,11 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { boardSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 const mockPush = jest.fn();
@@ -27,6 +28,7 @@ jest.mock('@/connection/actions', () => ({
 }));
 
 function seedStores(): void {
+  useSettingsStore.setState({ collapsedTriageSection: null });
   useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true });
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
@@ -174,6 +176,28 @@ describe('TriageHomeScreen', () => {
     });
     expect(screen.getAllByText('Thinking')).toHaveLength(1);
     expect(screen.queryByText('Idle')).toBeNull();
+  });
+
+  it('tapping the section header collapses its rows (but keeps the header and its count visible), and tapping again re-expands', () => {
+    renderHome();
+    // needs-you and idle share the "Idle" title; our lone permission-pending
+    // session lands in needs-you, so that is the section kind whose header
+    // actually gets emitted.
+    expect(screen.getByTestId('section-header-needs-you').props.accessibilityState).toEqual({ expanded: true });
+    expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+    expect(within(screen.getByTestId('section-header-needs-you')).getByText('1')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('section-header-needs-you'));
+
+    expect(screen.getByTestId('section-header-needs-you').props.accessibilityState).toEqual({ expanded: false });
+    expect(screen.queryByTestId('activity-row-sess-1')).toBeNull();
+    // The count stays visible while collapsed - collapsing hides the rows, not the fact that there are some.
+    expect(within(screen.getByTestId('section-header-needs-you')).getByText('1')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('section-header-needs-you'));
+
+    expect(screen.getByTestId('section-header-needs-you').props.accessibilityState).toEqual({ expanded: true });
+    expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
   });
 
   it('shows the all-quiet state when connected with no sessions', () => {
