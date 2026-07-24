@@ -375,6 +375,9 @@ function UnpairedEmptyState(): React.JSX.Element {
   );
 }
 
+/** Lines the snippet slot always occupies, whatever it currently holds (see the row's fixed-geometry note). */
+const SNIPPET_LINES = 2;
+
 /** How long a row waits before retrying a failed snippet peek. */
 const SNIPPET_PEEK_RETRY_MS = 6000;
 
@@ -481,10 +484,13 @@ const ActivityRow = React.memo(function ActivityRow({
   // refresh key it belongs to (the prompt id, or unreadCount which bumps
   // on new messages), so re-renders never refetch.
   const awaitedPromptId = entry.awaitedPromptId;
-  const snippetKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
   const [peekedSnippet, setPeekedSnippet] = useState<{ key: string; text: string | null } | null>(null);
   const [peekRetryNonce, setPeekRetryNonce] = useState(0);
-  const snippet = peekedSnippet !== null && peekedSnippet.key === snippetKey ? peekedSnippet.text : null;
+  // The last text we resolved, shown until a newer one REPLACES it. The key
+  // decides when to refetch, never what to display: gating display on a key
+  // match blanked the row the instant unreadCount bumped, so every engine
+  // event flashed the snippet text -> empty -> text.
+  const snippet = peekedSnippet !== null ? peekedSnippet.text : null;
   // While working, a slightly stale snippet is fine (the throttle stops a
   // busy session from refetching a heavy window on every event); at idle
   // the final message must be fresh, and the freshness flip on the
@@ -522,7 +528,13 @@ const ActivityRow = React.memo(function ActivityRow({
           })();
       void peek
         .then((snippetText) => {
-          if (!cancelled) setPeekedSnippet({ key: currentKey, text: snippetText });
+          if (cancelled) return;
+          // Re-resolving the SAME text must not touch state: a new object
+          // would re-render the row (and restart its animations) for a
+          // snippet that did not actually change.
+          setPeekedSnippet((previous) =>
+            previous !== null && previous.text === snippetText ? previous : { key: currentKey, text: snippetText },
+          );
         })
         .catch(() => {
           // Not connected yet or a transient fetch failure: retry shortly.
@@ -542,11 +554,13 @@ const ActivityRow = React.memo(function ActivityRow({
   }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce, snippetFreshnessMs]);
 
   // No status filler ("Thinking", "Waiting for..."): the section header
-  // and the icon already say the state. PREDICTABLE GEOMETRY: the snippet
-  // always renders (one reserved line minimum, flexing to two when the
-  // message needs it), so an async update adjusts a card at most once -
-  // and never collapses a slot a thumb is heading for.
-  const snippetLineHeight = theme.typography.caption.lineHeight;
+  // and the icon already say the state. FIXED GEOMETRY: the snippet slot is
+  // always exactly two lines tall and centres whatever it holds. A live
+  // snippet changes length constantly (each new agent message replaces it),
+  // and a slot that grew from one line to two shifted every card below it
+  // mid-read. Reserving both lines up front costs one line of space and
+  // buys a feed that never moves under the thumb.
+  const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
   return (
     <TaskCard
@@ -557,7 +571,8 @@ const ActivityRow = React.memo(function ActivityRow({
       usage={entry.usage}
       projectName={projectName}
       bodyText={snippet ?? ''}
-      bodyMinHeight={snippetLineHeight}
+      bodyNumberOfLines={SNIPPET_LINES}
+      bodyMinHeight={snippetSlotHeight}
       onPress={openTask}
       onLongPress={onLongPress}
       overlay={

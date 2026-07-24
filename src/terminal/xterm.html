@@ -349,6 +349,13 @@ return exports; })();
   // not fight the user's finger; auto-pan resumes after the pause.
   var MANUAL_PAN_PAUSE_MS = 4000;
   var manualPanUntil = 0;
+  // A desktop grid is far wider than a phone, so where the frame OPENS
+  // matters. Follow-the-cursor would immediately drag the view to wherever
+  // the TUI's cursor happens to sit, dropping the user into the middle of
+  // lines with the left edge (where every line, prompt and tree begins) off
+  // screen. Open pinned to column 0 at the newest output instead, and hand
+  // control over the moment the user actually touches or types.
+  var pinnedToStart = true;
   var MIN_AUTO_FONT_PX = 6;
   // Cap the fill-to-height font so a very short grid does not produce absurd
   // glyphs; pinch zoom goes higher or lower on demand.
@@ -432,9 +439,10 @@ return exports; })();
   }
 
   // Keep the cursor in view while output streams once the frame is zoomed in
-  // past the viewport. Skips while the user is mid-pan.
+  // past the viewport. Skips while the user is mid-pan, and until the user
+  // has taken the wheel at all (see pinnedToStart).
   function panToCursor() {
-    if (!terminal || Date.now() < manualPanUntil) return;
+    if (!terminal || pinnedToStart || Date.now() < manualPanUntil) return;
     var container = scrollContainer();
     var screen = document.querySelector('.xterm-screen');
     if (!container || !screen) return;
@@ -622,6 +630,10 @@ return exports; })();
     currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
     lastAppCursorMode = false;
     manualPanUntil = 0;
+    // Every (re-)init is a fresh open - including a session swap and the
+    // re-seed when the pane becomes visible again - so the frame starts at
+    // column 0 rather than inheriting the previous view's pan.
+    pinnedToStart = true;
     cleanFeedEnabled = initMessage.cleanFeed === true;
     // The row-stretch fill can leave a sub-row remainder below the last row;
     // paint the page in the terminal's own background so it never reads as a
@@ -760,6 +772,13 @@ return exports; })();
   function clampHorizontalPan() {
     var container = scrollContainer();
     if (!container) return;
+    // Still showing the opening view: hold column 0 so a relayout (the soft
+    // keyboard, rotation) cannot drift the frame off the left edge before
+    // the user has panned anywhere themselves.
+    if (pinnedToStart) {
+      container.scrollLeft = 0;
+      return;
+    }
     // Clamp against the RENDERED GRID width, never container.scrollWidth: a
     // shrinking refit leaves stale wider children inside #terminal, so
     // scrollWidth keeps authorizing scroll far past the last column.
@@ -865,6 +884,9 @@ return exports; })();
     var container = scrollContainer();
     if (container) {
       container.addEventListener('touchstart', function (touchEvent) {
+        // The user has taken the wheel: stop holding column 0 and let
+        // follow-the-cursor resume once their pan settles.
+        pinnedToStart = false;
         manualPanUntil = Date.now() + MANUAL_PAN_PAUSE_MS;
         if (touchEvent.touches.length === 1) {
           tapDirty = false;

@@ -73,11 +73,22 @@ describe('generated xterm.html', () => {
     const build = new Function(
       'scrollContainer',
       'document',
+      'pinnedToStart',
       `${clampSource}; return clampHorizontalPan;`,
-    ) as (scrollContainer: () => typeof container, documentRef: typeof fakeDocument) => () => void;
-    build(() => container, fakeDocument)();
+    ) as (
+      scrollContainer: () => typeof container,
+      documentRef: typeof fakeDocument,
+      pinnedToStart: boolean,
+    ) => () => void;
+    build(() => container, fakeDocument, false)();
 
     // 723 (grid) - 411 (viewport) = 312: the furthest pan still showing content.
     expect(container.scrollLeft).toBe(312);
+
+    // Before the user has panned, the frame holds column 0 outright so a
+    // relayout cannot drift the opening view off the left edge.
+    const pinnedContainer = { scrollLeft: 705.9, scrollWidth: 1366, clientWidth: 411 };
+    build(() => pinnedContainer, fakeDocument, true)();
+    expect(pinnedContainer.scrollLeft).toBe(0);
   });
 });
