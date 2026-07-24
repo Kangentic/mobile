@@ -35,9 +35,9 @@ When given a list of changed files, map them to anchors:
 - `eas.json` - EAS profile names (see developer-guide.md)
 - `app.config.*` - App structure, permissions (see developer-guide.md and architecture.md)
 
-If a changed file does not map to any anchor, skip it. Until App Phase 1 adds these source
-files, most of this table is prose-only; report "no source file present yet" rather than a
-false gap.
+If a changed file does not map to any anchor, skip it. If a listed anchor's source file genuinely
+does not exist yet, report "no source file present yet" rather than a false gap; otherwise audit
+normally against the existing source.
 
 ## Audit Procedure
 

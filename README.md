@@ -17,9 +17,9 @@ Kangentic Mobile is the mobile companion to the desktop
 what your agents are doing, and lets you steer them, all without giving up end-to-end encryption
 or a self-hostable relay in between.
 
-**Status: pre-release, App Phase 0.** This repo currently holds the documentation, agent
-operating environment, and governance layer only; the Expo app itself lands in App Phase 1. See
-the roadmap below.
+**Status: pre-release, App Phase 2.** The Expo app, pairing, secure channel, and the core
+remote-control experience (triage home, board, conversation, terminal, diffs) are live; store
+release and device management are still ahead. See the roadmap below.
 
 ## What it is
 
@@ -48,10 +48,11 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 
 ## Roadmap
 
-- **App Phase 0 (this repo, now):** documentation, `.claude/` agent environment, governance.
-- **App Phase 1:** Expo scaffold, pairing client, secure channel client.
-- **App Phase 2:** the core experience (triage home, board, conversation, terminal, diffs).
-- **App Phase 3:** notifications, device management, store release.
+- **App Phase 0 (done):** documentation, `.claude/` agent environment, governance.
+- **App Phase 1 (done):** Expo scaffold, pairing client, secure channel client.
+- **App Phase 2 (this repo, now):** the core experience (triage home, board, conversation,
+  terminal, diffs).
+- **App Phase 3 (next):** notifications, device management, store release.
 
 ## Stack
 
@@ -60,7 +61,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 | Framework | Expo SDK 55+, React Native New Architecture, TypeScript strict |
 | State | Zustand |
 | Lists | FlashList |
-| Crypto | react-native-quick-crypto, react-native-libsodium |
+| Crypto | `@kangentic/protocol` (pure TypeScript on `@noble/*`), react-native-get-random-values, @bacons/text-decoder |
 | Storage | expo-secure-store (Keychain / Android Keystore) |
 | Notifications | Expo Push, Notifee, a native iOS Notification Service Extension |
 | Build | EAS Build/Submit/Workflows (cloud), Continuous Native Generation |
@@ -69,13 +70,12 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 
 Windows-first, no Mac required:
 
-- **Android:** the emulator is the day-to-day local target (`npx expo start --android`).
+- **Android:** the emulator is the day-to-day local target (`npx expo start --dev-client`).
 - **iOS:** built and signed in the cloud via EAS (`eas build --platform ios`); validated through
   TestFlight or a cloud EAS Workflow run. There is never a local iOS simulator step.
 - Node version pinned in [.nvmrc](.nvmrc).
 
-See [docs/developer-guide.md](docs/developer-guide.md) for full setup once App Phase 1 lands the
-scaffold.
+See [docs/developer-guide.md](docs/developer-guide.md) for full setup.
 
 ## Testing tiers
 

@@ -33,15 +33,12 @@ repo.
    `main`); main repo mode, the current branch.
 5. Run `git status --porcelain` to check for uncommitted changes.
 
-## Step 0 - Install, typecheck, lint (gated on the harness existing)
+## Step 0 - Install, typecheck, lint
 
-1. If `package.json` exists, run `npm ci`. If it fails with EBUSY, stop: "A file in
-   node_modules is locked by a running process."
-2. If `package.json` exists, run `npm run typecheck`. Stop on failure.
-3. If `package.json` exists and an ESLint config exists, run `npm run lint`. Stop on error
-   (warnings do not block).
-4. If `package.json` does not exist yet (App Phase 0: governance/docs-only changes), skip
-   straight to Step 1.
+1. Run `npm ci`. If it fails with EBUSY, stop: "A file in node_modules is locked by a running
+   process."
+2. Run `npm run typecheck`. Stop on failure.
+3. Run `npm run lint`. Stop on error (warnings do not block).
 
 ## Step 1 - Commit Changes
 

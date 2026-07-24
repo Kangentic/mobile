@@ -29,8 +29,8 @@ so it is E2E-encrypted or it is nothing.
 
 - **Review (live now):** the `crypto-pairing-auditor` agent checks the push payload builder and
   the NSE/Notifee decrypt paths during `/code-review`.
-- **Tests (planned, App Phase 1 and 3):** a unit test asserting the payload builder never emits
-  a plaintext field, and a Maestro flow asserting the placeholder renders on decrypt failure.
+- **Tests (planned):** a unit test asserting the payload builder never emits a plaintext field,
+  and a Maestro flow asserting the placeholder renders on decrypt failure.
 
 ## Scope
 

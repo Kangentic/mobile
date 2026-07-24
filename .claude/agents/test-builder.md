@@ -11,7 +11,7 @@ description: |
 
   <example>
   User adds the SAS-confirm screen with its accept/reject buttons.
-  -> Spawn test-builder to add Jest + React Native Testing Library coverage for the interaction, mocking react-native-quick-crypto, expo-secure-store, and notifee.
+  -> Spawn test-builder to add Jest + React Native Testing Library coverage for the interaction, mocking expo-secure-store and notifee.
   </example>
 
   <example>
@@ -86,7 +86,7 @@ expected result. This is **self-review bias**. Two non-negotiable rules counter 
 | Tier | Location | Runner | Scope | Runs where |
 |------|----------|--------|-------|------------|
 | Unit | `tests/unit/` | vitest | Pure TypeScript logic, no RN runtime: protocol glue, parsers, Zustand store logic, the Noise handshake state machine against test vectors | Locally, any OS, CI |
-| Component | `tests/components/` | Jest + React Native Testing Library v13+ | Screens and components; native modules (`react-native-quick-crypto`, `expo-secure-store`, `notifee`) are mocked via `jest.mock` | Locally, any OS, CI |
+| Component | `tests/components/` | Jest + React Native Testing Library v13+ | Screens and components; native modules (`expo-secure-store`, `notifee`) are mocked via `jest.mock` | Locally, any OS, CI |
 | E2E | `.maestro/` | Maestro | Full flows against a real dev build: pairing, board navigation, sending a message | Locally on Windows against the Android emulator; cloud iOS simulators via EAS Workflows (the only iOS E2E path - there is never a local iOS simulator, no Mac) |
 | Web | `tests/web/` | Playwright via react-native-web target | Cross-platform component behavior in a browser | Later phase, once the react-native-web target exists |
 

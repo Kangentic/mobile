@@ -31,9 +31,8 @@ new local commit. If the user wants any of those, stop and point them at `/pull-
 If the user has not already explicitly approved committing in this turn, ask once before
 proceeding (never commit without an explicit go-ahead). If they approved, continue.
 
-Do NOT run `npm ci`, `npm install`, `npm run typecheck`, or `npm run lint` here (once those
-commands exist, from App Phase 1). A local commit is a snapshot and must stay fast. Full
-validation happens at push time via `/pull-request`.
+Do NOT run `npm ci`, `npm install`, `npm run typecheck`, or `npm run lint` here. A local commit
+is a snapshot and must stay fast. Full validation happens at push time via `/pull-request`.
 
 ## Step 1 - Inspect the working tree
 

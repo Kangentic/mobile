@@ -3,9 +3,8 @@
 Thank you for your interest in contributing to Kangentic Mobile! This guide covers everything
 you need to know to get started.
 
-**App Phase 0 note:** this repo currently contains only documentation, agent tooling, and
-governance; the Expo app itself lands in App Phase 1. Contributions to docs, `.claude/`
-conventions, and this governance layer are welcome now.
+The Expo app, its test harness, and CI are all live (App Phase 2). Code contributions are welcome
+alongside docs, `.claude/` conventions, and governance changes.
 
 ## Contributor License Agreement (CLA)
 
@@ -44,45 +43,33 @@ full text is in [CLA.md](CLA.md).
 - JDK 17 and Android Studio with an Android Virtual Device configured (the emulator is the daily
   local target)
 - Git 2.25+
-- Optional: `eas-cli` and the Maestro CLI (needed once App Phase 1 lands)
+- Optional: `eas-cli` (for EAS builds) and the Maestro CLI (to run the E2E flows in `.maestro/`)
 - **No Mac is needed.** iOS builds and iOS E2E both run in the cloud via EAS.
 
 ### Setup
-
-Once App Phase 1 lands the Expo scaffold:
 
 ```bash
 git clone https://github.com/Kangentic/mobile.git
 cd mobile
 npm install
-npx expo start --android
+npx expo start --dev-client
 ```
 
-Today, this repo has no `package.json`; a docs or governance contribution needs no build step.
+A docs or governance-only contribution needs no build step; `npm install` and the dev client are
+only needed for code changes.
 
 ### Where the conventions live
 
 The authoritative conventions for this codebase are [CLAUDE.md](CLAUDE.md) and the focused rule
 files in [.claude/rules/](.claude/rules/). Each rule names how it is enforced (live now, or
-planned for App Phase 1). The sections below distill the human-relevant subset.
+planned). The sections below distill the human-relevant subset.
 
-### Project Structure (planned)
+### Project Structure
 
-```
-app.json / app.config.ts     # Expo config; CNG only, no checked-in native projects
-eas.json                     # EAS Build/Submit/Workflows profiles
-plugins/                     # Local Expo config plugins
-src/
-  screens/        # App screens
-  components/     # Design system + transcript-terminal cells
-  pairing/        # QR scan, SAS confirm, device identity, key storage
-  channel/        # Noise KK secure channel, relay client, capability client
-  notifications/  # Push registration, E2E blob decrypt
-  state/          # Zustand stores
-tests/            # unit/, components/, web/
-.maestro/         # Maestro E2E flows
-docs/             # Architecture, developer guide, security
-```
+`app/` holds thin expo-router route wrappers; screens, components, and everything else live under
+`src/` (pairing, channel, connection, conversation, terminal, notifications, state, and more).
+See [CLAUDE.md](CLAUDE.md)'s Project Structure section for the authoritative, current tree; this
+file does not duplicate it, so the two never drift.
 
 ## Making Changes
 
@@ -108,14 +95,14 @@ Use descriptive branch names: `fix/pairing-timeout`, `feature/board-swipe`, `doc
   expect a `crypto-pairing-auditor` review pass. See `.claude/rules/accountless-core.md` and
   `.claude/rules/secure-storage.md`.
 
-### Testing (planned, App Phase 1)
+### Testing
 
 - **Unit** (`tests/unit/`, vitest): `npx vitest run tests/unit`
 - **Component** (`tests/components/`, Jest + React Native Testing Library): `npx jest tests/components`
 - **E2E** (`.maestro/`, Maestro): `maestro test .maestro/`, locally against the Android emulator;
   iOS E2E runs on cloud simulators via EAS Workflows
 
-Quick local pass before opening a PR (once the harness exists):
+Quick local pass before opening a PR:
 
 ```bash
 npm run typecheck
@@ -133,17 +120,17 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 1. Fork the repo and create a branch from `main`
 2. Make your changes and add or update tests for them
-3. Run the quick local pass above (once the harness exists)
+3. Run the quick local pass above
 4. Sign the CLA when prompted on your first PR
 5. Open the PR. The template prompts you for What / Why / How / Tests and a short checklist
 6. Link any related issues
 
 ### What to expect
 
-- Once App Phase 1 lands `ci.yml`, your PR must be green on: **Lint (ESLint)**, **Type check
-  (tsc)**, **Unit tests (Vitest)**, **Component tests (Jest + RNTL)**, **E2E tests (Maestro /
-  Android)**, and **E2E tests (Maestro / iOS simulator)** (the last runs on EAS Workflows, cloud
-  only). Today, the only required check is **CLA Assistant**.
+- Your PR must be green on both checks that register: **`fast-tiers`** (lint, typecheck, unit
+  tests, component tests, from `.github/workflows/ci.yml`) and **`cla`** (CLA Assistant). Maestro
+  E2E is not in CI; it runs locally against the Android emulator, and iOS E2E on cloud simulators
+  via EAS Workflows is a future addition.
 - If a check fails, push a fix and CI re-runs automatically.
 
 ### Security

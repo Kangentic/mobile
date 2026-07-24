@@ -20,8 +20,8 @@ output), where the character is content, not punctuation you chose.
 
 ## Enforcement (self-maintaining)
 
-- **Test (planned, App Phase 1):** `tests/unit/no-em-dashes.test.ts` will scan `src/` and
-  `scripts/` and fail on any U+2014, once the vitest harness lands.
+- **Test (planned):** `tests/unit/no-em-dashes.test.ts` will scan `src/` and `scripts/` and fail
+  on any U+2014.
 - **Review (live now):** the `expo-rn-reviewer` agent flags em-dashes anywhere during
   `/code-review`, including `tests/`, `docs/`, and markdown, which the future mechanical test
   will deliberately not scan.

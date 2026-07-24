@@ -12,8 +12,7 @@ flow.
 
 ## Source-to-Doc Mapping
 
-Each doc file and the source files that are its authority (planned; most do not exist yet in
-App Phase 0):
+Each doc file and the source files that are its authority:
 
 | Doc | Primary Source Files |
 |-----|---------------------|
@@ -48,14 +47,14 @@ App Phase 0):
 
 Anchors are enumerable source-code structures that must be exhaustively listed in docs. A
 mechanical audit (the `doc-auditor` agent) counts items in source, counts items in docs, and
-reports the diff. Most of the table below is planned: the source files do not exist until App
-Phase 1, so until then this is a forward-looking contract, not a live check.
+reports the diff. The source files below now exist, so this is a live check; a handful of
+individual anchors whose source is genuinely not written yet stay forward-looking until it lands.
 
 | Anchor | What to extract | Source file(s) | Target doc | WHY |
 |--------|------------------|-----------------|------------|-----|
 | Capability verb list | The v1 capability verbs (`read-stream`, `read-board`, `read-diff`, `send-user-message`, `move-task`, `answer-permission-prompt`) | `@kangentic/protocol`'s `CAPABILITY_VERBS` (consumed via `src/channel/capabilityClient.ts`, never redeclared locally - see `protocol-types-from-package.md`) | architecture.md (canonical); security.md (cross-reference only) | The protocol's entire authorization surface; drift here is a security-relevant gap, not just a docs gap. |
 | Key-storage inventory | Every secret stored via `expo-secure-store` (identity key, per-pairing key, push-decrypt key, ExponentPushToken) | `src/pairing/**`, `src/notifications/**` | security.md | The key-storage rule (`secure-storage.md`) is only auditable if the inventory is complete. |
-| Notification categories | The set of push notification categories and their placeholder copy | `src/notifications/categories.ts` (planned) | architecture.md | Push privacy claims in security.md depend on an accurate category list. |
+| Notification categories | The set of push notification categories and their placeholder copy | `src/notifications/categoryCopy.ts`, `src/notifications/channels.ts` | architecture.md | Push privacy claims in security.md depend on an accurate category list. |
 | Test-tier commands | The exact `npm run`/`npx` command for each test tier | `package.json` scripts | developer-guide.md | Stale commands break the getting-started flow for new contributors. |
 | EAS profile names | The `development`/`preview`/`production` EAS Build/Submit profile names | `eas.json` | developer-guide.md | Contributors reference these by name when running `eas build`. |
 
@@ -71,8 +70,8 @@ Phase 1, so until then this is a forward-looking contract, not a live check.
 5. If no source files changed, report "No source changes detected - skipping doc review" and
    stop.
 
-Until App Phase 1 adds `src/`, this step will almost always find nothing; the prose-audit pass
-(Step 3) is where most of the value is in App Phase 0.
+With `src/` now populated, this step routinely finds matching source-file changes; the mechanical
+anchor audit (Step 2) and the prose-audit pass (Step 3) both carry real weight.
 
 ### Step 2 - Anchor Point Verification
 

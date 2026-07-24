@@ -28,8 +28,8 @@ commands, and skills.
 - **Hook (blocking, live now):** `scripts/bash-guard.js` runs as a `PreToolUse` hook (registered
   in `.claude/settings.json`) and denies any Bash command that contains a forbidden operator
   outside quotes.
-- **Test (planned, App Phase 1):** `tests/unit/bash-guard.test.ts` will lock the guard's
-  allow/deny behavior and response shape once the vitest harness lands.
+- **Test (planned):** `tests/unit/bash-guard.test.ts` will lock the guard's allow/deny behavior
+  and response shape.
 
 ## Scope
 

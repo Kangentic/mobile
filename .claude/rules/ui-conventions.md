@@ -34,7 +34,7 @@ one-off components, tiny fonts, and slow lists unless these are stated.
 
 - **Review (live now):** `/code-review` and the `expo-rn-reviewer` agent flag these on screen and
   component changes.
-- **Test (planned, App Phase 1):** a scan for sub-floor font sizes and raw `FlatList` usage under
+- **Test (planned):** a scan for sub-floor font sizes and raw `FlatList` usage under
   `src/screens/` and `src/components/`.
 
 ## Scope

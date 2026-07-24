@@ -2,8 +2,8 @@
 
 Kangentic Mobile is a mobile companion app that pairs to, and remotely steers, agent sessions
 running in the desktop [Kangentic](https://github.com/Kangentic/kangentic) app. These docs
-describe the architecture as scaffolded in App Phase 1. The durable research behind these
-decisions lives in the desktop repo's
+describe the architecture as of App Phase 2. The durable research behind these decisions lives
+in the desktop repo's
 [`docs/research/mobile-companion-app.md`](https://github.com/Kangentic/kangentic/blob/main/docs/research/mobile-companion-app.md).
 
 ## Start Here
