@@ -40,6 +40,8 @@ export interface ConversationTabProps {
 const LIVE_TAIL_MAX_LINES = 12;
 const LIVE_TAIL_FLUSH_INTERVAL_MS = 250;
 const JUMP_TO_LATEST_THRESHOLD_PX = 600;
+/** How close to the top of the loaded window a scroll gets before the next older page is fetched. */
+const PAGE_OLDER_THRESHOLD_PX = 1200;
 
 // A stable identity (an inline object literal re-triggers FlashList layout
 // every render). `startRenderingFromBottom` is deliberately omitted: on a
@@ -88,13 +90,19 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   }, [needsTailFetch, established, sessionId]);
 
   /**
-   * The list opens at the newest message, so it starts life inside
-   * `onStartReachedThreshold` of the top and FlashList fires onStartReached
-   * the moment cells first populate. Paging history then races the initial
-   * bottom anchor: the older page prepends AFTER the anchor ran, pushing all
-   * the content down and leaving the viewport parked in empty space (observed
-   * live - a blank chat that fills in only once you scroll). This is
-   * scroll-up pagination, so it waits for an actual scroll.
+   * The list opens anchored at the newest message, so it begins life inside
+   * the top threshold and would page in history the user never asked for -
+   * and that older page prepends AFTER the initial anchor has run, pushing
+   * every cell down and parking the viewport in empty space (observed live:
+   * a blank chat that filled in only once you scrolled). So paging waits for
+   * a real scroll.
+   *
+   * That wait is why paging is driven from onScroll rather than FlashList's
+   * onStartReached: onStartReached is EDGE-triggered. It fires once on the
+   * way into the threshold, and declining it there consumes the only event -
+   * the list then sits pinned at the top of its window loading nothing, which
+   * is exactly what happened when this was gated on onStartReached. A scroll
+   * offset is level-triggered and cannot be swallowed.
    */
   const userTookOverScrollRef = useRef(false);
   const onScrollBeginDrag = useCallback(() => {
@@ -103,18 +111,22 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
 
   // Scroll-up pagination: one in-flight older-page request at a time.
   const loadingOlderRef = useRef(false);
-  const onStartReached = useCallback(() => {
-    if (!userTookOverScrollRef.current) return;
-    if (!hasMoreHistory || loadingOlderRef.current) return;
-    loadingOlderRef.current = true;
-    void loadOlderTranscript(sessionId)
-      .catch(() => {
-        // Transient failure: the next onStartReached retries.
-      })
-      .finally(() => {
-        loadingOlderRef.current = false;
-      });
-  }, [hasMoreHistory, sessionId]);
+  const pageOlderIfNeeded = useCallback(
+    (offsetFromTop: number) => {
+      if (!userTookOverScrollRef.current) return;
+      if (offsetFromTop > PAGE_OLDER_THRESHOLD_PX) return;
+      if (!hasMoreHistory || loadingOlderRef.current) return;
+      loadingOlderRef.current = true;
+      void loadOlderTranscript(sessionId)
+        .catch(() => {
+          // Transient failure: the next scroll event retries.
+        })
+        .finally(() => {
+          loadingOlderRef.current = false;
+        });
+    },
+    [hasMoreHistory, sessionId],
+  );
 
   // LIVE TAIL: raw PTY chunks feed a cleaner buffer; re-renders are throttled
   // to one snapshot per ~250ms while chunks stream.
@@ -198,14 +210,18 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   // Ref-track the current value so a scroll storm (auto-scroll on mount)
   // dispatches a React update only on a real transition, never re-entrantly.
   const showJumpToLatestRef = useRef(false);
-  const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    const nextShowJumpToLatest = distanceFromBottom > JUMP_TO_LATEST_THRESHOLD_PX;
-    if (nextShowJumpToLatest === showJumpToLatestRef.current) return;
-    showJumpToLatestRef.current = nextShowJumpToLatest;
-    setShowJumpToLatest(nextShowJumpToLatest);
-  }, []);
+  const onScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      pageOlderIfNeeded(contentOffset.y);
+      const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+      const nextShowJumpToLatest = distanceFromBottom > JUMP_TO_LATEST_THRESHOLD_PX;
+      if (nextShowJumpToLatest === showJumpToLatestRef.current) return;
+      showJumpToLatestRef.current = nextShowJumpToLatest;
+      setShowJumpToLatest(nextShowJumpToLatest);
+    },
+    [pageOlderIfNeeded],
+  );
 
   const renderItem = useCallback(
     ({ item }: { item: ConversationCell }) => renderConversationCell(item, sessionId),
@@ -240,8 +256,6 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         onScrollBeginDrag={onScrollBeginDrag}
         scrollEventThrottle={64}
         onContentSizeChange={onContentSizeChange}
-        onStartReached={onStartReached}
-        onStartReachedThreshold={0.4}
         maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
       />
       {showJumpToLatest ? (

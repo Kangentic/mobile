@@ -105,29 +105,66 @@ describe('ConversationTab', () => {
     jest.mocked(loadOlderTranscript).mockClear();
   });
 
+  function scrollTo(offsetFromTop: number): void {
+    fireEvent.scroll(screen.getByTestId('conversation-list'), {
+      nativeEvent: {
+        contentOffset: { x: 0, y: offsetFromTop },
+        contentSize: { width: 400, height: 12_000 },
+        layoutMeasurement: { width: 400, height: 800 },
+      },
+    });
+  }
+
   /**
-   * The feed opens anchored at the newest message, so it begins life within
-   * onStartReachedThreshold of the top and FlashList fires onStartReached
-   * immediately. Live on a Pixel that paged in 60 older entries AFTER the
-   * initial bottom anchor had run, prepending a screenful above the scroll
-   * offset: the chat opened blank and only filled in once the user scrolled.
-   * History paging is a scroll-up affordance and must wait for a scroll.
+   * The feed opens anchored at the newest message, so it begins life near the
+   * top of its own window. Live on a Pixel that paged in 60 older entries
+   * AFTER the initial bottom anchor had run, prepending a screenful above the
+   * scroll offset: the chat opened blank and only filled in once the user
+   * scrolled. History paging is a scroll-up affordance and waits for a drag.
    */
   it('does not page older history before the user has scrolled', () => {
     seedWindowWithOlderHistory();
     renderTab();
 
-    fireEvent(screen.getByTestId('conversation-list'), 'startReached');
+    scrollTo(0);
     expect(loadOlderTranscript).not.toHaveBeenCalled();
   });
 
-  it('pages older history once the user drags the feed', () => {
+  it('pages older history once the user drags the feed near the top', () => {
     seedWindowWithOlderHistory();
     renderTab();
 
     fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
-    fireEvent(screen.getByTestId('conversation-list'), 'startReached');
+    scrollTo(0);
     expect(loadOlderTranscript).toHaveBeenCalledWith('sess-1');
+  });
+
+  /**
+   * The reason paging is driven by scroll offset and not FlashList's
+   * onStartReached: that callback is edge-triggered, so declining it once
+   * (which the pre-scroll gate above does by design) consumed the only event
+   * and left the list pinned at the top of its window, loading nothing. A
+   * level-triggered offset check still pages on the next scroll event.
+   */
+  it('still pages after an earlier near-top scroll was declined', () => {
+    seedWindowWithOlderHistory();
+    renderTab();
+
+    scrollTo(0);
+    expect(loadOlderTranscript).not.toHaveBeenCalled();
+
+    fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
+    scrollTo(0);
+    expect(loadOlderTranscript).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('does not page while the user is scrolled far from the top', () => {
+    seedWindowWithOlderHistory();
+    renderTab();
+
+    fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
+    scrollTo(9000);
+    expect(loadOlderTranscript).not.toHaveBeenCalled();
   });
 
   it('shows the empty state without a session', () => {
