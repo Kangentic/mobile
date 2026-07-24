@@ -8,6 +8,7 @@ import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { CapabilityError } from '@/channel/verbClient';
 import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { peekLastAssistantMessage } from '@/connection/actions';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -331,6 +332,71 @@ describe('TriageHomeScreen', () => {
     });
     expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
     expect(screen.queryByTestId('connecting-empty-state')).toBeNull();
+  });
+
+  /**
+   * The agent snippet is a per-session transcript fetch that can take seconds
+   * on a long-running session, so the card falls back to the task description
+   * that already rode in on the board snapshot. Before this, the feed revealed
+   * with every description slot empty and filled them a beat later, which read
+   * as a second load.
+   */
+  it('shows the task description until the agent snippet resolves', async () => {
+    useBoardStore.setState((state) => ({
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        'project-1': {
+          ...state.boardsByProjectId['project-1'],
+          tasksById: {
+            ...state.boardsByProjectId['project-1'].tasksById,
+            'task-1': {
+              ...state.boardsByProjectId['project-1'].tasksById['task-1'],
+              description: '## Heading\n\nRepro the auth redirect loop.',
+            },
+          },
+        },
+      },
+    }));
+
+    renderHome();
+
+    // Markdown decoration is collapsed the same way a live snippet is.
+    expect(screen.getByText('Heading Repro the auth redirect loop.')).toBeTruthy();
+  });
+
+  it('replaces the description with the agent snippet once it lands', async () => {
+    // Not `Once`: the screen pre-warms every known session's snippet before
+    // the rows mount, so a single-use mock is consumed before render.
+    jest.mocked(peekLastAssistantMessage).mockResolvedValue('Fixed the redirect, running tests.');
+    // seedStores leaves sess-1 awaiting a prompt, which takes the prompt-peek
+    // path instead; clear it so the row peeks the agent's last message.
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'permission', promptId: 'sess-1:tool-1', pending: false },
+    });
+    useBoardStore.setState((state) => ({
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        'project-1': {
+          ...state.boardsByProjectId['project-1'],
+          tasksById: {
+            ...state.boardsByProjectId['project-1'].tasksById,
+            'task-1': {
+              ...state.boardsByProjectId['project-1'].tasksById['task-1'],
+              description: 'Repro the auth redirect loop.',
+            },
+          },
+        },
+      },
+    }));
+
+    renderHome();
+
+    expect((await screen.findAllByText('Fixed the redirect, running tests.')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Repro the auth redirect loop.')).toBeNull();
+    jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
   });
 
   it('shows the pairing CTA when unpaired', () => {

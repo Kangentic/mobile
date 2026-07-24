@@ -36,7 +36,7 @@ import {
   refreshSnapshots,
   updateTaskFields,
 } from '@/connection/actions';
-import { buildPendingPromptSummary } from '@/conversation/pendingPromptSummary';
+import { buildPendingPromptSummary, collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { triggerHaptic } from '@/lib/haptics';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
@@ -708,6 +708,17 @@ const ActivityRow = React.memo(function ActivityRow({
   // buys a feed that never moves under the thumb.
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
+  /**
+   * Until the agent snippet resolves, show the task's own description.
+   *
+   * It rides in on the board snapshot the feed already has, so it costs
+   * nothing, while the snippet is a per-session transcript fetch that can take
+   * seconds on a long-running session. Without this the feed revealed with
+   * every description slot empty and filled them in a beat later, which read
+   * as a second load even though the fixed slot meant nothing moved. Cards now
+   * arrive with text and sharpen to the live snippet when it lands.
+   */
+  const bodyText = snippet ?? collapseToSnippetText(task.description);
 
   return (
     <TaskCard
@@ -717,7 +728,7 @@ const ActivityRow = React.memo(function ActivityRow({
       showTicketNumbers={false}
       usage={entry.usage}
       projectName={projectName}
-      bodyText={snippet ?? ''}
+      bodyText={bodyText}
       bodyNumberOfLines={SNIPPET_LINES}
       bodyMinHeight={snippetSlotHeight}
       onPress={openTask}
