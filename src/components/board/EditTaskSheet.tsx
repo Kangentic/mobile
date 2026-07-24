@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { BoardTaskWire } from '@kangentic/protocol';
-import { Button, SHEET_MAX_HEIGHT_FRACTION, Sheet, Stack, Text, TextField, useTheme } from '@/components';
+import { Button, Sheet, Stack, Text, TextField, computeSheetDescriptionBounds, useTheme } from '@/components';
 
 export interface EditTaskSheetProps {
   visible: boolean;
@@ -52,27 +52,12 @@ function EditTaskForm({
   const theme = useTheme();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  // The description fills whatever the sheet's 75% budget leaves after its
-  // own fixed rows (no column chips here, unlike CreateTaskSheet) - see
-  // CreateTaskSheet for why this isn't a small fixed cap, and for why the
-  // safety buffer + insets.bottom term matter (undershooting cuts off Save).
-  const CHROME_ESTIMATE_SAFETY_BUFFER = theme.spacing.md;
-  const reservedChromeHeight =
-    theme.spacing.lg + // Sheet's own paddingTop
-    theme.typography.title.lineHeight +
-    theme.spacing.md + // Sheet's own title + its marginBottom
-    theme.minTouchSize +
-    theme.spacing.sm + // title field + gap
-    theme.spacing.sm + // gap from description to the Save button
-    theme.minTouchSize + // Save button
-    theme.spacing.lg + // Sheet's own paddingBottom
-    insets.bottom +
-    CHROME_ESTIMATE_SAFETY_BUFFER;
-  const descriptionMinHeight = theme.typography.body.lineHeight * 3 + theme.spacing.sm * 2;
-  const descriptionMaxHeight = Math.max(
-    windowHeight * SHEET_MAX_HEIGHT_FRACTION - reservedChromeHeight,
-    descriptionMinHeight,
-  );
+  const { descriptionMinHeight, descriptionMaxHeight } = computeSheetDescriptionBounds({
+    theme,
+    windowHeight,
+    bottomInset: insets.bottom,
+    hasColumnChipsRow: false,
+  });
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
 

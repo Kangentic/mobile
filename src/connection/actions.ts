@@ -4,6 +4,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
 import { lastContentLineFromScrollback } from '@/terminal/liveTail';
@@ -321,13 +322,13 @@ export function refreshTerminalStream(sessionId: string): void {
 
 /**
  * Clear EVERYTHING the phone holds from the paired desktop: board, activity,
- * transcripts, diffs, terminal ring buffers, the cleaned reading view, and
- * the module-level peek caches (prompt options, message and terminal-line
- * snippets). Unpairing revokes trust; content fetched under that trust must
- * not outlive it on an unlocked phone, so the unpair and pairing-completion
- * paths call this right before reconnectNow(). In-flight peeks need no
- * cancellation - the connection they ride is being torn down, so they reject
- * and cache nothing.
+ * transcripts, diffs, terminal ring buffers, the cleaned reading view, the
+ * module-level peek caches (prompt options, message and terminal-line
+ * snippets), and settings keyed by the old desktop's own task IDs. Unpairing
+ * revokes trust; content fetched under that trust must not outlive it on an
+ * unlocked phone, so the unpair and pairing-completion paths call this right
+ * before reconnectNow(). In-flight peeks need no cancellation - the
+ * connection they ride is being torn down, so they reject and cache nothing.
  */
 export function wipeDesktopContent(): void {
   useBoardStore.getState().reset();
@@ -339,6 +340,11 @@ export function wipeDesktopContent(): void {
   awaitedPromptPeekCache.clear();
   lastMessagePeekBySession.clear();
   lastTerminalLinePeekBySession.clear();
+  // Fire-and-forget like openSessionScreen's tail fetch: the in-memory clear
+  // above already ran synchronously; this only persists the empty map. A
+  // rejected write leaves a stale, non-secret lens map that the next lens
+  // pick or wipe overwrites, so the failure is safe to swallow.
+  void useSettingsStore.getState().clearDesktopScopedPreferences().catch(() => {});
 }
 
 /** Pull-to-refresh: re-run the bootstrap (re-subscribes replace desktop-side, so this is snapshot refresh everywhere). */

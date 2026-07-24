@@ -15,6 +15,12 @@ vi.mock('@/connection/connectionManager', () => ({
   requireVerbClient: () => ({ readTranscriptWindow, readStreamSubscribe }),
 }));
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: vi.fn() }));
+// @/connection/actions also imports settingsStore, which persists via
+// expo-secure-store - fake it so the vitest (node) run has no native module.
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: () => Promise.resolve(null),
+  setItemAsync: () => Promise.resolve(),
+}));
 
 function windowWithAssistantText(text: string): { entries: TranscriptEntryWire[] } {
   return { entries: [{ kind: 'assistant', uuid: 'a1', ts: 1, blocks: [{ type: 'text', text }] }] };

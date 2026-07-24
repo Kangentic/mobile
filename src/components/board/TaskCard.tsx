@@ -64,8 +64,6 @@ export interface TaskCardProps {
   onLongPress?: () => void;
   /** Absolutely-positioned content painted over the whole card - the Agents feed's section-change pulse. The board has none. */
   overlay?: React.ReactNode;
-  /** Extra content appended after the usage bar - the Agents feed's time-ago + chevron utility row. */
-  footer?: React.ReactNode;
 }
 
 /**
@@ -89,7 +87,6 @@ export function TaskCard({
   onPress,
   onLongPress,
   overlay,
-  footer,
 }: TaskCardProps): React.JSX.Element {
   const theme = useTheme();
   // The labels row stretches to the card's full content width regardless of
@@ -109,10 +106,7 @@ export function TaskCard({
   // itself is one tap away in the detail view.
   const hasPr = showMetaRow && task.pr_number !== null;
   const hasMetaRow = showMetaRow && task.labels.length > 0;
-  // One shared divider for the trailing utility content (usage bar, then
-  // the Agents feed's time-ago footer) instead of each owning its own -
-  // two hairlines a few pixels apart reads as visual noise, not structure.
-  const hasUtilityStrip = isUsageTrusted(usage) || footer !== undefined;
+  const hasUtilityStrip = isUsageTrusted(usage);
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>
@@ -171,13 +165,11 @@ export function TaskCard({
           </Row>
         ) : null}
         {hasUtilityStrip ? (
-          <Stack
-            gap="xs"
+          <View
             style={[styles.utilityStrip, { borderTopColor: theme.colors.border, marginTop: theme.spacing.xs, paddingTop: theme.spacing.sm }]}
           >
             <ContextUsageBar usage={usage} testID={`${testID}-usage`} />
-            {footer}
-          </Stack>
+          </View>
         ) : null}
       </Stack>
     </Card>

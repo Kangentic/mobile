@@ -21,8 +21,8 @@ function contextUsageColor(theme: ReturnType<typeof useTheme>, usedPercentage: n
 /**
  * Whether a usage report is trustworthy enough to render - a sane window
  * size the used tokens could fit inside. Exported so a parent (TaskCard)
- * can decide layout - e.g. whether a shared divider above this bar is
- * needed - without duplicating the check.
+ * can decide layout - whether to render its bordered utility strip at all -
+ * without duplicating the check.
  */
 export function isUsageTrusted(usage: SessionUsageWire | null): usage is SessionUsageWire {
   return usage !== null && usage.contextWindow.contextWindowSize > 0 && usage.contextWindow.usedTokens <= usage.contextWindow.contextWindowSize;
@@ -32,11 +32,10 @@ export function isUsageTrusted(usage: SessionUsageWire | null): usage is Session
  * The model + context-window bar shared by the board's task cards and the
  * Agents feed rows: model name and used percent on one line (both muted -
  * secondary to the card's own content, never competing with it), the bar
- * full-width beneath. No divider or top padding of its own - a parent
- * placing this alongside other utility content (a time-ago footer) owns
- * ONE shared divider rather than stacking two. Renders nothing when the
- * session reports no usage yet, or fails isUsageTrusted - desktop parity
- * for "don't show a bar we don't trust".
+ * full-width beneath. No divider or top padding of its own - the parent
+ * (a task card's utility strip) owns the divider above it. Renders nothing
+ * when the session reports no usage yet, or fails isUsageTrusted - desktop
+ * parity for "don't show a bar we don't trust".
  */
 export function ContextUsageBar({ usage, testID }: ContextUsageBarProps): React.JSX.Element | null {
   const theme = useTheme();

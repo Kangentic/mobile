@@ -202,3 +202,18 @@ describe('settingsStore - collapsed triage section', () => {
     expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
   });
 });
+
+describe('settingsStore - clearDesktopScopedPreferences', () => {
+  beforeEach(() => {
+    storedValues.clear();
+    useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
+  });
+
+  it('resets preferredSessionLensByTaskId and persists the empty map', async () => {
+    await useSettingsStore.getState().setPreferredSessionLens('task-1', 'chat');
+    await useSettingsStore.getState().clearDesktopScopedPreferences();
+
+    expect(useSettingsStore.getState().preferredSessionLensByTaskId).toEqual({});
+    expect(storedValues.get('settings.preferredSessionLensByTaskId')).toBe('{}');
+  });
+});

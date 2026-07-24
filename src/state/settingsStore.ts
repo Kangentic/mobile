@@ -114,6 +114,10 @@ interface SettingsStoreState {
   setPreferredSessionLens: (taskId: string, lens: PreferredSessionLens) => Promise<void>;
   setPushCategoryEnabled: (category: PushCategory, enabled: boolean) => Promise<void>;
   toggleTriageSectionCollapsed: (title: string) => Promise<void>;
+  /** Clears preferences keyed by the desktop's own task IDs (currently just
+   * preferredSessionLensByTaskId), which go stale on unpair or a new
+   * pairing - the desktop's task IDs mean nothing to a different desktop. */
+  clearDesktopScopedPreferences: () => Promise<void>;
 }
 
 /**
@@ -212,5 +216,10 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     const next = get().collapsedTriageSection === title ? null : title;
     set({ collapsedTriageSection: next });
     await SecureStore.setItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY, JSON.stringify(next));
+  },
+
+  clearDesktopScopedPreferences: async () => {
+    set({ preferredSessionLensByTaskId: {} });
+    await SecureStore.setItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY, JSON.stringify({}));
   },
 }));
