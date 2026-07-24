@@ -65,6 +65,31 @@ describe('validateScannedQr', () => {
     expect(localhostResult.ok).toBe(true);
   });
 
+  it('accepts the emulator host-loopback alias ws://10.0.2.2 only in dev builds', () => {
+    const payload = buildValidPayload({ relayAddress: 'ws://10.0.2.2:8080' });
+    const uri = encodePairingQrPayload(payload);
+
+    // Without __DEV__ defined (production shape), the alias is rejected.
+    const productionResult = validateScannedQr(uri, anchorNow(0));
+    expect(productionResult.ok).toBe(false);
+    if (productionResult.ok) throw new Error('unreachable');
+    expect(productionResult.errorKind).toBe('insecure-relay');
+
+    // With __DEV__ true (dev-client shape), the alias is a loopback peer.
+    (globalThis as { __DEV__?: boolean }).__DEV__ = true;
+    try {
+      const devResult = validateScannedQr(uri, anchorNow(0));
+      expect(devResult.ok).toBe(true);
+
+      // Prefix-boundary still enforced: 10.0.2.20 is NOT the alias.
+      const boundaryPayload = buildValidPayload({ relayAddress: 'ws://10.0.2.20:8080' });
+      const boundaryResult = validateScannedQr(encodePairingQrPayload(boundaryPayload), anchorNow(0));
+      expect(boundaryResult.ok).toBe(false);
+    } finally {
+      delete (globalThis as { __DEV__?: boolean }).__DEV__;
+    }
+  });
+
   it('rejects a non-loopback plaintext ws:// relay as insecure-relay', () => {
     const payload = buildValidPayload({ relayAddress: 'ws://relay.example.com' });
     const uri = encodePairingQrPayload(payload);

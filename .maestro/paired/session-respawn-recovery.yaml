@@ -25,8 +25,10 @@ appId: com.kangentic.mobile
 - inputText: "/respawn"
 - tapOn:
     id: "composer-send"
+# Anchored regex: the markdown renderer can split the marker across text
+# nodes, and Maestro's text matcher is full-string - match the stable head.
 - extendedWaitUntil:
-    visible: "Respawned session online (stub-session-2)."
+    visible: "Respawned session online.*"
     timeout: 25000
 - assertNotVisible:
     id: "session-ended-state"

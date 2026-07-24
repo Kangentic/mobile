@@ -101,7 +101,15 @@ function parseArgs(argv) {
   // relay.
   const identityIndex = argv.indexOf('--identity-file');
   const identityFile = identityIndex >= 0 ? argv[identityIndex + 1] : DEFAULT_IDENTITY_FILE;
-  return { relayUrl, autoConfirm, phoneKeyHex, identityFile };
+  // --advertise-relay <url>: the relay address baked into the pairing QR
+  // (what the PHONE dials), when it differs from the address THIS process
+  // dials. The emulator reaches host loopback as ws://10.0.2.2:8080 (its
+  // NAT alias, no adb reverse involved), while the stub on the host dials
+  // ws://127.0.0.1:8080 - same relay, two vantage points. CI uses the same
+  // split.
+  const advertiseIndex = argv.indexOf('--advertise-relay');
+  const advertiseRelayUrl = advertiseIndex >= 0 ? argv[advertiseIndex + 1] : relayUrl;
+  return { relayUrl, autoConfirm, phoneKeyHex, identityFile, advertiseRelayUrl };
 }
 
 function connect(url) {
@@ -710,7 +718,7 @@ function isEmulatorTypeable(uri) {
 }
 
 async function main() {
-  const { relayUrl, autoConfirm, phoneKeyHex, identityFile } = parseArgs(process.argv.slice(2));
+  const { relayUrl, autoConfirm, phoneKeyHex, identityFile, advertiseRelayUrl } = parseArgs(process.argv.slice(2));
 
   // Already-paired fast path: open the ongoing session directly, no pairing.
   if (phoneKeyHex) {
@@ -740,7 +748,7 @@ async function main() {
     qrUri = encodePairingQrPayload({
       desktopStaticPublicKey: desktopStatic.publicKey,
       pairingToken,
-      relayAddress: relayUrl,
+      relayAddress: advertiseRelayUrl,
       expiresAt,
       protocolVersion: PROTOCOL_VERSION,
     });

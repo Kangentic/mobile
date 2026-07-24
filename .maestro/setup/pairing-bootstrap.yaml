@@ -9,7 +9,14 @@ tags:
 # must pair to its own stub) and the future CI Maestro job. Exclude it from
 # suite runs with --exclude-tags setup.
 - launchApp
-# A pm-cleared dev client shows the first-run developer-menu sheet once.
+# Wait out the cold boot first: either the pair CTA or the dev client's
+# one-time first-run sheet ("Continue") lands, whichever renders first -
+# checking for the sheet immediately after launchApp races the boot and
+# skips before the sheet exists.
+- extendedWaitUntil:
+    visible:
+      text: "Pair with your desktop|Continue"
+    timeout: 90000
 - runFlow:
     when:
       visible: "Continue"
@@ -17,7 +24,7 @@ tags:
       - tapOn: "Continue"
 - extendedWaitUntil:
     visible: "Pair with your desktop"
-    timeout: 60000
+    timeout: 15000
 - tapOn: "Pair with your desktop"
 - extendedWaitUntil:
     visible:
