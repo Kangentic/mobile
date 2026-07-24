@@ -89,6 +89,19 @@ describe('contextWindowDisplayPercent', () => {
     const usage = buildUsage({ contextWindowSize: 0, usedTokens: 5000, usedPercentage: 100 });
     expect(contextWindowDisplayPercent(usage)).toBe(0);
   });
+
+  it('does not treat usedTokens exactly at the window size as over budget - pins the documented "exceeds" (strict >) semantics at their own boundary', () => {
+    // usedPercentage is authoritative and independent of the usedTokens /
+    // contextWindowSize ratio (the same independence the 190_000 / 200_000 /
+    // usedPercentage: 105 case above relies on), so a usedPercentage well
+    // below 100 here is a legitimate payload, not an invented one. Kills an
+    // isContextWindowOverBudget `>` -> `>=` mutation: that mutation would
+    // wrongly clamp this to 100, and every other case in this describe block
+    // stays green against it (the over-budget case is already at 200_000 <
+    // 210_000, not exactly-equal, so it can't see the flip either).
+    const usage = buildUsage({ contextWindowSize: 200_000, usedTokens: 200_000, usedPercentage: 80 });
+    expect(contextWindowDisplayPercent(usage)).toBe(80);
+  });
 });
 
 describe('contextUsageColor', () => {
@@ -149,6 +162,13 @@ describe('ContextUsageBar', () => {
 
     expect(screen.getByTestId('usage-bar')).toBeTruthy();
     expect(screen.getByText('100%')).toBeTruthy();
+    // The accessibility label/value must carry the clamped 100, not the raw
+    // reported 92: a mutation that feeds usage.contextWindow.usedPercentage
+    // straight into these two props instead of the clamped local would leave
+    // the visible "100%" Text and the fill style (asserted below) green
+    // while silently reading 92% to a screen reader.
+    expect(screen.getByLabelText('Claude Fable 5, context window 100% used')).toBeTruthy();
+    expect(screen.getByTestId('usage-bar').props.accessibilityValue).toEqual({ min: 0, max: 100, now: 100 });
   });
 
   it('renders nothing for a null usage report', () => {
