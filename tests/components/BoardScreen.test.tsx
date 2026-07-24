@@ -171,6 +171,47 @@ describe('BoardScreen', () => {
     });
   });
 
+  it('moving to a column that already holds tasks appends after them - targetPosition is the existing count, not hardcoded to 0', async () => {
+    // seedBoard's default fixture leaves lane-doing empty, which cannot
+    // distinguish append-to-bottom from a hardcoded-0 regression (both
+    // produce targetPosition 0). Seed an existing task in the target
+    // column so the assertion actually depends on the append math.
+    useBoardStore.setState({
+      projects: [{ id: 'project-1', name: 'Alpha' }],
+      boardsByProjectId: {
+        'project-1': {
+          columns: [column('lane-todo', 'To Do', 0), column('lane-doing', 'Doing', 1)],
+          tasksById: {
+            'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, 'sess-1'),
+            'task-2': baseTask('task-2', 'Already in progress', 'lane-doing', 0, null),
+          },
+          backlog: [],
+          snapshotAt: 0,
+          showTicketNumbers: true,
+        },
+      },
+      pendingMoves: [],
+    });
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
+    fireEvent.press(screen.getByTestId('task-action-move'));
+    fireEvent.press(screen.getByTestId('move-target-lane-doing'));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('move-confirm'));
+    });
+
+    expect(mockMoveTaskOptimistic).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      targetSwimlaneId: 'lane-doing',
+      targetPosition: 1,
+    });
+  });
+
   it('Edit routes to the edit sheet and saves the changed fields', async () => {
     render(
       <ThemeProvider>
