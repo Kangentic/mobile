@@ -20,7 +20,13 @@
  *
  * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
  *        --kangentic-repo <path>, --clear, --no-metro, --no-protocol-link,
- *        --stub (pair mode), --fresh (stub mode: ignore the saved phone key).
+ *        --stub (pair mode), --fresh (stub mode: ignore the saved phone key),
+ *        --headless (boot the emulator with -no-window; Maestro and
+ *        screenshots work identically, there is just no window to watch),
+ *        --shard <N> (stub mode: boot N-1 extra read-only emulator
+ *        instances, each auto-paired to its own stub via
+ *        .maestro/setup/pairing-bootstrap.yaml, then run the batch with
+ *        `maestro test --shard-split N .maestro/paired`).
  *
  * Devices: every adb call targets ONE device, chosen once per run via
  * --serial (or the ANDROID_SERIAL env var, which adb honors natively and
@@ -166,6 +172,8 @@ function parseRigArgs(argv) {
       'no-protocol-link': { type: 'boolean', default: false },
       stub: { type: 'boolean', default: false },
       fresh: { type: 'boolean', default: false },
+      headless: { type: 'boolean', default: false },
+      shard: { type: 'string' },
     },
   });
   const mode = positionals[0] ?? 'live';
@@ -462,13 +470,16 @@ function avdConfigPath(avdName) {
 }
 
 /** Boot the AVD cold and wait for it; returns the booted emulator's serial. */
-async function bootEmulator(avdName) {
+async function bootEmulator(avdName, { headless = false, readOnly = false } = {}) {
   const listed = run('emulator', ['-list-avds']);
   if (listed.status !== 0) fail('the `emulator` command is not on PATH (add %ANDROID_HOME%\\emulator to PATH)');
   if (!listed.stdout.split('\n').map((name) => name.trim()).includes(avdName)) {
     fail(`AVD "${avdName}" not found. Available: ${listed.stdout.trim().split('\n').join(', ') || '(none)'}`);
   }
-  log(`booting emulator ${avdName} (host GPU, cold boot)...`);
+  // With another emulator already attached (sharding), the boot poll must
+  // bind to the NEW instance, never an already-running one.
+  const alreadyAttached = new Set(listAdbDevices().map((device) => device.serial));
+  log(`booting emulator ${avdName} (host GPU, cold boot${headless ? ', headless' : ''}${readOnly ? ', read-only instance' : ''})...`);
   // Explicit host GPU: an AVD with hw.gpu.enabled=no renders in software
   // and degrades over long sessions (progressive input + window lag).
   // NOTE emulator 36.6.11.0 rejects the old angle_indirect value (silently
@@ -477,7 +488,16 @@ async function bootEmulator(avdName) {
   // flag here overrides whatever the config says. ALWAYS cold boot
   // (-no-snapshot-load): resuming a Quick Boot snapshot taken under a
   // different GPU config wedges the guest with adb reporting offline.
-  const emulatorChild = spawn('emulator', ['-avd', avdName, '-no-snapshot-load', '-gpu', 'host'], {
+  // -no-window (headless): Maestro drives the device purely over adb/gRPC
+  // and screenshots capture the guest framebuffer, so a window is only for
+  // human spectating; headless skips host compositing entirely.
+  // -read-only: boots an ADDITIONAL instance of the same AVD (sharding);
+  // its disk changes are discarded at shutdown, so a sharded instance is
+  // re-paired fresh every rig run via the pairing bootstrap flow.
+  const emulatorArgs = ['-avd', avdName, '-no-snapshot-load', '-gpu', 'host'];
+  if (headless) emulatorArgs.push('-no-window');
+  if (readOnly) emulatorArgs.push('-read-only');
+  const emulatorChild = spawn('emulator', emulatorArgs, {
     detached: true,
     stdio: 'ignore',
   });
@@ -487,7 +507,7 @@ async function bootEmulator(avdName) {
     // Poll per-serial: a physical device may be attached alongside, so a
     // bare `adb shell` would refuse with "more than one device".
     for (const device of listAdbDevices()) {
-      if (!device.isEmulator || device.state !== 'device') continue;
+      if (!device.isEmulator || device.state !== 'device' || alreadyAttached.has(device.serial)) continue;
       const boot = run('adb', ['-s', device.serial, 'shell', 'getprop', 'sys.boot_completed']);
       if (boot.stdout?.trim() === '1') {
         log(`emulator booted (${device.serial})`);
@@ -505,10 +525,10 @@ async function bootEmulator(avdName) {
  * emulator boot), else boot the AVD. Sets ANDROID_SERIAL for everything
  * downstream.
  */
-async function ensureDevice(avdName, requestedSerial) {
+async function ensureDevice(avdName, requestedSerial, { headless = false } = {}) {
   let target = selectAdbTarget(requestedSerial);
   if (!target) {
-    const serial = await bootEmulator(avdName);
+    const serial = await bootEmulator(avdName, { headless });
     target = { serial, state: 'device', isEmulator: true };
   }
   applyAdbTarget(target);
@@ -520,6 +540,12 @@ function ensureAdbReverse() {
   const result = run('adb', ['reverse', `tcp:${RELAY_PORT}`, `tcp:${RELAY_PORT}`]);
   if (result.status !== 0) fail(`adb reverse failed: ${result.stderr?.trim() || result.stdout?.trim()}`);
   log(`adb reverse tcp:${RELAY_PORT} in place`);
+}
+
+/** Serial-scoped reverse for sharded instances (the plain helpers target ANDROID_SERIAL). */
+function ensureAdbReverseFor(serial, port) {
+  const result = run('adb', ['-s', serial, 'reverse', `tcp:${port}`, `tcp:${port}`]);
+  if (result.status !== 0) fail(`adb -s ${serial} reverse tcp:${port} failed: ${result.stderr?.trim() || result.stdout?.trim()}`);
 }
 
 function ensureInspectAdbReverse() {
@@ -666,6 +692,62 @@ function startStub(state, flags, restartCount = 0) {
       }
     }, 20_000).unref();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sharding: extra emulator instances, each paired to its own stub
+
+/**
+ * Boot N-1 additional read-only instances of the AVD and pair each to its
+ * own stub peer (own identity file: the pairing and session slots derive
+ * from the desktop static key, so instances must not share one). Read-only
+ * instances discard disk changes at shutdown, so pairing is re-run fresh
+ * each time via .maestro/setup/pairing-bootstrap.yaml. Returns the extra
+ * serials; afterwards `maestro test --shard-split N .maestro/paired`
+ * distributes flows across all instances.
+ */
+async function setupShardDevices(shardCount, avdName, flags) {
+  const extraSerials = [];
+  for (let shardIndex = 1; shardIndex < shardCount; shardIndex++) {
+    log(`shard ${shardIndex}: booting an additional read-only emulator instance...`);
+    const serial = await bootEmulator(avdName, { headless: flags.headless, readOnly: true });
+    ensureAdbReverseFor(serial, RELAY_PORT);
+    ensureAdbReverseFor(serial, METRO_PORT);
+
+    const identityFile = join(tmpdir(), `kangentic-stub-desktop-identity-shard${shardIndex}.json`);
+    let pairingUri = null;
+    let established = false;
+    spawnPrefixed(`stub${shardIndex}`, 'node', ['scripts/stubDesktopPeer.mjs', '--relay', RELAY_URL, '--yes', '--identity-file', identityFile], {
+      onLine: (line) => {
+        const uriMatch = line.match(/kangentic-pair:\/\/[A-Za-z0-9-]+/);
+        if (uriMatch) pairingUri = uriMatch[0];
+        if (line.includes('[session] established')) established = true;
+      },
+    });
+    const uriDeadline = Date.now() + 30_000;
+    while (pairingUri === null && Date.now() < uriDeadline) {
+      await sleep(500);
+    }
+    if (pairingUri === null) fail(`shard ${shardIndex}: the stub printed no pairing URI within 30s`);
+
+    log(`shard ${shardIndex}: clearing the app on ${serial} and running the pairing bootstrap flow...`);
+    run('adb', ['-s', serial, 'shell', 'pm', 'clear', APP_PACKAGE]);
+    const bootstrap = runShell(`maestro --device ${serial} test -e PAIRING_URI=${pairingUri} .maestro/setup/pairing-bootstrap.yaml`, {
+      cwd: repoRoot,
+      timeout: 300_000,
+    });
+    if (bootstrap.status !== 0) {
+      fail(`shard ${shardIndex}: pairing bootstrap failed on ${serial}:\n${(bootstrap.stdout ?? '').slice(-2000)}\n${(bootstrap.stderr ?? '').slice(-2000)}`);
+    }
+    const establishDeadline = Date.now() + 30_000;
+    while (!established && Date.now() < establishDeadline) {
+      await sleep(500);
+    }
+    if (!established) fail(`shard ${shardIndex}: the session did not establish after the pairing bootstrap`);
+    log(`shard ${shardIndex}: ${serial} paired and established`);
+    extraSerials.push(serial);
+  }
+  return extraSerials;
 }
 
 // ---------------------------------------------------------------------------
@@ -885,7 +967,7 @@ async function main() {
       }
       await sleep(2000);
     }
-    const bootedSerial = await bootEmulator(avdName);
+    const bootedSerial = await bootEmulator(avdName, { headless: flags.headless });
     applyAdbTarget({ serial: bootedSerial, state: 'device', isEmulator: true });
     ensureAdbReverse();
     ensureInspectAdbReverse();
@@ -900,7 +982,7 @@ async function main() {
 
   log(`mode: ${mode}`);
   if (!commandExists('adb', ['version'])) fail('adb is not on PATH');
-  await ensureDevice(avdName, requestedSerial);
+  await ensureDevice(avdName, requestedSerial, { headless: flags.headless });
 
   const kangenticRepo = resolveKangenticRepo(flags, state);
   // Link the sibling protocol build into node_modules; a change forces a
@@ -953,6 +1035,20 @@ async function main() {
     startMetro({ ...flags, clear: flags.clear || protocolRelinked }, { EXPO_PUBLIC_KANGENTIC_MOCK: '1' });
   } else {
     startMetro({ ...flags, clear: flags.clear || protocolRelinked });
+  }
+
+  // Sharding (stub mode): boot and pair the extra instances AFTER Metro is
+  // up - the pairing bootstrap flow launches the app, which needs a bundle.
+  if (mode === 'stub' && flags.shard !== undefined) {
+    const shardCount = Number(flags.shard);
+    if (!Number.isInteger(shardCount) || shardCount < 2 || shardCount > 4) {
+      fail(`--shard expects an integer 2..4, got "${flags.shard}"`);
+    }
+    const primarySerial = process.env.ANDROID_SERIAL;
+    const extraSerials = await setupShardDevices(shardCount, avdName, flags);
+    const allSerials = [primarySerial, ...extraSerials].join(',');
+    log('shard devices ready. Run the batch with:');
+    log(`  maestro --device "${allSerials}" test --shard-split ${shardCount} .maestro/paired`);
   }
 
   if (flags['no-metro'] && spawnedChildren.length === 0) {

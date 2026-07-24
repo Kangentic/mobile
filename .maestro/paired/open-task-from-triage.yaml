@@ -26,13 +26,15 @@ appId: com.kangentic.mobile
       id: "conversation-list"
     timeout: 15000
 - assertVisible: "Fix the login redirect bug and add a regression test."
-# Changes is its own pushed destination behind the header chip.
+# Changes is a same-screen mode behind the pill bar (TaskHeader's
+# onOpenChanges chip / the old pushed ChangesScreen are unused now that
+# SessionScreen renders ChangesTab inline for session-mode-changes).
 - tapOn:
-    id: "task-header-changes"
+    id: "session-mode-changes"
 - assertVisible:
-    id: "changes-screen"
+    id: "changes-scope"
 - extendedWaitUntil:
     visible:
       id: "changes-file-list"
     timeout: 15000
-- assertVisible: "login.ts"
+- assertVisible: "src/auth/login.ts"

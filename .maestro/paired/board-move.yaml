@@ -12,6 +12,10 @@ appId: com.kangentic.mobile
     timeout: 60000
 - tapOn:
     id: "board-tab"
+# stub-task-1 (the active-session card the header actions target) lives in
+# the Doing column, not the default To Do page the board pager opens on.
+- tapOn:
+    id: "board-column-chip-lane-doing"
 - extendedWaitUntil:
     visible:
       id: "board-card-stub-task-1"
