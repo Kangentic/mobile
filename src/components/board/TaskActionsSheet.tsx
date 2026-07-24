@@ -78,7 +78,7 @@ export function TaskActionsSheet({
           testID="task-action-edit"
         />
         <ActionRow
-          label="Archive (move to Done)"
+          label="Archive"
           iconName="archive"
           onPress={onArchive}
           disabled={actionInFlight || !archiveAvailable}

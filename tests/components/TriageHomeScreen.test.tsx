@@ -6,7 +6,8 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { boardSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { CapabilityError } from '@/channel/verbClient';
+import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -20,11 +21,20 @@ jest.mock('react-native-safe-area-context', () =>
 );
 
 const mockPeekAwaitedPrompt = jest.fn();
+const mockArchiveTask = jest.fn();
+const mockDeleteTaskFromBoard = jest.fn();
+const mockMoveTaskOptimistic = jest.fn();
+const mockUpdateTaskFields = jest.fn();
 jest.mock('@/connection/actions', () => ({
   refreshSnapshots: jest.fn().mockResolvedValue(undefined),
   peekAwaitedPrompt: (sessionId: string, promptId: string) => mockPeekAwaitedPrompt(sessionId, promptId),
   peekLastAssistantMessage: jest.fn().mockResolvedValue(null),
+  peekLastTerminalLine: jest.fn().mockResolvedValue(null),
   answerPermissionPrompt: jest.fn().mockResolvedValue(undefined),
+  archiveTask: (input: unknown) => mockArchiveTask(input),
+  deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
+  moveTaskOptimistic: (input: unknown) => mockMoveTaskOptimistic(input),
+  updateTaskFields: (input: unknown) => mockUpdateTaskFields(input),
 }));
 
 function seedStores(): void {
@@ -83,6 +93,63 @@ function renderHome(): void {
       <TriageHomeScreen />
     </ThemeProvider>,
   );
+}
+
+/**
+ * Two paired projects, each with its own board - unlike BoardScreen (one
+ * screen-level projectId), the Triage feed spans every paired project at
+ * once, so every long-press target carries its OWN projectId. Sess-2/task-2
+ * lives in project-2, never project-1, so any test that long-presses it and
+ * then asserts the action call's `projectId` catches a crossed-project bug
+ * (e.g. a screen-level default sneaking back in).
+ */
+function seedTwoProjectBoards(): void {
+  useSettingsStore.setState({ collapsedTriageSection: null });
+  useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true });
+  useBoardStore.setState({
+    projects: [
+      { id: 'project-1', name: 'Alpha' },
+      { id: 'project-2', name: 'Beta' },
+    ],
+    hasHydratedSnapshot: true,
+    boardsByProjectId: {
+      'project-1': {
+        columns: [
+          boardColumnFixture({ id: 'p1-todo', name: 'To Do', role: 'todo', position: 0 }),
+          boardColumnFixture({ id: 'p1-done', name: 'Done', role: 'done', position: 1 }),
+        ],
+        tasksById: {
+          'task-1': boardTaskFixture({ id: 'task-1', title: 'Fix the login bug', swimlane_id: 'p1-todo', session_id: 'sess-1' }),
+        },
+        backlog: [],
+        snapshotAt: 0,
+        showTicketNumbers: true,
+      },
+      'project-2': {
+        columns: [
+          boardColumnFixture({ id: 'p2-todo', name: 'Backlog', role: 'todo', position: 0 }),
+          // Two tasks already parked here so the "append to bottom" position
+          // this suite pins is non-zero - a target column count of 0 cannot
+          // distinguish a correct `.length` computation from a regressed
+          // hardcoded 0.
+          boardColumnFixture({ id: 'p2-doing', name: 'In Progress', role: null, position: 1 }),
+          boardColumnFixture({ id: 'p2-done', name: 'Shipped', role: 'done', position: 2 }),
+        ],
+        tasksById: {
+          'task-2': boardTaskFixture({ id: 'task-2', title: 'Ship the beta banner', swimlane_id: 'p2-todo', session_id: 'sess-2' }),
+          'task-2b': boardTaskFixture({ id: 'task-2b', title: 'Existing card A', swimlane_id: 'p2-doing', position: 0, session_id: null }),
+          'task-2c': boardTaskFixture({ id: 'task-2c', title: 'Existing card B', swimlane_id: 'p2-doing', position: 1, session_id: null }),
+        },
+        backlog: [],
+        snapshotAt: 0,
+        showTicketNumbers: true,
+      },
+    },
+    pendingMoves: [],
+  });
+  useActivityStore.getState().reset();
+  useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+  useActivityStore.getState().registerSession('sess-2', 'task-2', 'project-2');
 }
 
 describe('TriageHomeScreen', () => {
@@ -235,5 +302,143 @@ describe('TriageHomeScreen', () => {
     useChannelStore.setState({ pairedState: 'unpaired' });
     renderHome();
     expect(screen.getByTestId('triage-pair-cta')).toBeTruthy();
+  });
+
+  describe('long-press action hub', () => {
+    beforeEach(() => {
+      mockArchiveTask.mockReset().mockResolvedValue(undefined);
+      mockDeleteTaskFromBoard.mockReset().mockResolvedValue(undefined);
+      mockMoveTaskOptimistic.mockReset().mockResolvedValue(undefined);
+      mockUpdateTaskFields.mockReset().mockResolvedValue(undefined);
+      seedTwoProjectBoards();
+    });
+
+    it('opens TaskActionsSheet for the long-pressed row, scoped to that row\'s own project', () => {
+      renderHome();
+      expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
+
+      // task-2/sess-2 lives in project-2, not project-1.
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+
+      const sheet = screen.getByTestId('task-actions-sheet');
+      expect(sheet).toBeTruthy();
+      expect(within(sheet).getByText('Ship the beta banner')).toBeTruthy();
+      // project-2 has a done-role column, so archive is enabled - proves the
+      // sheet used project-2's board, not project-1's (whose done column has
+      // a different id and would still resolve true, but a screen-level
+      // default of "no project" or "the wrong project" is what this and the
+      // action-call assertions below are really pinning).
+      expect(screen.getByTestId('task-action-archive').props.accessibilityState.disabled).toBe(false);
+    });
+
+    it('Move: routes to the target project\'s own columns and appends to the bottom of the selected column', async () => {
+      renderHome();
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+      fireEvent.press(screen.getByTestId('task-action-move'));
+
+      expect(screen.getByTestId('move-task-sheet')).toBeTruthy();
+      // project-2's columns render; project-1's do not.
+      expect(screen.getByTestId('move-target-p2-doing')).toBeTruthy();
+      expect(screen.queryByTestId('move-target-p1-todo')).toBeNull();
+      expect(screen.queryByTestId('move-target-p1-done')).toBeNull();
+
+      fireEvent.press(screen.getByTestId('move-target-p2-doing'));
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('move-confirm'));
+      });
+
+      // p2-doing already holds task-2b and task-2c: targetPosition must be
+      // their count (2), not 0 - the tell for a regressed "always top" bug.
+      expect(mockMoveTaskOptimistic).toHaveBeenCalledWith({
+        projectId: 'project-2',
+        taskId: 'task-2',
+        targetSwimlaneId: 'p2-doing',
+        targetPosition: 2,
+      });
+    });
+
+    it('Edit: saves the changed field with the target\'s own project id', async () => {
+      renderHome();
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+      fireEvent.press(screen.getByTestId('task-action-edit'));
+
+      expect(screen.getByTestId('edit-task-sheet')).toBeTruthy();
+      expect(screen.getByTestId('edit-task-title').props.value).toBe('Ship the beta banner');
+
+      fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Ship the beta banner v2');
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('edit-task-save'));
+      });
+
+      expect(mockUpdateTaskFields).toHaveBeenCalledWith({
+        projectId: 'project-2',
+        taskId: 'task-2',
+        title: 'Ship the beta banner v2',
+      });
+    });
+
+    it('Archive: calls archiveTask with the target\'s own project id and task id', async () => {
+      renderHome();
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-archive'));
+      });
+
+      expect(mockArchiveTask).toHaveBeenCalledWith({ projectId: 'project-2', taskId: 'task-2' });
+    });
+
+    it('Delete: requires the two-step confirm, then calls deleteTaskFromBoard with the target\'s own project id and task id', async () => {
+      renderHome();
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+      fireEvent.press(screen.getByTestId('task-action-delete'));
+      expect(mockDeleteTaskFromBoard).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+      });
+
+      expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-2', taskId: 'task-2' });
+    });
+
+    it('Move: a CapabilityError surfaces its own message on the move sheet', async () => {
+      mockMoveTaskOptimistic.mockRejectedValueOnce(new CapabilityError('move-task', 'The desktop rejected the move'));
+      renderHome();
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+      fireEvent.press(screen.getByTestId('task-action-move'));
+      fireEvent.press(screen.getByTestId('move-target-p2-doing'));
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('move-confirm'));
+      });
+
+      expect(screen.getByText('The desktop rejected the move')).toBeTruthy();
+    });
+
+    it('Move: a plain Error falls back to the generic message (narrower than the edit/archive/delete error handling)', async () => {
+      mockMoveTaskOptimistic.mockRejectedValueOnce(new Error('some transport blip'));
+      renderHome();
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+      fireEvent.press(screen.getByTestId('task-action-move'));
+      fireEvent.press(screen.getByTestId('move-target-p2-doing'));
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('move-confirm'));
+      });
+
+      expect(screen.getByText('Move failed - check the connection')).toBeTruthy();
+      expect(screen.queryByText('some transport blip')).toBeNull();
+    });
+
+    it('Archive: a plain Error\'s own message surfaces (unlike Move, the archive/edit/delete path is not narrowed to CapabilityError)', async () => {
+      mockArchiveTask.mockRejectedValueOnce(new Error('archive transport blip'));
+      renderHome();
+      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-archive'));
+      });
+
+      expect(screen.getByText('archive transport blip')).toBeTruthy();
+    });
   });
 });

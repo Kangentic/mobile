@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import { GitPullRequest, Paperclip } from 'lucide-react-native';
+import { GitPullRequest } from 'lucide-react-native';
 import type { BoardTaskWire, SessionUsageWire } from '@kangentic/protocol';
 import {
   AgentStatusIcon,
@@ -28,7 +28,7 @@ function prStateColor(theme: ReturnType<typeof useTheme>, prState: string | null
 }
 
 export interface TaskCardProps {
-  /** Base testID; sub-parts key off it as `${testID}-status`, `-project`, `-display-id`, `-pr`, `-attachments`, `-snippet`, `-usage`. */
+  /** Base testID; sub-parts key off it as `${testID}-status`, `-project`, `-display-id`, `-pr`, `-snippet`, `-usage`. */
   testID: string;
   task: BoardTaskWire;
   statusKind: AgentStatusKind | null;
@@ -56,8 +56,8 @@ export interface TaskCardProps {
   projectName?: string | null;
   /**
    * Whether to render board/backlog reference chrome: the labels row and
-   * the title row's PR-state icon and attachment count (same category as
-   * the ticket number). Defaults true (the board).
+   * the title row's PR-state icon (same category as the ticket number).
+   * Defaults true (the board).
    */
   showMetaRow?: boolean;
   onPress: () => void;
@@ -108,10 +108,6 @@ export function TaskCard({
   // row says that without adding another stacked row of chrome. The number
   // itself is one tap away in the detail view.
   const hasPr = showMetaRow && task.pr_number !== null;
-  // Same category as the PR icon: a bare count that says "this task carries
-  // context you cannot see from here". Rides the title row rather than the
-  // labels row so a task with attachments but no labels still shows it.
-  const hasAttachments = showMetaRow && task.attachment_count > 0;
   const hasMetaRow = showMetaRow && task.labels.length > 0;
   // One shared divider for the trailing utility content (usage bar, then
   // the Agents feed's time-ago footer) instead of each owning its own -
@@ -149,14 +145,6 @@ export function TaskCard({
             <View testID={`${testID}-pr`}>
               <GitPullRequest size={14} color={prStateColor(theme, task.pr_state)} />
             </View>
-          ) : null}
-          {hasAttachments ? (
-            <Row gap="xs" style={styles.attachments} testID={`${testID}-attachments`}>
-              <Paperclip size={14} color={theme.colors.textMuted} />
-              <Text variant="caption" color="muted">
-                {task.attachment_count}
-              </Text>
-            </Row>
           ) : null}
         </Row>
         {bodyText.length > 0 || bodyMinHeight !== undefined ? (
@@ -204,9 +192,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   metaRow: {
-    alignItems: 'center',
-  },
-  attachments: {
     alignItems: 'center',
   },
   utilityStrip: {

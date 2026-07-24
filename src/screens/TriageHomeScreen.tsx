@@ -6,6 +6,9 @@ import { FlashList } from '@shopify/flash-list';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, SectionHeader, useTheme } from '@/components';
 import { TaskCard } from '@/components/board/TaskCard';
+import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
+import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
+import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import {
   selectTriageRows,
   sectionForEntry,
@@ -13,13 +16,34 @@ import {
   type TriageSection,
   useActivityStore,
 } from '@/state/activityStore';
-import { useBoardStore } from '@/state/boardStore';
+import { selectColumnsOrdered, selectTasksForColumn, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { peekAwaitedPrompt, peekLastAssistantMessage, peekLastTerminalLine, refreshSnapshots } from '@/connection/actions';
+import { CapabilityError } from '@/channel';
+import {
+  archiveTask,
+  deleteTaskFromBoard,
+  moveTaskOptimistic,
+  peekAwaitedPrompt,
+  peekLastAssistantMessage,
+  peekLastTerminalLine,
+  refreshSnapshots,
+  updateTaskFields,
+} from '@/connection/actions';
 import { buildPendingPromptSummary } from '@/conversation/pendingPromptSummary';
+import { triggerHaptic } from '@/lib/haptics';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
+
+/** A task targeted for an action from the Triage feed, bundled with its project id - the feed spans multiple projects, unlike the board's single screen-level project. */
+interface TriageActionTarget {
+  task: BoardTaskWire;
+  projectId: string;
+}
+
+function messageForActionError(error: unknown, fallback: string): string {
+  return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
+}
 
 /**
  * A session can briefly outlive its task's board entry (e.g. a snapshot
@@ -125,6 +149,100 @@ export function TriageHomeScreen(): React.JSX.Element {
   // quiet" on cold start before the desktop's actual sessions populate it.
   const hasHydratedSnapshot = useBoardStore((state) => state.hasHydratedSnapshot);
 
+  // Long-press hub, reusing the exact same TaskActionsSheet/MoveTaskSheet/
+  // EditTaskSheet trio the board uses. Every target bundles its own
+  // projectId (rather than one screen-level id, as the board has) since a
+  // triage feed spans every paired project at once.
+  const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);
+  const [actionsTarget, setActionsTarget] = useState<TriageActionTarget | null>(null);
+  const [actionsInFlight, setActionsInFlight] = useState(false);
+  const [actionsError, setActionsError] = useState<string | null>(null);
+  const [moveTarget, setMoveTarget] = useState<TriageActionTarget | null>(null);
+  const [moveInFlight, setMoveInFlight] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<TriageActionTarget | null>(null);
+  const [editInFlight, setEditInFlight] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const moveColumns = useMemo(() => {
+    const board = moveTarget ? boardsByProjectId[moveTarget.projectId] : null;
+    return board ? selectColumnsOrdered(board) : [];
+  }, [moveTarget, boardsByProjectId]);
+  const actionsArchiveAvailable = useMemo(() => {
+    const board = actionsTarget ? boardsByProjectId[actionsTarget.projectId] : null;
+    return board ? selectColumnsOrdered(board).some((column) => column.role === 'done') : false;
+  }, [actionsTarget, boardsByProjectId]);
+
+  // Stable identity: an inline arrow here would be a fresh prop on every
+  // TriageHomeScreen render, which defeats ActivityRow's React.memo for
+  // every visible card in the feed.
+  const onLongPressTask = useCallback((task: BoardTaskWire, projectId: string) => {
+    setActionsError(null);
+    setActionsTarget({ task, projectId });
+  }, []);
+
+  const onMove = useCallback(
+    (targetSwimlaneId: string) => {
+      if (!moveTarget) return;
+      const board = boardsByProjectId[moveTarget.projectId];
+      if (!board) return;
+      const targetPosition = selectTasksForColumn(board, targetSwimlaneId).length;
+      setMoveInFlight(true);
+      setMoveError(null);
+      void moveTaskOptimistic({
+        projectId: moveTarget.projectId,
+        taskId: moveTarget.task.id,
+        targetSwimlaneId,
+        targetPosition,
+      })
+        .then(() => {
+          triggerHaptic('taskMoved');
+          setMoveTarget(null);
+        })
+        .catch((error: unknown) => {
+          setMoveError(error instanceof CapabilityError ? error.message : 'Move failed - check the connection');
+        })
+        .finally(() => setMoveInFlight(false));
+    },
+    [moveTarget, boardsByProjectId],
+  );
+
+  const onEditSave = useCallback(
+    (fields: { title?: string; description?: string }) => {
+      if (!editTarget) return;
+      setEditInFlight(true);
+      setEditError(null);
+      void updateTaskFields({ projectId: editTarget.projectId, taskId: editTarget.task.id, ...fields })
+        .then(() => setEditTarget(null))
+        .catch((error: unknown) => setEditError(messageForActionError(error, 'Edit failed - check the connection')))
+        .finally(() => setEditInFlight(false));
+    },
+    [editTarget],
+  );
+
+  const onArchive = useCallback(() => {
+    if (!actionsTarget) return;
+    setActionsInFlight(true);
+    setActionsError(null);
+    void archiveTask({ projectId: actionsTarget.projectId, taskId: actionsTarget.task.id })
+      .then(() => setActionsTarget(null))
+      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Archive failed - check the connection')))
+      .finally(() => setActionsInFlight(false));
+  }, [actionsTarget]);
+
+  const onDelete = useCallback(() => {
+    if (!actionsTarget) return;
+    setActionsInFlight(true);
+    setActionsError(null);
+    void deleteTaskFromBoard({ projectId: actionsTarget.projectId, taskId: actionsTarget.task.id })
+      .then(() => {
+        triggerHaptic('destructiveConfirmed');
+        setActionsTarget(null);
+      })
+      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Delete failed - check the connection')))
+      .finally(() => setActionsInFlight(false));
+  }, [actionsTarget]);
+
   if (pairedState === 'unpaired') {
     return (
       <Screen edges={['left', 'right']}>
@@ -187,10 +305,48 @@ export function TriageHomeScreen(): React.JSX.Element {
             />
           ) : (
             <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-              <ActivityRow entry={item.entry} />
+              <ActivityRow entry={item.entry} onLongPressTask={onLongPressTask} />
             </View>
           )
         }
+      />
+
+      <TaskActionsSheet
+        visible={actionsTarget !== null}
+        task={actionsTarget?.task ?? null}
+        archiveAvailable={actionsArchiveAvailable}
+        onClose={() => setActionsTarget(null)}
+        onMove={() => {
+          setMoveError(null);
+          setMoveTarget(actionsTarget);
+          setActionsTarget(null);
+        }}
+        onEdit={() => {
+          setEditError(null);
+          setEditTarget(actionsTarget);
+          setActionsTarget(null);
+        }}
+        onArchive={onArchive}
+        onDelete={onDelete}
+        actionInFlight={actionsInFlight}
+        errorMessage={actionsError}
+      />
+      <MoveTaskSheet
+        visible={moveTarget !== null}
+        task={moveTarget?.task ?? null}
+        columns={moveColumns}
+        onClose={() => setMoveTarget(null)}
+        onMove={onMove}
+        moveInFlight={moveInFlight}
+        errorMessage={moveError}
+      />
+      <EditTaskSheet
+        visible={editTarget !== null}
+        task={editTarget?.task ?? null}
+        onClose={() => setEditTarget(null)}
+        onSave={onEditSave}
+        saveInFlight={editInFlight}
+        errorMessage={editError}
       />
     </Screen>
   );
@@ -233,12 +389,18 @@ const SECTION_PULSE_WINDOW_MS = 3000;
 const SECTION_PULSE_MAX_OPACITY = 0.16;
 const SECTION_PULSE_FADE_MS = 700;
 
-const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionActivityEntry }): React.JSX.Element {
+const ActivityRow = React.memo(function ActivityRow({
+  entry,
+  onLongPressTask,
+}: {
+  entry: SessionActivityEntry;
+  onLongPressTask: (task: BoardTaskWire, projectId: string) => void;
+}): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   // The full task (not just title): the Agents feed renders the EXACT SAME
-  // card as the board - labels, PR, attachments, usage bar - via the same
-  // shared TaskCard, plus the project name sharing the title row (the
+  // card as the board - labels, PR, usage bar - via the same shared
+  // TaskCard, plus the project name sharing the title row (the
   // board's only structural addition). The ticket number is the one
   // deliberate exception: a triage feed cares about status/title/last
   // message, not the ticket ID, so it is always off here regardless of the
@@ -267,6 +429,10 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
         : { taskId: entry.taskId, sessionId: entry.sessionId, projectId: entry.projectId },
     });
   }, [router, entry.taskId, entry.sessionId, entry.projectId, isPermission]);
+
+  const onLongPress = useCallback(() => {
+    onLongPressTask(task, entry.projectId);
+  }, [onLongPressTask, task, entry.projectId]);
 
   // Desktop-parity status treatment: green spinner while the agent works,
   // the yellow mail envelope for EVERY idle session (a pending prompt is
@@ -364,6 +530,7 @@ const ActivityRow = React.memo(function ActivityRow({ entry }: { entry: SessionA
       bodyText={snippet ?? ''}
       bodyMinHeight={snippetLineHeight}
       onPress={openTask}
+      onLongPress={onLongPress}
       overlay={
         <Animated.View
           pointerEvents="none"

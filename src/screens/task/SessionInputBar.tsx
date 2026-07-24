@@ -12,6 +12,7 @@ export interface SessionInputBarProps {
   mode: SessionMode;
   onModeChange: (mode: SessionMode) => void;
   chatAttention: boolean;
+  onMove: () => void;
 }
 
 /**
@@ -23,7 +24,7 @@ export interface SessionInputBarProps {
  * whole panel keeps its geometry. Typing in terminal happens directly in
  * the terminal (tap it to raise the keyboard).
  */
-export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }: SessionInputBarProps): React.JSX.Element | null {
+export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention, onMove }: SessionInputBarProps): React.JSX.Element | null {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   if (sessionId === null) return null;
@@ -55,7 +56,7 @@ export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }
         </Row>
       ) : null}
       {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}
-      <SessionModeToggle mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />
+      <SessionModeToggle mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} onMove={onMove} />
     </Stack>
   );
 }
