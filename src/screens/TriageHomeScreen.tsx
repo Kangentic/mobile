@@ -378,6 +378,7 @@ function UnpairedEmptyState(): React.JSX.Element {
 /** Lines the snippet slot always occupies, whatever it currently holds (see the row's fixed-geometry note). */
 const SNIPPET_LINES = 2;
 
+
 /** How long a row waits before retrying a failed snippet peek. */
 const SNIPPET_PEEK_RETRY_MS = 6000;
 
@@ -500,10 +501,14 @@ const ActivityRow = React.memo(function ActivityRow({
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const currentKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
-    // Let a burst settle before fetching: each unreadCount bump re-runs this
-    // effect and clears the previous timer, so a catch-up storm resolves to
-    // exactly one peek for the LAST key instead of one paint per event.
-    const settleTimer = setTimeout(runPeek, SNIPPET_SETTLE_MS);
+    // Let a burst settle before REFETCHING: each unreadCount bump re-runs
+    // this effect and clears the previous timer, so a catch-up storm
+    // resolves to one peek for the LAST key instead of one paint per event.
+    // The FIRST peek has no burst to absorb and the card is waiting on it,
+    // so it fires immediately - delaying it would only slow the cold start
+    // the settle exists to smooth.
+    const settleTimer =
+      peekedSnippet === null ? (runPeek(), null) : setTimeout(runPeek, SNIPPET_SETTLE_MS);
 
     function runPeek(): void {
       if (cancelled) return;
@@ -548,7 +553,7 @@ const ActivityRow = React.memo(function ActivityRow({
 
     return () => {
       cancelled = true;
-      clearTimeout(settleTimer);
+      if (settleTimer !== null) clearTimeout(settleTimer);
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
   }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce, snippetFreshnessMs]);
@@ -562,6 +567,7 @@ const ActivityRow = React.memo(function ActivityRow({
   // buys a feed that never moves under the thumb.
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
+
   return (
     <TaskCard
       testID={testID}

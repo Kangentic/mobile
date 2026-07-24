@@ -5,7 +5,7 @@ import { Badge, Button, Card, Icon, MarkdownBlock, MonoText, Row, Stack, Text, u
 import { triggerHaptic } from '@/lib/haptics';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
-import { approvePermissionKeystrokes, denyPermissionKeystrokes, permissionOptionKeystrokes } from '@/conversation/promptKeystrokes';
+import { approvePermissionKeystrokes, denyPermissionKeystrokes } from '@/conversation/promptKeystrokes';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { PromptOptionRow } from './PromptOptionRow';
 import { InlineDiff } from './InlineDiff';
@@ -135,18 +135,26 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
   const theme = useTheme();
   const { answering, answeredNote, errorNote, submit } = usePromptAnswer(sessionId, prompt.promptId);
   const buttonsDisabled = answering || answeredNote !== null;
-  // Bind the array (not just a boolean) so the render below stays narrowed.
-  const publishedOptions = prompt.options !== null && prompt.options.length >= 2 ? prompt.options : null;
   /**
-   * Nothing identifies this prompt: no tool (the agent blocks at a
-   * pre-execution gate, so its tool_use is not in the transcript yet) and no
-   * published option labels. It may not be a permission request at all - a
-   * live AskUserQuestion ("1 Red / 2 Blue / 3 Type something") arrives in
-   * exactly this shape. Approve sends '1\r', which would silently pick the
-   * FIRST ANSWER of a question rather than granting anything, so the card
-   * must not offer it here: name the uncertainty and route to the terminal.
+   * ONE-TAP ANSWERING REQUIRES STRUCTURED EVIDENCE.
+   *
+   * The only trustworthy description of a prompt is the transcript's own
+   * `tool_use` block: real JSON out of the agent's session history, so
+   * "Bash + {command}" is exact. `prompt.options` is the other thing we
+   * receive, and it is SCRAPED off the desktop's terminal grid - which
+   * produced, live, an option reading "Yes, and use auto mode" with half a
+   * plan document glued to it. Screen-scraped text can be wrong in ways we
+   * cannot detect, and answering sends a digit, so a wrong label means a
+   * wrong answer with no way to tell. It is deliberately not rendered.
+   *
+   * So: a transcript-identified tool gets Approve/Deny (the frequent case,
+   * worth the tap, resting on structured data). Everything else - an
+   * AskUserQuestion, a plan approval, anything unrecognised - routes to the
+   * terminal, which mirrors the desktop faithfully and cannot drift when
+   * Claude Code changes its dialogs.
    */
-  const kindUnknown = prompt.toolName === null && publishedOptions === null;
+  const identifiedTool = prompt.toolName;
+  const kindUnknown = identifiedTool === null;
 
   return (
     <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
@@ -159,16 +167,16 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
               </Text>
               {prompt.toolName !== null ? <Badge label={prompt.toolName} color="secondary" /> : null}
             </Row>
-            {prompt.toolName === null ? (
+            {identifiedTool === null ? (
               <Text variant="body" color="secondary">
-                {kindUnknown ? 'Open the terminal to see what it is asking.' : 'Waiting for prompt details'}
+                Open the terminal to see what it is asking.
               </Text>
             ) : (
               <>
                 <Text variant="caption" color="secondary">
-                  {framingLineForTool(prompt.toolName)}
+                  {framingLineForTool(identifiedTool)}
                 </Text>
-                <PermissionPromptBody toolName={prompt.toolName} input={prompt.input} />
+                <PermissionPromptBody toolName={identifiedTool} input={prompt.input} />
               </>
             )}
             {answeredNote !== null ? (
@@ -181,32 +189,11 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                 {errorNote}
               </Text>
             ) : null}
-            {publishedOptions !== null ? (
-              // FULL-FIDELITY MODE: the desktop's PTY probe published the
-              // dialog's actual numbered options; render every one as an
-              // identical outlined row (no primary emphasis - the choice is
-              // the user's, none is blessed). Option 1 keeps the approve
-              // testID for flow continuity.
-              <Stack gap="xs">
-                {publishedOptions.map((optionLabel, optionIndex) => (
-                  <PromptOptionRow
-                    key={optionIndex}
-                    label={optionLabel}
-                    testID={optionIndex === 0 ? 'permission-approve' : `permission-option-${optionIndex}`}
-                    disabled={buttonsDisabled || optionIndex > 8}
-                    onPress={() => {
-                      triggerHaptic('promptAnswered');
-                      submit(permissionOptionKeystrokes(optionIndex));
-                    }}
-                  />
-                ))}
-              </Stack>
-            ) : kindUnknown ? (
-              // UNKNOWN PROMPT: no blind actions at all. A digit could answer
-              // the wrong question, and dismissing is equally blind - it might
-              // cancel something the user would have said yes to. The only
-              // honest move is to go look, so the terminal row below is the
-              // sole action.
+            {kindUnknown ? (
+              // No blind actions: a digit could answer the wrong question,
+              // and dismissing is equally blind - it might cancel something
+              // the user would have accepted. The terminal row below is the
+              // only action.
               null
             ) : (
               // Equal-weight pair: approving and denying are both one tap on
