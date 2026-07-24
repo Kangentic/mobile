@@ -88,8 +88,13 @@ export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: Co
               {/* The count reads as a neutral tally, not a second accented
                   element - active state is already carried by the chip's
                   border and the name's color, so the pill stays flat and
-                  unbordered (no double hairline against the chip's own). */}
-              <Badge label={String(taskCounts[columnIndex] ?? 0)} color="muted" shape="pill" outlined={false} />
+                  unbordered (no double hairline against the chip's own).
+                  An empty column shows no pill at all: a row of "0"s on a
+                  fresh board is noise, and the bare chip already reads as
+                  empty. */}
+              {(taskCounts[columnIndex] ?? 0) > 0 ? (
+                <Badge label={String(taskCounts[columnIndex] ?? 0)} color="muted" shape="pill" outlined={false} />
+              ) : null}
             </Row>
           </Pressable>
         );

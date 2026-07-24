@@ -407,6 +407,7 @@ function ColumnPage({
         <EmptyState
           testID={`board-column-${column.id}-empty`}
           title="No tasks"
+          caption="Move a task here or add one from the desktop."
           overseerSize={54}
           overseerAnimate="blink-loop"
         />

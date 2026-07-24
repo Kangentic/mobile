@@ -2,11 +2,10 @@
  * Byte-sequence constants and helpers for PTY input the phone sends to the
  * desktop's interactive terminal.
  *
- * v1 always sends the CSI arrow variants (`ESC [ A` etc.). Claude Code's TUI
- * accepts these in normal cursor mode. Tracking DECCKM (application cursor
- * mode, which expects the SS3 variants `ESC O A` etc.) from the PTY output
- * stream is a possible later change - VERIFY against real Claude Code,
- * flagged in the plan.
+ * DECCKM (application cursor mode) is tracked automatically: the WebView's
+ * VT parser reports mode flips over the terminal bridge, TerminalPane writes
+ * them into terminalUiStore, and QuickKeyBar picks the CSI (`ESC [ A`) or
+ * SS3 (`ESC O A`) arrow variant per press via arrowKeySequence.
  */
 
 export const ESCAPE = '\x1b';
