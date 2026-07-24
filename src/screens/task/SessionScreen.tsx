@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
@@ -218,10 +218,11 @@ export function SessionScreen(): React.JSX.Element {
   return (
     <Screen testID="session-screen">
       <TaskHeader taskTitle={taskTitle} sessionId={sessionId} displayId={locatedDisplayId} />
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      {/* behavior="padding" on BOTH platforms: edge-to-edge Android never
+          resizes the window for the soft keyboard, so without JS-side
+          padding the keyboard fully covers the composer (send button
+          unreachable while typing). */}
+      <KeyboardAvoidingView style={styles.flex} behavior="padding">
         <View style={styles.flex}>
           <PagerView
             ref={pagerRef}

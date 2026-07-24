@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet } from 'react-native';
 import Animated, { FadeOut, ReduceMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from './theme/ThemeProvider';
@@ -65,7 +65,11 @@ export function Sheet({ visible, onClose, testID, title, children }: SheetProps)
       statusBarTranslucent
       navigationBarTranslucent
     >
-      <View style={styles.overlay}>
+      {/* behavior="padding" on BOTH platforms: edge-to-edge Android never
+          resizes the window for the soft keyboard, so without JS-side
+          padding the keyboard covers the sheet's bottom-anchored actions
+          (save/create buttons) with no way to reach them while typing. */}
+      <KeyboardAvoidingView style={styles.overlay} behavior="padding">
         {visible ? (
           <Animated.View
             entering={motionPresets.crossfadeIn}
@@ -118,7 +122,7 @@ export function Sheet({ visible, onClose, testID, title, children }: SheetProps)
             </ScrollView>
           </Animated.View>
         ) : null}
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

@@ -60,25 +60,25 @@ process.on('unhandledRejection', (fatalReason) => {
 // same desktop key the phone pinned at pairing - no re-pairing needed. The
 // pairing token is still fresh per run (single-use); only the static key is
 // stable. Delete this file to force a fresh identity.
-const IDENTITY_FILE = join(tmpdir(), 'kangentic-stub-desktop-identity.json');
+const DEFAULT_IDENTITY_FILE = join(tmpdir(), 'kangentic-stub-desktop-identity.json');
 
-function generateAndPersistDesktopStatic() {
+function generateAndPersistDesktopStatic(identityFile) {
   const keypair = generateX25519KeyPair();
-  writeFileSync(IDENTITY_FILE, JSON.stringify({ secretKey: bytesToHex(keypair.secretKey), publicKey: bytesToHex(keypair.publicKey) }));
-  console.log(`[identity] generated a new stub desktop identity at ${IDENTITY_FILE}`);
+  writeFileSync(identityFile, JSON.stringify({ secretKey: bytesToHex(keypair.secretKey), publicKey: bytesToHex(keypair.publicKey) }));
+  console.log(`[identity] generated a new stub desktop identity at ${identityFile}`);
   return keypair;
 }
 
-function loadOrCreateDesktopStatic() {
-  if (existsSync(IDENTITY_FILE)) {
+function loadOrCreateDesktopStatic(identityFile) {
+  if (existsSync(identityFile)) {
     try {
-      const stored = JSON.parse(readFileSync(IDENTITY_FILE, 'utf8'));
+      const stored = JSON.parse(readFileSync(identityFile, 'utf8'));
       return { secretKey: hexToBytes(stored.secretKey), publicKey: hexToBytes(stored.publicKey) };
     } catch (parseError) {
-      console.log(`[identity] ignoring unreadable ${IDENTITY_FILE}: ${parseError.message}`);
+      console.log(`[identity] ignoring unreadable ${identityFile}: ${parseError.message}`);
     }
   }
-  return generateAndPersistDesktopStatic();
+  return generateAndPersistDesktopStatic(identityFile);
 }
 
 function parseArgs(argv) {
@@ -94,7 +94,14 @@ function parseArgs(argv) {
   // without a re-pair.
   const phoneKeyIndex = argv.indexOf('--phone-key');
   const phoneKeyHex = phoneKeyIndex >= 0 ? argv[phoneKeyIndex + 1] : null;
-  return { relayUrl, autoConfirm, phoneKeyHex };
+  // --identity-file <path>: this instance's persisted desktop identity.
+  // Sharded rigs run one stub PER DEVICE, and each needs its own identity:
+  // the pairing slot and the session slot both derive from the desktop
+  // static key, so two stubs sharing one identity would collide on the
+  // relay.
+  const identityIndex = argv.indexOf('--identity-file');
+  const identityFile = identityIndex >= 0 ? argv[identityIndex + 1] : DEFAULT_IDENTITY_FILE;
+  return { relayUrl, autoConfirm, phoneKeyHex, identityFile };
 }
 
 function connect(url) {
@@ -703,11 +710,11 @@ function isEmulatorTypeable(uri) {
 }
 
 async function main() {
-  const { relayUrl, autoConfirm, phoneKeyHex } = parseArgs(process.argv.slice(2));
+  const { relayUrl, autoConfirm, phoneKeyHex, identityFile } = parseArgs(process.argv.slice(2));
 
   // Already-paired fast path: open the ongoing session directly, no pairing.
   if (phoneKeyHex) {
-    const desktopStatic = loadOrCreateDesktopStatic();
+    const desktopStatic = loadOrCreateDesktopStatic(identityFile);
     const phoneStaticPublicKey = hexToBytes(phoneKeyHex);
     console.log(`Relay: ${relayUrl}`);
     console.log(`Session-only mode: reconnecting to the phone paired at ${bytesToHex(phoneStaticPublicKey)}`);
@@ -724,7 +731,7 @@ async function main() {
 
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-  let desktopStatic = loadOrCreateDesktopStatic();
+  let desktopStatic = loadOrCreateDesktopStatic(identityFile);
   let pairingToken;
   let qrUri;
   let tokenAttempts = 0;
@@ -741,7 +748,7 @@ async function main() {
     tokenAttempts += 1;
     if (tokenAttempts >= 300) {
       // The loaded key forces a '_' no token can avoid; regenerate + re-persist it.
-      desktopStatic = generateAndPersistDesktopStatic();
+      desktopStatic = generateAndPersistDesktopStatic(identityFile);
       tokenAttempts = 0;
     }
   }

@@ -1,10 +1,11 @@
 appId: com.kangentic.mobile
 ---
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
-# The Session view opens on the TERMINAL lens (quick keys + dictation mic;
-# typing happens directly in the terminal, no staging field); the mode pill
-# flips to CHAT (message composer), then CHANGES (diff pane), and back.
-# WebView content is never asserted - only RN-side testIDs.
+# The Session view opens on the TERMINAL lens by default for a never-viewed
+# task (quick keys + dictation mic; typing happens directly in the terminal,
+# no staging field); the mode pill flips to CHAT (message composer), then
+# CHANGES (diff pane), and back. WebView content is never asserted - only
+# RN-side testIDs.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
@@ -15,6 +16,14 @@ appId: com.kangentic.mobile
     id: "activity-row-stub-session-1"
 - assertVisible:
     id: "session-screen"
+# The per-task lens preference (settingsStore.preferredSessionLensByTaskId)
+# is persisted device-side and only clears on unpair/re-pair, not on
+# launchApp's force-stop - so another paired flow that already switched
+# stub-task-1 to Chat this run (approve-permission, open-task-from-triage,
+# home-needs-you-approve) leaves it landing on Chat here too. Force Terminal
+# explicitly so this flow's toggle sequence is independent of run order.
+- tapOn:
+    id: "session-mode-terminal"
 - extendedWaitUntil:
     visible:
       id: "quick-key-esc"

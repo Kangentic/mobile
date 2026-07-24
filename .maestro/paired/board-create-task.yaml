@@ -12,9 +12,11 @@ appId: com.kangentic.mobile
     timeout: 60000
 - tapOn:
     id: "board-tab"
+# stub-task-2 is the board-loaded anchor: it lives in To Do, the pager's
+# default page (stub-task-1 is in Doing and would need a column switch).
 - extendedWaitUntil:
     visible:
-      id: "board-card-stub-task-1"
+      id: "board-card-stub-task-2"
     timeout: 20000
 - tapOn:
     id: "board-create-task"

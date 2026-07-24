@@ -1,0 +1,46 @@
+appId: com.kangentic.mobile
+tags:
+  - setup
+---
+# Rig-driven pairing bootstrap, NOT a test: pairs a freshly-cleared app
+# instance to a stub peer whose pairing URI arrives via the PAIRING_URI env
+# var (the stub auto-confirms its SAS side with --yes; this flow accepts the
+# phone side). Used by the sharded local rig (each extra emulator instance
+# must pair to its own stub) and the future CI Maestro job. Exclude it from
+# suite runs with --exclude-tags setup.
+- launchApp
+# A pm-cleared dev client shows the first-run developer-menu sheet once.
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+- extendedWaitUntil:
+    visible: "Pair with your desktop"
+    timeout: 60000
+- tapOn: "Pair with your desktop"
+- extendedWaitUntil:
+    visible:
+      id: "pairing-paste-link-input"
+    timeout: 15000
+- tapOn:
+    id: "pairing-paste-link-input"
+- inputText: ${PAIRING_URI}
+- hideKeyboard
+- extendedWaitUntil:
+    visible:
+      id: "pairing-paste-link-submit"
+    timeout: 5000
+- tapOn:
+    id: "pairing-paste-link-submit"
+- extendedWaitUntil:
+    visible:
+      id: "sas-accept"
+    timeout: 30000
+- tapOn:
+    id: "sas-accept"
+# Full-pipeline proof: the stub's session row lands on the Agents feed.
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 60000
