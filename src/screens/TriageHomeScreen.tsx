@@ -148,6 +148,35 @@ export function TriageHomeScreen(): React.JSX.Element {
   // establishment), so without this the empty feed briefly reads "All
   // quiet" on cold start before the desktop's actual sessions populate it.
   const hasHydratedSnapshot = useBoardStore((state) => state.hasHydratedSnapshot);
+  /**
+   * Reveal the feed once, assembled - not row by row as it arrives.
+   *
+   * The bootstrap declares EVERY project's board desired, and each board
+   * answers in its own round-trip. `hasHydratedSnapshot` flips on the first
+   * one, so the feed used to paint a fraction of its rows and then grow once
+   * per remaining project, re-sorting and re-anchoring each time. Cold start
+   * read as agents flickering in and the page lurching. Worse, if the first
+   * board to answer had no live session the feed briefly claimed "All quiet"
+   * while the rest were still in flight.
+   *
+   * `projects` is the declared set, so "every project has a board" is an
+   * exact completion signal rather than a guessed delay. The deadline is only
+   * a floor under a project that is slow or never answers.
+   */
+  const allBoardsAnswered = useBoardStore(
+    (state) => state.projects.length > 0 && state.projects.every((project) => state.boardsByProjectId[project.id] !== undefined),
+  );
+  // Monotonic: the deadline only ever passes. Never reset on a disconnect -
+  // a reconnect should resume the assembled feed, not blank it back to the
+  // connecting state, and it also keeps a later project-list refresh (which
+  // briefly makes allBoardsAnswered false again) from doing the same.
+  const [revealDeadlinePassed, setRevealDeadlinePassed] = useState(false);
+  useEffect(() => {
+    if (!established || revealDeadlinePassed) return undefined;
+    const timer = setTimeout(() => setRevealDeadlinePassed(true), FEED_REVEAL_DEADLINE_MS);
+    return () => clearTimeout(timer);
+  }, [established, revealDeadlinePassed]);
+  const feedReady = allBoardsAnswered || revealDeadlinePassed;
 
   // Long-press hub, reusing the exact same TaskActionsSheet/MoveTaskSheet/
   // EditTaskSheet trio the board uses. Every target bundles its own
@@ -271,7 +300,7 @@ export function TriageHomeScreen(): React.JSX.Element {
     );
   }
 
-  if (rows.length === 0 && established && hasHydratedSnapshot) {
+  if (rows.length === 0 && established && hasHydratedSnapshot && feedReady) {
     return (
       <Screen edges={['left', 'right']}>
         <AppHeader title="Agents" />
@@ -281,9 +310,10 @@ export function TriageHomeScreen(): React.JSX.Element {
     );
   }
 
-  // Paired with nothing to show while the channel comes up: the Overseer
-  // holds the center (the banner still escalates a long outage to Offline).
-  if (rows.length === 0) {
+  // Paired with nothing to show while the channel comes up, or with the board
+  // fan-out still landing: the Overseer holds the center (the banner still
+  // escalates a long outage to Offline).
+  if (rows.length === 0 || !feedReady) {
     return (
       <Screen edges={['left', 'right']}>
         <AppHeader title="Agents" />
@@ -399,6 +429,13 @@ function UnpairedEmptyState(): React.JSX.Element {
 
 /** Lines the snippet slot always occupies, whatever it currently holds (see the row's fixed-geometry note). */
 const SNIPPET_LINES = 2;
+
+/**
+ * How long the feed waits for every declared board before revealing itself
+ * anyway. Only a floor under a project that is slow or never answers - the
+ * normal path reveals as soon as the last board lands.
+ */
+const FEED_REVEAL_DEADLINE_MS = 2500;
 
 
 /** How long a row waits before retrying a failed snippet peek. */
