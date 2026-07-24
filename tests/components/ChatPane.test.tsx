@@ -37,6 +37,11 @@ function seedTranscript(sessionId: string, totalEntries: number): void {
   useTranscriptStore.setState({
     bySessionId: {
       [sessionId]: {
+        // A window has landed. For totalEntries 0 that is the whole point:
+        // "the desktop answered, and this session has no structured
+        // transcript" is what selects the reading-view lens, and it must not
+        // be confused with "the window has not come back yet".
+        hasWindow: true,
         entries:
           totalEntries > 0
             ? [{ kind: 'user' as const, uuid: 'u-1', ts: 1, text: 'Structured entry' }]
@@ -98,13 +103,39 @@ describe('ChatPane lens selection', () => {
   it('keeps the loading note when a delta lands before the window', () => {
     useTranscriptStore.setState({
       bySessionId: {
-        'sess-1': { entries: [], startIndex: 0, totalEntries: 476, revision: -1, tailRevision: 0, needsTailFetch: true },
+        'sess-1': {
+          hasWindow: false,
+          entries: [],
+          startIndex: 0,
+          totalEntries: 476,
+          revision: 312,
+          tailRevision: 0,
+          needsTailFetch: true,
+        },
       },
       retainedSessionIds: ['sess-1'],
     });
     renderPane('sess-1');
     expect(screen.getByTestId('chat-pane-loading')).toBeTruthy();
     expect(screen.queryByTestId('conversation-list')).toBeNull();
+  });
+
+  /**
+   * `revision` is a raw wire number with no reserved "none" value, so the
+   * lens choice must not read a sentinel out of it. A transcript-less
+   * session whose window happens to report revision -1 still has a window,
+   * and must reach the reading view rather than load forever.
+   */
+  it('picks the reading view even when the landed window reports revision -1', () => {
+    useTranscriptStore.setState({
+      bySessionId: {
+        'sess-1': { hasWindow: true, entries: [], startIndex: 0, totalEntries: 0, revision: -1, tailRevision: 1, needsTailFetch: false },
+      },
+      retainedSessionIds: ['sess-1'],
+    });
+    renderPane('sess-1');
+    expect(screen.getByTestId('reading-view-caption')).toBeTruthy();
+    expect(screen.queryByTestId('chat-pane-loading')).toBeNull();
   });
 
   it('shows the no-session empty state without a session', () => {

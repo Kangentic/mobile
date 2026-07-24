@@ -18,6 +18,16 @@ const RETAINED_SESSION_CAP = 3;
  * append after the window.
  */
 export interface TranscriptSessionState {
+  /**
+   * Whether a transcript window has ever been applied for this session.
+   * Deliberately NOT derived from `revision`: that is a raw wire number and
+   * nothing in the protocol reserves a value for "no window yet", so reading
+   * a sentinel out of it would make the screen's loading state depend on
+   * what the desktop happens to send. Until this is true the session has no
+   * window - `entries` is empty and `totalEntries` may still be non-zero
+   * (a delta can land first and report the length).
+   */
+  hasWindow: boolean;
   entries: TranscriptEntryWire[];
   /** Absolute index of entries[0] in the full transcript. > 0 means more history exists above the window. */
   startIndex: number;
@@ -53,7 +63,7 @@ interface TranscriptStoreState {
 }
 
 function emptySessionState(): TranscriptSessionState {
-  return { entries: [], startIndex: 0, totalEntries: 0, revision: -1, tailRevision: 0, needsTailFetch: true };
+  return { hasWindow: false, entries: [], startIndex: 0, totalEntries: 0, revision: -1, tailRevision: 0, needsTailFetch: true };
 }
 
 /** Reuse the previous entry object when content is unchanged so memoized rows skip re-render on `previous === next`. */
@@ -119,7 +129,7 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
 
     // A delta with no window yet only records that a fetch is needed - the
     // window request will bring the actual entries.
-    if (previous.revision === -1) {
+    if (!previous.hasWindow) {
       set({
         bySessionId: {
           ...state.bySessionId,
@@ -163,6 +173,7 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
       bySessionId: {
         ...state.bySessionId,
         [event.sessionId]: {
+          hasWindow: true,
           entries: gap ? previous.entries : entries,
           startIndex: previous.startIndex,
           totalEntries: payload.totalEntries,
@@ -185,7 +196,7 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
     // An older-history page that ends exactly where the current window
     // starts extends it upward; anything else (first load, refetch after a
     // reset/gap, revision moved) replaces the window wholesale.
-    const isOlderPage = previous.revision !== -1 && window.revision === previous.revision && windowEnd === previous.startIndex;
+    const isOlderPage = previous.hasWindow && window.revision === previous.revision && windowEnd === previous.startIndex;
 
     if (isOlderPage) {
       set({
@@ -216,11 +227,12 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
       bySessionId: {
         ...state.bySessionId,
         [sessionId]: {
+          hasWindow: true,
           entries,
           startIndex: window.startIndex,
           totalEntries: window.totalEntries,
           revision: window.revision,
-          tailRevision: windowEnd > previousEnd || previous.revision === -1 ? previous.tailRevision + 1 : previous.tailRevision,
+          tailRevision: windowEnd > previousEnd || !previous.hasWindow ? previous.tailRevision + 1 : previous.tailRevision,
           needsTailFetch: false,
         },
       },
