@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
 import Animated, { ReduceMotion, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
@@ -497,6 +497,10 @@ const ActivityRow = React.memo(function ActivityRow({
   // the final message must be fresh, and the freshness flip on the
   // working-to-idle transition refires the effect to fetch it.
   const snippetFreshnessMs = working ? WORKING_SNIPPET_FRESHNESS_MS : 0;
+  // "Has this row ever resolved a peek" as a ref, not the state value: the
+  // effect only needs it to choose immediate-vs-settled, and depending on the
+  // snippet state would re-run the effect on every resolved peek.
+  const hasResolvedPeekRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -507,15 +511,14 @@ const ActivityRow = React.memo(function ActivityRow({
     // The FIRST peek has no burst to absorb and the card is waiting on it,
     // so it fires immediately - delaying it would only slow the cold start
     // the settle exists to smooth.
-    const settleTimer =
-      peekedSnippet === null ? (runPeek(), null) : setTimeout(runPeek, SNIPPET_SETTLE_MS);
+    const settleTimer = hasResolvedPeekRef.current ? setTimeout(runPeek, SNIPPET_SETTLE_MS) : (runPeek(), null);
 
     function runPeek(): void {
       if (cancelled) return;
       const peek =
-      isPermission && awaitedPromptId !== null
-        ? peekAwaitedPrompt(entry.sessionId, awaitedPromptId).then((toolUse) => buildPendingPromptSummary(toolUse))
-        : (async () => {
+        isPermission && awaitedPromptId !== null
+          ? peekAwaitedPrompt(entry.sessionId, awaitedPromptId).then((toolUse) => buildPendingPromptSummary(toolUse))
+          : (async () => {
             // Transcript-less agents (codex-style) still stream a PTY, and
             // a huge session's window fetch can fail outright: either way
             // fall back to the last readable terminal line, and treat a
@@ -534,6 +537,7 @@ const ActivityRow = React.memo(function ActivityRow({
       void peek
         .then((snippetText) => {
           if (cancelled) return;
+          hasResolvedPeekRef.current = true;
           // Re-resolving the SAME text must not touch state: a new object
           // would re-render the row (and restart its animations) for a
           // snippet that did not actually change.
