@@ -5,10 +5,11 @@ appId: com.kangentic.mobile
 # degrade to the cleaned reading view (derived live from the terminal), with
 # the honest caption and real content lines.
 - launchApp
+# 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-codex"
-    timeout: 25000
+    timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-codex"
 - assertVisible:

@@ -5,10 +5,11 @@ appId: com.kangentic.mobile
 # Pair once manually: node scripts/stubDesktopPeer.mjs --relay ws://<host>:8080,
 # paste the printed URI into the pairing screen, confirm the SAS both sides.
 - launchApp
+# 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
     visible:
       id: "triage-home-list"
-    timeout: 15000
+    timeout: 60000
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-1"

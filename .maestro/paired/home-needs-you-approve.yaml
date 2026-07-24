@@ -9,7 +9,14 @@ appId: com.kangentic.mobile
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-1"
-    timeout: 45000
+    timeout: 60000
+# The stub raises its prompt ~20s after the stream subscribes; wait for the
+# row's prompt teaser so the no-inline-approve assertion below is checked
+# while a prompt is actually pending (not vacuously before it exists).
+- extendedWaitUntil:
+    visible:
+      text: "Approve:.*"
+    timeout: 60000
 # No inline controls on Home: the approve button must NOT be on this screen.
 - assertNotVisible:
     id: "permission-approve"
@@ -19,7 +26,7 @@ appId: com.kangentic.mobile
 - extendedWaitUntil:
     visible:
       id: "permission-approve"
-    timeout: 15000
+    timeout: 30000
 - tapOn:
     id: "permission-approve"
 - extendedWaitUntil:

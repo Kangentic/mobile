@@ -218,10 +218,14 @@ async function openConnection(): Promise<void> {
   let bootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let bootstrapGeneration = 0;
   const runBootstrapWithRetry = (attempt: number, generation: number): void => {
-    void runBootstrap(controller.verbs, subscriptions).catch(() => {
+    void runBootstrap(controller.verbs, subscriptions).catch((bootstrapError: unknown) => {
       if (generation !== bootstrapGeneration) return;
       if (!controller.session.isEstablished) return;
       const delayMs = Math.min(BOOTSTRAP_RETRY_MAX_MS, BOOTSTRAP_RETRY_BASE_MS * 2 ** attempt);
+      if (__DEV__) {
+        const reason = bootstrapError instanceof Error ? bootstrapError.message : String(bootstrapError);
+        console.log(`[bootstrap] attempt ${attempt + 1} failed (${reason}); retrying in ${delayMs}ms`);
+      }
       bootstrapRetryTimer = setTimeout(() => runBootstrapWithRetry(attempt + 1, generation), delayMs);
     });
   };

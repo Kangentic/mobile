@@ -5,10 +5,11 @@ appId: com.kangentic.mobile
 # switch). The screen must follow the successor automatically - the new
 # session's transcript marker appears and the ended state never shows.
 - launchApp
+# 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-1"
-    timeout: 20000
+    timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-1"
 - assertVisible:
