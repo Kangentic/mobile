@@ -131,12 +131,12 @@ describe('activityStore', () => {
     applyActivityEvent(activityEvent('sess-working-new', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
     applyActivityEvent(activityEvent('sess-permission', { type: 'permission', promptId: 'sess-permission:tool-1', pending: true }));
 
-    // Force distinct recency ordering.
+    // Force distinct arrival ordering (newest into the section on top).
     useActivityStore.setState((state) => ({
       bySessionId: {
         ...state.bySessionId,
-        'sess-working-old': { ...state.bySessionId['sess-working-old'], lastEventAt: 1000 },
-        'sess-working-new': { ...state.bySessionId['sess-working-new'], lastEventAt: 2000 },
+        'sess-working-old': { ...state.bySessionId['sess-working-old'], enteredSectionAt: 1000 },
+        'sess-working-new': { ...state.bySessionId['sess-working-new'], enteredSectionAt: 2000 },
       },
     }));
 
@@ -145,5 +145,54 @@ describe('activityStore', () => {
     expect(sections[0].entries.map((entry) => entry.sessionId)).toEqual(['sess-permission']);
     expect(sections[1].entries.map((entry) => entry.sessionId)).toEqual(['sess-working-new', 'sess-working-old']);
     expect(sections[2].entries.map((entry) => entry.sessionId)).toEqual(['sess-idle']);
+  });
+
+  /**
+   * Reported live: two agents working at once traded places in the feed
+   * continuously, because every streamed engine event bumped lastEventAt and
+   * the section re-sorted on it. A row's position must only move when the
+   * row moves sections.
+   */
+  it('keeps concurrently working sessions in a stable order as events stream (no ping-pong)', () => {
+    const { registerSession, applyActivityEvent } = useActivityStore.getState();
+    registerSession('sess-a', 'task-a', 'project-1');
+    registerSession('sess-b', 'task-b', 'project-1');
+    applyActivityEvent(activityEvent('sess-a', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+    applyActivityEvent(activityEvent('sess-b', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+    useActivityStore.setState((state) => ({
+      bySessionId: {
+        ...state.bySessionId,
+        'sess-a': { ...state.bySessionId['sess-a'], enteredSectionAt: 1000 },
+        'sess-b': { ...state.bySessionId['sess-b'], enteredSectionAt: 2000 },
+      },
+    }));
+    const initialOrder = selectTriageRows(useActivityStore.getState())[1].entries.map((entry) => entry.sessionId);
+    expect(initialOrder).toEqual(['sess-b', 'sess-a']);
+
+    // The OLDER session now emits a flurry of events (tokens, usage ticks).
+    // Pre-fix this jumped it to the top on the first one.
+    for (let index = 0; index < 5; index += 1) {
+      applyActivityEvent(activityEvent('sess-a', { type: 'usage', usage: null }));
+      applyActivityEvent(activityEvent('sess-a', { type: 'event' }));
+    }
+
+    const afterOrder = selectTriageRows(useActivityStore.getState())[1].entries.map((entry) => entry.sessionId);
+    expect(afterOrder).toEqual(initialOrder);
+  });
+
+  it('re-ranks a session only when it changes section', () => {
+    const { registerSession, applyActivityEvent } = useActivityStore.getState();
+    registerSession('sess-a', 'task-a', 'project-1');
+    applyActivityEvent(activityEvent('sess-a', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+    const whileWorking = useActivityStore.getState().bySessionId['sess-a'].enteredSectionAt;
+
+    // Same section: the ordering key must hold.
+    applyActivityEvent(activityEvent('sess-a', { type: 'event' }));
+    expect(useActivityStore.getState().bySessionId['sess-a'].enteredSectionAt).toBe(whileWorking);
+
+    // Moving to needs-you IS a re-rank.
+    applyActivityEvent(activityEvent('sess-a', { type: 'permission', promptId: 'sess-a:tool-1', pending: true }));
+    expect(useActivityStore.getState().bySessionId['sess-a'].enteredSectionAt).toBeGreaterThanOrEqual(whileWorking);
+    expect(sectionForEntry(useActivityStore.getState().bySessionId['sess-a'])).toBe('needs-you');
   });
 });
