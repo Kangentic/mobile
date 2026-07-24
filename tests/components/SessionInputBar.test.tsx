@@ -24,7 +24,7 @@ jest.mock('expo-speech-recognition', () => ({
 function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): void {
   render(
     <ThemeProvider>
-      <SessionInputBar sessionId={sessionId} mode={mode} onModeChange={jest.fn()} chatAttention={false} />
+      <SessionInputBar sessionId={sessionId} mode={mode} onModeChange={jest.fn()} chatAttention={false} onMove={jest.fn()} />
     </ThemeProvider>,
   );
 }
@@ -60,6 +60,7 @@ describe('SessionInputBar', () => {
     expect(screen.getByTestId('session-mode-terminal')).toBeTruthy();
     expect(screen.getByTestId('session-mode-chat')).toBeTruthy();
     expect(screen.getByTestId('session-mode-changes')).toBeTruthy();
+    expect(screen.getByTestId('session-mode-move')).toBeTruthy();
   });
 
   it('renders nothing without a session', () => {

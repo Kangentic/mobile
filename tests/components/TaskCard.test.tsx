@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { ThemeProvider } from '@/components';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
@@ -41,22 +41,9 @@ function findAncestorWithLayoutHandler(instance: ReactTestInstance): ReactTestIn
 }
 
 describe('TaskCard', () => {
-  describe('attachment indicator', () => {
-    it('is absent when the task has no attachments', () => {
-      renderTaskCard({ task: boardTaskFixture({ attachment_count: 0 }) });
-      expect(screen.queryByTestId(`${BASE_TEST_ID}-attachments`)).toBeNull();
-    });
-
-    it('renders the count when the task has attachments', () => {
-      renderTaskCard({ task: boardTaskFixture({ attachment_count: 3 }) });
-      const attachmentsIndicator = screen.getByTestId(`${BASE_TEST_ID}-attachments`);
-      expect(within(attachmentsIndicator).getByText('3')).toBeTruthy();
-    });
-  });
-
   it('every sub-part testID is queryable - regression guard for lucide forwarding testID as the web-only data-testid, which RNTL cannot select unless the glyph is wrapped', () => {
     renderTaskCard({
-      task: boardTaskFixture({ pr_number: 42, attachment_count: 2 }),
+      task: boardTaskFixture({ pr_number: 42 }),
       statusKind: 'working',
       showTicketNumbers: true,
       usage: usageFixture(),
@@ -65,7 +52,6 @@ describe('TaskCard', () => {
     });
 
     expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
-    expect(screen.getByTestId(`${BASE_TEST_ID}-attachments`)).toBeTruthy();
     expect(screen.getByTestId(`${BASE_TEST_ID}-usage`)).toBeTruthy();
     expect(screen.getByTestId(`${BASE_TEST_ID}-project`)).toBeTruthy();
     expect(screen.getByTestId(`${BASE_TEST_ID}-display-id`)).toBeTruthy();
@@ -73,14 +59,13 @@ describe('TaskCard', () => {
     expect(screen.getByTestId(`${BASE_TEST_ID}-snippet`)).toBeTruthy();
   });
 
-  it('showMetaRow={false} suppresses the labels row, the PR icon, and the attachment count - its only coverage, since no caller passes this yet', () => {
+  it('showMetaRow={false} suppresses the labels row and the PR icon - its only coverage, since no caller passes this yet', () => {
     renderTaskCard({
-      task: boardTaskFixture({ pr_number: 42, attachment_count: 5, labels: ['backend', 'p0'] }),
+      task: boardTaskFixture({ pr_number: 42, labels: ['backend', 'p0'] }),
       showMetaRow: false,
     });
 
     expect(screen.queryByTestId(`${BASE_TEST_ID}-pr`)).toBeNull();
-    expect(screen.queryByTestId(`${BASE_TEST_ID}-attachments`)).toBeNull();
     expect(screen.queryByText('backend')).toBeNull();
     expect(screen.queryByText('p0')).toBeNull();
   });

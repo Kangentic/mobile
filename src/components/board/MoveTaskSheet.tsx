@@ -8,31 +8,47 @@ export interface MoveTaskSheetProps {
   task: BoardTaskWire | null;
   columns: BoardColumnWire[];
   onClose: () => void;
-  /** targetPosition: 0 for top; the target column's task count for bottom. */
-  onMove: (targetSwimlaneId: string, position: 'top' | 'bottom') => void;
+  /** Always lands the task at the bottom of the target column - the one true Kanban "append" convention; no top/bottom choice. */
+  onMove: (targetSwimlaneId: string) => void;
   moveInFlight: boolean;
   errorMessage: string | null;
 }
 
-/** Long-press move flow: pick a column and top/bottom, confirm. Drag-and-drop across a one-column-at-a-time pager is a later refinement. */
+/** Long-press move flow: pick a column, confirm. Drag-and-drop across a one-column-at-a-time pager is a later refinement. */
 export function MoveTaskSheet({ visible, task, columns, onClose, onMove, moveInFlight, errorMessage }: MoveTaskSheetProps): React.JSX.Element {
   const theme = useTheme();
   const [selectedColumnId, setSelectedColumnId] = useState<string | null>(null);
-  const [position, setPosition] = useState<'top' | 'bottom'>('bottom');
+
+  // This component stays mounted across opens (only the inner Sheet unmounts
+  // on hide), and every caller closes a successful move by flipping `visible`
+  // rather than routing through `close`, so without this the selection would
+  // survive into the next open - pre-enabling Move with no visible choice and,
+  // in the multi-project Triage reuse, firing a move to a column absent from
+  // the next task's board. Reset whenever the sheet hides, adjusted during
+  // render (not a useEffect) so it lands before the hidden frame ever commits.
+  const [previousVisible, setPreviousVisible] = useState(visible);
+  if (visible !== previousVisible) {
+    setPreviousVisible(visible);
+    if (!visible) setSelectedColumnId(null);
+  }
 
   const close = useCallback(() => {
     setSelectedColumnId(null);
-    setPosition('bottom');
     onClose();
   }, [onClose]);
 
   const confirm = useCallback(() => {
-    if (selectedColumnId) onMove(selectedColumnId, position);
-  }, [onMove, selectedColumnId, position]);
+    if (selectedColumnId) onMove(selectedColumnId);
+  }, [onMove, selectedColumnId]);
 
   return (
-    <Sheet visible={visible} onClose={close} title={task ? `Move "${task.title}"` : 'Move task'} testID="move-task-sheet">
+    <Sheet visible={visible} onClose={close} title="Move" testID="move-task-sheet">
       <Stack gap="sm">
+        {task ? (
+          <Text variant="body" color="secondary" numberOfLines={2}>
+            {task.title}
+          </Text>
+        ) : null}
         {columns.map((column) => {
           const isCurrent = task?.swimlane_id === column.id;
           const isSelected = selectedColumnId === column.id;
@@ -50,8 +66,11 @@ export function MoveTaskSheet({ visible, task, columns, onClose, onMove, moveInF
                   minHeight: theme.minTouchSize,
                   paddingHorizontal: theme.spacing.md,
                   borderRadius: theme.radii.md,
-                  backgroundColor: isSelected ? theme.colors.surfaceRaised : 'transparent',
-                  opacity: isCurrent ? 0.4 : 1,
+                  backgroundColor: isCurrent
+                    ? theme.colors.accentSubtle
+                    : isSelected
+                      ? theme.colors.surfaceRaised
+                      : 'transparent',
                 },
               ]}
             >
@@ -61,19 +80,24 @@ export function MoveTaskSheet({ visible, task, columns, onClose, onMove, moveInF
                   {column.name}
                 </Text>
                 {isCurrent ? (
-                  <Text variant="caption" color="muted">
-                    current
-                  </Text>
+                  // Hand-rolled rather than the shared Badge primitive: Badge
+                  // has no accent-tinted fill variant, so it cannot reproduce
+                  // this accentMuted stadium look without extending it.
+                  <View
+                    style={[
+                      styles.currentBadge,
+                      { backgroundColor: theme.colors.accentMuted, borderRadius: theme.radii.full },
+                    ]}
+                  >
+                    <Text variant="caption" color="accent" style={styles.currentBadgeText}>
+                      Current
+                    </Text>
+                  </View>
                 ) : null}
               </Row>
             </Pressable>
           );
         })}
-
-        <Row gap="sm">
-          <PositionToggle label="Top" active={position === 'top'} onPress={() => setPosition('top')} testID="move-position-top" />
-          <PositionToggle label="Bottom" active={position === 'bottom'} onPress={() => setPosition('bottom')} testID="move-position-bottom" />
-        </Row>
 
         {errorMessage ? (
           <Text variant="caption" color="danger">
@@ -94,41 +118,6 @@ export function MoveTaskSheet({ visible, task, columns, onClose, onMove, moveInF
   );
 }
 
-function PositionToggle({
-  label,
-  active,
-  onPress,
-  testID,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-  testID: string;
-}): React.JSX.Element {
-  const theme = useTheme();
-  return (
-    <Pressable
-      testID={testID}
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      onPress={onPress}
-      style={[
-        styles.positionToggle,
-        {
-          minHeight: theme.minTouchSize,
-          borderRadius: theme.radii.md,
-          borderColor: active ? theme.colors.accent : theme.colors.border,
-          backgroundColor: active ? theme.colors.surfaceRaised : 'transparent',
-        },
-      ]}
-    >
-      <Text variant="body" color={active ? 'primary' : 'secondary'}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   columnRow: {
     justifyContent: 'center',
@@ -139,10 +128,11 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-  positionToggle: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
+  currentBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  currentBadgeText: {
+    fontWeight: '600',
   },
 });

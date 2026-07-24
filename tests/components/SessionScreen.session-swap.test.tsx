@@ -1,12 +1,12 @@
 import React from 'react';
-import { act, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { boardTaskFixture } from '@/devsupport/desktopFixtures';
-import { closeSessionScreen, openSessionScreen } from '@/connection/actions';
+import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { closeSessionScreen, moveTaskOptimistic, openSessionScreen } from '@/connection/actions';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -23,6 +23,7 @@ jest.mock('expo-router', () => ({
 jest.mock('@/connection/actions', () => ({
   openSessionScreen: jest.fn(),
   closeSessionScreen: jest.fn(),
+  moveTaskOptimistic: jest.fn().mockResolvedValue(undefined),
 }));
 
 // The panes and the input bar are heavy (FlashList transcript, xterm
@@ -56,13 +57,17 @@ jest.mock('@/screens/task/SessionInputBar', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const ReactModule = require('react');
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  const { View } = require('react-native');
+  const { Pressable, View } = require('react-native');
   return {
     __esModule: true,
-    SessionInputBar: (props: { sessionId: string | null; mode: string }) =>
+    SessionInputBar: (props: { sessionId: string | null; mode: string; onMove: () => void }) =>
       props.sessionId === null
         ? null
-        : ReactModule.createElement(View, { testID: 'stub-session-input-bar', accessibilityLabel: props.mode }),
+        : ReactModule.createElement(
+            View,
+            { testID: 'stub-session-input-bar', accessibilityLabel: props.mode },
+            ReactModule.createElement(Pressable, { testID: 'stub-session-input-bar-move', onPress: props.onMove }),
+          ),
   };
 });
 
@@ -74,7 +79,7 @@ function seedTaskWithSession(sessionId: string | null): void {
     projects: [{ id: 'project-1', name: 'Alpha' }],
     boardsByProjectId: {
       'project-1': {
-        columns: [],
+        columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-doing', name: 'Doing', position: 1 })],
         tasksById: {
           'task-1': boardTaskFixture({ id: 'task-1', session_id: sessionId }),
         },
@@ -213,5 +218,69 @@ describe('SessionScreen session binding', () => {
     expect(screen.queryByTestId('task-header-changes')).toBeNull();
     expect(screen.getByTestId('session-pane-changes')).toBeTruthy();
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('tapping Move opens the move-task sheet showing the current column', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    expect(screen.queryByTestId('move-task-sheet')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
+
+    expect(screen.getByTestId('move-task-sheet')).toBeTruthy();
+    expect(screen.getByTestId('move-target-lane-todo').props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByTestId('move-target-lane-doing').props.accessibilityState.disabled).toBe(false);
+  });
+
+  it('moving the task to another column calls moveTaskOptimistic with the resolved projectId', async () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+
+    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
+    fireEvent.press(screen.getByTestId('move-target-lane-doing'));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('move-confirm'));
+    });
+
+    expect(moveTaskOptimistic as jest.Mock).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      targetSwimlaneId: 'lane-doing',
+      targetPosition: 0,
+    });
+  });
+
+  it('renders the move sheet safely for a maximally long task title', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
+    const veryLongTitle = 'Migrate the legacy push notification registration path '.repeat(20);
+    useBoardStore.setState({
+      projects: [{ id: 'project-1', name: 'Alpha' }],
+      boardsByProjectId: {
+        'project-1': {
+          columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-doing', name: 'Doing', position: 1 })],
+          tasksById: {
+            'task-1': boardTaskFixture({
+              id: 'task-1',
+              session_id: 'sess-a',
+              title: veryLongTitle,
+            }),
+          },
+          backlog: [],
+          snapshotAt: 0,
+          showTicketNumbers: true,
+        },
+      },
+      pendingMoves: [],
+    });
+    renderSessionScreen();
+
+    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
+
+    const moveSheet = screen.getByTestId('move-task-sheet');
+    expect(moveSheet).toBeTruthy();
+    expect(within(moveSheet).getByText(veryLongTitle)).toBeTruthy();
+    expect(screen.getByTestId('move-confirm')).toBeTruthy();
   });
 });

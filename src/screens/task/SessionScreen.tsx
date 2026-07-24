@@ -1,14 +1,17 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import PagerView from 'react-native-pager-view';
+import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { Screen } from '@/components';
-import { findTaskById, useBoardStore } from '@/state/boardStore';
+import { findTaskById, selectColumnsOrdered, selectTasksForColumn, useBoardStore } from '@/state/boardStore';
 import { useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
-import { openSessionScreen, closeSessionScreen } from '@/connection/actions';
+import { CapabilityError } from '@/channel';
+import { closeSessionScreen, moveTaskOptimistic, openSessionScreen } from '@/connection/actions';
+import { triggerHaptic } from '@/lib/haptics';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
 import { ChangesTab } from './ChangesTab';
@@ -126,6 +129,48 @@ export function SessionScreen(): React.JSX.Element {
   });
   const agentLabel = useBoardStore((state) => findTaskById(state, taskId)?.task.agent ?? null);
 
+  // Move-to-column sheet: mirrors BoardScreen's long-press move wiring, over
+  // this task instead of a long-pressed card. Scope the selector to THIS
+  // project's board - an existing store reference, not a freshly-built object,
+  // so it dodges the infinite-loop hazard the top-of-file note describes -
+  // rather than subscribing to the whole boardsByProjectId map, which would
+  // re-render this screen (and its unmemoized pager children) on any other
+  // project's board mutation.
+  const board = useBoardStore((state) => (projectId ? (state.boardsByProjectId[projectId] ?? null) : null));
+  const moveColumns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
+  const moveTask = board ? (board.tasksById[taskId] ?? null) : null;
+  const [moveSheetVisible, setMoveSheetVisible] = useState(false);
+  const [moveInFlight, setMoveInFlight] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const openMoveSheet = useCallback(() => {
+    setMoveError(null);
+    setMoveSheetVisible(true);
+  }, []);
+  const closeMoveSheet = useCallback(() => setMoveSheetVisible(false), []);
+  const onMove = useCallback(
+    (targetSwimlaneId: string) => {
+      if (!projectId || !board) return;
+      const targetPosition = selectTasksForColumn(board, targetSwimlaneId).length;
+      setMoveInFlight(true);
+      setMoveError(null);
+      void moveTaskOptimistic({
+        projectId,
+        taskId,
+        targetSwimlaneId,
+        targetPosition,
+      })
+        .then(() => {
+          triggerHaptic('taskMoved');
+          setMoveSheetVisible(false);
+        })
+        .catch((error: unknown) => {
+          setMoveError(error instanceof CapabilityError ? error.message : 'Move failed - check the connection');
+        })
+        .finally(() => setMoveInFlight(false));
+    },
+    [projectId, board, taskId],
+  );
+
   const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
   const settingsHydrated = useSettingsStore((state) => state.hydrated);
   const showModeHint = settingsHydrated && !hasSeenSessionModeHint && !sessionEnded && sessionId !== null;
@@ -201,9 +246,24 @@ export function SessionScreen(): React.JSX.Element {
 
         {showModeHint ? <ModeToggleHint onDismiss={dismissModeHint} /> : null}
         {!sessionEnded ? (
-          <SessionInputBar sessionId={sessionId} mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />
+          <SessionInputBar
+            sessionId={sessionId}
+            mode={mode}
+            onModeChange={onModeChange}
+            chatAttention={chatAttention}
+            onMove={openMoveSheet}
+          />
         ) : null}
       </KeyboardAvoidingView>
+      <MoveTaskSheet
+        visible={moveSheetVisible}
+        task={moveTask}
+        columns={moveColumns}
+        onClose={closeMoveSheet}
+        onMove={onMove}
+        moveInFlight={moveInFlight}
+        errorMessage={moveError}
+      />
     </Screen>
   );
 }

@@ -132,16 +132,16 @@ export function BoardScreen(): React.JSX.Element {
   }, []);
 
   const onMove = useCallback(
-    (targetSwimlaneId: string, position: 'top' | 'bottom') => {
+    (targetSwimlaneId: string) => {
       if (!moveTarget || !projectId || !board) return;
-      const targetCount = selectTasksForColumn(board, targetSwimlaneId).length;
+      const targetPosition = selectTasksForColumn(board, targetSwimlaneId).length;
       setMoveInFlight(true);
       setMoveError(null);
       void moveTaskOptimistic({
         projectId,
         taskId: moveTarget.id,
         targetSwimlaneId,
-        targetPosition: position === 'top' ? 0 : targetCount,
+        targetPosition,
       })
         .then(() => {
           triggerHaptic('taskMoved');
