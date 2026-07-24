@@ -22,8 +22,16 @@ export interface ChatPaneProps {
  * model: Terminal = exact, Chat = readable.
  */
 export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneProps): React.JSX.Element {
-  const transcriptLoaded = useTranscriptStore((state) =>
-    sessionId !== null ? state.bySessionId[sessionId] !== undefined : false,
+  /**
+   * `revision`, not the mere presence of a store entry, is what says a
+   * transcript window has actually landed: a delta can arrive before the
+   * window request resolves and create the entry with `totalEntries > 0` and
+   * no entries at all (transcriptStore's revision === -1 branch). Routing on
+   * `totalEntries` alone rendered the conversation feed with zero cells and
+   * no loading state there - a blank screen, observed live.
+   */
+  const hasTranscriptWindow = useTranscriptStore((state) =>
+    sessionId !== null ? (state.bySessionId[sessionId]?.revision ?? -1) !== -1 : false,
   );
   const totalEntries = useTranscriptStore((state) =>
     sessionId !== null ? (state.bySessionId[sessionId]?.totalEntries ?? 0) : 0,
@@ -33,7 +41,7 @@ export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneP
     // ConversationTab owns the no-session empty state.
     return <ConversationTab taskId={taskId} sessionId={sessionId} projectId={projectId} />;
   }
-  if (!transcriptLoaded) {
+  if (!hasTranscriptWindow) {
     return (
       <Stack gap="sm" style={styles.loading}>
         <Text variant="body" color="secondary" testID="chat-pane-loading">

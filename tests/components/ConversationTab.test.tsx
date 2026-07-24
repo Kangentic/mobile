@@ -6,6 +6,7 @@ import { ConversationTab } from '@/screens/task/ConversationTab';
 import { useActivityStore } from '@/state/activityStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { appendChunk, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
+import { loadOlderTranscript } from '@/connection/actions';
 
 jest.mock('@/connection/actions', () => ({
   sendUserMessage: jest.fn().mockResolvedValue(undefined),
@@ -88,9 +89,45 @@ function renderTab(sessionId: string | null = 'sess-1'): void {
   }
 }
 
+/** Puts the session's window mid-transcript so older history exists above it. */
+function seedWindowWithOlderHistory(): void {
+  useTranscriptStore.setState((state) => ({
+    bySessionId: {
+      ...state.bySessionId,
+      'sess-1': { ...state.bySessionId['sess-1'], startIndex: 405, totalEntries: 476 },
+    },
+  }));
+}
+
 describe('ConversationTab', () => {
   beforeEach(() => {
     seedStores();
+    jest.mocked(loadOlderTranscript).mockClear();
+  });
+
+  /**
+   * The feed opens anchored at the newest message, so it begins life within
+   * onStartReachedThreshold of the top and FlashList fires onStartReached
+   * immediately. Live on a Pixel that paged in 60 older entries AFTER the
+   * initial bottom anchor had run, prepending a screenful above the scroll
+   * offset: the chat opened blank and only filled in once the user scrolled.
+   * History paging is a scroll-up affordance and must wait for a scroll.
+   */
+  it('does not page older history before the user has scrolled', () => {
+    seedWindowWithOlderHistory();
+    renderTab();
+
+    fireEvent(screen.getByTestId('conversation-list'), 'startReached');
+    expect(loadOlderTranscript).not.toHaveBeenCalled();
+  });
+
+  it('pages older history once the user drags the feed', () => {
+    seedWindowWithOlderHistory();
+    renderTab();
+
+    fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
+    fireEvent(screen.getByTestId('conversation-list'), 'startReached');
+    expect(loadOlderTranscript).toHaveBeenCalledWith('sess-1');
   });
 
   it('shows the empty state without a session', () => {
@@ -154,7 +191,7 @@ describe('ConversationTab', () => {
     expect(screen.getAllByText('npm run lint').length).toBeGreaterThan(0);
   });
 
-  it('renders the generic prompt state when the awaited tool_use is not in the transcript yet', () => {
+  it('routes to the terminal, with no blind action, when the awaited tool_use is not in the transcript', () => {
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
       sessionId: 'sess-1',
@@ -163,7 +200,12 @@ describe('ConversationTab', () => {
     });
     renderTab();
 
-    expect(screen.getByText('Permission requested')).toBeTruthy();
-    expect(screen.getByText('Waiting for prompt details')).toBeTruthy();
+    // Without a tool_use the app cannot say what approving would grant, and
+    // Approve sends a digit that could answer the wrong question.
+    expect(screen.queryByText('Permission requested')).toBeNull();
+    expect(screen.queryByTestId('permission-approve')).toBeNull();
+    expect(screen.queryByTestId('permission-deny')).toBeNull();
+    expect(screen.getByText('The agent needs you')).toBeTruthy();
+    expect(screen.getByText('Open in terminal')).toBeTruthy();
   });
 });

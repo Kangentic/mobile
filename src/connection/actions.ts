@@ -158,9 +158,24 @@ const TRANSCRIPT_PAGE_SIZE = 60;
  * screen-open bootstrap and the self-heal path whenever the store flags
  * `needsTailFetch` (reset signal, delta gap, delta before any window).
  */
+const tailFetchesInFlight = new Map<string, Promise<void>>();
+
 export async function loadTranscriptTail(sessionId: string): Promise<void> {
-  const window = await requireVerbClient().readTranscriptWindow(sessionId, { limit: TRANSCRIPT_INITIAL_WINDOW });
-  useTranscriptStore.getState().applyWindow(sessionId, window);
+  // openSessionScreen fires one of these, and the screen's needsTailFetch
+  // self-heal effect mounts while it is still in flight and fires a second.
+  // Both resolved with the same window and each applied it wholesale, so the
+  // feed's cell identity was replaced twice mid-layout for no gain.
+  const inFlight = tailFetchesInFlight.get(sessionId);
+  if (inFlight !== undefined) return inFlight;
+  const fetch = (async () => {
+    const window = await requireVerbClient().readTranscriptWindow(sessionId, { limit: TRANSCRIPT_INITIAL_WINDOW });
+    useTranscriptStore.getState().applyWindow(sessionId, window);
+  })();
+  const tracked = fetch.finally(() => {
+    tailFetchesInFlight.delete(sessionId);
+  });
+  tailFetchesInFlight.set(sessionId, tracked);
+  return tracked;
 }
 
 /** Scroll-up pagination: prepends the next older window above the current one. */

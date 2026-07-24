@@ -88,6 +88,25 @@ describe('ChatPane lens selection', () => {
     expect(screen.getByText(/codex session/)).toBeTruthy();
   });
 
+  /**
+   * A transcript delta can beat the window request and create the store entry
+   * with a real totalEntries and no entries at all (transcriptStore's
+   * revision === -1 branch). Routing on totalEntries alone sent that state to
+   * the conversation feed, which rendered zero cells and no loading note - a
+   * blank chat screen, seen live on a Pixel.
+   */
+  it('keeps the loading note when a delta lands before the window', () => {
+    useTranscriptStore.setState({
+      bySessionId: {
+        'sess-1': { entries: [], startIndex: 0, totalEntries: 476, revision: -1, tailRevision: 0, needsTailFetch: true },
+      },
+      retainedSessionIds: ['sess-1'],
+    });
+    renderPane('sess-1');
+    expect(screen.getByTestId('chat-pane-loading')).toBeTruthy();
+    expect(screen.queryByTestId('conversation-list')).toBeNull();
+  });
+
   it('shows the no-session empty state without a session', () => {
     renderPane(null);
     expect(screen.getByText('No active session for this task')).toBeTruthy();
