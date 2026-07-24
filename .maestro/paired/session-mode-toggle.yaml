@@ -6,10 +6,11 @@ appId: com.kangentic.mobile
 # flips to CHAT (message composer), then CHANGES (diff pane), and back.
 # WebView content is never asserted - only RN-side testIDs.
 - launchApp
+# 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-1"
-    timeout: 20000
+    timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-1"
 - assertVisible:

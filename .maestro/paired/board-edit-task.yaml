@@ -4,6 +4,12 @@ appId: com.kangentic.mobile
 # Long-press -> Edit: rename the quiet card and assert the optimistic (then
 # stub-confirmed) title lands on the board.
 - launchApp
+# 60s: the dev client cold-boots the bundle after launchApp's force-stop;
+# wait for the tab bar instead of tapping into a still-booting app.
+- extendedWaitUntil:
+    visible:
+      id: "board-tab"
+    timeout: 60000
 - tapOn:
     id: "board-tab"
 - extendedWaitUntil:

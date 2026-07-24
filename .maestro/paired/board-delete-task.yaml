@@ -4,6 +4,12 @@ appId: com.kangentic.mobile
 # Self-contained delete: create a throwaway card, then delete it through the
 # two-step confirm and assert it leaves the board.
 - launchApp
+# 60s: the dev client cold-boots the bundle after launchApp's force-stop;
+# wait for the tab bar instead of tapping into a still-booting app.
+- extendedWaitUntil:
+    visible:
+      id: "board-tab"
+    timeout: 60000
 - tapOn:
     id: "board-tab"
 - extendedWaitUntil:

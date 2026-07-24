@@ -4,6 +4,12 @@ appId: com.kangentic.mobile
 # The FAB create flow against the stub's stateful board: the created card
 # appears in the To Do column after the board push.
 - launchApp
+# 60s: the dev client cold-boots the bundle after launchApp's force-stop;
+# wait for the tab bar instead of tapping into a still-booting app.
+- extendedWaitUntil:
+    visible:
+      id: "board-tab"
+    timeout: 60000
 - tapOn:
     id: "board-tab"
 - extendedWaitUntil:

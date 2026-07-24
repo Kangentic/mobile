@@ -95,6 +95,9 @@ const DEFAULT_AVD = 'kangentic_pixel';
 const MODES = ['mock', 'live', 'pair', 'stub', 'doctor', 'emu', 'adb'];
 
 const spawnedChildren = [];
+// Set during teardown so child exit handlers (e.g. the stub auto-restart)
+// never respawn a process the rig itself is killing.
+let shuttingDown = false;
 
 function log(message) {
   console.log(`[rig] ${message}`);
@@ -310,6 +313,7 @@ function spawnPrefixed(label, command, args, options = {}) {
 }
 
 function teardown() {
+  shuttingDown = true;
   for (const { label, child } of spawnedChildren.splice(0)) {
     if (child.exitCode !== null || child.pid === undefined) continue;
     log(`stopping ${label} (pid ${child.pid})`);
@@ -621,7 +625,7 @@ function startMetro(flags, extraEnv = {}) {
 // ---------------------------------------------------------------------------
 // Stub peer
 
-function startStub(state, flags) {
+function startStub(state, flags, restartCount = 0) {
   const args = ['scripts/stubDesktopPeer.mjs', '--relay', RELAY_URL];
   const phoneKey = flags.fresh ? null : state.stubPhoneKey;
   if (phoneKey) {
@@ -632,7 +636,7 @@ function startStub(state, flags) {
     args.push('--yes');
   }
   let established = false;
-  spawnPrefixed('stub', 'node', args, {
+  const stubChild = spawnPrefixed('stub', 'node', args, {
     onLine: (line) => {
       if (line.includes('[session] established')) established = true;
       const keyMatch = line.match(/Phone static key: ([0-9a-f]{64})/);
@@ -641,6 +645,17 @@ function startStub(state, flags) {
         log(`saved the phone static key to ${STATE_FILE}`);
       }
     },
+  });
+  // A dead stub silently strands every paired Maestro flow after it, so a
+  // crash restarts it (bounded; a clean exit or rig shutdown does not).
+  stubChild.on('exit', (exitCode) => {
+    if (shuttingDown || exitCode === 0) return;
+    if (restartCount >= 5) {
+      warn('stub crashed 5 times; not restarting it again - investigate the [fatal] lines above');
+      return;
+    }
+    warn(`stub crashed (${exitCode ?? 'signal'}); restarting it in 2s...`);
+    setTimeout(() => startStub(loadState(), flags, restartCount + 1), 2000);
   });
   if (phoneKey) {
     setTimeout(() => {

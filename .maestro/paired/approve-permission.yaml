@@ -5,10 +5,12 @@ appId: com.kangentic.mobile
 # flow waits for it, approves it from the CHAT lens, and asserts the card
 # resolves. The stub's console logs the received keystrokes.
 - launchApp
+# 60s: launchApp force-stops, so the dev client cold-boots the bundle and
+# the channel re-establishes before the first row can render.
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-1"
-    timeout: 20000
+    timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-1"
 - assertVisible:

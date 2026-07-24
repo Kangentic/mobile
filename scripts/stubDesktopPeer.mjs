@@ -44,6 +44,17 @@ import {
   wrapSessionFrame,
 } from '@kangentic/protocol';
 
+// A silent stub death strands every paired Maestro flow behind it; always
+// leave a stack trace so the crash is diagnosable from the rig log.
+process.on('uncaughtException', (fatalError) => {
+  console.error('[fatal] uncaught exception:', fatalError?.stack ?? fatalError);
+  process.exit(1);
+});
+process.on('unhandledRejection', (fatalReason) => {
+  console.error('[fatal] unhandled rejection:', fatalReason instanceof Error ? fatalReason.stack : fatalReason);
+  process.exit(1);
+});
+
 // Persist the stub's static X25519 identity OUTSIDE the repo so restarting
 // the stub (e.g. to pick up code changes, or after a phone reload) keeps the
 // same desktop key the phone pinned at pairing - no re-pairing needed. The
@@ -308,8 +319,23 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
       socket.send(wrapSessionFrame(SessionFrameKind.Application, frame).slice().buffer);
     }
 
+    /**
+     * send() for fire-and-forget paths driven by timers or delayed pushes:
+     * a tick can fire in the window between the socket closing and the
+     * close handler clearing the timers, and that must drop the frame, not
+     * crash the stub (the pre-hardening silent stub deaths were exactly
+     * this throw escaping a timer callback).
+     */
+    function sendSafe(message, contextLabel) {
+      try {
+        send(message);
+      } catch (sendError) {
+        console.log(`[session] dropped ${contextLabel}: ${sendError.message}`);
+      }
+    }
+
     function sendEvent(event) {
-      send({ type: 'event', event });
+      sendSafe({ type: 'event', event }, 'an event send');
     }
 
     function emitPtyResize() {
@@ -420,8 +446,8 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     function answerCapabilityRequest(request) {
       const { requestId, verb, payload } = request;
       console.log(`[verb] ${verb}`, JSON.stringify(payload));
-      const ok = (responsePayload) => send({ type: 'capability-response', requestId, ok: true, ...(responsePayload === undefined ? {} : { payload: responsePayload }) });
-      const fail = (error) => send({ type: 'capability-response', requestId, ok: false, error });
+      const ok = (responsePayload) => sendSafe({ type: 'capability-response', requestId, ok: true, ...(responsePayload === undefined ? {} : { payload: responsePayload }) }, 'a capability response');
+      const fail = (error) => sendSafe({ type: 'capability-response', requestId, ok: false, error }, 'a capability response');
 
       switch (verb) {
         case 'read-board':
@@ -561,11 +587,15 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     // read by the persistent frame handler below.
     let handshake = null;
 
-    // The desktop always INITIATES the KK handshake. It does so on first
-    // connect and then on its ~2-minute rekey timer; that timer is also what
-    // recovers a phone that dropped and reconnected (the phone is the
-    // responder and only reacts to an inbound handshake). We re-initiate on a
-    // faster interval here so a dev reload of the app re-establishes quickly.
+    // The desktop always INITIATES the KK handshake: once on connect and
+    // then on its ~2-minute rekey timer. Phone reloads are recovered by the
+    // redial loop (runSessionWithRedial) initiating on the fresh socket,
+    // exactly like the real desktop's reconnect-on-drop - NOT by a fast
+    // rekey interval. A fast blind rekey is actively harmful here: while
+    // the phone is away, every initiation accumulates in the relay's
+    // parked-slot buffer and the whole pile flushes when the phone rejoins,
+    // churning both sides through key generations and eating any
+    // application frame (like the app's bootstrap) sent mid-storm.
     function initiateHandshake() {
       handshake = createKKHandshake({ initiator: true, localStatic: desktopStatic, remoteStatic: phoneStaticPublicKey });
       const { message } = handshake.writeMessage(new Uint8Array(0));
@@ -603,7 +633,13 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         console.log('[session] remote closed');
         return;
       }
-      const message = decodeMessage(opened.plaintext);
+      let message;
+      try {
+        message = decodeMessage(opened.plaintext);
+      } catch (decodeError) {
+        console.log(`[session] dropped an undecodable application frame: ${decodeError.message}`);
+        return;
+      }
       if (message.type === 'capability-request') {
         answerCapabilityRequest(message);
       } else if (message.type !== 'heartbeat') {
@@ -612,7 +648,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     });
 
     initiateHandshake();
-    const rehandshakeTimer = setInterval(initiateHandshake, 10_000);
+    const rehandshakeTimer = setInterval(initiateHandshake, 120_000);
     socket.addEventListener('close', () => {
       clearInterval(rehandshakeTimer);
       if (feedTimer) clearInterval(feedTimer);

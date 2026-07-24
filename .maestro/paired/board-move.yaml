@@ -4,6 +4,12 @@ appId: com.kangentic.mobile
 # Long-press a board card, move it to Done through the actions-sheet hop;
 # the stub's board is stateful, so the card lands in the Done column.
 - launchApp
+# 60s: the dev client cold-boots the bundle after launchApp's force-stop;
+# wait for the tab bar instead of tapping into a still-booting app.
+- extendedWaitUntil:
+    visible:
+      id: "board-tab"
+    timeout: 60000
 - tapOn:
     id: "board-tab"
 - extendedWaitUntil:
