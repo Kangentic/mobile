@@ -298,6 +298,41 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByTestId('connecting-empty-state')).toBeNull();
   });
 
+  /**
+   * The bootstrap declares EVERY project's board desired and each answers in
+   * its own round-trip, so the feed used to paint after the first snapshot
+   * and then grow once per remaining project - agents flickering in, the
+   * list re-sorting and re-anchoring under the thumb. It now reveals once,
+   * when the declared set is complete.
+   */
+  it('waits for every declared board before revealing the feed', () => {
+    useActivityStore.getState().reset();
+    useBoardStore.setState({
+      projects: [
+        { id: 'project-1', name: 'Alpha' },
+        { id: 'project-2', name: 'Beta' },
+      ],
+      boardsByProjectId: {},
+      hasHydratedSnapshot: false,
+    });
+    renderHome();
+    expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
+
+    // First of two boards answers: still incomplete, so nothing is revealed
+    // (and in particular no premature "All quiet").
+    act(() => {
+      useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', columns: [], tasks: [] }));
+    });
+    expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
+    expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
+
+    act(() => {
+      useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-2', columns: [], tasks: [] }));
+    });
+    expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
+    expect(screen.queryByTestId('connecting-empty-state')).toBeNull();
+  });
+
   it('shows the pairing CTA when unpaired', () => {
     useChannelStore.setState({ pairedState: 'unpaired' });
     renderHome();
