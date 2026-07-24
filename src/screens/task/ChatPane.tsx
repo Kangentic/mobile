@@ -23,15 +23,15 @@ export interface ChatPaneProps {
  */
 export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneProps): React.JSX.Element {
   /**
-   * `revision`, not the mere presence of a store entry, is what says a
+   * `hasWindow`, not the mere presence of a store entry, is what says a
    * transcript window has actually landed: a delta can arrive before the
    * window request resolves and create the entry with `totalEntries > 0` and
-   * no entries at all (transcriptStore's revision === -1 branch). Routing on
-   * `totalEntries` alone rendered the conversation feed with zero cells and
-   * no loading state there - a blank screen, observed live.
+   * no entries at all. Routing on `totalEntries` alone rendered the
+   * conversation feed with zero cells and no loading state there - a blank
+   * screen, observed live.
    */
   const hasTranscriptWindow = useTranscriptStore((state) =>
-    sessionId !== null ? (state.bySessionId[sessionId]?.revision ?? -1) !== -1 : false,
+    sessionId !== null ? (state.bySessionId[sessionId]?.hasWindow ?? false) : false,
   );
   const totalEntries = useTranscriptStore((state) =>
     sessionId !== null ? (state.bySessionId[sessionId]?.totalEntries ?? 0) : 0,

@@ -60,6 +60,7 @@ function seedStores(): void {
   useTranscriptStore.setState({
     bySessionId: {
       'sess-1': {
+        hasWindow: true,
         entries: fixtureEntries,
         startIndex: 0,
         totalEntries: fixtureEntries.length,
