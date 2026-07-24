@@ -45,7 +45,7 @@ describe('PairingConfirmScreen', () => {
     usePairingStore.getState().reset();
   });
 
-  it('renders the SAS digits and emoji for the user to confirm', () => {
+  it('renders the SAS digits and a single confirm action (no emoji row, no reject button)', () => {
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
       sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
@@ -55,7 +55,11 @@ describe('PairingConfirmScreen', () => {
 
     expect(screen.getByTestId('sas-digits').props.children).toBe('042917');
     expect(screen.getByTestId('sas-accept')).toBeTruthy();
-    expect(screen.getByTestId('sas-reject')).toBeTruthy();
+    // The digits carry the whole SAS; the emoji rendering was redundant.
+    expect(screen.queryByTestId('sas-emoji')).toBeNull();
+    // Backing out IS the rejection (the unmount effect tears the ceremony
+    // down), so the screen offers exactly one action.
+    expect(screen.queryByTestId('sas-reject')).toBeNull();
   });
 
   it('calls confirmActivePairing when the user accepts', async () => {
@@ -71,19 +75,19 @@ describe('PairingConfirmScreen', () => {
     await waitFor(() => expect(confirmActivePairing).toHaveBeenCalledTimes(1));
   });
 
-  it('calls rejectActivePairing when the user rejects', () => {
+  it('calls rejectActivePairing when the user leaves without confirming', () => {
     const { rejectActivePairing } = jest.requireMock<{ rejectActivePairing: jest.Mock }>('@/pairing/activePairing');
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
       sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
     });
 
-    render(<PairingConfirmScreen />);
-    fireEvent.press(screen.getByTestId('sas-reject'));
+    // Backing out (gesture, header back, tab switch) unmounts the screen -
+    // that IS the rejection now that the explicit button is gone, and it
+    // must still tear down the PairingMachine and its relay socket.
+    render(<PairingConfirmScreen />).unmount();
 
     expect(rejectActivePairing).toHaveBeenCalledTimes(1);
-    // Rejecting is the destructive confirm: warning haptic.
-    expect(mockNotificationAsync).toHaveBeenCalledWith(Haptics.NotificationFeedbackType.Warning);
   });
 
   it('fires the pairingSucceeded haptic once the accept completes', async () => {
