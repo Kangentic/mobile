@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshControl, StyleSheet, View } from 'react-native';
+import {
+  RefreshControl,
+  StyleSheet,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 import Animated, { ReduceMotion, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
@@ -292,12 +298,28 @@ export function TriageHomeScreen(): React.JSX.Element {
    * Pin to the top until the user scrolls, then leave them alone.
    */
   const listRef = useRef<FlashListRef<TriageListRow>>(null);
-  const userTookOverScrollRef = useRef(false);
-  const onScrollBeginDrag = useCallback(() => {
-    userTookOverScrollRef.current = true;
+  /**
+   * Whether the list is currently resting at the top, recomputed from the
+   * scroll offset rather than latched the first time the user drags.
+   *
+   * A one-way latch would be safe only by accident: it happens to protect a
+   * user who has scrolled, but it makes "at the top" a one-time event, and
+   * anything that remounted the screen would re-arm it under someone who had
+   * deliberately scrolled away. Reading the position instead makes the rule
+   * exact and self-correcting - at the top, new rows keep you at the top;
+   * scrolled away, nothing moves you; scroll back up and pinning resumes.
+   *
+   * It is the same contract the conversation feed gets from
+   * maintainVisibleContentPosition's autoscrollToBottomThreshold, on the
+   * opposite edge: pinned while you sit at the edge, released the moment you
+   * leave it.
+   */
+  const restingAtTopRef = useRef(true);
+  const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    restingAtTopRef.current = event.nativeEvent.contentOffset.y <= TOP_ANCHOR_TOLERANCE_PX;
   }, []);
   const onContentSizeChange = useCallback(() => {
-    if (userTookOverScrollRef.current) return;
+    if (!restingAtTopRef.current) return;
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
 
@@ -364,7 +386,8 @@ export function TriageHomeScreen(): React.JSX.Element {
         ref={listRef}
         testID="triage-home-list"
         data={rows}
-        onScrollBeginDrag={onScrollBeginDrag}
+        onScroll={onScroll}
+        scrollEventThrottle={64}
         onContentSizeChange={onContentSizeChange}
         refreshControl={
           // tintColor styles iOS; colors + progressBackgroundColor style
@@ -469,6 +492,13 @@ const SNIPPET_LINES = 2;
  * normal path reveals as soon as the last board lands.
  */
 const FEED_REVEAL_DEADLINE_MS = 2500;
+
+/**
+ * How far from offset 0 still counts as "resting at the top" for the feed's
+ * anchor. Small on purpose: enough to absorb overscroll bounce and rounding,
+ * not enough to grab someone who has deliberately scrolled down a little.
+ */
+const TOP_ANCHOR_TOLERANCE_PX = 8;
 
 
 /** How long a row waits before retrying a failed snippet peek. */
