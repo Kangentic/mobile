@@ -54,9 +54,31 @@ describe('PermissionPromptCard', () => {
     expect(screen.getByText('npm run lint\nnpm run test:unit')).toBeTruthy();
   });
 
-  it('renders the generic state when the tool_use has not been located yet', () => {
-    renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null });
+  /**
+   * Live on a Pixel against a real desktop: an AskUserQuestion ("1 Red /
+   * 2 Blue / 3 Type something") reaches the phone in exactly this shape -
+   * no tool_use in the transcript yet (the agent blocks at a pre-execution
+   * gate) and no published option labels. The card used to claim
+   * "Permission requested" and offer Approve, whose '1\r' would have
+   * silently selected "Red". An unidentified prompt must not offer a
+   * grant-shaped action.
+   */
+  it('never offers Approve when the prompt kind is unknown (would pick answer 1 of a question)', () => {
+    renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: null });
+
+    expect(screen.queryByTestId('permission-approve')).toBeNull();
+    expect(screen.queryByText('Permission requested')).toBeNull();
+    expect(screen.getByText('The agent needs you')).toBeTruthy();
+    // Esc is the one universally safe answer, and reading it in the
+    // terminal is promoted from fallback to the primary route.
+    expect(screen.getByTestId('permission-deny')).toBeTruthy();
+    expect(screen.getByText('Open in terminal')).toBeTruthy();
+  });
+
+  it('still shows the waiting-for-details state when the tool is unknown but options were published', () => {
+    renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: ['Yes', 'No'] });
     expect(screen.getByText('Waiting for prompt details')).toBeTruthy();
+    expect(screen.getByTestId('permission-approve')).toBeTruthy();
   });
 
   it('approve answers with the approve keystrokes', () => {
