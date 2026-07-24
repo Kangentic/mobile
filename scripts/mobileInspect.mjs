@@ -13,6 +13,11 @@
  *   node scripts/mobileInspect.mjs serve
  *   node scripts/mobileInspect.mjs relaunch
  *
+ * Every command accepts --serial <adb serial> (or the ANDROID_SERIAL env
+ * var, which adb honors natively) to pick the device when more than one is
+ * attached; with several ready devices and no selection the command fails
+ * early instead of letting adb error mid-run.
+ *
  * screenshot/tap/text/key/logcat are plain adb and need NO app cooperation
  * (they keep working when the JS bundle is broken). `state` hosts a local
  * WebSocket server on 127.0.0.1:8791 that the app's dev-only inspect bridge
@@ -38,6 +43,33 @@ const STATE_KINDS = ['connection', 'stores', 'subscriptions', 'feed-stats', 'rou
 function fail(message) {
   console.error(`[inspect] ${message}`);
   process.exit(1);
+}
+
+/** Strip --serial <value> from args, exporting it as ANDROID_SERIAL. */
+function extractSerialFlag(args) {
+  const index = args.indexOf('--serial');
+  if (index === -1) return args;
+  const serial = args[index + 1];
+  if (!serial) fail('--serial needs a value');
+  process.env.ANDROID_SERIAL = serial;
+  return [...args.slice(0, index), ...args.slice(index + 2)];
+}
+
+/** Fail early when several ready devices are attached and none was chosen. */
+function ensureSingleAdbTarget() {
+  if (process.env.ANDROID_SERIAL) return;
+  const listed = spawnSync('adb', ['devices'], { encoding: 'utf8' });
+  if (listed.status !== 0) return; // let the actual command surface adb errors
+  const ready = listed.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.includes('\t'))
+    .map((line) => line.split('\t').map((column) => column.trim()))
+    .filter(([, state]) => state === 'device')
+    .map(([serial]) => serial);
+  if (ready.length > 1) {
+    fail(`multiple devices attached (${ready.join(', ')}); pass --serial <serial> or set ANDROID_SERIAL`);
+  }
 }
 
 function runAdb(args, options = {}) {
@@ -194,7 +226,8 @@ function commandRelaunch() {
   fail(`relaunch: ${APP_PACKAGE} never reached the foreground after 4 launch attempts`);
 }
 
-const [command, ...rest] = process.argv.slice(2);
+const [command, ...rest] = extractSerialFlag(process.argv.slice(2));
+ensureSingleAdbTarget();
 switch (command) {
   case 'screenshot':
     commandScreenshot(rest);

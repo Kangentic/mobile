@@ -18,9 +18,15 @@
  *                                    key for a no-re-pair session when it can.
  *   node scripts/dev.mjs doctor   Preflight checks only.
  *
- * Flags: --avd <name>, --relay-repo <path>, --kangentic-repo <path>, --clear,
- *        --no-metro, --no-protocol-link, --stub (pair mode),
- *        --fresh (stub mode: ignore the saved phone key).
+ * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
+ *        --kangentic-repo <path>, --clear, --no-metro, --no-protocol-link,
+ *        --stub (pair mode), --fresh (stub mode: ignore the saved phone key).
+ *
+ * Devices: every adb call targets ONE device, chosen once per run via
+ * --serial (or the ANDROID_SERIAL env var, which adb honors natively and
+ * every child process inherits). With a single ready device attached the
+ * choice is automatic (a physical device skips the emulator boot); with
+ * several attached the rig fails early and lists the serials.
  *
  * Every run builds the sibling kangentic monorepo's packages/protocol and
  * links its packed output into node_modules (unless --no-protocol-link or the
@@ -32,9 +38,13 @@
  *   { "relayRepoPath": "...", "kangenticRepoPath": "...", "stubPhoneKey":
  *     "<64 hex>", "avdName": "...", "linkedProtocolHash": "..." }
  * Relay repo resolution: --relay-repo > KANGENTIC_RELAY_REPO env >
- * .devrig.local.json > ../kangentic-relay (sibling checkout). The kangentic
- * repo resolves the same way (--kangentic-repo / KANGENTIC_REPO / state /
- * ../kangentic).
+ * .devrig.local.json > ../kangentic-relay (sibling of the MAIN checkout; in
+ * an agent worktree under .kangentic/worktrees/ the siblings still live next
+ * to the main repo, so the fallback resolves through git's common dir). The
+ * kangentic repo resolves the same way (--kangentic-repo / KANGENTIC_REPO /
+ * state / ../kangentic). A worktree run also inherits the identity keys
+ * (dev phone key, stub phone key, repo paths) from the main checkout's state
+ * file so it never mints a second dev identity into the desktop roster.
  *
  * The rig adopts healthy already-running pieces (relay via /healthz, Metro
  * via port 8081, emulator via adb devices) and only tears down children it
@@ -54,6 +64,21 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Sibling repos (kangentic, kangentic-relay) and the shared dev identity live
+// next to the MAIN checkout. When the rig runs from an agent worktree
+// (.kangentic/worktrees/<branch>), repoRoot is the worktree, so '..' would
+// point inside .kangentic/worktrees/ - resolve the main checkout through
+// git's common dir instead.
+function resolveMainRepoRoot() {
+  const result = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' });
+  if (result.status !== 0) return repoRoot;
+  const commonDir = result.stdout?.trim();
+  if (!commonDir) return repoRoot;
+  return dirname(resolve(commonDir));
+}
+const mainRepoRoot = resolveMainRepoRoot();
+
 const STATE_FILE = join(repoRoot, '.devrig.local.json');
 const APP_PACKAGE = 'com.kangentic.mobile';
 const RELAY_PORT = 8080;
@@ -88,14 +113,32 @@ function fail(message) {
 // ---------------------------------------------------------------------------
 // Local state
 
-function loadState() {
-  if (!existsSync(STATE_FILE)) return {};
+// Keys a worktree run inherits from the main checkout's state file: identity
+// and machine paths must be shared (a fresh dev phone identity per worktree
+// would pollute the desktop roster with duplicate devices). Cache keys
+// (linkedProtocolHash, lastQuickPairEnv, inspectEnvEnabled) stay
+// per-checkout: they describe this checkout's node_modules and Metro cache.
+const SHARED_STATE_KEYS = ['relayRepoPath', 'kangenticRepoPath', 'avdName', 'stubPhoneKey', 'devPhoneKeyPair'];
+
+function readStateFile(statePath) {
+  if (!existsSync(statePath)) return {};
   try {
-    return JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+    return JSON.parse(readFileSync(statePath, 'utf8'));
   } catch (parseError) {
-    warn(`ignoring unreadable ${STATE_FILE}: ${parseError.message}`);
+    warn(`ignoring unreadable ${statePath}: ${parseError.message}`);
     return {};
   }
+}
+
+function loadState() {
+  const local = readStateFile(STATE_FILE);
+  if (mainRepoRoot === repoRoot) return local;
+  const shared = readStateFile(join(mainRepoRoot, '.devrig.local.json'));
+  const merged = { ...local };
+  for (const key of SHARED_STATE_KEYS) {
+    if (merged[key] === undefined && shared[key] !== undefined) merged[key] = shared[key];
+  }
+  return merged;
 }
 
 function saveState(patch) {
@@ -112,6 +155,7 @@ function parseRigArgs(argv) {
     allowPositionals: true,
     options: {
       avd: { type: 'string' },
+      serial: { type: 'string' },
       'relay-repo': { type: 'string' },
       'kangentic-repo': { type: 'string' },
       clear: { type: 'boolean', default: false },
@@ -131,7 +175,7 @@ function resolveRelayRepo(flags, state) {
     flags['relay-repo'] ??
     process.env.KANGENTIC_RELAY_REPO ??
     state.relayRepoPath ??
-    resolve(repoRoot, '..', 'kangentic-relay')
+    resolve(mainRepoRoot, '..', 'kangentic-relay')
   );
 }
 
@@ -140,7 +184,7 @@ function resolveKangenticRepo(flags, state) {
     flags['kangentic-repo'] ??
     process.env.KANGENTIC_REPO ??
     state.kangenticRepoPath ??
-    resolve(repoRoot, '..', 'kangentic')
+    resolve(mainRepoRoot, '..', 'kangentic')
   );
 }
 
@@ -344,11 +388,68 @@ function processNameForPid(pid) {
 // ---------------------------------------------------------------------------
 // Emulator + adb
 
-function attachedEmulator() {
+function listAdbDevices() {
   const result = run('adb', ['devices']);
-  if (result.status !== 0) return null;
-  const line = result.stdout.split('\n').find((deviceLine) => deviceLine.startsWith('emulator-') && deviceLine.includes('\tdevice'));
-  return line ? line.split('\t')[0] : null;
+  if (result.status !== 0) return [];
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('List of devices') && line.includes('\t'))
+    .map((line) => {
+      const [serial, state] = line.split('\t').map((column) => column.trim());
+      return { serial, state, isEmulator: serial.startsWith('emulator-') };
+    });
+}
+
+function describeDevices(devices) {
+  if (devices.length === 0) return '(none)';
+  return devices.map((device) => `${device.serial} (${device.state}${device.isEmulator ? ', emulator' : ''})`).join(', ');
+}
+
+function attachedEmulator() {
+  const device = listAdbDevices().find((candidate) => candidate.isEmulator && candidate.state === 'device');
+  return device ? device.serial : null;
+}
+
+/**
+ * Pick the one adb device every subsequent adb call targets. An explicit
+ * serial (--serial / ANDROID_SERIAL) wins; otherwise a single ready device
+ * is unambiguous, several ready devices demand an explicit choice, and
+ * nothing ready returns null (the caller may boot the emulator).
+ */
+function selectAdbTarget(requestedSerial) {
+  const devices = listAdbDevices();
+  const ready = devices.filter((device) => device.state === 'device');
+  const unauthorized = devices.filter((device) => device.state === 'unauthorized');
+  if (requestedSerial) {
+    const match = ready.find((device) => device.serial === requestedSerial);
+    if (!match) {
+      const authHint = unauthorized.some((device) => device.serial === requestedSerial)
+        ? ' - accept the USB debugging prompt on the device'
+        : '';
+      fail(`device "${requestedSerial}" is not attached and ready. Attached: ${describeDevices(devices)}${authHint}`);
+    }
+    return match;
+  }
+  if (ready.length === 1) return ready[0];
+  if (ready.length > 1) {
+    fail(`multiple devices attached (${describeDevices(ready)}); pick one with --serial <serial> or ANDROID_SERIAL`);
+  }
+  if (unauthorized.length > 0) {
+    warn(`attached but unauthorized: ${describeDevices(unauthorized)} - accept the USB debugging prompt on the device to use it`);
+  }
+  return null;
+}
+
+/**
+ * adb honors ANDROID_SERIAL natively and every child this rig spawns
+ * (Metro, mobileInspect.mjs, the stub) inherits the env, so setting it once
+ * threads the chosen device through every adb call without touching call
+ * sites.
+ */
+function applyAdbTarget(device) {
+  process.env.ANDROID_SERIAL = device.serial;
+  log(`target device: ${device.serial}${device.isEmulator ? '' : ' (physical)'}`);
 }
 
 function avdConfigPath(avdName) {
@@ -356,11 +457,8 @@ function avdConfigPath(avdName) {
   return join(avdHome, `${avdName}.avd`, 'config.ini');
 }
 
-async function ensureEmulator(avdName) {
-  if (attachedEmulator()) {
-    log('emulator already attached');
-    return;
-  }
+/** Boot the AVD cold and wait for it; returns the booted emulator's serial. */
+async function bootEmulator(avdName) {
   const listed = run('emulator', ['-list-avds']);
   if (listed.status !== 0) fail('the `emulator` command is not on PATH (add %ANDROID_HOME%\\emulator to PATH)');
   if (!listed.stdout.split('\n').map((name) => name.trim()).includes(avdName)) {
@@ -382,14 +480,35 @@ async function ensureEmulator(avdName) {
   emulatorChild.unref();
   const deadline = Date.now() + 300_000;
   while (Date.now() < deadline) {
-    const boot = run('adb', ['shell', 'getprop', 'sys.boot_completed']);
-    if (boot.stdout?.trim() === '1') {
-      log('emulator booted');
-      return;
+    // Poll per-serial: a physical device may be attached alongside, so a
+    // bare `adb shell` would refuse with "more than one device".
+    for (const device of listAdbDevices()) {
+      if (!device.isEmulator || device.state !== 'device') continue;
+      const boot = run('adb', ['-s', device.serial, 'shell', 'getprop', 'sys.boot_completed']);
+      if (boot.stdout?.trim() === '1') {
+        log(`emulator booted (${device.serial})`);
+        return device.serial;
+      }
     }
     await sleep(2000);
   }
-  fail('emulator did not finish booting within 3 minutes');
+  fail('emulator did not finish booting within 5 minutes');
+}
+
+/**
+ * Resolve the device this run targets: an attached ready device when one is
+ * unambiguous (physical devices are first-class targets and skip the
+ * emulator boot), else boot the AVD. Sets ANDROID_SERIAL for everything
+ * downstream.
+ */
+async function ensureDevice(avdName, requestedSerial) {
+  let target = selectAdbTarget(requestedSerial);
+  if (!target) {
+    const serial = await bootEmulator(avdName);
+    target = { serial, state: 'device', isEmulator: true };
+  }
+  applyAdbTarget(target);
+  return target;
 }
 
 function ensureAdbReverse() {
@@ -537,7 +656,7 @@ function startStub(state, flags) {
 // ---------------------------------------------------------------------------
 // Doctor
 
-async function doctor({ relayRepo, avdName, needsRelay }) {
+async function doctor({ relayRepo, avdName, requestedSerial }) {
   const checks = [];
   const add = (ok, label, hint) => checks.push({ ok, label, hint });
 
@@ -568,7 +687,7 @@ async function doctor({ relayRepo, avdName, needsRelay }) {
     add(true, `relay running on port ${RELAY_PORT}`);
     add(await probeSessionSlot(), 'relay accepts the 32-hex session slot', `restart it with SLOT_ID_PATTERN='${RELAY_SLOT_PATTERN}'`);
   } else if (relayState === 'free') {
-    add(true, `port ${RELAY_PORT} free (rig will start the relay${needsRelay ? '' : ' when a connected mode needs it'})`);
+    add(true, `port ${RELAY_PORT} free (rig will start the relay when a connected mode needs it)`);
   } else {
     add(false, `port ${RELAY_PORT} held by a non-relay process`, 'free the port');
   }
@@ -581,8 +700,26 @@ async function doctor({ relayRepo, avdName, needsRelay }) {
     add(name === 'node.exe', `port ${METRO_PORT} held by ${name ?? 'unknown'} (pid ${metroPid})`, name === 'node.exe' ? undefined : 'not a stray Metro; free it manually');
   }
 
-  if (attachedEmulator()) {
-    add(devClientInstalled(), `dev client (${APP_PACKAGE}) installed`, 'run npx expo run:android once to build and install it');
+  const devices = listAdbDevices();
+  const readyDevices = devices.filter((device) => device.state === 'device');
+  for (const device of devices) {
+    add(
+      device.state === 'device',
+      `device ${device.serial}${device.isEmulator ? ' (emulator)' : ''}: ${device.state}`,
+      device.state === 'unauthorized' ? 'accept the USB debugging prompt on the device' : `adb reports "${device.state}"`,
+    );
+  }
+  if (readyDevices.length > 1) {
+    add(
+      Boolean(requestedSerial),
+      'multiple devices: an explicit target is chosen',
+      `pass --serial <serial> or set ANDROID_SERIAL (attached: ${readyDevices.map((device) => device.serial).join(', ')})`,
+    );
+  }
+  const doctorTarget = requestedSerial ?? (readyDevices.length === 1 ? readyDevices[0].serial : null);
+  if (doctorTarget && readyDevices.some((device) => device.serial === doctorTarget)) {
+    process.env.ANDROID_SERIAL = doctorTarget;
+    add(devClientInstalled(), `dev client (${APP_PACKAGE}) installed on ${doctorTarget}`, 'run npx expo run:android once to build and install it');
   }
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
@@ -671,10 +808,11 @@ async function main() {
   const state = loadState();
   const relayRepo = resolveRelayRepo(flags, state);
   const avdName = flags.avd ?? state.avdName ?? DEFAULT_AVD;
+  const requestedSerial = flags.serial ?? (process.env.ANDROID_SERIAL || null);
   const needsRelay = mode === 'live' || mode === 'pair' || mode === 'stub';
 
   if (mode === 'doctor') {
-    const failures = await doctor({ relayRepo, avdName, needsRelay: false });
+    const failures = await doctor({ relayRepo, avdName, requestedSerial });
     log(failures === 0 ? 'all checks passed' : `${failures} check(s) need attention`);
     process.exit(failures === 0 ? 0 : 1);
   }
@@ -691,6 +829,14 @@ async function main() {
     await sleep(1000);
     const started = run('adb', ['start-server']);
     if (started.status !== 0) fail(`adb start-server failed: ${started.stderr?.trim() ?? ''}`);
+    // USB devices take a moment to re-handshake with the fresh server.
+    const enumerateDeadline = Date.now() + 15_000;
+    while (listAdbDevices().every((device) => device.state !== 'device') && Date.now() < enumerateDeadline) {
+      await sleep(1000);
+    }
+    const adbTarget = selectAdbTarget(requestedSerial);
+    if (!adbTarget) fail('no ready device after the adb restart; boot the emulator (npm run dev:emu) or plug in and authorize a device');
+    applyAdbTarget(adbTarget);
     ensureAdbReverse();
     ensureInspectAdbReverse();
     const relaunched = spawnSync('node', [join(repoRoot, 'scripts', 'mobileInspect.mjs'), 'relaunch'], { encoding: 'utf8' });
@@ -708,19 +854,24 @@ async function main() {
     // is a fresh process. Kill, reboot, restore the reverses the reboot
     // wiped, and put the app back on screen.
     if (!commandExists('adb', ['version'])) fail('adb is not on PATH');
+    if (requestedSerial && !requestedSerial.startsWith('emulator-')) {
+      fail(`emu mode manages the emulator; "${requestedSerial}" is a physical device (omit --serial or pass an emulator serial)`);
+    }
     log('restarting the emulator (fresh process cures long-session lag)...');
-    if (attachedEmulator()) {
-      run('adb', ['emu', 'kill']);
+    const runningEmulator = requestedSerial ?? attachedEmulator();
+    if (runningEmulator && listAdbDevices().some((device) => device.serial === runningEmulator)) {
+      run('adb', ['-s', runningEmulator, 'emu', 'kill']);
       // Wait for the dying instance to actually DETACH before booting the
       // next one, or the boot races the AVD lock and the boot-completed
       // poll can bind to the corpse.
       const detachDeadline = Date.now() + 20_000;
-      while (attachedEmulator() && Date.now() < detachDeadline) {
+      while (listAdbDevices().some((device) => device.serial === runningEmulator) && Date.now() < detachDeadline) {
         await sleep(1000);
       }
       await sleep(2000);
     }
-    await ensureEmulator(avdName);
+    const bootedSerial = await bootEmulator(avdName);
+    applyAdbTarget({ serial: bootedSerial, state: 'device', isEmulator: true });
     ensureAdbReverse();
     ensureInspectAdbReverse();
     const relaunch = spawnSync('node', [join(repoRoot, 'scripts', 'mobileInspect.mjs'), 'relaunch'], { encoding: 'utf8' });
@@ -734,7 +885,7 @@ async function main() {
 
   log(`mode: ${mode}`);
   if (!commandExists('adb', ['version'])) fail('adb is not on PATH');
-  await ensureEmulator(avdName);
+  await ensureDevice(avdName, requestedSerial);
 
   const kangenticRepo = resolveKangenticRepo(flags, state);
   // Link the sibling protocol build into node_modules; a change forces a

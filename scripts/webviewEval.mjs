@@ -8,7 +8,11 @@
 //
 // Usage:
 //   node scripts/webviewEval.mjs "window.innerWidth"
-//   node scripts/webviewEval.mjs "document.querySelector('.xterm-screen').getBoundingClientRect().width"
+//   node scripts/webviewEval.mjs --serial <adb serial> "document.querySelector('.xterm-screen').getBoundingClientRect().width"
+//
+// --serial (or the ANDROID_SERIAL env var) picks the device when more than
+// one is attached; with several ready devices and no selection this fails
+// early instead of letting adb error.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -16,14 +20,39 @@ const nodeRequire = createRequire(import.meta.url);
 const WebSocket = nodeRequire('ws');
 
 const FORWARD_PORT = 9223;
-const expression = process.argv[2];
+const scriptArguments = process.argv.slice(2);
+const serialFlagIndex = scriptArguments.indexOf('--serial');
+if (serialFlagIndex !== -1) {
+  const serial = scriptArguments[serialFlagIndex + 1];
+  if (!serial) {
+    console.error('--serial needs a value');
+    process.exit(1);
+  }
+  process.env.ANDROID_SERIAL = serial;
+  scriptArguments.splice(serialFlagIndex, 2);
+}
+const expression = scriptArguments[0];
 if (!expression) {
-  console.error('usage: node scripts/webviewEval.mjs <expression>');
+  console.error('usage: node scripts/webviewEval.mjs [--serial <adb serial>] <expression>');
   process.exit(1);
 }
 
 function adb(...adbArguments) {
   return execFileSync('adb', adbArguments, { encoding: 'utf8' });
+}
+
+if (!process.env.ANDROID_SERIAL) {
+  const readyDevices = adb('devices')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.includes('\t'))
+    .map((line) => line.split('\t').map((column) => column.trim()))
+    .filter(([, state]) => state === 'device')
+    .map(([serial]) => serial);
+  if (readyDevices.length > 1) {
+    console.error(`multiple devices attached (${readyDevices.join(', ')}); pass --serial <serial> or set ANDROID_SERIAL`);
+    process.exit(1);
+  }
 }
 
 const unixSockets = adb('shell', 'cat /proc/net/unix');
