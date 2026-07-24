@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
-import { Screen, Stack, Row, Text, Button, Overseer, useTheme } from '@/components';
+import { Screen, Stack, Text, Button, Overseer, useTheme } from '@/components';
 import { triggerHaptic } from '@/lib/haptics';
 import { usePairingStore } from '@/state/pairingStore';
-import { confirmActivePairing, rejectActivePairing, resetActivePairing } from '@/pairing/activePairing';
+import { confirmActivePairing, rejectActivePairing } from '@/pairing/activePairing';
 import { wipeDesktopContent } from '@/connection/actions';
 import { reconnectNow } from '@/connection/connectionManager';
 
@@ -57,13 +57,6 @@ export function PairingConfirmScreen(): React.JSX.Element {
     }
   };
 
-  const handleReject = (): void => {
-    triggerHaptic('destructiveConfirmed');
-    rejectActivePairing();
-    resetActivePairing();
-    router.back();
-  };
-
   if (!machineState || machineState.status === 'connecting' || machineState.status === 'handshaking') {
     return (
       <Screen testID="pairing-confirm-screen">
@@ -105,27 +98,23 @@ export function PairingConfirmScreen(): React.JSX.Element {
 
   const { sas } = machineState;
 
+  // The digits ARE the SAS; the emoji row rendered the same transcript hash
+  // a second way, adding a wrapping row and cross-platform font risk without
+  // adding assurance. One code, compared once.
   return (
     <Screen testID="pairing-confirm-screen">
       <Stack gap="lg" style={{ padding: theme.spacing.lg, flex: 1, justifyContent: 'center' }}>
         <Text variant="title">Confirm this matches your desktop</Text>
-        <Text variant="body" color="secondary">
-          These must match the code shown on your desktop. If they do not match, reject and pair again.
-        </Text>
         <Text testID="sas-digits" variant="heading">
           {sas.digits}
         </Text>
-        <Row gap="sm" testID="sas-emoji" style={{ flexWrap: 'wrap' }}>
-          {sas.emoji.map((glyph, index) => (
-            <Text key={`${glyph}-${index}`} variant="heading">
-              {glyph}
-            </Text>
-          ))}
-        </Row>
-        <Row gap="md">
-          <Button testID="sas-reject" label="Reject" variant="danger" onPress={handleReject} />
-          <Button testID="sas-accept" label="Accept" onPress={() => void handleAccept()} disabled={isConfirming} />
-        </Row>
+        {/* Single action: confirming is the only thing to DO here. Backing
+            out (gesture / header back) is the rejection, and this screen's
+            unmount already tears the ceremony down. */}
+        <Button testID="sas-accept" label="Confirm" onPress={() => void handleAccept()} disabled={isConfirming} />
+        <Text variant="caption" color="muted">
+          Codes not matching? Go back and pair again.
+        </Text>
         {confirmError ? (
           <Text testID="sas-confirm-error" variant="caption" color="danger">
             {confirmError}

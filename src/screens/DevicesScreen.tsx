@@ -69,7 +69,7 @@ export function DevicesScreen(): React.JSX.Element {
             <Text variant="body" color="secondary">
               No desktop paired yet.
             </Text>
-            <Button label="Pair with your desktop" onPress={() => router.push('/pair')} testID="devices-pair-cta" />
+            <Button label="Pair" onPress={() => router.push('/pair')} testID="devices-pair-cta" />
           </Stack>
         ) : (
           <>

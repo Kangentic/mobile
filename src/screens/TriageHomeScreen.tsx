@@ -354,15 +354,23 @@ export function TriageHomeScreen(): React.JSX.Element {
 
 function UnpairedEmptyState(): React.JSX.Element {
   const router = useRouter();
+  const theme = useTheme();
   return (
     <EmptyState
       testID="unpaired-empty-state"
       title="No desktop paired"
-      caption="Steer your agents from anywhere."
+      caption="Connect your phone to Kangentic."
       overseerSize={90}
       overseerAnimate="blink-loop"
     >
-      <Button label="Pair with your desktop" onPress={() => router.push('/pair')} testID="triage-pair-cta" />
+      {/* Short label ("Pair") would hug tight; widen it into a substantial
+          primary CTA - the hero action of this setup screen. */}
+      <Button
+        label="Pair"
+        onPress={() => router.push('/pair')}
+        testID="triage-pair-cta"
+        style={{ paddingHorizontal: theme.spacing.xxl * 2 }}
+      />
     </EmptyState>
   );
 }

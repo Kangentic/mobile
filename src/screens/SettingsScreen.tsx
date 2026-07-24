@@ -170,7 +170,7 @@ export function SettingsScreen(): React.JSX.Element {
                 // Once paired, this phone holds exactly ONE desktop trust
                 // anchor - re-pairing REPLACES it, so that action lives in
                 // the Devices screen next to unpair, stated as a replace.
-                <Button testID="settings-pair-device" label="Pair with your desktop" onPress={() => router.push('/pair')} />
+                <Button testID="settings-pair-device" label="Pair" onPress={() => router.push('/pair')} />
               ) : null}
             </Stack>
           </Card>
