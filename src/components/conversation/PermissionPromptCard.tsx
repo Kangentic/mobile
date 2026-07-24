@@ -135,7 +135,8 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
   const theme = useTheme();
   const { answering, answeredNote, errorNote, submit } = usePromptAnswer(sessionId, prompt.promptId);
   const buttonsDisabled = answering || answeredNote !== null;
-  const hasPublishedOptions = prompt.options !== null && prompt.options.length >= 2;
+  // Bind the array (not just a boolean) so the render below stays narrowed.
+  const publishedOptions = prompt.options !== null && prompt.options.length >= 2 ? prompt.options : null;
   /**
    * Nothing identifies this prompt: no tool (the agent blocks at a
    * pre-execution gate, so its tool_use is not in the transcript yet) and no
@@ -145,7 +146,7 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
    * FIRST ANSWER of a question rather than granting anything, so the card
    * must not offer it here: name the uncertainty and route to the terminal.
    */
-  const kindUnknown = prompt.toolName === null && !hasPublishedOptions;
+  const kindUnknown = prompt.toolName === null && publishedOptions === null;
 
   return (
     <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
@@ -180,14 +181,14 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                 {errorNote}
               </Text>
             ) : null}
-            {hasPublishedOptions ? (
+            {publishedOptions !== null ? (
               // FULL-FIDELITY MODE: the desktop's PTY probe published the
               // dialog's actual numbered options; render every one as an
               // identical outlined row (no primary emphasis - the choice is
               // the user's, none is blessed). Option 1 keeps the approve
               // testID for flow continuity.
               <Stack gap="xs">
-                {prompt.options.map((optionLabel, optionIndex) => (
+                {publishedOptions.map((optionLabel, optionIndex) => (
                   <PromptOptionRow
                     key={optionIndex}
                     label={optionLabel}
@@ -201,24 +202,12 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                 ))}
               </Stack>
             ) : kindUnknown ? (
-              // UNKNOWN PROMPT: only the universally safe action. Esc
-              // dismisses any dialog; a digit could answer the wrong
-              // question. Reading it in the terminal is the way forward,
-              // and the hatch below is the primary route.
-              <Row gap="sm" style={styles.actionRow}>
-                <View style={styles.flex}>
-                  <Button
-                    label="Dismiss"
-                    variant="ghost"
-                    testID="permission-deny"
-                    disabled={buttonsDisabled}
-                    onPress={() => {
-                      triggerHaptic('promptAnswered');
-                      submit(denyPermissionKeystrokes());
-                    }}
-                  />
-                </View>
-              </Row>
+              // UNKNOWN PROMPT: no blind actions at all. A digit could answer
+              // the wrong question, and dismissing is equally blind - it might
+              // cancel something the user would have said yes to. The only
+              // honest move is to go look, so the terminal row below is the
+              // sole action.
+              null
             ) : (
               // Equal-weight pair: approving and denying are both one tap on
               // a known permission request, so they share the row evenly.

@@ -63,15 +63,16 @@ describe('PermissionPromptCard', () => {
    * silently selected "Red". An unidentified prompt must not offer a
    * grant-shaped action.
    */
-  it('never offers Approve when the prompt kind is unknown (would pick answer 1 of a question)', () => {
+  it('offers no blind action when the prompt kind is unknown - only the terminal', () => {
     renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: null });
 
+    // Approve would send '1\r' and could answer "Red" to a question.
     expect(screen.queryByTestId('permission-approve')).toBeNull();
+    // Dismissing is equally blind: it might cancel something the user would
+    // have accepted. Neither belongs on a prompt the app cannot describe.
+    expect(screen.queryByTestId('permission-deny')).toBeNull();
     expect(screen.queryByText('Permission requested')).toBeNull();
     expect(screen.getByText('The agent needs you')).toBeTruthy();
-    // Esc is the one universally safe answer, and reading it in the
-    // terminal is promoted from fallback to the primary route.
-    expect(screen.getByTestId('permission-deny')).toBeTruthy();
     expect(screen.getByText('Open in terminal')).toBeTruthy();
   });
 

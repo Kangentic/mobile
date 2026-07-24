@@ -379,6 +379,17 @@ function UnpairedEmptyState(): React.JSX.Element {
 const SNIPPET_PEEK_RETRY_MS = 6000;
 
 /**
+ * How long the snippet key must hold still before the row fetches it.
+ *
+ * The key carries unreadCount, which climbs once per engine event. A fresh
+ * launch (and any catch-up burst) delivers those events back-to-back, so an
+ * unsettled fetch painted a DIFFERENT older message per increment and the
+ * row visibly flickered through the backlog. Waiting for the burst to stop
+ * means one fetch, of the final state, and a row that fills in once.
+ */
+const SNIPPET_SETTLE_MS = 350;
+
+/**
  * While a session is actively working its unread counter bumps on every
  * engine event; a snippet this old is still honest context, and the
  * throttle keeps a busy session from refetching a heavy transcript
@@ -483,7 +494,14 @@ const ActivityRow = React.memo(function ActivityRow({
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const currentKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
-    const peek =
+    // Let a burst settle before fetching: each unreadCount bump re-runs this
+    // effect and clears the previous timer, so a catch-up storm resolves to
+    // exactly one peek for the LAST key instead of one paint per event.
+    const settleTimer = setTimeout(runPeek, SNIPPET_SETTLE_MS);
+
+    function runPeek(): void {
+      if (cancelled) return;
+      const peek =
       isPermission && awaitedPromptId !== null
         ? peekAwaitedPrompt(entry.sessionId, awaitedPromptId).then((toolUse) => buildPendingPromptSummary(toolUse))
         : (async () => {
@@ -502,20 +520,23 @@ const ActivityRow = React.memo(function ActivityRow({
             if (snippetText === null && messagePeekFailed) throw new Error('snippet peek failed');
             return snippetText;
           })();
-    void peek
-      .then((snippetText) => {
-        if (!cancelled) setPeekedSnippet({ key: currentKey, text: snippetText });
-      })
-      .catch(() => {
-        // Not connected yet or a transient fetch failure: retry shortly.
-        // The loop self-terminates on the first resolved peek (results
-        // cache by key, so repeat runs after that are free).
-        if (!cancelled) {
-          retryTimer = setTimeout(() => setPeekRetryNonce((nonce) => nonce + 1), SNIPPET_PEEK_RETRY_MS);
-        }
-      });
+      void peek
+        .then((snippetText) => {
+          if (!cancelled) setPeekedSnippet({ key: currentKey, text: snippetText });
+        })
+        .catch(() => {
+          // Not connected yet or a transient fetch failure: retry shortly.
+          // The loop self-terminates on the first resolved peek (results
+          // cache by key, so repeat runs after that are free).
+          if (!cancelled) {
+            retryTimer = setTimeout(() => setPeekRetryNonce((nonce) => nonce + 1), SNIPPET_PEEK_RETRY_MS);
+          }
+        });
+    }
+
     return () => {
       cancelled = true;
+      clearTimeout(settleTimer);
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
   }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce, snippetFreshnessMs]);

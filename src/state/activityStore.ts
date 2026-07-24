@@ -23,6 +23,14 @@ export interface SessionActivityEntry {
   /** Epoch ms of the last snapshot/event touching this session. */
   lastEventAt: number;
   /**
+   * Epoch ms of when this session ENTERED its current triage section. This
+   * is the feed's ordering key, deliberately NOT lastEventAt: two agents
+   * working at once each bump lastEventAt on every token, so ordering by it
+   * made them trade places continuously while the user was trying to read
+   * them. A row's position now only changes when its section does.
+   */
+  enteredSectionAt: number;
+  /**
    * Epoch ms of the last EVENT-driven triage-section change (thinking to
    * idle, a prompt arriving), or null. Drives the feed's landing pulse so
    * the eye can track a row that just moved. Snapshot re-applies
@@ -61,6 +69,7 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     // the 0.5.x parsers strip the fields and this stays null.
     awaitedPromptOptions: null,
     lastEventAt: Date.now(),
+    enteredSectionAt: Date.now(),
     sectionChangedAt: null,
     unreadCount: 0,
     feedStatus: 'pending',
@@ -83,23 +92,26 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
   applySnapshot: (sessionId, taskId, projectId, snapshot) =>
     set((state) => {
       const existing = state.bySessionId[sessionId] ?? emptyEntry(sessionId, taskId, projectId);
-      return {
-        bySessionId: {
-          ...state.bySessionId,
-          [sessionId]: {
-            ...existing,
-            taskId,
-            projectId,
-            state: snapshot.activity.state ?? 'idle',
-            reason: snapshot.activity.reason,
-            usage: snapshot.usage,
-            awaitedPromptId: snapshot.awaitedPromptId,
-            awaitedPromptOptions: snapshot.awaitedPromptOptions ?? null,
-            lastEventAt: Date.now(),
-            feedStatus: 'live',
-          },
-        },
+      const next: SessionActivityEntry = {
+        ...existing,
+        taskId,
+        projectId,
+        state: snapshot.activity.state ?? 'idle',
+        reason: snapshot.activity.reason,
+        usage: snapshot.usage,
+        awaitedPromptId: snapshot.awaitedPromptId,
+        awaitedPromptOptions: snapshot.awaitedPromptOptions ?? null,
+        lastEventAt: Date.now(),
+        feedStatus: 'live',
       };
+      // Re-subscribes (reconnect, pull-to-refresh) re-deliver a snapshot for
+      // every live session at once. Only advance the ordering key when the
+      // section actually changed, or the whole feed would reshuffle into
+      // snapshot-arrival order on every reconnect.
+      if (sectionForEntry(next) !== sectionForEntry(existing)) {
+        next.enteredSectionAt = Date.now();
+      }
+      return { bySessionId: { ...state.bySessionId, [sessionId]: next } };
     }),
 
   applyActivityEvent: (event) =>
@@ -136,6 +148,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       }
       if (sectionForEntry(updated) !== sectionForEntry(existing)) {
         updated.sectionChangedAt = Date.now();
+        updated.enteredSectionAt = Date.now();
       }
       return { bySessionId: { ...state.bySessionId, [event.sessionId]: updated } };
     }),
@@ -199,13 +212,24 @@ export function selectTriageRows(state: { bySessionId: Record<string, SessionAct
       .filter((entry) => sectionForEntry(entry) === section)
       .sort((first, second) => {
         // Within Idle, unread sessions surface first (finished work the user
-        // has not seen outranks quiet idles); recency breaks ties everywhere.
+        // has not seen outranks quiet idles).
         if (section === 'idle') {
           const firstHasUnread = first.unreadCount > 0 ? 1 : 0;
           const secondHasUnread = second.unreadCount > 0 ? 1 : 0;
           if (firstHasUnread !== secondHasUnread) return secondHasUnread - firstHasUnread;
         }
-        return second.lastEventAt - first.lastEventAt;
+        // Newest arrival on top, then HOLD that position. Ordering by
+        // lastEventAt made two concurrently-working agents swap places on
+        // every streamed token, so a feed the user was reading rearranged
+        // itself continuously. enteredSectionAt only moves when the row
+        // moves sections, which is a change worth re-ranking for.
+        if (second.enteredSectionAt !== first.enteredSectionAt) {
+          return second.enteredSectionAt - first.enteredSectionAt;
+        }
+        // Same millisecond (a batch of snapshots on reconnect): fall back to
+        // a stable, value-based tiebreak so the order never depends on
+        // object-iteration order.
+        return first.sessionId < second.sessionId ? -1 : first.sessionId > second.sessionId ? 1 : 0;
       }),
   }));
 }
