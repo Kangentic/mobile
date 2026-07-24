@@ -6,6 +6,7 @@ import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { appendChunk, getBufferedData, retainTerminal } from '@/state/terminalFeed';
+import { useSettingsStore } from '@/state/settingsStore';
 import type { TranscriptEntryWire } from '@kangentic/protocol';
 
 // vi.hoisted + vi.mock both hoist above the imports, so the actions module
@@ -20,6 +21,12 @@ vi.mock('@/connection/connectionManager', () => ({
   requireVerbClient: () => ({ readTranscriptWindow }),
 }));
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: vi.fn() }));
+// wipeDesktopContent also clears settingsStore, which persists via
+// expo-secure-store - fake it so the vitest (node) run has no native module.
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: () => Promise.resolve(null),
+  setItemAsync: () => Promise.resolve(),
+}));
 
 afterEach(() => {
   readTranscriptWindow.mockReset();
@@ -66,5 +73,19 @@ describe('wipeDesktopContent', () => {
     readTranscriptWindow.mockResolvedValue({ entries: [{ ...entry, blocks: [{ type: 'text', text: 'New desktop.' }] }] });
     await expect(peekLastAssistantMessage('session-1', 20_000)).resolves.toBe('New desktop.');
     expect(readTranscriptWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears preferredSessionLensByTaskId (keyed by the old desktop\'s task IDs) but leaves other settings alone', () => {
+    useSettingsStore.setState({
+      preferredSessionLensByTaskId: { 'task-1': 'chat' },
+      collapsedTriageSection: 'Idle',
+      hapticsEnabled: false,
+    });
+
+    wipeDesktopContent();
+
+    expect(useSettingsStore.getState().preferredSessionLensByTaskId).toEqual({});
+    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Idle');
+    expect(useSettingsStore.getState().hapticsEnabled).toBe(false);
   });
 });

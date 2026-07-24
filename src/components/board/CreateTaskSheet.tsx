@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { BoardColumnWire } from '@kangentic/protocol';
-import { Button, SHEET_MAX_HEIGHT_FRACTION, Sheet, Stack, Text, TextField, useTheme } from '@/components';
+import { Button, Sheet, Stack, Text, TextField, computeSheetDescriptionBounds, useTheme } from '@/components';
 
 export interface CreateTaskSheetProps {
   visible: boolean;
@@ -35,33 +35,12 @@ export function CreateTaskSheet({
   const theme = useTheme();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  // The description should use as much of the sheet's own 75% budget as the
-  // OTHER fixed rows (the sheet's own title, the title field, the column
-  // chips, the Create button, and the sheet's paddings) leave behind, not a
-  // small fixed cap - a fixed cap left a large dead gap above a short sheet
-  // instead of giving a long description more visible room to read. A small
-  // safety buffer absorbs the rest: this is an estimate of Sheet's actual
-  // layout, not a measurement of it, and undershooting cuts off the Create
-  // button, which is worse than a slightly-shorter description.
-  const CHROME_ESTIMATE_SAFETY_BUFFER = theme.spacing.md;
-  const reservedChromeHeight =
-    theme.spacing.lg + // Sheet's own paddingTop
-    theme.typography.title.lineHeight +
-    theme.spacing.md + // Sheet's own title + its marginBottom
-    theme.minTouchSize +
-    theme.spacing.sm + // title field + gap
-    theme.spacing.sm + // gap from description to the column chips
-    theme.minTouchSize +
-    theme.spacing.sm + // column chips row + gap
-    theme.minTouchSize + // Create button
-    theme.spacing.lg + // Sheet's own paddingBottom
-    insets.bottom + // Sheet's paddingBottom also adds the real safe-area inset
-    CHROME_ESTIMATE_SAFETY_BUFFER;
-  const descriptionMinHeight = theme.typography.body.lineHeight * 3 + theme.spacing.sm * 2;
-  const descriptionMaxHeight = Math.max(
-    windowHeight * SHEET_MAX_HEIGHT_FRACTION - reservedChromeHeight,
-    descriptionMinHeight,
-  );
+  const { descriptionMinHeight, descriptionMaxHeight } = computeSheetDescriptionBounds({
+    theme,
+    windowHeight,
+    bottomInset: insets.bottom,
+    hasColumnChipsRow: true,
+  });
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   // null = the user has not picked yet: the selection stays on the default
@@ -167,6 +146,10 @@ const styles = StyleSheet.create({
   columnChip: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
+    // A full 1px border, not hairlineWidth: a sub-pixel border on a rounded
+    // corner anti-aliases into visible jagged pixelation, especially at the
+    // selected chip's full-saturation accent color (same reasoning as
+    // AskUserQuestionCard/PermissionPromptCard's accented borders).
+    borderWidth: 1,
   },
 });
