@@ -16,12 +16,19 @@ const sharedProjectConfig = {
   testMatch: ['**/tests/components/**/*.test.tsx'],
   // The board gives each task its own git worktree under .kangentic/worktrees/,
   // and every one of those contains a full copy of tests/ and node_modules/.
-  // Without this, a local run collects every worktree's copy of every test: `jest
-  // tests/components` does not scope to a directory, it matches that string as a
-  // regex against the whole path. The symptom is a pile of failures from other
-  // branches' source, which reads like the change under test broke something.
-  // CI never sees it, because a fresh checkout has no worktrees.
-  testPathIgnorePatterns: ['/node_modules/', '/\\.kangentic/'],
+  // Without this, a local run collects every worktree's copy of every test:
+  // `jest tests/components` does not scope to a directory, it matches that
+  // string as a regex against the whole path. The symptom is a pile of failures
+  // from other branches' source, which reads like the change under test broke
+  // something. CI never sees it, because a fresh checkout has no worktrees.
+  // modulePathIgnorePatterns covers the haste map too, so the duplicate-module
+  // warnings go with it.
+  //
+  // Anchored to <rootDir>, which is load-bearing: a worktree's OWN absolute path
+  // contains .kangentic/, so an unanchored pattern ignores the entire worktree
+  // whenever jest runs inside one - collecting nothing and passing vacuously.
+  modulePathIgnorePatterns: ['<rootDir>[/\\\\]\\.kangentic[/\\\\]'],
+  testPathIgnorePatterns: ['[/\\\\]node_modules[/\\\\]', '<rootDir>[/\\\\]\\.kangentic[/\\\\]'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
