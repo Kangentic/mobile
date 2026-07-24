@@ -303,6 +303,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
 
     function send(message) {
       if (!streams) throw new Error('session not established yet');
+      if (socket.readyState !== WebSocket.OPEN) throw new Error('session socket is closed');
       const frame = streams.send.seal(encodeMessage(message));
       socket.send(wrapSessionFrame(SessionFrameKind.Application, frame).slice().buffer);
     }
@@ -612,9 +613,47 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
 
     initiateHandshake();
     const rehandshakeTimer = setInterval(initiateHandshake, 10_000);
-    socket.addEventListener('close', () => clearInterval(rehandshakeTimer));
+    socket.addEventListener('close', () => {
+      clearInterval(rehandshakeTimer);
+      if (feedTimer) clearInterval(feedTimer);
+    });
     return { send, socket };
   });
+}
+
+/**
+ * Keep the ongoing session alive across phone restarts. The relay closes
+ * BOTH peers when one drops (the peer-closed cascade), so a phone
+ * force-stop or reload kills this side's session socket too. The real
+ * desktop redials its relay transport on every drop and re-initiates the
+ * handshake; the stub must do the same or the first phone relaunch (which
+ * every Maestro launchApp performs) permanently strands the session.
+ * Returns a stable handle whose send() targets the current dial.
+ */
+function runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey) {
+  let currentSession = null;
+  async function dialForever() {
+    for (;;) {
+      try {
+        currentSession = await runSession(relayUrl, desktopStatic, phoneStaticPublicKey);
+      } catch (dialError) {
+        console.log(`[session] relay dial failed (${dialError.message}); retrying in 1s...`);
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000));
+        continue;
+      }
+      await new Promise((resolveClosed) => currentSession.socket.addEventListener('close', resolveClosed));
+      console.log('[session] socket closed (phone dropped, or relay park timeout); redialing the session slot...');
+      currentSession = null;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000));
+    }
+  }
+  void dialForever();
+  return {
+    send(message) {
+      if (!currentSession) throw new Error('session socket is between dials');
+      currentSession.send(message);
+    },
+  };
 }
 
 // `adb shell input text` (the only way to get the pairing link onto an
@@ -636,7 +675,7 @@ async function main() {
     const phoneStaticPublicKey = hexToBytes(phoneKeyHex);
     console.log(`Relay: ${relayUrl}`);
     console.log(`Session-only mode: reconnecting to the phone paired at ${bytesToHex(phoneStaticPublicKey)}`);
-    const session = await runSession(relayUrl, desktopStatic, phoneStaticPublicKey);
+    const session = runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey);
     setInterval(() => {
       try {
         session.send({ type: 'heartbeat' });
@@ -695,7 +734,7 @@ async function main() {
   console.log(`\nPaired. Phone static key: ${bytesToHex(phoneStaticPublicKey)}`);
   console.log('Opening the ongoing session and sending a heartbeat every 5s (Ctrl+C to stop)...\n');
 
-  const session = await runSession(relayUrl, desktopStatic, phoneStaticPublicKey);
+  const session = runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey);
   setInterval(() => {
     try {
       session.send({ type: 'heartbeat' });

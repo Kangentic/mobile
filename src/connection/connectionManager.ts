@@ -41,6 +41,11 @@ import { runBootstrap } from './bootstrap';
  * accountless-core discipline as both (see .claude/rules/accountless-core.md).
  */
 
+// Bootstrap retry backoff: 2s, 4s, 8s, ... capped at 30s, while the session
+// stays established (see the retry comment inside openConnection).
+const BOOTSTRAP_RETRY_BASE_MS = 2000;
+const BOOTSTRAP_RETRY_MAX_MS = 30_000;
+
 export interface ActiveConnection {
   controller: ChannelController;
   verbs: VerbClient;
@@ -237,12 +242,29 @@ async function openConnectionOrThrow(): Promise<void> {
   const unsubscribeTransportState = controller.transport.onStateChange((state) => {
     useChannelStore.getState().setTransportState(state);
   });
+
+  // Bootstrap must eventually succeed while the session stays established.
+  // The first attempt can die silently - the request can be lost in the
+  // pairing-to-session transition or time out mid-rekey - and a QUIET rekey
+  // never re-fires onEstablished (only a transport drop does), so without
+  // this retry one lost bootstrap leaves the app on "Connecting..." with a
+  // healthy channel until a manual pull-to-refresh.
+  let bootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let bootstrapGeneration = 0;
+  const runBootstrapWithRetry = (attempt: number, generation: number): void => {
+    void runBootstrap(controller.verbs, subscriptions).catch(() => {
+      if (generation !== bootstrapGeneration) return;
+      if (!controller.session.isEstablished) return;
+      const delayMs = Math.min(BOOTSTRAP_RETRY_MAX_MS, BOOTSTRAP_RETRY_BASE_MS * 2 ** attempt);
+      bootstrapRetryTimer = setTimeout(() => runBootstrapWithRetry(attempt + 1, generation), delayMs);
+    });
+  };
+
   const unsubscribeEstablished = controller.session.onEstablished(() => {
     useChannelStore.getState().markEstablished();
-    void runBootstrap(controller.verbs, subscriptions).catch(() => {
-      // Bootstrap failures (a request timing out mid-rekey) self-heal on
-      // the next established handshake; the stores keep their last state.
-    });
+    if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
+    bootstrapGeneration += 1;
+    runBootstrapWithRetry(0, bootstrapGeneration);
     // Fire-and-forget push registration on every established handshake
     // (idempotent; re-hits the wire only on first run or token rotation).
     // Never fatal: registerPushWithDesktop records a status instead.
@@ -259,6 +281,8 @@ async function openConnectionOrThrow(): Promise<void> {
   activeConnection = { controller, verbs: controller.verbs, subscriptions };
   teardownActiveConnection = () => {
     inspectStateModule?.setInspectSubscriptions(null);
+    bootstrapGeneration += 1;
+    if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
     unsubscribeTransportState();
     unsubscribeEstablished();
     unbindFeed();
