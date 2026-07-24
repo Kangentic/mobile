@@ -176,6 +176,39 @@ export function TriageHomeScreen(): React.JSX.Element {
     const timer = setTimeout(() => setRevealDeadlinePassed(true), FEED_REVEAL_DEADLINE_MS);
     return () => clearTimeout(timer);
   }, [established, revealDeadlinePassed]);
+
+  /**
+   * Warm each session's snippet as soon as that session is known, rather than
+   * when its row mounts.
+   *
+   * Waiting only on the boards revealed a complete, correctly ordered feed
+   * whose description slots were all still EMPTY, and a beat later every one
+   * of them filled in at once - the slots are fixed-height so nothing moved,
+   * but the text still arrived as a second wave. Sessions register as each
+   * board snapshot lands, so starting their peeks here overlaps them with the
+   * remaining board round-trips and they are normally resolved by the time
+   * the feed reveals; the row's own peek then hits the cache and paints in
+   * its first frame.
+   *
+   * Deliberately does NOT gate the reveal. Whether you can see your agents at
+   * all must not depend on a transcript-window fetch succeeding - a slow peek
+   * should cost one row's snippet, not the whole feed.
+   */
+  const warmedSessionIdsRef = useRef(new Set<string>());
+  const knownSessionIds = useActivityStore((state) => Object.keys(state.bySessionId).sort().join(','));
+  useEffect(() => {
+    if (!established) return;
+    for (const entry of Object.values(useActivityStore.getState().bySessionId)) {
+      if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
+      warmedSessionIdsRef.current.add(entry.sessionId);
+      void peekSnippet(entry.sessionId, entry.awaitedPromptId, sectionForEntry(entry) === 'needs-you', 0).catch(() => {
+        // The row retries on its own once mounted; a failed warm just means
+        // that one snippet arrives late.
+        warmedSessionIdsRef.current.delete(entry.sessionId);
+      });
+    }
+  }, [knownSessionIds, established]);
+
   const feedReady = allBoardsAnswered || revealDeadlinePassed;
 
   // Long-press hub, reusing the exact same TaskActionsSheet/MoveTaskSheet/
@@ -462,6 +495,37 @@ const SNIPPET_SETTLE_MS = 350;
 const WORKING_SNIPPET_FRESHNESS_MS = 20_000;
 
 /**
+ * A row's snippet source, shared with the feed's pre-warm so both resolve
+ * through the same caches: the pending decision when a prompt waits,
+ * otherwise the agent's last message, falling back to the last readable
+ * terminal line for transcript-less (codex-style) agents that still stream a
+ * PTY. Throws when the message fetch failed AND left no fallback - the
+ * caller treats that as retryable rather than as "no preview", since
+ * successes cache and a stuck blank would never heal on its own.
+ *
+ * Takes primitives rather than the entry object so the row's effect can keep
+ * depending on the few fields that should actually trigger a refetch.
+ */
+async function peekSnippet(
+  sessionId: string,
+  awaitedPromptId: string | null,
+  isPermission: boolean,
+  freshnessMs: number,
+): Promise<string | null> {
+  if (isPermission && awaitedPromptId !== null) {
+    return buildPendingPromptSummary(await peekAwaitedPrompt(sessionId, awaitedPromptId));
+  }
+  let messagePeekFailed = false;
+  const messageText = await peekLastAssistantMessage(sessionId, freshnessMs).catch(() => {
+    messagePeekFailed = true;
+    return null;
+  });
+  const snippetText = messageText ?? (await peekLastTerminalLine(sessionId, freshnessMs));
+  if (snippetText === null && messagePeekFailed) throw new Error('snippet peek failed');
+  return snippetText;
+}
+
+/**
  * The landing pulse: a row that just changed sections tints briefly at
  * its new position so the eye can track the move. Marked event-side only
  * (see activityStore.sectionChangedAt), so a reconnect snapshot that
@@ -574,26 +638,10 @@ const ActivityRow = React.memo(function ActivityRow({
 
     function runPeek(): void {
       if (cancelled) return;
-      const peek =
-        isPermission && awaitedPromptId !== null
-          ? peekAwaitedPrompt(entry.sessionId, awaitedPromptId).then((toolUse) => buildPendingPromptSummary(toolUse))
-          : (async () => {
-            // Transcript-less agents (codex-style) still stream a PTY, and
-            // a huge session's window fetch can fail outright: either way
-            // fall back to the last readable terminal line, and treat a
-            // failed fetch with no fallback as retryable, not as "no
-            // preview" (successes cache, so a stuck blank never heals on
-            // its own).
-            let messagePeekFailed = false;
-            const messageText = await peekLastAssistantMessage(entry.sessionId, snippetFreshnessMs).catch(() => {
-              messagePeekFailed = true;
-              return null;
-            });
-            const snippetText = messageText ?? (await peekLastTerminalLine(entry.sessionId, snippetFreshnessMs));
-            if (snippetText === null && messagePeekFailed) throw new Error('snippet peek failed');
-            return snippetText;
-          })();
-      void peek
+      // The feed pre-warms these before it reveals itself, so on cold start
+      // this call resolves straight from the peek caches and the row paints
+      // its snippet in its first frame rather than a beat later.
+      void peekSnippet(entry.sessionId, awaitedPromptId, isPermission, snippetFreshnessMs)
         .then((snippetText) => {
           if (cancelled) return;
           hasResolvedPeekRef.current = true;
