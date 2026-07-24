@@ -537,6 +537,11 @@ export function createMockDesktop(): MockDesktop {
   // review) grew the transcript - and the Chat lens's rendering work -
   // without bound.
   let tickEntryCount = 0;
+  // A tick Bash cell completes with its matching tool_result a few ticks
+  // later, mirroring the real bridge (an agent's tool call always ends in a
+  // result). Without it every tick cell stayed pending forever, stacking
+  // identical "running Bash" cards in the chat lens.
+  let pendingTickResult: { toolUseId: string; content: string; dueTick: number } | null = null;
   let feedTimer: ReturnType<typeof setInterval> | null = null;
   let ptyDimensions = { ...MOCK_DESKTOP_PTY_DIMENSIONS };
   const oneShotTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -648,6 +653,7 @@ export function createMockDesktop(): MockDesktop {
    */
   function endActiveSession(): void {
     pendingPromptId = null;
+    pendingTickResult = null;
     activeSessionId = null;
     streamSubscribed = false;
     setTaskSession(null);
@@ -662,6 +668,7 @@ export function createMockDesktop(): MockDesktop {
     respawnCounter += 1;
     const successorSessionId = `mock-session-${respawnCounter}`;
     pendingPromptId = null;
+    pendingTickResult = null;
     activeSessionId = successorSessionId;
     streamSubscribed = false;
     transcript = [
@@ -763,12 +770,31 @@ export function createMockDesktop(): MockDesktop {
         ptyDimensions = { cols: 100, rows: 28 };
         emitPtyResize();
       }
+      if (pendingTickResult !== null && feedTick >= pendingTickResult.dueTick) {
+        appendTranscriptEntry({
+          kind: 'tool_result',
+          uuid: `${pendingTickResult.toolUseId}-result`,
+          ts: Date.now(),
+          toolUseId: pendingTickResult.toolUseId,
+          content: pendingTickResult.content,
+        });
+        pendingTickResult = null;
+      }
       if (feedTick % 12 === 0 && pendingPromptId === null && tickEntryCount < MOCK_MAX_TICK_ENTRIES) {
         tickEntryCount += 1;
         entryCounter += 1;
         // Varied realistic commands (real sessions never repeat one Bash
         // cell verbatim), mirroring the repo's actual verification loop.
-        const tickCommands = ['npm run typecheck', 'npm run lint', 'npx vitest run tests/unit'];
+        const tickInvocations = [
+          { command: 'npm run typecheck', result: '> @kangentic/mobile@0.1.0 typecheck\n> tsc --noEmit' },
+          { command: 'npm run lint', result: '> @kangentic/mobile@0.1.0 lint\n> eslint . --max-warnings 0' },
+          {
+            command: 'npx vitest run tests/unit',
+            result: ' Test Files  38 passed (38)\n      Tests  305 passed (305)\n   Duration  2.72s',
+          },
+        ];
+        const invocation = tickInvocations[entryCounter % tickInvocations.length];
+        const toolUseId = `mock-tool-tick-${entryCounter}`;
         appendTranscriptEntry({
           kind: 'assistant',
           uuid: `mock-assistant-tick-${entryCounter}`,
@@ -778,12 +804,13 @@ export function createMockDesktop(): MockDesktop {
           blocks: [
             {
               type: 'tool_use',
-              id: `mock-tool-tick-${entryCounter}`,
+              id: toolUseId,
               name: 'Bash',
-              input: { command: tickCommands[entryCounter % tickCommands.length] },
+              input: { command: invocation.command },
             },
           ],
         });
+        pendingTickResult = { toolUseId, content: invocation.result, dueTick: feedTick + 3 };
       }
       if (feedTick === 20 && pendingPromptId === null && !questionRaised) {
         appendTranscriptEntry({
@@ -1022,6 +1049,35 @@ export function createMockDesktop(): MockDesktop {
         }
         const answeredPromptId = pendingPromptId;
         clearPrompt(answeredPromptId);
+        // The real agent always follows an answered prompt with the awaited
+        // tool's result (or a rejection notice); without it the tool_use
+        // cell stays pending forever once the card clears.
+        if (answeredPromptId === PERMISSION_PROMPT_ID) {
+          const denied = payload.keystrokes.startsWith('\u001b');
+          later(600, () => {
+            appendTranscriptEntry({
+              kind: 'tool_result',
+              uuid: 'mock-result-permission',
+              ts: Date.now(),
+              toolUseId: PERMISSION_TOOL_ID,
+              content: denied
+                ? "The user doesn't want to proceed with this tool use."
+                : 'Test Suites: 41 passed, 41 total\nTests:       244 passed, 244 total\nTime:        27.1 s',
+            });
+          });
+        }
+        if (answeredPromptId === QUESTION_PROMPT_ID) {
+          const selectedDigit = payload.keystrokes.replace(/[^1-9]/g, '').slice(0, 1) || '1';
+          later(600, () => {
+            appendTranscriptEntry({
+              kind: 'tool_result',
+              uuid: 'mock-result-question',
+              ts: Date.now(),
+              toolUseId: QUESTION_TOOL_ID,
+              content: `User selected option ${selectedDigit}.`,
+            });
+          });
+        }
         if (answeredPromptId === PERMISSION_PROMPT_ID && !questionRaised) {
           later(10_000, () => {
             if (pendingPromptId === null) raiseQuestionPrompt();
