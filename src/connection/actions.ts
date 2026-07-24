@@ -249,6 +249,16 @@ const inFlightMessagePeeks = new Map<string, Promise<string | null>>();
  * share one in-flight fetch.
  */
 export async function peekLastAssistantMessage(sessionId: string, minFreshnessMs: number): Promise<string | null> {
+  // A session the user has opened is RETAINED, and its transcript deltas
+  // already stream into transcriptStore live. Read the newest message from
+  // there: free, no wire round trip, and always current - the throttled
+  // fetch below could otherwise show text up to minFreshnessMs old while
+  // the agent was visibly producing newer messages.
+  const localEntries = useTranscriptStore.getState().bySessionId[sessionId]?.entries;
+  if (localEntries !== undefined && localEntries.length > 0) {
+    const localSnippet = lastAssistantText(localEntries);
+    if (localSnippet !== null) return localSnippet;
+  }
   const record = lastMessagePeekBySession.get(sessionId);
   if (record !== undefined && minFreshnessMs > 0 && Date.now() - record.fetchedAtMs < minFreshnessMs) {
     return record.text;

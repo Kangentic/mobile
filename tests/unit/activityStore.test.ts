@@ -172,8 +172,8 @@ describe('activityStore', () => {
     // The OLDER session now emits a flurry of events (tokens, usage ticks).
     // Pre-fix this jumped it to the top on the first one.
     for (let index = 0; index < 5; index += 1) {
-      applyActivityEvent(activityEvent('sess-a', { type: 'usage', usage: null }));
-      applyActivityEvent(activityEvent('sess-a', { type: 'event' }));
+      applyActivityEvent(activityEvent('sess-a', { type: 'usage', usage: usageFixture() }));
+      applyActivityEvent(activityEvent('sess-a', { type: 'event', event: { ts: index, type: 'tool_start', tool: 'Bash' } }));
     }
 
     const afterOrder = selectTriageRows(useActivityStore.getState())[1].entries.map((entry) => entry.sessionId);
@@ -187,7 +187,7 @@ describe('activityStore', () => {
     const whileWorking = useActivityStore.getState().bySessionId['sess-a'].enteredSectionAt;
 
     // Same section: the ordering key must hold.
-    applyActivityEvent(activityEvent('sess-a', { type: 'event' }));
+    applyActivityEvent(activityEvent('sess-a', { type: 'event', event: { ts: 1, type: 'tool_start', tool: 'Bash' } }));
     expect(useActivityStore.getState().bySessionId['sess-a'].enteredSectionAt).toBe(whileWorking);
 
     // Moving to needs-you IS a re-rank.

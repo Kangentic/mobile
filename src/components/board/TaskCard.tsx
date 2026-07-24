@@ -42,7 +42,13 @@ export interface TaskCardProps {
    */
   bodyText: string;
   bodyNumberOfLines?: number;
-  /** Reserves the slot's height before the (often async) body text arrives, so it never bumps layout once. */
+  /**
+   * Fixes the body slot's height so the card NEVER changes size as its text
+   * arrives or changes length. Pass the full height you want reserved
+   * (typically `lineHeight * bodyNumberOfLines`): a shorter snippet is
+   * centered in that box rather than collapsing it, so an async update -
+   * or a live snippet growing from one line to two - moves nothing below it.
+   */
   bodyMinHeight?: number;
   /**
    * The Agents feed's addition to the title row - the project this task
@@ -142,15 +148,20 @@ export function TaskCard({
           ) : null}
         </Row>
         {bodyText.length > 0 || bodyMinHeight !== undefined ? (
-          <Text
-            variant="caption"
-            color="muted"
-            numberOfLines={bodyNumberOfLines}
-            style={bodyMinHeight !== undefined ? { minHeight: bodyMinHeight } : undefined}
-            testID={`${testID}-snippet`}
-          >
-            {bodyText}
-          </Text>
+          bodyMinHeight !== undefined ? (
+            // Fixed slot: the box owns the height and the text is centered
+            // inside it, so one-line and two-line snippets occupy exactly
+            // the same space and neighbouring cards never shift.
+            <View style={{ height: bodyMinHeight, justifyContent: 'center' }}>
+              <Text variant="caption" color="muted" numberOfLines={bodyNumberOfLines} testID={`${testID}-snippet`}>
+                {bodyText}
+              </Text>
+            </View>
+          ) : (
+            <Text variant="caption" color="muted" numberOfLines={bodyNumberOfLines} testID={`${testID}-snippet`}>
+              {bodyText}
+            </Text>
+          )
         ) : null}
         {hasMetaRow ? (
           <Row
