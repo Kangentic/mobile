@@ -18,6 +18,10 @@ export interface ReadingViewFeedProps {
 
 const JUMP_TO_LATEST_THRESHOLD_PX = 600;
 
+// A stable identity: an inline object literal re-triggers FlashList layout on
+// every render, and this feed re-renders on every cleaned-output revision.
+const MAINTAIN_VISIBLE_CONTENT_POSITION = { autoscrollToBottomThreshold: 0.2 } as const;
+
 interface ReadingViewRow {
   key: string;
   text: string;
@@ -45,6 +49,18 @@ export function ReadingViewFeed({ sessionId, agentLabel }: ReadingViewFeedProps)
   const listRef = useRef<FlashListRef<ReadingViewRow>>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const showJumpToLatestRef = useRef(false);
+
+  // Same initial anchor as the transcript feed: this lens is the newest-output
+  // view, so it opens at the newest line and hands over on the first drag.
+  const userTookOverScrollRef = useRef(false);
+  const onScrollBeginDrag = useCallback(() => {
+    userTookOverScrollRef.current = true;
+  }, []);
+  const onContentSizeChange = useCallback(() => {
+    if (userTookOverScrollRef.current || rows.length === 0) return;
+    listRef.current?.scrollToEnd({ animated: false });
+  }, [rows.length]);
+
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
@@ -93,8 +109,10 @@ export function ReadingViewFeed({ sessionId, agentLabel }: ReadingViewFeedProps)
           keyExtractor={(row) => row.key}
           renderItem={renderItem}
           onScroll={onScroll}
+          onScrollBeginDrag={onScrollBeginDrag}
+          onContentSizeChange={onContentSizeChange}
           scrollEventThrottle={64}
-          maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 0.2 }}
+          maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
           contentContainerStyle={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}
         />
       )}

@@ -87,9 +87,24 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
     });
   }, [needsTailFetch, established, sessionId]);
 
+  /**
+   * The list opens at the newest message, so it starts life inside
+   * `onStartReachedThreshold` of the top and FlashList fires onStartReached
+   * the moment cells first populate. Paging history then races the initial
+   * bottom anchor: the older page prepends AFTER the anchor ran, pushing all
+   * the content down and leaving the viewport parked in empty space (observed
+   * live - a blank chat that fills in only once you scroll). This is
+   * scroll-up pagination, so it waits for an actual scroll.
+   */
+  const userTookOverScrollRef = useRef(false);
+  const onScrollBeginDrag = useCallback(() => {
+    userTookOverScrollRef.current = true;
+  }, []);
+
   // Scroll-up pagination: one in-flight older-page request at a time.
   const loadingOlderRef = useRef(false);
   const onStartReached = useCallback(() => {
+    if (!userTookOverScrollRef.current) return;
     if (!hasMoreHistory || loadingOlderRef.current) return;
     loadingOlderRef.current = true;
     void loadOlderTranscript(sessionId)
@@ -197,12 +212,18 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
     [sessionId],
   );
 
-  // Land at the newest message on first open: scroll to the end once cells
-  // first populate (replaces startRenderingFromBottom without its layout loop).
-  const hasScrolledToInitialEndRef = useRef(false);
+  /**
+   * Land at the newest message on open (replaces startRenderingFromBottom
+   * without its layout loop). Deliberately NOT latched to the first
+   * content-size change: a session's window is assembled over several frames
+   * (the open fetch lands, cells build, the streaming tail appends, cell
+   * heights get measured), so anchoring once at the first change anchors to a
+   * list that is a fraction of its final height. Re-anchoring on every change
+   * until the user drags is what actually keeps the newest message on screen,
+   * and it hands control over the instant they scroll.
+   */
   const onContentSizeChange = useCallback(() => {
-    if (hasScrolledToInitialEndRef.current || cells.length === 0) return;
-    hasScrolledToInitialEndRef.current = true;
+    if (userTookOverScrollRef.current || cells.length === 0) return;
     listRef.current?.scrollToEnd({ animated: false });
   }, [cells.length]);
 
@@ -216,6 +237,7 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         getItemType={(cell) => cell.kind}
         renderItem={renderItem}
         onScroll={onScroll}
+        onScrollBeginDrag={onScrollBeginDrag}
         scrollEventThrottle={64}
         onContentSizeChange={onContentSizeChange}
         onStartReached={onStartReached}
