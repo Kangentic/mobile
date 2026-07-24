@@ -3,7 +3,8 @@ appId: com.kangentic.mobile
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
 # /end-session makes the stub drop the task's session with no successor:
 # the screen must show the honest ended state (never a frozen frame), and
-# its View-changes escape hatch must land on the Changes screen.
+# its View-changes escape hatch must land on the in-session Changes mode
+# (the mode pill's changes pane; the old pushed ChangesScreen is dead code).
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
@@ -33,5 +34,5 @@ appId: com.kangentic.mobile
     id: "session-ended-view-changes"
 - extendedWaitUntil:
     visible:
-      id: "changes-screen"
+      id: "changes-scope"
     timeout: 10000

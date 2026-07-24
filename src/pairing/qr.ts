@@ -10,14 +10,26 @@ export type QrValidationResult =
 const LOOPBACK_WS_PREFIXES = ['ws://localhost', 'ws://127.0.0.1', 'ws://[::1]'];
 
 /**
+ * The Android emulator's NAT alias for the HOST's loopback interface:
+ * same-machine traffic with loopback trust, so a dev-rig relay is reachable
+ * without any adb reverse. Only meaningful ON an emulator - on physical
+ * hardware 10.0.2.2 is an ordinary private address - so this prefix is
+ * honored in dev builds only (production builds never take this branch).
+ */
+const DEV_EMULATOR_HOST_LOOPBACK_PREFIX = 'ws://10.0.2.2';
+
+/**
  * The pairing token IS the Noise PSK and is dialed verbatim as the relay's
  * `?slot=` parameter (channel/slot.ts), so a non-TLS relay would put the PSK
  * on the wire in cleartext. Require `wss://`, independent of any OS-level
- * cleartext policy, carving out only loopback for local dev (docs/security.md).
+ * cleartext policy, carving out only loopback for local dev (docs/security.md),
+ * plus the emulator's host-loopback alias in dev builds.
  */
 function isSecureRelayAddress(relayAddress: string): boolean {
   if (relayAddress.startsWith('wss://')) return true;
-  return LOOPBACK_WS_PREFIXES.some((prefix) => {
+  const devBuild = typeof __DEV__ !== 'undefined' && __DEV__;
+  const allowedPrefixes = devBuild ? [...LOOPBACK_WS_PREFIXES, DEV_EMULATOR_HOST_LOOPBACK_PREFIX] : LOOPBACK_WS_PREFIXES;
+  return allowedPrefixes.some((prefix) => {
     if (!relayAddress.startsWith(prefix)) return false;
     const boundaryChar = relayAddress.charAt(prefix.length);
     return boundaryChar === '' || boundaryChar === ':' || boundaryChar === '/';
