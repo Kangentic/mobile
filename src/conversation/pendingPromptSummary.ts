@@ -49,6 +49,19 @@ const DECORATION_ONLY_LINE = /^[\s\-=_*~#>|+:.·‒-―…−⋯⎯⏤─-╿▀
 const CODE_FENCE_LINE = /^(?:`{3,}|~{3,})[\w-]*$/;
 /** Leading markdown structure markers: headings, blockquotes, bullets, ordered lists. */
 const LEADING_STRUCTURE_MARKERS = /^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d{1,3}[.)]\s+)+/;
+/**
+ * Terminal-UI chrome that the phone has no glyph for, so it renders as tofu
+ * boxes. Seen live on a Pixel, where a card read as two empty boxes followed
+ * by "auto mode on (shift+tab to cycle)": the agent's TUI draws that status
+ * with U+23F5 (Miscellaneous Technical), which the system font does not
+ * cover. These blocks are status indicators and icon-font glyphs - never
+ * words - so dropping them costs a snippet nothing and spares it a pair of
+ * boxes that read as a rendering bug.
+ *
+ * Deliberately narrow: arrows and bullets (which DO render, and carry
+ * meaning in a status line) are untouched.
+ */
+const UNRENDERABLE_TERMINAL_CHROME = /[\u2300-\u23FF\uE000-\uF8FF\uFE00-\uFE0F\uFFFD]/g;
 
 /**
  * Collapse markdown prose to plain inbox-snippet text: decoration-only
@@ -70,6 +83,7 @@ export function collapseToSnippetText(text: string): string {
     .join(' ')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\*\*|`/g, '')
+    .replace(UNRENDERABLE_TERMINAL_CHROME, '')
     // Inline separator runs (4+ rule glyphs between words) collapse too:
     // line-level filters only catch decoration-ONLY lines.
     .replace(/[‒-―−⋯⎯⏤─-╿▀-▟_=~-]{4,}/g, ' ')

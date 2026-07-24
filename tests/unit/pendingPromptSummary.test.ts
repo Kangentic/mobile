@@ -244,6 +244,21 @@ describe('collapseToSnippetText', () => {
     expect(collapseToSnippetText('Done ────────────── next steps below')).toBe('Done next steps below');
   });
 
+  /**
+   * Terminal-UI chrome the phone has no glyph for renders as tofu boxes.
+   * Seen live on a Pixel: a feed card read as two empty boxes followed by
+   * "auto mode on (shift+tab to cycle)", because the agent TUI draws that
+   * status with U+23F5. These are indicators, never words.
+   */
+  it('drops terminal-UI glyphs the phone cannot render', () => {
+    const autoModeStatus = '\u23F5\u23F5 auto mode on (shift+tab to cycle)';
+    expect(collapseToSnippetText(autoModeStatus)).toBe('auto mode on (shift+tab to cycle)');
+    // Private-use (icon-font) glyphs and the replacement character go too.
+    expect(collapseToSnippetText('\uE0B0main \uFFFDready')).toBe('main ready');
+    // Arrows and bullets DO render and carry meaning in a status line.
+    expect(collapseToSnippetText('\u2190 1 agent \u00B7 ready')).toBe('\u2190 1 agent \u00B7 ready');
+  });
+
   it('strips heading, quote, and fence markers but keeps their content', () => {
     const text = ['## Summary', '> quoted note', '```ts', 'const answer = 42;', '```', '1. first step'].join('\n');
     expect(collapseToSnippetText(text)).toBe('Summary quoted note const answer = 42; first step');
