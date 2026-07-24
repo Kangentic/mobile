@@ -46,9 +46,9 @@ If you are not sure which repo a finding belongs to, report it here and we will 
 ## An auditable core is a feature
 
 The pairing and transport crypto in this project is intentionally open source so it can be
-independently audited. If you are a security researcher interested in reviewing the design
-before it ships in App Phase 1, `docs/security.md` is the place to start, and we welcome that
-review through the same reporting channel above.
+independently audited. If you are a security researcher interested in reviewing the design,
+`docs/security.md` is the place to start (the implementation lives under `src/pairing/` and
+`src/channel/`), and we welcome that review through the same reporting channel above.
 
 ## What is NOT a vulnerability
 

@@ -24,8 +24,8 @@ protocol quietly (see Happy's one-key-many-jobs mistake in `docs/security.md`).
 
 - **Review (live now):** the `crypto-pairing-auditor` agent checks pairing/channel/notification
   code for local redeclarations of protocol shapes during `/code-review`.
-- **Test (planned, App Phase 1):** a scan for local `interface`/`type` declarations whose name
-  shadows a `@kangentic/protocol` export.
+- **Test (planned):** a scan for local `interface`/`type` declarations whose name shadows a
+  `@kangentic/protocol` export.
 
 ## Scope
 

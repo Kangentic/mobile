@@ -31,6 +31,6 @@ what you ran locally. Screenshot or screen recording for UI changes. -->
 - [ ] No em-dashes or `--` used as punctuation
 - [ ] Tests added or updated for this change, with tier named
 - [ ] Docs updated if an anchor source changed (capability verbs, key storage, test commands, EAS profiles)
-- [ ] Ran `npm run typecheck` and the relevant tests locally (once App Phase 1 lands the harness)
+- [ ] Ran `npm run typecheck` and the relevant tests locally
 - [ ] Screenshot or screen recording included (UI changes)
 - [ ] CLA signed (or will sign on first PR)

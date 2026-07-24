@@ -27,8 +27,8 @@ both platforms; losing that key to a stolen or backed-up device is a full compro
 
 - **Review (live now):** the `crypto-pairing-auditor` agent checks key-storage call sites during
   `/code-review`.
-- **Test (planned, App Phase 1):** a scan forbidding `@react-native-async-storage/async-storage`
-  imports and `persist(` on any key-holding store within the scoped directories.
+- **Test (planned):** a scan forbidding `@react-native-async-storage/async-storage` imports and
+  `persist(` on any key-holding store within the scoped directories.
 
 ## Scope
 

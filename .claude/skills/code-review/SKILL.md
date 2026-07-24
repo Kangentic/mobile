@@ -12,8 +12,8 @@ every safely-fixable finding.
 
 ## Modes
 
-- **Default** (`/code-review`) - review, apply every safely-fixable finding, re-run typecheck
-  (if it exists yet), report `Changes Applied` + `Skipped (with reason)`.
+- **Default** (`/code-review`) - review, apply every safely-fixable finding, re-run typecheck,
+  report `Changes Applied` + `Skipped (with reason)`.
 - **Review-only** (`/code-review review-only`) - findings table + Verdict footer only, no edits
   applied.
 
@@ -21,8 +21,8 @@ every safely-fixable finding.
 
 ## Mobile differences from the desktop repo's flow
 
-- Pre-flight typecheck and the HMR vitest check are desktop-only; both are skipped gracefully
-  until `package.json`/`tsconfig.json` exist (App Phase 1).
+- The HMR vitest check is desktop-only and does not apply here. Pre-flight typecheck runs: the
+  harness (`package.json`, `tsconfig.json`) is live.
 - The gated domain auditors are `crypto-pairing-auditor` (security-sensitive pairing/channel/
   notification code) and `expo-rn-reviewer` (Expo/RN platform and UI conventions), replacing
   desktop's `ipc-auditor`/`hmr-parity`/`platform-guard`/`session-debugger`/`migration-safety`.
@@ -32,8 +32,7 @@ every safely-fixable finding.
 This skill is a thin driver that runs in the main loop. All commands run from the current
 working directory; use `git -C <path>` to target another directory.
 
-1. **Pre-flight typecheck (if it exists yet).** Run `npm run typecheck` when `package.json`
-   exists. Type errors are highest-priority findings.
+1. **Pre-flight typecheck.** Run `npm run typecheck`. Type errors are highest-priority findings.
 2. **Resolve the base branch.** First hit wins: an explicit ref in `$ARGUMENTS`; the repo
    default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`); fallback
    `refs/heads/main`. If none resolve, review the working tree only.
@@ -57,7 +56,7 @@ working directory; use `git -C <path>` to target another directory.
    confirm the issue is real; refute anything the code does not substantiate. Dedup findings
    raised by multiple dimensions, keeping the highest severity. Sort by severity.
 6. **Apply Phase + re-typecheck** (skip in `review-only` mode). Apply every safely-fixable
-   finding with `Edit`/`Write`; re-run `npm run typecheck` if it exists. Delegate coverage holes
+   finding with `Edit`/`Write`; re-run `npm run typecheck`. Delegate coverage holes
    on diff-introduced behavior to `test-builder` (unit/component tests written and run scoped to
    green; Maestro flows flagged, not written inline).
 7. Emit the Output Format below.
