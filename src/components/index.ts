@@ -22,7 +22,7 @@ export {
 } from './Sheet';
 export { SegmentedTabBar, type SegmentedTabBarProps, type SegmentedTabBarItem } from './SegmentedTabBar';
 export { ConnectionBanner } from './ConnectionBanner';
-export { ContextUsageBar, isUsageTrusted, type ContextUsageBarProps } from './ContextUsageBar';
+export { ContextUsageBar, isContextWindowKnown, type ContextUsageBarProps } from './ContextUsageBar';
 export { MarkdownBlock, type MarkdownBlockProps } from './MarkdownBlock';
 export { Overseer, type OverseerProps, type OverseerAnimation } from './brand/Overseer';
 export { Brandmark, type BrandmarkProps, type BrandmarkVariant } from './brand/Brandmark';

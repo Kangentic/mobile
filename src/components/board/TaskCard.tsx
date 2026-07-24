@@ -12,7 +12,7 @@ import {
   Stack,
   Text,
   useTheme,
-  isUsageTrusted,
+  isContextWindowKnown,
   type AgentStatusKind,
 } from '@/components';
 import { computeVisibleLabelCount } from './labelFit';
@@ -106,7 +106,7 @@ export function TaskCard({
   // itself is one tap away in the detail view.
   const hasPr = showMetaRow && task.pr_number !== null;
   const hasMetaRow = showMetaRow && task.labels.length > 0;
-  const hasUtilityStrip = isUsageTrusted(usage);
+  const hasUtilityStrip = isContextWindowKnown(usage);
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>

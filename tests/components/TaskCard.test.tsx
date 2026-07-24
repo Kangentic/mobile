@@ -59,6 +59,27 @@ describe('TaskCard', () => {
     expect(screen.getByTestId(`${BASE_TEST_ID}-snippet`)).toBeTruthy();
   });
 
+  it('renders the utility strip for an over-budget usage report instead of hiding it - desktop parity for a critical, not untrustworthy, state', () => {
+    // Kills a restoration of the old hide-when-over-budget gate
+    // (`isContextWindowKnown(usage) && usedTokens <= contextWindowSize`):
+    // that mutation stays green against every other fixture in this file,
+    // which all report usedTokens comfortably under contextWindowSize.
+    renderTaskCard({
+      usage: usageFixture({
+        contextWindow: {
+          usedPercentage: 92,
+          usedTokens: 210_000,
+          cacheTokens: 800,
+          totalInputTokens: 3200,
+          totalOutputTokens: 500,
+          contextWindowSize: 200_000,
+        },
+      }),
+    });
+
+    expect(screen.getByTestId(`${BASE_TEST_ID}-usage`)).toBeTruthy();
+  });
+
   it('showMetaRow={false} suppresses the labels row and the PR icon - its only coverage, since no caller passes this yet', () => {
     renderTaskCard({
       task: boardTaskFixture({ pr_number: 42, labels: ['backend', 'p0'] }),
