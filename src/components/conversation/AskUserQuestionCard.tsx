@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { Badge, Card, Stack, Text, useTheme } from '@/components';
 import { triggerHaptic } from '@/lib/haptics';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
@@ -7,6 +7,7 @@ import { parseAskUserQuestionInput } from '@/conversation/pendingPromptSummary';
 import { askUserQuestionOptionKeystrokes } from '@/conversation/promptKeystrokes';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { PermissionPromptCard } from './PermissionPromptCard';
+import { PromptOptionRow } from './PromptOptionRow';
 import { usePromptAnswer } from './usePromptAnswer';
 
 export interface AskUserQuestionCardProps {
@@ -48,42 +49,24 @@ export function AskUserQuestionCard({ sessionId, prompt }: AskUserQuestionCardPr
               Multi-select question - answer in the Terminal tab for full control
             </Text>
           ) : null}
-          {firstQuestion.options.map((option, optionIndex) => {
-            const selectable = optionIndex <= MAX_SELECTABLE_OPTION_INDEX;
-            return (
-              <Pressable
-                key={optionIndex}
-                accessibilityRole="button"
-                accessibilityState={{ disabled: optionsDisabled || !selectable }}
-                testID={`ask-option-0-${optionIndex}`}
-                disabled={optionsDisabled || !selectable}
-                onPress={() => {
-                  triggerHaptic('promptAnswered');
-                  submit(askUserQuestionOptionKeystrokes(optionIndex));
-                }}
-                style={({ pressed }) => [
-                  styles.optionRow,
-                  {
-                    minHeight: theme.minTouchSize,
-                    backgroundColor: theme.colors.surfaceRaised,
-                    borderColor: theme.colors.border,
-                    borderRadius: theme.radii.sm,
-                    padding: theme.spacing.sm,
-                    opacity: optionsDisabled || !selectable ? 0.5 : pressed ? 0.7 : 1,
-                  },
-                ]}
-              >
-                <Text variant="bodyStrong" color="primary">
-                  {option.label}
-                </Text>
-                {option.description !== null ? (
-                  <Text variant="caption" color="secondary">
-                    {option.description}
-                  </Text>
-                ) : null}
-              </Pressable>
-            );
-          })}
+          <Stack gap="xs">
+            {firstQuestion.options.map((option, optionIndex) => {
+              const selectable = optionIndex <= MAX_SELECTABLE_OPTION_INDEX;
+              return (
+                <PromptOptionRow
+                  key={optionIndex}
+                  label={option.label}
+                  description={option.description ?? undefined}
+                  testID={`ask-option-0-${optionIndex}`}
+                  disabled={optionsDisabled || !selectable}
+                  onPress={() => {
+                    triggerHaptic('promptAnswered');
+                    submit(askUserQuestionOptionKeystrokes(optionIndex));
+                  }}
+                />
+              );
+            })}
+          </Stack>
           {parsedInput.questions.length > 1 ? (
             <Text variant="caption" color="muted">
               More questions follow on the desktop after this one
@@ -93,30 +76,14 @@ export function AskUserQuestionCard({ sessionId, prompt }: AskUserQuestionCardPr
               your own answer" option (and multi-select): one tap lands the
               user at the real prompt in the terminal lens. Free text is
               NEVER sent as keystrokes into a numbered select. */}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ disabled: optionsDisabled }}
+          <PromptOptionRow
+            label="Type your own answer..."
+            description="Opens the terminal at this prompt"
+            muted
             testID="ask-answer-in-terminal"
             disabled={optionsDisabled}
             onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal', { focusKeyboard: true })}
-            style={({ pressed }) => [
-              styles.optionRow,
-              {
-                minHeight: theme.minTouchSize,
-                borderColor: theme.colors.border,
-                borderRadius: theme.radii.sm,
-                padding: theme.spacing.sm,
-                opacity: optionsDisabled ? 0.5 : pressed ? 0.7 : 1,
-              },
-            ]}
-          >
-            <Text variant="bodyStrong" color="secondary">
-              Type your own answer...
-            </Text>
-            <Text variant="caption" color="muted">
-              Opens the terminal at this prompt
-            </Text>
-          </Pressable>
+          />
           {answeredNote !== null ? (
             <Text variant="caption" color="secondary">
               {answeredNote}
@@ -133,9 +100,3 @@ export function AskUserQuestionCard({ sessionId, prompt }: AskUserQuestionCardPr
   );
 }
 
-const styles = StyleSheet.create({
-  optionRow: {
-    borderWidth: StyleSheet.hairlineWidth,
-    justifyContent: 'center',
-  },
-});
