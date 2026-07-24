@@ -135,21 +135,32 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
   const theme = useTheme();
   const { answering, answeredNote, errorNote, submit } = usePromptAnswer(sessionId, prompt.promptId);
   const buttonsDisabled = answering || answeredNote !== null;
+  const hasPublishedOptions = prompt.options !== null && prompt.options.length >= 2;
+  /**
+   * Nothing identifies this prompt: no tool (the agent blocks at a
+   * pre-execution gate, so its tool_use is not in the transcript yet) and no
+   * published option labels. It may not be a permission request at all - a
+   * live AskUserQuestion ("1 Red / 2 Blue / 3 Type something") arrives in
+   * exactly this shape. Approve sends '1\r', which would silently pick the
+   * FIRST ANSWER of a question rather than granting anything, so the card
+   * must not offer it here: name the uncertainty and route to the terminal.
+   */
+  const kindUnknown = prompt.toolName === null && !hasPublishedOptions;
 
   return (
     <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
       <Card testID="permission-prompt-card" style={{ borderColor: theme.colors.accentMuted, borderWidth: 1 }}>
         <Stack gap="sm">
             <Row gap="sm" style={styles.headerRow}>
-              <Icon name="shield-half" color="accent" size={18} />
+              <Icon name={kindUnknown ? 'agent' : 'shield-half'} color="accent" size={18} />
               <Text variant="bodyStrong" color="accent" style={styles.flex}>
-                Permission requested
+                {kindUnknown ? 'The agent needs you' : 'Permission requested'}
               </Text>
               {prompt.toolName !== null ? <Badge label={prompt.toolName} color="secondary" /> : null}
             </Row>
             {prompt.toolName === null ? (
               <Text variant="body" color="secondary">
-                Waiting for prompt details
+                {kindUnknown ? 'Open the terminal to see what it is asking.' : 'Waiting for prompt details'}
               </Text>
             ) : (
               <>
@@ -169,7 +180,7 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                 {errorNote}
               </Text>
             ) : null}
-            {prompt.options !== null && prompt.options.length >= 2 ? (
+            {hasPublishedOptions ? (
               // FULL-FIDELITY MODE: the desktop's PTY probe published the
               // dialog's actual numbered options; render every one as an
               // identical outlined row (no primary emphasis - the choice is
@@ -189,7 +200,28 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                   />
                 ))}
               </Stack>
+            ) : kindUnknown ? (
+              // UNKNOWN PROMPT: only the universally safe action. Esc
+              // dismisses any dialog; a digit could answer the wrong
+              // question. Reading it in the terminal is the way forward,
+              // and the hatch below is the primary route.
+              <Row gap="sm" style={styles.actionRow}>
+                <View style={styles.flex}>
+                  <Button
+                    label="Dismiss"
+                    variant="ghost"
+                    testID="permission-deny"
+                    disabled={buttonsDisabled}
+                    onPress={() => {
+                      triggerHaptic('promptAnswered');
+                      submit(denyPermissionKeystrokes());
+                    }}
+                  />
+                </View>
+              </Row>
             ) : (
+              // Equal-weight pair: approving and denying are both one tap on
+              // a known permission request, so they share the row evenly.
               <Row gap="sm" style={styles.actionRow}>
                 <View style={styles.flex}>
                   <Button
@@ -203,25 +235,29 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
                     }}
                   />
                 </View>
-                <Button
-                  label="Deny"
-                  variant="ghost"
-                  testID="permission-deny"
-                  disabled={buttonsDisabled}
-                  onPress={() => {
-                    triggerHaptic('promptAnswered');
-                    submit(denyPermissionKeystrokes());
-                  }}
-                />
+                <View style={styles.flex}>
+                  <Button
+                    label="Deny"
+                    variant="ghost"
+                    testID="permission-deny"
+                    disabled={buttonsDisabled}
+                    onPress={() => {
+                      triggerHaptic('promptAnswered');
+                      submit(denyPermissionKeystrokes());
+                    }}
+                  />
+                </View>
               </Row>
             )}
             {/* The agent-agnostic escape hatch: some dialogs carry options
                 this card cannot see ("always allow", free text). One tap
-                lands the user at the real prompt in the terminal lens. */}
+                lands the user at the real prompt in the terminal lens. When
+                the prompt is unidentified this is not a fallback - it is the
+                only way to answer correctly, so it stops being muted. */}
             <PromptOptionRow
-              label="More options in terminal"
-              description="Opens the terminal at this prompt"
-              muted
+              label={kindUnknown ? 'Open in terminal' : 'More options in terminal'}
+              description={kindUnknown ? 'See the prompt and answer it' : 'Opens the terminal at this prompt'}
+              muted={!kindUnknown}
               testID="permission-answer-in-terminal"
               disabled={answering}
               onPress={() => useTerminalUiStore.getState().requestSessionMode(sessionId, 'terminal', { focusKeyboard: true })}
