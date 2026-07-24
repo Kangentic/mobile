@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshControl, StyleSheet, View } from 'react-native';
 import Animated, { ReduceMotion, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
-import { FlashList } from '@shopify/flash-list';
+import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, SectionHeader, useTheme } from '@/components';
 import { TaskCard } from '@/components/board/TaskCard';
@@ -220,6 +220,25 @@ export function TriageHomeScreen(): React.JSX.Element {
     [editTarget],
   );
 
+  /**
+   * The feed leads with what needs the user: Needs You, then Idle, then the
+   * agents that are still working. Rows arrive incrementally as the snapshot
+   * lands, and FlashList v2 enables maintainVisibleContentPosition by
+   * default, so it holds whatever row it first anchored while higher-priority
+   * rows insert ABOVE it - with 8+ agents the feed opened parked at the
+   * bottom, showing the working sessions and hiding the ones waiting on you.
+   * Pin to the top until the user scrolls, then leave them alone.
+   */
+  const listRef = useRef<FlashListRef<TriageListRow>>(null);
+  const userTookOverScrollRef = useRef(false);
+  const onScrollBeginDrag = useCallback(() => {
+    userTookOverScrollRef.current = true;
+  }, []);
+  const onContentSizeChange = useCallback(() => {
+    if (userTookOverScrollRef.current) return;
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, []);
+
   const onArchive = useCallback(() => {
     if (!actionsTarget) return;
     setActionsInFlight(true);
@@ -279,8 +298,11 @@ export function TriageHomeScreen(): React.JSX.Element {
       <AppHeader title="Agents" />
       <ConnectionBanner />
       <FlashList<TriageListRow>
+        ref={listRef}
         testID="triage-home-list"
         data={rows}
+        onScrollBeginDrag={onScrollBeginDrag}
+        onContentSizeChange={onContentSizeChange}
         refreshControl={
           // tintColor styles iOS; colors + progressBackgroundColor style
           // Android (stock is a white circle, jarring on the warm theme).
