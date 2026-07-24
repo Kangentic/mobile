@@ -76,11 +76,6 @@ describe('PermissionPromptCard', () => {
     expect(screen.getByText('Open in terminal')).toBeTruthy();
   });
 
-  it('still shows the waiting-for-details state when the tool is unknown but options were published', () => {
-    renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: ['Yes', 'No'] });
-    expect(screen.getByText('Waiting for prompt details')).toBeTruthy();
-    expect(screen.getByTestId('permission-approve')).toBeTruthy();
-  });
 
   it('approve answers with the approve keystrokes', () => {
     renderCard();
@@ -94,23 +89,40 @@ describe('PermissionPromptCard', () => {
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '\u001b');
   });
 
-  it('renders every probed option as a digit button when options are present', () => {
+  /**
+   * `options` is scraped off the desktop's terminal grid, and live on a
+   * Pixel it produced "Yes, and use auto mode" with half a plan document
+   * glued to the end (the TUI redraws a row without clearing to end-of-line,
+   * so the buffer keeps stale characters past the painted text). Answering
+   * sends a digit, so a wrong label means a wrong answer with no way to
+   * tell. Screen-scraped text is never rendered as a tappable option.
+   */
+  it('ignores scraped option labels entirely - they are never rendered as buttons', () => {
     renderCard({
       ...bashPrompt,
       options: ['Yes', "Yes, and don't ask again for this command", 'No, and tell Claude what to do differently'],
     });
-    // Option 1 keeps the approve identity; the rest are numbered options.
-    expect(screen.getByText('Yes')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('permission-option-1'));
-    expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '2\r');
-    // The binary Deny is replaced by the dialog's own reject option.
-    expect(screen.queryByTestId('permission-deny')).toBeNull();
+
+    expect(screen.queryByTestId('permission-option-1')).toBeNull();
+    expect(screen.queryByTestId('permission-option-2')).toBeNull();
+    expect(screen.queryByText("Yes, and don't ask again for this command")).toBeNull();
   });
 
-  it('option 1 keeps the approve identity and its digit keystrokes', () => {
+  it('a transcript-identified tool still gets one-tap Approve/Deny, from structured input', () => {
+    // toolName + input come from the transcript's tool_use block (real JSON
+    // from the session history), which is why acting on them is safe.
     renderCard({ ...bashPrompt, options: ['Yes', 'No'] });
+    expect(screen.getByText('npm run lint\nnpm run test:unit')).toBeTruthy();
     fireEvent.press(screen.getByTestId('permission-approve'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '1\r');
+  });
+
+  it('routes to the terminal when only scraped options identify the prompt', () => {
+    // No transcript tool_use: scraped labels alone are not evidence.
+    renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: ['Yes', 'No'] });
+    expect(screen.queryByTestId('permission-approve')).toBeNull();
+    expect(screen.queryByTestId('permission-deny')).toBeNull();
+    expect(screen.getByText('Open in terminal')).toBeTruthy();
   });
 
   it('fires the promptAnswered haptic on approve', () => {
