@@ -93,6 +93,36 @@ function seedTaskWithSession(sessionId: string | null): void {
   });
 }
 
+/**
+ * The board a `view: 'sessions'` projection returns once the task's session
+ * ended: the task is not reported with a null session_id, it is absent.
+ */
+function seedBoardWithoutTask(): void {
+  useBoardStore.setState({
+    projects: [{ id: 'project-1', name: 'Alpha' }],
+    boardsByProjectId: {
+      'project-1': {
+        columns: [boardColumnFixture()],
+        tasksById: {},
+        snapshotAt: 0,
+        showTicketNumbers: true,
+        view: 'sessions',
+        taskCountsByColumnId: { 'lane-todo': 0 },
+      },
+    },
+    pendingMoves: [],
+  });
+}
+
+function pushSessionEnded(sessionId: string): void {
+  useActivityStore.getState().applyActivityEvent({
+    kind: 'activity',
+    sessionId,
+    taskId: 'task-1',
+    payload: { type: 'session-ended', intentional: true },
+  });
+}
+
 function renderSessionScreen(): ReturnType<typeof render> {
   return render(
     <ThemeProvider>
@@ -166,6 +196,59 @@ describe('SessionScreen session binding', () => {
 
     expect(screen.queryByTestId('session-ended-state')).toBeNull();
     expect(openSessionScreenMock).toHaveBeenCalledWith('sess-c');
+  });
+
+  /**
+   * Caught by the session-ended-state E2E flow, which went red the moment the
+   * 0.9.0 board projection landed. Under `view: 'sessions'` the ended task is
+   * filtered out of the board entirely, so `taskLocated` goes false and the
+   * board-says-no-session signal above can never fire; reconcileSessionsFromBoards
+   * then prunes the activity entry, taking `feedStatus: 'ended'` with it a few
+   * hundred milliseconds later. Both signals the screen used to rely on are gone
+   * within one round trip of the end, and the ended state appeared and vanished.
+   */
+  it('keeps the ended state after the sessions projection drops the task and the entry is pruned', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+    renderSessionScreen();
+    expect(screen.getByTestId('stub-session-input-bar')).toBeTruthy();
+
+    act(() => {
+      pushSessionEnded('sess-a');
+    });
+    expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+
+    // What lands next: the board refetch drops the task, and the reconciler
+    // prunes the activity entry behind it.
+    act(() => {
+      seedBoardWithoutTask();
+      useActivityStore.getState().removeSession('sess-a');
+    });
+
+    expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+    expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
+  });
+
+  /**
+   * The same collapse, entered from the board rather than a triage row, so
+   * there is no sessionId param either. With the task gone nothing can name
+   * the dead session but the binding the screen already made.
+   */
+  it('keeps the ended state with no sessionId param to fall back on', () => {
+    mockParams = { taskId: 'task-1' };
+    seedTaskWithSession('sess-a');
+    useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+    renderSessionScreen();
+    expect(screen.queryByTestId('session-ended-state')).toBeNull();
+
+    act(() => {
+      pushSessionEnded('sess-a');
+      seedBoardWithoutTask();
+      useActivityStore.getState().removeSession('sess-a');
+    });
+
+    expect(screen.getByTestId('session-ended-state')).toBeTruthy();
   });
 
   it('does not show the ended state for a task that never had a session', () => {

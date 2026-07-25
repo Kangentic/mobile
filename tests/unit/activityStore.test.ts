@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
-import { sectionForEntry, selectTriageRows, useActivityStore } from '@/state/activityStore';
+import { sectionForEntry, selectSessionEnded, selectTriageRows, useActivityStore } from '@/state/activityStore';
 import { streamSnapshotFixture, usageFixture } from '@/devsupport/desktopFixtures';
 
 function activityEvent(sessionId: string, payload: ActivityEventPayload): ActivityEvent {
@@ -59,6 +59,37 @@ describe('activityStore', () => {
     const entry = useActivityStore.getState().bySessionId['sess-1'];
     expect(entry.feedStatus).toBe('ended');
     expect(entry.endedIntentionally).toBe(true);
+  });
+
+  /**
+   * Caught by the session-ended-state E2E flow. A session that ends leaves the
+   * board's `view: 'sessions'` projection in the very next snapshot (its task
+   * no longer has a session_id, so the projection drops the task), and
+   * reconcileSessionsFromBoards then prunes the activity entry for any session
+   * no board claims - deleting `feedStatus: 'ended'` a few hundred
+   * milliseconds after it was set. The session screen read only that field, so
+   * its ended state appeared and vanished. Pruning the entry is right; the
+   * fact that the session ended has to outlive it.
+   */
+  it('records an ended session id that survives the entry being pruned', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
+    expect(selectSessionEnded(useActivityStore.getState(), 'sess-1')).toBe(true);
+
+    // What the board reconciler does once the task leaves the projection.
+    useActivityStore.getState().removeSession('sess-1');
+
+    expect(useActivityStore.getState().bySessionId['sess-1']).toBeUndefined();
+    expect(selectSessionEnded(useActivityStore.getState(), 'sess-1')).toBe(true);
+    expect(selectSessionEnded(useActivityStore.getState(), 'sess-other')).toBe(false);
+    expect(selectSessionEnded(useActivityStore.getState(), null)).toBe(false);
+  });
+
+  /** A deep link or push tap can land on a session this phone never registered. */
+  it('records an ended session id even with no entry to update', () => {
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-ghost', { type: 'session-ended', intentional: false }));
+    expect(useActivityStore.getState().bySessionId['sess-ghost']).toBeUndefined();
+    expect(selectSessionEnded(useActivityStore.getState(), 'sess-ghost')).toBe(true);
   });
 
   it('applyActivityEvent dispatches on payload type', () => {
