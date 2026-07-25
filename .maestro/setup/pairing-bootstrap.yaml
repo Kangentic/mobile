@@ -8,24 +8,36 @@ tags:
 # phone side). Used by the sharded local rig (each extra emulator instance
 # must pair to its own stub) and the future CI Maestro job. Exclude it from
 # suite runs with --exclude-tags setup.
+# Deliberately NOT `launchApp: clearState: true`, which is the form the docs
+# otherwise recommend. Against a DEV CLIENT, clearing state also wipes the
+# saved Metro bundle URL, so the app comes up on the dev launcher ("start a
+# development server") and no JS ever loads. The caller has to clear state and
+# then re-point the dev client at Metro BEFORE this flow starts (dev.mjs's
+# pointDevClientAtMetro does exactly that), which a clearState inside the
+# launch would undo.
 - launchApp
-# Wait out the cold boot first: checking for the dev client's one-time
-# first-run sheet ("Continue") immediately after launchApp races the boot and
-# skips before the sheet exists. Waiting on the pair CTA gives the app time
-# to mount either way, then the sheet is dismissed if it is on top.
+# The dev client's one-time first-run sheet has to go FIRST. It is a separate
+# window covering the full screen, so while it is up the app's entire view
+# tree is absent from the hierarchy - not merely occluded - and no testID of
+# ours can be found, however visible the screen looks. This flow always runs
+# against a freshly-cleared install (see the header), so the sheet is always
+# there; waiting on it doubles as the cold-boot gate.
 #
-# The CTA is matched by testID, never by its label: the label is UI copy and
-# has already changed once ("Pair with your desktop" -> "Pair"), which is
-# exactly what a text selector cannot survive.
+# "Continue" is expo-dev-client's own string, not our UI copy. Everything of
+# OURS below is addressed by testID: the pair CTA's label already changed once
+# ("Pair with your desktop" -> "Pair") and silently broke this flow.
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 90000
+- tapOn: "Continue"
+# "Continue" only dismisses the EXPLAINER: it expands into the dev menu
+# proper (Reload / Go home / TOOLS), which is still the same covering window.
+# Closing it is what actually hands the screen back to the app.
+- tapOn: "Close"
 - extendedWaitUntil:
     visible:
       id: "triage-pair-cta"
-    timeout: 90000
-- runFlow:
-    when:
-      visible: "Continue"
-    commands:
-      - tapOn: "Continue"
+    timeout: 30000
 - tapOn:
     id: "triage-pair-cta"
 - extendedWaitUntil:

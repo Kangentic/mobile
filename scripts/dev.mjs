@@ -597,6 +597,24 @@ function ensureAdbReverseFor(serial, port) {
   if (result.status !== 0) fail(`adb -s ${serial} reverse tcp:${port} failed: ${result.stderr?.trim() || result.stdout?.trim()}`);
 }
 
+/**
+ * Open the dev client's deep link so it loads the bundle from Metro over the
+ * device's adb reverse, instead of showing the launcher's "start a
+ * development server" screen. Needed after `pm clear`, which wipes the saved
+ * server URL with the rest of the app's data.
+ *
+ * The URL is the loopback one deliberately: every device the rig drives has
+ * `adb reverse tcp:8081`, so it works on an emulator and a physical device
+ * alike, with no LAN address to guess at.
+ */
+function pointDevClientAtMetro(serial) {
+  const deepLink = `kangentic://expo-development-client/?url=${encodeURIComponent(`http://127.0.0.1:${METRO_PORT}`)}`;
+  const result = run('adb', ['-s', serial, 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', deepLink]);
+  if (result.status !== 0) {
+    warn(`could not point the dev client at Metro on ${serial}: ${result.stderr?.trim() || result.stdout?.trim()}`);
+  }
+}
+
 function ensureInspectAdbReverse() {
   // Every mode gets the inspect loop's reverse (mock mode has no relay but
   // still wants state dumps). Non-fatal: the loop is a dev nicety.
@@ -781,6 +799,13 @@ async function setupShardDevices(shardCount, avdName, flags) {
 
     log(`shard ${shardIndex}: clearing the app on ${serial} and running the pairing bootstrap flow...`);
     run('adb', ['-s', serial, 'shell', 'pm', 'clear', APP_PACKAGE]);
+    // `pm clear` wipes the dev client's saved Metro URL along with the app's
+    // data, so a plain launchApp lands on the dev LAUNCHER ("Start a local
+    // development server with npx expo start") and no JS ever loads - the
+    // bootstrap flow then waits out its full timeout for a screen that
+    // cannot appear. Point the dev client back at Metro first, the same way
+    // `expo start --android` does for the primary device.
+    pointDevClientAtMetro(serial);
     const bootstrap = runShell(`maestro --device ${serial} test -e PAIRING_URI=${pairingUri} .maestro/setup/pairing-bootstrap.yaml`, {
       cwd: repoRoot,
       timeout: 300_000,
