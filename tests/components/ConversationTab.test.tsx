@@ -38,6 +38,32 @@ jest.mock('expo-speech-recognition', () => ({
   useSpeechRecognitionEvent: jest.fn(),
 }));
 
+const mockFlashListScrollToEnd = jest.fn();
+// Wraps the REAL FlashList (every other test in this file keeps exercising
+// its actual virtualization and layout behavior) and only intercepts
+// scrollToEnd on the ref, so the re-anchor test below can assert on it
+// without reaching into native scroll-command dispatch.
+jest.mock('@shopify/flash-list', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const ReactModule = require('react');
+  const ActualFlashListModule = jest.requireActual('@shopify/flash-list');
+  const RealFlashList = ActualFlashListModule.FlashList;
+  const SpyingFlashList = ReactModule.forwardRef(function SpyingFlashList(
+    props: object,
+    forwardedRef: React.Ref<{ scrollToEnd: (params?: { animated?: boolean }) => void }>,
+  ) {
+    const innerRef = ReactModule.useRef(null);
+    ReactModule.useImperativeHandle(forwardedRef, () => ({
+      scrollToEnd: (params?: { animated?: boolean }) => {
+        mockFlashListScrollToEnd(params);
+        innerRef.current?.scrollToEnd(params);
+      },
+    }));
+    return ReactModule.createElement(RealFlashList, { ...props, ref: innerRef });
+  });
+  return { ...ActualFlashListModule, FlashList: SpyingFlashList };
+});
+
 const fixtureEntries: TranscriptEntryWire[] = [
   { kind: 'user', uuid: 'user-1', ts: 1, text: 'Fix the login bug' },
   {
@@ -104,6 +130,7 @@ describe('ConversationTab', () => {
   beforeEach(() => {
     seedStores();
     jest.mocked(loadOlderTranscript).mockClear();
+    mockFlashListScrollToEnd.mockClear();
   });
 
   function scrollTo(offsetFromTop: number): void {
@@ -245,5 +272,31 @@ describe('ConversationTab', () => {
     expect(screen.queryByTestId('permission-deny')).toBeNull();
     expect(screen.getByText('The agent needs you')).toBeTruthy();
     expect(screen.getByText('Open in terminal')).toBeTruthy();
+  });
+
+  /**
+   * A session's window assembles over several frames (the open fetch lands,
+   * cells build, the streaming tail appends, cell heights get measured), so
+   * anchoring only on the FIRST content-size change lands the chat lens in
+   * empty space - it must re-anchor on every growth until the user actually
+   * takes over scrolling.
+   */
+  it('re-anchors to the end on every content-size change, not just the first, until the user drags', () => {
+    renderTab();
+    const list = screen.getByTestId('conversation-list');
+
+    fireEvent(list, 'contentSizeChange', 400, 2000);
+    const callsAfterFirstGrowth = mockFlashListScrollToEnd.mock.calls.length;
+    expect(callsAfterFirstGrowth).toBeGreaterThan(0);
+
+    // A second, later growth must re-anchor too, not be a no-op because the
+    // list already anchored once.
+    fireEvent(list, 'contentSizeChange', 400, 2400);
+    expect(mockFlashListScrollToEnd.mock.calls.length).toBeGreaterThan(callsAfterFirstGrowth);
+
+    const callsBeforeDrag = mockFlashListScrollToEnd.mock.calls.length;
+    fireEvent(list, 'scrollBeginDrag');
+    fireEvent(list, 'contentSizeChange', 400, 2800);
+    expect(mockFlashListScrollToEnd.mock.calls.length).toBe(callsBeforeDrag);
   });
 });
