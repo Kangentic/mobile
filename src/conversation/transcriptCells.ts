@@ -20,8 +20,14 @@ export interface PendingPromptDescriptor {
   input: JsonValue | null;
   /**
    * The dialog's numbered option labels as detected by the desktop's PTY
-   * probe (protocol 0.6.0 `awaitedPromptOptions`/`options`). Null = unknown:
-   * the card falls back to plain Approve/Deny + the terminal escape hatch.
+   * probe (protocol 0.6.0 `awaitedPromptOptions`/`options`).
+   *
+   * Carried on the wire but deliberately NOT rendered: a scraped label is a
+   * guess at what a keystroke does, and offering it as a tappable answer
+   * invites approving something other than what the row says. The prompt card
+   * decides its own fallback from `toolName` instead - null there means the
+   * prompt could not be identified, and the card shows the terminal escape
+   * hatch rather than an Approve button.
    */
   options: string[] | null;
 }

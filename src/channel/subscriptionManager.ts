@@ -71,8 +71,6 @@ export class SubscriptionManager {
    * activity, not output it discards on arrival.
    */
   private readonly terminalStreamIds = new Set<string>();
-  /** What each active subscription was actually opened with, so a mode change re-subscribes. */
-  private readonly activeStreamWantsTerminal = new Map<string, boolean>();
   private readonly activeBoardIds = new Set<string>();
   /**
    * Which projection each board is subscribed with. Boards start at
@@ -84,6 +82,14 @@ export class SubscriptionManager {
    * the rollback with nothing to restore.
    */
   private readonly boardViewByProjectId = new Map<string, ReadBoardView>();
+  /**
+   * The projection each board's last SUCCESSFUL subscribe actually returned,
+   * as opposed to the one wanted above. Kept apart so a failed upgrade can be
+   * retried: recording the intent as if it had landed would make every later
+   * request a no-op, and the Board tab would wait on a snapshot nobody was
+   * going to ask for again.
+   */
+  private readonly activeBoardViewByProjectId = new Map<string, ReadBoardView>();
   private readonly activeDiffTaskIds = new Set<string>();
 
   private readonly boardRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -129,11 +135,16 @@ export class SubscriptionManager {
   /**
    * Upgrade one project's board to the full projection - the Board tab, which
    * renders every column and every card, not just the ones with an agent on
-   * them. Idempotent, and never reversed (see boardViewByProjectId).
+   * them. Never reversed (see boardViewByProjectId).
+   *
+   * Safe to call repeatedly, and the Board tab does on every focus: while the
+   * upgrade has not actually landed this re-issues it, so a request lost to a
+   * rekey or a timeout is retried by leaving the tab and coming back rather
+   * than stranding the screen on its loading state.
    */
   setBoardWantsFull(projectId: string): void {
-    if (this.boardViewByProjectId.get(projectId) === 'full') return;
     this.boardViewByProjectId.set(projectId, 'full');
+    if (this.activeBoardViewByProjectId.get(projectId) === 'full') return;
     if (!this.desiredBoardIds.has(projectId) || !this.session.isEstablished) return;
     void this.subscribeBoard(projectId);
   }
@@ -174,14 +185,18 @@ export class SubscriptionManager {
    * session screen turns it on when it opens and off when it closes; the feed
    * never turns it on. Flipping it re-subscribes, which is also what fetches
    * the fresh scrollback a newly-opened terminal needs to seed itself.
+   *
+   * Returns whether it issued that re-subscribe, so a caller that also wants
+   * a fresh frame knows whether it still needs to ask for one.
    */
-  setStreamWantsTerminal(sessionId: string, wantsTerminal: boolean): void {
+  setStreamWantsTerminal(sessionId: string, wantsTerminal: boolean): boolean {
     const previous = this.terminalStreamIds.has(sessionId);
-    if (previous === wantsTerminal) return;
+    if (previous === wantsTerminal) return false;
     if (wantsTerminal) this.terminalStreamIds.add(sessionId);
     else this.terminalStreamIds.delete(sessionId);
-    if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return;
+    if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return false;
     void this.subscribeStream(sessionId);
+    return true;
   }
 
   /** Immediate re-subscribe for one stream - the fresh-scrollback path when a session screen opens. */
@@ -241,6 +256,7 @@ export class SubscriptionManager {
     // handshake (the desktop tore its registry down on disconnect).
     this.activeStreamIds.clear();
     this.activeBoardIds.clear();
+    this.activeBoardViewByProjectId.clear();
     this.activeDiffTaskIds.clear();
     for (const projectId of this.desiredBoardIds) void this.subscribeBoard(projectId);
     for (const sessionId of this.desiredStreamIds) void this.subscribeStream(sessionId);
@@ -253,7 +269,6 @@ export class SubscriptionManager {
       const snapshot = await this.verbs.readStreamSubscribe(sessionId, { terminal: wantsTerminal });
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
       this.activeStreamIds.add(sessionId);
-      this.activeStreamWantsTerminal.set(sessionId, wantsTerminal);
       this.sinks.onStreamSnapshot(sessionId, snapshot);
     } catch (error) {
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
@@ -279,16 +294,17 @@ export class SubscriptionManager {
   }
 
   private async subscribeBoard(projectId: string): Promise<void> {
+    const view = this.boardViewByProjectId.get(projectId) ?? 'sessions';
     try {
-      const snapshot = await this.verbs.readBoardSubscribe(projectId, {
-        view: this.boardViewByProjectId.get(projectId) ?? 'sessions',
-      });
+      const snapshot = await this.verbs.readBoardSubscribe(projectId, { view });
       if (this.disposed || !this.desiredBoardIds.has(projectId)) return;
       this.activeBoardIds.add(projectId);
+      this.activeBoardViewByProjectId.set(projectId, view);
       this.sinks.onBoardSnapshot(snapshot);
     } catch {
       // Board subscribe failures are recovered by the next reconcile
-      // (established, refreshBoard, or a desired-set change).
+      // (established, refreshBoard, a desired-set change, or the Board tab
+      // re-focusing, which re-issues an upgrade that has not landed).
     }
   }
 
@@ -310,8 +326,11 @@ export class SubscriptionManager {
       clearTimeout(retryTimer);
       this.streamRetryTimers.delete(sessionId);
     }
-    this.terminalStreamIds.delete(sessionId);
-    this.activeStreamWantsTerminal.delete(sessionId);
+    // terminalStreamIds is NOT cleared here: it is screen-owned state, set by
+    // openSessionScreen and cleared by closeSessionScreen. A stream can drop
+    // out of the desired set while its screen stays mounted (the task gets
+    // archived desktop-side, say), and clearing the flag would bring the
+    // session back list-only, leaving a mounted terminal permanently frozen.
     if (!this.activeStreamIds.has(sessionId)) return;
     this.activeStreamIds.delete(sessionId);
     if (this.session.isEstablished) void this.verbs.readStreamUnsubscribe(sessionId).catch(() => undefined);

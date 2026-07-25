@@ -201,11 +201,12 @@ export function openSessionScreen(sessionId: string): void {
   useActivityStore.getState().markRead(sessionId);
   const connection = getActiveConnection();
   // This is the only screen that renders PTY bytes, so it is the only place
-  // that asks for them. The flip re-subscribes, which is also what fetches
-  // the fresh scrollback the terminal seeds itself from - so this replaces
-  // the refreshStream call rather than joining it.
-  connection?.subscriptions.setStreamWantsTerminal(sessionId, true);
-  connection?.subscriptions.refreshStream(sessionId);
+  // that asks for them. The flip already re-subscribes, and that IS the fetch
+  // of the fresh scrollback the terminal seeds itself from - so only ask for
+  // a refresh when the flag was already set (reopening a screen that never
+  // closed), or the open costs two round trips and seeds the WebView twice.
+  const resubscribed = connection?.subscriptions.setStreamWantsTerminal(sessionId, true) ?? false;
+  if (!resubscribed) connection?.subscriptions.refreshStream(sessionId);
   void loadTranscriptTail(sessionId).catch(() => {
     // Not connected yet or a transient failure: the store keeps
     // needsTailFetch set, and the screen retries when it sees the flag.
@@ -286,9 +287,15 @@ export async function peekLastAssistantMessage(sessionId: string, minFreshnessMs
   // there: free, no wire round trip, and always current - the throttled
   // fetch below could otherwise show text up to minFreshnessMs old while
   // the agent was visibly producing newer messages.
-  const localEntries = useTranscriptStore.getState().bySessionId[sessionId]?.entries;
-  if (localEntries !== undefined && localEntries.length > 0) {
-    const localSnippet = lastAssistantText(localEntries);
+  //
+  // Unless the store knows it fell behind: a delta that arrived with a gap
+  // leaves `entries` deliberately stale and sets needsTailFetch, and only a
+  // mounted chat screen re-fetches. For a retained-but-unmounted session that
+  // stale text would otherwise be pinned on the feed indefinitely, so fall
+  // through to the wire fetch instead.
+  const localSession = useTranscriptStore.getState().bySessionId[sessionId];
+  if (localSession !== undefined && !localSession.needsTailFetch && localSession.entries.length > 0) {
+    const localSnippet = lastAssistantText(localSession.entries);
     if (localSnippet !== null) return localSnippet;
   }
   const record = lastMessagePeekBySession.get(sessionId);
@@ -324,6 +331,13 @@ const inFlightTerminalLinePeeks = new Map<string, Promise<string | null>>();
  * so this never duplicates the feed). Skipped while the session screen
  * retains the terminal - that surface owns the live feed. Throttled per
  * session exactly like peekLastAssistantMessage.
+ *
+ * This is the ONE place outside a session screen that has to ask for PTY
+ * bytes: the scrollback IS the snippet, and a list-only subscribe returns an
+ * empty one. Because the desktop's subscribe replaces whatever that session
+ * was subscribed with, the one-shot leaves PTY streaming armed for a session
+ * showing no terminal - the exact ~13MB/hour cost the `terminal` flag exists
+ * to remove - so it is put straight back to list-only afterwards.
  */
 export async function peekLastTerminalLine(sessionId: string, minFreshnessMs: number): Promise<string | null> {
   if (isTerminalRetained(sessionId)) return null;
@@ -334,7 +348,11 @@ export async function peekLastTerminalLine(sessionId: string, minFreshnessMs: nu
   const inFlight = inFlightTerminalLinePeeks.get(sessionId);
   if (inFlight !== undefined) return inFlight;
   const fetchPromise = (async () => {
-    const snapshot = await requireVerbClient().readStreamSubscribe(sessionId);
+    const snapshot = await requireVerbClient().readStreamSubscribe(sessionId, { terminal: true });
+    // Put the subscription straight back to list-only. The desktop replaces a
+    // session's subscription on every subscribe, so without this the one-shot
+    // above leaves PTY bytes streaming to a feed row that discards them.
+    getActiveConnection()?.subscriptions.refreshStream(sessionId);
     // Content, not chrome: skip status/spinner lines and context bars so
     // the snippet reads like the agent's most recent message, and collapse
     // decoration so a separator run never renders as literal lines.

@@ -13,8 +13,9 @@ screen's context carries the object; the label carries only the action or the ne
 ## The rule
 
 - **Labels name the action, not the object, when the context names the object.** "Unpair",
-  not "Unpair this desktop", on the desktop card. "Pair with your desktop" is right where no
-  context exists yet (the unpaired empty state).
+  not "Unpair this desktop", on the desktop card; "Pair", not "Pair with your desktop", under
+  an empty state already titled "No desktop paired". Where a button has to widen to read as a
+  primary call to action, widen the button, not the words.
 - **Descriptions are one line at default font on a small phone (~45 characters).** If a
   description needs two lines, cut words before wrapping; never let a single word orphan-wrap.
 - **Only useful information.** No restating the obvious ("of any kind", "on this phone"), no
