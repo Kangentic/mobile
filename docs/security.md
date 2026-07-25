@@ -76,16 +76,17 @@ the wire.
 ## Authorization
 
 The encrypted channel proves *which* device is talking; a desktop-enforced capability allowlist
-decides *what* it may do (see `docs/architecture.md` for the nine-verb table). **There is no
+decides *what* it may do (see `docs/architecture.md` for the ten-verb table). **There is no
 shell, file-read, or arbitrary-command verb in the protocol at all: it is absent, not filtered.**
 This follows the lesson of Chrome Remote Desktop and VS Code tunnels, which are identity-gated
 but capability-unscoped, and of the SSH forced-command pattern, which shows that a filter on an
 otherwise-general command channel is the wrong shape.
 
-The default pairing grant is read-only (`read-stream`, `read-board`, `read-diff`,
-`board-tool-read`); every write/control verb (`send-user-message`, `move-task`,
-`answer-permission-prompt`, `interactive-terminal`, `board-tool-write`) requires an explicit
-per-verb grant in the desktop's Mobile Devices settings. `interactive-terminal` is deliberately
+The default pairing grant is the read-only four (`read-stream`, `read-board`, `read-diff`,
+`board-tool-read`) plus `register-push`, which only lets the desktop send this device encrypted
+notifications and carries no read or write authority of its own; every write/control verb
+(`send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
+`board-tool-write`) requires an explicit per-verb grant in the desktop's Mobile Devices settings. `interactive-terminal` is deliberately
 raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
 already running, never a new shell. Its resize/release actions (the phone sizing that PTY to the
 phone screen) ride the same grant rather than a new verb: a device already trusted to type raw
