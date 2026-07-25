@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { FlashList } from '@shopify/flash-list';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, Sheet, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
+import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, Sheet, SkeletonCard, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
@@ -12,10 +12,18 @@ import { CreateTaskSheet } from '@/components/board/CreateTaskSheet';
 import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
 import { TaskCard } from '@/components/board/TaskCard';
-import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
+import { selectColumnsOrdered, selectColumnTaskCount, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
 import { CapabilityError } from '@/channel';
-import { archiveTask, createTask, deleteTaskFromBoard, moveTaskOptimistic, refreshSnapshots, updateTaskFields } from '@/connection/actions';
+import {
+  archiveTask,
+  createTask,
+  deleteTaskFromBoard,
+  moveTaskOptimistic,
+  openProjectBoard,
+  refreshSnapshots,
+  updateTaskFields,
+} from '@/connection/actions';
 import { triggerHaptic } from '@/lib/haptics';
 
 function messageForActionError(error: unknown, fallback: string): string {
@@ -24,6 +32,9 @@ function messageForActionError(error: unknown, fallback: string): string {
 
 /** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
 const NO_TASKS: BoardTaskWire[] = [];
+
+/** Placeholder cards shown for the one round trip that upgrades a board to the full projection. */
+const BOARD_SKELETON_CARDS = ['board-skeleton-1', 'board-skeleton-2', 'board-skeleton-3'];
 
 export function BoardScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -36,7 +47,21 @@ export function BoardScreen(): React.JSX.Element {
 
   const projectId = selectedProjectId ?? projects[0]?.id ?? null;
   const board: ProjectBoard | null = projectId ? (boardsByProjectId[projectId] ?? null) : null;
-  const columns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
+  // Every other screen reads the feed projection, which carries only the tasks
+  // with an agent on them. This one draws every column and every card, so it
+  // asks the desktop to upgrade the project it is showing - on focus, so a
+  // board the user never opens is never fetched in full.
+  useFocusEffect(
+    useCallback(() => {
+      if (projectId) openProjectBoard(projectId);
+    }, [projectId]),
+  );
+  // ...and it does not paint until that upgrade lands. Rendering a 'sessions'
+  // board here would show a two-card board that fills in a beat later, which
+  // is the staggered cold start this release exists to remove.
+  const fullBoard = board !== null && board.view === 'full' ? board : null;
+  const awaitingFullBoard = board !== null && fullBoard === null;
+  const columns = useMemo(() => (fullBoard ? selectColumnsOrdered(fullBoard) : []), [fullBoard]);
   // Derived once per board/column change, not per render: selectTasksForColumn
   // filters + sorts the whole task map, and calling it inline in the render
   // body handed every column's FlashList a brand-new `data` array on every
@@ -44,9 +69,9 @@ export function BoardScreen(): React.JSX.Element {
   // The counts read off the same map rather than repeating the derivation.
   const tasksByColumnId = useMemo(() => {
     const byColumnId = new Map<string, BoardTaskWire[]>();
-    for (const column of columns) byColumnId.set(column.id, board ? selectTasksForColumn(board, column.id) : []);
+    for (const column of columns) byColumnId.set(column.id, fullBoard ? selectTasksForColumn(fullBoard, column.id) : []);
     return byColumnId;
-  }, [columns, board]);
+  }, [columns, fullBoard]);
   const taskCounts = useMemo(
     () => columns.map((column) => tasksByColumnId.get(column.id)?.length ?? 0),
     [columns, tasksByColumnId],
@@ -133,8 +158,8 @@ export function BoardScreen(): React.JSX.Element {
 
   const onMove = useCallback(
     (targetSwimlaneId: string) => {
-      if (!moveTarget || !projectId || !board) return;
-      const targetPosition = selectTasksForColumn(board, targetSwimlaneId).length;
+      if (!moveTarget || !projectId || !fullBoard) return;
+      const targetPosition = selectColumnTaskCount(fullBoard, targetSwimlaneId);
       setMoveInFlight(true);
       setMoveError(null);
       void moveTaskOptimistic({
@@ -152,7 +177,7 @@ export function BoardScreen(): React.JSX.Element {
         })
         .finally(() => setMoveInFlight(false));
     },
-    [moveTarget, projectId, board],
+    [moveTarget, projectId, fullBoard],
   );
 
   const onCreate = useCallback(
@@ -223,7 +248,13 @@ export function BoardScreen(): React.JSX.Element {
       />
       <ConnectionBanner />
 
-      {columns.length === 0 ? (
+      {awaitingFullBoard ? (
+        <Stack gap="sm" style={{ padding: theme.spacing.lg }} testID="board-loading">
+          {BOARD_SKELETON_CARDS.map((cardKey) => (
+            <SkeletonCard key={cardKey} />
+          ))}
+        </Stack>
+      ) : columns.length === 0 ? (
         <EmptyState
           testID="board-empty-state"
           title={projects.length === 0 ? 'No board yet' : 'No columns yet'}

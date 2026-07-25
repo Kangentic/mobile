@@ -212,6 +212,15 @@ export function openSessionScreen(sessionId: string): void {
   });
 }
 
+/**
+ * The Board tab is looking at a project: upgrade that board to the full
+ * projection. Every other board stays on the feed projection, which carries
+ * only the tasks an agent is actually running.
+ */
+export function openProjectBoard(projectId: string): void {
+  getActiveConnection()?.subscriptions.setBoardWantsFull(projectId);
+}
+
 export function closeSessionScreen(sessionId: string): void {
   // Transcript retention is LRU-capped rather than released on close, so
   // backing out and returning is instant; the terminal ring is released

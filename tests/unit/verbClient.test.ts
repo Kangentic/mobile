@@ -102,8 +102,8 @@ describe('VerbClient', () => {
     expect(projectList.projects).toEqual([{ id: 'project-1', name: 'Alpha' }]);
     expect(requests[0].payload).toEqual({});
 
-    const board = await verbs.readBoardSubscribe('project-1');
-    expect(requests[1].payload).toEqual({ projectId: 'project-1', action: 'subscribe' });
+    const board = await verbs.readBoardSubscribe('project-1', { view: 'sessions' });
+    expect(requests[1].payload).toEqual({ projectId: 'project-1', action: 'subscribe', view: 'sessions' });
     expect(board.projectId).toBe('project-1');
     expect(board.tasks).toHaveLength(1);
   });

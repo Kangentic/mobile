@@ -79,7 +79,8 @@ export function boardSnapshotFixture(overrides: Partial<ReadBoardSnapshotRespons
     projectId: 'project-1',
     columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-doing', name: 'Doing', position: 1 })],
     tasks: [boardTaskFixture()],
-    backlog: [],
+    // No backlog: a 0.9.0 desktop only sends one to a phone that named no
+    // `view`, which no current code path does.
     ...overrides,
   };
 }

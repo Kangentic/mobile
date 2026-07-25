@@ -17,6 +17,7 @@ import {
   type MoveTaskResponsePayload,
   type ReadBoardProjectListResponsePayload,
   type ReadBoardSnapshotResponsePayload,
+  type ReadBoardView,
   type ReadDiffScope,
   type ReadStreamRequestPayload,
   type ReadStreamResponsePayload,
@@ -125,8 +126,13 @@ export class VerbClient {
     return parsed;
   }
 
-  async readBoardSubscribe(projectId: string): Promise<ReadBoardSnapshotResponsePayload> {
-    const response = await this.requireOk('read-board', { projectId, action: 'subscribe' });
+  /**
+   * `view` picks the projection: 'sessions' for the feed's cross-project
+   * watch, 'full' for the one board the user has open. A pre-0.9.0 desktop
+   * ignores it and answers with a full board carrying no `view` echo.
+   */
+  async readBoardSubscribe(projectId: string, options: { view: ReadBoardView }): Promise<ReadBoardSnapshotResponsePayload> {
+    const response = await this.requireOk('read-board', { projectId, action: 'subscribe', view: options.view });
     const parsed = this.parsePayload('read-board', response, parseReadBoardResponsePayload);
     if ('projects' in parsed) throw new CapabilityError('read-board', 'Expected a board snapshot, received a project list');
     return parsed;

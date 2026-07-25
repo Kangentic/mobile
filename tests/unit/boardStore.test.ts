@@ -8,6 +8,7 @@ import type { ReadBoardProjectSummary } from '@kangentic/protocol';
 import {
   findTaskById,
   selectColumnsOrdered,
+  selectColumnTaskCount,
   selectLiveSessionIds,
   selectProjectAccentColor,
   selectTasksForColumn,
@@ -45,6 +46,38 @@ describe('boardStore', () => {
     expect(selectColumnsOrdered(board).map((column) => column.id)).toEqual(['lane-todo', 'lane-doing']);
     expect(selectTasksForColumn(board, 'lane-todo').map((task) => task.id)).toEqual(['task-1', 'task-2']);
     expect(selectTasksForColumn(board, 'lane-doing')).toEqual([]);
+  });
+
+  /**
+   * A pre-0.9.0 desktop echoes no `view` and always sends every task, so an
+   * absent field has to mean 'full'. Reading it as "filtered, unknown how"
+   * would strand the Board tab on its loading state forever.
+   */
+  it('treats a snapshot with no view echo as a full board', () => {
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].view).toBe('full');
+  });
+
+  it('selectColumnTaskCount uses the wire counts under a sessions board and the local list under a full one', () => {
+    useBoardStore.getState().applyBoardSnapshot(
+      boardSnapshotFixture({
+        projectId: 'project-1',
+        columns: COLUMNS,
+        // What a 'sessions' snapshot looks like: one task on the wire, but
+        // the column really holds five. Appending has to land at 5, not 1.
+        tasks: [boardTaskFixture({ id: 'task-1', swimlane_id: 'lane-todo', position: 0, session_id: 'sess-1' })],
+        view: 'sessions',
+        taskCountsByColumnId: { 'lane-todo': 5 },
+      }),
+    );
+    const sessionsBoard = useBoardStore.getState().boardsByProjectId['project-1'];
+    expect(selectColumnTaskCount(sessionsBoard, 'lane-todo')).toBe(5);
+    // A column with no live session is absent from the map entirely.
+    expect(selectColumnTaskCount(sessionsBoard, 'lane-doing')).toBe(0);
+
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    const fullBoard = useBoardStore.getState().boardsByProjectId['project-1'];
+    expect(selectColumnTaskCount(fullBoard, 'lane-todo')).toBe(2);
   });
 
   it('hasHydratedSnapshot latches true on the first snapshot and resets with the rest of the board', () => {

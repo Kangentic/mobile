@@ -4,7 +4,7 @@ import { useLocalSearchParams } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { Screen } from '@/components';
-import { findTaskById, selectColumnsOrdered, selectTasksForColumn, useBoardStore } from '@/state/boardStore';
+import { findTaskById, selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
 import { useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
@@ -150,7 +150,7 @@ export function SessionScreen(): React.JSX.Element {
   const onMove = useCallback(
     (targetSwimlaneId: string) => {
       if (!projectId || !board) return;
-      const targetPosition = selectTasksForColumn(board, targetSwimlaneId).length;
+      const targetPosition = selectColumnTaskCount(board, targetSwimlaneId);
       setMoveInFlight(true);
       setMoveError(null);
       void moveTaskOptimistic({
