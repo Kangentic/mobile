@@ -240,7 +240,9 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
 - **Development builds** (`expo-dev-client`) from day one: Expo Go cannot run this app, since
   `expo-secure-store`, `expo-camera`, and (later) Notifee are all custom native modules.
 - **EAS profiles:** `development` (dev-client, for local iteration), `preview` (internal
-  distribution, TestFlight/Play internal), `production` (store release). Convenience scripts:
+  distribution, TestFlight/Play internal), `e2e` (extends `preview`; a release-shaped APK for
+  Maestro, carrying `EXPO_PUBLIC_KANGENTIC_E2E=1` so it can pair through a local rig relay -
+  internal only, never distributed), `production` (store release). Convenience scripts:
   `npm run build:dev` / `build:preview` / `build:prod` wrap
   `eas build --profile <profile> --platform android` for each.
 - **EAS Update** for JS-only OTA updates (free tier, 1,000 MAU) once the app ships.
@@ -288,11 +290,19 @@ client rather than of our app:
    dismisses the explainer - the dev menu proper opens behind it and needs closing too.
 3. Metro has to be up for any of it.
 
-Maestro's own guidance is to test the final bundled binary, which has none of those problems. We
-cannot yet, because `src/pairing/qr.ts` permits a plaintext `ws://` relay only under `__DEV__`,
-so a release-shaped build refuses the local dev relay. Closing that gap means a dedicated e2e
-build profile gated on an explicit env flag rather than `__DEV__` - worth doing, and it would
-delete all three workarounds above.
+**The `e2e` build profile removes all three.** Maestro's guidance is to test the final bundled
+binary, and `eas.json`'s `e2e` profile builds exactly that: release-shaped, internal
+distribution, APK, with `EXPO_PUBLIC_KANGENTIC_E2E=1`. That flag is the second gate on the
+`ws://10.0.2.2` carve-out in `src/pairing/qr.ts` (see `docs/security.md`), so the binary can
+still reach a local rig relay even though `__DEV__` is false. No dev menu, no Metro, no bundle
+URL to lose:
+
+```
+eas build --profile e2e --platform android          # or a local release build with the flag set
+maestro --device <serial> test .maestro/paired
+```
+
+Use the dev client only when you need Fast Refresh while writing a flow.
 
 **Why a run takes minutes:** every flow begins with `launchApp`, which force-stops and cold
 boots, and then waits up to 60s for the channel to re-establish - roughly 70s of the runtime of
@@ -320,6 +330,12 @@ Dev-only variables:
 
 - `EXPO_PUBLIC_KANGENTIC_MOCK=1` - enables the in-app mock desktop peer (dev builds only; the
   code path is stripped from production bundles). Set by `npm run dev:mock`, not by hand.
+- `EXPO_PUBLIC_KANGENTIC_E2E=1` - set by the `e2e` EAS profile, never by hand. It is the second
+  build-time gate (alongside `__DEV__`) on accepting the Android emulator's `ws://10.0.2.2`
+  host-loopback alias as a relay address, so a release-shaped Maestro build can pair with a
+  local rig relay. It widens NOTHING else, and like every `EXPO_PUBLIC_*` value it is inlined at
+  build time, so a `production` bundle has no such branch. See `docs/security.md`'s relay-scheme
+  paragraph before touching it.
 - `KANGENTIC_RELAY_REPO` - where `scripts/dev.mjs` finds the relay checkout; never read by
   the app bundle.
 

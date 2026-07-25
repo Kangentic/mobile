@@ -90,6 +90,38 @@ describe('validateScannedQr', () => {
     }
   });
 
+  /**
+   * E2E has to run against a release-shaped binary (no dev menu, no Metro),
+   * which without this flag refuses the local dev relay. The flag is the ONLY
+   * other way in: it is an EXPO_PUBLIC_ value Metro inlines at build time, so
+   * a build that did not set it has no branch to take, and nothing on an
+   * installed app can turn it on.
+   */
+  it('accepts the emulator alias in a release-shaped e2e build, and only for that exact flag value', () => {
+    const uri = encodePairingQrPayload(buildValidPayload({ relayAddress: 'ws://10.0.2.2:8080' }));
+    const originalFlag = process.env.EXPO_PUBLIC_KANGENTIC_E2E;
+
+    try {
+      process.env.EXPO_PUBLIC_KANGENTIC_E2E = '1';
+      expect(validateScannedQr(uri, anchorNow(0)).ok).toBe(true);
+
+      // A stray truthy-looking value is not the flag: only the literal '1'
+      // the e2e profile sets opens the carve-out.
+      process.env.EXPO_PUBLIC_KANGENTIC_E2E = 'true';
+      expect(validateScannedQr(uri, anchorNow(0)).ok).toBe(false);
+
+      // And the flag never widens anything BEYOND the emulator alias.
+      process.env.EXPO_PUBLIC_KANGENTIC_E2E = '1';
+      const publicRelay = encodePairingQrPayload(buildValidPayload({ relayAddress: 'ws://relay.example.com' }));
+      expect(validateScannedQr(publicRelay, anchorNow(0)).ok).toBe(false);
+      const lookalike = encodePairingQrPayload(buildValidPayload({ relayAddress: 'ws://10.0.2.20:8080' }));
+      expect(validateScannedQr(lookalike, anchorNow(0)).ok).toBe(false);
+    } finally {
+      if (originalFlag === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_E2E;
+      else process.env.EXPO_PUBLIC_KANGENTIC_E2E = originalFlag;
+    }
+  });
+
   it('rejects a non-loopback plaintext ws:// relay as insecure-relay', () => {
     const payload = buildValidPayload({ relayAddress: 'ws://relay.example.com' });
     const uri = encodePairingQrPayload(payload);
