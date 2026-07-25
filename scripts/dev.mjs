@@ -636,6 +636,29 @@ function ensureAdbReverse() {
   log(`adb reverse tcp:${RELAY_PORT} in place`);
 }
 
+/**
+ * Restore every reverse tunnel on every ATTACHED device.
+ *
+ * An adb server restart wipes the reverses for all of them, but the rig's
+ * other helpers target one selected device, so recovering with a phone AND an
+ * emulator attached silently left the unselected one with no tunnels at all.
+ * It does not fail loudly: the app on that device simply cannot reach Metro or
+ * the relay, so it hangs on startup until Android ANR-kills it, and the dev
+ * client then reports "the development build crashed". Cost an evening once.
+ */
+function restoreAllAdbReverses() {
+  for (const device of listAdbDevices()) {
+    if (device.state !== 'device') continue;
+    for (const port of [RELAY_PORT, METRO_PORT, INSPECT_PORT]) {
+      const result = run('adb', ['-s', device.serial, 'reverse', `tcp:${port}`, `tcp:${port}`]);
+      if (result.status !== 0) {
+        warn(`adb -s ${device.serial} reverse tcp:${port} failed: ${result.stderr?.trim() || result.stdout?.trim()}`);
+      }
+    }
+    log(`reverses restored on ${device.serial}`);
+  }
+}
+
 /** Serial-scoped reverse for sharded instances (the plain helpers target ANDROID_SERIAL). */
 function ensureAdbReverseFor(serial, port) {
   const result = run('adb', ['-s', serial, 'reverse', `tcp:${port}`, `tcp:${port}`]);
@@ -1068,8 +1091,9 @@ async function main() {
     const adbTarget = selectAdbTarget(requestedSerial);
     if (!adbTarget) fail('no ready device after the adb restart; boot the emulator (npm run dev:emu) or plug in and authorize a device');
     applyAdbTarget(adbTarget);
-    ensureAdbReverse();
-    ensureInspectAdbReverse();
+    // EVERY attached device, not just the selected one: the restart wiped
+    // them all, and a device left without tunnels fails silently.
+    restoreAllAdbReverses();
     const relaunched = spawnSync('node', [join(repoRoot, 'scripts', 'mobileInspect.mjs'), 'relaunch'], { encoding: 'utf8' });
     if (relaunched.status === 0) {
       log('app relaunched and foregrounded');
