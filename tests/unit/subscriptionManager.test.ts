@@ -229,6 +229,41 @@ describe('SubscriptionManager', () => {
     expect((afterReconnect[0].payload as { view?: string }).view).toBe('full');
   });
 
+  /**
+   * The upgrade-permanence guarantee above is scoped to a project that STAYS
+   * desired. Once a project drops out of the desired set entirely (the
+   * project list refreshed without it), its full-board upgrade is gone too -
+   * a later re-add is a fresh board and starts back at the feed projection,
+   * with the Board tab upgrading it again only if it is opened.
+   */
+  it('a board dropped from the desired set and later re-added starts back at the sessions projection', async () => {
+    const { stub, manager, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredBoards(new Set(['project-1']));
+    manager.setBoardWantsFull('project-1');
+    await flushLoopback();
+
+    const readBoardSubscribeRequests = (): CapabilityRequestMessage[] =>
+      requests.filter((request) => request.verb === 'read-board' && (request.payload as { action?: string }).action !== 'unsubscribe');
+    expect((readBoardSubscribeRequests().at(-1)?.payload as { view?: string }).view).toBe('full');
+
+    manager.setDesiredBoards(new Set());
+    await flushLoopback();
+    // Only the requests issued AFTER the re-add count: an earlier subscribe
+    // still in flight can land on the stub out of issue order, which would
+    // make `.at(-1)` over the whole list a coin flip.
+    const countBeforeReadd = requests.length;
+    manager.setDesiredBoards(new Set(['project-1']));
+    await flushLoopback();
+
+    const afterReadd = requests
+      .slice(countBeforeReadd)
+      .filter((request) => request.verb === 'read-board' && (request.payload as { action?: string }).action !== 'unsubscribe');
+    expect(afterReadd).toHaveLength(1);
+    expect(afterReadd[0].payload).toMatchObject({ projectId: 'project-1', view: 'sessions' });
+  });
+
   it('re-issues every desired subscription after a transport drop and fresh handshake', async () => {
     const { session, stub, manager, requests, sinkCalls } = await harness();
     stub.beginHandshake();

@@ -2,7 +2,7 @@
  * activityStore: snapshot application, each ActivityEvent payload type,
  * permission set/clear, and the triage section mapping/sort.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
 import { sectionForEntry, selectTriageRows, useActivityStore } from '@/state/activityStore';
 import { streamSnapshotFixture, usageFixture } from '@/devsupport/desktopFixtures';
@@ -118,6 +118,66 @@ describe('activityStore', () => {
     const entry = useActivityStore.getState().bySessionId['sess-1'];
     expect(entry.state).toBe('thinking');
     expect(entry.sectionChangedAt).toBeNull();
+  });
+
+  /**
+   * A re-delivered snapshot (reconnect, pull-to-refresh) fires for every live
+   * session at once. If the section it reports is unchanged, the ordering key
+   * must stay put - otherwise every reconnect reshuffles the whole feed into
+   * snapshot-arrival order, exactly the churn enteredSectionAt exists to stop.
+   */
+  it('applySnapshot leaves enteredSectionAt untouched when the section is unchanged', () => {
+    vi.useFakeTimers();
+    try {
+      // Fake time (rather than two real-clock reads) so a same-millisecond
+      // coincidence can never make an always-bump implementation pass this
+      // by accident: the clock genuinely moves between the two calls.
+      vi.setSystemTime(1_000);
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      const enteredSectionAtOnRegister = useActivityStore.getState().bySessionId['sess-1'].enteredSectionAt;
+      expect(sectionForEntry(useActivityStore.getState().bySessionId['sess-1'])).toBe('idle');
+      expect(enteredSectionAtOnRegister).toBe(1_000);
+
+      vi.setSystemTime(5_000);
+      // Idle -> idle: the re-delivered snapshot reports the same section.
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null } }));
+
+      const entry = useActivityStore.getState().bySessionId['sess-1'];
+      expect(sectionForEntry(entry)).toBe('idle');
+      expect(entry.enteredSectionAt).toBe(enteredSectionAtOnRegister);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The companion case: a snapshot that genuinely moves a session to a new
+   * section must still advance enteredSectionAt, or newly-arrived agents
+   * would never rank above sessions that have been sitting in a section for
+   * a while (and the unchanged-section test above would pass vacuously for
+   * an implementation that stopped updating enteredSectionAt altogether).
+   */
+  it('applySnapshot bumps enteredSectionAt when the section genuinely changed', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      const enteredSectionAtOnRegister = useActivityStore.getState().bySessionId['sess-1'].enteredSectionAt;
+      expect(sectionForEntry(useActivityStore.getState().bySessionId['sess-1'])).toBe('idle');
+
+      vi.setSystemTime(5_000);
+      // The default fixture reports 'thinking': idle -> working IS a section change.
+      useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture());
+
+      const entry = useActivityStore.getState().bySessionId['sess-1'];
+      expect(sectionForEntry(entry)).toBe('working');
+      expect(entry.enteredSectionAt).toBe(5_000);
+      expect(entry.enteredSectionAt).not.toBe(enteredSectionAtOnRegister);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('selectTriageRows buckets by state and sorts each section by recency', () => {
