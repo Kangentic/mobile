@@ -45,10 +45,14 @@ second rig mode silently kills the first one's bundler. Both failures look like 
   matches a label in `src/screens/**` or `src/components/**`, which is the mechanical form of the
   testID rule above.
 
+**Prefer the `e2e` build profile over the dev client.** `eas.json`'s `e2e` profile builds a
+release-shaped binary carrying `EXPO_PUBLIC_KANGENTIC_E2E=1`, the second build-time gate on the
+`ws://10.0.2.2` carve-out in `src/pairing/qr.ts`, so it reaches a local rig relay without
+`__DEV__`. Against that binary none of the three dev-client constraints above exist. Reach for
+the dev client only when authoring a flow and wanting Fast Refresh.
+
 ## Scope
 
-`.maestro/**` and the two scripts that drive it. The lasting fix is out of scope here and
-recorded in the developer guide: `src/pairing/qr.ts` permits a plaintext `ws://` relay only under
-`__DEV__`, so a release-shaped build refuses the local dev relay and we cannot yet test the final
-bundled binary the way Maestro recommends. A dedicated e2e build profile gated on an explicit env
-flag would delete every dev-client workaround above.
+`.maestro/**` and the two scripts that drive it. Widening the relay carve-out further is a
+security change, not a testing one: read `docs/security.md`'s relay-scheme paragraph first, and
+keep every gate build-time. A runtime toggle for it would be a defect.

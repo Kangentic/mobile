@@ -71,13 +71,20 @@ the wire.
   and dialed verbatim as the relay's slot parameter, so a plaintext relay connection would put
   it on the wire in cleartext. The phone (`src/pairing/qr.ts`) refuses to pair through any
   relay address that isn't `wss://`, carving out only loopback (`ws://localhost`, `127.0.0.1`,
-  `::1`) for a local dev relay. A **dev build alone** additionally accepts `ws://10.0.2.2`, the
-  Android emulator's NAT alias for the host's loopback interface, so the dev rig's relay is
-  reachable without an `adb reverse`. That carve-out is gated on `__DEV__`, a build-time
-  constant Metro folds to `false` and eliminates from a release bundle, so a production build
-  never has the branch to take. The gate is on the BUILD, not on the device: a dev-client build
-  installed on a physical phone would accept `10.0.2.2`, where it is an ordinary private
-  address rather than a loopback alias.
+  `::1`) for a local dev relay. Two build shapes additionally accept `ws://10.0.2.2`, the
+  Android emulator's NAT alias for the host's loopback interface, so a rig relay is reachable
+  without an `adb reverse`: a `__DEV__` bundle, and a build from the **`e2e` EAS profile**,
+  which sets `EXPO_PUBLIC_KANGENTIC_E2E=1`. E2E needs a release-shaped binary (Maestro tests the
+  final bundled app, and a dev client drags in a dev menu, a Metro dependency, and a bundle URL
+  that `pm clear` wipes), and without the flag that binary refuses the local relay.
+
+  Both gates are decided at BUILD time and both fold to a constant: `__DEV__` and every
+  `EXPO_PUBLIC_*` value are substituted as literals by Metro, so a `production` bundle contains
+  neither branch. There is no runtime flag, setting, or intent that can widen an installed app's
+  accepted relay addresses. The `e2e` profile is `distribution: internal` and is never the
+  profile that ships. Note the gate is on the BUILD, not the device: an `e2e` or dev build
+  installed on a physical phone would accept `10.0.2.2`, where it is an ordinary private address
+  rather than a loopback alias, so neither belongs on a phone that pairs with anything real.
 
 ## Authorization
 

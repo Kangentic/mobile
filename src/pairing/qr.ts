@@ -13,22 +13,48 @@ const LOOPBACK_WS_PREFIXES = ['ws://localhost', 'ws://127.0.0.1', 'ws://[::1]'];
  * The Android emulator's NAT alias for the HOST's loopback interface:
  * same-machine traffic with loopback trust, so a dev-rig relay is reachable
  * without any adb reverse. Only meaningful ON an emulator - on physical
- * hardware 10.0.2.2 is an ordinary private address - so this prefix is
- * honored in dev builds only (production builds never take this branch).
+ * hardware 10.0.2.2 is an ordinary private address - so it is carved out only
+ * for the two build shapes below, never for a build a user could install.
  */
 const DEV_EMULATOR_HOST_LOOPBACK_PREFIX = 'ws://10.0.2.2';
+
+/**
+ * Whether this BUILD may pair through the emulator's host-loopback alias.
+ *
+ * Two build shapes qualify, and both are decided at BUILD time, never at run
+ * time: there is no runtime flag, setting, or intent an attacker could flip on
+ * an installed app to widen what it accepts.
+ *
+ * - `__DEV__` - a Metro dev bundle.
+ * - `EXPO_PUBLIC_KANGENTIC_E2E` - the `e2e` EAS profile (eas.json). E2E has to
+ *   run against a RELEASE-shaped binary: Maestro's own guidance is to test the
+ *   final bundled app, and a dev client drags in a dev menu whose window hides
+ *   the app's entire view tree from the hierarchy, a Metro dependency, and a
+ *   bundle URL that `pm clear` wipes. Without this flag that binary refuses the
+ *   local dev relay, which is why E2E was stuck on the dev client.
+ *
+ * Both are inlined by Metro at build time (`EXPO_PUBLIC_*` is substituted as a
+ * literal), so in a production bundle this function constant-folds to the
+ * loopback-only list and the emulator branch is eliminated outright. The `e2e`
+ * profile is internal-distribution only and is never the profile that ships.
+ */
+function buildAllowsEmulatorHostLoopback(): boolean {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) return true;
+  return process.env.EXPO_PUBLIC_KANGENTIC_E2E === '1';
+}
 
 /**
  * The pairing token IS the Noise PSK and is dialed verbatim as the relay's
  * `?slot=` parameter (channel/slot.ts), so a non-TLS relay would put the PSK
  * on the wire in cleartext. Require `wss://`, independent of any OS-level
  * cleartext policy, carving out only loopback for local dev (docs/security.md),
- * plus the emulator's host-loopback alias in dev builds.
+ * plus the emulator's host-loopback alias for the build shapes above.
  */
 function isSecureRelayAddress(relayAddress: string): boolean {
   if (relayAddress.startsWith('wss://')) return true;
-  const devBuild = typeof __DEV__ !== 'undefined' && __DEV__;
-  const allowedPrefixes = devBuild ? [...LOOPBACK_WS_PREFIXES, DEV_EMULATOR_HOST_LOOPBACK_PREFIX] : LOOPBACK_WS_PREFIXES;
+  const allowedPrefixes = buildAllowsEmulatorHostLoopback()
+    ? [...LOOPBACK_WS_PREFIXES, DEV_EMULATOR_HOST_LOOPBACK_PREFIX]
+    : LOOPBACK_WS_PREFIXES;
   return allowedPrefixes.some((prefix) => {
     if (!relayAddress.startsWith(prefix)) return false;
     const boundaryChar = relayAddress.charAt(prefix.length);
