@@ -365,6 +365,106 @@ describe('TriageHomeScreen', () => {
   });
 
   /**
+   * FEED_REVEAL_DEADLINE_MS is only a FLOOR under a project whose board is
+   * slow or never answers - allBoardsAnswered is the normal completion
+   * signal. If the deadline fallback regressed (feedReady tied to
+   * allBoardsAnswered alone), a board that never answers would strand the
+   * feed on "Connecting" forever instead of revealing what it does have.
+   */
+  it('reveals the feed past the deadline even when a declared board never answers', () => {
+    jest.useFakeTimers();
+    try {
+      useActivityStore.getState().reset();
+      useBoardStore.setState({
+        projects: [
+          { id: 'project-1', name: 'Alpha' },
+          { id: 'project-2', name: 'Beta' },
+        ],
+        boardsByProjectId: {},
+        hasHydratedSnapshot: false,
+      });
+      renderHome();
+      expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
+
+      // project-1 answers; project-2 never does - allBoardsAnswered stays
+      // false for the rest of the test.
+      act(() => {
+        useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', columns: [], tasks: [] }));
+      });
+      expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
+
+      // FEED_REVEAL_DEADLINE_MS (2500ms): the only other path to feedReady.
+      act(() => {
+        jest.advanceTimersByTime(2500);
+      });
+
+      expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
+      expect(screen.queryByTestId('connecting-empty-state')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
+   * SNIPPET_SETTLE_MS (350ms): a burst of unreadCount bumps (an actively
+   * working session's engine events land back-to-back) must settle to ONE
+   * refetch of the LAST state, not one paint per bump - each bump restarts
+   * the settle timer. If the debounce regressed to fetching on every bump,
+   * the mid-burst assertion below (no fetch yet) is what catches it; a test
+   * that only checked "a fetch eventually happens" would not.
+   */
+  it('debounces a burst of unreadCount bumps into one refetch after the burst settles', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.mocked(peekLastAssistantMessage).mockClear();
+      jest.mocked(peekLastAssistantMessage).mockResolvedValue('Latest.');
+      // seedStores leaves sess-1 awaiting a prompt (the prompt-peek path);
+      // resolve it so the row peeks the message path this test is pinning.
+      act(() => {
+        useActivityStore.getState().applyActivityEvent({
+          kind: 'activity',
+          sessionId: 'sess-1',
+          taskId: 'task-1',
+          payload: { type: 'permission', promptId: 'sess-1:tool-1', pending: false },
+        });
+      });
+
+      renderHome();
+      // The first peek (this row's pre-warm plus its own mount) has no
+      // burst to settle and fires immediately - capture that count as the
+      // baseline rather than assuming it is exactly one call.
+      await act(async () => {});
+      const callsAfterMount = jest.mocked(peekLastAssistantMessage).mock.calls.length;
+      expect(callsAfterMount).toBeGreaterThan(0);
+
+      for (let bumpIndex = 0; bumpIndex < 4; bumpIndex += 1) {
+        await act(async () => {
+          useActivityStore.getState().applyActivityEvent({
+            kind: 'activity',
+            sessionId: 'sess-1',
+            taskId: 'task-1',
+            payload: { type: 'event', event: { ts: bumpIndex, type: 'tool_start', tool: 'Bash' } },
+          });
+          jest.advanceTimersByTime(200);
+        });
+      }
+      // Still inside the 350ms settle window of the last bump: nothing has
+      // refetched yet, which is the debounce itself, not just its outcome.
+      expect(jest.mocked(peekLastAssistantMessage).mock.calls.length).toBe(callsAfterMount);
+
+      await act(async () => {
+        jest.advanceTimersByTime(350);
+      });
+
+      // The burst settled to exactly ONE additional fetch, not one per bump.
+      expect(jest.mocked(peekLastAssistantMessage).mock.calls.length).toBe(callsAfterMount + 1);
+    } finally {
+      jest.useRealTimers();
+      jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
+    }
+  });
+
+  /**
    * The agent snippet is a per-session transcript fetch that can take seconds
    * on a long-running session, so the card falls back to the task description
    * that already rode in on the board snapshot. Before this, the feed revealed

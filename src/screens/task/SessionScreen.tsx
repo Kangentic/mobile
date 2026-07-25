@@ -110,7 +110,7 @@ export function SessionScreen(): React.JSX.Element {
     const graceTimer = setTimeout(() => setGracePassedForSessionId(rejectedSessionId), REJECTED_FEED_GRACE_MS);
     return () => clearTimeout(graceTimer);
   }, [feedStatus, sessionId]);
-  // Signal 3: the desktop said outright that this screen's session is over.
+  // Signal 2: the desktop said outright that this screen's session is over.
   // Read from the store's ended-id set rather than the entry's feedStatus,
   // because the entry does not survive: the ended session leaves the board's
   // 'sessions' projection in the next snapshot and the reconciler prunes it.

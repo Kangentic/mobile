@@ -134,6 +134,59 @@ describe('transcriptStore', () => {
     expect(session.revision).toBe(2);
   });
 
+  /**
+   * A reset leaves `hasWindow: false` alongside a REAL revision (2, not the
+   * old -1 "no window" sentinel) - exactly the case `hasWindow` exists to
+   * distinguish from that sentinel. A delta that lands after the reset must
+   * still be treated as "no window yet" (recording only that a fetch is
+   * needed), because the window really was dropped. If the no-window check
+   * regressed from `!previous.hasWindow` back to `previous.revision === -1`,
+   * a post-reset revision no longer reads as -1, so this delta would fall
+   * through into the upsert path and fabricate a window (entries, hasWindow
+   * true) from a session that never actually got one back from the wire.
+   */
+  it('a delta arriving after a reset still only flags a tail fetch, even though the reset revision is not -1', () => {
+    const { retainSession, applyWindow, applyTranscript } = useTranscriptStore.getState();
+    retainSession('sess-1');
+    applyWindow('sess-1', windowPayload(1, 2, 0, [userEntryFixture({ uuid: 'u-0' }), assistantEntryFixture({ uuid: 'a-1' })]));
+    applyTranscript({ kind: 'transcript', sessionId: 'sess-1', taskId: 'task-1', payload: { mode: 'reset', revision: 5, totalEntries: 0 } });
+
+    applyTranscript(deltaEvent('sess-1', 6, 1, [{ index: 0, entry: userEntryFixture({ uuid: 'post-reset' }) }]));
+
+    const session = useTranscriptStore.getState().bySessionId['sess-1'];
+    expect(session.hasWindow).toBe(false);
+    expect(session.entries).toHaveLength(0);
+    expect(session.needsTailFetch).toBe(true);
+    // The no-window branch does not adopt the delta's revision either -
+    // only a real window fetch (applyWindow) does that.
+    expect(session.revision).toBe(5);
+  });
+
+  /**
+   * The analogous case in applyWindow's older-page check: a post-reset
+   * refetch can legitimately land at the SAME revision the reset itself
+   * carried (nothing changed in between), with an empty window ending at
+   * startIndex 0 - the one shape where a reset's revision and its
+   * `previous.hasWindow: false` diverge from the old `revision === -1`
+   * reading of "has no window". If `isOlderPage`'s guard regressed from
+   * `previous.hasWindow` to a revision-sentinel check, this reads as an
+   * older-page PREPEND onto a window that never existed, which skips the
+   * wholesale-replace branch and leaves hasWindow/needsTailFetch exactly as
+   * the reset left them - the screen would stay stuck thinking it still
+   * needs a tail fetch forever, despite a window having just landed.
+   */
+  it('a post-reset window fetch at the reset\'s own revision replaces the window wholesale, not an older-page prepend', () => {
+    const { retainSession, applyTranscript, applyWindow } = useTranscriptStore.getState();
+    retainSession('sess-1');
+    applyTranscript({ kind: 'transcript', sessionId: 'sess-1', taskId: 'task-1', payload: { mode: 'reset', revision: 5, totalEntries: 0 } });
+
+    applyWindow('sess-1', windowPayload(5, 0, 0, []));
+
+    const session = useTranscriptStore.getState().bySessionId['sess-1'];
+    expect(session.hasWindow).toBe(true);
+    expect(session.needsTailFetch).toBe(false);
+  });
+
   it('prepends an older contiguous page without touching tailRevision', () => {
     const { retainSession, applyWindow } = useTranscriptStore.getState();
     retainSession('sess-1');

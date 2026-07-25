@@ -59,6 +59,24 @@ describe('openSessionScreen', () => {
     openSessionScreen('session-1');
 
     expect(setStreamWantsTerminal).toHaveBeenCalledWith('session-1', true);
+    // setStreamWantsTerminal(true) already re-subscribed - that IS the fresh
+    // scrollback fetch. Calling refreshStream too would fire a second,
+    // redundant read-stream round trip on every screen open.
+    expect(refreshStream).not.toHaveBeenCalled();
+  });
+
+  it('asks for a fresh frame directly when the flag was already set (reopening a screen that never closed)', () => {
+    getActiveConnection.mockReturnValue(stubConnection());
+    // The flag did not flip, so setStreamWantsTerminal's own re-subscribe
+    // never fires - without the explicit refreshStream call here, reopening
+    // a screen that never closed would seed the terminal from stale scrollback.
+    setStreamWantsTerminal.mockReturnValue(false);
+    readTranscriptWindow.mockResolvedValue(tailWindow());
+    useActivityStore.getState().registerSession('session-1', 'task-1', 'project-1');
+
+    openSessionScreen('session-1');
+
+    expect(refreshStream).toHaveBeenCalledWith('session-1');
   });
 
   it('does nothing to the terminal projection while disconnected (no active connection)', () => {

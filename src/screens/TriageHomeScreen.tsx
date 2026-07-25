@@ -201,6 +201,13 @@ export function TriageHomeScreen(): React.JSX.Element {
    * should cost one row's snippet, not the whole feed.
    */
   const warmedSessionIdsRef = useRef(new Set<string>());
+  // The effect below needs to run when the SET of sessions changes, so this
+  // selector has to be set-valued. It must NOT be reduced to a count: a
+  // snapshot that drops one session and adds another leaves the count
+  // identical, and the new session would then never be warmed. Returning a
+  // joined string rather than an array is also deliberate - a fresh array
+  // identity every call would defeat Zustand's equality check and re-render
+  // the feed on every activity event.
   const knownSessionIds = useActivityStore((state) => Object.keys(state.bySessionId).sort().join(','));
   useEffect(() => {
     if (!established) return;

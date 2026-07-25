@@ -60,4 +60,19 @@ describe('ColumnChipBar', () => {
 
     expect(onSelect).toHaveBeenCalledWith(1);
   });
+
+  // A row of "0"s on a fresh board is noise (see the component's own
+  // comment); an empty column's chip shows no count pill at all. If the
+  // `> 0` guard regresses back to an unconditional badge, "0" renders next
+  // to "Doing" and this fails.
+  it('hides the count badge for an empty column but shows it for a non-empty one', () => {
+    render(
+      <ThemeProvider>
+        <ColumnChipBar columns={columns} taskCounts={taskCounts} activeIndex={0} onSelect={jest.fn()} />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.queryByText('0')).toBeNull();
+  });
 });

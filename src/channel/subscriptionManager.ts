@@ -268,6 +268,13 @@ export class SubscriptionManager {
     try {
       const snapshot = await this.verbs.readStreamSubscribe(sessionId, { terminal: wantsTerminal });
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
+      // Same staleness guard as subscribeBoard. Opening and immediately
+      // closing a session screen flips the flag twice, so two subscribes are
+      // in flight with opposite terminal values; whichever landed last would
+      // otherwise decide the bookkeeping regardless of which is current.
+      // Dropping the stale one loses nothing: the flag only ever changes on a
+      // path that issues its own subscribe, so a fresher one is always coming.
+      if (this.terminalStreamIds.has(sessionId) !== wantsTerminal) return;
       this.activeStreamIds.add(sessionId);
       this.sinks.onStreamSnapshot(sessionId, snapshot);
     } catch (error) {
@@ -298,6 +305,17 @@ export class SubscriptionManager {
     try {
       const snapshot = await this.verbs.readBoardSubscribe(projectId, { view });
       if (this.disposed || !this.desiredBoardIds.has(projectId)) return;
+      // A response that answers a view we no longer want is stale, and
+      // applying it would UNDO a newer one. Two subscribes for the same
+      // project are legitimately in flight together (bootstrap asks for
+      // 'sessions', the Board tab focusing then asks for 'full'), and
+      // responses can land out of issue order. Without this, a late
+      // 'sessions' snapshot overwrites the landed 'full' one: applyBoardSnapshot
+      // replaces tasksById wholesale, so every task without a live session
+      // vanishes from the Board tab, any optimistic move over one of them has
+      // nothing left to commit against, and the screen strands on its skeleton
+      // until the tab is re-focused. Mirrors the check subscribeDiff makes.
+      if ((this.boardViewByProjectId.get(projectId) ?? 'sessions') !== view) return;
       this.activeBoardIds.add(projectId);
       this.activeBoardViewByProjectId.set(projectId, view);
       this.sinks.onBoardSnapshot(snapshot);
