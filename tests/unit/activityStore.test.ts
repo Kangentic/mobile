@@ -27,6 +27,40 @@ describe('activityStore', () => {
     expect(entry.usage).not.toBeNull();
   });
 
+  /**
+   * The desktop pushes session-ended just before tearing the read-stream
+   * subscription down. It had no case in the switch, so it fell through and
+   * was discarded - taking the session-failed notification and the session
+   * screen's ended state with it.
+   */
+  it('session-ended marks the feed ended and records whether it was deliberate', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture());
+
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: false }));
+
+    const entry = useActivityStore.getState().bySessionId['sess-1'];
+    expect(entry.feedStatus).toBe('ended');
+    expect(entry.endedIntentionally).toBe(false);
+  });
+
+  /**
+   * A dead session keeps being re-subscribed by the reconciler until a board
+   * snapshot drops it, and the desktop refuses every attempt. Without this
+   * guard the first refusal overwrites the real cause of death with a
+   * consequence of it, and the screen shows the wrong terminal state.
+   */
+  it('a later refused subscribe cannot downgrade an ended session back to rejected', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
+
+    useActivityStore.getState().markRejected('sess-1');
+
+    const entry = useActivityStore.getState().bySessionId['sess-1'];
+    expect(entry.feedStatus).toBe('ended');
+    expect(entry.endedIntentionally).toBe(true);
+  });
+
   it('applyActivityEvent dispatches on payload type', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
 

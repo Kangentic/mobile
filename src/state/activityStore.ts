@@ -47,8 +47,25 @@ export interface SessionActivityEntry {
   sectionChangedAt: number | null;
   /** Session events since the last markRead (the triage unread badge). */
   unreadCount: number;
-  /** 'pending' until the first snapshot lands; 'rejected' when the desktop refused the stream subscribe. */
-  feedStatus: 'pending' | 'live' | 'rejected';
+  /**
+   * 'pending' until the first snapshot lands; 'rejected' when the desktop
+   * refused the stream subscribe; 'ended' when the desktop pushed
+   * `session-ended` for a session that WAS live and subscribed.
+   *
+   * 'rejected' and 'ended' are different events, not synonyms: 'rejected' is a
+   * subscribe the desktop refused (the session was already gone when we asked),
+   * while 'ended' is a session that died under us. Nothing but a refused
+   * subscribe reaches 'rejected', so a live session that exits only ever
+   * arrives here as 'ended'. 'ended' is TERMINAL - see markRejected.
+   */
+  feedStatus: 'pending' | 'live' | 'rejected' | 'ended';
+  /**
+   * Whether the end was deliberate (a desktop Stop, suspend or shutdown) as
+   * opposed to a crash. Null until a `session-ended` event arrives. Kept
+   * separate from feedStatus because only an UNINTENTIONAL end is worth a
+   * notification - see localNotifier.
+   */
+  endedIntentionally: boolean | null;
 }
 
 interface ActivityStoreState {
@@ -84,6 +101,7 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     sectionChangedAt: null,
     unreadCount: 0,
     feedStatus: 'pending',
+    endedIntentionally: null,
   };
 }
 
@@ -164,6 +182,24 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         case 'message-preview':
           updated.messagePreview = payload.text;
           break;
+        // The desktop pushes this immediately before tearing the read-stream
+        // subscription down. It was parsed and forwarded but had no case here,
+        // so it fell through, bumped lastEventAt and vanished - which is why
+        // the 'session-failed' notification could never fire (localNotifier
+        // keys on exactly this status) and why the session screen never showed
+        // its ended state for a session that died while subscribed.
+        case 'session-ended':
+          updated.feedStatus = 'ended';
+          updated.endedIntentionally = payload.intentional;
+          break;
+        default: {
+          // Exhaustiveness guard. `session-ended` survived two protocol bumps
+          // precisely because a silent fall-through was possible here; a new
+          // payload type must now fail the build rather than be dropped.
+          const unhandled: never = payload;
+          void unhandled;
+          break;
+        }
       }
       if (sectionForEntry(updated) !== sectionForEntry(existing)) {
         updated.sectionChangedAt = Date.now();
@@ -176,6 +212,12 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
     set((state) => {
       const existing = state.bySessionId[sessionId];
       if (!existing) return state;
+      // 'ended' is terminal and outranks 'rejected'. A session that died while
+      // subscribed keeps being re-subscribed by the reconciler until a board
+      // snapshot drops it, and the desktop refuses each attempt - so without
+      // this guard the first refusal would overwrite the real cause of death
+      // with the consequence of it.
+      if (existing.feedStatus === 'ended') return state;
       return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, feedStatus: 'rejected' } } };
     }),
 
