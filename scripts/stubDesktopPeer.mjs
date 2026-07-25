@@ -254,6 +254,29 @@ function stubBoardSnapshot(activeSessionId) {
   };
 }
 
+/**
+ * Mirrors the desktop handler's projection rules (protocol 0.9.0): a request
+ * that names a `view` gets no backlog, and 'sessions' gets only the tasks with
+ * a session on them, plus whole-column counts taken BEFORE the filter.
+ *
+ * Applied after the stub's own board mutations, so a card created over the
+ * wire is projected the same way a real one would be.
+ */
+function projectBoardSnapshot(snapshot, view) {
+  if (view === undefined) return snapshot;
+  const taskCountsByColumnId = {};
+  for (const task of snapshot.tasks) {
+    taskCountsByColumnId[task.swimlane_id] = (taskCountsByColumnId[task.swimlane_id] ?? 0) + 1;
+  }
+  const { backlog: _backlog, ...withoutBacklog } = snapshot;
+  return {
+    ...withoutBacklog,
+    tasks: view === 'sessions' ? snapshot.tasks.filter((task) => task.session_id !== null) : snapshot.tasks,
+    view,
+    ...(view === 'sessions' ? { taskCountsByColumnId } : {}),
+  };
+}
+
 function stubTranscript() {
   return [
     { kind: 'user', uuid: 'stub-user-1', ts: Date.now() - 60000, text: 'Fix the login redirect bug and add a regression test.' },
@@ -468,7 +491,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         case 'read-board':
           if (!payload.projectId) return ok({ projects: [STUB_PROJECT] });
           if (payload.action === 'unsubscribe') return ok();
-          return ok(applyBoardMutations(stubBoardSnapshot(activeSessionId)));
+          return ok(projectBoardSnapshot(applyBoardMutations(stubBoardSnapshot(activeSessionId)), payload.view));
         case 'read-stream': {
           if (payload.action === 'unsubscribe') {
             if (payload.sessionId === STUB_CODEX_SESSION_ID) codexStreamSubscribed = false;

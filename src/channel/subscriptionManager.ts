@@ -1,6 +1,7 @@
 import type {
   DiffFileListWire,
   ReadBoardSnapshotResponsePayload,
+  ReadBoardView,
   ReadDiffScope,
   ReadStreamResponsePayload,
   Unsubscribe,
@@ -73,6 +74,16 @@ export class SubscriptionManager {
   /** What each active subscription was actually opened with, so a mode change re-subscribes. */
   private readonly activeStreamWantsTerminal = new Map<string, boolean>();
   private readonly activeBoardIds = new Set<string>();
+  /**
+   * Which projection each board is subscribed with. Boards start at
+   * 'sessions' (the feed watches every project but only draws the tasks with
+   * an agent on them) and are upgraded to 'full' when the Board tab opens
+   * one. The upgrade is permanent for the life of the pairing: a full board
+   * is at most a few tens of kB, and downgrading would let a snapshot drop a
+   * task that an optimistic move/edit/removal is still pending on, leaving
+   * the rollback with nothing to restore.
+   */
+  private readonly boardViewByProjectId = new Map<string, ReadBoardView>();
   private readonly activeDiffTaskIds = new Set<string>();
 
   private readonly boardRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -113,6 +124,18 @@ export class SubscriptionManager {
     for (const projectId of this.desiredBoardIds) {
       if (!this.activeBoardIds.has(projectId)) void this.subscribeBoard(projectId);
     }
+  }
+
+  /**
+   * Upgrade one project's board to the full projection - the Board tab, which
+   * renders every column and every card, not just the ones with an agent on
+   * them. Idempotent, and never reversed (see boardViewByProjectId).
+   */
+  setBoardWantsFull(projectId: string): void {
+    if (this.boardViewByProjectId.get(projectId) === 'full') return;
+    this.boardViewByProjectId.set(projectId, 'full');
+    if (!this.desiredBoardIds.has(projectId) || !this.session.isEstablished) return;
+    void this.subscribeBoard(projectId);
   }
 
   /** At most a screenful of these exist (the Changes tab sets one on focus, null on blur) - the desktop fs-watcher is the scarce resource. */
@@ -187,6 +210,7 @@ export class SubscriptionManager {
     activeStreams: string[];
     desiredBoards: string[];
     activeBoards: string[];
+    fullBoards: string[];
     desiredDiffTaskIds: string[];
     activeDiffTaskIds: string[];
   } {
@@ -195,6 +219,7 @@ export class SubscriptionManager {
       activeStreams: [...this.activeStreamIds].sort(),
       desiredBoards: [...this.desiredBoardIds].sort(),
       activeBoards: [...this.activeBoardIds].sort(),
+      fullBoards: [...this.boardViewByProjectId.entries()].filter(([, view]) => view === 'full').map(([projectId]) => projectId).sort(),
       desiredDiffTaskIds: [...this.desiredDiffsByTaskId.keys()].sort(),
       activeDiffTaskIds: [...this.activeDiffTaskIds].sort(),
     };
@@ -255,7 +280,9 @@ export class SubscriptionManager {
 
   private async subscribeBoard(projectId: string): Promise<void> {
     try {
-      const snapshot = await this.verbs.readBoardSubscribe(projectId);
+      const snapshot = await this.verbs.readBoardSubscribe(projectId, {
+        view: this.boardViewByProjectId.get(projectId) ?? 'sessions',
+      });
       if (this.disposed || !this.desiredBoardIds.has(projectId)) return;
       this.activeBoardIds.add(projectId);
       this.sinks.onBoardSnapshot(snapshot);
@@ -296,6 +323,9 @@ export class SubscriptionManager {
       clearTimeout(refreshTimer);
       this.boardRefreshTimers.delete(projectId);
     }
+    // The project left the desired set entirely; a later re-add starts back at
+    // the feed projection and the Board tab upgrades it again if opened.
+    this.boardViewByProjectId.delete(projectId);
     if (!this.activeBoardIds.has(projectId)) return;
     this.activeBoardIds.delete(projectId);
     if (this.session.isEstablished) void this.verbs.readBoardUnsubscribe(projectId).catch(() => undefined);

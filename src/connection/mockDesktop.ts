@@ -8,6 +8,7 @@ import {
   type DiffFileContentWire,
   type DiffFileListWire,
   type JsonValue,
+  type ReadBoardView,
   type ReadStreamResponsePayload,
   type SessionUsageWire,
   type TranscriptWindowResponsePayload,
@@ -834,26 +835,30 @@ export function createMockDesktop(): MockDesktop {
     return { type: 'capability-response', requestId: request.requestId, ok: false, error };
   }
 
-  function boardSnapshot(projectId: string): JsonValue {
-    if (projectId === MOCK_PROJECT_2.id) {
-      return {
-        projectId: MOCK_PROJECT_2.id,
-        columns: mockColumns2(),
-        tasks: [...tasks2],
-        backlog: [],
-        projectColor: MOCK_PROJECT_2.color,
-        // Exercises the desktop's "hide ticket numbers" layout setting -
-        // Project 1 leaves it at the true default, Project 2 turns it off.
-        showTicketNumbers: false,
-      } as unknown as JsonValue;
+  /**
+   * Mirrors the desktop handler: a request that names a `view` gets no
+   * backlog, 'sessions' gets only the session-bearing tasks plus whole-column
+   * counts, and a request that names none gets the pre-0.9.0 payload.
+   */
+  function boardSnapshot(projectId: string, view: ReadBoardView | undefined): JsonValue {
+    const isSecondProject = projectId === MOCK_PROJECT_2.id;
+    const allTasks = isSecondProject ? [...tasks2] : [...tasks];
+    const taskCountsByColumnId: Record<string, number> = {};
+    for (const task of allTasks) {
+      if (task.archived_at !== null) continue;
+      taskCountsByColumnId[task.swimlane_id] = (taskCountsByColumnId[task.swimlane_id] ?? 0) + 1;
     }
     return {
-      projectId: MOCK_PROJECT.id,
-      columns: mockColumns(),
-      tasks: [...tasks],
-      backlog: [],
-      projectColor: MOCK_PROJECT.color,
-      showTicketNumbers: true,
+      projectId: isSecondProject ? MOCK_PROJECT_2.id : MOCK_PROJECT.id,
+      columns: isSecondProject ? mockColumns2() : mockColumns(),
+      tasks: view === 'sessions' ? allTasks.filter((task) => task.session_id !== null) : allTasks,
+      ...(view === undefined ? { backlog: [] } : {}),
+      projectColor: isSecondProject ? MOCK_PROJECT_2.color : MOCK_PROJECT.color,
+      // Exercises the desktop's "hide ticket numbers" layout setting -
+      // Project 1 leaves it at the true default, Project 2 turns it off.
+      showTicketNumbers: !isSecondProject,
+      ...(view !== undefined ? { view } : {}),
+      ...(view === 'sessions' ? { taskCountsByColumnId } : {}),
     } as unknown as JsonValue;
   }
 
@@ -872,7 +877,7 @@ export function createMockDesktop(): MockDesktop {
         const payload = parseCapabilityRequestPayload('read-board', request.payload);
         if (!payload.projectId) return ok(request, { projects: [MOCK_PROJECT, MOCK_PROJECT_2] });
         if (payload.action === 'unsubscribe') return ok(request);
-        return ok(request, boardSnapshot(payload.projectId));
+        return ok(request, boardSnapshot(payload.projectId, payload.view));
       }
       case 'read-stream': {
         const payload = parseCapabilityRequestPayload('read-stream', request.payload);

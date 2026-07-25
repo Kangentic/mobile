@@ -9,6 +9,7 @@ import {
   type CapabilityRequestMessage,
   type CapabilityResponseMessage,
   type JsonValue,
+  type ReadBoardView,
 } from '@kangentic/protocol';
 import { SessionManager } from '@/channel/sessionManager';
 import { CapabilityClient } from '@/channel/capabilityClient';
@@ -32,7 +33,7 @@ interface Harness {
 }
 
 function defaultResponder(request: CapabilityRequestMessage): CapabilityResponseMessage {
-  const payload = request.payload as { sessionId?: string; projectId?: string; taskId?: string; action?: string };
+  const payload = request.payload as { sessionId?: string; projectId?: string; taskId?: string; action?: string; view?: ReadBoardView };
   if (payload.action === 'unsubscribe') return { type: 'capability-response', requestId: request.requestId, ok: true };
   switch (request.verb) {
     case 'read-stream':
@@ -42,7 +43,11 @@ function defaultResponder(request: CapabilityRequestMessage): CapabilityResponse
         type: 'capability-response',
         requestId: request.requestId,
         ok: true,
-        payload: boardSnapshotFixture({ projectId: payload.projectId ?? 'project-1' }) as unknown as JsonValue,
+        // Echoes the requested view, as a 0.9.0 desktop does.
+        payload: boardSnapshotFixture({
+          projectId: payload.projectId ?? 'project-1',
+          ...(payload.view !== undefined ? { view: payload.view } : {}),
+        }) as unknown as JsonValue,
       };
     case 'read-diff':
       return { type: 'capability-response', requestId: request.requestId, ok: true, payload: diffFileListFixture() as unknown as JsonValue };
@@ -164,6 +169,64 @@ describe('SubscriptionManager', () => {
     await flushLoopback();
 
     expect(requests).toHaveLength(countAfterSubscribe);
+  });
+
+  /**
+   * The phone watches every project's board to find live sessions, but only
+   * draws the tasks that have one. Measured across 15 projects, the full
+   * boards were 63kB compressed against 12kB for the projection, repeated on
+   * every board change - so 'sessions' is the default and 'full' is asked for
+   * only where a whole board is rendered.
+   */
+  it('subscribes boards with the sessions projection until a board screen asks for the full one', async () => {
+    const { stub, manager, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+
+    manager.setDesiredBoards(new Set(['project-1', 'project-2']));
+    await flushLoopback();
+
+    const subscribes = requests.filter((request) => request.verb === 'read-board');
+    expect(subscribes).toHaveLength(2);
+    expect(subscribes.every((request) => (request.payload as { view?: string }).view === 'sessions')).toBe(true);
+
+    manager.setBoardWantsFull('project-1');
+    await flushLoopback();
+
+    const afterOpen = requests.filter((request) => request.verb === 'read-board');
+    expect(afterOpen).toHaveLength(3);
+    expect((afterOpen[2].payload as { projectId?: string; view?: string })).toMatchObject({
+      projectId: 'project-1',
+      view: 'full',
+    });
+  });
+
+  /**
+   * Upgrade-only, deliberately. A full board is small, and downgrading one
+   * back to 'sessions' would let a snapshot drop a task that an optimistic
+   * move/edit/removal is still pending on, leaving the rollback nothing to
+   * restore.
+   */
+  it('keeps a board on the full projection across a re-handshake, and never asks twice', async () => {
+    const { session, stub, manager, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredBoards(new Set(['project-1']));
+    manager.setBoardWantsFull('project-1');
+    await flushLoopback();
+    const countAfterUpgrade = requests.length;
+
+    manager.setBoardWantsFull('project-1');
+    await flushLoopback();
+    expect(requests).toHaveLength(countAfterUpgrade);
+
+    session.reset();
+    stub.beginHandshake();
+    await flushLoopback();
+
+    const afterReconnect = requests.slice(countAfterUpgrade).filter((request) => request.verb === 'read-board');
+    expect(afterReconnect).toHaveLength(1);
+    expect((afterReconnect[0].payload as { view?: string }).view).toBe('full');
   });
 
   it('re-issues every desired subscription after a transport drop and fresh handshake', async () => {

@@ -1,20 +1,33 @@
 import { create } from 'zustand';
 import type {
-  BacklogItemWire,
   BoardColumnWire,
   BoardTaskWire,
   ReadBoardProjectSummary,
   ReadBoardSnapshotResponsePayload,
+  ReadBoardView,
 } from '@kangentic/protocol';
 
 export interface ProjectBoard {
   columns: BoardColumnWire[];
   tasksById: Record<string, BoardTaskWire>;
-  backlog: BacklogItemWire[];
   /** Epoch ms when this snapshot was applied. */
   snapshotAt: number;
   /** The desktop's Layout "Ticket Numbers" setting; absent on the wire (pre-0.6.0 desktop) means true, the desktop default. */
   showTicketNumbers: boolean;
+  /**
+   * Which projection `tasksById` holds. 'sessions' carries only the tasks
+   * with an agent on them, which is all the Agents feed draws; the Board tab
+   * needs 'full' and must not paint until it has one. A pre-0.9.0 desktop
+   * sends no `view` at all and always means a full board.
+   */
+  view: ReadBoardView;
+  /**
+   * Whole-column task counts from a 'sessions' snapshot, where `tasksById` is
+   * filtered and counting it would undercount. Empty under 'full', where the
+   * local task list is both complete and fresher (it carries pending
+   * optimistic moves).
+   */
+  taskCountsByColumnId: Record<string, number>;
 }
 
 export interface PendingMove {
@@ -126,9 +139,12 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       let board: ProjectBoard = {
         columns: snapshot.columns,
         tasksById: Object.fromEntries(snapshot.tasks.map((task) => [task.id, task])),
-        backlog: snapshot.backlog,
         snapshotAt: Date.now(),
         showTicketNumbers: snapshot.showTicketNumbers ?? true,
+        // A desktop that echoes no view predates the projection and always
+        // sends the whole board - absent means full, never "filtered, unknown".
+        view: snapshot.view ?? 'full',
+        taskCountsByColumnId: snapshot.taskCountsByColumnId ?? {},
       };
       // Re-apply in-flight optimistic mutations on top, so a snapshot racing
       // one does not visibly bounce the card before the mutation commits.
@@ -298,6 +314,22 @@ export function selectTasksForColumn(board: ProjectBoard, swimlaneId: string): B
   return Object.values(board.tasksById)
     .filter((task) => task.swimlane_id === swimlaneId && task.archived_at === null)
     .sort((first, second) => first.position - second.position);
+}
+
+/**
+ * How many tasks a column really holds - the position a card takes when it is
+ * appended to the end of that column.
+ *
+ * Under a 'sessions' board the local task list is filtered, so counting it
+ * would drop the card into the middle of the column (the desktop writes the
+ * position it is given and shifts everything at or above it). The snapshot's
+ * whole-column count is the only correct source there. Under a 'full' board
+ * the local list wins: it is complete AND carries pending optimistic moves the
+ * snapshot has not caught up with.
+ */
+export function selectColumnTaskCount(board: ProjectBoard, swimlaneId: string): number {
+  if (board.view === 'sessions') return board.taskCountsByColumnId[swimlaneId] ?? 0;
+  return selectTasksForColumn(board, swimlaneId).length;
 }
 
 /** The union of live session ids across every cached board - the bootstrap's stream desired-set source. */

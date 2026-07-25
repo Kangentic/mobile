@@ -22,7 +22,7 @@ import {
   type TriageSection,
   useActivityStore,
 } from '@/state/activityStore';
-import { selectColumnsOrdered, selectTasksForColumn, useBoardStore } from '@/state/boardStore';
+import { selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { CapabilityError } from '@/channel';
@@ -257,7 +257,7 @@ export function TriageHomeScreen(): React.JSX.Element {
       if (!moveTarget) return;
       const board = boardsByProjectId[moveTarget.projectId];
       if (!board) return;
-      const targetPosition = selectTasksForColumn(board, targetSwimlaneId).length;
+      const targetPosition = selectColumnTaskCount(board, targetSwimlaneId);
       setMoveInFlight(true);
       setMoveError(null);
       void moveTaskOptimistic({

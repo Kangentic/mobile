@@ -14,6 +14,10 @@ jest.mock('react-native-safe-area-context', () =>
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
+  // The screen is always "focused" under test; the real hook runs the effect
+  // on focus and the cleanup on blur, which is the same thing for one render.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  useFocusEffect: (effect: () => void | (() => void)) => require('react').useEffect(effect, [effect]),
 }));
 
 const mockMoveTaskOptimistic = jest.fn().mockResolvedValue(undefined);
@@ -21,8 +25,10 @@ const mockCreateTask = jest.fn().mockResolvedValue(undefined);
 const mockUpdateTaskFields = jest.fn().mockResolvedValue(undefined);
 const mockDeleteTaskFromBoard = jest.fn().mockResolvedValue(undefined);
 const mockArchiveTask = jest.fn().mockResolvedValue(undefined);
+const mockOpenProjectBoard = jest.fn();
 jest.mock('@/connection/actions', () => ({
   moveTaskOptimistic: (input: unknown) => mockMoveTaskOptimistic(input),
+  openProjectBoard: (projectId: string) => mockOpenProjectBoard(projectId),
   createTask: (input: unknown) => mockCreateTask(input),
   updateTaskFields: (input: unknown) => mockUpdateTaskFields(input),
   deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
@@ -69,9 +75,10 @@ function seedBoard(): void {
         tasksById: {
           'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, 'sess-1'),
         },
-        backlog: [],
         snapshotAt: 0,
         showTicketNumbers: true,
+        view: 'full',
+        taskCountsByColumnId: {},
       },
     },
     pendingMoves: [],
@@ -84,6 +91,46 @@ describe('BoardScreen', () => {
     mockMoveTaskOptimistic.mockClear();
     mockCreateTask.mockClear();
     seedBoard();
+  });
+
+  /**
+   * The feed projection carries only the tasks with an agent on them. Painting
+   * one here would show a board missing most of its cards, which then fill in
+   * a beat later - the staggered cold start this release set out to remove.
+   */
+  it('asks for the full board on focus and shows placeholders until it lands', () => {
+    act(() => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': { ...state.boardsByProjectId['project-1'], view: 'sessions', taskCountsByColumnId: { 'lane-todo': 4 } },
+        },
+      }));
+    });
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    expect(mockOpenProjectBoard).toHaveBeenCalledWith('project-1');
+    expect(screen.getByTestId('board-loading')).toBeTruthy();
+    expect(screen.queryByTestId('board-column-lane-todo')).toBeNull();
+    expect(screen.queryByText('Fix the login bug')).toBeNull();
+    // Not the "no board yet" empty state either - the board exists, it is
+    // one round trip away from being complete.
+    expect(screen.queryByTestId('board-empty-state')).toBeNull();
+
+    act(() => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': { ...state.boardsByProjectId['project-1'], view: 'full' },
+        },
+      }));
+    });
+    expect(screen.queryByTestId('board-loading')).toBeNull();
+    expect(screen.getByTestId('board-column-lane-todo')).toBeTruthy();
   });
 
   it('renders columns from the live store and navigates on card tap', () => {
@@ -185,9 +232,10 @@ describe('BoardScreen', () => {
             'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, 'sess-1'),
             'task-2': baseTask('task-2', 'Already in progress', 'lane-doing', 0, null),
           },
-          backlog: [],
           snapshotAt: 0,
           showTicketNumbers: true,
+          view: 'full',
+          taskCountsByColumnId: {},
         },
       },
       pendingMoves: [],
@@ -358,18 +406,20 @@ describe('BoardScreen', () => {
           tasksById: {
             'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, 'sess-1'),
           },
-          backlog: [],
           snapshotAt: 0,
           showTicketNumbers: true,
+          view: 'full',
+          taskCountsByColumnId: {},
         },
         'project-2': {
           columns: [column('lane-review', 'Review', 0)],
           tasksById: {
             'task-2': baseTask('task-2', 'Ship the beta banner', 'lane-review', 0, 'sess-2'),
           },
-          backlog: [],
           snapshotAt: 0,
           showTicketNumbers: true,
+          view: 'full',
+          taskCountsByColumnId: {},
         },
       },
       pendingMoves: [],
