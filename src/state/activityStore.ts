@@ -149,7 +149,15 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         awaitedPromptId: snapshot.awaitedPromptId,
         awaitedPromptOptions: snapshot.awaitedPromptOptions ?? null,
         lastEventAt: Date.now(),
-        feedStatus: 'live',
+        // 'ended' is TERMINAL, the same invariant markRejected enforces. The
+        // desktop pushes session-ended just BEFORE it tears the read-stream
+        // registry entry down, so a subscribe already in flight can still
+        // succeed inside that window and land here; without this guard it
+        // would resurrect a dead session as 'live', and a later refusal would
+        // then downgrade it to 'rejected' (markRejected's own guard reads the
+        // status this one just corrupted) instead of leaving the real cause
+        // of death in place.
+        feedStatus: existing.feedStatus === 'ended' ? 'ended' : 'live',
       };
       // Re-subscribes (reconnect, pull-to-refresh) re-deliver a snapshot for
       // every live session at once. Only advance the ordering key when the

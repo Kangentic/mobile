@@ -122,6 +122,87 @@ describe('validateScannedQr', () => {
     }
   });
 
+  /**
+   * The bypass a prefix match cannot see. A URL's authority ends at the first
+   * '/', '?' or '#', and anything before an '@' inside it is USERINFO, not the
+   * host: `ws://127.0.0.1:8080@evil.test` dials evil.test, with 127.0.0.1 as a
+   * username and 8080 as a password. The old check matched the `ws://127.0.0.1`
+   * prefix, saw ':' next, read it as a port boundary and accepted - so a single
+   * crafted relayAddress on an otherwise ordinary QR sent the pairing token
+   * (which IS the Noise PSK) over cleartext to an attacker-chosen host, and
+   * persisted that host to the trust anchor for every later session.
+   *
+   * Checked for EVERY allowed host, including the emulator alias with its
+   * build gate wide open, because each was its own prefix in the old list.
+   */
+  it('rejects a userinfo address that only looks like loopback', () => {
+    const credentialedAddresses = [
+      'ws://127.0.0.1:8080@evil.test',
+      'ws://localhost:8080@evil.test',
+      'ws://[::1]:8080@evil.test',
+      'ws://10.0.2.2:8080@evil.test',
+      // Without a port, so the '@' lands directly on the boundary char.
+      'ws://127.0.0.1@evil.test',
+      // Userinfo plus a path, so the authority is not the whole remainder.
+      'ws://127.0.0.1:8080@evil.test/relay?slot=abc',
+    ];
+    const originalFlag = process.env.EXPO_PUBLIC_KANGENTIC_E2E;
+    try {
+      // Gate open: proves these are refused on their own merits, not because
+      // the emulator carve-out happened to be closed.
+      process.env.EXPO_PUBLIC_KANGENTIC_E2E = '1';
+      for (const relayAddress of credentialedAddresses) {
+        const result = validateScannedQr(encodePairingQrPayload(buildValidPayload({ relayAddress })), anchorNow(0));
+        expect(result.ok, `${relayAddress} must not validate`).toBe(false);
+        if (result.ok) throw new Error('unreachable');
+        expect(result.errorKind).toBe('insecure-relay');
+      }
+    } finally {
+      if (originalFlag === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_E2E;
+      else process.env.EXPO_PUBLIC_KANGENTIC_E2E = originalFlag;
+    }
+  });
+
+  /**
+   * The companion positive control: the forms that are genuinely loopback must
+   * still pass, so the fix above cannot be satisfied by rejecting everything.
+   */
+  it('still accepts genuine loopback authorities, including ports, paths and mixed case', () => {
+    const acceptedAddresses = [
+      'ws://127.0.0.1',
+      'ws://127.0.0.1:8080',
+      'ws://127.0.0.1:8080/relay',
+      'ws://127.0.0.1:8080?slot=abc',
+      'ws://localhost:8080',
+      'ws://LOCALHOST:8080',
+      'ws://[::1]:8080',
+    ];
+    for (const relayAddress of acceptedAddresses) {
+      const result = validateScannedQr(encodePairingQrPayload(buildValidPayload({ relayAddress })), anchorNow(0));
+      expect(result.ok, `${relayAddress} must validate`).toBe(true);
+    }
+  });
+
+  /**
+   * A host that merely CONTAINS a loopback label is not loopback. These were
+   * already refused by the prefix check; they stay refused under authority
+   * parsing, which is what makes this a regression guard rather than a
+   * restatement of the fix.
+   */
+  it('rejects hosts that only embed a loopback label', () => {
+    const lookalikeAddresses = [
+      'ws://127.0.0.1.evil.test',
+      'ws://localhost.evil.test',
+      'ws://evil.test/127.0.0.1',
+      // A non-numeric port must not be stripped down to a matching host.
+      'ws://127.0.0.1:evil.test',
+    ];
+    for (const relayAddress of lookalikeAddresses) {
+      const result = validateScannedQr(encodePairingQrPayload(buildValidPayload({ relayAddress })), anchorNow(0));
+      expect(result.ok, `${relayAddress} must not validate`).toBe(false);
+    }
+  });
+
   it('rejects a non-loopback plaintext ws:// relay as insecure-relay', () => {
     const payload = buildValidPayload({ relayAddress: 'ws://relay.example.com' });
     const uri = encodePairingQrPayload(payload);

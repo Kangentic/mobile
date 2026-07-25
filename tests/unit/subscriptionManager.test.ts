@@ -157,6 +157,43 @@ describe('SubscriptionManager', () => {
     expect((afterClose[0].payload as { terminal?: boolean }).terminal).toBe(false);
   });
 
+  /**
+   * openSessionScreen trusts this return value to decide whether it still
+   * needs its own refreshStream call (see tests/unit/openSessionScreen.test.ts):
+   * true means setStreamWantsTerminal's own re-subscribe already fetched a
+   * fresh frame, false means nothing was issued and the caller must ask
+   * itself. If this drifted to always-true (or always-false), the caller's
+   * own tests are mocking the return value and would never catch it - only
+   * asserting the REAL return value here does.
+   */
+  it('setStreamWantsTerminal returns true only when it actually issues a re-subscribe', async () => {
+    const { stub, manager } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredStreams(new Set(['sess-1']));
+    await flushLoopback();
+
+    // Changed, desired, and established: this call IS the re-subscribe.
+    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(true);
+    await flushLoopback();
+
+    // Same value as already set: nothing to do, nothing issued.
+    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(false);
+
+    // A session nobody has declared desired: the flag is recorded, but
+    // there is no active subscription to re-issue.
+    expect(manager.setStreamWantsTerminal('sess-2', true)).toBe(false);
+  });
+
+  it('setStreamWantsTerminal returns false for a desired stream before the handshake establishes', async () => {
+    const { manager } = await harness();
+    // Declared before any handshake - exactly the openSessionScreen case of
+    // opening a screen while still connecting.
+    manager.setDesiredStreams(new Set(['sess-1']));
+
+    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(false);
+  });
+
   it('does not re-subscribe when the terminal mode is set to what it already is', async () => {
     const { stub, manager, requests } = await harness();
     stub.beginHandshake();
@@ -199,6 +236,84 @@ describe('SubscriptionManager', () => {
       projectId: 'project-1',
       view: 'full',
     });
+  });
+
+  /**
+   * The two subscribes above, WITHOUT the flush between them - which is the
+   * only arrangement that reaches the race. Bootstrap asks for 'sessions' and
+   * the Board tab focuses and asks for 'full' before the first answer comes
+   * back, so two read-boards for one project are in flight at once and the
+   * responses can land in either order.
+   *
+   * A late 'sessions' snapshot must not be applied: applyBoardSnapshot replaces
+   * tasksById wholesale, so it would erase every task without a live session
+   * from a Board tab that had already rendered them, strand the screen back on
+   * its skeleton, and leave any optimistic move over one of those tasks with
+   * nothing to commit against.
+   */
+  it('ignores a board response whose view is no longer the one wanted', async () => {
+    const heldSessionsRequests: CapabilityRequestMessage[] = [];
+    const { stub, manager, requests, sinkCalls } = await harness((request) => {
+      if (request.verb === 'read-board' && (request.payload as { view?: ReadBoardView }).view === 'sessions') {
+        heldSessionsRequests.push(request);
+        return null;
+      }
+      return defaultResponder(request);
+    });
+    stub.beginHandshake();
+    await flushLoopback();
+
+    manager.setDesiredBoards(new Set(['project-1']));
+    manager.setBoardWantsFull('project-1');
+    await flushLoopback();
+
+    // Both went out; only the 'full' one has been answered so far.
+    expect(requests.filter((request) => request.verb === 'read-board')).toHaveLength(2);
+    expect(heldSessionsRequests).toHaveLength(1);
+    expect(sinkCalls.boardSnapshots).toEqual(['project-1']);
+
+    // Release the stale answer, out of issue order.
+    for (const held of heldSessionsRequests) stub.send(defaultResponder(held));
+    await flushLoopback();
+
+    // Not applied to the store...
+    expect(sinkCalls.boardSnapshots).toEqual(['project-1']);
+    // ...and the LANDED view is still 'full', which setBoardWantsFull proves by
+    // declining to re-issue (it only re-issues while the upgrade has not landed).
+    const countBeforeRefocus = requests.length;
+    manager.setBoardWantsFull('project-1');
+    await flushLoopback();
+    expect(requests).toHaveLength(countBeforeRefocus);
+  });
+
+  /**
+   * The same race on the terminal flag: opening a session screen and closing it
+   * again before the first subscribe answers leaves two read-streams in flight
+   * with opposite `terminal` values.
+   */
+  it('ignores a stream response whose terminal mode is no longer the one wanted', async () => {
+    const heldListOnlyRequests: CapabilityRequestMessage[] = [];
+    const { stub, manager, requests, sinkCalls } = await harness((request) => {
+      if (request.verb === 'read-stream' && (request.payload as { terminal?: boolean }).terminal === false) {
+        heldListOnlyRequests.push(request);
+        return null;
+      }
+      return defaultResponder(request);
+    });
+    stub.beginHandshake();
+    await flushLoopback();
+
+    manager.setDesiredStreams(new Set(['sess-1']));
+    manager.setStreamWantsTerminal('sess-1', true);
+    await flushLoopback();
+
+    expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(2);
+    expect(sinkCalls.streamSnapshots).toEqual(['sess-1']);
+
+    for (const held of heldListOnlyRequests) stub.send(defaultResponder(held));
+    await flushLoopback();
+
+    expect(sinkCalls.streamSnapshots).toEqual(['sess-1']);
   });
 
   /**

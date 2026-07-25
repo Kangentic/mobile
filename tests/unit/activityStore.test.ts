@@ -85,6 +85,30 @@ describe('activityStore', () => {
     expect(selectSessionEnded(useActivityStore.getState(), null)).toBe(false);
   });
 
+  /**
+   * The other half of the terminal-'ended' invariant markRejected enforces.
+   * The desktop pushes session-ended just BEFORE it tears the read-stream
+   * registry entry down, so a subscribe already in flight can still succeed
+   * inside that window and deliver a snapshot afterwards. Resurrecting the
+   * session as 'live' would also disarm markRejected's guard, so the next
+   * refusal would record 'rejected' - the consequence of the death - in place
+   * of its actual cause.
+   */
+  it('a snapshot landing after session-ended cannot resurrect it as live', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: false }));
+
+    useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture());
+
+    const entry = useActivityStore.getState().bySessionId['sess-1'];
+    expect(entry.feedStatus).toBe('ended');
+    expect(entry.endedIntentionally).toBe(false);
+
+    // And the guard still holds for the refusal that follows.
+    useActivityStore.getState().markRejected('sess-1');
+    expect(useActivityStore.getState().bySessionId['sess-1'].feedStatus).toBe('ended');
+  });
+
   /** A deep link or push tap can land on a session this phone never registered. */
   it('records an ended session id even with no entry to update', () => {
     useActivityStore.getState().applyActivityEvent(activityEvent('sess-ghost', { type: 'session-ended', intentional: false }));

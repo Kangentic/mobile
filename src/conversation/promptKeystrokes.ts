@@ -27,6 +27,14 @@ export function denyPermissionKeystrokes(): string {
 /**
  * Select an AskUserQuestion option by zero-based index. The TUI's digit
  * select covers options 1-9, so only indexes 0..8 are valid.
+ *
+ * There is deliberately NO permission-dialog equivalent. A permission
+ * dialog's option labels reach the phone by screen-scraping the desktop's
+ * PTY, and a scraped label is not trustworthy enough to render as a tappable
+ * answer - mistaking one numbered option for another approves the wrong
+ * thing. The permission card offers Approve, Deny, and "answer in terminal"
+ * only; anything else goes through the raw terminal where the user reads the
+ * real dialog.
  */
 export function askUserQuestionOptionKeystrokes(optionIndex: number): string {
   if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 8) {
@@ -35,19 +43,4 @@ export function askUserQuestionOptionKeystrokes(optionIndex: number): string {
     );
   }
   return String(optionIndex + 1);
-}
-
-/**
- * Select a permission-dialog option by zero-based index. Mirrors the
- * approve pattern the desktop's own tests drive ('1\r' = digit + confirm),
- * generalized to any numbered option the desktop's PTY probe detected.
- * Same 1-9 digit-select ceiling as AskUserQuestion.
- */
-export function permissionOptionKeystrokes(optionIndex: number): string {
-  if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 8) {
-    throw new RangeError(
-      `Permission option index must be an integer in 0..8, got ${optionIndex}`,
-    );
-  }
-  return `${optionIndex + 1}\r`;
 }

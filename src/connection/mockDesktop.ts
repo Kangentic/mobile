@@ -525,7 +525,18 @@ export function createMockDesktop(): MockDesktop {
   const tasks2 = initialTasks2();
   let transcript = baseTranscript();
   let transcriptRevision = 1;
+  /**
+   * Whether ANY read-stream subscription is attached. Gates the whole
+   * simulated agent: usage growth, transcript entries, the permission prompt.
+   *
+   * Deliberately NOT the same thing as terminalWanted. The feed subscribes
+   * list-only (`terminal: false`), and that is the normal state whenever no
+   * session screen is open - so conflating the two left the mock agent inert
+   * on the Home feed, which is the screen the mock mostly exists to preview.
+   */
   let streamSubscribed = false;
+  /** Whether the subscriber asked for live PTY bytes. Gates ONLY terminal emission. */
+  let terminalWanted = false;
   let feedTick = 0;
   let pendingPromptId: string | null = null;
   let questionRaised = false;
@@ -655,8 +666,26 @@ export function createMockDesktop(): MockDesktop {
   function endActiveSession(): void {
     pendingPromptId = null;
     pendingTickResult = null;
+    const endedSessionId = activeSessionId;
+    // The real desktop pushes session-ended immediately before it tears the
+    // read-stream subscription down, and since the 0.9.0 board projection that
+    // event is the ONLY signal the phone gets: this mock's own boardSnapshot()
+    // applies the same `view: 'sessions'` filter, so the ended task leaves the
+    // board entirely rather than surviving with a null session_id. Without
+    // this the session screen could never reach its ended state under
+    // dev:mock, and the input bar stayed live for a task the board had
+    // already dropped.
+    if (endedSessionId !== null) {
+      emit({
+        kind: 'activity',
+        sessionId: endedSessionId,
+        taskId: MOCK_TASK_ID,
+        payload: { type: 'session-ended', intentional: true },
+      });
+    }
     activeSessionId = null;
     streamSubscribed = false;
+    terminalWanted = false;
     setTaskSession(null);
   }
 
@@ -672,6 +701,7 @@ export function createMockDesktop(): MockDesktop {
     pendingTickResult = null;
     activeSessionId = successorSessionId;
     streamSubscribed = false;
+    terminalWanted = false;
     transcript = [
       {
         kind: 'assistant',
@@ -748,12 +778,18 @@ export function createMockDesktop(): MockDesktop {
         });
       }
       if (!streamSubscribed || activeSessionId === null) return;
-      emit({
-        kind: 'terminal',
-        sessionId: activeSessionId,
-        taskId: MOCK_TASK_ID,
-        payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` },
-      });
+      // PTY bytes are the only thing the terminal flag gates. Everything
+      // below - usage, transcript growth, the permission prompt - is what a
+      // list-only subscriber came for, and gating it on the terminal froze
+      // the whole simulated agent whenever no session screen was open.
+      if (terminalWanted) {
+        emit({
+          kind: 'terminal',
+          sessionId: activeSessionId,
+          taskId: MOCK_TASK_ID,
+          payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` },
+        });
+      }
       if (feedTick % 5 === 0) {
         // Grows the board card's context bar over the session, like a real
         // one - not tied to any other cadence, just a steady drip.
@@ -889,6 +925,7 @@ export function createMockDesktop(): MockDesktop {
             !MOCK_EXTRA_THINKING_SESSIONS.some((spec) => spec.sessionId === payload.sessionId)
           ) {
             streamSubscribed = false;
+            terminalWanted = false;
           }
           return ok(request);
         }
@@ -997,7 +1034,8 @@ export function createMockDesktop(): MockDesktop {
         // bytes to every subscriber and no dev run could ever show that a
         // caller had re-armed PTY streaming by accident.
         const wantsTerminal = payload.terminal ?? true;
-        streamSubscribed = wantsTerminal;
+        streamSubscribed = true;
+        terminalWanted = wantsTerminal;
         startFeed();
         const snapshot: ReadStreamResponsePayload = {
           scrollback: wantsTerminal ? 'kangentic mock desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n' : '',
