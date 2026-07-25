@@ -5,7 +5,7 @@ import PagerView from 'react-native-pager-view';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { Screen } from '@/components';
 import { findTaskById, selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
-import { useActivityStore } from '@/state/activityStore';
+import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
@@ -82,10 +82,13 @@ export function SessionScreen(): React.JSX.Element {
     return () => closeSessionScreen(sessionId);
   }, [sessionId]);
 
-  // SESSION-DEATH DETECTION. Two signals, both scoped to the CURRENT binding:
+  // SESSION-DEATH DETECTION. Three signals, all scoped to the CURRENT binding:
   // 1. The board located the task but reports no session, after this screen
-  //    had one: the session ended with no successor (authoritative).
-  // 2. The stream feed for the bound session sits 'rejected' past a grace
+  //    had one: the session ended with no successor (authoritative). Only
+  //    fires for a board fetched as `view: 'full'` - the 'sessions' projection
+  //    drops such a task rather than reporting it with a null session_id.
+  // 2. The desktop pushed `session-ended` for the bound session (see below).
+  // 3. The stream feed for the bound session sits 'rejected' past a grace
   //    window: the desktop refused the subscribe (dead session on a desktop
   //    that predates the session-ended event) and no successor arrived.
   // "Had one before" is state adjusted during render (the sanctioned
@@ -107,14 +110,24 @@ export function SessionScreen(): React.JSX.Element {
     const graceTimer = setTimeout(() => setGracePassedForSessionId(rejectedSessionId), REJECTED_FEED_GRACE_MS);
     return () => clearTimeout(graceTimer);
   }, [feedStatus, sessionId]);
+  // Signal 3: the desktop said outright that this screen's session is over.
+  // Read from the store's ended-id set rather than the entry's feedStatus,
+  // because the entry does not survive: the ended session leaves the board's
+  // 'sessions' projection in the next snapshot and the reconciler prunes it.
+  // Keyed on lastBoundSessionId as well as the current one - once the task is
+  // off the board there is nothing left to resolve a sessionId from except the
+  // navigation param, which a board-entered screen never has.
+  const boundSessionEnded = useActivityStore((state) =>
+    selectSessionEnded(state, sessionId ?? lastBoundSessionId),
+  );
   const sessionEnded =
     (taskLocated && sessionId === null && lastBoundSessionId !== null) ||
-    // 'ended' needs no grace window: unlike a refused subscribe, which can be
-    // a transient race with the desktop's registry, this is the desktop
-    // telling us outright that the session it was streaming is gone. It is
-    // also the ONLY status a session that dies while subscribed reaches -
-    // markRejected fires from a refused subscribe, which that path never hits.
-    (sessionId !== null && feedStatus === 'ended') ||
+    // Needs no grace window: unlike a refused subscribe, which can be a
+    // transient race with the desktop's registry, this is the desktop telling
+    // us the session it was streaming is gone. It is also the only signal a
+    // session that dies while subscribed produces - markRejected fires from a
+    // refused subscribe, which that path never hits.
+    boundSessionEnded ||
     (sessionId !== null && feedStatus === 'rejected' && gracePassedForSessionId === sessionId);
 
   // The Chat segment's needs-you dot: a prompt is pending and the user is

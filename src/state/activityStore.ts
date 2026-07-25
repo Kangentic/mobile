@@ -70,6 +70,23 @@ export interface SessionActivityEntry {
 
 interface ActivityStoreState {
   bySessionId: Record<string, SessionActivityEntry>;
+  /**
+   * Every sessionId the desktop has reported `session-ended` for, kept
+   * SEPARATELY from bySessionId because that map is pruned and this fact must
+   * outlive the pruning.
+   *
+   * A session that ends leaves the board's `view: 'sessions'` projection in
+   * the very next snapshot (its task has no session_id, so the projection
+   * drops the task), and reconcileSessionsFromBoards then deletes the activity
+   * entry for any session no board claims - taking `feedStatus: 'ended'` with
+   * it a few hundred milliseconds after it was set. A screen bound to that
+   * session would see the ended state appear and vanish, which is what the
+   * session-ended-state E2E flow caught. Pruning the entry is right (the feed
+   * must not keep listing a dead session); losing the fact is not.
+   *
+   * Grows by one short string per session ended in an app run, in memory only.
+   */
+  endedSessionIds: Record<string, true>;
   registerSession: (sessionId: string, taskId: string, projectId: string) => void;
   applySnapshot: (sessionId: string, taskId: string, projectId: string, snapshot: ReadStreamResponsePayload) => void;
   applyActivityEvent: (event: ActivityEvent) => void;
@@ -107,6 +124,7 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
 
 export const useActivityStore = create<ActivityStoreState>((set) => ({
   bySessionId: {},
+  endedSessionIds: {},
 
   registerSession: (sessionId, taskId, projectId) =>
     set((state) => {
@@ -146,8 +164,13 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
   applyActivityEvent: (event) =>
     set((state) => {
       const existing = state.bySessionId[event.sessionId];
-      if (!existing) return state;
       const payload = event.payload;
+      // Recorded BEFORE the no-entry bail: a session-ended for a session this
+      // phone never registered still tells a screen bound to it (by deep link
+      // or push tap) that it is over.
+      const endedSessionIds: Record<string, true> =
+        payload.type === 'session-ended' ? { ...state.endedSessionIds, [event.sessionId]: true } : state.endedSessionIds;
+      if (!existing) return endedSessionIds === state.endedSessionIds ? state : { endedSessionIds };
       const updated: SessionActivityEntry = { ...existing, lastEventAt: Date.now() };
       switch (payload.type) {
         case 'activity':
@@ -205,7 +228,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         updated.sectionChangedAt = Date.now();
         updated.enteredSectionAt = Date.now();
       }
-      return { bySessionId: { ...state.bySessionId, [event.sessionId]: updated } };
+      return { bySessionId: { ...state.bySessionId, [event.sessionId]: updated }, endedSessionIds };
     }),
 
   markRejected: (sessionId) =>
@@ -236,8 +259,17 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, unreadCount: 0 } } };
     }),
 
-  reset: () => set({ bySessionId: {} }),
+  reset: () => set({ bySessionId: {}, endedSessionIds: {} }),
 }));
+
+/**
+ * Whether the desktop has reported this session as over. Survives the activity
+ * entry's pruning, so a screen bound to the session keeps its ended state
+ * after the board projection drops the task. See `endedSessionIds`.
+ */
+export function selectSessionEnded(state: { endedSessionIds: Record<string, true> }, sessionId: string | null): boolean {
+  return sessionId !== null && state.endedSessionIds[sessionId] === true;
+}
 
 /**
  * The triage bucketing: 'permission' needs the user (covers permission

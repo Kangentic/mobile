@@ -432,6 +432,26 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     // bridge once the registry entry is gone.
     function endActiveSession() {
       permissionPending = false;
+      const endedSessionId = activeSessionId;
+      // The real desktop pushes a session-ended ACTIVITY event immediately
+      // before it tears the read-stream subscription down, and that event is
+      // what the phone's ended state and its session-failed notification key
+      // on. The stub only emitted the board change, so it exercised a path
+      // the desktop does not rely on and left the real one untested.
+      //
+      // It matters more since the 0.9.0 board projection: under `view:
+      // 'sessions'` a task whose session ended is filtered out of the board
+      // entirely, so the phone cannot fall back to "the board says this task
+      // has no session" - the task is simply gone. The event is now the
+      // load-bearing signal.
+      if (endedSessionId !== null) {
+        sendEvent({
+          kind: 'activity',
+          sessionId: endedSessionId,
+          taskId: STUB_TASK_ID,
+          payload: { type: 'session-ended', intentional: true },
+        });
+      }
       activeSessionId = null;
       streamSubscribed = false;
       console.log('[lifecycle] /end-session: task now has no session');
