@@ -407,6 +407,21 @@ async function probeHealthz() {
   }
 }
 
+/**
+ * True when Metro answers its status endpoint. Holding port 8081 is not the
+ * same as serving: a wedged bundler leaves the dev client waiting on a bundle
+ * that never arrives, and Android reports that as a startup ANR rather than
+ * an error anyone can read.
+ */
+async function probeMetroStatus() {
+  try {
+    const response = await fetch(`http://127.0.0.1:${METRO_PORT}/status`, { signal: AbortSignal.timeout(4000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** True when the relay accepts a 32-hex session slot at upgrade time. */
 function probeSessionSlot() {
   return new Promise((resolveProbe) => {
@@ -658,6 +673,24 @@ function restoreAllAdbReverses() {
     log(`reverses restored on ${device.serial}`);
   }
 }
+
+/** Host ports currently reverse-tunnelled on one device. */
+function listAdbReverses(serial) {
+  const result = run('adb', ['-s', serial, 'reverse', '--list']);
+  if (result.status !== 0) return [];
+  return (result.stdout ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const match = line.match(/tcp:(\d+)\s+tcp:(\d+)/);
+      return match ? Number(match[1]) : null;
+    })
+    .filter((port) => port !== null);
+}
+
+/** Ports the app needs tunnelled on every device the rig drives. */
+const REQUIRED_REVERSE_PORTS = [RELAY_PORT, METRO_PORT, INSPECT_PORT];
 
 /** Serial-scoped reverse for sharded instances (the plain helpers target ANDROID_SERIAL). */
 function ensureAdbReverseFor(serial, port) {
@@ -937,6 +970,10 @@ async function doctor({ relayRepo, avdName, requestedSerial }) {
   } else {
     const name = processNameForPid(metroPid);
     add(name === 'node.exe', `port ${METRO_PORT} held by ${name ?? 'unknown'} (pid ${metroPid})`, name === 'node.exe' ? undefined : 'not a stray Metro; free it manually');
+    // Holding the port is not the same as serving. A Metro that answers its
+    // status endpoint but cannot build still leaves the dev client hanging on
+    // startup, which Android turns into an ANR rather than an error.
+    add(await probeMetroStatus(), `Metro answering on port ${METRO_PORT}`, 'the port is held but Metro does not respond; restart it (npm run dev:stop, then your rig mode)');
   }
 
   const devices = listAdbDevices();
@@ -955,11 +992,36 @@ async function doctor({ relayRepo, avdName, requestedSerial }) {
       `pass --serial <serial> or set ANDROID_SERIAL (attached: ${readyDevices.map((device) => device.serial).join(', ')})`,
     );
   }
-  const doctorTarget = requestedSerial ?? (readyDevices.length === 1 ? readyDevices[0].serial : null);
-  if (doctorTarget && readyDevices.some((device) => device.serial === doctorTarget)) {
-    process.env.ANDROID_SERIAL = doctorTarget;
-    add(devClientInstalled(), `dev client (${APP_PACKAGE}) installed on ${doctorTarget}`, 'run npx expo run:android once to build and install it');
+  // Reverse tunnels, per device, for EVERY attached device - not just the
+  // target. This is the check that matters most and the one that did not
+  // exist: an adb server restart wipes every device's tunnels, a device
+  // without them cannot reach Metro or the relay, and the app there hangs on
+  // startup until Android ANR-kills it. The symptom ("Connecting to your
+  // desktop", or the dev client reporting a crash) points nowhere near adb.
+  for (const device of readyDevices) {
+    const present = listAdbReverses(device.serial);
+    const missing = REQUIRED_REVERSE_PORTS.filter((port) => !present.includes(port));
+    add(
+      missing.length === 0,
+      `reverse tunnels on ${device.serial} (${REQUIRED_REVERSE_PORTS.join(', ')})`,
+      `missing ${missing.join(', ')} - run: npm run dev:adb (restores every device), or adb -s ${device.serial} reverse tcp:<port> tcp:<port>`,
+    );
+    process.env.ANDROID_SERIAL = device.serial;
+    add(devClientInstalled(), `app (${APP_PACKAGE}) installed on ${device.serial}`, 'run npx expo run:android once, or install an e2e/preview APK');
   }
+  const doctorTarget = requestedSerial ?? (readyDevices.length === 1 ? readyDevices[0].serial : null);
+  if (doctorTarget) process.env.ANDROID_SERIAL = doctorTarget;
+
+  // One rig at most. Orphans from an interrupted run keep dialing the same
+  // relay slot and wanting the same Metro port, which presents as a flaky app
+  // rather than as a process problem.
+  // npx spawns the real bundler as a child, so a single Metro shows up twice;
+  // count the wrapper out or a healthy rig always looks doubled.
+  const rigProcesses = findOrphanRigProcesses().filter((process) => !process.commandLine.includes('npx-cli.js'));
+  const stubCount = rigProcesses.filter((process) => process.commandLine.includes('stubDesktopPeer')).length;
+  const metroCount = rigProcesses.filter((process) => /expo(-cli)?.*start/.test(process.commandLine)).length;
+  add(stubCount <= 1, `stub peers running: ${stubCount}`, 'more than one stub dials the same relay slot and they steal the session from each other - run: npm run dev:stop');
+  add(metroCount <= 1, `Metro bundlers running: ${metroCount}`, `more than one bundler wants port ${METRO_PORT}; the loser serves nothing - run: npm run dev:stop`);
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   add(nodeMajor >= 22, `Node >= 22 (running ${process.versions.node})`, 'the rig uses the built-in fetch and WebSocket');
