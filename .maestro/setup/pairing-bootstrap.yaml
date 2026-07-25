@@ -26,18 +26,22 @@ tags:
 # "Continue" is expo-dev-client's own string, not our UI copy. Everything of
 # OURS below is addressed by testID: the pair CTA's label already changed once
 # ("Pair with your desktop" -> "Pair") and silently broke this flow.
-- extendedWaitUntil:
-    visible: "Continue"
-    timeout: 90000
-- tapOn: "Continue"
-# "Continue" only dismisses the EXPLAINER: it expands into the dev menu
-# proper (Reload / Go home / TOOLS), which is still the same covering window.
-# Closing it is what actually hands the screen back to the app.
-- tapOn: "Close"
+# The dev client opens a one-time first-run sheet that covers the WHOLE
+# screen: while it is up the app's view tree is absent from the hierarchy, so
+# no testID of ours resolves however visible the screen looks. Its "Continue"
+# only dismisses the explainer and expands the dev menu proper, which then has
+# to be closed. An `e2e` build has no dev menu at all, so both steps are
+# conditional and the flow runs unchanged against either binary.
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+      - tapOn: "Close"
 - extendedWaitUntil:
     visible:
       id: "triage-pair-cta"
-    timeout: 30000
+    timeout: 90000
 - tapOn:
     id: "triage-pair-cta"
 - extendedWaitUntil:
