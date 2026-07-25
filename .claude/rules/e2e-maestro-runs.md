@@ -33,6 +33,11 @@ second rig mode silently kills the first one's bundler. Both failures look like 
   next time the copy changes, silently and at full timeout.
 - **A flow that calls itself self-contained must be.** The stub peer restores its canned board on
   every session establish, which is one flow; do not add state that outlives that boundary.
+- **Never edit `src/` while a suite is running against Metro.** Fast Refresh pushes every save
+  into the app mid-flow, so a half-finished edit becomes the build under test. It does not fail
+  honestly: it presents as most flows failing on unrelated selectors, which reads as a product
+  regression. Observed turning a 7/11 run into 8/11 failures. Either finish and commit before
+  running, or run against an `e2e` build, which has no bundler attached to push anything.
 
 ## Enforcement (self-maintaining)
 
