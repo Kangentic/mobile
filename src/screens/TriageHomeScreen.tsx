@@ -206,6 +206,9 @@ export function TriageHomeScreen(): React.JSX.Element {
     if (!established) return;
     for (const entry of Object.values(useActivityStore.getState().bySessionId)) {
       if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
+      // Already pushed by a 0.8.0+ desktop: warming it would re-fetch, over
+      // the wire, the exact line we were just handed for free.
+      if (entry.messagePreview !== null && sectionForEntry(entry) !== 'needs-you') continue;
       warmedSessionIdsRef.current.add(entry.sessionId);
       void peekSnippet(entry.sessionId, entry.awaitedPromptId, sectionForEntry(entry) === 'needs-you', 0).catch(() => {
         // The row retries on its own once mounted; a failed warm just means
@@ -654,7 +657,16 @@ const ActivityRow = React.memo(function ActivityRow({
   // effect only needs it to choose immediate-vs-settled, and depending on the
   // snippet state would re-run the effect on every resolved peek.
   const hasResolvedPeekRef = useRef(false);
+  /**
+   * A desktop on protocol 0.8.0+ pushes the message preview on the activity
+   * feed, so this row already has its line and must NOT fetch one - skipping
+   * the peek here is where the per-session transcript requests actually go
+   * away. A prompt-pending row still peeks: its body is the pending decision,
+   * which the preview does not describe.
+   */
+  const previewPushedByDesktop = !isPermission && entry.messagePreview !== null;
   useEffect(() => {
+    if (previewPushedByDesktop) return undefined;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const currentKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
@@ -697,7 +709,15 @@ const ActivityRow = React.memo(function ActivityRow({
       if (settleTimer !== null) clearTimeout(settleTimer);
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
-  }, [entry.sessionId, entry.unreadCount, isPermission, awaitedPromptId, peekRetryNonce, snippetFreshnessMs]);
+  }, [
+    entry.sessionId,
+    entry.unreadCount,
+    isPermission,
+    awaitedPromptId,
+    peekRetryNonce,
+    snippetFreshnessMs,
+    previewPushedByDesktop,
+  ]);
 
   // No status filler ("Thinking", "Waiting for..."): the section header
   // and the icon already say the state. FIXED GEOMETRY: the snippet slot is
@@ -718,7 +738,16 @@ const ActivityRow = React.memo(function ActivityRow({
    * as a second load even though the fixed slot meant nothing moved. Cards now
    * arrive with text and sharpen to the live snippet when it lands.
    */
-  const bodyText = snippet ?? collapseToSnippetText(task.description);
+  /**
+   * Body preference, cheapest first:
+   *   1. the desktop's pushed preview (protocol 0.8.0+) - already on a feed
+   *      the app receives, so it costs no request at all;
+   *   2. this row's own transcript peek - the fallback for an older desktop,
+   *      and for a prompt-pending row whose summary is the pending decision;
+   *   3. the task description from the board snapshot, so a card is never
+   *      blank while either of the above is still resolving.
+   */
+  const bodyText = (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
 
   return (
     <TaskCard
