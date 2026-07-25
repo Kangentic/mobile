@@ -23,6 +23,9 @@
  *        --stub (pair mode), --fresh (stub mode: ignore the saved phone key),
  *        --headless (boot the emulator with -no-window; Maestro and
  *        screenshots work identically, there is just no window to watch),
+ *        --wifi (physical device: switch it onto wireless adb, which keeps a
+ *        long session's bulk transfers off the USB endpoints that wedge the
+ *        adb server, and lets the phone be picked up without dropping),
  *        --shard <N> (stub mode: boot N-1 extra read-only emulator
  *        instances, each auto-paired to its own stub via
  *        .maestro/setup/pairing-bootstrap.yaml, then run the batch with
@@ -174,6 +177,7 @@ function parseRigArgs(argv) {
       fresh: { type: 'boolean', default: false },
       headless: { type: 'boolean', default: false },
       shard: { type: 'string' },
+      wifi: { type: 'boolean', default: false },
     },
   });
   const mode = positionals[0] ?? 'live';
@@ -413,6 +417,45 @@ function listAdbDevices() {
     });
 }
 
+/**
+ * Move a USB-attached physical device onto wireless adb.
+ *
+ * The adb server wedges under repeated large bulk transfers over USB: adb's
+ * own zero-length-packet doc describes a stalled transfer merging into the
+ * next packet header, which closes the connection ("received too many bytes
+ * while waiting for payload") and can leave the server unresponsive. Every
+ * command then BLOCKS rather than failing, which is how a wedge became a
+ * ten-minute stall. Screenshots and scrollback pulls are exactly that traffic.
+ *
+ * TCP transport does not use those USB endpoints, so the whole class goes
+ * away - and the phone can be picked up and carried off without dropping the
+ * session. Returns the `host:port` serial to target, or null to stay on USB.
+ */
+function enableWirelessAdb(usbSerial) {
+  const ipResult = run('adb', ['-s', usbSerial, 'shell', 'ip', '-f', 'inet', 'addr', 'show', 'wlan0']);
+  const ipMatch = ipResult.stdout?.match(/inet (\d+\.\d+\.\d+\.\d+)/);
+  if (!ipMatch) {
+    warn('could not read the device wlan0 address; staying on USB');
+    return null;
+  }
+  const deviceIp = ipMatch[1];
+  const tcpip = run('adb', ['-s', usbSerial, 'tcpip', '5555']);
+  if (tcpip.status !== 0) {
+    warn('adb tcpip failed; staying on USB');
+    return null;
+  }
+  // adbd restarts its listener; connecting immediately races that.
+  spawnSync('cmd', ['/c', 'timeout', '/t', '2', '/nobreak'], { stdio: 'ignore' });
+  const wirelessSerial = `${deviceIp}:5555`;
+  const connected = run('adb', ['connect', wirelessSerial]);
+  if (connected.status !== 0 || !/connected/i.test(connected.stdout ?? '')) {
+    warn(`adb connect ${wirelessSerial} failed; staying on USB`);
+    return null;
+  }
+  log(`wireless adb: ${wirelessSerial} (USB bulk transfers no longer wedge the server)`);
+  return wirelessSerial;
+}
+
 function describeDevices(devices) {
   if (devices.length === 0) return '(none)';
   return devices.map((device) => `${device.serial} (${device.state}${device.isEmulator ? ', emulator' : ''})`).join(', ');
@@ -525,11 +568,17 @@ async function bootEmulator(avdName, { headless = false, readOnly = false } = {}
  * emulator boot), else boot the AVD. Sets ANDROID_SERIAL for everything
  * downstream.
  */
-async function ensureDevice(avdName, requestedSerial, { headless = false } = {}) {
+async function ensureDevice(avdName, requestedSerial, { headless = false, wifi = false } = {}) {
   let target = selectAdbTarget(requestedSerial);
   if (!target) {
     const serial = await bootEmulator(avdName, { headless });
     target = { serial, state: 'device', isEmulator: true };
+  }
+  // --wifi only makes sense for a physical device already reachable over USB;
+  // an emulator's transport is a local socket and never hits the USB stack.
+  if (wifi && !target.isEmulator && !target.serial.includes(':')) {
+    const wirelessSerial = enableWirelessAdb(target.serial);
+    if (wirelessSerial) target = { serial: wirelessSerial, state: 'device', isEmulator: false };
   }
   applyAdbTarget(target);
   return target;
@@ -982,7 +1031,7 @@ async function main() {
 
   log(`mode: ${mode}`);
   if (!commandExists('adb', ['version'])) fail('adb is not on PATH');
-  await ensureDevice(avdName, requestedSerial, { headless: flags.headless });
+  await ensureDevice(avdName, requestedSerial, { headless: flags.headless, wifi: flags.wifi });
 
   const kangenticRepo = resolveKangenticRepo(flags, state);
   // Link the sibling protocol build into node_modules; a change forces a
