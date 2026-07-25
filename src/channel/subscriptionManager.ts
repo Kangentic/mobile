@@ -331,6 +331,10 @@ export class SubscriptionManager {
     // out of the desired set while its screen stays mounted (the task gets
     // archived desktop-side, say), and clearing the flag would bring the
     // session back list-only, leaving a mounted terminal permanently frozen.
+    //
+    // Nothing leaks: closeSessionScreen is the CLEANUP of SessionScreen's
+    // mount effect, so it runs on every unmount path, not just the back
+    // button - and a process death takes this manager with it.
     if (!this.activeStreamIds.has(sessionId)) return;
     this.activeStreamIds.delete(sessionId);
     if (this.session.isEstablished) void this.verbs.readStreamUnsubscribe(sessionId).catch(() => undefined);
@@ -343,8 +347,10 @@ export class SubscriptionManager {
       this.boardRefreshTimers.delete(projectId);
     }
     // The project left the desired set entirely; a later re-add starts back at
-    // the feed projection and the Board tab upgrades it again if opened.
+    // the feed projection and the Board tab upgrades it again if opened. Both
+    // maps go, or a stale 'full' active would make that upgrade a no-op.
     this.boardViewByProjectId.delete(projectId);
+    this.activeBoardViewByProjectId.delete(projectId);
     if (!this.activeBoardIds.has(projectId)) return;
     this.activeBoardIds.delete(projectId);
     if (this.session.isEstablished) void this.verbs.readBoardUnsubscribe(projectId).catch(() => undefined);
