@@ -27,14 +27,6 @@ import { channelIdForCategory, titleForCategory } from './categoryCopy';
 /** Matches the desktop's own per-(session, category) push cooldown. */
 const LOCAL_NOTIFICATION_COOLDOWN_MS = 30_000;
 
-/**
- * The activity store's feedStatus union gains 'ended' in a parallel
- * workstream (the desktop already pushes session-ended activity events);
- * widening locally keeps this notifier forward-compatible without
- * touching the store's type.
- */
-type FeedStatusMaybeEnded = SessionActivityEntry['feedStatus'] | 'ended';
-
 function resolveTaskTitle(entry: SessionActivityEntry): string {
   const boardTask = useBoardStore.getState().boardsByProjectId[entry.projectId]?.tasksById[entry.taskId];
   return boardTask && boardTask.title.length > 0 ? boardTask.title : 'Agent session';
@@ -47,9 +39,13 @@ function categoriesForTransition(entry: SessionActivityEntry, previousEntry: Ses
     entry.state === 'permission' && entry.awaitedPromptId !== null && previousEntry?.awaitedPromptId !== entry.awaitedPromptId;
   if (enteredPermission || promptChanged) categories.push('input-required');
   if (previousEntry?.state === 'thinking' && entry.state === 'idle') categories.push('turn-complete');
-  const feedStatus = entry.feedStatus as FeedStatusMaybeEnded;
-  const previousFeedStatus = (previousEntry?.feedStatus ?? 'pending') as FeedStatusMaybeEnded;
-  if (feedStatus === 'ended' && previousFeedStatus !== 'ended') categories.push('session-failed');
+  // Only an UNINTENTIONAL end is worth waking someone for. A deliberate Stop,
+  // suspend or shutdown is the user's own action taken at the desktop they are
+  // sitting at, and this category is 'session-failed', not 'session-stopped'.
+  // (The "Session stopped" copy in categoryCopy.ts stays as-is: it describes a
+  // crash accurately, and docs/architecture.md enumerates it.)
+  const endedUnintentionally = entry.feedStatus === 'ended' && entry.endedIntentionally === false;
+  if (endedUnintentionally && previousEntry?.feedStatus !== 'ended') categories.push('session-failed');
   return categories;
 }
 

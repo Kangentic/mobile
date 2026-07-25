@@ -66,6 +66,10 @@ function permissionEvent(promptId: string, pending = true): ActivityEvent {
   return { kind: 'activity', sessionId: 'sess-1', taskId: 'task-1', payload: { type: 'permission', promptId, pending } };
 }
 
+function sessionEndedEvent(intentional: boolean): ActivityEvent {
+  return { kind: 'activity', sessionId: 'sess-1', taskId: 'task-1', payload: { type: 'session-ended', intentional } };
+}
+
 function activityStateEvent(state: 'thinking' | 'idle'): ActivityEvent {
   return {
     kind: 'activity',
@@ -121,6 +125,51 @@ describe('startLocalNotifier', () => {
     expect(notification.body).toBe('Ship the release');
     expect(notification.android?.channelId).toBe('needs-attention');
     expect(notification.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+  });
+
+  /**
+   * This notification could not fire at all before: the desktop's
+   * `session-ended` event had no case in applyActivityEvent, so it fell
+   * through and `feedStatus` never reached 'ended' - the value this notifier
+   * keys on. It survived two protocol bumps because nothing asserted it.
+   */
+  it('fires session-failed when a live session ends UNINTENTIONALLY', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(false));
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    const notification = displayNotification.mock.calls[0][0];
+    expect(notification.android?.channelId).toBe('failures');
+    expect(notification.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+  });
+
+  /**
+   * A deliberate Stop, suspend or shutdown is the user's own action, taken at
+   * the desktop they are sitting at. Waking their phone to report it would be
+   * noise, and the category is 'session-failed' - nothing failed.
+   */
+  it('stays silent when the session ends intentionally', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(true));
+
+    expect(displayNotification).not.toHaveBeenCalled();
+  });
+
+  it('fires session-failed only once, however many times the end is re-delivered', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(false));
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(false));
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
   });
 
   it('is fully suppressed while the app is foregrounded', () => {

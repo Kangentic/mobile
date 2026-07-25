@@ -109,6 +109,12 @@ export function SessionScreen(): React.JSX.Element {
   }, [feedStatus, sessionId]);
   const sessionEnded =
     (taskLocated && sessionId === null && lastBoundSessionId !== null) ||
+    // 'ended' needs no grace window: unlike a refused subscribe, which can be
+    // a transient race with the desktop's registry, this is the desktop
+    // telling us outright that the session it was streaming is gone. It is
+    // also the ONLY status a session that dies while subscribed reaches -
+    // markRejected fires from a refused subscribe, which that path never hits.
+    (sessionId !== null && feedStatus === 'ended') ||
     (sessionId !== null && feedStatus === 'rejected' && gracePassedForSessionId === sessionId);
 
   // The Chat segment's needs-you dot: a prompt is pending and the user is
