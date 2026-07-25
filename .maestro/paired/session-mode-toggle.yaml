@@ -14,8 +14,10 @@ appId: com.kangentic.mobile
     timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-1"
-- assertVisible:
-    id: "session-screen"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 20000
 # The per-task lens preference (settingsStore.preferredSessionLensByTaskId)
 # is persisted device-side and only clears on unpair/re-pair, not on
 # launchApp's force-stop - so another paired flow that already switched

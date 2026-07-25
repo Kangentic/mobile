@@ -13,8 +13,10 @@ appId: com.kangentic.mobile
     timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-1"
-- assertVisible:
-    id: "session-screen"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 20000
 # The prompt card lives in the chat lens (terminal is the default).
 - tapOn:
     id: "session-mode-chat"

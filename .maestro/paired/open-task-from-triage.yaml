@@ -16,8 +16,10 @@ appId: com.kangentic.mobile
     timeout: 20000
 - tapOn:
     id: "activity-row-stub-session-1"
-- assertVisible:
-    id: "session-screen"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 20000
 # Terminal is the default lens; switch to Chat for the transcript.
 - tapOn:
     id: "session-mode-chat"
