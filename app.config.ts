@@ -127,6 +127,19 @@ const config: ExpoConfig = {
           // Notifee ships its core AAR inside the npm package; this is its
           // documented Expo integration (no hand-edited android/, per CNG).
           extraMavenRepos: ['../../node_modules/@notifee/react-native/android/libs'],
+          // E2E BUILDS ONLY. Android blocks cleartext traffic in a
+          // release-shaped build, so the dev relay's ws:// socket is refused
+          // by the platform before any of our code runs - the pairing screen
+          // just reports "Relay connection closed before it opened (code
+          // 1006)". The dev client never hits this because its debug
+          // network-security-config permits cleartext.
+          //
+          // Gated on the same build-time flag as the relay-address carve-out
+          // in src/pairing/qr.ts, so it travels with the `e2e` profile and
+          // cannot reach `preview` or `production`: EXPO_PUBLIC_* values are
+          // read here at config-evaluation time, and the e2e profile is the
+          // only one in eas.json that sets it.
+          ...(process.env.EXPO_PUBLIC_KANGENTIC_E2E === '1' ? { usesCleartextTraffic: true } : {}),
         },
       },
     ],

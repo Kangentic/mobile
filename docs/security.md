@@ -78,6 +78,13 @@ the wire.
   final bundled app, and a dev client drags in a dev menu, a Metro dependency, and a bundle URL
   that `pm clear` wipes), and without the flag that binary refuses the local relay.
 
+  A release-shaped build additionally needs Android's own permission to speak cleartext at all:
+  the platform refuses a `ws://` socket before any of our code runs, which surfaces as "Relay
+  connection closed before it opened (code 1006)". The `e2e` profile therefore also sets
+  `usesCleartextTraffic` (via `expo-build-properties` in `app.config.ts`), gated on the same
+  `EXPO_PUBLIC_KANGENTIC_E2E` flag, so it travels with that profile and no other. The dev client
+  never needed it because a debug build ships a network-security-config that permits cleartext.
+
   Both gates are decided at BUILD time and both fold to a constant: `__DEV__` and every
   `EXPO_PUBLIC_*` value are substituted as literals by Metro, so a `production` bundle contains
   neither branch. There is no runtime flag, setting, or intent that can widen an installed app's
