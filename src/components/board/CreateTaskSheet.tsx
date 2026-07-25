@@ -91,7 +91,12 @@ export function CreateTaskSheet({
           testID="create-task-description"
           style={{ minHeight: descriptionMinHeight, maxHeight: descriptionMaxHeight }}
         />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        {/* keyboardShouldPersistTaps is NOT inherited from the Sheet's own
+            ScrollView: a nested one defaults to "never", so with the title or
+            description field focused the first tap on a chip was spent
+            dismissing the keyboard and the column never changed. Reported as
+            "the columns don't register without multiple taps". */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <View style={[styles.columnChips, { gap: theme.spacing.xs }]}>
             {columnChoices.map((choiceName) => {
               const isSelected = columnName === choiceName;
