@@ -257,6 +257,12 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         scrollEventThrottle={64}
         onContentSizeChange={onContentSizeChange}
         maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
+        // The composer sits on this same screen, so the keyboard is routinely
+        // up while a prompt card is on screen. The default ("never") spends
+        // the first tap dismissing the keyboard, which on this list means the
+        // first tap on Approve or Deny does nothing - the single worst control
+        // in the app to make people tap twice.
+        keyboardShouldPersistTaps="handled"
       />
       {showJumpToLatest ? (
         <Pressable

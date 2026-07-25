@@ -114,6 +114,10 @@ export function ReadingViewFeed({ sessionId, agentLabel }: ReadingViewFeedProps)
           scrollEventThrottle={64}
           maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
           contentContainerStyle={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}
+          // This lens shares the composer with the transcript one. No row is
+          // tappable today, so this is consistency rather than a live bug -
+          // but the moment one becomes tappable it would be.
+          keyboardShouldPersistTaps="handled"
         />
       )}
       {showJumpToLatest ? (

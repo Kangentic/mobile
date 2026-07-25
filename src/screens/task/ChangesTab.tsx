@@ -108,6 +108,10 @@ export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): Re
         data={fileList.files}
         keyExtractor={(file) => file.path}
         renderItem={({ item, index }) => <FileRow file={item} index={index} onOpen={openFile} />}
+        // All three session panes stay mounted, so the composer's keyboard can
+        // still be up when this one is switched to. Without this the first tap
+        // on a file row is spent dismissing it.
+        keyboardShouldPersistTaps="handled"
       />
     );
   }

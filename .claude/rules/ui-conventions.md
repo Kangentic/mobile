@@ -23,6 +23,14 @@ one-off components, tiny fonts, and slow lists unless these are stated.
   (a toolbar pill, a segmented control) already frames the control.
 - **Lists:** use FlashList for any feed, transcript, or board list. Never `FlatList` or a
   `.map()` inside a `ScrollView` for a list that can grow.
+- **Every scrollable that holds a tappable control, on a screen that can have a keyboard up,
+  sets `keyboardShouldPersistTaps="handled"`.** The default is `"never"`, which spends the
+  first tap dismissing the keyboard, so the control needs two taps and reads as an unresponsive
+  app. **It is NOT inherited**: a nested `ScrollView` inside one that sets it still defaults to
+  `"never"`, which is how the create-task column chips shipped needing two taps while the
+  `Sheet` around them was configured correctly. Applies to `FlashList` as much as `ScrollView`.
+  Judge by whether a `TextInput` can be focused on that screen, remembering that the session
+  screen keeps all three panes mounted, so the composer's keyboard outlives a lens switch.
 - **Test selectors:** every interactive element gets a stable `testID` (Maestro's selector
   mechanism).
 - **Color:** use semantic color tokens from the design system. No hardcoded hex values in
@@ -35,7 +43,10 @@ one-off components, tiny fonts, and slow lists unless these are stated.
 - **Review (live now):** `/code-review` and the `expo-rn-reviewer` agent flag these on screen and
   component changes.
 - **Test (planned):** a scan for sub-floor font sizes and raw `FlatList` usage under
-  `src/screens/` and `src/components/`.
+  `src/screens/` and `src/components/`, plus a scan for a `ScrollView`/`FlashList` that renders
+  a `Pressable` without `keyboardShouldPersistTaps`. That last one needs an allowlist for the
+  genuinely read-only scrollables (`MonoBlock`, `InlineDiff`, the diff viewers), which is why it
+  is a scan rather than a lint rule.
 
 ## Scope
 
