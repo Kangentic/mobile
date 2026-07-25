@@ -56,6 +56,13 @@ release-shaped binary carrying `EXPO_PUBLIC_KANGENTIC_E2E=1`, the second build-t
 `__DEV__`. Against that binary none of the three dev-client constraints above exist. Reach for
 the dev client only when authoring a flow and wanting Fast Refresh.
 
+**Do not try to build that binary locally on Windows.** `expo run:android --variant release` and
+`eas build --local` both die on CMake's 250-character object-path cap inside
+`node_modules/<pkg>/android/.cxx/`, and a short-path junction does not dodge it (Node realpaths
+`node_modules`). See `docs/developer-guide.md`. An `e2e` APK is a cloud build until board task
+\#5 lands, so it is a **cloud-spend decision the user makes**, never something to fire off to
+unblock a flow.
+
 ## Scope
 
 `.maestro/**` and the two scripts that drive it. Widening the relay carve-out further is a

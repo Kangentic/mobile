@@ -298,11 +298,22 @@ still reach a local rig relay even though `__DEV__` is false. No dev menu, no Me
 URL to lose:
 
 ```
-eas build --profile e2e --platform android          # or a local release build with the flag set
+eas build --profile e2e --platform android
 maestro --device <serial> test .maestro/paired
 ```
 
 Use the dev client only when you need Fast Refresh while writing a flow.
+
+**A local release build is not a fallback on Windows.** Both `npx expo run:android --variant
+release` and `eas build --local` fail here, because `react-native-screens` and
+`react-native-worklets` put their CMake object files under `node_modules/<pkg>/android/.cxx/`,
+which overruns CMake's 250-character `CMAKE_OBJECT_PATH_MAX` from any normal checkout path (the
+object directory alone measures 208 characters from a `.kangentic/worktrees/<branch>/` root).
+CMake reports it as a warning and ninja then fails outright with `manifest 'build.ninja' still
+dirty after 100 tries`. A directory junction to a short path does not help: Node realpaths
+`node_modules`, so CMake still receives the long path. Producing an `e2e` APK therefore means a
+cloud build today, which is one of the reasons board task #5 (moving build execution to GitHub
+Actions runners, which have no such limit) exists.
 
 **Why a run takes minutes:** every flow begins with `launchApp`, which force-stops and cold
 boots, and then waits up to 60s for the channel to re-establish - roughly 70s of the runtime of
