@@ -105,7 +105,10 @@ export function DevicesScreen(): React.JSX.Element {
             <Card testID="devices-phone-card">
               <Stack gap="xs">
                 <Text variant="bodyStrong">This phone</Text>
-                <LabeledValue label="Device id">
+                {/* It is the phone's static public key, shortened - not an
+                    id the desktop assigned. Naming it honestly is what lets
+                    a user compare it against the desktop's device list. */}
+                <LabeledValue label="Key fingerprint">
                   <MonoText size="caption" testID="devices-phone-fingerprint">
                     {formatKeyFingerprint(pairedInfo.info.phonePublicKeyHex)}
                   </MonoText>
