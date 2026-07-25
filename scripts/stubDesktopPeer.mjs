@@ -342,12 +342,28 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     const boardMutations = { patches: new Map(), deleted: new Set(), created: [] };
     let createdTaskCounter = 0;
 
-    /** Back to the canned board. Called on every session establish, which is one Maestro flow. */
-    function resetBoardMutations() {
+    /**
+     * Back to the canned fixture. Called on every session establish, which is
+     * exactly one Maestro flow (each opens with launchApp, which force-stops
+     * the app and brings the session back up here).
+     *
+     * BOTH halves matter. The board half stops create/edit/move/delete piling
+     * up across flows. The lifecycle half stops `/end-session` from ending the
+     * run: it nulls activeSessionId, nothing restored it, and every later flow
+     * then looked for a session row that no longer existed. That is why
+     * session-respawn-recovery has been failing - it runs directly after
+     * session-ended-state, and was never a product bug at all.
+     */
+    function resetStubFixture() {
       boardMutations.patches.clear();
       boardMutations.deleted.clear();
       boardMutations.created.length = 0;
       createdTaskCounter = 0;
+      transcriptEntries = stubTranscript();
+      transcriptRevision = 1;
+      activeSessionId = STUB_SESSION_ID;
+      respawnCounter = 1;
+      codexStreamSubscribed = false;
     }
 
     function applyBoardMutations(snapshot) {
@@ -663,17 +679,10 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         }
         if (!result.split) return;
         streams = deriveSecretstreamPair(handshake.getChainingKey(), true);
-        // Every Maestro flow opens with launchApp, which force-stops the app
-        // and brings the session back up here - so this is the per-flow
-        // boundary, and the board resets to its canned state on it.
-        //
-        // Without this the stub accumulates every create/edit/move/delete for
-        // as long as the process lives, and flows that describe themselves as
-        // self-contained silently are not: board-delete-task creates "Delete
-        // me Maestro", deletes the one it long-pressed, and then fails its own
-        // assertNotVisible because an identically-titled card left over from
-        // an earlier run is still on the board.
-        resetBoardMutations();
+        // The per-flow boundary: see resetStubFixture. Without it the stub
+        // carried board mutations AND a killed session across flows, so a
+        // suite run contaminated itself from the first mutating flow onward.
+        resetStubFixture();
         console.log('[session] established');
         return;
       }

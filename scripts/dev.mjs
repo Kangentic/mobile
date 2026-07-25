@@ -17,6 +17,11 @@
  *                                    Maestro E2E rig. Reuses the saved phone
  *                                    key for a no-re-pair session when it can.
  *   node scripts/dev.mjs doctor   Preflight checks only.
+ *   node scripts/dev.mjs stop     Stop every rig process (this run's and any
+ *                                    orphaned by an earlier one), leaving the
+ *                                    relay and emulator up. Starting any mode
+ *                                    does this first, so `stop` is only needed
+ *                                    to hand the machine back clean.
  *
  * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
  *        --kangentic-repo <path>, --clear, --no-metro, --no-protocol-link,
@@ -101,7 +106,7 @@ const RELAY_URL = `ws://127.0.0.1:${RELAY_PORT}`;
 // the 64-hex pairing slot). Harmless once the relay default matches.
 const RELAY_SLOT_PATTERN = '^([0-9a-f]{32}|[0-9a-f]{64})$';
 const DEFAULT_AVD = 'kangentic_pixel';
-const MODES = ['mock', 'live', 'pair', 'stub', 'doctor', 'emu', 'adb'];
+const MODES = ['mock', 'live', 'pair', 'stub', 'doctor', 'emu', 'adb', 'stop'];
 
 const spawnedChildren = [];
 // Set during teardown so child exit handlers (e.g. the stub auto-restart)
@@ -322,6 +327,46 @@ function spawnPrefixed(label, command, args, options = {}) {
   });
   spawnedChildren.push({ label, child });
   return child;
+}
+
+/**
+ * Every rig-owned process still running, this one excluded: previous rig
+ * invocations, their stub peers, and their Metro bundlers.
+ *
+ * The rig only ever killed the children IT spawned, so an interrupted run
+ * (a killed terminal, an agent session ending, a Ctrl-C that missed) left
+ * orphans behind. They do not sit idle: each stub redials the same relay
+ * slot and each Metro wants port 8081, so a handful of them fight over one
+ * device and the symptoms read as a flaky app - sessions that will not
+ * establish, a bundler that answers but serves nothing. Observed at six
+ * live processes in one session before anyone noticed.
+ */
+function findOrphanRigProcesses() {
+  if (process.platform !== 'win32') return [];
+  const query =
+    "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | " +
+    'Where-Object { $_.CommandLine -match \'dev\\.mjs|stubDesktopPeer|expo(-cli)?.*start\' } | ' +
+    'Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress';
+  const listed = spawnSync('powershell', ['-NoProfile', '-Command', query], { encoding: 'utf8' });
+  if (listed.status !== 0 || !listed.stdout?.trim()) return [];
+  let rows;
+  try {
+    rows = JSON.parse(listed.stdout);
+  } catch {
+    return [];
+  }
+  const all = Array.isArray(rows) ? rows : [rows];
+  return all
+    .filter((row) => row && typeof row.ProcessId === 'number' && row.ProcessId !== process.pid)
+    .map((row) => ({ pid: row.ProcessId, commandLine: String(row.CommandLine ?? '').trim() }));
+}
+
+/** Kill the orphans above, process tree and all. Returns how many were cleared. */
+function killOrphanRigProcesses(orphans) {
+  for (const orphan of orphans) {
+    spawnSync('taskkill', ['/PID', String(orphan.pid), '/T', '/F'], { encoding: 'utf8' });
+  }
+  return orphans.length;
 }
 
 function teardown() {
@@ -982,6 +1027,21 @@ async function main() {
   const requestedSerial = flags.serial ?? (process.env.ANDROID_SERIAL || null);
   const needsRelay = mode === 'live' || mode === 'pair' || mode === 'stub';
 
+  if (mode === 'stop') {
+    // Back to a known-good machine in one command. Deliberately leaves the
+    // relay (spawned detached, shared with the desktop) and the emulator up:
+    // both are expensive to restart and neither is what goes wrong.
+    const orphans = findOrphanRigProcesses();
+    if (orphans.length === 0) {
+      log('no rig processes running');
+    } else {
+      for (const orphan of orphans) log(`stopping pid ${orphan.pid}: ${orphan.commandLine}`);
+      log(`stopped ${killOrphanRigProcesses(orphans)} rig process(es)`);
+    }
+    log('relay and emulator left running (npm run dev:adb recovers a wedged adb server)');
+    process.exit(0);
+  }
+
   if (mode === 'doctor') {
     const failures = await doctor({ relayRepo, avdName, requestedSerial });
     log(failures === 0 ? 'all checks passed' : `${failures} check(s) need attention`);
@@ -1055,6 +1115,20 @@ async function main() {
   }
 
   log(`mode: ${mode}`);
+  // Clear any previous rig before starting this one. The rig used to adopt a
+  // running Metro and otherwise leave everything alone, which quietly allowed
+  // two MODES at once: dev:live and dev:stub each want Metro on 8081 and each
+  // spawn their own peer, so the second run half-replaced the first and both
+  // sets of processes stayed alive fighting over one device. Starting a rig
+  // now means exactly one rig.
+  const orphans = findOrphanRigProcesses();
+  if (orphans.length > 0) {
+    for (const orphan of orphans) log(`clearing a previous rig process (pid ${orphan.pid})`);
+    killOrphanRigProcesses(orphans);
+    // Killing a process mid-adb-transfer can leave the adb server wedged;
+    // give it a beat, and let the health check below catch it if so.
+    await sleep(1500);
+  }
   if (!commandExists('adb', ['version'])) fail('adb is not on PATH');
   await ensureDevice(avdName, requestedSerial, { headless: flags.headless, wifi: flags.wifi });
 
