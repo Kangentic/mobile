@@ -637,16 +637,15 @@ const ActivityRow = React.memo(function ActivityRow({
 
   // Inbox-style snippet, the row's body for EVERY state: the pending
   // decision when a prompt waits, otherwise the agent's last message
-  // (context for thinking rows too). The peek result records WHICH
-  // refresh key it belongs to (the prompt id, or unreadCount which bumps
-  // on new messages), so re-renders never refetch.
+  // (context for thinking rows too). WHEN to refetch is decided entirely by
+  // the effect's dependency array below (the prompt id, or unreadCount, which
+  // bumps on every new message), so a re-render never refetches.
   const awaitedPromptId = entry.awaitedPromptId;
-  const [peekedSnippet, setPeekedSnippet] = useState<{ key: string; text: string | null } | null>(null);
+  const [peekedSnippet, setPeekedSnippet] = useState<{ text: string | null } | null>(null);
   const [peekRetryNonce, setPeekRetryNonce] = useState(0);
-  // The last text we resolved, shown until a newer one REPLACES it. The key
-  // decides when to refetch, never what to display: gating display on a key
-  // match blanked the row the instant unreadCount bumped, so every engine
-  // event flashed the snippet text -> empty -> text.
+  // The last text resolved, shown until a newer one REPLACES it - never
+  // cleared while a refetch is in flight. Blanking it on each refetch flashed
+  // the row text -> empty -> text on every engine event.
   const snippet = peekedSnippet !== null ? peekedSnippet.text : null;
   // While working, a slightly stale snippet is fine (the throttle stops a
   // busy session from refetching a heavy window on every event); at idle
@@ -669,7 +668,6 @@ const ActivityRow = React.memo(function ActivityRow({
     if (previewPushedByDesktop) return undefined;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const currentKey = isPermission ? `prompt:${awaitedPromptId}` : `message:${entry.sessionId}:${entry.unreadCount}`;
     // Let a burst settle before REFETCHING: each unreadCount bump re-runs
     // this effect and clears the previous timer, so a catch-up storm
     // resolves to one peek for the LAST key instead of one paint per event.
@@ -690,9 +688,7 @@ const ActivityRow = React.memo(function ActivityRow({
           // Re-resolving the SAME text must not touch state: a new object
           // would re-render the row (and restart its animations) for a
           // snippet that did not actually change.
-          setPeekedSnippet((previous) =>
-            previous !== null && previous.text === snippetText ? previous : { key: currentKey, text: snippetText },
-          );
+          setPeekedSnippet((previous) => (previous !== null && previous.text === snippetText ? previous : { text: snippetText }));
         })
         .catch(() => {
           // Not connected yet or a transient fetch failure: retry shortly.
@@ -729,23 +725,17 @@ const ActivityRow = React.memo(function ActivityRow({
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
   /**
-   * Until the agent snippet resolves, show the task's own description.
-   *
-   * It rides in on the board snapshot the feed already has, so it costs
-   * nothing, while the snippet is a per-session transcript fetch that can take
-   * seconds on a long-running session. Without this the feed revealed with
-   * every description slot empty and filled them in a beat later, which read
-   * as a second load even though the fixed slot meant nothing moved. Cards now
-   * arrive with text and sharpen to the live snippet when it lands.
-   */
-  /**
    * Body preference, cheapest first:
    *   1. the desktop's pushed preview (protocol 0.8.0+) - already on a feed
    *      the app receives, so it costs no request at all;
    *   2. this row's own transcript peek - the fallback for an older desktop,
    *      and for a prompt-pending row whose summary is the pending decision;
    *   3. the task description from the board snapshot, so a card is never
-   *      blank while either of the above is still resolving.
+   *      blank while either of the above is still resolving. It rides in on a
+   *      snapshot the feed already has, so it costs nothing, while a peek is a
+   *      transcript fetch that can take seconds on a long session. Without it
+   *      the feed revealed with every body empty and filled them a beat later,
+   *      which read as a second load.
    */
   const bodyText = (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
 

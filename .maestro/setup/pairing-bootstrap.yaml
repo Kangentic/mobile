@@ -9,23 +9,25 @@ tags:
 # must pair to its own stub) and the future CI Maestro job. Exclude it from
 # suite runs with --exclude-tags setup.
 - launchApp
-# Wait out the cold boot first: either the pair CTA or the dev client's
-# one-time first-run sheet ("Continue") lands, whichever renders first -
-# checking for the sheet immediately after launchApp races the boot and
-# skips before the sheet exists.
+# Wait out the cold boot first: checking for the dev client's one-time
+# first-run sheet ("Continue") immediately after launchApp races the boot and
+# skips before the sheet exists. Waiting on the pair CTA gives the app time
+# to mount either way, then the sheet is dismissed if it is on top.
+#
+# The CTA is matched by testID, never by its label: the label is UI copy and
+# has already changed once ("Pair with your desktop" -> "Pair"), which is
+# exactly what a text selector cannot survive.
 - extendedWaitUntil:
     visible:
-      text: "Pair with your desktop|Continue"
+      id: "triage-pair-cta"
     timeout: 90000
 - runFlow:
     when:
       visible: "Continue"
     commands:
       - tapOn: "Continue"
-- extendedWaitUntil:
-    visible: "Pair with your desktop"
-    timeout: 15000
-- tapOn: "Pair with your desktop"
+- tapOn:
+    id: "triage-pair-cta"
 - extendedWaitUntil:
     visible:
       id: "pairing-paste-link-input"

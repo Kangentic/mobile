@@ -991,10 +991,16 @@ export function createMockDesktop(): MockDesktop {
           };
           return ok(request, window as unknown as JsonValue);
         }
-        streamSubscribed = true;
+        // Mirrors the desktop: a list-only subscription (`terminal: false`)
+        // attaches no PTY tap and returns an empty scrollback. Omitted means
+        // true, per the protocol. Without this the mock streamed terminal
+        // bytes to every subscriber and no dev run could ever show that a
+        // caller had re-armed PTY streaming by accident.
+        const wantsTerminal = payload.terminal ?? true;
+        streamSubscribed = wantsTerminal;
         startFeed();
         const snapshot: ReadStreamResponsePayload = {
-          scrollback: 'kangentic mock desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n',
+          scrollback: wantsTerminal ? 'kangentic mock desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n' : '',
           activity: pendingPromptId ? { state: 'permission', reason: { kind: 'permission' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
           usage: mockUsage(42_000 + feedTick * 900, MOCK_MODEL_SONNET),
           awaitedPromptId: pendingPromptId,

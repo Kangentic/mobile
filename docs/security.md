@@ -71,7 +71,13 @@ the wire.
   and dialed verbatim as the relay's slot parameter, so a plaintext relay connection would put
   it on the wire in cleartext. The phone (`src/pairing/qr.ts`) refuses to pair through any
   relay address that isn't `wss://`, carving out only loopback (`ws://localhost`, `127.0.0.1`,
-  `::1`) for a local dev relay.
+  `::1`) for a local dev relay. A **dev build alone** additionally accepts `ws://10.0.2.2`, the
+  Android emulator's NAT alias for the host's loopback interface, so the dev rig's relay is
+  reachable without an `adb reverse`. That carve-out is gated on `__DEV__`, a build-time
+  constant Metro folds to `false` and eliminates from a release bundle, so a production build
+  never has the branch to take. The gate is on the BUILD, not on the device: a dev-client build
+  installed on a physical phone would accept `10.0.2.2`, where it is an ordinary private
+  address rather than a loopback alias.
 
 ## Authorization
 
