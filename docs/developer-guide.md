@@ -656,6 +656,43 @@ app on a free `macos-latest` runner, so booting a simulator there with `xcrun si
 Maestro flow is a working path that needs no Apple Developer account and no EAS spend. That is the
 cheapest way to finally execute the WKWebView terminal on iOS, which has never run.
 
+### Running the E2E suite (the path that actually works)
+
+**Drive Maestro through the CLI, not the MCP server.** The MCP server starts its own
+`simulator-server` alongside whatever the rig and the CLI are already doing, and when those
+collide it stops responding: observed hanging for over two minutes on calls as trivial as
+`cheat_sheet` and `take_screenshot`, while the same work through `maestro test` returned in
+seconds. Use the MCP server for authoring help (`inspect_screen` on a quiet device) and the CLI
+to run anything.
+
+**One rig, one mode.** `dev:live` and `dev:stub` both own Metro on 8081, so starting one kills
+the other's bundler out from under the device. Pick the mode for the job and stay in it.
+
+**Testing against a DEV CLIENT costs three workarounds**, all of them consequences of the dev
+client rather than of our app:
+
+1. `adb shell pm clear` wipes the saved Metro bundle URL along with the app data, so the next
+   launch lands on the dev launcher and no JS loads. Re-point it first (the rig's
+   `pointDevClientAtMetro`). For the same reason `launchApp: clearState: true` - the form the
+   Maestro docs otherwise recommend - is wrong here: it would undo that re-pointing.
+2. The dev client's first-run sheet is a separate window covering the whole screen. While it is
+   up the app's view tree is absent from the hierarchy entirely, so no `testID` of ours resolves
+   however visible the screen looks. It has to be dismissed first, and its "Continue" only
+   dismisses the explainer - the dev menu proper opens behind it and needs closing too.
+3. Metro has to be up for any of it.
+
+Maestro's own guidance is to test the final bundled binary, which has none of those problems. We
+cannot yet, because `src/pairing/qr.ts` permits a plaintext `ws://` relay only under `__DEV__`,
+so a release-shaped build refuses the local dev relay. Closing that gap means a dedicated e2e
+build profile gated on an explicit env flag rather than `__DEV__` - worth doing, and it would
+delete all three workarounds above.
+
+**Why a run takes minutes:** every flow begins with `launchApp`, which force-stops and cold
+boots, and then waits up to 60s for the channel to re-establish - roughly 70s of the runtime of
+a flow whose actual assertions take seconds. `launchApp: stopApp: false` brings the backgrounded
+app forward instead, keeping the channel up, at the cost of each flow having to navigate itself
+to a known screen rather than relying on a fresh launch.
+
 See `CLAUDE.md`'s Testing section for the scoped-run discipline (what to run while actively
 working on a task vs. the full gate).
 
