@@ -95,16 +95,24 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 
 ## Cloud-spend and public-write MCP tools
 
-Three MCP servers are wired in: `context7` and `maestro` from `.mcp.json`, plus the official Expo
-plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is documentation-only and
-unguarded; the Expo plugin and `maestro` expose tools with consequences outside this machine,
-gated by `permissions.ask` in `.claude/settings.json` (a prompt on every call in every normal
-permission mode; a bypass mode skips it, so this section, not the prompt, is the real guard) -
-never call these without an explicit user request, and re-check this list against `/mcp` when
-either server is upgraded.
+Two MCP servers are wired in: `context7` from `.mcp.json`, plus the official Expo plugin from
+`enabledPlugins` in `.claude/settings.json`. `context7` is documentation-only and unguarded; the
+Expo plugin exposes tools with consequences outside this machine, gated by `permissions.ask` in
+`.claude/settings.json` (a prompt on every call in every normal permission mode; a bypass mode
+skips it, so this section, not the prompt, is the real guard) - never call these without an
+explicit user request, and re-check this list against `/mcp` when the server is upgraded.
+
+**The Maestro MCP server was removed deliberately** (2026-07-25). It is `maestro mcp`, a wrapper
+over the same CLI, so it added no capability: `run`/`inspect_screen`/`list_devices`/`run_on_cloud`
+are `maestro test`/`hierarchy`/`list-devices`/`cloud`. It did add a second device driver that
+contended with the dev rig's and then hung rather than erroring (over two minutes on calls as
+small as `cheat_sheet`, while the CLI answered in seconds), ten tool schemas of context per
+session, and a cloud-spend tool this section had to guard in prose. Drive Maestro with the CLI;
+see `.claude/rules/e2e-maestro-runs.md`.
 
 - **Never without an explicit request - spends money or quota:** `build_run`, `build_submit`,
-  `workflow_run` (Expo MCP), `run_on_cloud` (Maestro MCP). `build_run` also cuts against board
+  `workflow_run` (Expo MCP). `maestro cloud` on the CLI bills Maestro Cloud minutes and carries
+  the same bar. `build_run` also cuts against board
   task #5 ("CI: GitHub Actions build workflow"), a **planned, not yet built** move of build
   execution to `eas build --local` on GitHub Actions runners, to preserve the Expo Free allowance
   of 15 iOS + 15 Android cloud builds per month. EAS itself is not going away; only *cloud* build
@@ -175,16 +183,18 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
 - Running tests you just added or modified, scoped to those files.
 
 **Never run unless the user explicitly asks, or `/test` is executing:**
-- An unscoped full-tier run, however invoked - shell command (`npx vitest run` with no path,
-  `maestro test .maestro/` for the full suite) or MCP tool (the Maestro MCP `run` tool pointed at
-  a directory or the whole suite is the same violation as `maestro test .maestro/`).
+- An unscoped full-tier run - `npx vitest run` with no path, `maestro test .maestro/` for the
+  full suite.
 
 If a run would execute tests you did not add or modify, it is a full-tier run regardless of
 mechanism: stop and let `/test` handle it.
 
 **Maestro note:** `.maestro/smoke.yaml` runs against a fresh (unpaired) install; the flows under
 `.maestro/paired/` need a running relay plus `node scripts/stubDesktopPeer.mjs` and a completed
-pairing first (each flow's header documents the setup).
+pairing first (each flow's header documents the setup). Run flows with the **CLI**
+(`maestro --device <serial> test <path>`), one rig mode at a time, and read
+`.claude/rules/e2e-maestro-runs.md` before touching a flow - the dev client imposes several
+non-obvious constraints and each one fails as a full-timeout hang rather than an error.
 
 ## Conventions
 
@@ -214,6 +224,8 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   `src/components/`).
 - `ui-copy-brevity.md` - labels name the action, context names the object; one-line
   descriptions; a11y labels exempt (`src/screens/`, `src/components/`).
+- `e2e-maestro-runs.md` - Maestro through the CLI, one rig mode, testID selectors, the dev-client
+  constraints (`.maestro/`, `scripts/stubDesktopPeer.mjs`, `scripts/dev.mjs`).
 - `docs-stay-in-sync.md` - update docs when changing anchor source files.
 
 **Local overrides:** there is no per-rule local file. Put machine-specific instruction overrides
