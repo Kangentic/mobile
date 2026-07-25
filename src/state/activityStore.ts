@@ -20,6 +20,13 @@ export interface SessionActivityEntry {
   awaitedPromptId: string | null;
   /** The prompt dialog's numbered option labels from the desktop's PTY probe (protocol 0.6.0), or null when unknown. */
   awaitedPromptOptions: string[] | null;
+  /**
+   * The agent's last message as a ready-to-render line, pushed by the desktop
+   * (protocol 0.8.0+), or null when the desktop predates it. Null is what
+   * keeps the Home feed's own transcript peek alive as the fallback, so this
+   * must never be set to an empty string to mean "nothing to say".
+   */
+  messagePreview: string | null;
   /** Epoch ms of the last snapshot/event touching this session. */
   lastEventAt: number;
   /**
@@ -68,6 +75,10 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     // permission-event options once the bumped package links; until then
     // the 0.5.x parsers strip the fields and this stays null.
     awaitedPromptOptions: null,
+    // Filled by the desktop's message-preview push (protocol 0.8.0+); stays
+    // null against an older desktop, which is what keeps the Home feed's own
+    // transcript peek as the fallback.
+    messagePreview: null,
     lastEventAt: Date.now(),
     enteredSectionAt: Date.now(),
     sectionChangedAt: null,
@@ -144,6 +155,14 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           // (absent = desktop probed nothing), cleared when it resolves.
           updated.awaitedPromptOptions = payload.pending ? (payload.options ?? null) : null;
           if (payload.pending) updated.state = 'permission';
+          break;
+        // The agent's last message, already collapsed desktop-side (protocol
+        // 0.8.0+). It arrives on a feed the app receives anyway, replacing a
+        // per-session transcript fetch that cost 2.3-34.6 KB and up to 3.8s
+        // to produce this same one line. A pre-0.8.0 desktop sends none, and
+        // the Home feed's own peek stays as the fallback.
+        case 'message-preview':
+          updated.messagePreview = payload.text;
           break;
       }
       if (sectionForEntry(updated) !== sectionForEntry(existing)) {

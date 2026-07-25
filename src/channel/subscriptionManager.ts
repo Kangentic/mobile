@@ -64,6 +64,14 @@ export class SubscriptionManager {
   private readonly desiredDiffsByTaskId = new Map<string, DesiredDiff>();
 
   private readonly activeStreamIds = new Set<string>();
+  /**
+   * Sessions whose subscription must carry live PTY bytes - the ones with a
+   * terminal on screen. Everything else subscribes list-only: the feed needs
+   * activity, not output it discards on arrival.
+   */
+  private readonly terminalStreamIds = new Set<string>();
+  /** What each active subscription was actually opened with, so a mode change re-subscribes. */
+  private readonly activeStreamWantsTerminal = new Map<string, boolean>();
   private readonly activeBoardIds = new Set<string>();
   private readonly activeDiffTaskIds = new Set<string>();
 
@@ -138,6 +146,21 @@ export class SubscriptionManager {
     );
   }
 
+  /**
+   * Declare whether this session's subscription needs live PTY bytes. A
+   * session screen turns it on when it opens and off when it closes; the feed
+   * never turns it on. Flipping it re-subscribes, which is also what fetches
+   * the fresh scrollback a newly-opened terminal needs to seed itself.
+   */
+  setStreamWantsTerminal(sessionId: string, wantsTerminal: boolean): void {
+    const previous = this.terminalStreamIds.has(sessionId);
+    if (previous === wantsTerminal) return;
+    if (wantsTerminal) this.terminalStreamIds.add(sessionId);
+    else this.terminalStreamIds.delete(sessionId);
+    if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return;
+    void this.subscribeStream(sessionId);
+  }
+
   /** Immediate re-subscribe for one stream - the fresh-scrollback path when a session screen opens. */
   refreshStream(sessionId: string): void {
     if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return;
@@ -200,10 +223,12 @@ export class SubscriptionManager {
   }
 
   private async subscribeStream(sessionId: string, isRetry = false): Promise<void> {
+    const wantsTerminal = this.terminalStreamIds.has(sessionId);
     try {
-      const snapshot = await this.verbs.readStreamSubscribe(sessionId);
+      const snapshot = await this.verbs.readStreamSubscribe(sessionId, { terminal: wantsTerminal });
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
       this.activeStreamIds.add(sessionId);
+      this.activeStreamWantsTerminal.set(sessionId, wantsTerminal);
       this.sinks.onStreamSnapshot(sessionId, snapshot);
     } catch (error) {
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
@@ -258,6 +283,8 @@ export class SubscriptionManager {
       clearTimeout(retryTimer);
       this.streamRetryTimers.delete(sessionId);
     }
+    this.terminalStreamIds.delete(sessionId);
+    this.activeStreamWantsTerminal.delete(sessionId);
     if (!this.activeStreamIds.has(sessionId)) return;
     this.activeStreamIds.delete(sessionId);
     if (this.session.isEstablished) void this.verbs.readStreamUnsubscribe(sessionId).catch(() => undefined);

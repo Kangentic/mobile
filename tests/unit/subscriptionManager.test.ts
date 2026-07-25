@@ -108,6 +108,64 @@ describe('SubscriptionManager', () => {
     expect([...sinkCalls.streamSnapshots].sort()).toEqual(['sess-1', 'sess-2']);
   });
 
+  /**
+   * The feed discards PTY bytes on arrival, and on a live board that discard
+   * measured ~13MB an hour with no terminal on screen. So a stream is
+   * subscribed list-only by default, and only a session screen asks for the
+   * bytes. `terminal` absent would mean "send them" to the desktop, so the
+   * false must actually be on the wire, not merely omitted.
+   */
+  it('subscribes streams list-only until a screen asks for the terminal', async () => {
+    const { stub, manager, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+
+    manager.setDesiredStreams(new Set(['sess-1']));
+    await flushLoopback();
+
+    const subscribes = requests.filter((request) => request.verb === 'read-stream');
+    expect(subscribes).toHaveLength(1);
+    expect((subscribes[0].payload as { terminal?: boolean }).terminal).toBe(false);
+
+    manager.setStreamWantsTerminal('sess-1', true);
+    await flushLoopback();
+
+    const afterOpen = requests.filter((request) => request.verb === 'read-stream');
+    expect(afterOpen).toHaveLength(2);
+    expect((afterOpen[1].payload as { terminal?: boolean }).terminal).toBe(true);
+  });
+
+  it('drops back to list-only when the screen closes', async () => {
+    const { stub, manager, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredStreams(new Set(['sess-1']));
+    manager.setStreamWantsTerminal('sess-1', true);
+    await flushLoopback();
+    const countAfterOpen = requests.length;
+
+    manager.setStreamWantsTerminal('sess-1', false);
+    await flushLoopback();
+
+    const afterClose = requests.slice(countAfterOpen).filter((request) => request.verb === 'read-stream');
+    expect(afterClose).toHaveLength(1);
+    expect((afterClose[0].payload as { terminal?: boolean }).terminal).toBe(false);
+  });
+
+  it('does not re-subscribe when the terminal mode is set to what it already is', async () => {
+    const { stub, manager, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredStreams(new Set(['sess-1']));
+    await flushLoopback();
+    const countAfterSubscribe = requests.length;
+
+    manager.setStreamWantsTerminal('sess-1', false);
+    await flushLoopback();
+
+    expect(requests).toHaveLength(countAfterSubscribe);
+  });
+
   it('re-issues every desired subscription after a transport drop and fresh handshake', async () => {
     const { session, stub, manager, requests, sinkCalls } = await harness();
     stub.beginHandshake();

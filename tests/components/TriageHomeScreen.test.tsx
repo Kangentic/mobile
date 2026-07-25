@@ -399,6 +399,55 @@ describe('TriageHomeScreen', () => {
     jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
   });
 
+  /**
+   * A 0.8.0+ desktop pushes the preview on the activity feed the app already
+   * receives. The row must then render it AND stop fetching its own, which is
+   * where the per-session transcript requests (2.3-34.6 KB each) go away.
+   */
+  it('renders the desktop-pushed preview and fetches no snippet of its own', async () => {
+    jest.mocked(peekLastAssistantMessage).mockClear();
+    // seedStores leaves sess-1 in the permission state, whose body is the
+    // pending decision rather than the preview; move it back to idle.
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
+    });
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'message-preview', text: 'Pushed straight from the desktop.' },
+    });
+
+    renderHome();
+
+    expect(screen.getByText('Pushed straight from the desktop.')).toBeTruthy();
+    await act(async () => {});
+    expect(peekLastAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A prompt-pending row's body is the pending DECISION, which the preview
+   * does not describe, so that row keeps peeking even when a preview exists.
+   */
+  it('still peeks for a prompt-pending row despite a pushed preview', async () => {
+    jest.mocked(peekLastAssistantMessage).mockClear();
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'message-preview', text: 'Not what this row should show.' },
+    });
+
+    renderHome();
+    await act(async () => {});
+
+    expect(mockPeekAwaitedPrompt).toHaveBeenCalled();
+    expect(screen.queryByText('Not what this row should show.')).toBeNull();
+  });
+
   it('shows the pairing CTA when unpaired', () => {
     useChannelStore.setState({ pairedState: 'unpaired' });
     renderHome();

@@ -200,6 +200,11 @@ export function openSessionScreen(sessionId: string): void {
   retainTerminal(sessionId);
   useActivityStore.getState().markRead(sessionId);
   const connection = getActiveConnection();
+  // This is the only screen that renders PTY bytes, so it is the only place
+  // that asks for them. The flip re-subscribes, which is also what fetches
+  // the fresh scrollback the terminal seeds itself from - so this replaces
+  // the refreshStream call rather than joining it.
+  connection?.subscriptions.setStreamWantsTerminal(sessionId, true);
   connection?.subscriptions.refreshStream(sessionId);
   void loadTranscriptTail(sessionId).catch(() => {
     // Not connected yet or a transient failure: the store keeps
@@ -212,6 +217,9 @@ export function closeSessionScreen(sessionId: string): void {
   // backing out and returning is instant; the terminal ring is released
   // (raw PTY bytes are the heavy part).
   releaseTerminal(sessionId);
+  // Stop the desktop SENDING those bytes too. Releasing the ring only stopped
+  // us keeping them; the relay was still carrying every one.
+  getActiveConnection()?.subscriptions.setStreamWantsTerminal(sessionId, false);
   useActivityStore.getState().markRead(sessionId);
 }
 

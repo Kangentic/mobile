@@ -78,8 +78,20 @@ export class VerbClient {
     this.capabilities = capabilities;
   }
 
-  async readStreamSubscribe(sessionId: string): Promise<ReadStreamResponsePayload> {
-    const payload: ReadStreamRequestPayload = { sessionId, action: 'subscribe' };
+  /**
+   * `terminal: false` subscribes to everything the session list renders -
+   * activity, usage, permission, transcript - without the live PTY bytes.
+   * The feed discards those bytes anyway (see storeFeed's terminal handler),
+   * and on a live board they measured ~13MB an hour with no terminal open.
+   * A pre-0.8.0 desktop ignores the flag and keeps sending, which is exactly
+   * the behaviour we had before.
+   */
+  async readStreamSubscribe(sessionId: string, options: { terminal?: boolean } = {}): Promise<ReadStreamResponsePayload> {
+    const payload: ReadStreamRequestPayload = {
+      sessionId,
+      action: 'subscribe',
+      ...(options.terminal !== undefined ? { terminal: options.terminal } : {}),
+    };
     const response = await this.requireOk('read-stream', asRequestJson(payload));
     return this.parsePayload('read-stream', response, parseReadStreamResponsePayload);
   }
