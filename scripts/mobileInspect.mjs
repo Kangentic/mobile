@@ -31,7 +31,7 @@
  * hand (scripts cannot import TS) - keep the two in sync.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -72,8 +72,68 @@ function ensureSingleAdbTarget() {
   }
 }
 
+/**
+ * Every adb call is bounded and self-healing.
+ *
+ * A wedged adb server does not error - it BLOCKS, and spawnSync without a
+ * timeout blocks with it, which is how a stuck server turned into ten-minute
+ * stalls. The server wedges most often after a large binary transfer over USB
+ * (see commandScreenshot): adb's own docs describe a stalled bulk transfer
+ * merging into the next packet header, which closes the connection with
+ * "received too many bytes while waiting for payload".
+ *
+ * So: bound the call, and on a timeout restart the server once (the documented
+ * host:kill recovery) before giving up. Reverse tunnels do NOT survive a server
+ * restart, so they are re-applied too.
+ */
+const ADB_TIMEOUT_MS = 20_000;
+
+function spawnAdb(args, options = {}) {
+  return spawnSync('adb', args, {
+    encoding: options.binary ? 'buffer' : 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: options.timeoutMs ?? ADB_TIMEOUT_MS,
+  });
+}
+
+/**
+ * Restart a wedged server and restore the reverses the rig depends on.
+ *
+ * `adb kill-server` is the polite route, but a server wedged mid-transfer
+ * cannot answer that either - it is itself an adb client. When the polite
+ * route times out, the process has to be terminated directly; adb is a daemon
+ * that any later command restarts on demand, so this is recoverable, not
+ * destructive.
+ */
+function recoverAdbServer() {
+  console.error('[inspect] adb stopped responding; restarting the server');
+  const killed = spawnSync('adb', ['kill-server'], { encoding: 'utf8', timeout: 5000 });
+  if (killed.error || killed.status !== 0) {
+    console.error('[inspect] kill-server did not answer either; terminating adb.exe');
+    spawnSync(process.platform === 'win32' ? 'taskkill' : 'pkill', process.platform === 'win32' ? ['/F', '/IM', 'adb.exe'] : ['-f', 'adb'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+  }
+  const started = spawnSync('adb', ['start-server'], { encoding: 'utf8', timeout: ADB_TIMEOUT_MS });
+  if (started.error) {
+    console.error('[inspect] adb server would not restart; check the USB cable or use the rig --wifi flag');
+    return;
+  }
+  // Reverse tunnels never survive a server restart.
+  for (const port of ['8080', '8081', '8791']) {
+    spawnSync('adb', ['reverse', `tcp:${port}`, `tcp:${port}`], { encoding: 'utf8', timeout: ADB_TIMEOUT_MS });
+  }
+}
+
 function runAdb(args, options = {}) {
-  const result = spawnSync('adb', args, { encoding: options.binary ? 'buffer' : 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  let result = spawnAdb(args, options);
+  // ETIMEDOUT (or a killed process with no status) means the server hung
+  // rather than answered. Recover once, then retry the same command.
+  if (result.error?.code === 'ETIMEDOUT' || (result.signal !== null && result.status === null)) {
+    recoverAdbServer();
+    result = spawnAdb(args, options);
+  }
   if (result.error) fail(`adb failed to start: ${result.error.message}`);
   if (result.status !== 0) {
     const stderrText = options.binary ? result.stderr?.toString('utf8') : result.stderr;
@@ -87,11 +147,26 @@ function flagValue(args, name) {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
+/**
+ * Capture on the DEVICE, then pull.
+ *
+ * `exec-out screencap -p` streams the whole PNG back as one bulk USB transfer,
+ * which is the pattern adb's own zero-length-packet doc names as the stall
+ * trigger: when a payload lands on an exact multiple of the endpoint's max
+ * packet size and no short packet follows, the transfer stalls and merges into
+ * the next header, closing the connection and often leaving the server wedged.
+ * Screenshots were by far our largest and most frequent such transfer.
+ *
+ * `adb pull` moves the same bytes over the sync protocol, which frames and
+ * chunks them itself, so it does not hit that path.
+ */
 function commandScreenshot(args) {
   const outPath = flagValue(args, '--out') ?? join(tmpdir(), 'kangentic-mobile-inspect', `shot-${Date.now()}.png`);
   mkdirSync(dirname(outPath), { recursive: true });
-  const result = runAdb(['exec-out', 'screencap', '-p'], { binary: true });
-  writeFileSync(outPath, result.stdout);
+  const devicePath = `/sdcard/kangentic-inspect-shot.png`;
+  runAdb(['shell', 'screencap', '-p', devicePath]);
+  runAdb(['pull', devicePath, outPath]);
+  runAdb(['shell', 'rm', '-f', devicePath]);
   console.log(outPath);
 }
 
