@@ -171,6 +171,11 @@ describe('validateScannedQr', () => {
     const acceptedAddresses = [
       'ws://127.0.0.1',
       'ws://127.0.0.1:8080',
+      // Exactly what the desktop emits: LOCAL_DEV_RELAY_URL verbatim for its
+      // 'local' mode, and url.href for a custom one - which appends a trailing
+      // slash to an authority-only URL. Both must validate, or a real pairing
+      // breaks.
+      'ws://127.0.0.1:8080/',
       'ws://127.0.0.1:8080/relay',
       'ws://127.0.0.1:8080?slot=abc',
       'ws://localhost:8080',
