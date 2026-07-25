@@ -21,6 +21,32 @@ jest.mock('react-native-safe-area-context', () =>
   require('react-native-safe-area-context/jest/mock').default,
 );
 
+const mockFlashListScrollToOffset = jest.fn();
+// Wraps the REAL FlashList (every other test in this file keeps exercising
+// its actual virtualization and layout behavior) and only intercepts
+// scrollToOffset on the ref, so the top-anchor test below can assert on it
+// without reaching into native scroll-command dispatch.
+jest.mock('@shopify/flash-list', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const ReactModule = require('react');
+  const ActualFlashListModule = jest.requireActual('@shopify/flash-list');
+  const RealFlashList = ActualFlashListModule.FlashList;
+  const SpyingFlashList = ReactModule.forwardRef(function SpyingFlashList(
+    props: object,
+    forwardedRef: React.Ref<{ scrollToOffset: (params: { offset: number; animated?: boolean }) => void }>,
+  ) {
+    const innerRef = ReactModule.useRef(null);
+    ReactModule.useImperativeHandle(forwardedRef, () => ({
+      scrollToOffset: (params: { offset: number; animated?: boolean }) => {
+        mockFlashListScrollToOffset(params);
+        innerRef.current?.scrollToOffset(params);
+      },
+    }));
+    return ReactModule.createElement(RealFlashList, { ...props, ref: innerRef });
+  });
+  return { ...ActualFlashListModule, FlashList: SpyingFlashList };
+});
+
 const mockPeekAwaitedPrompt = jest.fn();
 const mockArchiveTask = jest.fn();
 const mockDeleteTaskFromBoard = jest.fn();
@@ -161,6 +187,7 @@ describe('TriageHomeScreen', () => {
     mockPush.mockClear();
     mockPeekAwaitedPrompt.mockReset();
     mockPeekAwaitedPrompt.mockResolvedValue(null);
+    mockFlashListScrollToOffset.mockClear();
     seedStores();
   });
 
@@ -455,6 +482,52 @@ describe('TriageHomeScreen', () => {
     useChannelStore.setState({ pairedState: 'unpaired' });
     renderHome();
     expect(screen.getByTestId('triage-pair-cta')).toBeTruthy();
+  });
+
+  /**
+   * With 8+ agents, FlashList v2's maintainVisibleContentPosition held
+   * whatever row it first anchored while higher-priority rows inserted
+   * ABOVE it, so the feed opened parked at the bottom - showing the working
+   * sessions and hiding the ones waiting on you. The fix re-anchors to the
+   * top on every insertion while the user is resting there, and the anchor
+   * is derived from the live scroll offset on each onScroll (not a one-way
+   * latch that, once tripped, could never resume pinning).
+   */
+  it('re-anchors the feed to the top on every insertion while resting there, and resumes after scrolling back (not a one-way latch)', async () => {
+    renderHome();
+    const list = screen.getByTestId('triage-home-list');
+
+    function scrollTo(offsetFromTop: number): void {
+      fireEvent.scroll(list, { nativeEvent: { contentOffset: { x: 0, y: offsetFromTop } } });
+    }
+
+    // Fresh mount: resting at the top, so a row insertion re-anchors.
+    fireEvent(list, 'contentSizeChange', 400, 800);
+    expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(1);
+    expect(mockFlashListScrollToOffset).toHaveBeenLastCalledWith({ offset: 0, animated: false });
+
+    // Still within the 8px tolerance: another insertion re-anchors again -
+    // this is NOT a one-shot "anchor once on mount" behavior.
+    scrollTo(8);
+    fireEvent(list, 'contentSizeChange', 400, 900);
+    expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(2);
+
+    // Scrolled past the tolerance: a later insertion must not yank the list
+    // back out from under the user.
+    scrollTo(400);
+    fireEvent(list, 'contentSizeChange', 400, 1000);
+    expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(2);
+
+    // Scrolling back to the top resumes anchoring - proves this reads the
+    // live offset each time rather than latching "the user scrolled away"
+    // permanently.
+    scrollTo(0);
+    fireEvent(list, 'contentSizeChange', 400, 1100);
+    expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(3);
+
+    // The lone row is prompt-pending, which kicks off an async snippet peek;
+    // let it settle so it does not bleed into the next test.
+    await act(async () => {});
   });
 
   describe('long-press action hub', () => {
