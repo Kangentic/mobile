@@ -361,10 +361,16 @@ function findOrphanRigProcesses() {
     .map((row) => ({ pid: row.ProcessId, commandLine: String(row.CommandLine ?? '').trim() }));
 }
 
-/** Kill the orphans above, process tree and all. Returns how many were cleared. */
+/**
+ * Kill the orphans above. Deliberately NOT a tree kill: the emulator is a
+ * descendant of the rig that booted it, so `/T` takes qemu down with the rig
+ * and costs a cold boot nobody asked for. Every process worth killing here is
+ * itself a node.exe the scan already matched, so killing them individually
+ * covers the same ground; their cmd.exe shims exit with their child.
+ */
 function killOrphanRigProcesses(orphans) {
   for (const orphan of orphans) {
-    spawnSync('taskkill', ['/PID', String(orphan.pid), '/T', '/F'], { encoding: 'utf8' });
+    spawnSync('taskkill', ['/PID', String(orphan.pid), '/F'], { encoding: 'utf8' });
   }
   return orphans.length;
 }
