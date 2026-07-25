@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { AppState, StyleSheet, View } from 'react-native';
 import { Asset } from 'expo-asset';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -92,8 +92,9 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
 /**
  * The raw interactive terminal: a FAITHFUL MIRROR of the desktop terminal.
  * An xterm.js WebView fed by the terminalFeed ring renders the desktop's
- * EXACT grid 1:1 and the glue sizes the font so the whole frame fits the
- * phone screen (nothing cut off); pinch-zoom + pan read the detail.
+ * EXACT grid 1:1, with the font sized so the grid's ROWS fill the phone's
+ * height. A grid wider than the screen then overflows and pans horizontally
+ * (the cursor stays in view); pinch-zoom reads the detail.
  *
  * It NEVER resizes the desktop PTY - a shared desktop session must not be
  * reshaped by the phone. Keyboard input typed inside the WebView flows back
@@ -219,6 +220,23 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       postInit();
     }
   }, [isActive, terminalReady, postInit, clearFlushTimer]);
+
+  // Coming back from the background can leave the mirror with holes: the
+  // WebView survives (no 'ready', so nothing re-inits) but its renderer has
+  // dropped glyphs, and single characters go missing mid-line and STAY
+  // missing. Observed on a Pixel - "110 +" rendered as "10", "progress" as
+  // "p ogress" - and repaired completely by the refit button, which is
+  // exactly this message. So send it automatically: a refit re-fits the font
+  // and re-applies the geometry, which forces a full repaint of the frame
+  // already in the buffer. Purely local, no wire traffic.
+  useEffect(() => {
+    if (!terminalReady) return;
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status !== 'active' || !isActiveRef.current) return;
+      postToTerminal({ type: 'refit' });
+    });
+    return () => subscription.remove();
+  }, [terminalReady, postToTerminal]);
 
   // Session swap under a mounted pane (the desktop respawned the task's
   // session): the WebView survives but its grid belongs to the dead session.

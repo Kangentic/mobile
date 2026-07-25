@@ -1,4 +1,5 @@
 import React from 'react';
+import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { act, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
@@ -14,6 +15,16 @@ import { useTerminalUiStore } from '@/state/terminalUiStore';
 jest.mock('@/connection/actions', () => ({
   writeTerminal: jest.fn().mockResolvedValue(undefined),
 }));
+
+// Drives the foreground/background transitions the pane refits on.
+// Spied on the real AppState (registered in beforeEach) rather than mocked as
+// a module: react-native re-exports it lazily, so replacing the module leaves
+// the component with an undefined AppState.
+const appStateListeners = new Set<(nextStatus: AppStateStatus) => void>();
+
+function emitAppState(nextStatus: AppStateStatus): void {
+  for (const listener of appStateListeners) listener(nextStatus);
+}
 
 jest.mock('expo-asset', () => ({
   Asset: {
@@ -128,10 +139,17 @@ function decodedPosts(): ReturnType<typeof decodeHostMessage>[] {
 
 describe('TerminalPane (faithful mirror)', () => {
   beforeEach(() => {
+    jest.restoreAllMocks();
     jest.clearAllMocks();
     resetTerminalFeed();
     webViewMock.__capturedProps.current = null;
     useTerminalUiStore.setState({ applicationCursorModeBySessionId: {}, focusKeyboardRequestBySessionId: {} });
+    appStateListeners.clear();
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener): NativeEventSubscription => {
+      const appStateListener = listener as (nextStatus: AppStateStatus) => void;
+      appStateListeners.add(appStateListener);
+      return { remove: () => appStateListeners.delete(appStateListener) } as unknown as NativeEventSubscription;
+    });
   });
 
   it('inits at the exact PTY grid when the desktop reported dimensions', async () => {
@@ -216,6 +234,36 @@ describe('TerminalPane (faithful mirror)', () => {
     if (reseed?.type === 'init') {
       expect(reseed.scrollback).toContain('while-hidden');
     }
+  });
+
+  /**
+   * Observed on a Pixel: after the app came back from the background the
+   * mirror kept single characters missing mid-line ("110 +" drawn as "10")
+   * and never recovered on its own, because the WebView survives and so
+   * nothing re-inits. The refit button repaired it completely, so the pane
+   * sends that same message itself on foreground.
+   */
+  it('refits on returning to the foreground, so a mirror with dropped glyphs repairs itself', async () => {
+    retainTerminal('sess-1');
+    setTerminalDimensions('sess-1', { cols: 120, rows: 30 });
+    await renderPaneAndReady(true);
+    webViewMock.__postMessageMock.mockClear();
+
+    act(() => emitAppState('background'));
+    expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
+
+    act(() => emitAppState('active'));
+    expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(true);
+  });
+
+  it('does not refit a pane the user is not looking at', async () => {
+    retainTerminal('sess-1');
+    const result = await renderPaneAndReady(true);
+    rerenderPane(result, false);
+    webViewMock.__postMessageMock.mockClear();
+
+    act(() => emitAppState('active'));
+    expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
   });
 
   it('drops malformed WebView messages without posting or writing', async () => {
