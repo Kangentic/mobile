@@ -9,14 +9,6 @@
         "@upstash/context7-mcp"
       ]
     },
-    "maestro": {
-      "command": "cmd",
-      "args": [
-        "/c",
-        "maestro",
-        "mcp"
-      ]
-    },
     "firebase": {
       "command": "cmd",
       "args": [

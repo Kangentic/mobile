@@ -115,25 +115,33 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 
 ## Cloud-spend and public-write MCP tools
 
-Four MCP servers are wired in: `context7`, `maestro`, and `firebase` from `.mcp.json`, plus the
-official Expo plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is
-documentation-only and unguarded; the Expo plugin, `maestro`, and `firebase` expose tools with
-consequences outside this machine, gated by `permissions.ask` in `.claude/settings.json` (a prompt
-on every call in every normal permission mode; a bypass mode skips it, so this section, not the
-prompt, is the real guard) - never call these without an explicit user request, and re-check this
-list against `/mcp` when any server is upgraded.
+Three MCP servers are wired in: `context7` and `firebase` from `.mcp.json`, plus the official
+Expo plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is documentation-only
+and unguarded; the Expo plugin and `firebase` expose tools with consequences outside this
+machine, gated by `permissions.ask` in `.claude/settings.json` (a prompt on every call in every
+normal permission mode; a bypass mode skips it, so this section, not the prompt, is the real
+guard) - never call these without an explicit user request, and re-check this list against
+`/mcp` when any server is upgraded.
+
+**The Maestro MCP server was removed deliberately** (2026-07-25). It is `maestro mcp`, a wrapper
+over the same CLI, so it added no capability: `run`/`inspect_screen`/`list_devices`/`run_on_cloud`
+are `maestro test`/`hierarchy`/`list-devices`/`cloud`. It did add a second device driver that
+contended with the dev rig's and then hung rather than erroring (over two minutes on calls as
+small as `cheat_sheet`, while the CLI answered in seconds), ten tool schemas of context per
+session, and a cloud-spend tool this section had to guard in prose. Drive Maestro with the CLI;
+see `.claude/rules/e2e-maestro-runs.md`.
 
 - **Never without an explicit request - spends money or quota:** `build_run`, `build_submit`,
-  `workflow_run` (Expo MCP), `run_on_cloud` (Maestro MCP). `build_run` spends one of the Expo
-  Free allowance of 15 iOS + 15 Android **cloud** builds per month, and it is no longer how this
-  project builds: `.github/workflows/build-android.yml` runs `expo prebuild` plus Gradle on a
-  free GitHub runner, so a normal build costs no EAS credit at all. Reach for the workflow, not
-  `build_run`. EAS is still the path for a manual `eas submit`, so `build_submit` is "explicit
-  request only" rather than "never our path". Note the Expo MCP authenticates as the individual
-  developer's **personal** Expo account via `/mcp` OAuth, and CI holds no Expo credential
-  whatsoever, so anything the MCP fires is both off-path and attributed to a personal identity
-  (see the auth table in [docs/developer-guide.md](docs/developer-guide.md)'s Agent tooling
-  section).
+  `workflow_run` (Expo MCP). `maestro cloud` on the CLI bills Maestro Cloud minutes and carries
+  the same bar. `build_run` spends one of the Expo Free allowance of 15 iOS + 15 Android **cloud**
+  builds per month, and it is no longer how this project builds:
+  `.github/workflows/build-android.yml` runs `expo prebuild` plus Gradle on a free GitHub runner,
+  so a normal build costs no EAS credit at all. Reach for the workflow, not `build_run`. EAS is
+  still the path for a manual `eas submit`, so `build_submit` is "explicit request only" rather
+  than "never our path". Note the Expo MCP authenticates as the individual developer's
+  **personal** Expo account via `/mcp` OAuth, and CI holds no Expo credential whatsoever, so
+  anything the MCP fires is both off-path and attributed to a personal identity (see the auth
+  table in [docs/developer-guide.md](docs/developer-guide.md)'s Agent tooling section).
 - **Never without an explicit request, higher bar - posts publicly and is effectively
   irreversible:** `appstore_reply_review`, `appstore_delete_review_response`,
   `playstore_reply_review` (Expo MCP). These write to real App Store and Play Store listings
@@ -207,16 +215,18 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
 - Running tests you just added or modified, scoped to those files.
 
 **Never run unless the user explicitly asks, or `/test` is executing:**
-- An unscoped full-tier run, however invoked - shell command (`npx vitest run` with no path,
-  `maestro test .maestro/` for the full suite) or MCP tool (the Maestro MCP `run` tool pointed at
-  a directory or the whole suite is the same violation as `maestro test .maestro/`).
+- An unscoped full-tier run - `npx vitest run` with no path, `maestro test .maestro/` for the
+  full suite.
 
 If a run would execute tests you did not add or modify, it is a full-tier run regardless of
 mechanism: stop and let `/test` handle it.
 
 **Maestro note:** `.maestro/smoke.yaml` runs against a fresh (unpaired) install; the flows under
 `.maestro/paired/` need a running relay plus `node scripts/stubDesktopPeer.mjs` and a completed
-pairing first (each flow's header documents the setup).
+pairing first (each flow's header documents the setup). Run flows with the **CLI**
+(`maestro --device <serial> test <path>`), one rig mode at a time, and read
+`.claude/rules/e2e-maestro-runs.md` before touching a flow - the dev client imposes several
+non-obvious constraints and each one fails as a full-timeout hang rather than an error.
 
 **Which stage owns which verification.** CI is the enforced gate, not the local machine:
 `.github/workflows/ci.yml` and `e2e.yml` run on every PR and are required on `main`. So do NOT run
@@ -257,6 +267,8 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   `src/components/`).
 - `ui-copy-brevity.md` - labels name the action, context names the object; one-line
   descriptions; a11y labels exempt (`src/screens/`, `src/components/`).
+- `e2e-maestro-runs.md` - Maestro through the CLI, one rig mode, testID selectors, the dev-client
+  constraints (`.maestro/`, `scripts/stubDesktopPeer.mjs`, `scripts/dev.mjs`).
 - `docs-stay-in-sync.md` - update docs when changing anchor source files.
 
 **Local overrides:** there is no per-rule local file. Put machine-specific instruction overrides
