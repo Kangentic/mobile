@@ -342,6 +342,14 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
     const boardMutations = { patches: new Map(), deleted: new Set(), created: [] };
     let createdTaskCounter = 0;
 
+    /** Back to the canned board. Called on every session establish, which is one Maestro flow. */
+    function resetBoardMutations() {
+      boardMutations.patches.clear();
+      boardMutations.deleted.clear();
+      boardMutations.created.length = 0;
+      createdTaskCounter = 0;
+    }
+
     function applyBoardMutations(snapshot) {
       const tasks = snapshot.tasks
         .filter((task) => !boardMutations.deleted.has(task.id))
@@ -655,6 +663,17 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         }
         if (!result.split) return;
         streams = deriveSecretstreamPair(handshake.getChainingKey(), true);
+        // Every Maestro flow opens with launchApp, which force-stops the app
+        // and brings the session back up here - so this is the per-flow
+        // boundary, and the board resets to its canned state on it.
+        //
+        // Without this the stub accumulates every create/edit/move/delete for
+        // as long as the process lives, and flows that describe themselves as
+        // self-contained silently are not: board-delete-task creates "Delete
+        // me Maestro", deletes the one it long-pressed, and then fails its own
+        // assertNotVisible because an identically-titled card left over from
+        // an earlier run is still on the board.
+        resetBoardMutations();
         console.log('[session] established');
         return;
       }
