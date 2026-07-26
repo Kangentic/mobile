@@ -1,174 +1,180 @@
-import React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
-import { ArrowLeftRight, GitCompareArrows, MessagesSquare, SquareTerminal } from 'lucide-react-native';
-import { Row, StatusDot, Text, useTheme } from '@/components';
+import React, { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { StatusDot, Text, useTheme } from '@/components';
 import { triggerHaptic } from '@/lib/haptics';
+import { SESSION_MODE_OPTIONS, type SessionMode } from './sessionModes';
 
-export type SessionMode = 'terminal' | 'chat' | 'changes';
+export type { SessionMode } from './sessionModes';
 
 export interface SessionModeToggleProps {
   mode: SessionMode;
   onModeChange: (mode: SessionMode) => void;
   /**
    * True when something on the chat side needs the user (a pending
-   * permission/question) while another surface is showing: the Chat
-   * segment grows a needs-you dot. Never auto-switches.
+   * permission/question) while another surface is showing: the Chat segment
+   * grows a needs-you dot. Never auto-switches.
    */
   chatAttention: boolean;
-  /** Opens the move-to-column sheet. Move is an action, not a persistent surface - it never becomes the active segment. */
-  onMove: () => void;
 }
 
-const SEGMENT_ICON_SIZE = 18;
-
-interface SegmentVisual {
-  mode: SessionMode;
-  label: string;
-  accessibilityLabel: string;
-  Icon: typeof SquareTerminal;
-}
-
-const SEGMENTS: SegmentVisual[] = [
-  { mode: 'terminal', label: 'Terminal', accessibilityLabel: 'Terminal view', Icon: SquareTerminal },
-  { mode: 'chat', label: 'Chat', accessibilityLabel: 'Chat view', Icon: MessagesSquare },
-  { mode: 'changes', label: 'Changes', accessibilityLabel: 'Changes view', Icon: GitCompareArrows },
-];
-
-interface SegmentProps {
-  Icon: typeof SquareTerminal;
-  label: string;
-  accessibilityLabel: string;
-  testID: string;
-  isActive: boolean;
-  showAttentionDot: boolean;
-  onPress: () => void;
-}
-
-/** One shared render path for every segment (the three surfaces and Move), so the group's look can never drift between them. */
-function Segment({ Icon, label, accessibilityLabel, testID, isActive, showAttentionDot, onPress }: SegmentProps): React.JSX.Element {
-  const theme = useTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: isActive }}
-      accessibilityLabel={accessibilityLabel}
-      testID={testID}
-      onPress={onPress}
-      style={[
-        styles.segment,
-        {
-          // The WHOLE segment tints when active, not just the icon:
-          // one glance says which surface is on.
-          backgroundColor: isActive ? theme.colors.accentSubtle : 'transparent',
-          borderRadius: theme.radii.lg - theme.spacing.xs / 2,
-          paddingVertical: theme.spacing.xs,
-          // Hold the shared segment at the 44pt touch floor; the token math
-          // otherwise lands a hair under it for all four segments.
-          minHeight: theme.minTouchSize,
-        },
-      ]}
-    >
-      <View style={styles.iconHolder}>
-        <Icon
-          size={SEGMENT_ICON_SIZE}
-          color={isActive ? theme.colors.accent : theme.colors.textMuted}
-          strokeWidth={isActive ? 2.4 : 1.8}
-        />
-        {showAttentionDot ? (
-          <View style={styles.attentionDot}>
-            <StatusDot variant="needs-you" testID="session-mode-chat-attention" />
-          </View>
-        ) : null}
-      </View>
-      <Text variant="caption" color={isActive ? 'accent' : 'muted'} style={styles.label}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
+/** Tall enough to anchor the screen as primary navigation rather than read as a compact form control. */
+const SEGMENT_HEIGHT = 52;
+const SEGMENT_ICON_SIZE = 19;
 
 /**
  * The session's surface switcher: one session, three surfaces - Terminal,
- * Chat, Changes - plus Move, an action (not a surface) that opens the
- * move-to-column sheet instead of paging. Full-width flexed segments
- * (large thumb targets) in the app tab bar's visual language: icon in an
- * amber stadium pill + accent label when active. Tap-only: swipe belongs
- * to the terminal's pan gesture. The row keeps identical geometry in
- * every mode.
+ * Chat, Changes - as a full-width control anchoring the footer.
+ *
+ * Deliberately CUSTOM rather than a native segmented control, which is the
+ * opposite of the call made for the bottom tab bar - and the difference is
+ * what each one is. A tab bar is platform CHROME: iOS users read its
+ * translucency and behaviour as correctness, so approximating it is a risk.
+ * This is in-screen CONTENT, where a branded control reads as the app's
+ * design rather than as a mistake, and where the platform controls actively
+ * fight the brief: Material's segmented button is a compact utilitarian
+ * control, and neither it nor UIKit's exposes a per-segment icon slot
+ * through @expo/ui.
+ *
+ * The active segment is marked by an indicator that SLIDES between positions
+ * rather than a fill that pops on and off, so the eye tracks the change
+ * instead of re-finding it. It is a single shared element whose x-position is
+ * animated; per-segment opacity crossfades would drift out of step.
  */
-export function SessionModeToggle({ mode, onModeChange, chatAttention, onMove }: SessionModeToggleProps): React.JSX.Element {
+export function SessionModeToggle({ mode, onModeChange, chatAttention }: SessionModeToggleProps): React.JSX.Element {
   const theme = useTheme();
+  const { durations, easing } = theme.motion;
+  const [barWidth, setBarWidth] = useState(0);
+  const segmentWidth = barWidth > 0 ? barWidth / SESSION_MODE_OPTIONS.length : 0;
+  const activeIndex = Math.max(
+    0,
+    SESSION_MODE_OPTIONS.findIndex((option) => option.mode === mode),
+  );
 
-  function selectMode(nextMode: SessionMode): void {
-    if (nextMode === mode) return;
-    triggerHaptic('modeToggled');
-    onModeChange(nextMode);
-  }
+  // Starts at its resting position so the initially-active segment renders
+  // already lit, with no slide-in on mount.
+  const indicatorOffset = useSharedValue(0);
+  const hasMeasured = useSharedValue(false);
+  useEffect(() => {
+    const target = activeIndex * segmentWidth;
+    if (!hasMeasured.get()) {
+      // First layout: land it, do not animate from zero.
+      hasMeasured.set(true);
+      indicatorOffset.set(target);
+      return;
+    }
+    indicatorOffset.set(
+      withTiming(target, {
+        duration: durations.base,
+        easing: Easing.bezier(easing.decelerate.x1, easing.decelerate.y1, easing.decelerate.x2, easing.decelerate.y2),
+        reduceMotion: ReduceMotion.System,
+      }),
+    );
+  }, [activeIndex, segmentWidth, indicatorOffset, hasMeasured, durations.base, easing.decelerate]);
 
-  function selectMove(): void {
-    triggerHaptic('modeToggled');
-    onMove();
+  const indicatorStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: indicatorOffset.get() }],
+  }));
+
+  function onLayout(event: LayoutChangeEvent): void {
+    const nextWidth = event.nativeEvent.layout.width;
+    setBarWidth((currentWidth) => (currentWidth === nextWidth ? currentWidth : nextWidth));
   }
 
   return (
-    <Row
+    <View
+      testID="session-mode-toggle"
+      onLayout={onLayout}
       style={[
         styles.bar,
         {
+          height: SEGMENT_HEIGHT,
           backgroundColor: theme.colors.surfaceRaised,
           borderRadius: theme.radii.lg,
-          padding: theme.spacing.xs / 2,
         },
       ]}
     >
-      {SEGMENTS.map((segment) => (
-        <Segment
-          key={segment.mode}
-          Icon={segment.Icon}
-          label={segment.label}
-          accessibilityLabel={segment.accessibilityLabel}
-          testID={`session-mode-${segment.mode}`}
-          isActive={mode === segment.mode}
-          showAttentionDot={segment.mode === 'chat' && chatAttention}
-          onPress={() => selectMode(segment.mode)}
+      {segmentWidth > 0 ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.indicator,
+            indicatorStyle,
+            {
+              width: segmentWidth,
+              backgroundColor: theme.colors.accentSubtle,
+              borderRadius: theme.radii.lg,
+            },
+          ]}
         />
-      ))}
-      <Segment
-        Icon={ArrowLeftRight}
-        label="Move"
-        accessibilityLabel="Move task to another column"
-        testID="session-mode-move"
-        isActive={false}
-        showAttentionDot={false}
-        onPress={selectMove}
-      />
-    </Row>
+      ) : null}
+
+      {SESSION_MODE_OPTIONS.map((option) => {
+        const isActive = option.mode === mode;
+        return (
+          <Pressable
+            key={option.mode}
+            testID={`session-mode-${option.mode}`}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isActive }}
+            accessibilityLabel={option.accessibilityLabel}
+            onPress={() => {
+              if (isActive) return;
+              triggerHaptic('modeToggled');
+              onModeChange(option.mode);
+            }}
+            style={styles.segment}
+          >
+            <View style={styles.iconHolder}>
+              <option.Icon
+                size={SEGMENT_ICON_SIZE}
+                color={isActive ? theme.colors.accent : theme.colors.textMuted}
+                strokeWidth={isActive ? 2.4 : 1.8}
+              />
+              {option.mode === 'chat' && chatAttention ? (
+                <View style={styles.attentionDot}>
+                  <StatusDot variant="needs-you" testID="session-mode-chat-attention" />
+                </View>
+              ) : null}
+            </View>
+            <Text variant="caption" color={isActive ? 'accent' : 'muted'} style={styles.label}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // The tinted fill binds the segments into one visible toggle group
-  // without a hard outline - a full hairline box on top of the footer's
-  // own top border read as two stacked borders ("sticky"/heavy).
-  // No flex here: as a column child it stretches to full width on its own,
-  // and flexBasis 0 would crush the row's height.
-  bar: {},
-  segment: {
-    alignItems: 'center',
-    flex: 1,
-    justifyContent: 'center',
+  attentionDot: {
+    position: 'absolute',
+    right: -9,
+    top: -2,
+  },
+  bar: {
+    flexDirection: 'row',
+    // The indicator is absolutely positioned against this box.
+    position: 'relative',
   },
   iconHolder: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  attentionDot: {
+  indicator: {
+    bottom: 0,
+    left: 0,
     position: 'absolute',
-    right: -10,
-    top: -2,
+    top: 0,
   },
   label: {
     fontWeight: '600',
-    marginTop: 1,
+    marginTop: 3,
+  },
+  segment: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
   },
 });

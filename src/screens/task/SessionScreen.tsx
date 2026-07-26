@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
@@ -41,7 +41,6 @@ const REJECTED_FEED_GRACE_MS = 1500;
  */
 export function SessionScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string; mode?: string }>();
-  const router = useRouter();
   const taskId = params.taskId;
 
   // Select primitives, never the object findTaskById builds: returning a
@@ -153,14 +152,6 @@ export function SessionScreen(): React.JSX.Element {
   // rather than subscribing to the whole boardsByProjectId map, which would
   // re-render this screen (and its unmemoized pager children) on any other
   // project's board mutation.
-  // Move is a native form sheet ROUTE now (app/move-task.tsx), so this screen
-  // only navigates: no visible/inFlight/error state, and no second copy of the
-  // move call to keep in step with the board's.
-  const openMoveSheet = useCallback(() => {
-    if (!projectId) return;
-    router.push({ pathname: '/move-task', params: { taskId, projectId } });
-  }, [router, taskId, projectId]);
-
   const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
   const settingsHydrated = useSettingsStore((state) => state.hydrated);
   const showModeHint = settingsHydrated && !hasSeenSessionModeHint && !sessionEnded && sessionId !== null;
@@ -242,7 +233,6 @@ export function SessionScreen(): React.JSX.Element {
             mode={mode}
             onModeChange={onModeChange}
             chatAttention={chatAttention}
-            onMove={openMoveSheet}
           />
         ) : null}
       </KeyboardAvoidingView>

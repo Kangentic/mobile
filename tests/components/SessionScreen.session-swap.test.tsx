@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -57,17 +57,13 @@ jest.mock('@/screens/task/SessionInputBar', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const ReactModule = require('react');
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  const { Pressable, View } = require('react-native');
+  const { View } = require('react-native');
   return {
     __esModule: true,
-    SessionInputBar: (props: { sessionId: string | null; mode: string; onMove: () => void }) =>
+    SessionInputBar: (props: { sessionId: string | null; mode: string }) =>
       props.sessionId === null
         ? null
-        : ReactModule.createElement(
-            View,
-            { testID: 'stub-session-input-bar', accessibilityLabel: props.mode },
-            ReactModule.createElement(Pressable, { testID: 'stub-session-input-bar-move', onPress: props.onMove }),
-          ),
+        : ReactModule.createElement(View, { testID: 'stub-session-input-bar', accessibilityLabel: props.mode }),
   };
 });
 
@@ -304,33 +300,4 @@ describe('SessionScreen session binding', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  /**
-   * Move is a native form sheet ROUTE now, so this screen only navigates. The
-   * sheet's own behaviour (current column disabled, append position, failure
-   * message) lives in tests/components/MoveTaskScreen.test.tsx.
-   */
-  it('tapping Move navigates to the move-task form sheet with the task and project', () => {
-    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
-    seedTaskWithSession('sess-a');
-    renderSessionScreen();
-
-    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
-
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/move-task',
-      params: { taskId: 'task-1', projectId: 'project-1' },
-    });
-    expect(screen.queryByTestId('move-task-sheet')).toBeNull();
-  });
-
-  /** Without a resolved projectId there is no board to move within, so navigating would open an empty sheet. */
-  it('does not navigate to Move before the board has resolved the project', () => {
-    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
-    useBoardStore.getState().reset();
-    renderSessionScreen();
-
-    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
-
-    expect(mockPush).not.toHaveBeenCalled();
-  });
 });
