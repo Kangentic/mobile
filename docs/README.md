@@ -21,3 +21,6 @@ in the desktop repo's
   transcript-terminal rendering, notifications.
 - [security.md](security.md) - threat model, the pairing ceremony's crypto detail, key storage,
   the relay's blind-metadata honesty statement.
+- [pre-live-hardening-summary.md](pre-live-hardening-summary.md) - the pre-live baseline: what is
+  proven on real hardware, what only tests cover, and what has never been verified at all
+  (iOS, chiefly). Read this before trusting a platform claim about this app.
