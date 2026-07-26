@@ -212,8 +212,11 @@ jobs:
           name: maestro-${{ matrix.suite }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/maestro-report.xml
-            ~/.maestro/tests
+            ${{ runner.temp }}/maestro-output
           retention-days: 7
+          # A failing flow is exactly when these matter, so upload on failure too
+          # (the `if: !cancelled()` above), but never fail the job over a missing
+          # screenshot.
           if-no-files-found: ignore
 
   # Thin required gate, mirroring the ci.yml tiers: this single check is what

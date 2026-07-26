@@ -30,14 +30,23 @@ concurrency:
 #   change. The install was a larger share of each tier than the tier itself.
 #
 # Concurrency budget (GitHub Free caps concurrent jobs around 20): the shard
-# phase is lint 1 + typecheck 1 + native-config 1 + unit 3 + components 4 = 10,
-# plus the CLA workflow = 11. The thin gates run after their shards via `needs`,
-# so they do not consume a shard-phase slot. That leaves real headroom for the
-# E2E tier in e2e.yml.
+# phase is lint 1 + typecheck 1 + native-config 1 + unit 2 + components 4 = 9,
+# plus the CLA workflow and e2e.yml's build job = 11. The thin gates run after
+# their shards via `needs`, so they do not consume a shard-phase slot. Queueing
+# was observed at 12 concurrent jobs, so the practical cap is lower than the
+# documented one and the headroom here is deliberate.
 #
-# Shard counts are a first cut sized to file count (46 unit, 41 component) and
-# should be retuned against observed CI timings, not guessed at again. Jest with
-# React Native Testing Library is expected to be the long pole.
+# Shard counts are sized against MEASURED timings, not file counts. With the
+# node_modules cache warm, a run looked like: unit shards 14s/15s/21s, component
+# shards 35s/40s/42s/51s, lint 23s, typecheck 17s, native-config 16s.
+#
+# Two things follow. First, these tiers sit close to the job spin-up and
+# cache-restore floor (~10-15s), so extra shards buy almost nothing: the unit
+# tier is 2 shards rather than 3 because a third runner spent more time starting
+# up than testing. Components keep 4 because they are genuinely the slower tier.
+# Second, and more important: the whole non-E2E gate now finishes in under a
+# minute of wall clock, so PR latency is entirely E2E-bound. Do not re-shard
+# these tiers looking for a speedup that is not there - look at e2e.yml instead.
 #
 # The E2E tier lives in e2e.yml: it needs an Android emulator and a real APK, so
 # it has a different shape and a much longer runtime.
@@ -70,8 +79,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shardIndex: [1, 2, 3]
-        shardTotal: [3]
+        shardIndex: [1, 2]
+        shardTotal: [2]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-deps
