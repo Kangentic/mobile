@@ -3,6 +3,7 @@ import type {
   BoardColumnWire,
   BoardTaskWire,
   ReadBoardArchivedResponsePayload,
+  ReadBoardProjectGroup,
   ReadBoardProjectSummary,
   ReadBoardSnapshotResponsePayload,
   ReadBoardView,
@@ -110,7 +111,9 @@ interface BoardStoreState {
   pendingRemovals: PendingTaskRemoval[];
   /** Completed tasks per project, filled on demand by the Done column. */
   archivedByProjectId: Record<string, ArchivedTasks>;
-  applyProjectList: (projects: ReadBoardProjectSummary[]) => void;
+  /** Desktop project groups in display order; empty against a pre-0.11.0 desktop, which means one flat list. */
+  projectGroups: ReadBoardProjectGroup[];
+  applyProjectList: (projects: ReadBoardProjectSummary[], groups?: ReadBoardProjectGroup[]) => void;
   selectProject: (projectId: string) => void;
   applyBoardSnapshot: (snapshot: ReadBoardSnapshotResponsePayload) => void;
   setArchivedLoading: (projectId: string, loading: boolean) => void;
@@ -178,8 +181,9 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
   pendingEdits: [],
   pendingRemovals: [],
   archivedByProjectId: {},
+  projectGroups: [],
 
-  applyProjectList: (projects) => set({ projects }),
+  applyProjectList: (projects, groups) => set({ projects, projectGroups: groups ?? [] }),
 
   selectProject: (projectId) => set({ selectedProjectId: projectId }),
 
@@ -385,6 +389,7 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       pendingEdits: [],
       pendingRemovals: [],
       archivedByProjectId: {},
+      projectGroups: [],
     }),
 }));
 

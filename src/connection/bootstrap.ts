@@ -15,6 +15,6 @@ import { useBoardStore } from '@/state/boardStore';
  */
 export async function runBootstrap(verbs: VerbClient, subscriptions: SubscriptionManager): Promise<void> {
   const projectList = await verbs.readProjectList();
-  useBoardStore.getState().applyProjectList(projectList.projects);
+  useBoardStore.getState().applyProjectList(projectList.projects, projectList.groups);
   subscriptions.setDesiredBoards(new Set(projectList.projects.map((project) => project.id)));
 }
