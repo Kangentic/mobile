@@ -78,24 +78,33 @@ export function BoardScreen(): React.JSX.Element {
   const tasksByColumnId = useMemo(() => {
     const byColumnId = new Map<string, BoardTaskWire[]>();
     for (const column of columns) {
-      // The done lane's cards are the archive, not the board: a task is
-      // archived the moment it lands there, so the desktop's task list - and
-      // therefore every board projection - has already dropped it.
-      byColumnId.set(
-        column.id,
-        isDoneColumn(column) ? archived.tasks : fullBoard ? selectTasksForColumn(fullBoard, column.id) : [],
-      );
+      const boardTasks = fullBoard ? selectTasksForColumn(fullBoard, column.id) : [];
+      if (!isDoneColumn(column)) {
+        byColumnId.set(column.id, boardTasks);
+        continue;
+      }
+      // The done lane draws BOTH: the archive is its real content (the desktop
+      // archives a task the moment it lands there, so every board projection
+      // has already dropped it), but a task sitting in the lane un-archived is
+      // real too. That is the optimistic window after a move from this phone -
+      // without the board half, confirming a move to Done makes the card
+      // vanish from the old column and never appear in the new one.
+      const archivedIds = new Set(archived.tasks.map((task) => task.id));
+      byColumnId.set(column.id, [...boardTasks.filter((task) => !archivedIds.has(task.id)), ...archived.tasks]);
     }
     return byColumnId;
   }, [columns, fullBoard, archived.tasks]);
   const taskCounts = useMemo(
     () =>
-      columns.map((column) =>
-        // The archive's total, not the loaded page's length, so the chip does
-        // not read "25" on a board holding two hundred completed tasks.
-        isDoneColumn(column) ? archived.totalCount : (tasksByColumnId.get(column.id)?.length ?? 0),
-      ),
-    [columns, tasksByColumnId, archived.totalCount],
+      columns.map((column) => {
+        const held = tasksByColumnId.get(column.id)?.length ?? 0;
+        if (!isDoneColumn(column)) return held;
+        // The archive's TOTAL, not the loaded page's length, so the chip does
+        // not read "25" on a board holding two hundred completed tasks. Plus
+        // whatever is in the lane un-archived, which the total does not count.
+        return archived.totalCount + Math.max(0, held - archived.tasks.length);
+      }),
+    [columns, tasksByColumnId, archived.totalCount, archived.tasks.length],
   );
   const projectName = projects.find((project) => project.id === projectId)?.name ?? null;
   const [refreshing, setRefreshing] = useState(false);
