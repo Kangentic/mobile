@@ -346,6 +346,25 @@ to watch when doing it is the reusable workflow's concurrency group colliding wi
 dispatch. Separately, `profile=all` and the effect of `--build-cache` are both implemented but
 unmeasured.
 
+**The emulator uses the `default` system image, NOT `google_apis`, and that is load-bearing.**
+With Play Services the smoke flow failed three runs out of four, and the failure looked exactly like
+an app bug: `Assertion is false: id: home-tab is visible`, surviving even a 45-second
+`extendedWaitUntil`. It was not an app bug. Diagnostics proved the app process was **alive** with
+`MainActivity` both resumed and focused, no ANR, no exception from our package: it had simply not
+rendered. Meanwhile `ActivityManager` was killing and restarting `settings.intelligence`, gms
+services were failing to bind, and gms churn refilled a freshly cleared logcat buffer within
+seconds, so the app's own launch window was never even captured.
+
+**Play Services was starving the app.** On the `default` image the same commit renders in **7
+seconds**, against 16s on a quiet gms image and never within 45s on the failing runs. App code was
+byte-identical across all of them.
+
+Two things follow. Do not "fix" a flaky Maestro run by extending timeouts before checking whether
+the process is alive and what is focused: a starved emulator and a hung app produce an identical
+assertion failure. And when a paired suite that exercises remote push eventually needs
+`google_apis`, add it as a **separate matrix entry** rather than putting every flow back on the
+image that caused this.
+
 **E2E scope, deliberately narrow.** `e2e.yml` runs only `.maestro/smoke.yaml`, which works against
 a fresh unpaired install with no relay and no pairing. The 11 flows under `.maestro/paired/` are
 **not** in CI yet: each needs a completed pairing to `scripts/stubDesktopPeer.mjs` over a local
