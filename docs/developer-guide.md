@@ -567,7 +567,17 @@ To wire it up:
 
 Delivering a push additionally needs the FCM V1 service-account key uploaded to the Expo project's
 Android push credentials, because the app sends through Expo Push rather than talking to FCM
-directly. That is a one-time step on the Expo dashboard and is not part of the build.
+directly (see "Expo is in the delivery path" in [docs/security.md](security.md) for why, and what
+Expo can and cannot see). Generate the key from the Firebase Admin SDK service account:
+
+```
+gcloud iam service-accounts keys create <output.json> --iam-account=firebase-adminsdk-fbsvc@kangentic-b43ff.iam.gserviceaccount.com --project kangentic-b43ff
+```
+
+Then upload it at `https://expo.dev/accounts/kangentic/projects/mobile/credentials` under
+Android -> FCM V1. This is a one-time dashboard step: `eas credentials` is interactive only, and
+there is no non-interactive CLI or MCP path for it. Expo Push itself is free, with no
+per-notification charge and no paid plan requirement.
 
 Until all of this exists, `build-android.yml` emits a warning on every run and the resulting
 binary cannot receive remote notifications.

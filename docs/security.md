@@ -145,6 +145,34 @@ Unpairing revokes push, not just trust: `DevicesScreen` calls
 unpaired desktop would retain a valid `(expoPushToken, pushKey)` pair and could still push
 notifications this phone would decrypt and display.
 
+### Expo is in the delivery path, deliberately
+
+`src/notifications/pushRegistration.ts` calls `Notifications.getExpoPushTokenAsync()`, so the
+token registered with the desktop is an `ExponentPushToken`, not a raw FCM token. Delivery is
+therefore **desktop -> Expo push service -> FCM/APNs -> device**, and Expo relays on our behalf
+using an FCM V1 service-account key uploaded to the Expo project's Android credentials.
+
+This is a conscious trade, not an oversight, and it is worth stating plainly because it sits
+awkwardly next to `.claude/rules/accountless-core.md`:
+
+- **What Expo cannot see:** notification content. Payloads are ciphertext plus a generic
+  placeholder, which is the whole point of the rule above. This holds regardless of who relays.
+- **What Expo can see:** metadata. Which device receives a notification, when, and how often.
+  Expo also holds a credential that can push to every install of the app.
+- **What it costs a self-hoster:** an Expo account, and uploading their own FCM key to Expo, for
+  remote push to work at all. Everything else in the pairing, transport, and capability path is
+  genuinely accountless; push is the one exception.
+- **Why we accept it:** Expo Push is free (no per-notification charge, no paid plan required) and
+  covers Android and iOS through one token and one API. Going direct means implementing FCM v1
+  *and* APNs separately, and APNs is the expensive half.
+- **Degradation:** push is optional. Without any of this the app records
+  `unavailable-no-fcm` and works fully, minus remote notifications.
+
+The exit path, if the metadata exposure or the account requirement ever becomes unacceptable:
+switch to `getDevicePushTokenAsync()` for a raw FCM token and have the desktop call FCM v1
+directly. That is a `@kangentic/protocol` change first (`RegisterPushRequestPayload.expoPushToken`),
+per `.claude/rules/protocol-types-from-package.md`, then desktop send-path work, then APNs for iOS.
+
 ## Reporting a vulnerability
 
 See [SECURITY.md](../SECURITY.md).
