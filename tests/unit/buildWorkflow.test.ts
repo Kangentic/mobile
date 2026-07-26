@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const workflowPath = `${repositoryRoot}.github/workflows/build-android.yml`;
 const easProfileScript = `${repositoryRoot}scripts/easProfile.mjs`;
+const androidAbisScript = `${repositoryRoot}scripts/androidAbis.mjs`;
 
 const workflowSource = readFileSync(workflowPath, 'utf8');
 
@@ -54,16 +55,47 @@ function readWorkflowProfileChoices(): string[] {
   return choices;
 }
 
-function runEasProfileScript(scriptArguments: string[]): string {
-  return execFileSync(process.execPath, [easProfileScript, ...scriptArguments], {
+function runScript(scriptPath: string, scriptArguments: string[]): string {
+  return execFileSync(process.execPath, [scriptPath, ...scriptArguments], {
     encoding: 'utf8',
     cwd: repositoryRoot,
   }).trim();
 }
 
+function runEasProfileScript(scriptArguments: string[]): string {
+  return runScript(easProfileScript, scriptArguments);
+}
+
 describe('build-android workflow and eas.json parity', () => {
-  it('offers exactly the build profiles eas.json declares', () => {
-    expect(readWorkflowProfileChoices().sort()).toEqual(Object.keys(easConfig.build).sort());
+  it('offers exactly the build profiles eas.json declares, plus "all"', () => {
+    const choices = readWorkflowProfileChoices();
+    // "all" fans every profile out across runners in parallel; it is a
+    // selection mode, not an eas.json profile.
+    expect(choices).toContain('all');
+    expect(choices.filter((choice) => choice !== 'all').sort()).toEqual(Object.keys(easConfig.build).sort());
+  });
+
+  it('gives every eas.json profile a default ABI list', () => {
+    // A profile with no ABI default would throw at build time, on the runner,
+    // after npm ci and prebuild have already run.
+    const profilesWithAbiDefaults = runScript(androidAbisScript, ['--profiles']).split('\n');
+    expect(profilesWithAbiDefaults.sort()).toEqual(Object.keys(easConfig.build).sort());
+  });
+
+  it('gives the e2e profile an emulator-installable ABI', () => {
+    // The Maestro paired suite runs on a standard emulator image, which is
+    // x86_64. An arm64-only APK builds and uploads fine and then fails at
+    // `adb install` with an unhelpful error.
+    expect(runScript(androidAbisScript, ['e2e'])).toContain('x86_64');
+  });
+
+  it('builds every ABI for production, since Play splits per device', () => {
+    const productionAbis = runScript(androidAbisScript, ['production']).split(',');
+    expect(productionAbis.sort()).toEqual(['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']);
+  });
+
+  it('verifies the artifact ABIs rather than trusting the Gradle flag', () => {
+    expect(workflowSource).toContain('verify-android-abis.sh');
   });
 
   it('sources the profile env from eas.json rather than duplicating it in YAML', () => {
@@ -103,9 +135,13 @@ describe('build-android release safety gates', () => {
     expect(workflowSource).toContain('environment: google-play');
   });
 
-  it('refuses to submit an artifact that is not signed with the upload key', () => {
-    expect(workflowSource).toContain('Refuse an unsigned artifact');
-    expect(workflowSource).toContain('Verify the artifact is signed with the upload key');
+  it('verifies the signature in both the build and the submit job', () => {
+    // The submit job re-verifies what it downloaded rather than trusting a job
+    // output from the build. That is both stronger and necessary: matrix job
+    // outputs are not per-instance addressable, so a trusted output would be
+    // whichever matrix leg happened to finish last.
+    const occurrences = workflowSource.split('verify-android-signature.sh').length - 1;
+    expect(occurrences).toBeGreaterThanOrEqual(2);
   });
 
   it('checks the version code against Play before uploading', () => {

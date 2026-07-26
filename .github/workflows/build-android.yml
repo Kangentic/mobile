@@ -5,14 +5,20 @@ name: Build Android
 # and unmetered on public repositories). See the CI builds section of
 # docs/developer-guide.md.
 #
-# There is deliberately no pull_request trigger: a full native build adds
-# 20 to 40 minutes for little signal. .github/workflows/ci.yml stays the PR gate.
+# There is deliberately no pull_request trigger: a full native build adds real
+# minutes for little signal. .github/workflows/ci.yml stays the PR gate.
+#
+# Speed: native compilation dominates. The first unrestricted run spent 1665 of
+# 1770 seconds inside Gradle, nearly all of it compiling C++ for four ABIs. So
+# each profile builds only the ABI its target actually runs
+# (scripts/androidAbis.mjs), and selecting several profiles fans them out across
+# runners instead of building them back to back.
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'eas.json build profile'
+        description: 'Build profile, or "all" to build every profile in parallel'
         type: choice
         default: preview
         options:
@@ -20,6 +26,7 @@ on:
           - preview
           - e2e
           - production
+          - all
       artifact:
         description: 'Artifact type (auto follows the eas.json profile)'
         type: choice
@@ -29,7 +36,7 @@ on:
           - apk
           - aab
       abis:
-        description: 'Comma-separated ABI allowlist. Empty builds every ABI.'
+        description: 'ABI override, comma-separated. Empty uses the per-profile default.'
         type: string
         default: ''
       submit_track:
@@ -46,27 +53,52 @@ on:
       - 'v*'
 
 concurrency:
-  group: build-android-${{ github.ref }}
+  # Keyed on the selection too, so a preview dispatch does not cancel an
+  # in-flight production build.
+  group: build-android-${{ github.ref }}-${{ github.event.inputs.profile || 'tag' }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      profiles: ${{ steps.matrix.outputs.profiles }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the profile matrix
+        id: matrix
+        env:
+          # A tag build is always the store artifact.
+          SELECTED: ${{ github.event_name == 'push' && 'production' || inputs.profile }}
+        run: |
+          set -euo pipefail
+          if [ "$SELECTED" = "all" ]; then
+            profiles="$(node --input-type=module -e "import {readEasProfileNames} from './scripts/androidAbis.mjs'; process.stdout.write(JSON.stringify(readEasProfileNames()))")"
+          else
+            profiles="$(node -e "process.stdout.write(JSON.stringify([process.argv[1]]))" "$SELECTED")"
+          fi
+          echo "profiles=$profiles" >> "$GITHUB_OUTPUT"
+          echo "Building: $profiles"
+
   build-android:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    outputs:
-      artifact-name: ${{ steps.name.outputs.artifact-name }}
-      extension: ${{ steps.plan.outputs.extension }}
-      version-code: ${{ steps.version.outputs.version-code }}
-      version-name: ${{ steps.version.outputs.version-name }}
-      signed: ${{ steps.plan.outputs.signed }}
+    strategy:
+      # One profile failing must not cancel the others: a matrix run is often
+      # "give me every artifact", and a partial set still has value.
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(needs.plan.outputs.profiles) }}
     env:
-      # A tag build always produces the store-shaped artifact.
-      BUILD_PROFILE: ${{ github.event_name == 'push' && 'production' || inputs.profile }}
+      BUILD_PROFILE: ${{ matrix.profile }}
       REQUESTED_ARTIFACT: ${{ github.event_name == 'push' && 'aab' || inputs.artifact }}
-      REQUESTED_ABIS: ${{ github.event_name == 'push' && '' || inputs.abis }}
+      ABI_OVERRIDE: ${{ github.event_name == 'push' && '' || inputs.abis }}
       # Secrets cannot be referenced from an `if:` condition, so presence is
       # resolved once here as a plain boolean and the steps branch on that.
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
@@ -91,9 +123,10 @@ jobs:
         run: npm ci
 
       # eas.json stays the source of truth for per-profile env even though the
-      # build itself runs on Gradle. EXPO_PUBLIC_* values are inlined by Metro
-      # during bundleReleaseJsAndAssets, so they must be exported before Gradle
-      # runs, not merely before prebuild.
+      # build itself runs on Gradle. EXPO_PUBLIC_* values are read by
+      # app.config.ts at config-evaluation time (prebuild) AND inlined by Metro
+      # during bundleReleaseJsAndAssets, so this must run before prebuild, not
+      # merely before Gradle. tests/unit/buildWorkflow.test.ts locks that order.
       - name: Export the profile env from eas.json
         run: node scripts/easProfile.mjs "$BUILD_PROFILE" --github-env
 
@@ -117,6 +150,13 @@ jobs:
             else
               artifact="aab"
             fi
+          fi
+
+          # ABIs: explicit override wins, otherwise the per-profile default.
+          if [ -n "$ABI_OVERRIDE" ]; then
+            abis="$ABI_OVERRIDE"
+          else
+            abis="$(node scripts/androidAbis.mjs "$BUILD_PROFILE")"
           fi
 
           # The development profile is a dev-client build, which is the debug
@@ -157,7 +197,10 @@ jobs:
             echo "output-path=$output_path"
             echo "extension=$extension"
             echo "signed=$signed"
+            echo "abis=$abis"
           } >> "$GITHUB_OUTPUT"
+
+          echo "Profile $BUILD_PROFILE -> $extension ($variant), ABIs: $abis"
 
       - name: Materialize google-services.json
         if: env.HAS_GOOGLE_SERVICES == 'true'
@@ -191,8 +234,7 @@ jobs:
 
       # Deliberately after prebuild: android/ does not exist at checkout time,
       # so an earlier setup-gradle would have no Gradle files to key its cache
-      # on. Caching is the main speed argument for building here rather than
-      # with `eas build --local`, which does not support it at all.
+      # on. The cache is per-profile because the ABI set differs.
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Read the app version
@@ -218,15 +260,26 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           GRADLE_TASK: ${{ steps.plan.outputs.task }}
+          BUILD_ABIS: ${{ steps.plan.outputs.abis }}
         run: |
           set -euo pipefail
           chmod +x android/gradlew
 
-          gradle_arguments=("$GRADLE_TASK" -x lint -x test)
-
-          if [ -n "$REQUESTED_ABIS" ]; then
-            gradle_arguments+=("-PreactNativeArchitectures=$REQUESTED_ABIS")
-          fi
+          # --parallel: a React Native project is many Gradle modules (one per
+          #   autolinked native library), so parallel project execution is a
+          #   real win rather than a no-op.
+          # --build-cache: setup-gradle caches GRADLE_USER_HOME, which includes
+          #   the local build cache, so non-native tasks (Java compile, dex,
+          #   resource processing) can hit across runs. Gradle keys cache
+          #   entries on task inputs, so this cannot produce a stale artifact.
+          gradle_arguments=(
+            "$GRADLE_TASK"
+            -x lint
+            -x test
+            --parallel
+            --build-cache
+            "-PreactNativeArchitectures=$BUILD_ABIS"
+          )
 
           if [ "$HAS_KEYSTORE" = "true" ]; then
             # Injected signing properties override the generated project without
@@ -252,35 +305,14 @@ jobs:
         env:
           OUTPUT_PATH: ${{ steps.plan.outputs.output-path }}
           EXTENSION: ${{ steps.plan.outputs.extension }}
-        run: |
-          set -euo pipefail
+        run: bash .github/scripts/verify-android-signature.sh "$OUTPUT_PATH" "$EXTENSION"
 
-          if [ "$EXTENSION" = "apk" ]; then
-            build_tools_dir="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
-            signer_report="$("$build_tools_dir/apksigner" verify --print-certs "$OUTPUT_PATH")"
-            echo "$signer_report"
-            if printf '%s' "$signer_report" | grep -qi 'CN=Android Debug'; then
-              echo "::error::Artifact is signed with the Android debug key, not the upload key."
-              exit 1
-            fi
-          else
-            # An AAB is a jar. -strict is deliberately omitted: a self-signed
-            # upload certificate always raises a chain warning and would make
-            # -strict exit non-zero on a perfectly good bundle. jarsigner also
-            # exits 0 on a completely unsigned jar, so the exit code proves
-            # nothing and the output has to be read both ways.
-            verify_report="$(jarsigner -verify -verbose:summary "$OUTPUT_PATH")"
-            echo "$verify_report"
-            if printf '%s' "$verify_report" | grep -qi 'jar is unsigned'; then
-              echo "::error::Bundle is unsigned."
-              exit 1
-            fi
-            if ! printf '%s' "$verify_report" | grep -qi 'jar verified'; then
-              echo "::error::Could not confirm the bundle signature. jarsigner output is above."
-              exit 1
-            fi
-            echo "Bundle signature verified."
-          fi
+      - name: Verify the artifact carries the expected ABIs
+        env:
+          OUTPUT_PATH: ${{ steps.plan.outputs.output-path }}
+          EXTENSION: ${{ steps.plan.outputs.extension }}
+          BUILD_ABIS: ${{ steps.plan.outputs.abis }}
+        run: bash .github/scripts/verify-android-abis.sh "$OUTPUT_PATH" "$EXTENSION" "$BUILD_ABIS"
 
       - name: Name the artifact
         id: name
@@ -300,19 +332,18 @@ jobs:
           EXTENSION: ${{ steps.plan.outputs.extension }}
           VARIANT: ${{ steps.plan.outputs.variant }}
           SIGNED: ${{ steps.plan.outputs.signed }}
+          BUILD_ABIS: ${{ steps.plan.outputs.abis }}
           VERSION_NAME: ${{ steps.version.outputs.version-name }}
           VERSION_CODE: ${{ steps.version.outputs.version-code }}
         run: |
           {
-            echo "### Android build"
+            echo "### Android build: \`$BUILD_PROFILE\`"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Profile | \`$BUILD_PROFILE\` |"
             echo "| Artifact | \`$EXTENSION\` ($VARIANT) |"
-            echo "| Version name | \`$VERSION_NAME\` |"
-            echo "| Version code | \`$VERSION_CODE\` |"
-            echo "| ABIs | \`${REQUESTED_ABIS:-all}\` |"
+            echo "| Version | \`$VERSION_NAME\` (code \`$VERSION_CODE\`) |"
+            echo "| ABIs | \`$BUILD_ABIS\` |"
             echo "| Signed with upload key | \`$SIGNED\` |"
             echo ""
             echo "Bump \`android.versionCode\` in \`app.config.ts\` before every Play upload."
@@ -322,8 +353,8 @@ jobs:
         with:
           name: ${{ steps.name.outputs.artifact-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.${{ steps.plan.outputs.extension }}
-          # ~100 MB per artifact. The 90-day default accrues storage billing
-          # even on a public repository.
+          # ~50 to 140 MB per artifact. The 90-day default accrues storage
+          # billing even on a public repository.
           retention-days: 14
           if-no-files-found: error
 
@@ -331,41 +362,48 @@ jobs:
   # waits on the google-play environment's required reviewer. The very first
   # AAB for this package has to be uploaded by hand through the Play Console
   # UI: the Play Developer API only works once an app has at least one release.
+  #
+  # It re-verifies the downloaded artifact rather than trusting a job output,
+  # which also keeps it correct with a matrix build (matrix job outputs are not
+  # per-instance addressable).
   submit-play:
     needs: build-android
-    if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none'
+    if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.profile != 'all'
     runs-on: ubuntu-latest
     environment: google-play
     steps:
-      - name: Refuse an unsigned artifact
-        env:
-          SIGNED: ${{ needs.build-android.outputs.signed }}
-        run: |
-          set -euo pipefail
-          if [ "$SIGNED" != "true" ]; then
-            echo "::error::The build was not signed with the upload key, so it cannot be submitted."
-            exit 1
-          fi
-
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+          cache: npm
 
       - uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build-android.outputs.artifact-name }}
+          pattern: kangentic-${{ inputs.profile }}-*
+          merge-multiple: true
           path: artifact
+
+      - name: Verify the artifact is signed with the upload key
+        run: |
+          set -euo pipefail
+          file="$(ls artifact/* | head -n 1)"
+          echo "Submitting $file"
+          bash .github/scripts/verify-android-signature.sh "$file" "${file##*.}"
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Check the version code is free on every track
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          VERSION_CODE: ${{ needs.build-android.outputs.version-code }}
         run: |
           set -euo pipefail
+          npx expo config --json > "$RUNNER_TEMP/expo-config.json"
+          version_code="$(node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(c.android.versionCode))" "$RUNNER_TEMP/expo-config.json")"
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
-          node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$VERSION_CODE"
+          node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$version_code"
 
       - name: Upload to Google Play
         uses: r0adkll/upload-google-play@v1
