@@ -108,6 +108,9 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   descriptionField: {
-    height: 120,
+    // Taller than the title field by a wide margin, because editing an
+    // existing description is the reason this sheet is opened. See
+    // CreateTaskScreen for why this is a height and not a flex.
+    height: 200,
   },
 });
