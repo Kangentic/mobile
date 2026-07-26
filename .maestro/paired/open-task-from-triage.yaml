@@ -49,9 +49,11 @@ appId: com.kangentic.mobile
 # which is the flashing the pin was added to remove. Scroll up to prove
 # history is reachable, then come back.
 - assertVisible: "npm run test:unit -- auth-redirect"
-- scroll:
-    direction: DOWN
-- assertVisible: "Fix the login redirect bug and add a regression test."
+- scrollUntilVisible:
+    element:
+      text: "Fix the login redirect bug and add a regression test."
+    direction: UP
+    timeout: 20000
 # Changes is a same-screen mode behind the pill bar (TaskHeader's
 # onOpenChanges chip / the old pushed ChangesScreen are unused now that
 # SessionScreen renders ChangesTab inline for session-mode-changes).
