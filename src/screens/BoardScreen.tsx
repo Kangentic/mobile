@@ -8,7 +8,6 @@ import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, Sheet, Ske
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
-import { CreateTaskSheet } from '@/components/board/CreateTaskSheet';
 import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
 import { TaskCard } from '@/components/board/TaskCard';
@@ -17,7 +16,6 @@ import { useActivityStore, sectionForEntry } from '@/state/activityStore';
 import { CapabilityError } from '@/channel';
 import {
   archiveTask,
-  createTask,
   deleteTaskFromBoard,
   moveTaskOptimistic,
   openProjectBoard,
@@ -38,6 +36,7 @@ const BOARD_SKELETON_CARDS = ['board-skeleton-1', 'board-skeleton-2', 'board-ske
 
 export function BoardScreen(): React.JSX.Element {
   const theme = useTheme();
+  const router = useRouter();
   const projects = useBoardStore((state) => state.projects);
   const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -142,9 +141,6 @@ export function BoardScreen(): React.JSX.Element {
   const [editTarget, setEditTarget] = useState<BoardTaskWire | null>(null);
   const [editInFlight, setEditInFlight] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  const [createVisible, setCreateVisible] = useState(false);
-  const [createInFlight, setCreateInFlight] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   const archiveAvailable = columns.some((column) => column.role === 'done');
 
@@ -178,24 +174,6 @@ export function BoardScreen(): React.JSX.Element {
         .finally(() => setMoveInFlight(false));
     },
     [moveTarget, projectId, fullBoard],
-  );
-
-  const onCreate = useCallback(
-    (input: { title: string; description: string; column: string }) => {
-      if (!projectId) return;
-      setCreateInFlight(true);
-      setCreateError(null);
-      void createTask({ projectId, ...input })
-        .then(() => {
-          triggerHaptic('taskCreated');
-          setCreateVisible(false);
-        })
-        .catch((error: unknown) => {
-          setCreateError(error instanceof CapabilityError ? error.message : 'Create failed - check the connection');
-        })
-        .finally(() => setCreateInFlight(false));
-    },
-    [projectId],
   );
 
   const onEditSave = useCallback(
@@ -308,8 +286,8 @@ export function BoardScreen(): React.JSX.Element {
           iconName="add"
           variant="fab"
           onPress={() => {
-            setCreateError(null);
-            setCreateVisible(true);
+            if (!projectId) return;
+            router.push({ pathname: '/create-task', params: { projectId } });
           }}
           testID="board-create-task"
           accessibilityLabel="Create a task"
@@ -352,15 +330,6 @@ export function BoardScreen(): React.JSX.Element {
         onSave={onEditSave}
         saveInFlight={editInFlight}
         errorMessage={editError}
-      />
-      <CreateTaskSheet
-        visible={createVisible}
-        columns={columns}
-        defaultColumnName={columns[0]?.name ?? null}
-        onClose={() => setCreateVisible(false)}
-        onCreate={onCreate}
-        createInFlight={createInFlight}
-        errorMessage={createError}
       />
       <Sheet visible={projectPickerVisible} onClose={() => setProjectPickerVisible(false)} title="Projects" testID="board-project-sheet">
         <Stack gap="xs">

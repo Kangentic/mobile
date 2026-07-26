@@ -298,26 +298,25 @@ describe('BoardScreen', () => {
     expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
   });
 
-  it('the FAB opens the create sheet and confirming calls createTask with the column name', async () => {
+  /**
+   * The create form is a NATIVE form sheet route now, not an inline Modal, so
+   * the board's only job is to navigate to it carrying the project. The form's
+   * own behaviour is covered by tests/components/CreateTaskScreen.test.tsx.
+   */
+  it('the FAB navigates to the create-task form sheet with the current project', () => {
     render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
+
     fireEvent.press(screen.getByTestId('board-create-task'));
-    expect(screen.getByTestId('create-task-sheet')).toBeTruthy();
 
-    fireEvent.changeText(screen.getByTestId('create-task-title'), 'New feature');
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('create-task-confirm'));
-    });
-
-    expect(mockCreateTask).toHaveBeenCalledWith({
-      projectId: 'project-1',
-      title: 'New feature',
-      description: '',
-      column: 'To Do',
-    });
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/create-task', params: { projectId: 'project-1' } });
+    // The board must not render the form itself any more - that was the
+    // hand-rolled Modal whose Android window laid out one tab-bar-height off
+    // the bottom on first open.
+    expect(screen.queryByTestId('create-task-title')).toBeNull();
   });
 
   it('renders named column chips, highlights the tapped one, and states empty columns', () => {
