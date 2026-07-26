@@ -449,6 +449,37 @@ manual procedure below is the fallback for when you need a bundle without a runn
 - See [docs/privacy-policy.md](privacy-policy.md) and [docs/store-listing.md](store-listing.md)
   for the store-facing text already prepared.
 
+## Firebase and remote push
+
+`app.config.ts` only sets `android.googleServicesFile` when `google-services.json` exists at the
+repo root. The file is gitignored, so a build without it succeeds and simply ships with remote
+push inert. That is deliberate: a missing Firebase config must never break a build.
+
+To wire it up:
+
+1. Create (or open) the Firebase project. It can attach to the existing `kangentic-mobile` Google
+   Cloud project, which is where the `play-publisher` service account already lives.
+2. Add an Android app with package name **`com.kangentic.mobile`**, matching `app.config.ts`.
+3. Download `google-services.json` and drop it at the repo root. It stays gitignored.
+4. For CI, store it base64-encoded as the `GOOGLE_SERVICES_JSON` GitHub secret:
+
+   ```
+   base64 -w 0 google-services.json
+   ```
+
+   On Windows PowerShell:
+
+   ```
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("google-services.json"))
+   ```
+
+Delivering a push additionally needs the FCM V1 service-account key uploaded to the Expo project's
+Android push credentials, because the app sends through Expo Push rather than talking to FCM
+directly. That is a one-time step on the Expo dashboard and is not part of the build.
+
+Until all of this exists, `build-android.yml` emits a warning on every run and the resulting
+binary cannot receive remote notifications.
+
 ## Deployment tracks
 
 The Play developer account is a **Personal** account created on 2026-07-20, which is after
