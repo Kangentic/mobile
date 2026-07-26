@@ -108,9 +108,17 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   descriptionField: {
-    // Taller than the title field by a wide margin, because editing an
-    // existing description is the reason this sheet is opened. See
-    // CreateTaskScreen for why this is a height and not a flex.
-    height: 200,
+    /**
+     * Sized by its CONTENT, not pinned: a multiline TextInput with no fixed
+     * height grows to fit, and 'fitToContents' grows the sheet with it. So a
+     * long description opens a tall sheet and a short one does not reserve
+     * dead space - which a fixed height gets wrong in both directions at once.
+     *
+     * The cap is what keeps the sheet clear of the keyboard. Past it the box
+     * scrolls internally, which is the honest trade for a description longer
+     * than a phone screen. See CreateTaskScreen for why this is not a flex.
+     */
+    maxHeight: 420,
+    minHeight: 160,
   },
 });
