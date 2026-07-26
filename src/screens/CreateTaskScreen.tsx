@@ -173,15 +173,17 @@ const styles = StyleSheet.create({
   },
   descriptionField: {
     /**
-     * Sized to give a description real room without pushing the column chips
-     * and Create button under the keyboard.
+     * Sized by its CONTENT, not pinned: a multiline TextInput with no fixed
+     * height grows to fit, and 'fitToContents' grows the sheet with it, so the
+     * sheet is as tall as what is actually being written.
      *
-     * Fractional detents were tried instead and are worse: a fixed-fraction
-     * sheet does not shrink when the keyboard opens, so its lower third -
-     * chips and the submit button - became unreachable. 'fitToContents' keeps
-     * the sheet exactly as tall as this form, which is what keeps it above
-     * the keyboard, so height here IS the height of the sheet.
+     * Fractional detents were tried instead of all this and are worse: a
+     * fixed-fraction sheet does not shrink when the keyboard opens, so its
+     * lower third - the column chips and the Create button - became
+     * unreachable. 'fitToContents' is what keeps the sheet clear of the
+     * keyboard, and the cap below is what keeps 'fitToContents' honest.
      */
-    height: 180,
+    maxHeight: 420,
+    minHeight: 120,
   },
 });
