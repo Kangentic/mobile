@@ -240,7 +240,9 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
 - **Development builds** (`expo-dev-client`) from day one: Expo Go cannot run this app, since
   `expo-secure-store`, `expo-camera`, and (later) Notifee are all custom native modules.
 - **EAS profiles:** `development` (dev-client, for local iteration), `preview` (internal
-  distribution, TestFlight/Play internal), `production` (store release). Convenience scripts:
+  distribution of a dev-signed build, not a Play track), `production` (store release; the Play
+  internal track is reached by this profile plus `submit.production.android`, and it no longer
+  auto-increments the version, see Android release and Google Play Console). Convenience scripts:
   `npm run build:dev` / `build:preview` / `build:prod` wrap
   `eas build --profile <profile> --platform android` for each.
 - **EAS Update** for JS-only OTA updates (free tier, 1,000 MAU) once the app ships.
@@ -272,12 +274,95 @@ working on a task vs. the full gate).
 happens via `npx testflight` (or `eas submit`). Local day-to-day development happens on the
 Android emulator; an iOS build is validated via TestFlight or a cloud EAS Workflow run.
 
+`cli.appVersionSource: "local"` is a CLI-wide setting, not an Android-only one, so `ios.buildNumber`
+in `app.config.ts` is hand-bumped for the same reason `android.versionCode` is. App Store Connect
+rejects a build number it has already seen, so bump it before every TestFlight submission. No iOS
+build has been produced yet, which is why both start at 1.
+
+## Android release and Google Play Console
+
+Android release builds are moving off EAS cloud builds (board task #5), so signing and versioning
+are handled locally rather than by EAS. Everything below is a manual, run-it-yourself procedure:
+nothing here is wired into CI yet, and moving it onto a GitHub Actions runner (via
+`eas build --local`) is task #5's job, not something you can do from a Windows dev box today.
+
+- **`cli.appVersionSource: "local"`** in `eas.json` (not `"remote"`). `android.versionCode` in
+  `app.config.ts` is a hand-bumped, code-reviewed integer, not a value EAS tracks server-side.
+  Bump it before every Play upload; it must exceed whatever is currently live on the internal
+  track. **Enforcement: none.** No test or CI check guards this, and none can locally, since the
+  correct value depends on Play Console state. The guard is this checklist plus code review, until
+  task #5 can query the Play Developer API for the live version codes.
+- **Upload keystore.** A dedicated `kangentic-upload.jks` keystore (PKCS12 format) lives in a directory outside
+  the repo (never committed - `.gitignore` also backstops `secrets/` and `*service-account*.json`
+  in case a download lands in the wrong place). Treat `secrets/` as the real backstop and always
+  move a freshly downloaded credential into it: Google Cloud names service-account keys
+  `<project>-<hash>.json`, which the `*service-account*.json` glob does not match unless you
+  rename the file. Losing the keystore means a Play support keystore-reset
+  round-trip, so back it up outside the repo too. It is intentionally separate from any
+  EAS-managed Android credentials: the `development` and `preview` dev-client builds are signed
+  differently, so a device with one of those installed must uninstall it before installing a
+  Play-internal-track build, or the install fails with a signature mismatch.
+- **Building a signed release bundle.** `android/` is a gitignored CNG artifact; never hand-edit
+  `android/app/build.gradle` to reference the keystore, and never patch the generated tree to get
+  a failing build to pass. Fix `app.config.ts` or a config plugin and regenerate instead.
+  Regenerate first, because a stale `android/` ships whatever `versionCode` it was generated with,
+  not the one you just bumped:
+
+  ```
+  npx expo prebuild --platform android
+  ```
+
+  Then pass signing details as injected Gradle properties, which override the generated project
+  without touching it (run from `android/`, where the generated `gradlew` wrapper lives):
+
+  ```
+  cd android
+  gradlew :app:bundleRelease -PreactNativeArchitectures=arm64-v8a -Pandroid.injected.signing.store.file=<path to kangentic-upload.jks> -Pandroid.injected.signing.store.password=<password> -Pandroid.injected.signing.key.alias=kangentic-upload -Pandroid.injected.signing.key.password=<password>
+  ```
+
+  `-PreactNativeArchitectures=arm64-v8a` is needed today: an unscoped `gradlew` build compiles
+  all four ABIs and has failed on 32-bit `armeabi-v7a`. The cause has not been pinned down, so
+  treat the restriction as a workaround, not a settled fact. Be deliberate about
+  keeping it for a release bundle: the resulting AAB carries arm64-v8a native code only, so
+  32-bit ARM and x86/x86_64 devices (older phones, Chromebooks, x86 emulators) cannot install it.
+  That is acceptable for the internal track, where the test devices are known, and must be
+  revisited (diagnose the all-ABI build, or ship all ABIs and let Play App Signing split them)
+  before promoting past internal. Build from a short
+  checkout path (something like `C:\kw`), not a deep worktree path, or the Windows path-length
+  limit breaks the native build. Passing passwords inline
+  leaks them to shell history; prefer a user-level `gradle.properties` outside the repo, or
+  `ORG_GRADLE_PROJECT_*` environment variables, for anything beyond a one-off build.
+- **Submitting.** `eas.json`'s `submit.production.android` sets `track: "internal"` and
+  `releaseStatus: "completed"`, but deliberately does not carry a `serviceAccountKeyPath`, because
+  that path is machine-specific and the key must never be committed. The key is uploaded once to
+  the project's Android credentials on the EAS dashboard, or supplied at submit time. Submit a
+  locally built bundle with `eas submit --platform android --path <local .aab>`; `--path` names
+  the bundle, not the key.
+- **First upload is manual.** The Google Play Developer API (what `eas submit` and any future CI
+  step use) only works once an app has at least one release; the very first AAB for a new package
+  name has to go through the Play Console UI by hand.
+- **Play Console service account.** A dedicated `play-publisher` service account (no GCP IAM
+  roles) is granted app-scoped **View app information** and **Manage testing track releases**
+  permissions in Play Console -> API access. Permission changes there can take up to 24 hours to
+  propagate.
+- **Internal testing track only, for now.** Kangentic's Play Console account is a Personal
+  account; production access needs a closed test with 12 testers opted in for 14 continuous days,
+  which internal testing does not count toward. Store listing, content rating, data safety, and
+  the other app-content declarations are not required for internal testing but are required
+  before any closed/open/production track. None of them are filled in yet, so treat promoting
+  past internal as its own piece of work, not a one-click step.
+- See [docs/privacy-policy.md](privacy-policy.md) and [docs/store-listing.md](store-listing.md)
+  for the store-facing text already prepared.
+
 ## Environment Variables
 
 Any variable prefixed `EXPO_PUBLIC_` is baked directly into the JS bundle at build time and is
-**never** an appropriate place for a secret. There are no runtime secrets embedded in this app;
-push credentials (FCM service account, APNs key) live only in the maintainer's EAS account,
-uploaded at build time, never in the repo or the shipped binary.
+**never** an appropriate place for a secret. There are no runtime secrets embedded in this app.
+Push credentials (FCM service account, APNs key) live only in the maintainer's EAS account,
+uploaded at build time. The Android upload keystore and the Play Console service-account key live
+in a directory outside the repo on the maintainer's machine only; they will be mirrored into
+GitHub Actions secrets when board task #5 wires up CI release builds, which has not happened yet.
+None of these ever land in the repo or the shipped binary.
 
 Dev-only variables:
 

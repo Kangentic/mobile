@@ -21,3 +21,7 @@ in the desktop repo's
   transcript-terminal rendering, notifications.
 - [security.md](security.md) - threat model, the pairing ceremony's crypto detail, key storage,
   the relay's blind-metadata honesty statement.
+- [privacy-policy.md](privacy-policy.md) - the store-facing privacy policy (camera, microphone,
+  notifications, data storage).
+- [store-listing.md](store-listing.md) - draft Play Console listing copy (title, descriptions,
+  reviewer notes).

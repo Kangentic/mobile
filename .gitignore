@@ -45,6 +45,8 @@ GoogleService-Info.plist
 *.p8
 *.p12
 *.mobileprovision
+secrets/
+*service-account*.json
 
 # Local native build outputs (EAS builds run in the cloud; local builds drop these)
 *.apk
