@@ -71,7 +71,17 @@ the wire.
   and dialed verbatim as the relay's slot parameter, so a plaintext relay connection would put
   it on the wire in cleartext. The phone (`src/pairing/qr.ts`) refuses to pair through any
   relay address that isn't `wss://`, carving out only loopback (`ws://localhost`, `127.0.0.1`,
-  `::1`) for a local dev relay. Two build shapes additionally accept `ws://10.0.2.2`, the
+  `::1`) for a local dev relay.
+
+  **That carve-out is decided by parsing the address's AUTHORITY, never by prefix matching.**
+  A prefix test can only ask what an address starts with, which says nothing about the host it
+  resolves to, and it accepted two impostors: `ws://127.0.0.1:8080@evil.test`, where everything
+  before the `@` is userinfo so the real host is `evil.test`; and `ws://[::1]evil.com`, where
+  truncating at the closing bracket read the host as `[::1]`. Either would have handed the
+  pairing token - the Noise PSK - to an attacker-chosen host in cleartext, and `activePairing`
+  would then have persisted that host to the trust anchor for every later session. The same
+  rules live in `@kangentic/protocol`'s `relay-address.ts` (0.11.1), which the desktop reads
+  through `src/shared/relay.ts`, so both ends enforce one definition. Two build shapes additionally accept `ws://10.0.2.2`, the
   Android emulator's NAT alias for the host's loopback interface, so a rig relay is reachable
   without an `adb reverse`: a `__DEV__` bundle, and a build from the **`e2e` EAS profile**,
   which sets `EXPO_PUBLIC_KANGENTIC_E2E=1`. E2E needs a release-shaped binary (Maestro tests the
