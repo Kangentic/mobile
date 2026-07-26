@@ -68,10 +68,19 @@ interface BoardStoreState {
    * (unpair), so a fresh pairing gets the same cold-start gating.
    */
   hasHydratedSnapshot: boolean;
+  /**
+   * Which project the Board tab is showing, or null to fall back to the first.
+   *
+   * Store state rather than BoardScreen's own useState because the project
+   * picker is a form sheet ROUTE now, and a route cannot reach into another
+   * screen's local state to set it.
+   */
+  selectedProjectId: string | null;
   pendingMoves: PendingMove[];
   pendingEdits: PendingTaskEdit[];
   pendingRemovals: PendingTaskRemoval[];
   applyProjectList: (projects: ReadBoardProjectSummary[]) => void;
+  selectProject: (projectId: string) => void;
   applyBoardSnapshot: (snapshot: ReadBoardSnapshotResponsePayload) => void;
   applyOptimisticMove: (move: { projectId: string; taskId: string; toSwimlaneId: string; toPosition: number }) => string | null;
   commitMove: (moveId: string) => void;
@@ -128,11 +137,14 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
   projects: [],
   boardsByProjectId: {},
   hasHydratedSnapshot: false,
+  selectedProjectId: null,
   pendingMoves: [],
   pendingEdits: [],
   pendingRemovals: [],
 
   applyProjectList: (projects) => set({ projects }),
+
+  selectProject: (projectId) => set({ selectedProjectId: projectId }),
 
   applyBoardSnapshot: (snapshot) =>
     set((state) => {
@@ -296,6 +308,7 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       projects: [],
       boardsByProjectId: {},
       hasHydratedSnapshot: false,
+      selectedProjectId: null,
       pendingMoves: [],
       pendingEdits: [],
       pendingRemovals: [],
