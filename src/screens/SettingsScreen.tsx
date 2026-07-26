@@ -21,6 +21,13 @@ const PUSH_STATUS_LABELS: Record<PushRegistrationStatus, string> = {
   pending: 'Remote push: registering...',
 };
 
+/**
+ * These govern the CHAT composer's mic only. The terminal used to carry its
+ * own dictation button; it was removed, and raising the keyboard there gives
+ * you the OS mic instead. Auto-send is the reason this setting still earns
+ * its place: speaking and sending in one gesture is the one thing keyboard
+ * dictation cannot do.
+ */
 const DICTATION_OPTIONS: { mode: DictationMode; label: string; description: string; testID: string }[] = [
   {
     mode: 'auto-send',
@@ -37,7 +44,7 @@ const DICTATION_OPTIONS: { mode: DictationMode; label: string; description: stri
   {
     mode: 'off',
     label: 'Off',
-    description: 'Hides the microphone button',
+    description: 'Hides the composer mic',
     testID: 'settings-dictation-off',
   },
 ];
@@ -233,7 +240,7 @@ export function SettingsScreen(): React.JSX.Element {
         </Stack>
 
         <Stack gap="xs">
-          <SectionHeader title="Dictation" testID="settings-section-dictation" />
+          <SectionHeader title="Chat dictation" testID="settings-section-dictation" />
           <Card>
             <Stack gap="xs">
               {DICTATION_OPTIONS.map((option, optionIndex) => (
