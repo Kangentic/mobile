@@ -1,4 +1,10 @@
-import { AndroidConfig, withAndroidManifest, type ConfigPlugin } from 'expo/config-plugins';
+// '@expo/config-plugins', not 'expo/config-plugins': the latter subpath does not
+// exist in SDK 57 (verified against expo@57.0.4 and 57.0.8, neither has the
+// export). `expo prebuild` resolved it anyway through Expo CLI's own loader,
+// which is why CI stayed green, but `eas build` imports this file as plain Node
+// ESM and strictly honours package exports, so an iOS build failed with
+// ERR_MODULE_NOT_FOUND while every Android prebuild passed.
+import { AndroidConfig, withAndroidManifest, type ConfigPlugin } from '@expo/config-plugins';
 
 /**
  * Android manifest additions for the notification stack (CNG: never

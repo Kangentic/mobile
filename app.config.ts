@@ -29,6 +29,21 @@ const config: ExpoConfig = {
     // section of docs/developer-guide.md. Required because
     // cli.appVersionSource is "local", which is CLI-wide and not Android-only.
     buildNumber: '1',
+    infoPlist: {
+      // US export-compliance declaration. `false` asserts the app uses only
+      // EXEMPT encryption, which is what App Store Connect stops asking about.
+      //
+      // REVISIT BEFORE ANY PUBLIC OR EXTERNAL RELEASE. This is not the usual
+      // boilerplate case: the app does not merely use OS-provided TLS, it
+      // implements its own Noise KK channel (X25519, ChaCha20-Poly1305,
+      // BLAKE2s) via @noble. Those are published standard algorithms rather
+      // than proprietary crypto, which is the common basis for treating such an
+      // app as exempt, but Apple's own documentation pages did not load when
+      // this was set, so the value is a considered default and NOT a verified
+      // legal conclusion. It is set now because TestFlight internal testing
+      // does not act on it and changing it is a one-line edit plus a rebuild.
+      ITSAppUsesNonExemptEncryption: false,
+    },
   },
   android: {
     package: 'com.kangentic.mobile',
