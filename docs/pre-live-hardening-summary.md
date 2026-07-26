@@ -101,14 +101,17 @@ single worst control in the app to need two taps.
   styling is the product decision - so honouring the rule means adding a marker to production
   render purely for a test.
 
-## Blocking prerequisite for landing
+## Protocol 0.10.0 (published)
 
-`@kangentic/protocol` **0.10.0 must be published before this branch can go green.** The mobile
-source imports `SessionSummaryWire` and `ReadBoardArchivedResponsePayload`, which exist only in
-the local build the dev rig links; CI installs from npm, where 0.9.0 is the newest. A caret
-range on a 0.x version pins the minor, so `^0.9.0` could not resolve them either way, and
-`package.json` now declares `^0.10.0` to state the real dependency rather than hide it. The
-desktop change lives on the `mobile-completed-tasks` branch of the kangentic repo, unpushed.
+Desktop PR **#209** merged and `@kangentic/protocol` **0.10.0** published via the
+`protocol-v0.10.0` tag. `read-board` gains an `archived` action returning a page of completed
+tasks plus each one's lifetime session summary, and `read-stream`'s `transcript-window` no longer
+requires a live session - it never used one, it merely sat below a live-session gate, which made
+a finished conversation permanently unreadable.
+
+Additive throughout, so `PROTOCOL_VERSION` stays at `2` and no handshake changed. Mobile pins
+`^0.10.0` and typechecks against the registry copy rather than the dev rig's local link, which
+is what CI actually installs.
 
 ## Cross-repo work shipped
 
