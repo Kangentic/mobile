@@ -319,7 +319,13 @@ export function TriageHomeScreen(): React.JSX.Element {
           item.kind === 'section-header' ? (
             <SectionHeader
               title={item.title}
-              testID={`section-header-${item.section}`}
+              // Keyed by the TITLE the user sees, not the underlying section.
+              // "Idle" is shared by needs-you and idle, and which of the two
+              // leads changes as a prompt arrives or resolves - so a
+              // section-keyed id silently renames itself mid-session, which is
+              // exactly the kind of moving selector an E2E flow cannot hold.
+              // The collapse state is title-keyed for the same reason.
+              testID={`section-header-${item.title.toLowerCase()}`}
               count={item.count}
               collapsed={collapsedTriageSection === item.title}
               onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}

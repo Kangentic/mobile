@@ -15,7 +15,7 @@ appId: com.kangentic.mobile
 # still missing, so this can never collapse an already-correct section.
 - extendedWaitUntil:
     visible:
-      id: "section-header-working"
+      id: "section-header-thinking"
     timeout: 60000
 - runFlow:
     when:
@@ -23,7 +23,7 @@ appId: com.kangentic.mobile
         id: "activity-row-stub-session-codex"
     commands:
       - tapOn:
-          id: "section-header-working"
+          id: "section-header-thinking"
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-codex"
