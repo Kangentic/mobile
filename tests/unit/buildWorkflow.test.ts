@@ -78,6 +78,20 @@ describe('build-android workflow and eas.json parity', () => {
     // .claude/rules/expo-cng.md: android/ is a prebuild artifact.
     expect(workflowSource).toContain('expo prebuild --platform android --no-install');
   });
+
+  it('exports the profile env before prebuild, not just before Gradle', () => {
+    // app.config.ts reads EXPO_PUBLIC_KANGENTIC_E2E at config-evaluation time
+    // to set android usesCleartextTraffic, and that evaluation happens during
+    // prebuild. GITHUB_ENV only affects LATER steps, so exporting after
+    // prebuild would produce an e2e APK that builds green but ships without the
+    // cleartext manifest entry, and the Maestro paired suite would then fail at
+    // relay connect (code 1006) with nothing in the build log to explain it.
+    const exportIndex = workflowSource.indexOf('Export the profile env from eas.json');
+    const prebuildIndex = workflowSource.indexOf('expo prebuild --platform android');
+    expect(exportIndex).toBeGreaterThan(-1);
+    expect(prebuildIndex).toBeGreaterThan(-1);
+    expect(exportIndex).toBeLessThan(prebuildIndex);
+  });
 });
 
 describe('build-android release safety gates', () => {
