@@ -121,11 +121,12 @@ scale was wrong, which no RN-side probe could see.
 
 ## Agent tooling (MCP servers)
 
-Agent sessions in this repo get MCP tools from two different mechanisms. `.mcp.json` wires two
-servers: `context7` (library documentation lookup, no setup needed) and `maestro` (the Maestro
-CLI's built-in `maestro mcp` server). Separately, `.claude/settings.json`'s `enabledPlugins`
-turns on the official Expo plugin, enabled in this repo only. `maestro` and the Expo plugin each
-need one-time setup on a fresh clone.
+Agent sessions in this repo get MCP tools from two different mechanisms. `.mcp.json` wires three
+servers: `context7` (library documentation lookup, no setup needed), `maestro` (the Maestro CLI's
+built-in `maestro mcp` server), and `firebase` (the Firebase CLI's built-in `firebase mcp`
+server). Separately, `.claude/settings.json`'s `enabledPlugins` turns on the official Expo plugin,
+enabled in this repo only. `maestro`, `firebase`, and the Expo plugin each need one-time setup on
+a fresh clone.
 
 - **Maestro CLI on PATH.** `.mcp.json` starts the server with `cmd /c maestro mcp`, resolved via
   PATH deliberately rather than an absolute path (an absolute path would violate
@@ -140,6 +141,17 @@ need one-time setup on a fresh clone.
   characters and silently overwrites the entire user `PATH`, not just appends to it - this has
   wiped a user PATH before. Snapshot the current value first, then use
   `[Environment]::SetEnvironmentVariable("Path", "<existing>;<new-entry>", "User")` in PowerShell.
+- **Firebase CLI on PATH, and logged in.** `.mcp.json` starts it with `cmd /c firebase mcp`,
+  PATH-resolved for the same reason `maestro` is. Install with `npm install -g firebase-tools`,
+  then `firebase login`. The server reuses the CLI's own credentials, so there is nothing extra to
+  configure and nothing committed.
+
+  It is scoped to `--only core,messaging`, because this app uses Firebase solely for FCM. The
+  flag matters: `--only` silently accepts an unrecognised feature name and simply exposes no tools
+  for it, so a typo looks like a working config. Valid names are `apphosting`, `apptesting`,
+  `auth`, `core`, `crashlytics`, `dataconnect`, `firestore`, `functions`, `messaging`,
+  `realtime_database`, `remoteconfig`, `storage`. There is no read-only mode, which is why the
+  write tools are listed under `permissions.ask` and in `CLAUDE.md`'s cloud-spend section.
 - **Expo plugin OAuth.** Run `/mcp` and complete the Expo login flow. Each contributor
   authenticates individually as their own personal Expo account; no credentials are committed.
 - **Expo credentials exist on developer machines only, never in CI:**

@@ -16,6 +16,16 @@
         "maestro",
         "mcp"
       ]
+    },
+    "firebase": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "firebase",
+        "mcp",
+        "--only",
+        "core,messaging"
+      ]
     }
   }
 }

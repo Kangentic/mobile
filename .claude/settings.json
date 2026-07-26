@@ -73,7 +73,13 @@
       "mcp__maestro__list_devices",
       "mcp__maestro__inspect_screen",
       "mcp__maestro__take_screenshot",
-      "mcp__maestro__cheat_sheet"
+      "mcp__maestro__cheat_sheet",
+      "mcp__firebase__firebase_get_project",
+      "mcp__firebase__firebase_list_projects",
+      "mcp__firebase__firebase_list_apps",
+      "mcp__firebase__firebase_get_sdk_config",
+      "mcp__firebase__firebase_get_environment",
+      "mcp__firebase__firebase_deploy_status"
     ],
     "ask": [
       "mcp__plugin_expo_expo__build_run",
@@ -82,7 +88,14 @@
       "mcp__plugin_expo_expo__appstore_reply_review",
       "mcp__plugin_expo_expo__appstore_delete_review_response",
       "mcp__plugin_expo_expo__playstore_reply_review",
-      "mcp__maestro__run_on_cloud"
+      "mcp__maestro__run_on_cloud",
+      "mcp__firebase__messaging_send_message",
+      "mcp__firebase__firebase_create_project",
+      "mcp__firebase__firebase_create_app",
+      "mcp__firebase__firebase_create_android_sha",
+      "mcp__firebase__firebase_deploy",
+      "mcp__firebase__firebase_init",
+      "mcp__firebase__firebase_update_environment"
     ],
     "deny": []
   },
