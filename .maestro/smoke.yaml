@@ -3,13 +3,18 @@ appId: com.kangentic.mobile
 # Cold-start smoke on a fresh (unpaired) install: the triage home offers
 # pairing, the board tab renders its empty state. Paired flows live under
 # .maestro/paired/ and need scripts/stubDesktopPeer.mjs running first.
+#
+# The tab bar is a NATIVE one (expo-router NativeTabs), so its buttons are
+# platform views we do not own and cannot put a testID on. Their labels are
+# the selector, which is the documented exception to the testID rule - see
+# .claude/rules/e2e-maestro-runs.md.
 - launchApp
 - assertVisible:
-    id: "home-tab"
+    text: "Agents"
 - assertVisible:
     id: "triage-pair-cta"
 - tapOn:
-    id: "board-tab"
+    text: "Board"
 - assertVisible:
     id: "board-screen"
 - assertVisible:

@@ -8,10 +8,10 @@ appId: com.kangentic.mobile
 # wait for the tab bar instead of tapping into a still-booting app.
 - extendedWaitUntil:
     visible:
-      id: "board-tab"
+      text: "Board"
     timeout: 60000
 - tapOn:
-    id: "board-tab"
+    text: "Board"
 # stub-task-2 is the board-loaded anchor: it lives in To Do, the pager's
 # default page (stub-task-1 is in Doing and would need a column switch).
 - extendedWaitUntil:

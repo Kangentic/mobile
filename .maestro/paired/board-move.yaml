@@ -8,10 +8,10 @@ appId: com.kangentic.mobile
 # wait for the tab bar instead of tapping into a still-booting app.
 - extendedWaitUntil:
     visible:
-      id: "board-tab"
+      text: "Board"
     timeout: 60000
 - tapOn:
-    id: "board-tab"
+    text: "Board"
 # stub-task-1 (the active-session card the header actions target) lives in
 # the Doing column, not the default To Do page the board pager opens on.
 - tapOn:
