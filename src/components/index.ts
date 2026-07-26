@@ -13,13 +13,6 @@ export { Stack, type StackProps } from './Stack';
 export { SectionHeader, type SectionHeaderProps } from './SectionHeader';
 export { Icon, type IconProps } from './Icon';
 export { TextField, type TextFieldProps } from './TextField';
-export {
-  Sheet,
-  SHEET_MAX_HEIGHT_FRACTION,
-  computeSheetDescriptionBounds,
-  type SheetProps,
-  type SheetDescriptionBoundsParams,
-} from './Sheet';
 export { SegmentedTabBar, type SegmentedTabBarProps, type SegmentedTabBarItem } from './SegmentedTabBar';
 export { ConnectionBanner } from './ConnectionBanner';
 export { ContextUsageBar, isUsageTrusted, type ContextUsageBarProps } from './ContextUsageBar';

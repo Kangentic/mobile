@@ -12,7 +12,6 @@ import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, SectionHeader, useTheme } from '@/components';
 import { TaskCard } from '@/components/board/TaskCard';
-import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
 import {
   selectTriageRows,
   sectionForEntry,
@@ -20,32 +19,18 @@ import {
   type TriageSection,
   useActivityStore,
 } from '@/state/activityStore';
-import { selectColumnsOrdered, useBoardStore } from '@/state/boardStore';
+import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { CapabilityError } from '@/channel';
 import {
-  archiveTask,
-  deleteTaskFromBoard,
   peekAwaitedPrompt,
   peekLastAssistantMessage,
   peekLastTerminalLine,
   refreshSnapshots,
 } from '@/connection/actions';
 import { buildPendingPromptSummary, collapseToSnippetText } from '@/conversation/pendingPromptSummary';
-import { triggerHaptic } from '@/lib/haptics';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
-
-/** A task targeted for an action from the Triage feed, bundled with its project id - the feed spans multiple projects, unlike the board's single screen-level project. */
-interface TriageActionTarget {
-  task: BoardTaskWire;
-  projectId: string;
-}
-
-function messageForActionError(error: unknown, fallback: string): string {
-  return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
-}
 
 /**
  * A session can briefly outlive its task's board entry (e.g. a snapshot
@@ -224,27 +209,19 @@ export function TriageHomeScreen(): React.JSX.Element {
 
   const feedReady = allBoardsAnswered || revealDeadlinePassed;
 
-  // Long-press hub, reusing the same sheets the board uses. Every target
-  // bundles its own projectId (rather than one screen-level id, as the board
-  // has) since a triage feed spans every paired project at once - Move
-  // navigates to the form-sheet route carrying that project.
-  const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);
-  const [actionsTarget, setActionsTarget] = useState<TriageActionTarget | null>(null);
-  const [actionsInFlight, setActionsInFlight] = useState(false);
-  const [actionsError, setActionsError] = useState<string | null>(null);
-
-  const actionsArchiveAvailable = useMemo(() => {
-    const board = actionsTarget ? boardsByProjectId[actionsTarget.projectId] : null;
-    return board ? selectColumnsOrdered(board).some((column) => column.role === 'done') : false;
-  }, [actionsTarget, boardsByProjectId]);
-
+  // Long-press hub, the same form-sheet route the board uses. The row carries
+  // its OWN projectId (rather than one screen-level id, as the board has)
+  // because a triage feed spans every paired project at once.
+  //
   // Stable identity: an inline arrow here would be a fresh prop on every
   // TriageHomeScreen render, which defeats ActivityRow's React.memo for
   // every visible card in the feed.
-  const onLongPressTask = useCallback((task: BoardTaskWire, projectId: string) => {
-    setActionsError(null);
-    setActionsTarget({ task, projectId });
-  }, []);
+  const onLongPressTask = useCallback(
+    (task: BoardTaskWire, projectId: string) => {
+      router.push({ pathname: '/task-actions', params: { taskId: task.id, projectId } });
+    },
+    [router],
+  );
 
 
   /**
@@ -281,29 +258,6 @@ export function TriageHomeScreen(): React.JSX.Element {
     if (!restingAtTopRef.current) return;
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
-
-  const onArchive = useCallback(() => {
-    if (!actionsTarget) return;
-    setActionsInFlight(true);
-    setActionsError(null);
-    void archiveTask({ projectId: actionsTarget.projectId, taskId: actionsTarget.task.id })
-      .then(() => setActionsTarget(null))
-      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Archive failed - check the connection')))
-      .finally(() => setActionsInFlight(false));
-  }, [actionsTarget]);
-
-  const onDelete = useCallback(() => {
-    if (!actionsTarget) return;
-    setActionsInFlight(true);
-    setActionsError(null);
-    void deleteTaskFromBoard({ projectId: actionsTarget.projectId, taskId: actionsTarget.task.id })
-      .then(() => {
-        triggerHaptic('destructiveConfirmed');
-        setActionsTarget(null);
-      })
-      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Delete failed - check the connection')))
-      .finally(() => setActionsInFlight(false));
-  }, [actionsTarget]);
 
   if (pairedState === 'unpaired') {
     return (
@@ -378,30 +332,6 @@ export function TriageHomeScreen(): React.JSX.Element {
         }
       />
 
-      <TaskActionsSheet
-        visible={actionsTarget !== null}
-        task={actionsTarget?.task ?? null}
-        archiveAvailable={actionsArchiveAvailable}
-        onClose={() => setActionsTarget(null)}
-        onMove={() => {
-          const target = actionsTarget;
-          setActionsTarget(null);
-          if (target) {
-            router.push({ pathname: '/move-task', params: { taskId: target.task.id, projectId: target.projectId } });
-          }
-        }}
-        onEdit={() => {
-          const target = actionsTarget;
-          setActionsTarget(null);
-          if (target) {
-            router.push({ pathname: '/edit-task', params: { taskId: target.task.id, projectId: target.projectId } });
-          }
-        }}
-        onArchive={onArchive}
-        onDelete={onDelete}
-        actionInFlight={actionsInFlight}
-        errorMessage={actionsError}
-      />
     </Screen>
   );
 }

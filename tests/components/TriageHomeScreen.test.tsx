@@ -638,90 +638,29 @@ describe('TriageHomeScreen', () => {
       seedTwoProjectBoards();
     });
 
-    it('opens TaskActionsSheet for the long-pressed row, scoped to that row\'s own project', () => {
+    /**
+     * The hub is a native form sheet ROUTE now, so all this screen does is
+     * navigate. What still matters HERE - and is the whole reason this feed
+     * differs from the board - is that it hands over the ROW'S OWN project:
+     * the feed spans every paired project at once, so a screen-level default
+     * would open the hub against the wrong board (wrong columns to move into,
+     * wrong answer for whether archive is even possible).
+     *
+     * The hub's own behaviour (replace-not-push, the archive gate, the
+     * two-step delete, failure messages) is in
+     * tests/components/TaskActionsScreen.test.tsx.
+     */
+    it("long-press navigates to the actions hub with the row's own project", () => {
       renderHome();
-      expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
 
       // task-2/sess-2 lives in project-2, not project-1.
       fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
 
-      const sheet = screen.getByTestId('task-actions-sheet');
-      expect(sheet).toBeTruthy();
-      expect(within(sheet).getByText('Ship the beta banner')).toBeTruthy();
-      // project-2 has a done-role column, so archive is enabled - proves the
-      // sheet used project-2's board, not project-1's (whose done column has
-      // a different id and would still resolve true, but a screen-level
-      // default of "no project" or "the wrong project" is what this and the
-      // action-call assertions below are really pinning).
-      expect(screen.getByTestId('task-action-archive').props.accessibilityState.disabled).toBe(false);
-    });
-
-    /**
-     * Move is a native form sheet ROUTE now. What still matters HERE is that
-     * the feed spans every paired project, so it must hand the route the
-     * TARGET's own project - a screen-level default would offer the wrong
-     * board's columns. The sheet's own behaviour (columns, append position,
-     * failure messages) is in tests/components/MoveTaskScreen.test.tsx.
-     */
-    it("Move: navigates with the target's own project, not a screen-level one", () => {
-      renderHome();
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
-      fireEvent.press(screen.getByTestId('task-action-move'));
-
       expect(mockPush).toHaveBeenCalledWith({
-        pathname: '/move-task',
+        pathname: '/task-actions',
         params: { taskId: 'task-2', projectId: 'project-2' },
       });
       expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
-    });
-
-    /** Same cross-project concern as Move: the route must get the TARGET's project. */
-    it("Edit: navigates with the target's own project id", () => {
-      renderHome();
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
-
-      fireEvent.press(screen.getByTestId('task-action-edit'));
-
-      expect(mockPush).toHaveBeenCalledWith({
-        pathname: '/edit-task',
-        params: { taskId: 'task-2', projectId: 'project-2' },
-      });
-      expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
-    });
-
-    it('Archive: calls archiveTask with the target\'s own project id and task id', async () => {
-      renderHome();
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-archive'));
-      });
-
-      expect(mockArchiveTask).toHaveBeenCalledWith({ projectId: 'project-2', taskId: 'task-2' });
-    });
-
-    it('Delete: requires the two-step confirm, then calls deleteTaskFromBoard with the target\'s own project id and task id', async () => {
-      renderHome();
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
-      fireEvent.press(screen.getByTestId('task-action-delete'));
-      expect(mockDeleteTaskFromBoard).not.toHaveBeenCalled();
-
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
-      });
-
-      expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-2', taskId: 'task-2' });
-    });
-
-    it('Archive: a plain Error\'s own message surfaces (unlike Move, the archive/edit/delete path is not narrowed to CapabilityError)', async () => {
-      mockArchiveTask.mockRejectedValueOnce(new Error('archive transport blip'));
-      renderHome();
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
-
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-archive'));
-      });
-
-      expect(screen.getByText('archive transport blip')).toBeTruthy();
     });
   });
 });
