@@ -109,12 +109,16 @@ export async function deleteTaskFromBoard(input: { projectId: string; taskId: st
  * done-role column (archive is not a board-tool command; the desktop's
  * cross-column move handler owns the archive semantics). Throws when the
  * board has no done column.
+ *
+ * Matched on `role` alone, exactly as the desktop's own lookup does
+ * (`task-archive.ts`: `swimlanes.list().find((l) => l.role === 'done')`).
+ * A `!is_archived` guard here looks defensive but is fatal: the done lane
+ * ships with `is_archived: 1` precisely BECAUSE it is the lane that archives
+ * what lands in it, so the guard matched nothing and every archive threw.
  */
 export async function archiveTask(input: { projectId: string; taskId: string }): Promise<void> {
   const board = useBoardStore.getState().boardsByProjectId[input.projectId];
-  const doneColumn = board?.columns.find(
-    (column) => column.role === 'done' && !column.is_archived && !column.is_ghost,
-  );
+  const doneColumn = board?.columns.find((column) => column.role === 'done' && !column.is_ghost);
   if (!doneColumn) throw new Error('This board has no Done column to archive into');
   await moveTaskOptimistic({
     projectId: input.projectId,
