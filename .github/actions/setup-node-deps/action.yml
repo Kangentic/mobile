@@ -1,0 +1,26 @@
+name: Set up Node and dependencies
+description: >
+  Node pinned from .nvmrc plus a shared lockfile-keyed node_modules cache, so
+  npm ci runs only when dependencies actually change. Every CI job uses the same
+  cache key, so the first job to run on a new lockfile pays the install and the
+  rest restore it. Run actions/checkout before this.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .nvmrc
+        cache: npm
+
+    - name: Cache node_modules
+      id: cache-node-modules
+      uses: actions/cache@v4
+      with:
+        path: node_modules
+        key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+
+    - name: Install dependencies (npm ci)
+      if: steps.cache-node-modules.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci

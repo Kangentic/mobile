@@ -21,11 +21,15 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
 
 - **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
   parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit tests (Vitest)`,
-  `Component tests (Jest)`, `Native config (expo prebuild)`, alongside `cla`. Never treat
-  `CLA Assistant` alone as all-green: confirm the registered check names with
-  `gh pr checks <branch>` and wait for every one of them. A real check can take a moment to
-  register after a push, so if only `CLA Assistant` appears, re-poll rather than concluding no
-  other check is coming.
+  `Component tests (Jest)`, `Native config (expo prebuild)`. `.github/workflows/e2e.yml` adds
+  `E2E tests (Maestro)`. Plus `cla`. Never treat `CLA Assistant` alone as all-green: confirm the
+  registered check names with `gh pr checks <branch>` and wait for every one of them. A real check
+  can take a moment to register after a push, so if only `CLA Assistant` appears, re-poll rather
+  than concluding no other check is coming.
+- **E2E is the long pole.** It builds a real signed APK and boots an Android emulator, so budget
+  far longer for it than the other tiers and do not mistake its pending state for a hang. The
+  sharded tiers also surface per-shard jobs (`Unit Test (1/3)`, `Component Test (2/4)`); those are
+  an implementation detail, and the single gate check per tier is what protection requires.
 - **The branch must be up to date with `main` before merging** (protection uses strict status
   checks), so a PR that has fallen behind needs a rebase even when every check is green.
 - Android release builds and the iOS compile check are dispatch or tag triggered, so they never

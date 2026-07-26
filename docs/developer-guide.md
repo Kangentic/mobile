@@ -290,9 +290,26 @@ Three workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
-| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | typecheck, lint, unit, component |
+| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint, typecheck, sharded unit and component tiers, native config |
+| `e2e.yml` | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs Maestro on an emulator |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
 | `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check |
+
+**The gate and the release are separate concerns by design.** `ci.yml` and `e2e.yml` gate every PR,
+so `main` is always stable. `build-android.yml` and `build-ios.yml` are dispatch or tag triggered
+only, so a release can be cut from `main` whenever wanted without waiting on E2E timing, and a
+build workflow never blocks a PR. Do not add a build workflow to the required checks: it would
+deadlock every PR on a check that never runs.
+
+**E2E scope, deliberately narrow.** `e2e.yml` runs only `.maestro/smoke.yaml`, which works against
+a fresh unpaired install with no relay and no pairing. The 11 flows under `.maestro/paired/` are
+**not** in CI yet: each needs a completed pairing to `scripts/stubDesktopPeer.mjs` over a local
+relay on `ws://`, and Android blocks cleartext in a release-shaped build. The
+`usesCleartextTraffic` carve-out that fixes it is gated on `EXPO_PUBLIC_KANGENTIC_E2E` in
+`app.config.ts` and has not landed on `main`, so a paired flow in CI would fail at relay connect
+with code 1006. Adding them is a follow-up: `Kangentic/relay` is public so CI can check it out, and
+the stub peer already lives in this repo. A required check that cannot go green blocks every merge,
+so only the flows that pass are run.
 
 **Why this is free.** The repository is public, so standard GitHub-hosted runners are unmetered
 on Linux and macOS alike. The build runs `npx expo prebuild` then Gradle on the runner, so it
@@ -314,12 +331,33 @@ A `v*` tag build always produces a production AAB with every ABI.
 The artifact lands on the run as `kangentic-<profile>-v<version>-vc<versionCode>-<sha>`, kept for
 14 days. Version name, code, and the ABI set are printed in the run summary.
 
-**Build speed, and why ABIs are per-profile.** Native compilation dominates: the first
-unrestricted run spent 1665 of 1770 seconds inside Gradle, nearly all of it compiling C++ for four
-ABIs. Roughly 4 to 5 minutes of that is ABI-independent (JS bundling, resource processing, dexing)
-and about 6 minutes is per ABI. So `scripts/androidAbis.mjs` gives each profile only the ABI its
-target actually runs, which is the documented React Native approach
-(`-PreactNativeArchitectures`, see https://reactnative.dev/docs/build-speed):
+**Build speed: measured, and not where you would guess.** Three runs, all Android release APKs:
+
+| Run | ABIs | Gradle cache | Gradle step | Total |
+|---|---|---|---|---|
+| cold, four ABIs | 4 | empty | 1665s | 29 min |
+| warm, four ABIs | 4 | populated | 1011s | 19 min |
+| warm, one ABI, `--parallel --build-cache` | 1 | populated | 695s | 13 min |
+
+Two findings worth keeping, because both contradict the obvious guess:
+
+- **The Gradle cache is worth about 11 minutes** (1665s to 1011s, a 39% cut). Native object files
+  are not in `GRADLE_USER_HOME`, so it is tempting to assume the cache barely helps. Wrong: most of
+  that first run was dependency resolution, the Gradle distribution, AGP artifacts, and Kotlin/Java
+  compilation across the roughly 20 autolinked library modules.
+- **Per-ABI native compilation is only about 105 seconds.** Dropping three of four ABIs saved 316s,
+  not the 18 minutes a naive per-ABI estimate suggests. The ABI-independent portion is roughly
+  590s and is the real bottleneck: JS bundling, resource processing, dexing, and module compilation.
+
+So ABI reduction is worth having but is not the main lever, and a compiler cache (ccache) targets
+the 105s rather than the 590s, which makes it much less valuable here than it first appears. The
+levers that actually attack the 590s are the Gradle build cache (now enabled, effect not yet
+measured on a second warm run) and potentially Gradle's configuration cache, which React Native
+documents but which tends to break on AGP plus a nonstandard plugin set, so it is not enabled blind.
+
+`scripts/androidAbis.mjs` gives each profile only the ABI its target actually runs, which is the
+documented React Native approach (`-PreactNativeArchitectures`, see
+https://reactnative.dev/docs/build-speed):
 
 | Profile | Default ABIs | Why |
 |---|---|---|
@@ -330,21 +368,16 @@ target actually runs, which is the documented React Native approach
 `.github/scripts/verify-android-abis.sh` then asserts the artifact carries exactly the ABIs that
 were asked for, so neither a silently-dropped ABI nor a silently-ignored flag can pass.
 
-Two more things that cannot change the output, only the speed: `--parallel` (a React Native
-project is many Gradle modules, one per autolinked library, so parallel project execution is a real
-win) and `--build-cache` (`setup-gradle` caches `GRADLE_USER_HOME`, which includes the local build
-cache, and Gradle keys entries on task inputs).
+Two more flags that cannot change the output, only the speed: `--parallel` (a React Native project
+is many Gradle modules, one per autolinked library, so parallel project execution is a real win)
+and `--build-cache` (`setup-gradle` caches `GRADLE_USER_HOME`, which includes the local build cache,
+and Gradle keys entries on task inputs).
 
 **Parallelism.** Selecting `all` fans the profiles out across runners rather than building them
 back to back. A matrix over ABIs is deliberately **not** used: every parallel job would repeat the
-whole ABI-independent portion, so it cannot beat about 10 minutes, and an app bundle must be a
-single artifact containing every ABI, so `production` cannot be split that way at all.
-
-**The next lever, not yet taken:** a compiler cache. React Native documents ccache for exactly
-this, with `compiler_check content` required on CI to avoid timestamp-driven cache poisoning.
-Wiring it into the Android NDK build means passing `CMAKE_CXX_COMPILER_LAUNCHER` through
-`externalNativeBuild`, which under CNG needs a config plugin rather than a hand edit. That is the
-only change that breaks the ~10 minute floor.
+whole ~590s ABI-independent portion, so with per-ABI cost at only ~105s it would trade a large
+amount of duplicated work for very little wall clock. An app bundle must also be a single artifact
+containing every ABI, so `production` could not be split that way regardless.
 
 **Secrets.** All optional: the workflow degrades rather than failing when one is missing, so the
 pipeline can be exercised before any of them exist. With no keystore it builds a debug-signed APK

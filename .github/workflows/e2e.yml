@@ -1,0 +1,227 @@
+name: E2E
+
+# Maestro E2E against a real APK on an Android emulator, as a PR gate. The point
+# is that main stays stable because E2E is a merge requirement, which then lets
+# releases be cut from main at will without worrying about E2E timing. Release
+# builds stay in build-android.yml and never gate a PR.
+#
+# WHAT RUNS HERE, AND WHY IT IS ONLY SMOKE FOR NOW
+#
+# .maestro/smoke.yaml runs against a fresh, unpaired install: no relay, no
+# pairing, nothing external. It works in CI today.
+#
+# The 11 flows under .maestro/paired/ do NOT work in CI yet. Each needs a
+# completed pairing to scripts/stubDesktopPeer.mjs over a local relay on ws://,
+# and Android blocks cleartext traffic in a release-shaped build. The
+# usesCleartextTraffic carve-out that fixes it is gated on
+# EXPO_PUBLIC_KANGENTIC_E2E in app.config.ts and has not landed on main yet, so
+# a paired flow here would fail at relay connect with code 1006. Wiring them up
+# is a follow-up once that lands: Kangentic/relay is public, so CI can check it
+# out, and the stub peer already runs from this repo.
+#
+# Deliberately only the flows that can pass are run. A required check that
+# cannot go green blocks every merge.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Builds the binary the flows run against. The e2e profile is release-shaped
+  # (no Metro dependency, no dev menu), which is why per-flow runtime is far
+  # lower than against a dev client. scripts/androidAbis.mjs gives it x86_64,
+  # matching the emulator system image: an arm64-only APK will not install.
+  #
+  # This overlaps with build-android.yml's build job. Kept separate rather than
+  # made a reusable workflow so a change here cannot break the release path;
+  # consolidating is a follow-up once both are proven in anger.
+  build-apk:
+    name: Build e2e APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      apk-name: ${{ steps.name.outputs.apk-name }}
+    env:
+      BUILD_PROFILE: e2e
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      HAS_GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node-deps
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      # Must precede prebuild: app.config.ts reads EXPO_PUBLIC_KANGENTIC_E2E at
+      # config-evaluation time, and GITHUB_ENV only affects later steps.
+      - name: Export the profile env from eas.json
+        run: node scripts/easProfile.mjs "$BUILD_PROFILE" --github-env
+
+      - name: Resolve the ABI set
+        id: abis
+        run: echo "abis=$(node scripts/androidAbis.mjs "$BUILD_PROFILE")" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize google-services.json
+        if: env.HAS_GOOGLE_SERVICES == 'true'
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > google-services.json
+
+      - name: Decode the upload keystore
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/kangentic-upload.jks"
+
+      - name: Fail without a keystore
+        if: env.HAS_KEYSTORE != 'true'
+        # An unsigned release APK will not install, so unlike build-android.yml
+        # there is no useful degraded mode here.
+        run: |
+          echo "::error::ANDROID_KEYSTORE_BASE64 is required: a release-shaped APK must be signed to install on the emulator."
+          exit 1
+
+      - name: Generate the native Android project
+        run: npx expo prebuild --platform android --no-install
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          BUILD_ABIS: ${{ steps.abis.outputs.abis }}
+        run: |
+          set -euo pipefail
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleRelease \
+            -x lint \
+            -x test \
+            --parallel \
+            --build-cache \
+            "-PreactNativeArchitectures=$BUILD_ABIS" \
+            "-Pandroid.injected.signing.store.file=$RUNNER_TEMP/kangentic-upload.jks" \
+            "-Pandroid.injected.signing.store.password=$ANDROID_KEYSTORE_PASSWORD" \
+            "-Pandroid.injected.signing.key.alias=$ANDROID_KEY_ALIAS" \
+            "-Pandroid.injected.signing.key.password=$ANDROID_KEY_PASSWORD"
+
+      - name: Verify the APK is signed and carries the expected ABIs
+        env:
+          BUILD_ABIS: ${{ steps.abis.outputs.abis }}
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          bash .github/scripts/verify-android-signature.sh "$apk" apk
+          bash .github/scripts/verify-android-abis.sh "$apk" apk "$BUILD_ABIS"
+
+      - name: Stage the APK
+        id: name
+        run: |
+          set -euo pipefail
+          echo "apk-name=kangentic-e2e-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/kangentic-e2e-${GITHUB_SHA::7}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.apk-name }}
+          path: ${{ runner.temp }}/${{ steps.name.outputs.apk-name }}.apk
+          retention-days: 3
+          if-no-files-found: error
+
+  maestro:
+    name: Maestro (${{ matrix.suite }})
+    needs: build-apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry per suite that actually works in CI. Add a `paired` entry
+        # once the cleartext carve-out lands on main and the relay plus stub peer
+        # are wired in.
+        include:
+          - suite: smoke
+            flows: .maestro/smoke.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-apk.outputs.apk-name }}
+          path: apk
+
+      - name: Install Maestro
+        run: |
+          set -euo pipefail
+          curl -Ls https://get.maestro.mobile.dev > "$RUNNER_TEMP/install-maestro.sh"
+          bash "$RUNNER_TEMP/install-maestro.sh"
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Report the Maestro version
+        run: maestro --version
+
+      # The emulator needs hardware acceleration to be usable. ubuntu-latest has
+      # KVM available but not world-writable by default.
+      - name: Enable KVM
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Maestro on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          # Must match the APK's ABI (scripts/androidAbis.mjs gives e2e x86_64).
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          # -no-snapshot-save keeps teardown from writing a snapshot we never reuse.
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -camera-back none
+          disable-animations: true
+          script: bash .github/scripts/run-maestro.sh "$(ls apk/*.apk | head -n 1)" ${{ matrix.flows }}
+
+      - name: Upload Maestro artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-${{ matrix.suite }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/maestro-report.xml
+            ~/.maestro/tests
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Thin required gate, mirroring the ci.yml tiers: this single check is what
+  # branch protection requires, so suites can be added without touching it.
+  e2e:
+    name: E2E tests (Maestro)
+    needs: [maestro]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Gate on suite results
+        run: |
+          if [ "${{ needs.maestro.result }}" != "success" ]; then
+            echo "One or more Maestro suites did not succeed (result: ${{ needs.maestro.result }})"
+            exit 1
+          fi
+          echo "All Maestro suites passed."
