@@ -386,16 +386,18 @@ describe('BoardScreen', () => {
     );
 
     expect(screen.getByText('Alpha')).toBeTruthy();
-    expect(screen.queryByTestId('board-project-sheet')).toBeNull();
 
+    // The picker is a form sheet ROUTE now; tapping the title navigates to it.
     fireEvent.press(screen.getByTestId('board-header-title'));
-    expect(screen.getByTestId('board-project-sheet')).toBeTruthy();
-    expect(screen.getByTestId('board-project-project-1')).toBeTruthy();
-    expect(screen.getByTestId('board-project-project-2')).toBeTruthy();
-
-    fireEvent.press(screen.getByTestId('board-project-project-2'));
-
+    expect(mockPush).toHaveBeenCalledWith('/project-picker');
     expect(screen.queryByTestId('board-project-sheet')).toBeNull();
+
+    // The picker writes the choice to the board store, which is what this
+    // screen reacts to - the redraw is the part that still belongs here.
+    act(() => {
+      useBoardStore.getState().selectProject('project-2');
+    });
+
     expect(screen.getByTestId('board-column-lane-review')).toBeTruthy();
     expect(screen.getByText('Ship the beta banner')).toBeTruthy();
     expect(screen.queryByText('Fix the login bug')).toBeNull();

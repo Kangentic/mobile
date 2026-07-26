@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { FlashList } from '@shopify/flash-list';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, Sheet, SkeletonCard, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
+import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCard, Stack, useTheme, type AgentStatusKind } from '@/components';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
@@ -35,12 +35,23 @@ export function BoardScreen(): React.JSX.Element {
   const router = useRouter();
   const projects = useBoardStore((state) => state.projects);
   const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [projectPickerVisible, setProjectPickerVisible] = useState(false);
+  // Store state, not local: the project picker is a form sheet route now and
+  // cannot reach in here to set it.
+  const selectedProjectId = useBoardStore((state) => state.selectedProjectId);
   const [activeColumnId, setActiveColumnId] = useState<string | null>(null);
   const pagerRef = useRef<PagerView>(null);
 
   const projectId = selectedProjectId ?? projects[0]?.id ?? null;
+  // Switching project starts at its first column rather than carrying over an
+  // index from the board the user just left. Owned here rather than by the
+  // picker, which no longer has a way to reach this screen's state. Adjusted
+  // during render (the sanctioned derive-from-state pattern, as SessionScreen
+  // does) rather than in an effect, which would cascade an extra render.
+  const [previousProjectId, setPreviousProjectId] = useState<string | null>(projectId);
+  if (projectId !== previousProjectId) {
+    setPreviousProjectId(projectId);
+    setActiveColumnId(null);
+  }
   const board: ProjectBoard | null = projectId ? (boardsByProjectId[projectId] ?? null) : null;
   // Every other screen reads the feed projection, which carries only the tasks
   // with an agent on them. This one draws every column and every card, so it
@@ -174,7 +185,7 @@ export function BoardScreen(): React.JSX.Element {
       <AppHeader
         title={projectName ?? 'Board'}
         subtitle={projectName ? 'Board' : undefined}
-        onTitlePress={projects.length > 0 ? () => setProjectPickerVisible(true) : undefined}
+        onTitlePress={projects.length > 0 ? () => router.push('/project-picker') : undefined}
         divider={columns.length === 0}
         testID="board-header"
       />
@@ -268,28 +279,6 @@ export function BoardScreen(): React.JSX.Element {
         actionInFlight={actionsInFlight}
         errorMessage={actionsError}
       />
-      <Sheet visible={projectPickerVisible} onClose={() => setProjectPickerVisible(false)} title="Projects" testID="board-project-sheet">
-        <Stack gap="xs">
-          {projects.map((project) => (
-            <Pressable
-              key={project.id}
-              testID={`board-project-${project.id}`}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: project.id === projectId }}
-              onPress={() => {
-                setSelectedProjectId(project.id);
-                setProjectPickerVisible(false);
-                setActiveColumnId(null);
-              }}
-              style={{ minHeight: theme.minTouchSize, justifyContent: 'center', paddingHorizontal: theme.spacing.md }}
-            >
-              <Text variant="body" color={project.id === projectId ? 'primary' : 'secondary'}>
-                {project.name}
-              </Text>
-            </Pressable>
-          ))}
-        </Stack>
-      </Sheet>
     </Screen>
   );
 }
