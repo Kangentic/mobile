@@ -44,6 +44,17 @@ export interface ArchivedTasks {
   totalCount: number;
   /** Sparse: a task archived without ever running an agent has no summary. */
   summariesByTaskId: Record<string, SessionSummaryWire>;
+  /**
+   * Offset the NEXT page should ask for: how many rows the desktop has handed
+   * over, which is not the same as how many are held.
+   *
+   * Tracked separately because pages are de-duplicated on arrival, so
+   * `tasks.length` can grow by less than a page. Deriving the offset from it
+   * would then re-request ground already covered, and a page that happened to
+   * be entirely duplicates would leave the offset frozen - paging stuck with
+   * rows still unfetched, refiring on every scroll to the end.
+   */
+  nextOffset: number;
   /** True while a page request is in flight, so the column can show it. */
   loading: boolean;
 }
@@ -117,7 +128,7 @@ interface BoardStoreState {
 }
 
 /** Shared empty value, so a project with no page yet still has a shape to read. */
-const EMPTY_ARCHIVED: ArchivedTasks = { tasks: [], totalCount: 0, summariesByTaskId: {}, loading: false };
+const EMPTY_ARCHIVED: ArchivedTasks = { tasks: [], totalCount: 0, summariesByTaskId: {}, nextOffset: 0, loading: false };
 
 let nextMoveSequence = 0;
 let nextEditSequence = 0;
@@ -198,6 +209,9 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
             summariesByTaskId: options.append
               ? { ...existing.summariesByTaskId, ...page.summariesByTaskId }
               : page.summariesByTaskId,
+            // Advanced by what the desktop RETURNED, so a page thinned by
+            // de-duplication still moves the cursor forward by a full page.
+            nextOffset: (options.append ? existing.nextOffset : 0) + page.archivedTasks.length,
             loading: false,
           },
         },

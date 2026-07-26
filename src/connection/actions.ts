@@ -143,14 +143,17 @@ export async function loadArchivedTasks(input: { projectId: string; append?: boo
   const board = useBoardStore.getState();
   const alreadyHeld = board.archivedByProjectId[input.projectId];
   if (alreadyHeld?.loading) return;
-  // Paging past the end is a no-op rather than a wasted round trip.
-  if (append && alreadyHeld && alreadyHeld.tasks.length >= alreadyHeld.totalCount) return;
+  // Paging past the end is a no-op rather than a wasted round trip. Measured
+  // against the fetch cursor, not the held rows: those two diverge whenever a
+  // page arrives carrying a row already held, and a full archive would then
+  // never satisfy this guard.
+  if (append && alreadyHeld && alreadyHeld.nextOffset >= alreadyHeld.totalCount) return;
 
   board.setArchivedLoading(input.projectId, true);
   try {
     const page = await requireVerbClient().readBoardArchived(input.projectId, {
       limit: ARCHIVED_PAGE_SIZE,
-      offset: append ? (alreadyHeld?.tasks.length ?? 0) : 0,
+      offset: append ? (alreadyHeld?.nextOffset ?? 0) : 0,
     });
     useBoardStore.getState().applyArchivedPage(page, { append });
   } catch (error) {

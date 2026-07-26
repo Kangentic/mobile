@@ -26,9 +26,13 @@ const mockUpdateTaskFields = jest.fn().mockResolvedValue(undefined);
 const mockDeleteTaskFromBoard = jest.fn().mockResolvedValue(undefined);
 const mockArchiveTask = jest.fn().mockResolvedValue(undefined);
 const mockOpenProjectBoard = jest.fn();
+const mockLoadArchivedTasks = jest.fn().mockResolvedValue(undefined);
 jest.mock('@/connection/actions', () => ({
   moveTaskOptimistic: (input: unknown) => mockMoveTaskOptimistic(input),
   openProjectBoard: (projectId: string) => mockOpenProjectBoard(projectId),
+  // The Done column's own read: completed tasks are in neither board
+  // projection, so focusing the board fetches them separately.
+  loadArchivedTasks: (input: unknown) => mockLoadArchivedTasks(input),
   createTask: (input: unknown) => mockCreateTask(input),
   updateTaskFields: (input: unknown) => mockUpdateTaskFields(input),
   deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
