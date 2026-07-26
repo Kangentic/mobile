@@ -610,6 +610,37 @@ Expo Push itself is free: no per-notification charge, no paid plan requirement, 
 Until all of this exists, `build-android.yml` emits a warning on every run and the resulting
 binary cannot receive remote notifications.
 
+## Credential inventory
+
+Every credential this project uses, where it lives, and what happens if it is lost. No values here,
+by design.
+
+**They live OUTSIDE the repo**, in `%USERPROFILE%\kangentic-secrets\` on the maintainer's machine.
+Do not move them in, even gitignored. This repo is public, so a `.gitignore` slip is a published
+private key; `git clean -xfd` deletes ignored files and would destroy the only copy of the
+keystore; the board's per-task worktrees under `.kangentic/worktrees/` would not see repo-root
+files anyway; and `eas build` uploads the project directory, so an in-repo secret would reach
+Expo's servers.
+
+| Credential | Local copy | Also held by | If lost |
+|---|---|---|---|
+| `kangentic-upload.jks` (+ base64, + credentials) | `~/kangentic-secrets/android/` | GitHub secrets (write-only) | **Unrecoverable.** Play support keystore-reset round trip |
+| Play publishing key (`play-publisher@kangentic-mobile`) | `~/kangentic-secrets/google-play/` | GitHub secret `PLAY_SERVICE_ACCOUNT_JSON` | Regenerate in Google Cloud, re-grant in Play Console |
+| FCM V1 key (`firebase-adminsdk-fbsvc@kangentic-b43ff`) | `~/kangentic-secrets/firebase/` | Expo project credentials (FCM V1) | Regenerate with `gcloud`, re-upload via `eas credentials` |
+| `google-services.json` (+ base64) | `~/kangentic-secrets/firebase/`, plus repo root (gitignored) | GitHub secret `GOOGLE_SERVICES_JSON` | Re-download from Firebase console |
+
+**Only the upload keystore is unrecoverable.** Everything else regenerates in minutes. GitHub
+secrets are write-only once set, so they are not a backup: the local copy is the only readable
+original. Back the keystore up off this machine (password manager or encrypted archive) - that is
+the single point of failure in the whole setup.
+
+**Two layers protect against committing one.** Filename globs in `.gitignore` (`*keystore*`,
+`*service-account*.json`, `*.jks`, `secrets/`, `kangentic-secrets/`), and GitHub **secret scanning
+with push protection**, which is enabled on this repo and matches on content rather than filename.
+The second layer matters because the first is inherently leaky: Google Cloud names downloaded keys
+`<project>-<hash>.json`, which no glob here matches. Verify a candidate filename with
+`git check-ignore -v <name>` rather than assuming.
+
 ## Deployment tracks
 
 The Play developer account is a **Personal** account created on 2026-07-20, which is after
