@@ -8,9 +8,16 @@ import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCa
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { TaskCard } from '@/components/board/TaskCard';
-import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
+import {
+  isDoneColumn,
+  selectArchived,
+  selectColumnsOrdered,
+  selectTasksForColumn,
+  useBoardStore,
+  type ProjectBoard,
+} from '@/state/boardStore';
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
-import { openProjectBoard, refreshSnapshots } from '@/connection/actions';
+import { loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
 
 /** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
 const NO_TASKS: BoardTaskWire[] = [];
@@ -41,13 +48,20 @@ export function BoardScreen(): React.JSX.Element {
     setActiveColumnId(null);
   }
   const board: ProjectBoard | null = projectId ? (boardsByProjectId[projectId] ?? null) : null;
+  const archived = useBoardStore((state) => selectArchived(state, projectId));
   // Every other screen reads the feed projection, which carries only the tasks
   // with an agent on them. This one draws every column and every card, so it
   // asks the desktop to upgrade the project it is showing - on focus, so a
   // board the user never opens is never fetched in full.
   useFocusEffect(
     useCallback(() => {
-      if (projectId) openProjectBoard(projectId);
+      if (!projectId) return;
+      openProjectBoard(projectId);
+      // Completed work rides its own one-shot read: it is in neither board
+      // projection, so without this the Done column has nothing to draw. A
+      // failure here leaves that one column empty and must not take the rest
+      // of the board down with it.
+      void loadArchivedTasks({ projectId }).catch(() => undefined);
     }, [projectId]),
   );
   // ...and it does not paint until that upgrade lands. Rendering a 'sessions'
@@ -63,12 +77,25 @@ export function BoardScreen(): React.JSX.Element {
   // The counts read off the same map rather than repeating the derivation.
   const tasksByColumnId = useMemo(() => {
     const byColumnId = new Map<string, BoardTaskWire[]>();
-    for (const column of columns) byColumnId.set(column.id, fullBoard ? selectTasksForColumn(fullBoard, column.id) : []);
+    for (const column of columns) {
+      // The done lane's cards are the archive, not the board: a task is
+      // archived the moment it lands there, so the desktop's task list - and
+      // therefore every board projection - has already dropped it.
+      byColumnId.set(
+        column.id,
+        isDoneColumn(column) ? archived.tasks : fullBoard ? selectTasksForColumn(fullBoard, column.id) : [],
+      );
+    }
     return byColumnId;
-  }, [columns, fullBoard]);
+  }, [columns, fullBoard, archived.tasks]);
   const taskCounts = useMemo(
-    () => columns.map((column) => tasksByColumnId.get(column.id)?.length ?? 0),
-    [columns, tasksByColumnId],
+    () =>
+      columns.map((column) =>
+        // The archive's total, not the loaded page's length, so the chip does
+        // not read "25" on a board holding two hundred completed tasks.
+        isDoneColumn(column) ? archived.totalCount : (tasksByColumnId.get(column.id)?.length ?? 0),
+      ),
+    [columns, tasksByColumnId, archived.totalCount],
   );
   const projectName = projects.find((project) => project.id === projectId)?.name ?? null;
   const [refreshing, setRefreshing] = useState(false);
@@ -256,6 +283,11 @@ function ColumnPage({
     ),
     [theme.spacing.md, theme.spacing.sm, projectId, onLongPressTask],
   );
+  // Paging the archive. loadArchivedTasks itself no-ops once every page is
+  // in, so this does not need to know how much is left.
+  const onEndReached = useCallback(() => {
+    if (projectId) void loadArchivedTasks({ projectId, append: true }).catch(() => undefined);
+  }, [projectId]);
   const refreshControl = (
     // tintColor styles iOS; colors + progressBackgroundColor style Android
     // (stock is a white circle, jarring on the warm theme).
@@ -268,13 +300,15 @@ function ColumnPage({
     />
   );
 
+  const isDone = isDoneColumn(column);
+
   if (tasks.length === 0) {
     return (
       <ScrollView contentContainerStyle={styles.flex} refreshControl={refreshControl}>
         <EmptyState
           testID={`board-column-${column.id}-empty`}
-          title="No tasks"
-          caption="Move a task here or add one from the desktop."
+          title={isDone ? 'Nothing completed yet' : 'No tasks'}
+          caption={isDone ? 'Finished tasks land here.' : 'Move a task here or add one from the desktop.'}
           overseerSize={54}
           overseerAnimate="blink-loop"
         />
@@ -291,6 +325,10 @@ function ColumnPage({
       refreshControl={refreshControl}
       contentContainerStyle={{ paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.xxl }}
       renderItem={renderTask}
+      // Only the done column pages: every other column's tasks arrive whole
+      // with the snapshot, so there is nothing further to fetch.
+      onEndReached={isDone ? onEndReached : undefined}
+      onEndReachedThreshold={0.5}
     />
   );
 }
@@ -327,6 +365,14 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
   // empty session shell. Moving to To Do hard-resets a task (the desktop kills
   // the session, worktree and branch), so that column can never have one.
   const openTask = useCallback(() => {
+    // Checked before the session test, not after: an archived task ALWAYS has
+    // a null session_id (the move to Done suspends the agent and clears it),
+    // so the sessionless branch would otherwise swallow every completed task
+    // and offer to edit finished work instead of showing what it did.
+    if (task.archived_at !== null) {
+      router.push({ pathname: '/completed-task', params: { taskId: task.id, projectId } });
+      return;
+    }
     if (task.session_id === null) {
       router.push({ pathname: '/edit-task', params: { taskId: task.id, projectId } });
       return;
@@ -335,7 +381,7 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
       pathname: '/task/[taskId]',
       params: { taskId: task.id, sessionId: task.session_id, projectId },
     });
-  }, [router, task.id, task.session_id, projectId]);
+  }, [router, task.id, task.session_id, task.archived_at, projectId]);
 
   // Desktop TaskCard parity: spinner while thinking, mail while the
   // session waits on the user (permission or idle).

@@ -2,9 +2,11 @@ import { create } from 'zustand';
 import type {
   BoardColumnWire,
   BoardTaskWire,
+  ReadBoardArchivedResponsePayload,
   ReadBoardProjectSummary,
   ReadBoardSnapshotResponsePayload,
   ReadBoardView,
+  SessionSummaryWire,
 } from '@kangentic/protocol';
 
 export interface ProjectBoard {
@@ -28,6 +30,22 @@ export interface ProjectBoard {
    * optimistic moves).
    */
   taskCountsByColumnId: Record<string, number>;
+}
+
+/**
+ * A project's completed tasks, held apart from `ProjectBoard` because they
+ * arrive on their own one-shot read rather than with the board snapshot, and
+ * a snapshot must never clear them.
+ */
+export interface ArchivedTasks {
+  /** Newest-archived first, as the desktop ordered them. */
+  tasks: BoardTaskWire[];
+  /** Total in the project, which exceeds `tasks.length` until every page is in. */
+  totalCount: number;
+  /** Sparse: a task archived without ever running an agent has no summary. */
+  summariesByTaskId: Record<string, SessionSummaryWire>;
+  /** True while a page request is in flight, so the column can show it. */
+  loading: boolean;
 }
 
 export interface PendingMove {
@@ -79,9 +97,13 @@ interface BoardStoreState {
   pendingMoves: PendingMove[];
   pendingEdits: PendingTaskEdit[];
   pendingRemovals: PendingTaskRemoval[];
+  /** Completed tasks per project, filled on demand by the Done column. */
+  archivedByProjectId: Record<string, ArchivedTasks>;
   applyProjectList: (projects: ReadBoardProjectSummary[]) => void;
   selectProject: (projectId: string) => void;
   applyBoardSnapshot: (snapshot: ReadBoardSnapshotResponsePayload) => void;
+  setArchivedLoading: (projectId: string, loading: boolean) => void;
+  applyArchivedPage: (page: ReadBoardArchivedResponsePayload, options: { append: boolean }) => void;
   applyOptimisticMove: (move: { projectId: string; taskId: string; toSwimlaneId: string; toPosition: number }) => string | null;
   commitMove: (moveId: string) => void;
   rollbackMove: (moveId: string) => void;
@@ -93,6 +115,9 @@ interface BoardStoreState {
   rollbackRemoval: (removalId: string) => void;
   reset: () => void;
 }
+
+/** Shared empty value, so a project with no page yet still has a shape to read. */
+const EMPTY_ARCHIVED: ArchivedTasks = { tasks: [], totalCount: 0, summariesByTaskId: {}, loading: false };
 
 let nextMoveSequence = 0;
 let nextEditSequence = 0;
@@ -141,10 +166,43 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
   pendingMoves: [],
   pendingEdits: [],
   pendingRemovals: [],
+  archivedByProjectId: {},
 
   applyProjectList: (projects) => set({ projects }),
 
   selectProject: (projectId) => set({ selectedProjectId: projectId }),
+
+  setArchivedLoading: (projectId, loading) =>
+    set((state) => ({
+      archivedByProjectId: {
+        ...state.archivedByProjectId,
+        [projectId]: { ...(state.archivedByProjectId[projectId] ?? EMPTY_ARCHIVED), loading },
+      },
+    })),
+
+  applyArchivedPage: (page, options) =>
+    set((state) => {
+      const existing = state.archivedByProjectId[page.projectId] ?? EMPTY_ARCHIVED;
+      // Appending de-duplicates by id rather than concatenating blindly: a
+      // task archived between two page requests shifts every later row down
+      // by one, so the next page legitimately re-sends a row already held.
+      const tasks = options.append
+        ? [...existing.tasks, ...page.archivedTasks.filter((task) => !existing.tasks.some((held) => held.id === task.id))]
+        : page.archivedTasks;
+      return {
+        archivedByProjectId: {
+          ...state.archivedByProjectId,
+          [page.projectId]: {
+            tasks,
+            totalCount: page.archivedTotalCount,
+            summariesByTaskId: options.append
+              ? { ...existing.summariesByTaskId, ...page.summariesByTaskId }
+              : page.summariesByTaskId,
+            loading: false,
+          },
+        },
+      };
+    }),
 
   applyBoardSnapshot: (snapshot) =>
     set((state) => {
@@ -312,14 +370,50 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       pendingMoves: [],
       pendingEdits: [],
       pendingRemovals: [],
+      archivedByProjectId: {},
     }),
 }));
 
-/** Visible columns in board order (archived and ghost columns are desktop-internal). */
+/**
+ * Visible columns in board order (archived and ghost columns are
+ * desktop-internal).
+ *
+ * The done lane is the deliberate exception: it carries `is_archived` because
+ * it ARCHIVES what lands in it, not because it is hidden, and the desktop
+ * draws it like any other column. Its own config builder spells the
+ * distinction out - `if (lane.is_archived && lane.role !== 'done')` is what
+ * marks a column hidden. Reading the flag without that carve-out is what kept
+ * completed work off the phone entirely.
+ */
 export function selectColumnsOrdered(board: ProjectBoard): BoardColumnWire[] {
   return board.columns
-    .filter((column) => !column.is_archived && !column.is_ghost)
+    .filter((column) => (!column.is_archived || column.role === 'done') && !column.is_ghost)
     .sort((first, second) => first.position - second.position);
+}
+
+/** True for the lane that holds completed work; its cards come from the archive, not the board. */
+export function isDoneColumn(column: BoardColumnWire): boolean {
+  return column.role === 'done';
+}
+
+/** A project's completed tasks; a stable empty value until its first page lands. */
+export function selectArchived(
+  state: { archivedByProjectId: Record<string, ArchivedTasks> },
+  projectId: string | null,
+): ArchivedTasks {
+  return (projectId !== null ? state.archivedByProjectId[projectId] : undefined) ?? EMPTY_ARCHIVED;
+}
+
+/** Finds a completed task and its summary across every project's archive. */
+export function findArchivedTaskById(
+  state: { archivedByProjectId: Record<string, ArchivedTasks> },
+  taskId: string,
+): { projectId: string; task: BoardTaskWire; summary: SessionSummaryWire | null } | null {
+  for (const [projectId, archived] of Object.entries(state.archivedByProjectId)) {
+    const task = archived.tasks.find((candidate) => candidate.id === taskId);
+    if (task) return { projectId, task, summary: archived.summariesByTaskId[task.id] ?? null };
+  }
+  return null;
 }
 
 /** Non-archived tasks of one column, by position. */

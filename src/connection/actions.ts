@@ -128,6 +128,37 @@ export async function archiveTask(input: { projectId: string; taskId: string }):
   });
 }
 
+/** Page size for the Done column. One screenful plus headroom, so the common board needs a single round trip. */
+const ARCHIVED_PAGE_SIZE = 25;
+
+/**
+ * Loads a page of a project's completed tasks into the board store.
+ *
+ * One-shot by design: completed work is not part of either board projection,
+ * and subscribing to it would re-send an ever-growing list on every board
+ * change. `append: false` refreshes from the top, `true` pages further back.
+ */
+export async function loadArchivedTasks(input: { projectId: string; append?: boolean }): Promise<void> {
+  const append = input.append ?? false;
+  const board = useBoardStore.getState();
+  const alreadyHeld = board.archivedByProjectId[input.projectId];
+  if (alreadyHeld?.loading) return;
+  // Paging past the end is a no-op rather than a wasted round trip.
+  if (append && alreadyHeld && alreadyHeld.tasks.length >= alreadyHeld.totalCount) return;
+
+  board.setArchivedLoading(input.projectId, true);
+  try {
+    const page = await requireVerbClient().readBoardArchived(input.projectId, {
+      limit: ARCHIVED_PAGE_SIZE,
+      offset: append ? (alreadyHeld?.tasks.length ?? 0) : 0,
+    });
+    useBoardStore.getState().applyArchivedPage(page, { append });
+  } catch (error) {
+    useBoardStore.getState().setArchivedLoading(input.projectId, false);
+    throw error;
+  }
+}
+
 /** Sets the Changes tab's live diff watch (scope changes re-subscribe); pass null on blur. */
 export function setDiffWatch(taskId: string, input: { projectId: string; scope: ReadDiffScope } | null): void {
   const connection = getActiveConnection();
