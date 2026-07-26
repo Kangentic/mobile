@@ -6,6 +6,24 @@ appId: com.kangentic.mobile
 # the honest caption and real content lines.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
+# The Agents feed's section collapse is PERSISTED (settings.collapsedTriageSection),
+# so it survives launchApp and leaks between flows: any earlier tap that landed
+# on a header - which happens when a recycling FlashList moves a row out from
+# under a resolved coordinate - leaves the section this flow needs collapsed,
+# and the row is then genuinely absent rather than merely slow. Wait for the
+# header first (proof the feed populated), then expand only if the row is
+# still missing, so this can never collapse an already-correct section.
+- extendedWaitUntil:
+    visible:
+      id: "section-header-working"
+    timeout: 60000
+- runFlow:
+    when:
+      notVisible:
+        id: "activity-row-stub-session-codex"
+    commands:
+      - tapOn:
+          id: "section-header-working"
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-codex"
