@@ -41,6 +41,16 @@ appId: com.kangentic.mobile
     visible:
       id: "conversation-list"
     timeout: 15000
+# Assert on the NEWEST turn, not the opening user message.
+#
+# The chat lens now opens pinned to the bottom with no visible reflow, so the
+# first message of the transcript is legitimately scrolled off - this used to
+# pass only because the list was still mid-reflow when the assertion ran,
+# which is the flashing the pin was added to remove. Scroll up to prove
+# history is reachable, then come back.
+- assertVisible: "npm run test:unit -- auth-redirect"
+- scroll:
+    direction: DOWN
 - assertVisible: "Fix the login redirect bug and add a regression test."
 # Changes is a same-screen mode behind the pill bar (TaskHeader's
 # onOpenChanges chip / the old pushed ChangesScreen are unused now that
