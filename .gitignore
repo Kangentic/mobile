@@ -47,6 +47,21 @@ GoogleService-Info.plist
 *.mobileprovision
 secrets/
 *service-account*.json
+# Anything keystore-shaped, not just the binary. A file holding the store/key
+# passwords, or a base64 copy of the .jks (from which the keystore is fully
+# reconstructible), is exactly as sensitive as the keystore itself and matched
+# none of the globs above.
+*keystore*
+# Defensive: the real credentials live OUTSIDE this repo (see the Android release
+# section of docs/developer-guide.md). This only exists so that copying that
+# folder in by accident cannot become a commit.
+kangentic-secrets/
+#
+# KNOWN GAP, do not rely on this list alone: Google Cloud names downloaded
+# service-account keys `<project>-<hash>.json`, which matches none of these
+# patterns unless the file is renamed to contain "service-account". Filename
+# globs are inherently leaky, so the real backstop is GitHub secret scanning with
+# push protection, enabled on this repo, which matches on content instead.
 
 # Local native build outputs (EAS builds run in the cloud; local builds drop these)
 *.apk
