@@ -275,20 +275,20 @@ describe('TriageHomeScreen', () => {
     // needs-you and idle share the "Idle" title; our lone permission-pending
     // session lands in needs-you, so that is the section kind whose header
     // actually gets emitted.
-    expect(screen.getByTestId('section-header-needs-you').props.accessibilityState).toEqual({ expanded: true });
+    expect(screen.getByTestId('section-header-idle').props.accessibilityState).toEqual({ expanded: true });
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
-    expect(within(screen.getByTestId('section-header-needs-you')).getByText('1')).toBeTruthy();
+    expect(within(screen.getByTestId('section-header-idle')).getByText('1')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('section-header-needs-you'));
+    fireEvent.press(screen.getByTestId('section-header-idle'));
 
-    expect(screen.getByTestId('section-header-needs-you').props.accessibilityState).toEqual({ expanded: false });
+    expect(screen.getByTestId('section-header-idle').props.accessibilityState).toEqual({ expanded: false });
     expect(screen.queryByTestId('activity-row-sess-1')).toBeNull();
     // The count stays visible while collapsed - collapsing hides the rows, not the fact that there are some.
-    expect(within(screen.getByTestId('section-header-needs-you')).getByText('1')).toBeTruthy();
+    expect(within(screen.getByTestId('section-header-idle')).getByText('1')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('section-header-needs-you'));
+    fireEvent.press(screen.getByTestId('section-header-idle'));
 
-    expect(screen.getByTestId('section-header-needs-you').props.accessibilityState).toEqual({ expanded: true });
+    expect(screen.getByTestId('section-header-idle').props.accessibilityState).toEqual({ expanded: true });
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
   });
 
