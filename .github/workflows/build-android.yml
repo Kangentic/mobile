@@ -70,6 +70,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned rather than relying on whatever Node the runner image ships: this
+      # job decides the matrix, so if it breaks nothing builds at all.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
       - name: Resolve the profile matrix
         id: matrix
         env:
