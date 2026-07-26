@@ -24,7 +24,7 @@ jest.mock('expo-speech-recognition', () => ({
 function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): void {
   render(
     <ThemeProvider>
-      <SessionInputBar sessionId={sessionId} mode={mode} onModeChange={jest.fn()} chatAttention={false} onMove={jest.fn()} />
+      <SessionInputBar sessionId={sessionId} mode={mode} onModeChange={jest.fn()} chatAttention={false} />
     </ThemeProvider>,
   );
 }
@@ -49,18 +49,16 @@ describe('SessionInputBar', () => {
 
   it('renders only the switcher in changes mode', () => {
     renderBar('changes');
-    expect(screen.getByTestId('session-mode-changes')).toBeTruthy();
+    expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
     expect(screen.queryByTestId('composer-input')).toBeNull();
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
     expect(screen.queryByTestId('terminal-mic')).toBeNull();
   });
 
-  it('renders the mode pill segments in every mode', () => {
+  /** The switcher anchors the footer in every mode; only what sits above it changes. */
+  it('renders the surface switcher in every mode', () => {
     renderBar('terminal');
-    expect(screen.getByTestId('session-mode-terminal')).toBeTruthy();
-    expect(screen.getByTestId('session-mode-chat')).toBeTruthy();
-    expect(screen.getByTestId('session-mode-changes')).toBeTruthy();
-    expect(screen.getByTestId('session-mode-move')).toBeTruthy();
+    expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
   });
 
   it('renders nothing without a session', () => {

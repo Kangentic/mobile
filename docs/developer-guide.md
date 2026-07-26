@@ -304,16 +304,42 @@ maestro --device <serial> test .maestro/paired
 
 Use the dev client only when you need Fast Refresh while writing a flow.
 
-**A local release build is not a fallback on Windows.** Both `npx expo run:android --variant
-release` and `eas build --local` fail here, because `react-native-screens` and
-`react-native-worklets` put their CMake object files under `node_modules/<pkg>/android/.cxx/`,
-which overruns CMake's 250-character `CMAKE_OBJECT_PATH_MAX` from any normal checkout path (the
-object directory alone measures 208 characters from a `.kangentic/worktrees/<branch>/` root).
-CMake reports it as a warning and ninja then fails outright with `manifest 'build.ninja' still
-dirty after 100 tries`. A directory junction to a short path does not help: Node realpaths
-`node_modules`, so CMake still receives the long path. Producing an `e2e` APK therefore means a
-cloud build today, which is one of the reasons board task #5 (moving build execution to GitHub
-Actions runners, which have no such limit) exists.
+### Local Android builds need a SHORT-PATH worktree
+
+A build started from `.kangentic/worktrees/<branch>/` fails on Windows, at every variant -
+`npx expo run:android`, `--variant release`, and `eas build --local` alike.
+`react-native-screens` and `react-native-worklets` put their CMake object files under
+`node_modules/<pkg>/android/.cxx/`, where the object directory alone measures **208 characters**
+against CMake's 250-character `CMAKE_OBJECT_PATH_MAX`. CMake reports it only as a warning; ninja
+then fails outright with `manifest 'build.ninja' still dirty after 100 tries`. `Debug` is a mere
+9 characters shorter than `RelWithDebInfo`, so the debug variant is no escape.
+
+**A directory junction does not help** - Node realpaths `node_modules`, so CMake still receives
+the long path.
+
+**A git worktree whose REAL path is short does.** It has no long path to resolve back to, and
+object paths drop to roughly 108 characters:
+
+```
+git -C <your worktree> worktree add --detach C:\kw HEAD
+cd C:\kw
+npm install
+npx expo prebuild --platform android --no-install
+cd C:\kw\android
+.\gradlew.bat app:assembleDebug -x lint -x test -PreactNativeArchitectures=arm64-v8a
+```
+
+Develop in the normal worktree, commit, then `git -C C:\kw checkout --detach <sha>` and build
+there. Swap `assembleDebug` for `assembleRelease` (with `EXPO_PUBLIC_KANGENTIC_E2E=1`) to
+produce the `e2e` APK.
+
+**Always pass `-PreactNativeArchitectures=arm64-v8a`.** A raw `gradlew` builds all four ABIs,
+and `react-native-reanimated` fails compiling for 32-bit `armeabi-v7a`. `expo run:android`
+passes this flag for you; a direct gradle call does not. Both the Pixel and the emulator AVD are
+arm64.
+
+Board task #5 (moving build execution to GitHub Actions runners, which have no such path limit)
+is still worth doing for CI, but it is no longer the only way to get a build.
 
 **Why a run takes minutes:** every flow begins with `launchApp`, which force-stops and cold
 boots, and then waits up to 60s for the channel to re-establish - roughly 70s of the runtime of
