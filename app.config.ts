@@ -46,6 +46,11 @@ const config: ExpoConfig = {
     'expo-secure-store',
     'expo-font',
     'expo-asset',
+    // expo-system-ui is what actually applies `userInterfaceStyle` above.
+    // Without it prebuild warns "Install expo-system-ui in your project to
+    // enable this feature" and the dark-mode declaration is inert.
+    'expo-system-ui',
+    'expo-status-bar',
     [
       'expo-splash-screen',
       {
