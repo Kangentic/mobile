@@ -31,20 +31,36 @@ if [ "$extension" = "apk" ]; then
   fi
   echo "APK signature verified."
 else
-  # An AAB is a jar. -strict is deliberately omitted: a self-signed upload
-  # certificate always raises a chain warning and would make -strict exit
-  # non-zero on a perfectly good bundle. jarsigner also exits 0 on a completely
-  # unsigned jar, so the exit code proves nothing and the output must be read
-  # both ways.
-  verify_report="$(jarsigner -verify -verbose:summary "$artifact_path")"
+  # An AAB is a jar, but jarsigner's exit code is unusable in BOTH directions
+  # here, which cost a good production build once:
+  #
+  #  - It exits NON-zero on entirely benign warnings, even without -strict: a
+  #    self-signed upload certificate ("certificate chain is invalid",
+  #    "signer certificate is self-signed"), the absence of a timestamp, and a
+  #    "signed in JarFile but is not signed in JarInputStream" note that AGP
+  #    always produces for the BUNDLE-METADATA debug-symbol entries. A correctly
+  #    signed release bundle trips all of those.
+  #  - It exits ZERO on a completely unsigned jar.
+  #
+  # So the exit code is captured and deliberately ignored, and the verdict comes
+  # from the output plus an explicit check on the signer identity.
+  set +e
+  verify_report="$(jarsigner -verify -verbose:summary -certs "$artifact_path" 2>&1)"
+  set -e
   echo "$verify_report"
+
   if printf '%s' "$verify_report" | grep -qi 'jar is unsigned'; then
     echo "::error::Bundle is unsigned."
     exit 1
   fi
   if ! printf '%s' "$verify_report" | grep -qi 'jar verified'; then
-    echo "::error::Could not confirm the bundle signature."
+    echo "::error::jarsigner did not report the bundle as verified."
     exit 1
   fi
-  echo "Bundle signature verified."
+  # The real assertion: signed by OUR key, not merely signed by something.
+  if ! printf '%s' "$verify_report" | grep -q 'CN=Kangentic'; then
+    echo "::error::Bundle is signed, but not by the Kangentic upload key."
+    exit 1
+  fi
+  echo "Bundle signature verified, signed by the Kangentic upload key."
 fi

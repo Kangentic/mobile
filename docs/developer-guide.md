@@ -574,10 +574,38 @@ Expo can and cannot see). Generate the key from the Firebase Admin SDK service a
 gcloud iam service-accounts keys create <output.json> --iam-account=firebase-adminsdk-fbsvc@kangentic-b43ff.iam.gserviceaccount.com --project kangentic-b43ff
 ```
 
-Then upload it at `https://expo.dev/accounts/kangentic/projects/mobile/credentials` under
-Android -> FCM V1. This is a one-time dashboard step: `eas credentials` is interactive only, and
-there is no non-interactive CLI or MCP path for it. Expo Push itself is free, with no
-per-notification charge and no paid plan requirement.
+Then register it with Expo. Use the CLI, not the dashboard:
+
+```
+eas credentials --platform android
+```
+
+and take this exact path, which is not obvious:
+
+1. build profile: any (`production` is fine). The credential attaches to the application
+   identifier, not the profile.
+2. **Google Service Account** - *not* "Push Notifications (Legacy)", which manages the deprecated
+   FCM legacy API key that Google is switching off.
+3. **Manage your Google Service Account Key for Push Notifications (FCM V1)** - *not* the "for
+   Play Store Submissions" entry directly above it. Same key type, different purpose.
+4. **Set up a Google Service Account Key for Push Notifications (FCM V1)**, then give it the
+   absolute path to the JSON.
+
+Expect `Google Service Account Key assigned to com.kangentic.mobile for FCM V1`.
+
+**Do not use the dashboard's "New Application Identifier" wizard for this.** It is the EAS Build
+credentials flow, it hard-requires uploading an Android upload keystore ("You must upload a
+keystore file"), and there is no skip. We do not build on EAS, so uploading `kangentic-upload.jks`
+there would put a second copy of the Play signing key in a third party for no benefit. The CLI path
+above reaches the FCM slot without touching the keystore, which is why it is the documented route.
+
+Two service accounts stay deliberately separate: `firebase-adminsdk-fbsvc@kangentic-b43ff` is the
+FCM V1 key held by Expo for push, and `play-publisher@kangentic-mobile` is the narrower Play
+publishing key held only as a GitHub secret, with no FCM rights. Do not consolidate them, even
+though the `eas credentials` prompt mentions both uses in one sentence.
+
+Expo Push itself is free: no per-notification charge, no paid plan requirement, and a rate limit
+(around 600 notifications/second/project) far above anything this app will produce.
 
 Until all of this exists, `build-android.yml` emits a warning on every run and the resulting
 binary cannot receive remote notifications.
