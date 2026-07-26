@@ -92,6 +92,9 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="edit-task" options={formSheetOptions} />
         <Stack.Screen name="project-picker" options={formSheetOptions} />
         <Stack.Screen name="task-actions" options={formSheetOptions} />
+        {/* Renders its own TaskHeader, exactly as the session screen does, so the
+            two kinds of task open into the same chrome. */}
+        <Stack.Screen name="completed-task" options={{ headerShown: false }} />
         <Stack.Screen name="file-diff" options={{ title: 'Changes' }} />
         <Stack.Screen name="pair" options={{ title: 'Pair a device' }} />
         <Stack.Screen name="pair-confirm" options={{ title: 'Confirm pairing' }} />

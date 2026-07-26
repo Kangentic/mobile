@@ -15,6 +15,7 @@ import {
   type JsonValue,
   type MoveTaskRequestPayload,
   type MoveTaskResponsePayload,
+  type ReadBoardArchivedResponsePayload,
   type ReadBoardProjectListResponsePayload,
   type ReadBoardSnapshotResponsePayload,
   type ReadBoardView,
@@ -134,12 +135,46 @@ export class VerbClient {
   async readBoardSubscribe(projectId: string, options: { view: ReadBoardView }): Promise<ReadBoardSnapshotResponsePayload> {
     const response = await this.requireOk('read-board', { projectId, action: 'subscribe', view: options.view });
     const parsed = this.parsePayload('read-board', response, parseReadBoardResponsePayload);
-    if ('projects' in parsed) throw new CapabilityError('read-board', 'Expected a board snapshot, received a project list');
+    // Narrowed against BOTH other shapes. A snapshot is the only one carrying
+    // `columns`, so testing for that identifies it positively rather than by
+    // elimination - which is what stops the next response shape added to this
+    // union from silently passing through here as a snapshot.
+    if (!('columns' in parsed)) {
+      throw new CapabilityError('read-board', 'Expected a board snapshot, received a different read-board response');
+    }
     return parsed;
   }
 
   async readBoardUnsubscribe(projectId: string): Promise<void> {
     await this.requireOk('read-board', { projectId, action: 'unsubscribe' });
+  }
+
+  /**
+   * One page of a project's COMPLETED tasks, newest first, with each one's
+   * lifetime session summary (protocol 0.10.0).
+   *
+   * A one-shot read, not a subscription: neither board projection carries
+   * archived tasks, and folding them into the snapshot would re-send an
+   * ever-growing list on every board change.
+   */
+  async readBoardArchived(
+    projectId: string,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<ReadBoardArchivedResponsePayload> {
+    const response = await this.requireOk('read-board', {
+      projectId,
+      action: 'archived',
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(options.offset !== undefined ? { offset: options.offset } : {}),
+    });
+    const parsed = this.parsePayload('read-board', response, parseReadBoardResponsePayload);
+    // A pre-0.10.0 desktop does not know the 'archived' action. Its parser
+    // rejects the request outright, so this narrowing only has to catch the
+    // shapes a 0.10.0 desktop can legitimately return.
+    if (!('archivedTasks' in parsed)) {
+      throw new CapabilityError('read-board', 'Expected an archived page, received a different read-board response');
+    }
+    return parsed;
   }
 
   /** Fetches the diff file list AND (desktop-side) subscribes the task's diff watch; DiffEvents follow until readDiffUnsubscribe. */
