@@ -25,3 +25,6 @@ in the desktop repo's
   notifications, data storage).
 - [store-listing.md](store-listing.md) - draft Play Console listing copy (title, descriptions,
   reviewer notes).
+- [pre-live-hardening-summary.md](pre-live-hardening-summary.md) - the pre-live baseline: what is
+  proven on real hardware, what only tests cover, and what has never been verified at all
+  (iOS, chiefly). Read this before trusting a platform claim about this app.
