@@ -6,7 +6,6 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { CapabilityError } from '@/channel/verbClient';
 import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 import { peekLastAssistantMessage } from '@/connection/actions';
 
@@ -657,30 +656,23 @@ describe('TriageHomeScreen', () => {
       expect(screen.getByTestId('task-action-archive').props.accessibilityState.disabled).toBe(false);
     });
 
-    it('Move: routes to the target project\'s own columns and appends to the bottom of the selected column', async () => {
+    /**
+     * Move is a native form sheet ROUTE now. What still matters HERE is that
+     * the feed spans every paired project, so it must hand the route the
+     * TARGET's own project - a screen-level default would offer the wrong
+     * board's columns. The sheet's own behaviour (columns, append position,
+     * failure messages) is in tests/components/MoveTaskScreen.test.tsx.
+     */
+    it("Move: navigates with the target's own project, not a screen-level one", () => {
       renderHome();
       fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
       fireEvent.press(screen.getByTestId('task-action-move'));
 
-      expect(screen.getByTestId('move-task-sheet')).toBeTruthy();
-      // project-2's columns render; project-1's do not.
-      expect(screen.getByTestId('move-target-p2-doing')).toBeTruthy();
-      expect(screen.queryByTestId('move-target-p1-todo')).toBeNull();
-      expect(screen.queryByTestId('move-target-p1-done')).toBeNull();
-
-      fireEvent.press(screen.getByTestId('move-target-p2-doing'));
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('move-confirm'));
+      expect(mockPush).toHaveBeenCalledWith({
+        pathname: '/move-task',
+        params: { taskId: 'task-2', projectId: 'project-2' },
       });
-
-      // p2-doing already holds task-2b and task-2c: targetPosition must be
-      // their count (2), not 0 - the tell for a regressed "always top" bug.
-      expect(mockMoveTaskOptimistic).toHaveBeenCalledWith({
-        projectId: 'project-2',
-        taskId: 'task-2',
-        targetSwimlaneId: 'p2-doing',
-        targetPosition: 2,
-      });
+      expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
     });
 
     it('Edit: saves the changed field with the target\'s own project id', async () => {
@@ -724,35 +716,6 @@ describe('TriageHomeScreen', () => {
       });
 
       expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-2', taskId: 'task-2' });
-    });
-
-    it('Move: a CapabilityError surfaces its own message on the move sheet', async () => {
-      mockMoveTaskOptimistic.mockRejectedValueOnce(new CapabilityError('move-task', 'The desktop rejected the move'));
-      renderHome();
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
-      fireEvent.press(screen.getByTestId('task-action-move'));
-      fireEvent.press(screen.getByTestId('move-target-p2-doing'));
-
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('move-confirm'));
-      });
-
-      expect(screen.getByText('The desktop rejected the move')).toBeTruthy();
-    });
-
-    it('Move: a plain Error falls back to the generic message (narrower than the edit/archive/delete error handling)', async () => {
-      mockMoveTaskOptimistic.mockRejectedValueOnce(new Error('some transport blip'));
-      renderHome();
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
-      fireEvent.press(screen.getByTestId('task-action-move'));
-      fireEvent.press(screen.getByTestId('move-target-p2-doing'));
-
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('move-confirm'));
-      });
-
-      expect(screen.getByText('Move failed - check the connection')).toBeTruthy();
-      expect(screen.queryByText('some transport blip')).toBeNull();
     });
 
     it('Archive: a plain Error\'s own message surfaces (unlike Move, the archive/edit/delete path is not narrowed to CapabilityError)', async () => {

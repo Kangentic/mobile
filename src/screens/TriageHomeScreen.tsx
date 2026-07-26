@@ -13,7 +13,6 @@ import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, SectionHeader, useTheme } from '@/components';
 import { TaskCard } from '@/components/board/TaskCard';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
-import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import {
   selectTriageRows,
@@ -22,14 +21,13 @@ import {
   type TriageSection,
   useActivityStore,
 } from '@/state/activityStore';
-import { selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
+import { selectColumnsOrdered, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { CapabilityError } from '@/channel';
 import {
   archiveTask,
   deleteTaskFromBoard,
-  moveTaskOptimistic,
   peekAwaitedPrompt,
   peekLastAssistantMessage,
   peekLastTerminalLine,
@@ -100,6 +98,7 @@ const SECTION_TITLES: Record<TriageSection, string> = {
 
 export function TriageHomeScreen(): React.JSX.Element {
   const theme = useTheme();
+  const router = useRouter();
   const bySessionId = useActivityStore((state) => state.bySessionId);
   const pairedState = useChannelStore((state) => state.pairedState);
   const [refreshing, setRefreshing] = useState(false);
@@ -227,25 +226,18 @@ export function TriageHomeScreen(): React.JSX.Element {
 
   const feedReady = allBoardsAnswered || revealDeadlinePassed;
 
-  // Long-press hub, reusing the exact same TaskActionsSheet/MoveTaskSheet/
-  // EditTaskSheet trio the board uses. Every target bundles its own
-  // projectId (rather than one screen-level id, as the board has) since a
-  // triage feed spans every paired project at once.
+  // Long-press hub, reusing the same sheets the board uses. Every target
+  // bundles its own projectId (rather than one screen-level id, as the board
+  // has) since a triage feed spans every paired project at once - Move
+  // navigates to the form-sheet route carrying that project.
   const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);
   const [actionsTarget, setActionsTarget] = useState<TriageActionTarget | null>(null);
   const [actionsInFlight, setActionsInFlight] = useState(false);
   const [actionsError, setActionsError] = useState<string | null>(null);
-  const [moveTarget, setMoveTarget] = useState<TriageActionTarget | null>(null);
-  const [moveInFlight, setMoveInFlight] = useState(false);
-  const [moveError, setMoveError] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<TriageActionTarget | null>(null);
   const [editInFlight, setEditInFlight] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const moveColumns = useMemo(() => {
-    const board = moveTarget ? boardsByProjectId[moveTarget.projectId] : null;
-    return board ? selectColumnsOrdered(board) : [];
-  }, [moveTarget, boardsByProjectId]);
   const actionsArchiveAvailable = useMemo(() => {
     const board = actionsTarget ? boardsByProjectId[actionsTarget.projectId] : null;
     return board ? selectColumnsOrdered(board).some((column) => column.role === 'done') : false;
@@ -259,31 +251,6 @@ export function TriageHomeScreen(): React.JSX.Element {
     setActionsTarget({ task, projectId });
   }, []);
 
-  const onMove = useCallback(
-    (targetSwimlaneId: string) => {
-      if (!moveTarget) return;
-      const board = boardsByProjectId[moveTarget.projectId];
-      if (!board) return;
-      const targetPosition = selectColumnTaskCount(board, targetSwimlaneId);
-      setMoveInFlight(true);
-      setMoveError(null);
-      void moveTaskOptimistic({
-        projectId: moveTarget.projectId,
-        taskId: moveTarget.task.id,
-        targetSwimlaneId,
-        targetPosition,
-      })
-        .then(() => {
-          triggerHaptic('taskMoved');
-          setMoveTarget(null);
-        })
-        .catch((error: unknown) => {
-          setMoveError(error instanceof CapabilityError ? error.message : 'Move failed - check the connection');
-        })
-        .finally(() => setMoveInFlight(false));
-    },
-    [moveTarget, boardsByProjectId],
-  );
 
   const onEditSave = useCallback(
     (fields: { title?: string; description?: string }) => {
@@ -435,9 +402,11 @@ export function TriageHomeScreen(): React.JSX.Element {
         archiveAvailable={actionsArchiveAvailable}
         onClose={() => setActionsTarget(null)}
         onMove={() => {
-          setMoveError(null);
-          setMoveTarget(actionsTarget);
+          const target = actionsTarget;
           setActionsTarget(null);
+          if (target) {
+            router.push({ pathname: '/move-task', params: { taskId: target.task.id, projectId: target.projectId } });
+          }
         }}
         onEdit={() => {
           setEditError(null);
@@ -448,15 +417,6 @@ export function TriageHomeScreen(): React.JSX.Element {
         onDelete={onDelete}
         actionInFlight={actionsInFlight}
         errorMessage={actionsError}
-      />
-      <MoveTaskSheet
-        visible={moveTarget !== null}
-        task={moveTarget?.task ?? null}
-        columns={moveColumns}
-        onClose={() => setMoveTarget(null)}
-        onMove={onMove}
-        moveInFlight={moveInFlight}
-        errorMessage={moveError}
       />
       <EditTaskSheet
         visible={editTarget !== null}

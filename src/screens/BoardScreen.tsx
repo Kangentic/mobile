@@ -7,17 +7,15 @@ import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, Sheet, SkeletonCard, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
-import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
 import { TaskCard } from '@/components/board/TaskCard';
-import { selectColumnsOrdered, selectColumnTaskCount, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
+import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
 import { CapabilityError } from '@/channel';
 import {
   archiveTask,
   deleteTaskFromBoard,
-  moveTaskOptimistic,
   openProjectBoard,
   refreshSnapshots,
   updateTaskFields,
@@ -135,9 +133,6 @@ export function BoardScreen(): React.JSX.Element {
   const [actionsTarget, setActionsTarget] = useState<BoardTaskWire | null>(null);
   const [actionsInFlight, setActionsInFlight] = useState(false);
   const [actionsError, setActionsError] = useState<string | null>(null);
-  const [moveTarget, setMoveTarget] = useState<BoardTaskWire | null>(null);
-  const [moveInFlight, setMoveInFlight] = useState(false);
-  const [moveError, setMoveError] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<BoardTaskWire | null>(null);
   const [editInFlight, setEditInFlight] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -152,29 +147,6 @@ export function BoardScreen(): React.JSX.Element {
     setActionsTarget(task);
   }, []);
 
-  const onMove = useCallback(
-    (targetSwimlaneId: string) => {
-      if (!moveTarget || !projectId || !fullBoard) return;
-      const targetPosition = selectColumnTaskCount(fullBoard, targetSwimlaneId);
-      setMoveInFlight(true);
-      setMoveError(null);
-      void moveTaskOptimistic({
-        projectId,
-        taskId: moveTarget.id,
-        targetSwimlaneId,
-        targetPosition,
-      })
-        .then(() => {
-          triggerHaptic('taskMoved');
-          setMoveTarget(null);
-        })
-        .catch((error: unknown) => {
-          setMoveError(error instanceof CapabilityError ? error.message : 'Move failed - check the connection');
-        })
-        .finally(() => setMoveInFlight(false));
-    },
-    [moveTarget, projectId, fullBoard],
-  );
 
   const onEditSave = useCallback(
     (fields: { title?: string; description?: string }) => {
@@ -300,9 +272,9 @@ export function BoardScreen(): React.JSX.Element {
         archiveAvailable={archiveAvailable}
         onClose={() => setActionsTarget(null)}
         onMove={() => {
-          setMoveError(null);
-          setMoveTarget(actionsTarget);
+          const target = actionsTarget;
           setActionsTarget(null);
+          if (target && projectId) router.push({ pathname: '/move-task', params: { taskId: target.id, projectId } });
         }}
         onEdit={() => {
           setEditError(null);
@@ -313,15 +285,6 @@ export function BoardScreen(): React.JSX.Element {
         onDelete={onDelete}
         actionInFlight={actionsInFlight}
         errorMessage={actionsError}
-      />
-      <MoveTaskSheet
-        visible={moveTarget !== null}
-        task={moveTarget}
-        columns={columns}
-        onClose={() => setMoveTarget(null)}
-        onMove={onMove}
-        moveInFlight={moveInFlight}
-        errorMessage={moveError}
       />
       <EditTaskSheet
         visible={editTarget !== null}

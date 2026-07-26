@@ -1,12 +1,12 @@
 import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
-import { closeSessionScreen, moveTaskOptimistic, openSessionScreen } from '@/connection/actions';
+import { closeSessionScreen, openSessionScreen } from '@/connection/actions';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -304,68 +304,33 @@ describe('SessionScreen session binding', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it('tapping Move opens the move-task sheet showing the current column', () => {
+  /**
+   * Move is a native form sheet ROUTE now, so this screen only navigates. The
+   * sheet's own behaviour (current column disabled, append position, failure
+   * message) lives in tests/components/MoveTaskScreen.test.tsx.
+   */
+  it('tapping Move navigates to the move-task form sheet with the task and project', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
     seedTaskWithSession('sess-a');
     renderSessionScreen();
+
+    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
+
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/move-task',
+      params: { taskId: 'task-1', projectId: 'project-1' },
+    });
     expect(screen.queryByTestId('move-task-sheet')).toBeNull();
-
-    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
-
-    expect(screen.getByTestId('move-task-sheet')).toBeTruthy();
-    expect(screen.getByTestId('move-target-lane-todo').props.accessibilityState.disabled).toBe(true);
-    expect(screen.getByTestId('move-target-lane-doing').props.accessibilityState.disabled).toBe(false);
   });
 
-  it('moving the task to another column calls moveTaskOptimistic with the resolved projectId', async () => {
-    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
-    seedTaskWithSession('sess-a');
-    renderSessionScreen();
-
-    fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
-    fireEvent.press(screen.getByTestId('move-target-lane-doing'));
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('move-confirm'));
-    });
-
-    expect(moveTaskOptimistic as jest.Mock).toHaveBeenCalledWith({
-      projectId: 'project-1',
-      taskId: 'task-1',
-      targetSwimlaneId: 'lane-doing',
-      targetPosition: 0,
-    });
-  });
-
-  it('renders the move sheet safely for a maximally long task title', () => {
-    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
-    const veryLongTitle = 'Migrate the legacy push notification registration path '.repeat(20);
-    useBoardStore.setState({
-      projects: [{ id: 'project-1', name: 'Alpha' }],
-      boardsByProjectId: {
-        'project-1': {
-          columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-doing', name: 'Doing', position: 1 })],
-          tasksById: {
-            'task-1': boardTaskFixture({
-              id: 'task-1',
-              session_id: 'sess-a',
-              title: veryLongTitle,
-            }),
-          },
-          snapshotAt: 0,
-          showTicketNumbers: true,
-          view: 'full',
-          taskCountsByColumnId: {},
-        },
-      },
-      pendingMoves: [],
-    });
+  /** Without a resolved projectId there is no board to move within, so navigating would open an empty sheet. */
+  it('does not navigate to Move before the board has resolved the project', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    useBoardStore.getState().reset();
     renderSessionScreen();
 
     fireEvent.press(screen.getByTestId('stub-session-input-bar-move'));
 
-    const moveSheet = screen.getByTestId('move-task-sheet');
-    expect(moveSheet).toBeTruthy();
-    expect(within(moveSheet).getByText(veryLongTitle)).toBeTruthy();
-    expect(screen.getByTestId('move-confirm')).toBeTruthy();
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });
