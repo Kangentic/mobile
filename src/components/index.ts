@@ -14,6 +14,7 @@ export { SectionHeader, type SectionHeaderProps } from './SectionHeader';
 export { Icon, type IconProps } from './Icon';
 export { TextField, type TextFieldProps } from './TextField';
 export { SegmentedTabBar, type SegmentedTabBarProps, type SegmentedTabBarItem } from './SegmentedTabBar';
+export { SegmentedSwitcher, type SegmentedSwitcherProps, type SegmentOption } from './SegmentedSwitcher';
 export { ConnectionBanner } from './ConnectionBanner';
 export { ContextUsageBar, isContextWindowKnown, type ContextUsageBarProps } from './ContextUsageBar';
 export { MarkdownBlock, type MarkdownBlockProps } from './MarkdownBlock';
