@@ -56,6 +56,24 @@ export default function RootLayout(): React.JSX.Element {
 
 function RootStack(): React.JSX.Element {
   const theme = useTheme();
+  /**
+   * Shared options for every sheet in the app. NATIVE form sheets, not
+   * hand-rolled Modals: the platform owns the presentation, the backdrop and
+   * keyboard avoidance, so there is no translucent-Dialog window whose insets
+   * can land a frame late (which is what made the old custom sheet open one
+   * tab-bar-height off the bottom until the keyboard forced a relayout).
+   *
+   * 'fitToContents' sizes the sheet to its form, so nothing inside may use
+   * flex: 1. Android form sheets render no native header, so each screen puts
+   * its own title in content.
+   */
+  const formSheetOptions = {
+    presentation: 'formSheet',
+    headerShown: false,
+    sheetAllowedDetents: 'fitToContents',
+    sheetCornerRadius: theme.radii.lg,
+    sheetGrabberVisible: true,
+  } as const;
   return (
     <>
       <StatusBar style="light" />
@@ -69,23 +87,8 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="task/[taskId]/index" options={{ headerShown: false }} />
         <Stack.Screen name="task/[taskId]/changes" options={{ headerShown: false }} />
-        {/* A NATIVE form sheet, not a hand-rolled Modal: the platform owns the
-            presentation, the backdrop, and keyboard avoidance, so there is no
-            translucent-Dialog window whose insets can land a frame late (which
-            is what made the old custom sheet open one tab-bar-height off the
-            bottom until the keyboard forced a relayout). 'fitToContents' sizes
-            it to the form; nothing inside it may use flex: 1. Android form
-            sheets render no native header, so the title lives in the content. */}
-        <Stack.Screen
-          name="create-task"
-          options={{
-            presentation: 'formSheet',
-            headerShown: false,
-            sheetAllowedDetents: 'fitToContents',
-            sheetCornerRadius: theme.radii.lg,
-            sheetGrabberVisible: true,
-          }}
-        />
+        <Stack.Screen name="create-task" options={formSheetOptions} />
+        <Stack.Screen name="move-task" options={formSheetOptions} />
         <Stack.Screen name="file-diff" options={{ title: 'Changes' }} />
         <Stack.Screen name="pair" options={{ title: 'Pair a device' }} />
         <Stack.Screen name="pair-confirm" options={{ title: 'Confirm pairing' }} />

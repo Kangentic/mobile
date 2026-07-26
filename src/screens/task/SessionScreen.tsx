@@ -1,17 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
-import { MoveTaskSheet } from '@/components/board/MoveTaskSheet';
 import { Screen } from '@/components';
-import { findTaskById, selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
+import { findTaskById, useBoardStore } from '@/state/boardStore';
 import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
-import { CapabilityError } from '@/channel';
-import { closeSessionScreen, moveTaskOptimistic, openSessionScreen } from '@/connection/actions';
-import { triggerHaptic } from '@/lib/haptics';
+import { closeSessionScreen, openSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
 import { ChangesTab } from './ChangesTab';
@@ -44,6 +41,7 @@ const REJECTED_FEED_GRACE_MS = 1500;
  */
 export function SessionScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string; mode?: string }>();
+  const router = useRouter();
   const taskId = params.taskId;
 
   // Select primitives, never the object findTaskById builds: returning a
@@ -155,40 +153,13 @@ export function SessionScreen(): React.JSX.Element {
   // rather than subscribing to the whole boardsByProjectId map, which would
   // re-render this screen (and its unmemoized pager children) on any other
   // project's board mutation.
-  const board = useBoardStore((state) => (projectId ? (state.boardsByProjectId[projectId] ?? null) : null));
-  const moveColumns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
-  const moveTask = board ? (board.tasksById[taskId] ?? null) : null;
-  const [moveSheetVisible, setMoveSheetVisible] = useState(false);
-  const [moveInFlight, setMoveInFlight] = useState(false);
-  const [moveError, setMoveError] = useState<string | null>(null);
+  // Move is a native form sheet ROUTE now (app/move-task.tsx), so this screen
+  // only navigates: no visible/inFlight/error state, and no second copy of the
+  // move call to keep in step with the board's.
   const openMoveSheet = useCallback(() => {
-    setMoveError(null);
-    setMoveSheetVisible(true);
-  }, []);
-  const closeMoveSheet = useCallback(() => setMoveSheetVisible(false), []);
-  const onMove = useCallback(
-    (targetSwimlaneId: string) => {
-      if (!projectId || !board) return;
-      const targetPosition = selectColumnTaskCount(board, targetSwimlaneId);
-      setMoveInFlight(true);
-      setMoveError(null);
-      void moveTaskOptimistic({
-        projectId,
-        taskId,
-        targetSwimlaneId,
-        targetPosition,
-      })
-        .then(() => {
-          triggerHaptic('taskMoved');
-          setMoveSheetVisible(false);
-        })
-        .catch((error: unknown) => {
-          setMoveError(error instanceof CapabilityError ? error.message : 'Move failed - check the connection');
-        })
-        .finally(() => setMoveInFlight(false));
-    },
-    [projectId, board, taskId],
-  );
+    if (!projectId) return;
+    router.push({ pathname: '/move-task', params: { taskId, projectId } });
+  }, [router, taskId, projectId]);
 
   const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
   const settingsHydrated = useSettingsStore((state) => state.hydrated);
@@ -275,15 +246,6 @@ export function SessionScreen(): React.JSX.Element {
           />
         ) : null}
       </KeyboardAvoidingView>
-      <MoveTaskSheet
-        visible={moveSheetVisible}
-        task={moveTask}
-        columns={moveColumns}
-        onClose={closeMoveSheet}
-        onMove={onMove}
-        moveInFlight={moveInFlight}
-        errorMessage={moveError}
-      />
     </Screen>
   );
 }
