@@ -436,15 +436,30 @@ Four tiers, chosen for the fastest tier that proves the behavior:
 |------|----------|--------|-------|
 | Unit | `tests/unit/` | vitest | Pure TypeScript logic, no RN runtime |
 | Component | `tests/components/` | Jest + React Native Testing Library v13+ | Screens and components, native modules mocked |
-| E2E | `.maestro/` | Maestro | Full flows against a real dev build |
+| E2E | `.maestro/` | Maestro | Full flows against a real build. `smoke.yaml` runs in CI; `paired/` is local-only for now |
 | Web | `tests/web/` | Playwright via react-native-web | Cross-platform component behavior (later) |
 
 Commands: `npm run typecheck`, `npm run lint`, `npm run test:unit`, `npm run test:components`,
 `maestro test .maestro/`.
 
-**Maestro on Windows:** Maestro runs natively on Windows against the Android emulator for local
-E2E. **EAS Workflows runs Maestro on cloud iOS simulators** for iOS E2E; this is the only
-supported path to iOS E2E without a Mac.
+**Where each tier runs.** Unit and component run on every PR, sharded, from `ci.yml`. Android E2E
+runs on every PR from `e2e.yml`: it builds a signed `e2e` APK and drives it on an emulator. Maestro
+also runs natively on Windows against a local emulator, which is the right loop while implementing
+a change (see the stage-ownership note in `CLAUDE.md` for why local E2E is deliberately *not* a
+pre-PR gate).
+
+**Only `.maestro/smoke.yaml` runs in CI today, 1 of 12 flows.** The 11 paired flows need a completed
+pairing to `scripts/stubDesktopPeer.mjs` over a local relay on `ws://`, and Android blocks cleartext
+in a release-shaped build. Do not read the green `E2E tests (Maestro)` check as full coverage: it is
+a smoke gate until those land.
+
+**iOS E2E does not exist yet, by any route.** An earlier version of this section claimed EAS
+Workflows on cloud iOS simulators was "the only supported path to iOS E2E without a Mac". That was
+never true in practice: there is no `.eas/workflows/` directory in this repo on any branch, so
+nothing was ever wired. It is also no longer the only option. `build-ios.yml` already compiles the
+app on a free `macos-latest` runner, so booting a simulator there with `xcrun simctl` and running a
+Maestro flow is a working path that needs no Apple Developer account and no EAS spend. That is the
+cheapest way to finally execute the WKWebView terminal on iOS, which has never run.
 
 See `CLAUDE.md`'s Testing section for the scoped-run discipline (what to run while actively
 working on a task vs. the full gate).
