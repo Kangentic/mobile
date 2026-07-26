@@ -724,10 +724,15 @@ Develop in the normal worktree, commit, then `git -C C:\kw checkout --detach <sh
 there. Swap `assembleDebug` for `assembleRelease` (with `EXPO_PUBLIC_KANGENTIC_E2E=1`) to
 produce the `e2e` APK.
 
-**Always pass `-PreactNativeArchitectures=arm64-v8a`.** A raw `gradlew` builds all four ABIs,
-and `react-native-reanimated` fails compiling for 32-bit `armeabi-v7a`. `expo run:android`
-passes this flag for you; a direct gradle call does not. Both the Pixel and the emulator AVD are
-arm64.
+**Always pass `-PreactNativeArchitectures`, and pick the ABIs deliberately.** A raw `gradlew`
+builds all four, and `react-native-reanimated` fails compiling for 32-bit `armeabi-v7a`.
+`expo run:android` passes this flag for you; a direct gradle call does not.
+
+Use `"-PreactNativeArchitectures=arm64-v8a,x86_64"` (quote it in PowerShell, or the comma splits
+the argument). A physical Pixel is **arm64-v8a**; the `kangentic_pixel` AVD is **x86_64**. An
+arm64-only APK still reports `Success` when installed on the emulator and then fails to render,
+with no crash in logcat - Maestro just reports the first `testID` missing. Confirm with
+`adb -s <serial> shell dumpsys package com.kangentic.mobile`, which prints `primaryCpuAbi`.
 
 Board task #5 (moving build execution to GitHub Actions runners, which have no such path limit)
 is still worth doing for CI, but it is no longer the only way to get a build.

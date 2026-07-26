@@ -73,6 +73,7 @@ export function CreateTaskScreen(): React.JSX.Element {
 
   return (
     <View
+      testID="create-task-sheet"
       style={[
         styles.container,
         {

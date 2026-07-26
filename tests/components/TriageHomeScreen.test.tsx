@@ -47,20 +47,15 @@ jest.mock('@shopify/flash-list', () => {
 });
 
 const mockPeekAwaitedPrompt = jest.fn();
-const mockArchiveTask = jest.fn();
-const mockDeleteTaskFromBoard = jest.fn();
-const mockMoveTaskOptimistic = jest.fn();
-const mockUpdateTaskFields = jest.fn();
+// Only what this screen still calls. The task-mutation actions (archive,
+// delete, move, edit) left with the long-press sheets: the feed navigates to
+// the actions-hub ROUTE now and performs none of them itself.
 jest.mock('@/connection/actions', () => ({
   refreshSnapshots: jest.fn().mockResolvedValue(undefined),
   peekAwaitedPrompt: (sessionId: string, promptId: string) => mockPeekAwaitedPrompt(sessionId, promptId),
   peekLastAssistantMessage: jest.fn().mockResolvedValue(null),
   peekLastTerminalLine: jest.fn().mockResolvedValue(null),
   answerPermissionPrompt: jest.fn().mockResolvedValue(undefined),
-  archiveTask: (input: unknown) => mockArchiveTask(input),
-  deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
-  moveTaskOptimistic: (input: unknown) => mockMoveTaskOptimistic(input),
-  updateTaskFields: (input: unknown) => mockUpdateTaskFields(input),
 }));
 
 function seedStores(): void {
@@ -631,10 +626,6 @@ describe('TriageHomeScreen', () => {
 
   describe('long-press action hub', () => {
     beforeEach(() => {
-      mockArchiveTask.mockReset().mockResolvedValue(undefined);
-      mockDeleteTaskFromBoard.mockReset().mockResolvedValue(undefined);
-      mockMoveTaskOptimistic.mockReset().mockResolvedValue(undefined);
-      mockUpdateTaskFields.mockReset().mockResolvedValue(undefined);
       seedTwoProjectBoards();
     });
 
