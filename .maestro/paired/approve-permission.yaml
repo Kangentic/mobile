@@ -13,10 +13,16 @@ appId: com.kangentic.mobile
     timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-1"
+# 45s, matching the prompt wait below rather than the 20s this used to be.
+# The session screen mounts all three panes at once - terminal WebView
+# included - and on the first launch after an install, with ART still
+# compiling, that reliably outruns 20s. It passed on every warm run and
+# failed on every cold one, which is the signature of a timeout that is too
+# tight rather than a screen that is broken.
 - extendedWaitUntil:
     visible:
       id: "session-screen"
-    timeout: 20000
+    timeout: 45000
 # The prompt card lives in the chat lens (terminal is the default).
 - tapOn:
     id: "session-mode-chat"

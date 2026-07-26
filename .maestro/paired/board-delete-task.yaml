@@ -35,6 +35,15 @@ appId: com.kangentic.mobile
     id: "task-actions-sheet"
 - tapOn:
     id: "task-action-delete"
+# Assert the row actually ARMED before confirming. The delete row swaps its
+# own testID when armed, so without this the flow cannot tell "armed" from
+# "the tap landed during the sheet's presentation animation and did nothing" -
+# the second tap then arms it instead of confirming, the window relaxes, and
+# the failure surfaces two steps later as a card that would not delete.
+- extendedWaitUntil:
+    visible:
+      id: "task-action-delete-confirm"
+    timeout: 10000
 - tapOn:
     id: "task-action-delete-confirm"
 - extendedWaitUntil:
