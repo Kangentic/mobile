@@ -39,13 +39,34 @@ adb shell settings put global animator_duration_scale 0
 
 echo "Running Maestro flows: $*"
 # --format takes an uppercase enum (JUNIT, HTML, HTML-DETAILED, NOOP).
-# --flatten-debug-output is documented as the CI option: artifacts land directly
-# in the output dir with no per-run timestamped subfolder, so the upload step has
-# a stable path to point at.
-mkdir -p "$RUNNER_TEMP/maestro-output"
+#
+# --debug-output is the flag that matters on a failure: it is where Maestro writes
+# the failure screenshot, the command log, and the view hierarchy.
+# --test-output-dir is a different thing (manifest/commands/logs) and does NOT
+# contain the screenshot, which is how the first failing run produced a 367-byte
+# artifact with nothing diagnostic in it. --flatten-debug-output is documented to
+# pair with --debug-output and drops the per-run timestamped subfolder, so the
+# upload step has a stable path.
+mkdir -p "$RUNNER_TEMP/maestro-output" "$RUNNER_TEMP/maestro-debug"
+
+exit_code=0
 maestro test \
   --format JUNIT \
   --output "$RUNNER_TEMP/maestro-report.xml" \
   --test-output-dir "$RUNNER_TEMP/maestro-output" \
+  --debug-output "$RUNNER_TEMP/maestro-debug" \
   --flatten-debug-output \
-  "$@"
+  "$@" || exit_code=$?
+
+if [ "$exit_code" -ne 0 ]; then
+  # A failed assertion says what was not visible, never why. Logcat is where a JS
+  # exception, a native crash, or a failed bundle load shows up, and it is the
+  # difference between "slow cold start" and "the app is broken".
+  echo "Maestro failed (exit $exit_code). Capturing diagnostics."
+  adb logcat -d -t 2000 > "$RUNNER_TEMP/maestro-debug/logcat.txt" || true
+  adb exec-out screencap -p > "$RUNNER_TEMP/maestro-debug/final-screen.png" || true
+  echo "--- ReactNativeJS / crash lines from logcat ---"
+  grep -E 'ReactNativeJS|FATAL|AndroidRuntime|Exception' "$RUNNER_TEMP/maestro-debug/logcat.txt" | tail -n 80 || true
+fi
+
+exit "$exit_code"

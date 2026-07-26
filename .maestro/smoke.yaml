@@ -4,8 +4,15 @@ appId: com.kangentic.mobile
 # pairing, the board tab renders its empty state. Paired flows live under
 # .maestro/paired/ and need scripts/stubDesktopPeer.mjs running first.
 - launchApp
-- assertVisible:
-    id: "home-tab"
+# App-ready gate. A bare assertVisible here only gets Maestro's short implicit
+# wait, which is enough on a warm local emulator but raced on a cold CI one: the
+# same commit passed in 16s and then failed at 25s on "home-tab is visible".
+# Everything after this point can assume the first render has happened, so only
+# this one assertion needs the extended wait.
+- extendedWaitUntil:
+    visible:
+      id: "home-tab"
+    timeout: 45000
 - assertVisible:
     id: "triage-pair-cta"
 - tapOn:
