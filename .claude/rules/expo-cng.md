@@ -41,9 +41,13 @@ unreproducible for any other contributor or CI machine.
   `package.json` diff, so review cannot tell which command was run. It can only flag a version
   that looks unresolved against the pinned SDK. The install discipline above is enforced in
   practice by the `--check` gate below, not by review.
-- **Check (planned, not yet scheduled):** an `npx expo prebuild --no-install` reproducibility
-  gate, and an `npx expo install --check` (or `npx expo-doctor`) step in
-  `.github/workflows/ci.yml`.
+- **Check (live now, on dispatch):** `.github/workflows/build-android.yml` and
+  `build-ios.yml` each run a real `npx expo prebuild --no-install` on a clean checkout, so a
+  config-plugin or native-config change that cannot prebuild fails there. Both are
+  dispatch-triggered rather than PR-triggered, so this catches breakage before a build, not
+  before a merge.
+- **Check (planned):** an `npx expo install --check` (or `npx expo-doctor`) step in
+  `.github/workflows/ci.yml`, which would make SDK-resolved dependency drift a PR gate.
 
 Mind the read-trigger gap: because `ios/`/`android/` are gitignored, this path-scoped rule
 rarely enters context on its own. The same summary is restated always-on in `CLAUDE.md`'s

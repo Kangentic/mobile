@@ -65,7 +65,8 @@ tests/
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
-                  #   mobileInspect.mjs, syncBranding.mjs + repo scripts
+                  #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
+                  #   profiles through it), checkPlayVersionCode.mjs + repo scripts
 ```
 
 ## Commands
@@ -80,12 +81,20 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 - `npx expo run:android` (`npm run android`) - Build, install, and launch the dev client on the
   Android emulator (rebuilds native code; use this after a native dependency or config plugin
   change, or the first time on a fresh emulator)
-- `eas build --profile development --platform android` (`npm run build:dev`) - Build a dev-client
-  for local iteration in the cloud, no local Android SDK build required
-- `eas build --profile preview --platform android` (`npm run build:preview`) - Internal
-  distribution build
-- `eas build --profile production --platform android` (`npm run build:prod`) - Store-release build
-- `eas build --profile production --platform ios` - Build for the App Store (cloud, no Mac needed)
+- `gh workflow run build-android.yml -f profile=<development|preview|e2e|production>` - **The
+  normal way to build.** Runs `expo prebuild` + Gradle on a free GitHub runner, spends no EAS
+  cloud credit, and uploads the APK/AAB as a run artifact. Add `-f submit_track=internal` to queue
+  a Play upload (gated behind an approval). See the CI builds section of
+  [docs/developer-guide.md](docs/developer-guide.md).
+- `gh workflow run build-ios.yml` - Unsigned iOS simulator compile check on a free macOS runner.
+  No Apple Developer account or signing needed.
+- The `eas build` wrappers below are **cloud** builds that each spend one of the 15 free monthly
+  Android builds. Prefer the workflow; use these only when a runner will not do:
+  - `eas build --profile development --platform android` (`npm run build:dev`) - dev-client build
+  - `eas build --profile preview --platform android` (`npm run build:preview`) - internal
+    distribution build
+  - `eas build --profile production --platform android` (`npm run build:prod`) - store-release build
+  - `eas build --profile production --platform ios` - App Store build (cloud, no Mac needed)
 - `npm run typecheck` - `tsc --noEmit`
 - `npm run lint` - `eslint . --max-warnings 0`
 - `npm run test:unit` - Unit tests (`vitest run tests/unit`)
@@ -104,16 +113,16 @@ never call these without an explicit user request, and re-check this list agains
 either server is upgraded.
 
 - **Never without an explicit request - spends money or quota:** `build_run`, `build_submit`,
-  `workflow_run` (Expo MCP), `run_on_cloud` (Maestro MCP). `build_run` also cuts against board
-  task #5 ("CI: GitHub Actions build workflow"), a **planned, not yet built** move of build
-  execution to `eas build --local` on GitHub Actions runners, to preserve the Expo Free allowance
-  of 15 iOS + 15 Android cloud builds per month. EAS itself is not going away; only *cloud* build
-  execution is what #5 would avoid, and `build_submit` may remain a legitimate path later (#5
-  does not move store submission off EAS), so treat it as "explicit request only" rather than
-  "never our path". The Expo MCP also authenticates as the individual developer's **personal**
-  Expo account via `/mcp` OAuth, not the org-scoped `EXPO_TOKEN` CI uses, so any build it fires
-  spends the org's quota under the wrong identity (see the auth table in
-  [docs/developer-guide.md](docs/developer-guide.md)'s Agent tooling section).
+  `workflow_run` (Expo MCP), `run_on_cloud` (Maestro MCP). `build_run` spends one of the Expo
+  Free allowance of 15 iOS + 15 Android **cloud** builds per month, and it is no longer how this
+  project builds: `.github/workflows/build-android.yml` runs `expo prebuild` plus Gradle on a
+  free GitHub runner, so a normal build costs no EAS credit at all. Reach for the workflow, not
+  `build_run`. EAS is still the path for a manual `eas submit`, so `build_submit` is "explicit
+  request only" rather than "never our path". Note the Expo MCP authenticates as the individual
+  developer's **personal** Expo account via `/mcp` OAuth, and CI holds no Expo credential
+  whatsoever, so anything the MCP fires is both off-path and attributed to a personal identity
+  (see the auth table in [docs/developer-guide.md](docs/developer-guide.md)'s Agent tooling
+  section).
 - **Never without an explicit request, higher bar - posts publicly and is effectively
   irreversible:** `appstore_reply_review`, `appstore_delete_review_response`,
   `playstore_reply_review` (Expo MCP). These write to real App Store and Play Store listings

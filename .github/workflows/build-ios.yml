@@ -1,0 +1,90 @@
+name: Build iOS (simulator compile check)
+
+# An unsigned iOS simulator build. It needs no Apple Developer Program
+# membership, no certificates, and no secrets, and macOS standard runners are
+# free and unmetered on public repositories, so this costs nothing.
+#
+# Its purpose is not distribution. This app has never been compiled for iOS at
+# all, so the native tree (the WKWebView terminal, the notification plugin set,
+# the New Architecture dependency graph) is entirely unverified. A red run here
+# is a useful result.
+#
+# Dispatch only. Once it is reliably green, a weekly schedule is a cheap way to
+# catch drift.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate the native iOS project
+        # CNG: ios/ is produced here and never committed. See
+        # .claude/rules/expo-cng.md. --no-install because npm ci already ran;
+        # it also skips CocoaPods, which the next step runs explicitly.
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install pods
+        # The .xcworkspace is a CocoaPods artifact, so it does not exist until
+        # this step completes. Everything that reads the workspace comes after.
+        working-directory: ios
+        run: pod install
+
+      - name: Resolve the workspace and scheme
+        id: xcode
+        run: |
+          set -euo pipefail
+          workspace="$(ls -d ios/*.xcworkspace | head -n 1)"
+          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -p "JSON.parse(require('node:fs').readFileSync(0, 'utf8')).workspace.schemes[0]")"
+          echo "workspace=$workspace" >> "$GITHUB_OUTPUT"
+          echo "scheme=$scheme" >> "$GITHUB_OUTPUT"
+          echo "Building scheme \"$scheme\" from $workspace."
+
+      - name: Build for the simulator
+        env:
+          WORKSPACE: ${{ steps.xcode.outputs.workspace }}
+          SCHEME: ${{ steps.xcode.outputs.scheme }}
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Write the build summary
+        if: always()
+        env:
+          SCHEME: ${{ steps.xcode.outputs.scheme }}
+        run: |
+          {
+            echo "### iOS simulator compile check"
+            echo ""
+            echo "Scheme: \`${SCHEME:-unresolved}\`"
+            echo ""
+            echo "Unsigned simulator build. Not installable on a device and not a distribution artifact."
+          } >> "$GITHUB_STEP_SUMMARY"

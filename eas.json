@@ -16,6 +16,17 @@
       "distribution": "internal",
       "channel": "preview"
     },
+    "e2e": {
+      "extends": "preview",
+      "distribution": "internal",
+      "channel": "e2e",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_KANGENTIC_E2E": "1"
+      }
+    },
     "production": {
       "channel": "production"
     }

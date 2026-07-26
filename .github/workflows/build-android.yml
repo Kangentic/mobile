@@ -1,0 +1,363 @@
+name: Build Android
+
+# Builds on the GitHub runner with Gradle, not on EAS servers, so a build costs
+# no EAS cloud credit and no GitHub Actions minutes (standard runners are free
+# and unmetered on public repositories). See the CI builds section of
+# docs/developer-guide.md.
+#
+# There is deliberately no pull_request trigger: a full native build adds
+# 20 to 40 minutes for little signal. .github/workflows/ci.yml stays the PR gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'eas.json build profile'
+        type: choice
+        default: preview
+        options:
+          - development
+          - preview
+          - e2e
+          - production
+      artifact:
+        description: 'Artifact type (auto follows the eas.json profile)'
+        type: choice
+        default: auto
+        options:
+          - auto
+          - apk
+          - aab
+      abis:
+        description: 'Comma-separated ABI allowlist. Empty builds every ABI.'
+        type: string
+        default: ''
+      submit_track:
+        description: 'Play track to submit to. "none" builds the artifact only.'
+        type: choice
+        default: none
+        options:
+          - none
+          - internal
+          - alpha
+          - beta
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      artifact-name: ${{ steps.name.outputs.artifact-name }}
+      extension: ${{ steps.plan.outputs.extension }}
+      version-code: ${{ steps.version.outputs.version-code }}
+      version-name: ${{ steps.version.outputs.version-name }}
+      signed: ${{ steps.plan.outputs.signed }}
+    env:
+      # A tag build always produces the store-shaped artifact.
+      BUILD_PROFILE: ${{ github.event_name == 'push' && 'production' || inputs.profile }}
+      REQUESTED_ARTIFACT: ${{ github.event_name == 'push' && 'aab' || inputs.artifact }}
+      REQUESTED_ABIS: ${{ github.event_name == 'push' && '' || inputs.abis }}
+      # Secrets cannot be referenced from an `if:` condition, so presence is
+      # resolved once here as a plain boolean and the steps branch on that.
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      HAS_GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      # eas.json stays the source of truth for per-profile env even though the
+      # build itself runs on Gradle. EXPO_PUBLIC_* values are inlined by Metro
+      # during bundleReleaseJsAndAssets, so they must be exported before Gradle
+      # runs, not merely before prebuild.
+      - name: Export the profile env from eas.json
+        run: node scripts/easProfile.mjs "$BUILD_PROFILE" --github-env
+
+      - name: Resolve the build plan
+        id: plan
+        run: |
+          set -euo pipefail
+
+          build_type="$(node scripts/easProfile.mjs "$BUILD_PROFILE" --field android.buildType)"
+          distribution="$(node scripts/easProfile.mjs "$BUILD_PROFILE" --field distribution)"
+
+          artifact="$REQUESTED_ARTIFACT"
+          if [ "$artifact" = "auto" ]; then
+            if [ "$build_type" = "apk" ]; then
+              artifact="apk"
+            elif [ "$build_type" = "app-bundle" ]; then
+              artifact="aab"
+            elif [ "$distribution" = "internal" ]; then
+              # EAS defaults internal distribution to an installable APK.
+              artifact="apk"
+            else
+              artifact="aab"
+            fi
+          fi
+
+          # The development profile is a dev-client build, which is the debug
+          # variant; every other profile builds release.
+          variant="release"
+          if [ "$BUILD_PROFILE" = "development" ]; then variant="debug"; fi
+
+          # Without a keystore secret we can still prove that prebuild, Gradle,
+          # and the ABI set all work. Fall back to the debug variant, which is
+          # signed with the throwaway debug key, rather than emitting an
+          # unsigned release artifact that looks installable but is not.
+          signed="true"
+          if [ "$HAS_KEYSTORE" != "true" ]; then
+            signed="false"
+            variant="debug"
+            artifact="apk"
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set. Building a debug-signed APK smoke build instead of a release artifact."
+          fi
+
+          if [ "$artifact" = "aab" ]; then
+            task=":app:bundleRelease"
+            output_path="android/app/build/outputs/bundle/release/app-release.aab"
+            extension="aab"
+          elif [ "$variant" = "debug" ]; then
+            task=":app:assembleDebug"
+            output_path="android/app/build/outputs/apk/debug/app-debug.apk"
+            extension="apk"
+          else
+            task=":app:assembleRelease"
+            output_path="android/app/build/outputs/apk/release/app-release.apk"
+            extension="apk"
+          fi
+
+          {
+            echo "artifact=$artifact"
+            echo "variant=$variant"
+            echo "task=$task"
+            echo "output-path=$output_path"
+            echo "extension=$extension"
+            echo "signed=$signed"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Materialize google-services.json
+        if: env.HAS_GOOGLE_SERVICES == 'true'
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          # app.config.ts only wires FCM when this file exists at the repo root
+          # (it is gitignored), so without this step a release build ships with
+          # remote push silently disabled.
+          printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > google-services.json
+          echo "Wrote google-services.json ($(wc -c < google-services.json) bytes)."
+
+      - name: Warn when google-services.json is absent
+        if: env.HAS_GOOGLE_SERVICES != 'true'
+        run: echo "::warning::GOOGLE_SERVICES_JSON is not set. This build ships without FCM config, so remote push will not work."
+
+      - name: Decode the upload keystore
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/kangentic-upload.jks"
+          echo "Decoded keystore ($(wc -c < "$RUNNER_TEMP/kangentic-upload.jks") bytes)."
+
+      - name: Generate the native Android project
+        # CNG: android/ is produced here and never committed. See
+        # .claude/rules/expo-cng.md. --no-install because npm ci already ran.
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Read the app version
+        id: version
+        run: |
+          set -euo pipefail
+          npx expo config --json > "$RUNNER_TEMP/expo-config.json"
+          version_name="$(node -p "require('$RUNNER_TEMP/expo-config.json').version")"
+          version_code="$(node -p "require('$RUNNER_TEMP/expo-config.json').android.versionCode")"
+          echo "version-name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version-code=$version_code" >> "$GITHUB_OUTPUT"
+
+      - name: Build with Gradle
+        env:
+          # Secrets are referenced as shell variables rather than interpolated
+          # into the command line, so the rendered run script in the log never
+          # contains the values.
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GRADLE_TASK: ${{ steps.plan.outputs.task }}
+        run: |
+          set -euo pipefail
+          chmod +x android/gradlew
+
+          gradle_arguments=("$GRADLE_TASK" -x lint -x test)
+
+          if [ -n "$REQUESTED_ABIS" ]; then
+            gradle_arguments+=("-PreactNativeArchitectures=$REQUESTED_ABIS")
+          fi
+
+          if [ "$HAS_KEYSTORE" = "true" ]; then
+            # Injected signing properties override the generated project without
+            # touching it, which keeps the CNG rule intact. This mirrors the
+            # local recipe in the Android release section of
+            # docs/developer-guide.md.
+            gradle_arguments+=(
+              "-Pandroid.injected.signing.store.file=$RUNNER_TEMP/kangentic-upload.jks"
+              "-Pandroid.injected.signing.store.password=$ANDROID_KEYSTORE_PASSWORD"
+              "-Pandroid.injected.signing.key.alias=$ANDROID_KEY_ALIAS"
+              "-Pandroid.injected.signing.key.password=$ANDROID_KEY_PASSWORD"
+            )
+          fi
+
+          cd android
+          ./gradlew "${gradle_arguments[@]}"
+
+      # A build that goes green while producing an unsigned or debug-signed
+      # artifact is the failure mode worth guarding: Play rejects it, but only
+      # after a human has spent the upload. Fail here instead.
+      - name: Verify the artifact is signed with the upload key
+        if: steps.plan.outputs.signed == 'true'
+        env:
+          OUTPUT_PATH: ${{ steps.plan.outputs.output-path }}
+          EXTENSION: ${{ steps.plan.outputs.extension }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EXTENSION" = "apk" ]; then
+            build_tools_dir="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+            signer_report="$("$build_tools_dir/apksigner" verify --print-certs "$OUTPUT_PATH")"
+            echo "$signer_report"
+            if printf '%s' "$signer_report" | grep -qi 'CN=Android Debug'; then
+              echo "::error::Artifact is signed with the Android debug key, not the upload key."
+              exit 1
+            fi
+          else
+            # An AAB is a jar. -strict is deliberately omitted: a self-signed
+            # upload certificate always raises a chain warning and would make
+            # -strict exit non-zero on a perfectly good bundle.
+            verify_report="$(jarsigner -verify -verbose:summary "$OUTPUT_PATH")"
+            if ! printf '%s' "$verify_report" | grep -q 'jar verified'; then
+              echo "$verify_report"
+              echo "::error::Bundle is not signed."
+              exit 1
+            fi
+            echo "Bundle signature verified."
+          fi
+
+      - name: Name the artifact
+        id: name
+        env:
+          OUTPUT_PATH: ${{ steps.plan.outputs.output-path }}
+          EXTENSION: ${{ steps.plan.outputs.extension }}
+          VERSION_NAME: ${{ steps.version.outputs.version-name }}
+          VERSION_CODE: ${{ steps.version.outputs.version-code }}
+        run: |
+          set -euo pipefail
+          artifact_name="kangentic-$BUILD_PROFILE-v$VERSION_NAME-vc$VERSION_CODE-${GITHUB_SHA::7}"
+          echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
+          cp "$OUTPUT_PATH" "$RUNNER_TEMP/$artifact_name.$EXTENSION"
+
+      - name: Write the build summary
+        env:
+          EXTENSION: ${{ steps.plan.outputs.extension }}
+          VARIANT: ${{ steps.plan.outputs.variant }}
+          SIGNED: ${{ steps.plan.outputs.signed }}
+          VERSION_NAME: ${{ steps.version.outputs.version-name }}
+          VERSION_CODE: ${{ steps.version.outputs.version-code }}
+        run: |
+          {
+            echo "### Android build"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Profile | \`$BUILD_PROFILE\` |"
+            echo "| Artifact | \`$EXTENSION\` ($VARIANT) |"
+            echo "| Version name | \`$VERSION_NAME\` |"
+            echo "| Version code | \`$VERSION_CODE\` |"
+            echo "| ABIs | \`${REQUESTED_ABIS:-all}\` |"
+            echo "| Signed with upload key | \`$SIGNED\` |"
+            echo ""
+            echo "Bump \`android.versionCode\` in \`app.config.ts\` before every Play upload."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.artifact-name }}
+          path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.${{ steps.plan.outputs.extension }}
+          # ~100 MB per artifact. The 90-day default accrues storage billing
+          # even on a public repository.
+          retention-days: 14
+          if-no-files-found: error
+
+  # Never runs unless a dispatch explicitly names a track, and even then it
+  # waits on the google-play environment's required reviewer. The very first
+  # AAB for this package has to be uploaded by hand through the Play Console
+  # UI: the Play Developer API only works once an app has at least one release.
+  submit-play:
+    needs: build-android
+    if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none'
+    runs-on: ubuntu-latest
+    environment: google-play
+    steps:
+      - name: Refuse an unsigned artifact
+        env:
+          SIGNED: ${{ needs.build-android.outputs.signed }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNED" != "true" ]; then
+            echo "::error::The build was not signed with the upload key, so it cannot be submitted."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-android.outputs.artifact-name }}
+          path: artifact
+
+      - name: Check the version code is free on every track
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          VERSION_CODE: ${{ needs.build-android.outputs.version-code }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$VERSION_CODE"
+
+      - name: Upload to Google Play
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.kangentic.mobile
+          releaseFiles: artifact/*
+          track: ${{ inputs.submit_track }}
+          status: completed
