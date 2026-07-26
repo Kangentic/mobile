@@ -4,23 +4,152 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# CI architecture, following the pattern in Kangentic/kangentic's ci.yml:
+# - Each check is its own top-level job, always visible in the checks list, and
+#   the job `name:` IS the branch-protection status-check context. Renaming a
+#   job renames the required check, so main's protection must be updated in the
+#   same change or every PR blocks on a check that will never report.
+# - Jobs are independent and run in parallel. The previous single `fast-tiers`
+#   job ran the four tiers serially, so PR latency was their sum rather than the
+#   slowest one.
+# - node_modules is cached under one shared lockfile-keyed key, so `npm ci` runs
+#   only when the lockfile changes. This is the single biggest saving here: the
+#   install was a larger share of each tier than the tier itself.
+#
+# The E2E tier lives in e2e.yml rather than here: it needs an Android emulator
+# and a real APK, so it has a different shape and a much longer runtime.
 
 jobs:
-  fast-tiers:
+  lint:
+    name: Lint (ESLint)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
-      - name: Install dependencies
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies (npm ci)
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Lint
+      - name: Lint (ESLint)
         run: npm run lint
-      - name: Unit tests
+
+  typecheck:
+    name: Type check (tsc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies (npm ci)
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Type check (tsc)
+        run: npm run typecheck
+
+  unit:
+    name: Unit tests (Vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies (npm ci)
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Unit tests (Vitest)
         run: npm run test:unit
-      - name: Component tests
+
+  components:
+    name: Component tests (Jest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies (npm ci)
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Component tests (Jest)
         run: npm run test:components
+
+  # Closes the "planned" prebuild gate named in .claude/rules/expo-cng.md.
+  # Prebuild took 3 seconds in a real build run, so catching a broken config
+  # plugin here rather than 20 minutes into a native build is nearly free.
+  native-config:
+    name: Native config (expo prebuild)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies (npm ci)
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Generate the native Android project
+        run: npx expo prebuild --platform android --no-install
+      - name: Confirm the generated project is not committed
+        # CNG: android/ must exist only as a build artifact. If prebuild output
+        # ever shows up as tracked changes, someone committed the native tree.
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain -- android ios)" ]; then
+            echo "::error::prebuild produced tracked changes under android/ or ios/. Those directories must stay gitignored (see .claude/rules/expo-cng.md)."
+            git status --porcelain -- android ios
+            exit 1
+          fi
+          echo "Native project generated cleanly and stayed untracked."

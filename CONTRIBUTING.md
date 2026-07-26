@@ -127,10 +127,15 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ### What to expect
 
-- Your PR must be green on both checks that register: **`fast-tiers`** (lint, typecheck, unit
-  tests, component tests, from `.github/workflows/ci.yml`) and **`cla`** (CLA Assistant). Maestro
-  E2E is not in CI; it runs locally against the Android emulator, and iOS E2E on cloud simulators
-  via EAS Workflows is a future addition.
+- Your PR must be green on every check that registers. From
+  `.github/workflows/ci.yml`, each runs as its own parallel job: **`Lint (ESLint)`**,
+  **`Type check (tsc)`**, **`Unit tests (Vitest)`**, **`Component tests (Jest)`**, and
+  **`Native config (expo prebuild)`**. Plus **`cla`** (CLA Assistant).
+- `main` is a protected branch: those checks are required, the branch must be up to date before
+  merging, and force pushes and deletions are blocked.
+- Android release builds and the iOS compile check are **not** PR checks. They are
+  dispatch-triggered or tag-triggered, so they never gate a PR. See the CI builds section of
+  [docs/developer-guide.md](docs/developer-guide.md).
 - If a check fails, push a fix and CI re-runs automatically.
 
 ### Security
