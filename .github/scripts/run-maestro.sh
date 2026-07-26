@@ -38,4 +38,14 @@ adb shell settings put global transition_animation_scale 0
 adb shell settings put global animator_duration_scale 0
 
 echo "Running Maestro flows: $*"
-maestro test --format junit --output "$RUNNER_TEMP/maestro-report.xml" "$@"
+# --format takes an uppercase enum (JUNIT, HTML, HTML-DETAILED, NOOP).
+# --flatten-debug-output is documented as the CI option: artifacts land directly
+# in the output dir with no per-run timestamped subfolder, so the upload step has
+# a stable path to point at.
+mkdir -p "$RUNNER_TEMP/maestro-output"
+maestro test \
+  --format JUNIT \
+  --output "$RUNNER_TEMP/maestro-report.xml" \
+  --test-output-dir "$RUNNER_TEMP/maestro-output" \
+  --flatten-debug-output \
+  "$@"
