@@ -54,14 +54,28 @@ function buildAllowsEmulatorHostLoopback(): boolean {
  * allow-list, so a malformed authority fails closed instead of being
  * "cleaned up" into a host that does match.
  */
-function hostWithoutPort(authority: string): string {
+/**
+ * Strips a `:port` suffix, leaving an IPv6 literal's bracketed colons alone.
+ * Null when the authority is malformed.
+ *
+ * The bracketed branch REJECTS rather than truncates: trimming at the ']'
+ * would read `[::1]evil.com` as the host `[::1]`, handing the loopback
+ * carve-out to an attacker-controlled name. After the literal, only a port
+ * may follow.
+ */
+function hostWithoutPort(authority: string): string | null {
   if (authority.startsWith('[')) {
     const closingBracket = authority.indexOf(']');
-    return closingBracket === -1 ? authority : authority.slice(0, closingBracket + 1);
+    if (closingBracket === -1) return null;
+    const afterLiteral = authority.slice(closingBracket + 1);
+    if (afterLiteral !== '' && !/^:[0-9]+$/.test(afterLiteral)) return null;
+    return authority.slice(0, closingBracket + 1);
   }
   const portSeparator = authority.lastIndexOf(':');
   if (portSeparator === -1) return authority;
   const port = authority.slice(portSeparator + 1);
+  // A non-numeric "port" is not a port, so the whole string is the host - and
+  // will simply fail the loopback check.
   return /^[0-9]+$/.test(port) ? authority.slice(0, portSeparator) : authority;
 }
 
@@ -91,7 +105,8 @@ function plaintextRelayHost(relayAddress: string): string | null {
   const authority = authorityEnd === -1 ? afterScheme : afterScheme.slice(0, authorityEnd);
   if (authority.includes('@')) return null;
   // Hosts are case-insensitive; the allow-list is lowercase.
-  return hostWithoutPort(authority).toLowerCase();
+  const host = hostWithoutPort(authority);
+  return host === null ? null : host.toLowerCase();
 }
 
 /**
