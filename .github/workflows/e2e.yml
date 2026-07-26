@@ -37,6 +37,67 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides whether the expensive jobs need to run at all. A docs-only PR should
+  # not build an APK and boot an emulator for 30 minutes.
+  #
+  # This is deliberately NOT `paths-ignore` on the trigger. `E2E tests (Maestro)`
+  # is a required status check, and a workflow skipped by paths-ignore never
+  # reports its checks at all, so protection would wait forever and the PR could
+  # never merge. Instead the workflow always runs, the costly jobs are
+  # conditional, and the gate below treats a skipped suite as a pass.
+  #
+  # Fail-safe direction is to RUN: anything we cannot classify builds.
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run-e2e: ${{ steps.filter.outputs.run-e2e }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify the diff
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Manual dispatch: always run."
+            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # An empty or all-zero base (first push of a branch, force push) means
+          # we cannot diff, so run.
+          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base SHA: running to be safe."
+            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! changed="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null)"; then
+            echo "Could not diff against $BASE_SHA: running to be safe."
+            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"
+          printf '%s\n' "$changed"
+
+          # Anything that is NOT documentation-shaped forces a run. Note that
+          # .github/ counts as relevant: a workflow change must be exercised.
+          if printf '%s\n' "$changed" | grep -qvE '(^|/)[^/]*\.(md|mdx)$|^docs/|^\.claude/|^LICENSE$|^CLA\.md$'; then
+            echo "Non-documentation changes present: running E2E."
+            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Documentation-only change: skipping the E2E build and emulator."
+            echo "run-e2e=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Builds the binary the flows run against. The e2e profile is release-shaped
   # (no Metro dependency, no dev menu), which is why per-flow runtime is far
   # lower than against a dev client. scripts/androidAbis.mjs gives it x86_64,
@@ -47,6 +108,8 @@ jobs:
   # consolidating is a follow-up once both are proven in anger.
   build-apk:
     name: Build e2e APK
+    needs: changes
+    if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -141,12 +204,17 @@ jobs:
         with:
           name: ${{ steps.name.outputs.apk-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.apk-name }}.apk
-          retention-days: 3
+          # 1 day, not the 90-day default. This is a throwaway build that only
+          # needs to survive long enough for the maestro job to download it, and
+          # every PR push produces another ~60 MB. Public repos get free minutes,
+          # not free storage.
+          retention-days: 1
           if-no-files-found: error
 
   maestro:
     name: Maestro (${{ matrix.suite }})
-    needs: build-apk
+    needs: [changes, build-apk]
+    if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -221,17 +289,54 @@ jobs:
 
   # Thin required gate, mirroring the ci.yml tiers: this single check is what
   # branch protection requires, so suites can be added without touching it.
+  #
+  # It must run on every event, including when the suites were skipped for a
+  # docs-only change, or protection would never see the check report.
+  #
+  # The name stays stable on purpose. It is a required-check context, so renaming
+  # it means updating branch protection, and it would need renaming again once
+  # the paired flows land. Honesty about current coverage goes in the run summary
+  # below instead, where it is visible at the point of use.
   e2e:
     name: E2E tests (Maestro)
-    needs: [maestro]
+    needs: [changes, maestro]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Gate on suite results
+        env:
+          RUN_E2E: ${{ needs.changes.outputs.run-e2e }}
+          MAESTRO_RESULT: ${{ needs.maestro.result }}
         run: |
-          if [ "${{ needs.maestro.result }}" != "success" ]; then
-            echo "One or more Maestro suites did not succeed (result: ${{ needs.maestro.result }})"
+          set -euo pipefail
+
+          if [ "$RUN_E2E" != "true" ]; then
+            {
+              echo "### E2E skipped"
+              echo ""
+              echo "Documentation-only change, so no APK was built and no emulator was booted."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Documentation-only change: nothing to run."
+            exit 0
+          fi
+
+          {
+            echo "### E2E coverage for this run"
+            echo ""
+            echo "| Suite | Flows | Status |"
+            echo "|---|---|---|"
+            echo "| smoke | 1 | ran |"
+            echo "| paired | 11 | **not run** |"
+            echo ""
+            echo "The paired flows are not in CI yet. Each needs a completed pairing to"
+            echo "\`scripts/stubDesktopPeer.mjs\` over a local relay on \`ws://\`, and Android blocks"
+            echo "cleartext in a release-shaped build. Treat this check as a smoke gate, not full"
+            echo "E2E coverage, until that lands."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$MAESTRO_RESULT" != "success" ]; then
+            echo "One or more Maestro suites did not succeed (result: $MAESTRO_RESULT)"
             exit 1
           fi
           echo "All Maestro suites passed."

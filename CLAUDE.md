@@ -207,6 +207,17 @@ mechanism: stop and let `/test` handle it.
 `.maestro/paired/` need a running relay plus `node scripts/stubDesktopPeer.mjs` and a completed
 pairing first (each flow's header documents the setup).
 
+**Which stage owns which verification.** CI is the enforced gate, not the local machine:
+`.github/workflows/ci.yml` and `e2e.yml` run on every PR and are required on `main`. So do NOT run
+the Maestro suite locally before opening a pull request. Three reasons: E2E is single-tenant (one
+emulator, one relay port, one paired identity), so it serialises every task on the board; a release
+APK cannot even be built inside a `.kangentic/worktrees/<branch>` path (Windows path length, hence
+the `C:\kw` recipe); and it duplicates the gate that actually cannot be bypassed.
+
+What IS in scope while implementing: `npm run typecheck`, the tests you touched, and - if the
+change touches a screen a flow already covers - that **single flow**, which takes well under a
+minute. One targeted flow is scoped work, not a full-tier run. The suite is `/test`'s job.
+
 ## Conventions
 
 Enforceable standards live as focused, auto-loaded rules in `.claude/rules/`. Rules without a
