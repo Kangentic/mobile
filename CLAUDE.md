@@ -283,8 +283,10 @@ ones:
    fresh context (a review or audit skill) or should fork the current session (continuing an
    in-flight task); never route a mutating skill to a read-only agent type.
 
-**Linting:** live. `npm run lint` (`eslint . --max-warnings 0`) runs in
-`.github/workflows/ci.yml` alongside `npm run typecheck`, `npm run test:unit`, and
-`npm run test:components`. Conventions with no mechanical check of their own (shorthand names,
-em-dashes, personal info, UI copy brevity) remain enforced by review (`/code-review`,
-`crypto-pairing-auditor`, `expo-rn-reviewer`) rather than mechanically.
+**Linting:** live. `.github/workflows/ci.yml` runs each check as its own parallel job, and each
+job name is a required status check on the protected `main`: `Lint (ESLint)`, `Type check (tsc)`,
+`Unit tests (Vitest)`, `Component tests (Jest)`, `Native config (expo prebuild)`. Renaming a job
+renames the required check, so main's branch protection must be updated in the same change.
+Conventions with no mechanical check of their own (shorthand names, em-dashes, personal info, UI
+copy brevity) remain enforced by review (`/code-review`, `crypto-pairing-auditor`,
+`expo-rn-reviewer`) rather than mechanically.

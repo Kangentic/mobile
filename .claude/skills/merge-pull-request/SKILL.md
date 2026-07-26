@@ -19,11 +19,14 @@ quick-push that skips the whole PR gate, use `/merge-back` instead.
 
 ## Mobile differences from the desktop repo's flow
 
-- **CI is live.** `.github/workflows/ci.yml` runs a `fast-tiers` job (typecheck, lint, unit
-  tests, component tests) on every pull request, alongside `CLA Assistant`. Step 2's green-check
+- **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
+  parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit tests (Vitest)`,
+  `Component tests (Jest)`, `Native config (expo prebuild)`, alongside `cla`. Step 2's green-check
   requirement means every registered check in the rollup, never `CLA Assistant` alone. Confirm
   the names with `gh pr checks <pr>` before merging; this matters because the merge here uses
   `--admin`, which waives the missing review but must never waive CI.
+- **Protection uses strict status checks,** so a PR that has fallen behind `main` cannot merge
+  even when green. Rebase it rather than reaching for a harder bypass.
 - **No HMR dogfooding concern.** Desktop's version of this skill fast-forwards the local
   checkout "so `npm start` picks it up via HMR." This app is not dogfooded from its own dev
   server, so the fast-forward in Step 4 exists to keep the local checkout current, not for HMR.
