@@ -65,6 +65,30 @@ describe('validateScannedQr', () => {
     expect(localhostResult.ok).toBe(true);
   });
 
+  it('rejects a ws:// host that only LOOKS like loopback', () => {
+    // The pairing token IS the Noise PSK and is dialed verbatim as ?slot=, so
+    // every one of these would put it on the wire in cleartext to a host the
+    // attacker picked, and persist that host to the trust anchor.
+    const impostors = [
+      // Userinfo: everything before the '@' is credentials, so this dials evil.test.
+      'ws://127.0.0.1:8080@evil.test',
+      'ws://localhost@evil.test',
+      // Trailing garbage after a bracketed IPv6 literal: truncating at the ']'
+      // would read this as the host [::1].
+      'ws://[::1]evil.com',
+      'ws://[::1]:8080@evil.test',
+      // A name that merely starts with a loopback string.
+      'ws://localhost.evil.com',
+      'ws://127.0.0.1.evil.com',
+    ];
+    for (const relayAddress of impostors) {
+      const result = validateScannedQr(encodePairingQrPayload(buildValidPayload({ relayAddress })), anchorNow(0));
+      expect(result.ok, relayAddress).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      expect(result.errorKind, relayAddress).toBe('insecure-relay');
+    }
+  });
+
   it('accepts the emulator host-loopback alias ws://10.0.2.2 only in dev builds', () => {
     const payload = buildValidPayload({ relayAddress: 'ws://10.0.2.2:8080' });
     const uri = encodePairingQrPayload(payload);

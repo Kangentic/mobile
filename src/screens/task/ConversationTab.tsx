@@ -53,6 +53,11 @@ const MAINTAIN_VISIBLE_CONTENT_POSITION = { autoscrollToBottomThreshold: 0.2 } a
 
 const EMPTY_ENTRIES: TranscriptEntryWire[] = [];
 
+/** How long the content size must hold still before the settled list is shown. */
+const SETTLE_QUIET_MS = 120;
+/** Hard cap on that wait: a continuously streaming session never goes quiet, and must still appear. */
+const SETTLE_DEADLINE_MS = 700;
+
 /** The conversation-terminal surface: the flattened transcript cell feed for the task's session. */
 export function ConversationTab({ sessionId }: ConversationTabProps): React.JSX.Element {
   if (sessionId === null) {
@@ -229,6 +234,47 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   );
 
   /**
+   * HOLD THE LIST INVISIBLE UNTIL IT HAS SETTLED AT THE BOTTOM.
+   *
+   * The anchoring below is correct but it is not free of visual cost: the
+   * window assembles over several frames, and each one paints at the previous
+   * offset before scrollToEnd moves it. The net effect is the content visibly
+   * streaming in and scrolling away under the reader - flashes of text nobody
+   * asked to see.
+   *
+   * Rather than fight the layout (startRenderingFromBottom is the obvious fix
+   * and loops - see MAINTAIN_VISIBLE_CONTENT_POSITION), the list still does
+   * all of that work, just off-screen. It renders at opacity 0 until the
+   * content size has been QUIET for a beat, which is the earliest moment the
+   * bottom anchor is the real bottom. The reader sees one thing: the newest
+   * message, already in place.
+   *
+   * Two guards keep this from ever hiding the feed for good: a hard deadline
+   * from mount (a session that streams continuously never goes quiet), and an
+   * immediate reveal when there are no cells, so the empty state is not held
+   * back by a settle that will never come.
+   */
+  const [revealed, setRevealed] = useState(false);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleReveal = useCallback(() => {
+    if (revealTimerRef.current !== null) clearTimeout(revealTimerRef.current);
+    revealTimerRef.current = setTimeout(() => {
+      revealTimerRef.current = null;
+      setRevealed(true);
+    }, SETTLE_QUIET_MS);
+  }, []);
+
+  useEffect(() => {
+    // Deadline, and the empty-list case, both independent of content size.
+    const deadline = setTimeout(() => setRevealed(true), SETTLE_DEADLINE_MS);
+    return () => {
+      clearTimeout(deadline);
+      if (revealTimerRef.current !== null) clearTimeout(revealTimerRef.current);
+    };
+  }, []);
+  if (cells.length === 0 && !revealed) setRevealed(true);
+
+  /**
    * Land at the newest message on open (replaces startRenderingFromBottom
    * without its layout loop). Deliberately NOT latched to the first
    * content-size change: a session's window is assembled over several frames
@@ -241,10 +287,15 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   const onContentSizeChange = useCallback(() => {
     if (userTookOverScrollRef.current || cells.length === 0) return;
     listRef.current?.scrollToEnd({ animated: false });
-  }, [cells.length]);
+    scheduleReveal();
+  }, [cells.length, scheduleReveal]);
 
   return (
     <View style={styles.flex}>
+      {/* opacity, not conditional mounting: the list has to lay out and
+          measure to find its own bottom, so it must be rendered - just not
+          watched while it does it. */}
+      <View style={[styles.flex, { opacity: revealed ? 1 : 0 }]} pointerEvents={revealed ? 'auto' : 'none'}>
       <FlashList<ConversationCell>
         ref={listRef}
         testID="conversation-list"
@@ -264,6 +315,7 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         // in the app to make people tap twice.
         keyboardShouldPersistTaps="handled"
       />
+      </View>
       {showJumpToLatest ? (
         <Pressable
           accessibilityRole="button"
