@@ -15,19 +15,32 @@ concurrency:
   cancel-in-progress: true
 
 # CI architecture, following the pattern in Kangentic/kangentic's ci.yml:
-# - Each check is its own top-level job, always visible in the checks list, and
-#   the job `name:` IS the branch-protection status-check context. Renaming a
-#   job renames the required check, so main's protection must be updated in the
-#   same change or every PR blocks on a check that will never report.
-# - Jobs are independent and run in parallel. The previous single `fast-tiers`
-#   job ran the four tiers serially, so PR latency was their sum rather than the
-#   slowest one.
-# - node_modules is cached under one shared lockfile-keyed key, so `npm ci` runs
-#   only when the lockfile changes. This is the single biggest saving here: the
-#   install was a larger share of each tier than the tier itself.
 #
-# The E2E tier lives in e2e.yml rather than here: it needs an Android emulator
-# and a real APK, so it has a different shape and a much longer runtime.
+# - Standalone checks (lint, typecheck, native config) are one top-level job
+#   each, always visible in the checks list.
+# - The two test tiers are sharded matrices, each behind a thin gate job whose
+#   `name:` is the required status check. The shards are an implementation
+#   detail; the gate is what branch protection requires, so shard counts can be
+#   retuned without touching protection.
+# - A job `name:` IS the branch-protection context. Renaming one renames the
+#   required check, so main's protection must be updated in the same change or
+#   every PR blocks on a check that will never report.
+# - node_modules is cached under one shared lockfile-keyed key
+#   (.github/actions/setup-node-deps), so npm ci runs only when dependencies
+#   change. The install was a larger share of each tier than the tier itself.
+#
+# Concurrency budget (GitHub Free caps concurrent jobs around 20): the shard
+# phase is lint 1 + typecheck 1 + native-config 1 + unit 3 + components 4 = 10,
+# plus the CLA workflow = 11. The thin gates run after their shards via `needs`,
+# so they do not consume a shard-phase slot. That leaves real headroom for the
+# E2E tier in e2e.yml.
+#
+# Shard counts are a first cut sized to file count (46 unit, 41 component) and
+# should be retuned against observed CI timings, not guessed at again. Jest with
+# React Native Testing Library is expected to be the long pole.
+#
+# The E2E tier lives in e2e.yml: it needs an Android emulator and a real APK, so
+# it has a different shape and a much longer runtime.
 
 jobs:
   lint:
@@ -36,19 +49,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies (npm ci)
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
+      - uses: ./.github/actions/setup-node-deps
       - name: Lint (ESLint)
         run: npm run lint
 
@@ -58,88 +59,83 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies (npm ci)
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
+      - uses: ./.github/actions/setup-node-deps
       - name: Type check (tsc)
         run: npm run typecheck
 
-  unit:
-    name: Unit tests (Vitest)
+  unit-shards:
+    name: Unit Test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shardIndex: [1, 2, 3]
+        shardTotal: [3]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies (npm ci)
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
-      - name: Unit tests (Vitest)
-        run: npm run test:unit
+      - uses: ./.github/actions/setup-node-deps
+      - name: Unit tests (shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+        run: npx vitest run tests/unit --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+
+  # Thin required gate: this single check is what branch protection requires, so
+  # the shards stay an implementation detail. No checkout or install, so it adds
+  # only job spin-up. Per-shard detail is in each shard's own log.
+  unit:
+    name: Unit tests (Vitest)
+    needs: [unit-shards]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Gate on shard results
+        run: |
+          if [ "${{ needs.unit-shards.result }}" != "success" ]; then
+            echo "One or more unit shards did not succeed (result: ${{ needs.unit-shards.result }})"
+            exit 1
+          fi
+          echo "All unit shards passed."
+
+  component-shards:
+    name: Component Test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shardIndex: [1, 2, 3, 4]
+        shardTotal: [4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node-deps
+      - name: Component tests (shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+        run: npx jest tests/components --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
 
   components:
     name: Component tests (Jest)
+    needs: [component-shards]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies (npm ci)
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
-      - name: Component tests (Jest)
-        run: npm run test:components
+      - name: Gate on shard results
+        run: |
+          if [ "${{ needs.component-shards.result }}" != "success" ]; then
+            echo "One or more component shards did not succeed (result: ${{ needs.component-shards.result }})"
+            exit 1
+          fi
+          echo "All component shards passed."
 
   # Closes the "planned" prebuild gate named in .claude/rules/expo-cng.md.
-  # Prebuild took 3 seconds in a real build run, so catching a broken config
-  # plugin here rather than 20 minutes into a native build is nearly free.
+  # Prebuild takes about 4 seconds, so catching a broken config plugin here
+  # rather than partway into a native build is nearly free.
   native-config:
     name: Native config (expo prebuild)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies (npm ci)
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
+      - uses: ./.github/actions/setup-node-deps
       - name: Generate the native Android project
         run: npx expo prebuild --platform android --no-install
       - name: Confirm the generated project is not committed
