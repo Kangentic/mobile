@@ -40,6 +40,7 @@ export interface ColorTokens {
   success: string;
   warning: string;
   danger: string;
+  dangerMuted: string;
   /** Neutral informational tint (hints, callouts) distinct from all status hues. */
   info: string;
   diffAddBackground: string;
@@ -243,6 +244,8 @@ export const darkTerminalTheme: Theme = {
     success: '#3ddc84',
     warning: '#d9b83f',
     danger: '#e05d5d',
+    /** Danger's tinted fill, mixed the same way accentMuted is, for destructive controls that need a findable surface rather than only red lettering. */
+    dangerMuted: mixHex('#e05d5d', BACKGROUND, 0.75),
     info: '#5da9e0',
     // Diff tints are solid dark blends (not alpha overlays) so mono 12px text
     // keeps full contrast regardless of what the row sits on.

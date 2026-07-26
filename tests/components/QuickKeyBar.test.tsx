@@ -8,25 +8,31 @@ jest.mock('@/connection/actions', () => ({
   writeTerminal: jest.fn().mockResolvedValue(undefined),
 }));
 
+/**
+ * The whole bar. Six keys, chosen so every common terminal interaction
+ * completes WITHOUT raising the keyboard: navigate a numbered prompt or
+ * recall history with the arrows, commit with Enter, back out with Esc,
+ * interrupt a running agent with Ctrl+C.
+ *
+ * Enter is here despite the soft keyboard having a Return key, because both
+ * arrow flows are navigate-then-commit and arrows without Enter would strand
+ * the user at a choice they cannot take. Left/right are absent: they edit
+ * inside an input line, which is keyboard-up work anyway, and dropping them
+ * keeps every target over the 44pt minimum.
+ */
 const EXPECTED_SEQUENCES: { testID: string; sequence: string }[] = [
   { testID: 'quick-key-esc', sequence: '\x1b' },
   { testID: 'quick-key-tab', sequence: '\t' },
   { testID: 'quick-key-up', sequence: '\x1b[A' },
   { testID: 'quick-key-down', sequence: '\x1b[B' },
-  { testID: 'quick-key-left', sequence: '\x1b[D' },
-  { testID: 'quick-key-right', sequence: '\x1b[C' },
   { testID: 'quick-key-enter', sequence: '\r' },
-  // Stop = Ctrl+C. No slash key: the soft keyboard types '/' itself, and
-  // the row shows every key at once with no scrolling.
   { testID: 'quick-key-ctrl-c', sequence: '\x03' },
 ];
 
-// In application-cursor mode (DECCKM) the four arrows switch from CSI to SS3.
+// In application-cursor mode (DECCKM) the arrows switch from CSI to SS3.
 const SS3_ARROWS: { testID: string; sequence: string }[] = [
   { testID: 'quick-key-up', sequence: '\x1bOA' },
   { testID: 'quick-key-down', sequence: '\x1bOB' },
-  { testID: 'quick-key-left', sequence: '\x1bOD' },
-  { testID: 'quick-key-right', sequence: '\x1bOC' },
 ];
 
 describe('QuickKeyBar', () => {

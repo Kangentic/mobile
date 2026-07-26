@@ -22,18 +22,47 @@ interface QuickKey {
   danger?: boolean;
 }
 
-// Every key visible at once, no scrolling: only keys the soft keyboard
-// CANNOT type. The interrupt is labeled literally - Ctrl+C - because
-// "Stop" hid what it actually sends (the interrupt character, SIGINT).
+/**
+ * Every key visible at once, no scrolling. The selection rule is what the
+ * FLOW needs, not which keys the keyboard happens to lack: this bar exists so
+ * the common terminal interactions complete without ever raising the
+ * keyboard, since terminal mode does not raise it until you tap the terminal.
+ *
+ * That is why Enter is here even though the soft keyboard has a Return key.
+ * Both arrow flows are navigate-then-commit - move the selection in one of
+ * the agent's numbered prompts and confirm, or recall a previous command and
+ * run it - so arrows without Enter would leave the user at a choice they
+ * cannot take, having to raise the keyboard anyway. The arrows and Enter earn
+ * their slots together or not at all.
+ *
+ * Left/right are omitted: they move the cursor INSIDE an input line, which is
+ * text editing you would do with the keyboard up regardless. Six keys also
+ * keeps every target at roughly 53dp on a 360dp phone, comfortably over the
+ * 44pt minimum, where eight shares would have left 40dp.
+ *
+ * Ctrl+C is deliberately a HARDCODED combo rather than the sticky Ctrl
+ * modifier Blink and Termius use for the control space generally. It is the
+ * interrupt for a running agent, so it has to be one tap - and a sticky
+ * modifier would need the keyboard raised to press the letter, defeating the
+ * point. TeamViewer makes the same exception for Ctrl+Alt+Del: one
+ * combination important enough to hardcode. It is labelled literally rather
+ * than "Stop", because "Stop" hid what it actually sends (the interrupt
+ * character, SIGINT), and it is marked by a danger TINT rather than extra
+ * width - colour makes it findable without stealing size from its neighbours.
+ */
 const QUICK_KEYS: QuickKey[] = [
   { id: 'esc', label: 'Esc', accessibilityLabel: 'Escape', sequence: ESCAPE },
   { id: 'tab', label: 'Tab', accessibilityLabel: 'Tab', sequence: TAB },
   { id: 'up', label: '↑', accessibilityLabel: 'Arrow up', arrow: 'up', glyph: true },
   { id: 'down', label: '↓', accessibilityLabel: 'Arrow down', arrow: 'down', glyph: true },
-  { id: 'left', label: '←', accessibilityLabel: 'Arrow left', arrow: 'left', glyph: true },
-  { id: 'right', label: '→', accessibilityLabel: 'Arrow right', arrow: 'right', glyph: true },
   { id: 'enter', label: 'Enter', accessibilityLabel: 'Enter', sequence: ENTER },
-  { id: 'ctrl-c', label: 'Ctrl+C', accessibilityLabel: 'Interrupt the running agent (Ctrl+C)', sequence: CTRL_C, danger: true },
+  {
+    id: 'ctrl-c',
+    label: 'Ctrl+C',
+    accessibilityLabel: 'Interrupt the running agent (Ctrl+C)',
+    sequence: CTRL_C,
+    danger: true,
+  },
 ];
 
 const KEY_LABEL_FONT_SIZE = 13;
@@ -68,23 +97,24 @@ export function QuickKeyBar({ sessionId }: QuickKeyBarProps): React.JSX.Element 
           style={({ pressed }) => [
             styles.key,
             {
+              flex: 1,
               minHeight: theme.minTouchSize,
               borderRadius: theme.radii.sm,
-              backgroundColor: theme.colors.surfaceRaised,
+              // The interrupt is tinted, not just red-lettered: it is the one
+              // destructive key here and has to be findable without reading.
+              backgroundColor: quickKey.danger ? theme.colors.dangerMuted : theme.colors.surfaceRaised,
               opacity: pressed ? 0.7 : 1,
             },
           ]}
         >
           {quickKey.danger ? (
-            <Text variant="caption" color="danger" style={styles.dangerLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+            <Text variant="caption" color="danger" style={styles.dangerLabel} numberOfLines={1}>
               {quickKey.label}
             </Text>
           ) : (
             <MonoText
               color="primary"
               numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.7}
               style={{
                 fontSize: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE,
                 lineHeight: quickKey.glyph ? KEY_GLYPH_FONT_SIZE : KEY_LABEL_FONT_SIZE + 2,
@@ -105,7 +135,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   key: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },

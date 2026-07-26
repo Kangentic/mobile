@@ -30,20 +30,21 @@ function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): void
 }
 
 describe('SessionInputBar', () => {
-  it('renders quick keys and the dictation mic in terminal mode (no staging field)', () => {
+  it('renders the quick keys in terminal mode (no staging field, no mic)', () => {
     renderBar('terminal');
     expect(screen.getByTestId('quick-key-esc')).toBeTruthy();
-    expect(screen.getByTestId('terminal-mic')).toBeTruthy();
     // Typing happens directly in the terminal (tap raises the keyboard);
     // there is no staging text field and no composer.
     expect(screen.queryByTestId('terminal-input')).toBeNull();
     expect(screen.queryByTestId('composer-input')).toBeNull();
+    // Dictation into the PTY is gone: the quick-key row carries only keys,
+    // and raising the keyboard gives you its own voice input.
+    expect(screen.queryByTestId('terminal-mic')).toBeNull();
   });
 
   it('renders the agent composer in chat mode', () => {
     renderBar('chat');
     expect(screen.getByTestId('composer-input')).toBeTruthy();
-    expect(screen.queryByTestId('terminal-mic')).toBeNull();
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
   });
 
@@ -52,7 +53,6 @@ describe('SessionInputBar', () => {
     expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
     expect(screen.queryByTestId('composer-input')).toBeNull();
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
-    expect(screen.queryByTestId('terminal-mic')).toBeNull();
   });
 
   /** The switcher anchors the footer in every mode; only what sits above it changes. */
