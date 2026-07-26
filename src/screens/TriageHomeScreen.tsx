@@ -13,7 +13,6 @@ import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, SectionHeader, useTheme } from '@/components';
 import { TaskCard } from '@/components/board/TaskCard';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
-import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import {
   selectTriageRows,
   sectionForEntry,
@@ -32,7 +31,6 @@ import {
   peekLastAssistantMessage,
   peekLastTerminalLine,
   refreshSnapshots,
-  updateTaskFields,
 } from '@/connection/actions';
 import { buildPendingPromptSummary, collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { triggerHaptic } from '@/lib/haptics';
@@ -234,9 +232,6 @@ export function TriageHomeScreen(): React.JSX.Element {
   const [actionsTarget, setActionsTarget] = useState<TriageActionTarget | null>(null);
   const [actionsInFlight, setActionsInFlight] = useState(false);
   const [actionsError, setActionsError] = useState<string | null>(null);
-  const [editTarget, setEditTarget] = useState<TriageActionTarget | null>(null);
-  const [editInFlight, setEditInFlight] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
 
   const actionsArchiveAvailable = useMemo(() => {
     const board = actionsTarget ? boardsByProjectId[actionsTarget.projectId] : null;
@@ -251,19 +246,6 @@ export function TriageHomeScreen(): React.JSX.Element {
     setActionsTarget({ task, projectId });
   }, []);
 
-
-  const onEditSave = useCallback(
-    (fields: { title?: string; description?: string }) => {
-      if (!editTarget) return;
-      setEditInFlight(true);
-      setEditError(null);
-      void updateTaskFields({ projectId: editTarget.projectId, taskId: editTarget.task.id, ...fields })
-        .then(() => setEditTarget(null))
-        .catch((error: unknown) => setEditError(messageForActionError(error, 'Edit failed - check the connection')))
-        .finally(() => setEditInFlight(false));
-    },
-    [editTarget],
-  );
 
   /**
    * The feed leads with what needs the user: Needs You, then Idle, then the
@@ -409,22 +391,16 @@ export function TriageHomeScreen(): React.JSX.Element {
           }
         }}
         onEdit={() => {
-          setEditError(null);
-          setEditTarget(actionsTarget);
+          const target = actionsTarget;
           setActionsTarget(null);
+          if (target) {
+            router.push({ pathname: '/edit-task', params: { taskId: target.task.id, projectId: target.projectId } });
+          }
         }}
         onArchive={onArchive}
         onDelete={onDelete}
         actionInFlight={actionsInFlight}
         errorMessage={actionsError}
-      />
-      <EditTaskSheet
-        visible={editTarget !== null}
-        task={editTarget?.task ?? null}
-        onClose={() => setEditTarget(null)}
-        onSave={onEditSave}
-        saveInFlight={editInFlight}
-        errorMessage={editError}
       />
     </Screen>
   );
