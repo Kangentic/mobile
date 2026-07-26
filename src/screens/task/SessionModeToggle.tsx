@@ -56,9 +56,16 @@ export function SessionModeToggle({ mode, onModeChange, chatAttention }: Session
   const indicatorOffset = useSharedValue(0);
   const hasMeasured = useSharedValue(false);
   useEffect(() => {
+    // Bail until the row has actually been measured. The first render always
+    // has segmentWidth 0 (onLayout cannot fire before it commits), so without
+    // this the "first layout" branch below burns itself on that pass, landing
+    // the indicator at 0. The real measurement then arrives as an ANIMATION
+    // from the Terminal slot - visible whenever the screen opens on another
+    // mode, which the needs-you rows do routinely by landing on chat.
+    if (segmentWidth === 0) return;
     const target = activeIndex * segmentWidth;
     if (!hasMeasured.get()) {
-      // First layout: land it, do not animate from zero.
+      // First real layout: land it, do not animate from zero.
       hasMeasured.set(true);
       indicatorOffset.set(target);
       return;

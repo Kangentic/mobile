@@ -145,13 +145,6 @@ export function SessionScreen(): React.JSX.Element {
   });
   const agentLabel = useBoardStore((state) => findTaskById(state, taskId)?.task.agent ?? null);
 
-  // Move-to-column sheet: mirrors BoardScreen's long-press move wiring, over
-  // this task instead of a long-pressed card. Scope the selector to THIS
-  // project's board - an existing store reference, not a freshly-built object,
-  // so it dodges the infinite-loop hazard the top-of-file note describes -
-  // rather than subscribing to the whole boardsByProjectId map, which would
-  // re-render this screen (and its unmemoized pager children) on any other
-  // project's board mutation.
   const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
   const settingsHydrated = useSettingsStore((state) => state.hydrated);
   const showModeHint = settingsHydrated && !hasSeenSessionModeHint && !sessionEnded && sessionId !== null;
