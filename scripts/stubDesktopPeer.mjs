@@ -240,6 +240,54 @@ function stubTask(id, displayId, title, swimlaneId, position, sessionId) {
   };
 }
 
+/**
+ * Completed tasks, served only by the `archived` action (protocol 0.10.0).
+ *
+ * Deliberately NOT in the board snapshot, mirroring the desktop: a task is
+ * archived the moment it lands in the done lane, so every board projection
+ * has already dropped it. A stub that left these in the snapshot would let a
+ * phone bug that reads the Done column from the wrong source pass here and
+ * fail against a real desktop.
+ *
+ * The second task carries no summary, which is the sparse case the wire
+ * contract allows: a task archived without ever running an agent has nothing
+ * to summarize, and the phone must render it rather than treat it as an error.
+ */
+function stubArchivedTasks() {
+  return [
+    {
+      ...stubTask('stub-task-archived-1', 4, 'Shipped: the completed stub task', 'lane-done', 0, null),
+      archived_at: '2026-07-20T18:30:00.000Z',
+    },
+    {
+      ...stubTask('stub-task-archived-2', 5, 'Closed without an agent', 'lane-done', 1, null),
+      archived_at: '2026-07-19T09:15:00.000Z',
+    },
+  ];
+}
+
+function stubArchivedSummaries() {
+  return {
+    'stub-task-archived-1': {
+      sessionId: 'stub-session-archived-1',
+      totalCostUsd: 1.2345,
+      totalInputTokens: 120_000,
+      totalOutputTokens: 8_400,
+      modelDisplayName: 'Sonnet 5',
+      durationMs: 3_720_000,
+      toolCallCount: 42,
+      compactionCount: 1,
+      linesAdded: 210,
+      linesRemoved: 18,
+      filesChanged: 7,
+      taskCreatedAt: '2026-07-19T12:00:00.000Z',
+      startedAt: '2026-07-20T17:00:00.000Z',
+      exitedAt: '2026-07-20T18:02:00.000Z',
+      exitCode: 0,
+    },
+  };
+}
+
 function stubBoardSnapshot(activeSessionId) {
   const codexTask = { ...stubTask(STUB_CODEX_TASK_ID, 3, 'Codex refactor (no structured transcript)', 'lane-doing', 1, STUB_CODEX_SESSION_ID), agent: 'codex' };
   return {
@@ -532,10 +580,24 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
       const fail = (error) => sendSafe({ type: 'capability-response', requestId, ok: false, error }, 'a capability response');
 
       switch (verb) {
-        case 'read-board':
+        case 'read-board': {
           if (!payload.projectId) return ok({ projects: [STUB_PROJECT] });
           if (payload.action === 'unsubscribe') return ok();
+          if (payload.action === 'archived') {
+            // One page, newest-archived first, honouring limit/offset so the
+            // phone's paging cursor is exercised rather than assumed.
+            const all = stubArchivedTasks();
+            const offset = payload.offset ?? 0;
+            const limit = payload.limit ?? 25;
+            return ok({
+              projectId: payload.projectId,
+              archivedTasks: all.slice(offset, offset + limit),
+              archivedTotalCount: all.length,
+              summariesByTaskId: stubArchivedSummaries(),
+            });
+          }
           return ok(projectBoardSnapshot(applyBoardMutations(stubBoardSnapshot(activeSessionId)), payload.view));
+        }
         case 'read-stream': {
           if (payload.action === 'unsubscribe') {
             if (payload.sessionId === STUB_CODEX_SESSION_ID) codexStreamSubscribed = false;

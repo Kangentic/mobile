@@ -10,6 +10,20 @@ appId: com.kangentic.mobile
     visible:
       id: "triage-home-list"
     timeout: 60000
+# The Agents feed's section collapse is PERSISTED, so it survives launchApp
+# and leaks between flows (see chat-fallback-reading-view for the mechanism).
+# Wait for the header first, then expand only if the row is still missing.
+- extendedWaitUntil:
+    visible:
+      id: "section-header-idle"
+    timeout: 60000
+- runFlow:
+    when:
+      notVisible:
+        id: "activity-row-stub-session-1"
+    commands:
+      - tapOn:
+          id: "section-header-idle"
 - extendedWaitUntil:
     visible:
       id: "activity-row-stub-session-1"

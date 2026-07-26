@@ -8,8 +8,17 @@ import { archiveTask, deleteTaskFromBoard } from '@/connection/actions';
 import { findTaskById, selectColumnsOrdered, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
 
-/** How long the armed delete confirmation stays armed before it relaxes back. */
-const DELETE_CONFIRM_WINDOW_MS = 5000;
+/**
+ * How long the armed delete confirmation stays armed before it relaxes back.
+ *
+ * The armed row asks the reader to notice the label changed, read the
+ * consequence ("Removes the task and stops its session on your desktop") and
+ * then decide. Five seconds was not enough time to do all three without
+ * hurrying, which is the wrong pressure to apply to a destructive action -
+ * the window exists to prevent an accidental double-tap, not to impose a
+ * deadline. Ten still disarms well within the "did I mean to do that" span.
+ */
+const DELETE_CONFIRM_WINDOW_MS = 10_000;
 
 function messageForActionError(error: unknown, fallback: string): string {
   return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
