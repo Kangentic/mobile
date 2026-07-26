@@ -304,15 +304,47 @@ path-length limit, which is the thing that makes local release builds awkward.
 
 | Input | Meaning |
 |---|---|
-| `profile` | An `eas.json` build profile. Decides the artifact type, the Gradle task, and the `env` block. |
+| `profile` | An `eas.json` build profile, or `all` to build every profile in parallel on its own runner. Decides the artifact type, the Gradle task, and the `env` block. |
 | `artifact` | `auto` follows the profile; override to force `apk` or `aab`. |
-| `abis` | Comma-separated ABI allowlist. Leave empty to build every ABI. |
-| `submit_track` | `none` (default) builds only. Any other value queues a Play upload behind an approval gate. |
+| `abis` | Comma-separated ABI override. Leave empty to use the per-profile default below. |
+| `submit_track` | `none` (default) builds only. Any other value queues a Play upload behind an approval gate. Not available with `profile=all`. |
 
 A `v*` tag build always produces a production AAB with every ABI.
 
 The artifact lands on the run as `kangentic-<profile>-v<version>-vc<versionCode>-<sha>`, kept for
-14 days. Version name and code are printed in the run summary.
+14 days. Version name, code, and the ABI set are printed in the run summary.
+
+**Build speed, and why ABIs are per-profile.** Native compilation dominates: the first
+unrestricted run spent 1665 of 1770 seconds inside Gradle, nearly all of it compiling C++ for four
+ABIs. Roughly 4 to 5 minutes of that is ABI-independent (JS bundling, resource processing, dexing)
+and about 6 minutes is per ABI. So `scripts/androidAbis.mjs` gives each profile only the ABI its
+target actually runs, which is the documented React Native approach
+(`-PreactNativeArchitectures`, see https://reactnative.dev/docs/build-speed):
+
+| Profile | Default ABIs | Why |
+|---|---|---|
+| `development`, `preview` | `arm64-v8a` | the maintainer's physical device |
+| `e2e` | `x86_64` | the Android emulator's standard system images. An arm64-only APK will not install on it |
+| `production`, `v*` tags | all four | Play serves real devices including 32-bit ARM and x86 Chromebooks, and an app bundle must carry every ABI for Play to split per device |
+
+`.github/scripts/verify-android-abis.sh` then asserts the artifact carries exactly the ABIs that
+were asked for, so neither a silently-dropped ABI nor a silently-ignored flag can pass.
+
+Two more things that cannot change the output, only the speed: `--parallel` (a React Native
+project is many Gradle modules, one per autolinked library, so parallel project execution is a real
+win) and `--build-cache` (`setup-gradle` caches `GRADLE_USER_HOME`, which includes the local build
+cache, and Gradle keys entries on task inputs).
+
+**Parallelism.** Selecting `all` fans the profiles out across runners rather than building them
+back to back. A matrix over ABIs is deliberately **not** used: every parallel job would repeat the
+whole ABI-independent portion, so it cannot beat about 10 minutes, and an app bundle must be a
+single artifact containing every ABI, so `production` cannot be split that way at all.
+
+**The next lever, not yet taken:** a compiler cache. React Native documents ccache for exactly
+this, with `compiler_check content` required on CI to avoid timestamp-driven cache poisoning.
+Wiring it into the Android NDK build means passing `CMAKE_CXX_COMPILER_LAUNCHER` through
+`externalNativeBuild`, which under CNG needs a config plugin rather than a hand edit. That is the
+only change that breaks the ~10 minute floor.
 
 **Secrets.** All optional: the workflow degrades rather than failing when one is missing, so the
 pipeline can be exercised before any of them exist. With no keystore it builds a debug-signed APK
