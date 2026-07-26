@@ -56,6 +56,13 @@ relay at `ws://127.0.0.1:8080` via USB `adb reverse`.
 - **`expo-router/unstable-native-tabs`** carries a vendor warning that its API may change in a
   minor version. Adopted deliberately for iOS native feel.
 - **Remote push** end to end, which needs FCM credentials and a real push round trip.
+- **The completed-task feature's desktop half.** The Done column, its empty state, and the
+  graceful degradation against a pre-0.10.0 desktop are verified on the Pixel. Everything that
+  needs the new bridge is NOT: no real completed task has been fetched, no session summary
+  rendered, and no archived transcript read. That last one is the load-bearing claim - a
+  finished conversation is most of why the screen exists - and it rests on reasoning about
+  `resolveTaskTranscript` reading from disk, not on having seen it work. Verifying it needs a
+  desktop restart, and the desktop is the app running these sessions.
 
 ## Fixed in this branch, worth knowing about
 
@@ -93,6 +100,15 @@ single worst control in the app to need two taps.
   than a testID. The Home row has no structural prompt-pending signal by design - uniform inbox
   styling is the product decision - so honouring the rule means adding a marker to production
   render purely for a test.
+
+## Blocking prerequisite for landing
+
+`@kangentic/protocol` **0.10.0 must be published before this branch can go green.** The mobile
+source imports `SessionSummaryWire` and `ReadBoardArchivedResponsePayload`, which exist only in
+the local build the dev rig links; CI installs from npm, where 0.9.0 is the newest. A caret
+range on a 0.x version pins the minor, so `^0.9.0` could not resolve them either way, and
+`package.json` now declares `^0.10.0` to state the real dependency rather than hide it. The
+desktop change lives on the `mobile-completed-tasks` branch of the kangentic repo, unpushed.
 
 ## Cross-repo work shipped
 
