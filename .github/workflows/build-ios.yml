@@ -55,10 +55,23 @@ jobs:
         run: |
           set -euo pipefail
           workspace="$(ls -d ios/*.xcworkspace | head -n 1)"
-          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -p "JSON.parse(require('node:fs').readFileSync(0, 'utf8')).workspace.schemes[0]")"
+          # The app scheme is named after the workspace, which expo prebuild
+          # names after the project. Never take schemes[0]: that list is
+          # alphabetical and full of Pod schemes, so it silently picks
+          # something like EXApplication and "succeeds" without compiling any
+          # app code.
+          scheme="$(basename "$workspace" .xcworkspace)"
+
+          xcodebuild -list -json -workspace "$workspace" > "$RUNNER_TEMP/schemes.json"
+          if ! node -e "const w=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.exit(w.workspace.schemes.includes(process.argv[2])?0:1)" "$RUNNER_TEMP/schemes.json" "$scheme"; then
+            echo "::error::Scheme \"$scheme\" is not in $workspace. Available schemes are in the log below."
+            cat "$RUNNER_TEMP/schemes.json"
+            exit 1
+          fi
+
           echo "workspace=$workspace" >> "$GITHUB_OUTPUT"
           echo "scheme=$scheme" >> "$GITHUB_OUTPUT"
-          echo "Building scheme \"$scheme\" from $workspace."
+          echo "Building app scheme \"$scheme\" from $workspace."
 
       - name: Build for the simulator
         env:
@@ -76,6 +89,25 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
+      # xcodebuild exits 0 for a build that compiled nothing we care about, so
+      # the exit code is not proof. The app bundle existing is.
+      - name: Verify an app bundle was produced
+        env:
+          SCHEME: ${{ steps.xcode.outputs.scheme }}
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphonesimulator/$SCHEME.app"
+          if [ ! -d "$app_path" ]; then
+            echo "::error::No $SCHEME.app was produced. The build compiled something, but not the app."
+            ls -R "$RUNNER_TEMP/DerivedData/Build/Products" || true
+            exit 1
+          fi
+          if [ ! -f "$app_path/$SCHEME" ]; then
+            echo "::error::$SCHEME.app contains no executable."
+            exit 1
+          fi
+          echo "Produced $SCHEME.app ($(du -sh "$app_path" | cut -f1))."
+
       - name: Write the build summary
         if: always()
         env:
@@ -84,7 +116,7 @@ jobs:
           {
             echo "### iOS simulator compile check"
             echo ""
-            echo "Scheme: \`${SCHEME:-unresolved}\`"
+            echo "App scheme: \`${SCHEME:-unresolved}\`"
             echo ""
             echo "Unsigned simulator build. Not installable on a device and not a distribution artifact."
           } >> "$GITHUB_STEP_SUMMARY"
