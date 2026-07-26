@@ -172,6 +172,16 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   descriptionField: {
-    height: 96,
+    /**
+     * Sized to give a description real room without pushing the column chips
+     * and Create button under the keyboard.
+     *
+     * Fractional detents were tried instead and are worse: a fixed-fraction
+     * sheet does not shrink when the keyboard opens, so its lower third -
+     * chips and the submit button - became unreachable. 'fitToContents' keeps
+     * the sheet exactly as tall as this form, which is what keeps it above
+     * the keyboard, so height here IS the height of the sheet.
+     */
+    height: 180,
   },
 });

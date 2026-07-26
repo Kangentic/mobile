@@ -22,6 +22,18 @@ import { loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connect
 /** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
 const NO_TASKS: BoardTaskWire[] = [];
 
+/**
+ * The archived read is allowed to fail without taking the board down - a
+ * desktop older than 0.10.0 rejects the action outright, and an empty Done
+ * column is the right answer there. Silence is NOT the right answer to the
+ * developer, though: an empty column looks identical whether the desktop said
+ * "no completed tasks" or "I do not know that verb", and telling those apart
+ * by hand costs an afternoon. Dev-only, so a shipped app stays quiet.
+ */
+function reportArchivedFetchFailure(error: unknown): void {
+  if (__DEV__) console.warn('[board] archived tasks unavailable:', error);
+}
+
 /** Placeholder cards shown for the one round trip that upgrades a board to the full projection. */
 const BOARD_SKELETON_CARDS = ['board-skeleton-1', 'board-skeleton-2', 'board-skeleton-3'];
 
@@ -61,7 +73,7 @@ export function BoardScreen(): React.JSX.Element {
       // projection, so without this the Done column has nothing to draw. A
       // failure here leaves that one column empty and must not take the rest
       // of the board down with it.
-      void loadArchivedTasks({ projectId }).catch(() => undefined);
+      void loadArchivedTasks({ projectId }).catch(reportArchivedFetchFailure);
     }, [projectId]),
   );
   // ...and it does not paint until that upgrade lands. Rendering a 'sessions'
@@ -295,7 +307,7 @@ function ColumnPage({
   // Paging the archive. loadArchivedTasks itself no-ops once every page is
   // in, so this does not need to know how much is left.
   const onEndReached = useCallback(() => {
-    if (projectId) void loadArchivedTasks({ projectId, append: true }).catch(() => undefined);
+    if (projectId) void loadArchivedTasks({ projectId, append: true }).catch(reportArchivedFetchFailure);
   }, [projectId]);
   const refreshControl = (
     // tintColor styles iOS; colors + progressBackgroundColor style Android
