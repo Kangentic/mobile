@@ -104,13 +104,13 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 
 ## Cloud-spend and public-write MCP tools
 
-Three MCP servers are wired in: `context7` and `maestro` from `.mcp.json`, plus the official Expo
-plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is documentation-only and
-unguarded; the Expo plugin and `maestro` expose tools with consequences outside this machine,
-gated by `permissions.ask` in `.claude/settings.json` (a prompt on every call in every normal
-permission mode; a bypass mode skips it, so this section, not the prompt, is the real guard) -
-never call these without an explicit user request, and re-check this list against `/mcp` when
-either server is upgraded.
+Four MCP servers are wired in: `context7`, `maestro`, and `firebase` from `.mcp.json`, plus the
+official Expo plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is
+documentation-only and unguarded; the Expo plugin, `maestro`, and `firebase` expose tools with
+consequences outside this machine, gated by `permissions.ask` in `.claude/settings.json` (a prompt
+on every call in every normal permission mode; a bypass mode skips it, so this section, not the
+prompt, is the real guard) - never call these without an explicit user request, and re-check this
+list against `/mcp` when any server is upgraded.
 
 - **Never without an explicit request - spends money or quota:** `build_run`, `build_submit`,
   `workflow_run` (Expo MCP), `run_on_cloud` (Maestro MCP). `build_run` spends one of the Expo
@@ -127,6 +127,18 @@ either server is upgraded.
   irreversible:** `appstore_reply_review`, `appstore_delete_review_response`,
   `playstore_reply_review` (Expo MCP). These write to real App Store and Play Store listings
   under the company identity. Confirm the exact text with the user before posting, every time.
+- **Never without an explicit request, higher bar - reaches real devices:**
+  `messaging_send_message` (Firebase MCP). This delivers an FCM push to real installs. It also
+  cannot satisfy `.claude/rules/e2e-notification-privacy.md`, which requires every payload to be
+  ciphertext plus a generic placeholder: a console-style FCM send is plaintext by construction.
+  Use it only to debug delivery mechanics with the user's explicit say-so, never as a way to
+  send app content.
+- **Never without an explicit request - creates or mutates cloud resources:**
+  `firebase_create_project`, `firebase_create_app`, `firebase_create_android_sha`,
+  `firebase_deploy`, `firebase_init`, `firebase_update_environment` (Firebase MCP). The Firebase
+  MCP is scoped to `--only core,messaging` in `.mcp.json` because this app uses Firebase solely
+  for FCM. Widen that list only when a feature is actually adopted. Note `firebase_init` writes
+  a `firebase.json` into the repo, which this project deliberately does not have.
 
 ## Architecture
 
