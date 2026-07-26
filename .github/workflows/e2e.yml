@@ -266,10 +266,22 @@ jobs:
           api-level: 34
           # Must match the APK's ABI (scripts/androidAbis.mjs gives e2e x86_64).
           arch: x86_64
-          target: google_apis
+          # `default`, NOT `google_apis`. With Play Services the emulator thrashes
+          # during boot: gms churn refilled a freshly cleared logcat buffer within
+          # seconds, ActivityManager was killing and restarting
+          # settings.intelligence, and gms services were failing to bind. The smoke
+          # flow runs against a fresh unpaired install and exercises no push, so it
+          # needs none of that. Diagnostics on the failing runs showed the app
+          # process alive with MainActivity resumed and focused but nothing
+          # rendered after 45s, which is starvation rather than a crash or a hang.
+          #
+          # A future paired suite that tests remote push WILL need google_apis; add
+          # it as a separate matrix entry then rather than making every flow pay for
+          # it.
+          target: default
           profile: pixel_6
           # -no-snapshot-save keeps teardown from writing a snapshot we never reuse.
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -camera-back none -memory 4096
           disable-animations: true
           script: bash .github/scripts/run-maestro.sh "$(ls apk/*.apk | head -n 1)" ${{ matrix.flows }}
 
