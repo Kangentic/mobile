@@ -8,10 +8,10 @@ appId: com.kangentic.mobile
 # wait for the tab bar instead of tapping into a still-booting app.
 - extendedWaitUntil:
     visible:
-      id: "board-tab"
+      text: "Board"
     timeout: 60000
 - tapOn:
-    id: "board-tab"
+    text: "Board"
 - extendedWaitUntil:
     visible:
       id: "board-card-stub-task-2"

@@ -3,20 +3,29 @@ appId: com.kangentic.mobile
 # Cold-start smoke on a fresh (unpaired) install: the triage home offers
 # pairing, the board tab renders its empty state. Paired flows live under
 # .maestro/paired/ and need scripts/stubDesktopPeer.mjs running first.
+#
+# The tab bar is a NATIVE one (expo-router NativeTabs), so its buttons are
+# platform views we do not own and cannot put a testID on. Their labels are
+# the selector, which is the documented exception to the testID rule - see
+# .claude/rules/e2e-maestro-runs.md.
 - launchApp
 # App-ready gate. A bare assertVisible here only gets Maestro's short implicit
 # wait, which is enough on a warm local emulator but raced on a cold CI one: the
-# same commit passed in 16s and then failed at 25s on "home-tab is visible".
+# same commit passed in 16s and then failed at 25s waiting for the tab bar.
 # Everything after this point can assume the first render has happened, so only
 # this one assertion needs the extended wait.
+#
+# Selected by LABEL, not by testID: the native tab buttons carry no testID of
+# ours (see the note above), so the id this gate used before the NativeTabs
+# migration no longer resolves at all.
 - extendedWaitUntil:
     visible:
-      id: "home-tab"
+      text: "Agents"
     timeout: 45000
 - assertVisible:
     id: "triage-pair-cta"
 - tapOn:
-    id: "board-tab"
+    text: "Board"
 - assertVisible:
     id: "board-screen"
 - assertVisible:

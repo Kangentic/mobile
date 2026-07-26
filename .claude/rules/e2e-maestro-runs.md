@@ -31,6 +31,13 @@ second rig mode silently kills the first one's bundler. Both failures look like 
   closing.
 - **Address our own UI by `testID`, never by label.** A flow that taps visible copy breaks the
   next time the copy changes, silently and at full timeout.
+- **Exception: NATIVE chrome we do not render.** The bottom tab bar is expo-router `NativeTabs`,
+  so its buttons are platform views with no `testID` of ours to set. `testID` reaches them only
+  through `unstable_nativeProps`, which expo-router's own types warn "may change or be removed
+  in minor versions" and "will override any other props set by Expo Router". Depending on that
+  for E2E selectors trades one fragility for a worse one, so the flows select tabs by their
+  LABEL (`text: "Board"`). This is the narrow carve-out: it applies where the platform owns the
+  view, not to anything we render ourselves.
 - **A flow that calls itself self-contained must be.** The stub peer restores its canned board on
   every session establish, which is one flow; do not add state that outlives that boundary.
 - **Never edit `src/` while a suite is running against Metro.** Fast Refresh pushes every save
