@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@bacons/text-decoder": "^0.0.0",
+    "@expo/ui": "~57.0.7",
     "@kangentic/protocol": "^0.9.0",
     "@notifee/react-native": "9.1.8",
     "@shopify/flash-list": "2.0.2",
@@ -53,6 +54,7 @@
     "expo-speech-recognition": "^56.0.1",
     "expo-splash-screen": "~57.0.5",
     "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.1",
     "expo-task-manager": "~57.0.6",
     "katex": "^0.17.0",
     "lucide-react-native": "^1.24.0",
