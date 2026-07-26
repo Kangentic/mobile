@@ -47,6 +47,7 @@ For anything beyond a bare Metro session, use the dev rig below.
 | `npm run dev:doctor` | Read-only preflight: adb/emulator/AVD, the `hw.keyboard=yes` typing check, relay repo and port states, dev-client install, Node version. |
 | `npm run dev:emu` | Emulator hygiene: kill + reboot on host GPU, restore the adb reverses, relaunch the app foreground-verified. The cure for progressive emulator lag (a long-lived qemu process degrades under sustained WebGL load). |
 | `npm run dev:adb` | adb-server wedge recovery: force-kill adb, fresh server, reverses, relaunch. The cure when the phone reconnect-loops while the relay and desktop are healthy (forwarding silently stops moving data). |
+| `npm run dev:stop` | Stops every rig process, this run's and any orphaned by an earlier one, leaving the relay and emulator up (both are expensive to restart and neither is what goes wrong). Starting any mode does this first, so it is only needed to hand the machine back clean - or to free Metro before switching rig mode, since only one mode can own port 8081. |
 
 Details worth knowing:
 

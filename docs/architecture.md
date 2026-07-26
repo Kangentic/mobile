@@ -89,8 +89,8 @@ decides *what* it may do:
 
 | Verb | Purpose |
 |------|---------|
-| `read-stream` | Subscribe one session's live feeds: raw PTY tail, activity/usage/permission telemetry, and chunked transcript deltas; its `transcript-window` action serves byte-budgeted history pages (the subscribe response carries the scrollback snapshot and the outstanding `awaitedPromptId`) |
-| `read-board` | Project list (no `projectId`) or a board snapshot + live board-change subscription |
+| `read-stream` | Subscribe one session's live feeds: raw PTY tail, activity/usage/permission telemetry, and chunked transcript deltas; its `transcript-window` action serves byte-budgeted history pages (the subscribe response carries the scrollback snapshot and the outstanding `awaitedPromptId`). `transcript-window` alone needs no LIVE session (protocol 0.10.0): it reads session records plus their on-disk JSONL, which is what lets a completed task's conversation be read after its agent is gone. Every other action still requires one. |
+| `read-board` | Project list (no `projectId`, carrying the desktop's project groups since 0.11.0), a board snapshot + live board-change subscription, or - via the `archived` action (0.10.0) - a one-shot page of COMPLETED tasks with each one's lifetime session summary. Archived tasks are deliberately not in the snapshot: a board subscription re-snapshots on every change, and the archive only grows. |
 | `read-diff` | A task's diff file list (+ a live change-signal watch) or one file's old/new content |
 | `send-user-message` | Send a composed message into an agent session (bracketed paste desktop-side) |
 | `move-task` | Move a task between board columns |

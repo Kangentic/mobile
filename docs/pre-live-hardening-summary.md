@@ -101,7 +101,25 @@ single worst control in the app to need two taps.
   styling is the product decision - so honouring the rule means adding a marker to production
   render purely for a test.
 
-## Protocol 0.10.0 (published)
+## Verified against the live desktop, after the bridge landed
+
+- **The Done column**, showing real completed tasks newest-first with a count matching the
+  desktop's own Completed list.
+- **A completed task's summary**: timeline, agent-active duration, model, cost, tokens, files
+  and lines changed, tool calls - checked against the desktop's SESSION SUMMARY panel.
+- **A completed task's CONVERSATION**, rendered in full with no agent running. This was the
+  load-bearing claim of the whole feature and the last one resting on reasoning.
+- **The grouped project switcher**, mirroring the desktop sidebar's groups and membership, with
+  per-project agent counts.
+
+Three mobile-side defects sat between a working desktop and a working screen, all invisible from
+the desktop end: a Zustand selector building a fresh object per call (infinite render loop),
+nothing triggering the FIRST transcript fetch for a never-subscribed session, and
+`transcriptStore.applyWindow` silently discarding any window whose session is not retained. That
+last one is worth remembering: the desktop returned all 418 entries and the phone binned them,
+which is indistinguishable from a desktop that returned nothing.
+
+## Protocol 0.10.0, 0.11.0 and 0.11.1 (published)
 
 Desktop PR **#209** merged and `@kangentic/protocol` **0.10.0** published via the
 `protocol-v0.10.0` tag. `read-board` gains an `archived` action returning a page of completed
@@ -109,9 +127,30 @@ tasks plus each one's lifetime session summary, and `read-stream`'s `transcript-
 requires a live session - it never used one, it merely sat below a live-session gate, which made
 a finished conversation permanently unreadable.
 
+**0.11.0** (PR #210) adds the desktop's project groups to the project listing, so the phone's
+switcher mirrors the desktop sidebar instead of showing one flat list of every project on the
+machine. **0.11.1** (PR #211) is the security fix below.
+
 Additive throughout, so `PROTOCOL_VERSION` stays at `2` and no handshake changed. Mobile pins
-`^0.10.0` and typechecks against the registry copy rather than the dev rig's local link, which
+`^0.11.1` and typechecks against the registry copy rather than the dev rig's local link, which
 is what CI actually installs.
+
+**No relay change was needed for any of them.** The relay forwards ciphertext only and never
+parses a capability payload; its slot pattern already accepts both slot lengths and its frame
+cap sits far above these payloads.
+
+## The relay-address hole, closed at the source
+
+`isSecureRelayAddress` accepted `ws://127.0.0.1:8080@evil.test`. This branch hardened the
+phone's copy early on, but the shared module in `@kangentic/protocol` kept the flaw until
+0.11.1 - and the desktop reads its half from there, so the desktop stayed exposed while the
+phone was safe.
+
+Fixing it upstream, the desktop's existing suite caught a REGRESSION in that first fix:
+`hostWithoutPort` truncated at the closing bracket, so `ws://[::1]evil.com` read as the host
+`[::1]`. Narrower than the original hole, same kind, and present in the mobile copy too - where
+no test covered it, which is exactly why it survived there. Both ends now parse the authority
+and both suites cover userinfo, the bracket boundary, and prefix lookalikes.
 
 ## Cross-repo work shipped
 
