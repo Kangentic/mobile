@@ -1,10 +1,9 @@
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Row, Stack, useTheme } from '@/components';
+import { Stack, useTheme } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
 import { QuickKeyBar } from '@/components/terminal/QuickKeyBar';
-import { TerminalMicButton } from '@/components/terminal/TerminalMicButton';
 import { SessionModeToggle, type SessionMode } from './SessionModeToggle';
 
 export interface SessionInputBarProps {
@@ -17,11 +16,11 @@ export interface SessionInputBarProps {
 /**
  * The session's ONE mode-aware footer, anchored by the surface switcher as
  * the LAST row in every mode - toggling never moves it. Above it sits one
- * mode row of matching height: quick keys + the PTY dictation mic in
- * terminal, the composer (which owns chat's mic and send) in chat, nothing
- * in changes - so a terminal-chat switch swaps equal-height rows and the
- * whole panel keeps its geometry. Typing in terminal happens directly in
- * the terminal (tap it to raise the keyboard).
+ * mode row of matching height: the quick keys in terminal, the composer
+ * (which owns chat's send and dictation) in chat, nothing in changes - so a
+ * terminal-chat switch swaps equal-height rows and the whole panel keeps its
+ * geometry. Typing in terminal happens directly in the terminal (tap it to
+ * raise the keyboard).
  */
 export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }: SessionInputBarProps): React.JSX.Element | null {
   const theme = useTheme();
@@ -44,27 +43,9 @@ export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }
         paddingBottom: Math.max(theme.spacing.xs, insets.bottom - theme.spacing.sm),
       }}
     >
-      {mode === 'terminal' ? (
-        // Mic on the LEFT, mirroring the chat composer's mic position, so
-        // dictation lives in the same spot in both modes.
-        <Row gap="sm" style={styles.modeRow}>
-          <TerminalMicButton sessionId={sessionId} />
-          <View style={styles.flex}>
-            <QuickKeyBar sessionId={sessionId} />
-          </View>
-        </Row>
-      ) : null}
+      {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}
       {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}
       <SessionModeToggle mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />
     </Stack>
   );
 }
-
-const styles = StyleSheet.create({
-  modeRow: {
-    alignItems: 'center',
-  },
-  flex: {
-    flex: 1,
-  },
-});
