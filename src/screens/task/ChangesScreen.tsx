@@ -1,5 +1,4 @@
 import React from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
@@ -10,6 +9,15 @@ import { ChangesTab } from './ChangesTab';
  * The task's CHANGES destination, pushed over the Session screen (which
  * stays mounted underneath, xterm WebView included). The diff watch is
  * screen-scoped: mounted = watching; popping the screen tears it down.
+ *
+ * No KeyboardAvoidingView: this screen is a diff list with no text input, so
+ * the keyboard never comes up over it. The one it used to carry was worse
+ * than useless - it applied `padding` on iOS only, which is the RN default
+ * advice but WRONG for this app: edge-to-edge Android never resizes the
+ * window for the soft keyboard either, which is why SessionScreen applies
+ * padding on BOTH platforms (see 71f5fdd, where the keyboard covered the
+ * composer's send button). Two neighbouring screens disagreeing about that is
+ * how the wrong one gets copied next.
  */
 export function ChangesScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ taskId: string; projectId?: string }>();
@@ -27,15 +35,7 @@ export function ChangesScreen(): React.JSX.Element {
   return (
     <Screen testID="changes-screen">
       <TaskHeader taskTitle={locatedTaskTitle ?? 'Changes'} sessionId={locatedSessionId} displayId={locatedDisplayId} />
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ChangesTab taskId={taskId} projectId={projectId} isActive={true} />
-      </KeyboardAvoidingView>
+      <ChangesTab taskId={taskId} projectId={projectId} isActive={true} />
     </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
-});
