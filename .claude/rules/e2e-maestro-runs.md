@@ -46,10 +46,38 @@ second rig mode silently kills the first one's bundler. Both failures look like 
   regression. Observed turning a 7/11 run into 8/11 failures. Either finish and commit before
   running, or run against an `e2e` build, which has no bundler attached to push anything.
 
+## Diagnosing a failure
+
+**Read the failure screenshot before forming a hypothesis.** Maestro writes them to
+`~/.maestro/tests/<timestamp>/<flow>/screenshots/`, and every expensive E2E mistake in this
+project came from reasoning about a selector instead of looking at the screen: a row whose
+SECTION was collapsed, a delete row that was never armed, a chat lens that was rendering
+correctly and had simply scrolled the asserted text off. The `e2e-flow-doctor` agent owns the
+full diagnosis order (screenshot, then whether the request reached the stub, then crash, then
+leftover state, then selector stability, and only then timing) and lands one of four verdicts:
+fix the app, fix the flow, rewrite it, or delete it.
+
+Three failure modes worth knowing without spawning anything:
+
+- **Persisted state outlives `launchApp`**, which force-stops rather than clears. The Agents
+  feed's section collapse is persisted, so one stray tap on a header hides a row for every
+  later flow. A flow that assumes fresh state and does not establish it is broken, not flaky.
+- **A testID built from transient state renames itself.** The feed's section header was keyed
+  to the SECTION, so the same visible header answered to `-idle` or `-needs-you` depending on
+  whether a prompt was pending. Key selectors to something that cannot move.
+- **Dependent taps need an assertion between them.** The delete row swaps its own testID when
+  armed; without asserting the armed state, a tap that never landed surfaces two steps later as
+  a card that would not delete.
+
+**Never raise a timeout as a first move**, and never change product behaviour to make a flow
+pass without giving the product argument on its own merits.
+
 ## Enforcement (self-maintaining)
 
 - **Review (live now):** `/code-review` flags MCP-run invocations and label selectors in
   `.maestro/**` diffs.
+- **Agent (live now):** `e2e-flow-doctor` diagnoses a failing or flaky flow against this rule
+  and is the intended first responder for a red suite.
 - **Docs (live now):** `docs/developer-guide.md`'s "Running the E2E suite" section carries the
   full reasoning, the measured cost of each workaround, and the build-profile change that would
   remove them.
