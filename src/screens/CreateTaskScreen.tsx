@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Button, Stack, Text, TextField, useTheme } from '@/components';
 import { CapabilityError } from '@/channel';
@@ -31,6 +32,7 @@ const BACKLOG_COLUMN_NAME = 'Backlog';
 export function CreateTaskScreen(): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
   // Select the BOARD (a stable store reference), never the derived array:
   // selectColumnsOrdered builds a new array per call, so returning it straight
@@ -70,7 +72,19 @@ export function CreateTaskScreen(): React.JSX.Element {
   }, [projectId, title, description, columnName, router]);
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.surfaceOverlay, padding: theme.spacing.lg }]}>
+    <View
+      style={[
+        styles.container,
+        {
+          backgroundColor: theme.colors.surfaceOverlay,
+          padding: theme.spacing.lg,
+          // 'fitToContents' hugs the content exactly, so the Create button
+          // would otherwise sit hard against the sheet's bottom edge. The
+          // safe-area inset on top of that keeps it clear of the gesture bar.
+          paddingBottom: theme.spacing.xl + insets.bottom,
+        },
+      ]}
+    >
       <Stack gap="sm">
         <Text variant="title">New task</Text>
         <TextField value={title} onChangeText={setTitle} placeholder="Title" testID="create-task-title" autoFocus />
