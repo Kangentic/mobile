@@ -377,6 +377,10 @@ function killOrphanRigProcesses(orphans) {
 
 function teardown() {
   shuttingDown = true;
+  if (reverseWatchdogTimer) {
+    clearInterval(reverseWatchdogTimer);
+    reverseWatchdogTimer = null;
+  }
   for (const { label, child } of spawnedChildren.splice(0)) {
     if (child.exitCode !== null || child.pid === undefined) continue;
     log(`stopping ${label} (pid ${child.pid})`);
@@ -697,6 +701,45 @@ function listAdbReverses(serial) {
 
 /** Ports the app needs tunnelled on every device the rig drives. */
 const REQUIRED_REVERSE_PORTS = [RELAY_PORT, METRO_PORT, INSPECT_PORT];
+
+/** How often the watchdog below re-checks the target device's tunnels. */
+const REVERSE_WATCHDOG_MS = 3000;
+let reverseWatchdogTimer = null;
+
+/**
+ * Keep the target device's reverse tunnels alive for as long as the rig runs.
+ *
+ * adb does NOT restore reverses when a device re-attaches, so unplugging a
+ * phone and plugging it back in leaves it attached, authorized, and with no
+ * route to the relay or Metro at all. The app keeps retrying a host port that
+ * is no longer tunnelled and reports the only thing it can observe:
+ * "Connecting to your desktop", indefinitely. `dev:doctor` already diagnoses
+ * this, but only when someone thinks to suspect adb - and the symptom points
+ * squarely at pairing instead, which is the wrong place to go looking.
+ *
+ * Healing it on a timer is what makes replugging behave the way it plainly
+ * looks like it should. Deliberately silent when nothing is missing: this
+ * fires every few seconds and must not become log noise.
+ */
+function startReverseWatchdog(serial) {
+  if (!serial || reverseWatchdogTimer) return;
+  reverseWatchdogTimer = setInterval(() => {
+    const device = listAdbDevices().find((candidate) => candidate.serial === serial);
+    // Unplugged, or still coming up (`unauthorized`/`offline`): there is
+    // nothing to heal yet, and adb would only error. The next tick retries.
+    if (!device || device.state !== 'device') return;
+    const present = listAdbReverses(serial);
+    const missing = REQUIRED_REVERSE_PORTS.filter((port) => !present.includes(port));
+    if (missing.length === 0) return;
+    const healed = missing.filter(
+      (port) => run('adb', ['-s', serial, 'reverse', `tcp:${port}`, `tcp:${port}`]).status === 0,
+    );
+    if (healed.length > 0) log(`restored reverse tunnel(s) on ${serial}: ${healed.join(', ')}`);
+  }, REVERSE_WATCHDOG_MS);
+  // The supervised children keep the rig alive; this timer must never be the
+  // reason it refuses to exit.
+  reverseWatchdogTimer.unref?.();
+}
 
 /** Serial-scoped reverse for sharded instances (the plain helpers target ANDROID_SERIAL). */
 function ensureAdbReverseFor(serial, port) {
@@ -1295,6 +1338,10 @@ async function main() {
     log('nothing left to supervise; exiting');
     process.exit(0);
   }
+
+  // Only meaningful while the rig stays up: a one-shot invocation exits here
+  // and has nothing left to keep healthy.
+  if (spawnedChildren.length > 0) startReverseWatchdog(process.env.ANDROID_SERIAL ?? null);
 }
 
 main().catch((mainError) => fail(mainError.stack ?? String(mainError)));
