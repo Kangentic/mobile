@@ -1,8 +1,9 @@
 /**
- * Parity between app.config.ts and the brand foundations. The Expo config
- * loader cannot import the tokens module (it transpiles only the config file
- * itself), so the config inlines the background hex; this test is the
- * mechanical guard that keeps the inline value equal to the token.
+ * Parity between app.config.ts and the brand foundations, plus a guard on the
+ * hand-bumped release version fields. The Expo config loader cannot import
+ * the tokens module (it transpiles only the config file itself), so the
+ * config inlines the background hex; this test is the mechanical guard that
+ * keeps the inline value equal to the token.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,5 +29,25 @@ describe('app.config.ts brand parity', () => {
     const configSource = readFileSync(fileURLToPath(new URL('../../app.config.ts', import.meta.url)), 'utf8');
     expect(configSource).toContain("'expo-splash-screen'");
     expect(configSource).toContain('./assets/brand/splash-icon.png');
+  });
+});
+
+describe('app.config.ts hand-bumped release versions', () => {
+  // cli.appVersionSource is "local" in eas.json, so EAS does not track these
+  // server-side; nothing else in CI checks them (see the Android release
+  // section of docs/developer-guide.md, "Enforcement: none"). This is the
+  // one mechanical guard that the values are present and well-formed.
+  it('keeps android.versionCode a positive integer', () => {
+    const versionCode = appConfig.android?.versionCode;
+    expect(versionCode).toBeDefined();
+    expect(Number.isInteger(versionCode)).toBe(true);
+    expect(versionCode).toBeGreaterThan(0);
+  });
+
+  it('keeps ios.buildNumber a positive integer string', () => {
+    const buildNumber = appConfig.ios?.buildNumber;
+    expect(buildNumber).toBeDefined();
+    expect(buildNumber).toMatch(/^\d+$/);
+    expect(Number(buildNumber)).toBeGreaterThan(0);
   });
 });
