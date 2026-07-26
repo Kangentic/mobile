@@ -12,7 +12,9 @@
  * happens because someone clicked Run workflow".
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -124,5 +126,29 @@ describe('easProfile.mjs profile resolution', () => {
 
   it('fails loudly on an unknown profile', () => {
     expect(() => runEasProfileScript(['does-not-exist', '--json'])).toThrow();
+  });
+
+  it('writes the profile env in GITHUB_ENV format', () => {
+    // The workflow relies on this exact shape to get EXPO_PUBLIC_* values into
+    // the Gradle step, where Metro inlines them into the bundle. A silent
+    // change here would produce an e2e APK without its flag set.
+    const githubEnvPath = join(mkdtempSync(join(tmpdir(), 'kangentic-github-env-')), 'github-env');
+    writeFileSync(githubEnvPath, '');
+
+    execFileSync(process.execPath, [easProfileScript, 'e2e', '--github-env'], {
+      cwd: repositoryRoot,
+      env: { ...process.env, GITHUB_ENV: githubEnvPath },
+      encoding: 'utf8',
+    });
+    expect(readFileSync(githubEnvPath, 'utf8')).toBe('EXPO_PUBLIC_KANGENTIC_E2E=1\n');
+
+    // A profile with no env block must contribute nothing rather than a blank line.
+    writeFileSync(githubEnvPath, '');
+    execFileSync(process.execPath, [easProfileScript, 'preview', '--github-env'], {
+      cwd: repositoryRoot,
+      env: { ...process.env, GITHUB_ENV: githubEnvPath },
+      encoding: 'utf8',
+    });
+    expect(readFileSync(githubEnvPath, 'utf8')).toBe('');
   });
 });
