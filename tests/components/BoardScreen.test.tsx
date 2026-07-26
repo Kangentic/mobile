@@ -194,63 +194,25 @@ describe('BoardScreen', () => {
   });
 
   /**
-   * Move is a native form sheet ROUTE now, so the board dismisses the actions
-   * sheet and navigates. The append math (targetPosition = the target column's
-   * existing count, not a hardcoded 0) moved with it, and is asserted in
-   * tests/components/MoveTaskScreen.test.tsx.
+   * The actions hub is a native form sheet ROUTE now, so the board's only job
+   * is to navigate to it with the card and the board's project. Everything the
+   * hub then does - Move/Edit replacing it, the archive gate, the two-step
+   * delete - is in tests/components/TaskActionsScreen.test.tsx.
    */
-  it('long-press opens the actions sheet; Move dismisses it and navigates to the move route', () => {
+  it('long-press navigates to the actions hub for that card', () => {
     render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
-    fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
-    expect(screen.getByTestId('task-actions-sheet')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('task-action-move'));
-
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/move-task',
-      params: { taskId: 'task-1', projectId: 'project-1' },
-    });
-    // The actions sheet must close behind it, or it would sit under the form
-    // sheet and be waiting when the user dismisses.
-    expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
-  });
-
-  /** The form itself is covered by tests/components/EditTaskScreen.test.tsx. */
-  it('Edit dismisses the actions sheet and navigates to the edit route', () => {
-    render(
-      <ThemeProvider>
-        <BoardScreen />
-      </ThemeProvider>,
-    );
     fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
 
-    fireEvent.press(screen.getByTestId('task-action-edit'));
-
     expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/edit-task',
+      pathname: '/task-actions',
       params: { taskId: 'task-1', projectId: 'project-1' },
     });
     expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
-  });
-
-  it('Delete requires the two-step confirm then calls the delete action', async () => {
-    render(
-      <ThemeProvider>
-        <BoardScreen />
-      </ThemeProvider>,
-    );
-    fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
-    fireEvent.press(screen.getByTestId('task-action-delete'));
-    expect(mockDeleteTaskFromBoard).not.toHaveBeenCalled();
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
-    });
-
-    expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
   });
 
   /**

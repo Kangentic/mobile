@@ -7,22 +7,10 @@ import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCard, Stack, useTheme, type AgentStatusKind } from '@/components';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
-import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
 import { TaskCard } from '@/components/board/TaskCard';
 import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
-import { CapabilityError } from '@/channel';
-import {
-  archiveTask,
-  deleteTaskFromBoard,
-  openProjectBoard,
-  refreshSnapshots,
-} from '@/connection/actions';
-import { triggerHaptic } from '@/lib/haptics';
-
-function messageForActionError(error: unknown, fallback: string): string {
-  return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
-}
+import { openProjectBoard, refreshSnapshots } from '@/connection/actions';
 
 /** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
 const NO_TASKS: BoardTaskWire[] = [];
@@ -139,43 +127,16 @@ export function BoardScreen(): React.JSX.Element {
     if (pager && typeof pager.setPage === 'function') pager.setPage(activeColumnIndex);
   }, [activeColumnIndex]);
 
-  const [actionsTarget, setActionsTarget] = useState<BoardTaskWire | null>(null);
-  const [actionsInFlight, setActionsInFlight] = useState(false);
-  const [actionsError, setActionsError] = useState<string | null>(null);
-
-  const archiveAvailable = columns.some((column) => column.role === 'done');
-
   // Stable identity: an inline arrow here would be a fresh prop on every
   // BoardScreen render, which defeats BoardTaskCard's React.memo for every
   // visible card in every column.
-  const onLongPressTask = useCallback((task: BoardTaskWire) => {
-    setActionsError(null);
-    setActionsTarget(task);
-  }, []);
-
-
-  const onArchive = useCallback(() => {
-    if (!actionsTarget || !projectId) return;
-    setActionsInFlight(true);
-    setActionsError(null);
-    void archiveTask({ projectId, taskId: actionsTarget.id })
-      .then(() => setActionsTarget(null))
-      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Archive failed - check the connection')))
-      .finally(() => setActionsInFlight(false));
-  }, [actionsTarget, projectId]);
-
-  const onDelete = useCallback(() => {
-    if (!actionsTarget || !projectId) return;
-    setActionsInFlight(true);
-    setActionsError(null);
-    void deleteTaskFromBoard({ projectId, taskId: actionsTarget.id })
-      .then(() => {
-        triggerHaptic('destructiveConfirmed');
-        setActionsTarget(null);
-      })
-      .catch((error: unknown) => setActionsError(messageForActionError(error, 'Delete failed - check the connection')))
-      .finally(() => setActionsInFlight(false));
-  }, [actionsTarget, projectId]);
+  const onLongPressTask = useCallback(
+    (task: BoardTaskWire) => {
+      if (!projectId) return;
+      router.push({ pathname: '/task-actions', params: { taskId: task.id, projectId } });
+    },
+    [router, projectId],
+  );
 
   return (
     <Screen testID="board-screen" edges={['left', 'right']}>
@@ -259,26 +220,6 @@ export function BoardScreen(): React.JSX.Element {
         />
       </View>
 
-      <TaskActionsSheet
-        visible={actionsTarget !== null}
-        task={actionsTarget}
-        archiveAvailable={archiveAvailable}
-        onClose={() => setActionsTarget(null)}
-        onMove={() => {
-          const target = actionsTarget;
-          setActionsTarget(null);
-          if (target && projectId) router.push({ pathname: '/move-task', params: { taskId: target.id, projectId } });
-        }}
-        onEdit={() => {
-          const target = actionsTarget;
-          setActionsTarget(null);
-          if (target && projectId) router.push({ pathname: '/edit-task', params: { taskId: target.id, projectId } });
-        }}
-        onArchive={onArchive}
-        onDelete={onDelete}
-        actionInFlight={actionsInFlight}
-        errorMessage={actionsError}
-      />
     </Screen>
   );
 }
