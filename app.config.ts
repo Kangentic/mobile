@@ -25,9 +25,17 @@ const config: ExpoConfig = {
   ios: {
     bundleIdentifier: 'com.kangentic.mobile',
     supportsTablet: false,
+    // Hand-bumped, like android.versionCode below; see the iOS without a Mac
+    // section of docs/developer-guide.md. Required because
+    // cli.appVersionSource is "local", which is CLI-wide and not Android-only.
+    buildNumber: '1',
   },
   android: {
     package: 'com.kangentic.mobile',
+    // Hand-bumped, code-reviewed version code (cli.appVersionSource: "local"
+    // in eas.json, so EAS does not track it server-side). Read the Android
+    // release section of docs/developer-guide.md before bumping.
+    versionCode: 1,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
