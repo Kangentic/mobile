@@ -219,26 +219,22 @@ describe('BoardScreen', () => {
     expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
   });
 
-  it('Edit routes to the edit sheet and saves the changed fields', async () => {
+  /** The form itself is covered by tests/components/EditTaskScreen.test.tsx. */
+  it('Edit dismisses the actions sheet and navigates to the edit route', () => {
     render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
     fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
+
     fireEvent.press(screen.getByTestId('task-action-edit'));
-    expect(screen.getByTestId('edit-task-sheet')).toBeTruthy();
 
-    fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Renamed from the phone');
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('edit-task-save'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/edit-task',
+      params: { taskId: 'task-1', projectId: 'project-1' },
     });
-
-    expect(mockUpdateTaskFields).toHaveBeenCalledWith({
-      projectId: 'project-1',
-      taskId: 'task-1',
-      title: 'Renamed from the phone',
-    });
+    expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
   });
 
   it('Delete requires the two-step confirm then calls the delete action', async () => {

@@ -89,6 +89,7 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="task/[taskId]/changes" options={{ headerShown: false }} />
         <Stack.Screen name="create-task" options={formSheetOptions} />
         <Stack.Screen name="move-task" options={formSheetOptions} />
+        <Stack.Screen name="edit-task" options={formSheetOptions} />
         <Stack.Screen name="file-diff" options={{ title: 'Changes' }} />
         <Stack.Screen name="pair" options={{ title: 'Pair a device' }} />
         <Stack.Screen name="pair-confirm" options={{ title: 'Confirm pairing' }} />

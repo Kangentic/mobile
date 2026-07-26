@@ -7,7 +7,6 @@ import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, Sheet, SkeletonCard, Stack, Text, useTheme, type AgentStatusKind } from '@/components';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
-import { EditTaskSheet } from '@/components/board/EditTaskSheet';
 import { TaskActionsSheet } from '@/components/board/TaskActionsSheet';
 import { TaskCard } from '@/components/board/TaskCard';
 import { selectColumnsOrdered, selectTasksForColumn, useBoardStore, type ProjectBoard } from '@/state/boardStore';
@@ -18,7 +17,6 @@ import {
   deleteTaskFromBoard,
   openProjectBoard,
   refreshSnapshots,
-  updateTaskFields,
 } from '@/connection/actions';
 import { triggerHaptic } from '@/lib/haptics';
 
@@ -133,9 +131,6 @@ export function BoardScreen(): React.JSX.Element {
   const [actionsTarget, setActionsTarget] = useState<BoardTaskWire | null>(null);
   const [actionsInFlight, setActionsInFlight] = useState(false);
   const [actionsError, setActionsError] = useState<string | null>(null);
-  const [editTarget, setEditTarget] = useState<BoardTaskWire | null>(null);
-  const [editInFlight, setEditInFlight] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
 
   const archiveAvailable = columns.some((column) => column.role === 'done');
 
@@ -147,19 +142,6 @@ export function BoardScreen(): React.JSX.Element {
     setActionsTarget(task);
   }, []);
 
-
-  const onEditSave = useCallback(
-    (fields: { title?: string; description?: string }) => {
-      if (!editTarget || !projectId) return;
-      setEditInFlight(true);
-      setEditError(null);
-      void updateTaskFields({ projectId, taskId: editTarget.id, ...fields })
-        .then(() => setEditTarget(null))
-        .catch((error: unknown) => setEditError(messageForActionError(error, 'Edit failed - check the connection')))
-        .finally(() => setEditInFlight(false));
-    },
-    [editTarget, projectId],
-  );
 
   const onArchive = useCallback(() => {
     if (!actionsTarget || !projectId) return;
@@ -277,22 +259,14 @@ export function BoardScreen(): React.JSX.Element {
           if (target && projectId) router.push({ pathname: '/move-task', params: { taskId: target.id, projectId } });
         }}
         onEdit={() => {
-          setEditError(null);
-          setEditTarget(actionsTarget);
+          const target = actionsTarget;
           setActionsTarget(null);
+          if (target && projectId) router.push({ pathname: '/edit-task', params: { taskId: target.id, projectId } });
         }}
         onArchive={onArchive}
         onDelete={onDelete}
         actionInFlight={actionsInFlight}
         errorMessage={actionsError}
-      />
-      <EditTaskSheet
-        visible={editTarget !== null}
-        task={editTarget}
-        onClose={() => setEditTarget(null)}
-        onSave={onEditSave}
-        saveInFlight={editInFlight}
-        errorMessage={editError}
       />
       <Sheet visible={projectPickerVisible} onClose={() => setProjectPickerVisible(false)} title="Projects" testID="board-project-sheet">
         <Stack gap="xs">

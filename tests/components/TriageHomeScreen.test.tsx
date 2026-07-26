@@ -675,24 +675,18 @@ describe('TriageHomeScreen', () => {
       expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
     });
 
-    it('Edit: saves the changed field with the target\'s own project id', async () => {
+    /** Same cross-project concern as Move: the route must get the TARGET's project. */
+    it("Edit: navigates with the target's own project id", () => {
       renderHome();
       fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+
       fireEvent.press(screen.getByTestId('task-action-edit'));
 
-      expect(screen.getByTestId('edit-task-sheet')).toBeTruthy();
-      expect(screen.getByTestId('edit-task-title').props.value).toBe('Ship the beta banner');
-
-      fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Ship the beta banner v2');
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('edit-task-save'));
+      expect(mockPush).toHaveBeenCalledWith({
+        pathname: '/edit-task',
+        params: { taskId: 'task-2', projectId: 'project-2' },
       });
-
-      expect(mockUpdateTaskFields).toHaveBeenCalledWith({
-        projectId: 'project-2',
-        taskId: 'task-2',
-        title: 'Ship the beta banner v2',
-      });
+      expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
     });
 
     it('Archive: calls archiveTask with the target\'s own project id and task id', async () => {
