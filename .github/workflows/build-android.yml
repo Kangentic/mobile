@@ -87,8 +87,6 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - uses: gradle/actions/setup-gradle@v4
-
       - name: Install dependencies
         run: npm ci
 
@@ -191,15 +189,25 @@ jobs:
         # .claude/rules/expo-cng.md. --no-install because npm ci already ran.
         run: npx expo prebuild --platform android --no-install
 
+      # Deliberately after prebuild: android/ does not exist at checkout time,
+      # so an earlier setup-gradle would have no Gradle files to key its cache
+      # on. Caching is the main speed argument for building here rather than
+      # with `eas build --local`, which does not support it at all.
+      - uses: gradle/actions/setup-gradle@v4
+
       - name: Read the app version
         id: version
         run: |
           set -euo pipefail
           npx expo config --json > "$RUNNER_TEMP/expo-config.json"
-          version_name="$(node -p "require('$RUNNER_TEMP/expo-config.json').version")"
-          version_code="$(node -p "require('$RUNNER_TEMP/expo-config.json').android.versionCode")"
+          read_config_field() {
+            node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String($1))" "$RUNNER_TEMP/expo-config.json"
+          }
+          version_name="$(read_config_field 'c.version')"
+          version_code="$(read_config_field 'c.android.versionCode')"
           echo "version-name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version-code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "Building version $version_name (versionCode $version_code)."
 
       - name: Build with Gradle
         env:
@@ -258,11 +266,17 @@ jobs:
           else
             # An AAB is a jar. -strict is deliberately omitted: a self-signed
             # upload certificate always raises a chain warning and would make
-            # -strict exit non-zero on a perfectly good bundle.
+            # -strict exit non-zero on a perfectly good bundle. jarsigner also
+            # exits 0 on a completely unsigned jar, so the exit code proves
+            # nothing and the output has to be read both ways.
             verify_report="$(jarsigner -verify -verbose:summary "$OUTPUT_PATH")"
-            if ! printf '%s' "$verify_report" | grep -q 'jar verified'; then
-              echo "$verify_report"
-              echo "::error::Bundle is not signed."
+            echo "$verify_report"
+            if printf '%s' "$verify_report" | grep -qi 'jar is unsigned'; then
+              echo "::error::Bundle is unsigned."
+              exit 1
+            fi
+            if ! printf '%s' "$verify_report" | grep -qi 'jar verified'; then
+              echo "::error::Could not confirm the bundle signature. jarsigner output is above."
               exit 1
             fi
             echo "Bundle signature verified."
