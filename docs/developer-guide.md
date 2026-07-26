@@ -301,6 +301,22 @@ only, so a release can be cut from `main` whenever wanted without waiting on E2E
 build workflow never blocks a PR. Do not add a build workflow to the required checks: it would
 deadlock every PR on a check that never runs.
 
+**Docs-only PRs skip the E2E build.** `e2e.yml`'s `changes` job classifies the diff and the
+expensive jobs are conditional on it. This is deliberately not `paths-ignore` on the trigger:
+`E2E tests (Maestro)` is a required check, and a workflow skipped by `paths-ignore` never reports
+its checks, so branch protection would wait forever and the PR could never merge. The workflow
+always runs, the costly jobs are skipped, and the gate treats a skipped suite as a pass. The
+fail-safe direction is to run: anything the classifier cannot confidently call documentation
+builds. Changes under `.github/` always run, because a workflow change must be exercised.
+
+**Two known costs, not yet paid down.** `e2e.yml` has its own build job that overlaps with
+`build-android.yml`. `setup-gradle` scopes its cache per workflow, so the two do not share a warm
+Gradle cache and the E2E build pays a cold one. Consolidating them behind `workflow_call` would fix
+it; that was deferred so a change to the E2E path could not break the release path, and the hazard
+to watch when doing it is the reusable workflow's concurrency group colliding with a direct
+dispatch. Separately, `profile=all` and the effect of `--build-cache` are both implemented but
+unmeasured.
+
 **E2E scope, deliberately narrow.** `e2e.yml` runs only `.maestro/smoke.yaml`, which works against
 a fresh unpaired install with no relay and no pairing. The 11 flows under `.maestro/paired/` are
 **not** in CI yet: each needs a completed pairing to `scripts/stubDesktopPeer.mjs` over a local
