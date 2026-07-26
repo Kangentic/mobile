@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { ClipboardList, MessagesSquare } from 'lucide-react-native';
 import type { SessionSummaryWire } from '@kangentic/protocol';
-import { EmptyState, Screen, SegmentedSwitcher, Stack, Text, useTheme, type SegmentOption } from '@/components';
+import { EmptyState, MarkdownBlock, Screen, SegmentedSwitcher, Stack, Text, useTheme, type SegmentOption } from '@/components';
 import { loadTranscriptTail } from '@/connection/actions';
 import { findArchivedTaskById, useBoardStore } from '@/state/boardStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
@@ -141,7 +141,9 @@ function SummaryPane({
         {task.description.length > 0 ? (
           <Stack gap="xs">
             <Text variant="caption" color="muted">Description</Text>
-            <Text>{task.description}</Text>
+            {/* Descriptions are authored as markdown (the desktop renders them
+                as such), so plain Text showed literal ** and backticks. */}
+            <MarkdownBlock markdown={task.description} testID="completed-task-description" />
           </Stack>
         ) : null}
 
