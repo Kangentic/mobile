@@ -320,10 +320,20 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
   const activityEntry = useActivityStore((state) => (task.session_id ? (state.bySessionId[task.session_id] ?? null) : null));
   const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[projectId]?.showTicketNumbers ?? true);
 
+  // Desktop parity (TaskCard.handleClick): a task with no session on it opens
+  // straight into the edit form. Keyed on the session, not the column, because
+  // that is what the desktop keys on - a task parked in Testing with no agent
+  // is as sessionless as one in To Do, and a column check would send it to an
+  // empty session shell. Moving to To Do hard-resets a task (the desktop kills
+  // the session, worktree and branch), so that column can never have one.
   const openTask = useCallback(() => {
+    if (task.session_id === null) {
+      router.push({ pathname: '/edit-task', params: { taskId: task.id, projectId } });
+      return;
+    }
     router.push({
       pathname: '/task/[taskId]',
-      params: { taskId: task.id, sessionId: task.session_id ?? '', projectId },
+      params: { taskId: task.id, sessionId: task.session_id, projectId },
     });
   }, [router, task.id, task.session_id, projectId]);
 
