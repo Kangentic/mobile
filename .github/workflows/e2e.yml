@@ -166,6 +166,13 @@ jobs:
           name: ${{ needs.build-apk.outputs.apk-name }}
           path: apk
 
+      # Maestro is a JVM tool. The runner image happens to ship a JDK, but
+      # pinning it means an image change cannot silently break this job.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Install Maestro
         run: |
           set -euo pipefail
