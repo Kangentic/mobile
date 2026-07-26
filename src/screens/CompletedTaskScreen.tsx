@@ -1,10 +1,12 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { ClipboardList, MessagesSquare } from 'lucide-react-native';
 import type { SessionSummaryWire } from '@kangentic/protocol';
 import { EmptyState, Screen, SegmentedSwitcher, Stack, Text, useTheme, type SegmentOption } from '@/components';
+import { loadTranscriptTail } from '@/connection/actions';
 import { findArchivedTaskById, useBoardStore } from '@/state/boardStore';
+import { useTranscriptStore } from '@/state/transcriptStore';
 import { ConversationTab } from './task/ConversationTab';
 import { TaskHeader } from './task/TaskHeader';
 
@@ -27,10 +29,47 @@ const COMPLETED_MODE_OPTIONS: SegmentOption<CompletedMode>[] = [
 
 export function CompletedTaskScreen(): React.JSX.Element {
   const { taskId, projectId } = useLocalSearchParams<{ taskId?: string; projectId?: string }>();
-  const found = useBoardStore((state) => (taskId ? findArchivedTaskById(state, taskId) : null));
+  // Select the STORED slice and derive from it. findArchivedTaskById builds a
+  // fresh { projectId, task, summary } object per call, so calling it inside
+  // the selector hands useSyncExternalStore a new snapshot on every render -
+  // "getSnapshot should be cached", then an infinite update loop that takes
+  // the screen down on open. The same trap bit CreateTaskScreen's column list.
+  const archivedByProjectId = useBoardStore((state) => state.archivedByProjectId);
+  const found = useMemo(
+    () => (taskId ? findArchivedTaskById({ archivedByProjectId }, taskId) : null),
+    [archivedByProjectId, taskId],
+  );
   const [mode, setMode] = useState<CompletedMode>('conversation');
   const onModeChange = useCallback((next: CompletedMode) => setMode(next), []);
   const theme = useTheme();
+
+  /**
+   * The FIRST transcript fetch, which nothing else will do for a completed
+   * task.
+   *
+   * ConversationTab self-heals only when the store raises `needsTailFetch`,
+   * and that flag is set by the SUBSCRIBE path - "openSessionScreen does the
+   * first fetch", as its own comment says. A completed task is deliberately
+   * never subscribed: its agent is gone, and read-stream still requires a live
+   * session for every action except the transcript window. So without this the
+   * pane stays blank forever, showing nothing on the screen whose entire
+   * purpose is the conversation.
+   */
+  const anchorSessionId = found?.summary?.sessionId ?? null;
+  useEffect(() => {
+    if (anchorSessionId === null) return;
+    // RETAIN BEFORE FETCHING. applyWindow drops any window for a session that
+    // is not retained - a memory guard so background sessions cannot pile up
+    // transcripts - and retention is normally declared by openSessionScreen,
+    // which this screen must never call (that subscribes a stream, and this
+    // session's agent is gone). Without this the desktop returns the whole
+    // transcript and the store discards it, which looks exactly like a
+    // desktop that returned nothing.
+    useTranscriptStore.getState().retainSession(anchorSessionId);
+    void loadTranscriptTail(anchorSessionId).catch((error: unknown) => {
+      if (__DEV__) console.warn('[completed-task] transcript unavailable:', error);
+    });
+  }, [anchorSessionId]);
 
   if (!found) {
     return (
