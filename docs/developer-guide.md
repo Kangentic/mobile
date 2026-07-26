@@ -426,18 +426,17 @@ manual procedure below is the fallback for when you need a bundle without a runn
   gradlew :app:bundleRelease -PreactNativeArchitectures=arm64-v8a -Pandroid.injected.signing.store.file=<path to kangentic-upload.jks> -Pandroid.injected.signing.store.password=<password> -Pandroid.injected.signing.key.alias=kangentic-upload -Pandroid.injected.signing.key.password=<password>
   ```
 
-  `-PreactNativeArchitectures=arm64-v8a` is needed **on Windows**: an unscoped `gradlew` build
-  compiles all four ABIs and has failed on 32-bit `armeabi-v7a` there. The cause has not been
-  pinned down, and it may well be a symptom of the same Windows path-length problem rather than a
-  real ABI constraint, so treat the restriction as a local workaround, not a settled fact. The
-  resulting AAB carries arm64-v8a native code only, so 32-bit ARM and x86/x86_64 devices (older
-  phones, Chromebooks, x86 emulators) cannot install it, which is why an arm64-only bundle must
-  not be promoted past the internal track.
+  `-PreactNativeArchitectures=arm64-v8a` is a **Windows-only workaround**, and it is now known to
+  be exactly that. An unscoped `gradlew` build compiles all four ABIs and fails on 32-bit
+  `armeabi-v7a` on Windows, but the first unrestricted CI run on Linux built every ABI cleanly:
+  `arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`, verified by inspecting `lib/` inside the artifact.
+  So the failure was a symptom of the Windows path-length problem, not a real ABI constraint.
 
-  The `build-android.yml` workflow builds every ABI by default precisely to settle this: Linux
-  has no path-length limit, so a green all-ABI run there says the constraint was a Windows
-  artifact. If `armeabi-v7a` does turn out to fail on Linux too, restrict to `arm64-v8a,x86_64`
-  rather than `arm64-v8a` alone, or the `e2e` APK stops installing on a standard x86_64 emulator.
+  Two consequences. Keep the flag for a local Windows build, where the failure is real. And do
+  **not** ship a locally built Windows AAB past the internal track: it carries arm64-v8a code
+  only, so 32-bit ARM and x86/x86_64 devices (older phones, Chromebooks, x86 emulators) cannot
+  install it. A CI-built bundle has no such limitation, which is the supported path for any track
+  beyond internal.
 
   Build from a short checkout path (something like `C:\kw`), not a deep worktree path, or the
   Windows path-length limit breaks the native build. Passing passwords inline leaks them to shell
@@ -510,10 +509,10 @@ The ladder, in order:
 1. **Manual first upload.** A signed AAB through the Play Console UI by hand. Everything
    automated is blocked until this exists.
 2. **Internal track.** Dispatch the workflow with `submit_track=internal`. Fast iteration with
-   known devices. An arm64-only bundle is acceptable here because the test devices are known.
-3. **Closed track.** Requires resolving the ABI question first (an arm64-only bundle must not go
-   past internal), plus every app-content declaration that internal testing lets you skip: store
-   listing, content rating, data safety, target audience, ads, and a public privacy policy URL.
+   known devices.
+3. **Closed track.** Requires every app-content declaration that internal testing lets you skip:
+   store listing, content rating, data safety, target audience, ads, and a public privacy policy
+   URL. Build in CI, not locally on Windows, so the bundle carries every ABI.
    Then recruit 12+ testers and keep them opted in for 14 **continuous** days. Testers who opt out
    and back in reset the clock; the 14 days do not accumulate across gaps.
 4. **Apply for production access.** Only after step 3 has genuinely held for 14 days. Play asks
