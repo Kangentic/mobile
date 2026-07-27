@@ -132,10 +132,14 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
   `.github/workflows/ci.yml`, each runs as its own parallel job: **`Lint (ESLint)`**,
   **`Type check (tsc)`**, **`Unit tests (Vitest)`**, **`Component tests (Jest)`**, and
   **`Native config (expo prebuild)`**. From `.github/workflows/e2e.yml`:
-  **`E2E tests (Maestro)`**, which builds a real APK and runs the smoke flow on an Android
+  **`Tests (Maestro)`**, which builds a real APK and runs the smoke flow on an Android
   emulator, so it takes appreciably longer than the rest. Plus **`cla`** (CLA Assistant).
 - The unit and component tiers are sharded across runners. The shards show up as their own jobs
-  (`Unit Test (1/3)` and so on) but are not themselves required: the single gate check per tier is.
+  (`Unit test (1/2)` and so on) but are not themselves required: the single gate check per tier is.
+- `Maestro (paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required
+  and cannot block a merge. GitHub prints a "Required" badge on the checks that are, so the
+  absence of one is how the list tells you. Do not silence a red run there: it is real coverage
+  of the pairing ceremony and the secure channel.
 - `main` is a protected branch: those checks are required, the branch must be up to date before
   merging, and force pushes and deletions are blocked.
 - Android release builds and the iOS compile check are **not** PR checks. They are

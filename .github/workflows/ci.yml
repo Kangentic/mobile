@@ -85,7 +85,7 @@ jobs:
         run: npm run typecheck
 
   unit-shards:
-    name: Unit Test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+    name: Unit test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -118,7 +118,7 @@ jobs:
           echo "All unit shards passed."
 
   component-shards:
-    name: Component Test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+    name: Component test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:

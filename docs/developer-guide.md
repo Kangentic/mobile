@@ -352,7 +352,7 @@ deadlock every PR on a check that never runs.
 
 **Docs-only PRs skip the E2E build.** `e2e.yml`'s `changes` job classifies the diff and the
 expensive jobs are conditional on it. This is deliberately not `paths-ignore` on the trigger:
-`E2E tests (Maestro)` is a required check, and a workflow skipped by `paths-ignore` never reports
+`Tests (Maestro)` is a required check, and a workflow skipped by `paths-ignore` never reports
 its checks, so branch protection would wait forever and the PR could never merge. The workflow
 always runs, the costly jobs are skipped, and the gate treats a skipped suite as a pass. The
 fail-safe direction is to run: anything the classifier cannot confidently call documentation
@@ -387,7 +387,7 @@ image that caused this.
 
 **Two E2E suites, two jobs, one required.** `e2e.yml`'s `maestro` job runs `.maestro/smoke.yaml`
 against a fresh unpaired install (no relay, no pairing) and is what the required
-`E2E tests (Maestro)` check actually gates on. The separate `maestro-paired` job runs the 11 flows
+`Tests (Maestro)` check actually gates on. The separate `maestro-paired` job runs the 11 flows
 under `.maestro/paired/`: it checks out the public `Kangentic/relay` repo (pinned to a SHA), builds
 and runs it on the runner, pairs the app to `scripts/stubDesktopPeer.mjs` over it - the same relay
 and stub the local `dev:stub --pair` rig uses - and then runs the suite
@@ -669,11 +669,11 @@ also runs natively on Windows against a local emulator, which is the right loop 
 a change (see the stage-ownership note in `CLAUDE.md` for why local E2E is deliberately *not* a
 pre-PR gate).
 
-**`E2E tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The 11 paired flows run
-in CI too, in the separate `maestro-paired` job, but that job is advisory (see "Two E2E suites, two
+**`Tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The 11 paired flows run in
+CI too, in the separate `maestro-paired` job, but that job is advisory (see "Two E2E suites, two
 jobs, one required" above) until it has been green across several PRs. A green required check is
-smoke coverage; check the `Maestro paired (advisory)` check separately for the paired suite's
-result.
+smoke coverage; read the `Maestro (paired)` check separately for the paired suite's result. It
+carries no "Required" badge, which is how the checks list says it cannot block a merge.
 
 **iOS E2E does not exist yet, by any route.** An earlier version of this section claimed EAS
 Workflows on cloud iOS simulators was "the only supported path to iOS E2E without a Mac". That was

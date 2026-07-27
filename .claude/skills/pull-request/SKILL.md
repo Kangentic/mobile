@@ -22,14 +22,18 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
 - **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
   parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit tests (Vitest)`,
   `Component tests (Jest)`, `Native config (expo prebuild)`. `.github/workflows/e2e.yml` adds
-  `E2E tests (Maestro)`. Plus `cla`. Never treat `CLA Assistant` alone as all-green: confirm the
+  `Tests (Maestro)`. Plus `cla`. Never treat `CLA Assistant` alone as all-green: confirm the
   registered check names with `gh pr checks <branch>` and wait for every one of them. A real check
   can take a moment to register after a push, so if only `CLA Assistant` appears, re-poll rather
   than concluding no other check is coming.
 - **E2E is the long pole.** It builds a real signed APK and boots an Android emulator, so budget
   far longer for it than the other tiers and do not mistake its pending state for a hang. The
-  sharded tiers also surface per-shard jobs (`Unit Test (1/3)`, `Component Test (2/4)`); those are
+  sharded tiers also surface per-shard jobs (`Unit test (1/2)`, `Component test (2/4)`); those are
   an implementation detail, and the single gate check per tier is what protection requires.
+- **`Maestro (paired)` is advisory and must stay that way.** It runs the 11 paired flows and
+  reports on every PR, but is not a required check. If it goes red, diagnose it through
+  `e2e-flow-doctor`; never drive it green by weakening the job, raising a timeout, or relaxing
+  `tests/unit/ciSafeMaestroFlows.test.ts`. A red advisory check does not block the merge.
 - **The branch must be up to date with `main` before merging** (protection uses strict status
   checks), so a PR that has fallen behind needs a rebase even when every check is green.
 - Android release builds and the iOS compile check are dispatch or tag triggered, so they never
@@ -149,7 +153,7 @@ Treat a non-zero exit while checks are pending as status, not a tool failure; re
 `--watch` command if the timeout fires with checks still only pending. If `CLA Assistant` is the
 only check registered, do not call that all-green: the `ci.yml` checks may not have registered
 yet, so re-poll before concluding it is genuinely the only one. Expect seven checks in total (the
-`ci.yml` jobs plus `E2E tests (Maestro)` and `cla`).
+`ci.yml` jobs plus `Tests (Maestro)` and `cla`), plus the advisory `Maestro (paired)`.
 
 **A stacked PR reports green having run nothing.** `ci.yml` and `e2e.yml` both filter
 `pull_request` to `branches: [main]`, so a PR whose base is another feature branch gets only

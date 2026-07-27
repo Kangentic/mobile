@@ -122,7 +122,7 @@ Report both the local and the store-side numbers before changing anything.
    `ios.buildNumber` for iOS. Bumping both when releasing one spends a number for nothing, and the
    two are independent.
 3. `/pull-request` to open it and drive the checks green. `tests/unit/appConfigBrand.test.ts` guards
-   the field's shape, and the full gate including `E2E tests (Maestro)` still applies.
+   the field's shape, and the full gate including `Tests (Maestro)` still applies.
 4. `/merge-pull-request` to land it.
 
 **Never `--admin` past a red check to get a release out.** The gate exists precisely for the build

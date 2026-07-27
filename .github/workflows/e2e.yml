@@ -9,7 +9,7 @@ name: E2E
 #
 # .maestro/smoke.yaml runs against a fresh, unpaired install: no relay, no
 # pairing, nothing external. It is the `maestro` job below, and it is what the
-# required `E2E tests (Maestro)` check actually gates on.
+# required `Tests (Maestro)` check actually gates on.
 #
 # The 11 flows under .maestro/paired/ run in the `maestro-paired` job: it
 # checks out the public Kangentic/relay repo, runs it locally on the runner,
@@ -22,10 +22,12 @@ name: E2E
 # is NOT in the `e2e` gate's `needs:` below, so a red run does not block a
 # merge. A required check that cannot pass blocks every merge, which is
 # exactly why only smoke was wired into the gate before this suite had any CI
-# runs to prove it stable. Promote it once it has been green across several
-# PRs: add it to the gate's `needs:`, fold its result into the gate condition,
-# and drop "(advisory)" from its name. The required context name itself never
-# changes.
+# runs to prove it stable. Nothing in its NAME says advisory, because GitHub
+# already prints a "Required" badge on the checks that are, so the absence of
+# one is the honest signal and the name does not have to be rewritten on
+# promotion. Promoting it is then a two-line change: add it to the gate's
+# `needs:` and fold its result into the gate condition (plus deleting the
+# assertion in tests/unit/ciSafeMaestroFlows.test.ts that pins it out).
 
 on:
   pull_request:
@@ -45,7 +47,7 @@ jobs:
   # Decides whether the expensive jobs need to run at all. A docs-only PR should
   # not build an APK and boot an emulator for 30 minutes.
   #
-  # This is deliberately NOT `paths-ignore` on the trigger. `E2E tests (Maestro)`
+  # This is deliberately NOT `paths-ignore` on the trigger. `Tests (Maestro)`
   # is a required status check, and a workflow skipped by paths-ignore never
   # reports its checks at all, so protection would wait forever and the PR could
   # never merge. Instead the workflow always runs, the costly jobs are
@@ -313,9 +315,10 @@ jobs:
 
   # The paired suite: checks out the relay, pairs to the stub, runs
   # .maestro/paired. Advisory (see the header comment above) - its result is
-  # deliberately NOT read by the `e2e` gate job below.
+  # deliberately NOT read by the `e2e` gate job below, and it carries no
+  # "Required" badge in the checks list, which is what says so.
   maestro-paired:
-    name: Maestro paired (advisory)
+    name: Maestro (paired)
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
@@ -428,12 +431,16 @@ jobs:
   # It must run on every event, including when the suites were skipped for a
   # docs-only change, or protection would never see the check report.
   #
-  # The name stays stable on purpose. It is a required-check context, so renaming
-  # it means updating branch protection, and it would need renaming again once
-  # the paired flows land. Honesty about current coverage goes in the run summary
-  # below instead, where it is visible at the point of use.
+  # `Tests (Maestro)`, not `E2E tests (Maestro)`: GitHub renders a check as
+  # "<workflow> / <job>", so the latter stuttered as "E2E / E2E tests (Maestro)".
+  #
+  # This name IS a required-check context, so it does not change casually.
+  # Renaming it means updating main's branch protection in the same change, or
+  # every PR blocks on a context that will never report. Honesty about current
+  # coverage goes in the run summary below, where it is visible at the point of
+  # use, rather than in the name.
   e2e:
-    name: E2E tests (Maestro)
+    name: Tests (Maestro)
     needs: [changes, maestro]
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -462,7 +469,7 @@ jobs:
             echo "| Suite | Flows | Gates the merge? |"
             echo "|---|---|---|"
             echo "| smoke | 1 | yes - this check |"
-            echo "| paired | 11 | no - see the separate \"Maestro paired (advisory)\" check |"
+            echo "| paired | 11 | no - see the separate \"Maestro (paired)\" check |"
             echo ""
             echo "The paired suite runs in its own job and reports its own check, but is not"
             echo "read by this gate: it is advisory until it has been green across several PRs,"
