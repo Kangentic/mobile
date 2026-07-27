@@ -32,11 +32,11 @@ const e2eWorkflowSource = readFileSync(`${repositoryRoot}.github/workflows/e2e.y
 const CI_SAFE_ENTRIES = ['.maestro/smoke.yaml', '.maestro/paired'];
 
 /**
- * The job names listed in the required `E2E tests (Maestro)` gate's `needs:`.
+ * The job names listed in the required `Tests (Maestro)` gate's `needs:`.
  * Text-parsed for the same reason as the flow entries below.
  */
 function readRequiredGateNeeds(): string[] {
-  const gate = e2eWorkflowSource.match(/name:\s*E2E tests \(Maestro\)\s*\n\s*needs:\s*\[([^\]]*)\]/);
+  const gate = e2eWorkflowSource.match(/name:\s*Tests \(Maestro\)\s*\n\s*needs:\s*\[([^\]]*)\]/);
   if (gate === null) return [];
   return gate[1]
     .split(',')
@@ -96,7 +96,7 @@ describe('CI runs only the Maestro entries this guard knows about', () => {
   });
 
   it('keeps the advisory paired job OUT of the required gate', () => {
-    // The whole safety design of the paired suite. `E2E tests (Maestro)` is a
+    // The whole safety design of the paired suite. `Tests (Maestro)` is a
     // required check on `main`, so anything in its `needs:` can block every
     // merge in the repository. The paired suite is 11 flows against a relay, a
     // stub peer, and an emulator, and it has no CI track record yet, so it
