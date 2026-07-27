@@ -43,8 +43,9 @@ full text is in [CLA.md](CLA.md).
 - JDK 17 and Android Studio with an Android Virtual Device configured (the emulator is the daily
   local target)
 - Git 2.25+
-- Optional: `eas-cli` (for EAS builds) and the Maestro CLI (to run the E2E flows in `.maestro/`)
-- **No Mac is needed.** iOS builds and iOS E2E both run in the cloud via EAS.
+- Optional: `eas-cli` (credential management and the cloud-build fallback) and the Maestro CLI (to
+  run the E2E flows in `.maestro/`)
+- **No Mac is needed.** Builds run on GitHub Actions, iOS included, on free macOS runners.
 
 ### Setup
 
@@ -99,8 +100,8 @@ Use descriptive branch names: `fix/pairing-timeout`, `feature/board-swipe`, `doc
 
 - **Unit** (`tests/unit/`, vitest): `npx vitest run tests/unit`
 - **Component** (`tests/components/`, Jest + React Native Testing Library): `npx jest tests/components`
-- **E2E** (`.maestro/`, Maestro): `maestro test .maestro/`, locally against the Android emulator;
-  iOS E2E runs on cloud simulators via EAS Workflows
+- **E2E** (`.maestro/`, Maestro): `maestro test .maestro/`, locally against the Android emulator, and
+  on an emulator in CI. There is no iOS E2E yet by any route
 
 Quick local pass before opening a PR:
 

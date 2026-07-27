@@ -16,7 +16,7 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
 - **Build:** GitHub Actions on free runners for both platforms (Gradle for Android, `xcodebuild` on
   a macOS runner for iOS). EAS is the credential source and the fallback, not the build path.
   Continuous Native Generation (no checked-in native projects)
-- **Testing:** vitest (unit), Jest + React Native Testing Library (components), Maestro (E2E, Windows + Android emulator locally, EAS Workflows cloud iOS simulators), Playwright via react-native-web (later)
+- **Testing:** vitest (unit), Jest + React Native Testing Library (components), Maestro (E2E, Windows + Android emulator locally and on a CI emulator; **no iOS E2E exists yet by any route**), Playwright via react-native-web (later)
 
 ## Project Structure
 
@@ -34,7 +34,9 @@ app/                           # expo-router route wrappers (thin - render the s
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen (OS deep-link routing of kangentic-pair:// is a later phase)
   settings.tsx, devices.tsx
 assets/brand/                 # Synced identity rasters (icon/splash/adaptive) - scripts/syncBranding.mjs owns them
-plugins/                      # Local Expo config plugins (withAndroidPushService: notification permissions + FGS type)
+plugins/                      # Local Expo config plugins (withAndroidPushService: notification
+                              #   permissions + FGS type; withIosManualSigning: App Store signing on
+                              #   the app target only, inert outside CI)
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
