@@ -233,16 +233,34 @@ than collected and stripped. `src/observability/crashReporting.ts` is the single
 configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps it that way.
 
 - **What Sentry cannot see:** session content. No screenshots, no view hierarchy, no console
-  output, no network breadcrumbs, no Session Replay, no performance traces, and no PII - each
-  disabled explicitly, several of them ON by default in the SDK. Transcripts, terminal output,
+  output, no captured network requests, no JS network breadcrumbs, no Session Replay, no
+  performance traces, no structured logs, and no PII - each disabled explicitly, several of them
+  ON by default in the SDK. Screenshots and view hierarchy are the two that reach native, and
+  both are off there too. Transcripts, terminal output,
   diff content, board data, pairing material and notification payloads are never collected, and
   `src/pairing/`, `src/channel/` and `src/notifications/` are forbidden by lint from reporting to
   Sentry at all, because their error messages can echo ciphertext, key material, or
   attacker-controlled bytes (see `src/notifications/pushDecrypt.ts`).
 - **What Sentry can see:** that this app crashed, where in the code, and on what kind of device.
-  A stack trace, the exception type and message, device model and OS version, and app version.
+  A stack trace, the exception type and message, app version, and the SDK's standard device and
+  OS context. That context is wider than model and OS version alone: it is the platform's normal
+  diagnostic block, and includes things like battery level, free memory and storage, screen
+  resolution, orientation, and device timezone. None of it is session content, none of it is an
+  account, and it is not used to profile a user, but "device model and OS" understates it and
+  this document would rather be exact.
   A crash is by definition an unplanned state, so a message could in principle carry a fragment
   of app data; the exception is code that runs on the paths above, which cannot report.
+- **What the native SDKs still record, which JS cannot turn off.** The breadcrumb controls in
+  `Sentry.init()` are JavaScript-side only: `@sentry/react-native` strips `beforeSend`,
+  `beforeBreadcrumb` and `integrations` out of the options before handing them to the native SDK
+  (`node_modules/@sentry/react-native/dist/js/wrapper.js`), so sentry-cocoa and sentry-android
+  keep their own default breadcrumbs (app foreground/background, activity or view-controller
+  lifecycle, connectivity and other system events) and those ride a NATIVE crash. They carry no
+  session content, but they are coarse app-lifecycle timing, so the honest statement is "not
+  nothing" rather than "nothing else". Closing this needs native configuration through a config
+  plugin, not a JS option; it is a named gap, not an oversight. iOS app-hang and
+  watchdog-termination reporting are likewise left at their native defaults (on), deliberately:
+  a hang and an out-of-memory kill are the app breaking, which is what this reports.
 - **What it costs a self-hoster:** nothing. The DSN is injected at build time from a GitHub
   repository variable (`vars.SENTRY_DSN`, not a secret: a DSN ships inside the published bundle
   and is write-only, so it is not confidential) and is never committed, so a build made from this
@@ -264,9 +282,12 @@ this app tells users it does not collect. **Sampling** is not used; every error 
 the volume is low and the free tier's budget is better spent on completeness than on smoothing.
 
 The exit path, if this ever becomes unacceptable: delete the `SENTRY_DSN` repository variable
-(GitHub Settings, Variables rather than Secrets) and the SDK goes inert
-across every build with no code change. Removing the dependency outright is a `package.json`
-change plus deleting `src/observability/`; nothing else imports it.
+(GitHub Settings, Variables rather than Secrets) and the SDK goes inert across every build with
+no code change. Removing the dependency outright is four edits, not one: drop it from
+`package.json`, delete `src/observability/` and its call in `index.js`, revert `metro.config.js`
+to `getDefaultConfig`, and remove the conditional plugin entry from `app.config.ts`. The last two
+matter, because leaving either behind after uninstalling the package breaks Metro startup and
+prebuild respectively.
 
 ## Reporting a vulnerability
 

@@ -16,15 +16,42 @@ import { allowlistBreadcrumb, scrubEvent } from './scrubEvent';
  * rides a native crash straight past `beforeSend`. Console breadcrumbs are
  * ON by default, which is why they are turned off explicitly below.
  *
+ * KNOW WHERE THAT ARGUMENT STOPS. Only some of these options reach native.
+ * `@sentry/react-native` destructures `beforeSend`, `beforeBreadcrumb` and
+ * `integrations` out of the options before calling `initNativeSdk` (see
+ * dist/js/wrapper.js), so the breadcrumb hardening below governs the JS
+ * scope ONLY. sentry-cocoa and sentry-android keep their own default
+ * auto-breadcrumbs (app foreground/background, activity or view-controller
+ * lifecycle, connectivity and system events) and those ride a native crash
+ * unfiltered. They carry no session content, but do not read the block
+ * below as covering them: closing that needs native config through a config
+ * plugin. Same story for iOS app-hang and watchdog-termination reporting,
+ * left at their native defaults (on) deliberately, because a hang and an
+ * out-of-memory kill are the app breaking, which is what this reports.
+ * `sendDefaultPii`, `attachScreenshot`, `attachViewHierarchy`,
+ * `maxBreadcrumbs`, `ignoreErrors` and `enableAutoSessionTracking` DO reach
+ * native (RNSentryModuleImpl.java bridges each explicitly).
+ *
  * See docs/security.md and .claude/rules/crash-reporting-scope.md.
  */
 
 /**
  * Errors that are normal operating conditions on a phone, not defects. A
- * mobile app loses its socket constantly (tunnel, lift, screen off), and
- * `src/channel/relayTransport.ts` surfaces that as a plain Error. Left
+ * mobile app loses its socket constantly (tunnel, lift, screen off). Left
  * unfiltered these alone would exhaust the free tier's 5,000 events/month
  * without describing a single real bug.
+ *
+ * The last two match `src/channel/relayTransport.ts` verbatim (lines 137,
+ * 142, 164, 190). The first does NOT come from this repo at all: "Network
+ * request failed" is React Native's own networking-bridge message for a
+ * failed fetch/XHR, so grepping src/ for it finds nothing. Keep the
+ * distinction in mind when editing: the relayTransport strings break if
+ * that file is reworded, the RN one breaks if React Native rewords it.
+ *
+ * That these exist at all is worth reading twice. They are only necessary
+ * because uncaught channel errors DO reach Sentry through the global
+ * handler, which is the gap named under Known limitations in
+ * .claude/rules/crash-reporting-scope.md.
  */
 const EXPECTED_TRANSPORT_NOISE: RegExp[] = [
   /Network request failed/i,
@@ -38,8 +65,10 @@ let initialized = false;
  * No DSN means no `Sentry.init()` at all, so the native SDK never starts
  * and nothing is collected or stored on device. That is the state for every
  * build a contributor or self-hoster makes from source: `EXPO_PUBLIC_SENTRY_DSN`
- * is injected from a GitHub secret at build time and is never committed, so
- * a fork reports nothing (and cannot burn this project's free-tier quota).
+ * is injected at build time from the GitHub repository VARIABLE `SENTRY_DSN`
+ * (a variable, not a secret, so it can be read back to confirm which project
+ * a build reports to) and is never committed, so a fork reports nothing (and
+ * cannot burn this project's free-tier quota).
  */
 export function initializeCrashReporting(): void {
   if (initialized) return;
@@ -80,7 +109,14 @@ export function initializeCrashReporting(): void {
     // desktop's task IDs.
     enableAutoPerformanceTracing: false,
     enableUserInteractionTracing: false,
-    tracesSampleRate: 0,
+    // `tracesSampleRate` is deliberately ABSENT, not 0. The SDK decides
+    // whether to register its tracing integrations with
+    // `typeof options.tracesSampleRate === 'number'` (dist/js/integrations/
+    // default.js), and 0 is a number, so setting it to 0 wires up
+    // appStart, nativeFrames, stallTracking and timeToDisplay anyway and
+    // then samples every span away. Omitting the key is what actually
+    // means off, and the SDK's own source comment says so. Do not "fix"
+    // this by adding an explicit 0 back.
     // Sentry's Logs product forwards console output as structured logs -
     // exactly the egress the console breadcrumb removal below prevents.
     enableLogs: false,

@@ -158,15 +158,16 @@ The `maestro` MCP server was removed deliberately on 2026-07-25 and is not in `.
 Maestro through the CLI instead. See `CLAUDE.md`'s MCP section for the reasoning and for which
 tools on each server are gated behind an explicit user request.
 
-- **Maestro CLI on PATH.** `.mcp.json` starts the server with `cmd /c maestro mcp`, resolved via
-  PATH deliberately rather than an absolute path (an absolute path would violate
+- **Maestro CLI on PATH.** No longer an MCP server, but still a PATH requirement: every flow runs
+  through the `maestro` CLI (`.claude/rules/e2e-maestro-runs.md`), and `scripts/dev.mjs` resolves
+  it via PATH deliberately rather than an absolute path (an absolute path would violate
   `.claude/rules/no-personal-info.md`, which forbids machine-specific paths in committed files).
   Install the Maestro CLI, add its `bin` directory to PATH, and verify with `maestro --version`.
 - **The gotcha that costs an evening.** Claude Code sessions inherit the environment of the
   desktop app (or terminal) that spawned them. After changing PATH, restart the **host app**, not
-  just the Claude Code session, or the MCP server keeps failing even though the CLI is installed
-  and `maestro --version` works in a fresh terminal. Symptom: `/mcp` shows `maestro` failed to
-  connect, or a session-local `maestro`/PATH lookup fails while a brand-new terminal succeeds.
+  just the Claude Code session, or a PATH-resolved MCP server keeps failing even though the CLI is
+  installed and works in a fresh terminal. Symptom: `/mcp` shows `firebase` failed to connect, or
+  a session-local CLI lookup fails while a brand-new terminal succeeds.
 - **Never use `setx PATH "%PATH%;..."` on Windows to fix this.** `setx` truncates at 1024
   characters and silently overwrites the entire user `PATH`, not just appends to it - this has
   wiped a user PATH before. Snapshot the current value first, then use
@@ -984,7 +985,7 @@ by `.claude/rules/crash-reporting-scope.md`.
 | Name | Kind | What it does | Absent means |
 |---|---|---|---|
 | `SENTRY_DSN` | repository **variable** | Exported to the bundle as `EXPO_PUBLIC_SENTRY_DSN`. Decides whether the app reports at runtime. | `Sentry.init()` is never called; the native SDK never starts; nothing is collected |
-| `SENTRY_AUTH_TOKEN` | repository **secret** | Uploads source maps and debug symbols at build time, and is what makes `app.config.ts` include the Sentry config plugin at all. | The plugin entry is omitted; stack traces arrive minified |
+| `SENTRY_AUTH_TOKEN` | repository **secret** | Uploads source maps and debug symbols at build time, and is what makes `app.config.ts` include the Sentry config plugin at all. | The plugin entry is omitted, so if a DSN is set the reports still arrive, with every stack trace minified. With no DSN either, nothing is reported at all |
 
 Both live on the GitHub repo, for the Sentry org `kangentic`, project `react-native`. **Neither
 goes in `eas.json`**, which is the one deviation from "eas.json is the single source of truth for
@@ -1023,8 +1024,20 @@ setting once in the Sentry UI and are not expressible in code:
 
 **Testing it locally.** Put `EXPO_PUBLIC_SENTRY_DSN` in `.env` (gitignored) and rebuild. Events
 land in the `development` environment, kept separate from `production` so dev noise does not
-pollute real crash stats. `sentry-cli` is not required for this; it is only useful for manual
-source-map work, and `sentry-cli login` writes `~/.sentryclirc` outside the repo.
+pollute real crash stats. Expect the frames to be unsymbolicated: without `SENTRY_AUTH_TOKEN`
+also set, `app.config.ts` omits the Sentry plugin, so that build uploads no source map and every
+frame shows the generic bundle name. That is the reporting path working, not a fault. Set both if
+you specifically want to exercise symbolication. `sentry-cli` is not required for either; it is
+only useful for manual source-map work, and `sentry-cli login` writes `~/.sentryclirc` outside
+the repo.
+
+**The `eas build` fallback is NOT wired for Sentry.** Both values are exported by
+`build-android.yml` and `build-ios.yml` only. `eas.json` deliberately holds neither (that is the
+whole point of keeping them out of a committed file), and nothing configures them as EAS
+environment variables, so an `eas build` taken as the fallback when a runner path breaks ships
+with crash reporting inert and no symbols uploaded - silently, with none of the `::notice::` the
+GitHub workflows print. Wire them as EAS environment variables before relying on that fallback
+for a release, or accept the gap knowingly.
 
 **What it does and does not collect** is in [docs/security.md](security.md) and
 [docs/privacy-policy.md](privacy-policy.md). Read those before changing any `Sentry.init()`

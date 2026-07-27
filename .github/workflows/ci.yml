@@ -205,13 +205,29 @@ jobs:
         # Guards against the plugin silently no-opping: if a future SDK version
         # changes how it injects, this fails loudly here instead of shipping a
         # release whose stack traces are all minified.
+        #
+        # BOTH platforms, for the reason spelled out on the prebuild steps above:
+        # the plugin has two independent halves (withSentryAndroid appends to
+        # build.gradle, withSentryIOS adds an Xcode build phase and writes
+        # ios/sentry.properties), and checking only Android is the same blind spot
+        # that let a broken config-plugin import reach an iOS build with every gate
+        # green. The prebuild above already generated both, so this costs nothing.
         run: |
           set -euo pipefail
           if ! grep -q "sentry.gradle" android/app/build.gradle; then
-            echo "::error::The Sentry Expo plugin did not add its Gradle integration. Release source maps would not upload, so every production stack trace would arrive minified."
+            echo "::error::The Sentry Expo plugin did not add its Gradle integration. Release source maps would not upload, so every production Android stack trace would arrive minified."
             exit 1
           fi
           echo "Sentry plugin wired into the Android build."
+          if ! grep -q "Upload Debug Symbols to Sentry" ios/*.xcodeproj/project.pbxproj; then
+            echo "::error::The Sentry Expo plugin did not add its Xcode debug-symbol upload phase. Release dSYMs would not upload, so every production iOS crash would arrive unsymbolicated."
+            exit 1
+          fi
+          if [ ! -f ios/sentry.properties ]; then
+            echo "::error::The Sentry Expo plugin did not write ios/sentry.properties, so the Xcode upload phase has no project to upload to."
+            exit 1
+          fi
+          echo "Sentry plugin wired into the iOS build."
 
       - name: Confirm the generated project is not committed
         # CNG: android/ must exist only as a build artifact. If prebuild output

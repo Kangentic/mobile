@@ -33,22 +33,28 @@ export function allowlistBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
  * rule ("if the top frame is under src/notifications/, redact the
  * message") is therefore not implementable on-device and is not attempted.
  *
- * What actually keeps src/pairing/**, src/channel/**, and
- * src/notifications/** content out of Sentry is upstream of this function:
- * those directories cannot import Sentry at all (ESLint-enforced, see
+ * What keeps src/pairing/**, src/channel/** and src/notifications/**
+ * content out of Sentry is upstream of this function: those directories
+ * cannot import Sentry at all (ESLint-enforced, see
  * .claude/rules/crash-reporting-scope.md), and their own long-standing
- * convention is to catch and discard every error without ever logging or
- * rethrowing it (.claude/rules/e2e-notification-privacy.md), so no
- * exception carrying their content should reach this function to begin
- * with. If that invariant is ever broken by a future change, this function
- * has no way to catch it - that residual gap is named in the rule file
- * rather than papered over with a check that would never fire.
+ * convention is to catch and discard every error without logging or
+ * rethrowing it (.claude/rules/e2e-notification-privacy.md).
+ *
+ * That is a partial guard, not an invariant, and this comment used to
+ * overstate it. The import ban only stops a DELIBERATE capture call; an
+ * error from those directories that escapes uncaught is still picked up by
+ * the global handler and arrives here with its message intact, because
+ * `exception.value` is deliberately never touched (reporting the message is
+ * the point). EXPECTED_TRANSPORT_NOISE in crashReporting.ts exists exactly
+ * because channel errors do arrive today. The rule file names this gap.
  */
 export function scrubEvent(event: ErrorEvent): ErrorEvent {
   const { user: _user, request: _request, extra: _extra, server_name: _serverName, contexts, ...rest } = event;
-  if (contexts === undefined || contexts.response === undefined) {
-    return { ...rest, ...(contexts !== undefined ? { contexts } : {}) };
-  }
+  if (contexts === undefined) return rest;
   const { response: _response, ...scrubbedContexts } = contexts;
+  // Omit `contexts` rather than sending an empty object, including when
+  // `response` was its only key. An empty container is not the same claim as
+  // an absent one to anything reading the payload later.
+  if (Object.keys(scrubbedContexts).length === 0) return rest;
   return { ...rest, contexts: scrubbedContexts };
 }

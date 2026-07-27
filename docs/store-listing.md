@@ -63,9 +63,16 @@ declarations are short. Source of truth for the wording is [privacy-policy.md](p
   service-provider wording when filling the form rather than trusting this note: answering
   **yes** would be a conservative overstatement, and answering **no** incorrectly is a policy
   violation, so this is the one entry worth reading the guidance for.
-- Declare **no** other type. In particular: no user IDs, no device IDs, no personal info, no
-  approximate or precise location, no photos, no audio, no contacts, no app-usage analytics, and
-  no "Diagnostics" beyond crash logs (performance tracing and session tracking are disabled).
+- Declare **no** other type. In particular: no personal info, no approximate or precise location,
+  no photos, no audio, no contacts, no app-usage analytics, and no "Diagnostics" beyond crash
+  logs (performance tracing and session tracking are disabled).
+- **Device IDs needs one check before you tick "no".** The app itself sets no user identity and
+  `src/observability/scrubEvent.ts` strips the `user` field, but that scrubber runs only on
+  JavaScript events - a native crash bypasses it entirely (see the crash reporting section of
+  [security.md](security.md)). Whether sentry-cocoa / sentry-android attach a per-install
+  identifier to a native crash under `sendDefaultPii: false` was not verified in code, and it is
+  a one-off answerable question: send a test crash from a release build and read the event
+  payload in Sentry. Do that before filing, rather than declaring from the config.
 - Data deletion: the app has no account, so there is no per-user deletion mechanism to declare;
   crash reports carry no user identifier and expire on their own.
 
@@ -75,6 +82,10 @@ declarations are short. Source of truth for the wording is [privacy-policy.md](p
   tracking. Answer **No** to the tracking question (the app runs no ATT-relevant tracking and
   should not prompt for ATT).
 - Declare nothing under "Data Linked to You" and nothing under "Data Used to Track You".
+- **The same device-identifier check gates this section too.** If a native crash turns out to
+  carry a per-install identifier, that is an *Identifiers -> Device ID* declaration in its own
+  right, separate from Diagnostics -> Crash Data. Answer it from the test-crash payload described
+  under Play above, not from the config.
 - Note for the encryption question: the existing `ITSAppUsesNonExemptEncryption: false` in
   `app.config.ts` carries its own caveat comment; that is a separate declaration from privacy and
   is flagged there for review before any public release.
