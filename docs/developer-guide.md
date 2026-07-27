@@ -506,6 +506,22 @@ unsigned.
 instead of a whole build followed by a rejection. It resolves the numeric app id from the bundle id
 so nobody has to look it up, and it is skipped with a warning when no ASC API key is set.
 
+**It has a measured blind spot, and the wording reflects that.** A build Apple has not finished
+ingesting is invisible to the API. After the 2026-07-26 upload, both `/v1/builds` and
+`/v1/preReleaseVersions` returned zero for the app for well over 45 minutes while it processed, so the
+check would have called the just-uploaded number free. That window is exactly when someone is most
+likely to re-run. So the script reports what it checked ("no registered build uses this number") rather
+than a verdict, and says so explicitly when it can see no builds at all.
+
+The authority is the upload, not the preflight: altool rejects a duplicate and
+`.github/scripts/upload-ios-testflight.sh` fails on that rejection. Which is worth stating because the
+first version of that script did **not**: it treated Apple's `The bundle version must be higher`
+rejection as success, alongside the "already exists" messages that genuinely do mean our binary
+landed. Those two look similar and mean opposite things. The lenient branch is now gated on
+`GITHUB_RUN_ATTEMPT > 1`, since only the attempt number distinguishes "our own retry" from "someone
+else's binary holds that version", and `tests/unit/iosTestflightUpload.test.ts` runs the real script
+against a stubbed `xcrun` to assert the exit codes.
+
 **Signing is set on the app target, not on the xcodebuild command line.** Command-line build
 settings apply to every target in the workspace, and a target that produces no signed bundle rejects
 a provisioning profile outright. The first signed archive died on exactly that, on a **Swift Package**
