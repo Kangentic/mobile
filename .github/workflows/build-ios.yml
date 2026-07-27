@@ -246,6 +246,7 @@ jobs:
           TEAM_ID: ${{ steps.signing.outputs.team-id }}
           PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain-path }}
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
         run: |
           set -euo pipefail
 
@@ -266,6 +267,13 @@ jobs:
           # add that extension's bundle id to the provisioningProfiles dict in
           # the export options below and give it its own profile. Do not "fix"
           # it by archiving unsigned.
+          #
+          # CODE_SIGN_IDENTITY is the certificate's SHA-1, not a name. There are
+          # two valid App Store certificate types ("Apple Distribution" and the
+          # older iOS-only "iPhone Distribution", which is what eas credentials
+          # issues), so a name would have to match either. The hash matches
+          # neither-and-both, and unlike the common name it is not a person's
+          # legal name in a public log.
           xcodebuild archive \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -274,7 +282,7 @@ jobs:
             -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
@@ -286,6 +294,7 @@ jobs:
           TEAM_ID: ${{ steps.signing.outputs.team-id }}
           PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
           BUNDLE_ID: ${{ steps.signing.outputs.bundle-id }}
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
         run: bash .github/scripts/export-ios-ipa.sh
 
       # An .ipa that is unsigned, development-signed, or missing the push
