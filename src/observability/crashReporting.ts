@@ -62,6 +62,37 @@ const EXPECTED_TRANSPORT_NOISE: RegExp[] = [
 let initialized = false;
 
 /**
+ * Gates the crash-test affordance in Settings and the SDK's `debug` logging.
+ * `EXPO_PUBLIC_KANGENTIC_CRASHTEST` is inlined at bundle time by the same
+ * mechanism as every other `EXPO_PUBLIC_*` flag, so it can only be true in a
+ * build that was dispatched with it on (`build-android.yml`'s `crash_test`
+ * input) - never in a store build, never by default. It exists so this
+ * app's own privacy claims can be verified against a delivered payload
+ * instead of against `Sentry.init()` options, repeatably, after every SDK
+ * upgrade. See the crash reporting section of docs/developer-guide.md.
+ */
+export function crashTestEnabled(): boolean {
+  return process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST === '1';
+}
+
+/**
+ * Throws from a timer rather than the caller's press handler, so it escapes
+ * uncaught through the global handler - the same path a real crash takes -
+ * instead of being swallowed by a React error boundary the handler sits
+ * behind.
+ */
+export function throwTestError(): void {
+  setTimeout(() => {
+    throw new Error('crash-test: deliberate JS throw for crash-reporting verification');
+  }, 0);
+}
+
+/** Exercises the native crash path, which JS-side `beforeSend` cannot filter. */
+export function crashNatively(): void {
+  Sentry.nativeCrash();
+}
+
+/**
  * No DSN means no `Sentry.init()` at all, so the native SDK never starts
  * and nothing is collected or stored on device. That is the state for every
  * build a contributor or self-hoster makes from source: `EXPO_PUBLIC_SENTRY_DSN`
@@ -78,13 +109,21 @@ export function initializeCrashReporting(): void {
 
   Sentry.init({
     dsn,
-    // Three environments, because all three would otherwise land in one
-    // 5,000-event budget as "production" and be indistinguishable from a real
-    // user's crash. E2E matters as much as dev here: a Maestro APK is
-    // release-shaped, so __DEV__ is FALSE in it, and a dispatched
-    // `profile=e2e` build does receive the DSN (the workflow's HAS_SENTRY gate
-    // is job-level and covers every matrix profile). Without this branch every
-    // smoke-flow crash would be filed as a production incident.
+    // Reaches native (not one of the options destructured out in
+    // wrapper.js's initNativeSdk call), so a crash-test build gets verbose
+    // sentry-android/sentry-cocoa logging of what it actually sends -
+    // envelope contents included. Off in every other build.
+    debug: crashTestEnabled(),
+    // Three environment VALUES, not one per EAS profile: `development` and
+    // `e2e` would otherwise land in the same 5,000-event budget as
+    // "production" and be indistinguishable from a real user's crash.
+    // E2E matters as much as dev here: a Maestro APK is release-shaped, so
+    // __DEV__ is FALSE in it, and a dispatched `profile=e2e` build does
+    // receive the DSN (the workflow's HAS_SENTRY gate is job-level and
+    // covers every matrix profile). Without this branch every smoke-flow
+    // crash would be filed as a production incident. `preview` sets
+    // neither __DEV__ nor the e2e flag, so it deliberately falls through to
+    // `production` too - a fourth EAS profile, not a fourth environment.
     environment: __DEV__
       ? 'development'
       : process.env.EXPO_PUBLIC_KANGENTIC_E2E === '1'

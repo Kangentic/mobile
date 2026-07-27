@@ -101,6 +101,39 @@ describe('app.config.ts brand parity', () => {
   });
 });
 
+describe('app.config.ts iOS privacy manifest', () => {
+  // Declares what Sentry's SDK collects, required because React Native links
+  // sentry-cocoa statically, so Apple does not auto-process the pod's own
+  // manifest (see the comment in app.config.ts). If this list changes,
+  // docs/store-listing.md's App Store Connect answers must change with it -
+  // they are one consistency requirement, not two independent edits.
+  it('declares exactly crash, performance, and other-diagnostic data, none linked or used for tracking', () => {
+    const collectedTypes = appConfig.ios?.privacyManifests?.NSPrivacyCollectedDataTypes;
+    expect(collectedTypes).toBeDefined();
+    expect(collectedTypes?.map((entry) => entry.NSPrivacyCollectedDataType).sort()).toEqual(
+      [
+        'NSPrivacyCollectedDataTypeCrashData',
+        'NSPrivacyCollectedDataTypeOtherDiagnosticData',
+        'NSPrivacyCollectedDataTypePerformanceData',
+      ].sort()
+    );
+    for (const entry of collectedTypes ?? []) {
+      expect(entry.NSPrivacyCollectedDataTypeLinked).toBe(false);
+      expect(entry.NSPrivacyCollectedDataTypeTracking).toBe(false);
+      expect(entry.NSPrivacyCollectedDataTypePurposes).toEqual(['NSPrivacyCollectedDataTypePurposeAppFunctionality']);
+    }
+  });
+
+  it('declares the three required-reason APIs Sentry calls, with the reason codes from its own guidance', () => {
+    const accessedTypes = appConfig.ios?.privacyManifests?.NSPrivacyAccessedAPITypes;
+    expect(accessedTypes).toBeDefined();
+    const byCategory = new Map(accessedTypes?.map((entry) => [entry.NSPrivacyAccessedAPIType, entry.NSPrivacyAccessedAPITypeReasons]));
+    expect(byCategory.get('NSPrivacyAccessedAPICategoryUserDefaults')).toEqual(['CA92.1']);
+    expect(byCategory.get('NSPrivacyAccessedAPICategorySystemBootTime')).toEqual(['35F9.1']);
+    expect(byCategory.get('NSPrivacyAccessedAPICategoryFileTimestamp')).toEqual(['C617.1']);
+  });
+});
+
 describe('app.config.ts hand-bumped release versions', () => {
   // cli.appVersionSource is "local" in eas.json, so EAS does not track these
   // server-side; nothing else in CI checks them (see the Android release

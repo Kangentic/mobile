@@ -52,6 +52,10 @@ on:
         description: 'Fraction of users for a staged rollout, e.g. 0.1. Empty means release to everyone.'
         type: string
         default: ''
+      crash_test:
+        description: 'Reveal the crash-reporting test rows in Settings. For verifying what a crash report contains; never for a store submission.'
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -133,6 +137,9 @@ jobs:
       # project a build is wired to. A secret cannot, which would leave a
       # mistyped DSN undetectable - builds would report nowhere and look fine.
       HAS_SENTRY: ${{ secrets.SENTRY_AUTH_TOKEN != '' && vars.SENTRY_DSN != '' }}
+      # A tag build (store artifact) never carries the crash-test rows,
+      # regardless of what a stale dispatch input might say.
+      CRASH_TEST: ${{ github.event_name != 'push' && inputs.crash_test == true }}
 
     steps:
       - uses: actions/checkout@v4
@@ -194,6 +201,18 @@ jobs:
       - name: Note when Sentry is not configured
         if: env.HAS_SENTRY != 'true'
         run: echo "::notice::SENTRY_AUTH_TOKEN/SENTRY_DSN are not both set. This build ships with crash reporting inert and uploads no source maps."
+
+      # Same ordering requirement as the exports above: EXPO_PUBLIC_* is read
+      # at config-evaluation time and inlined by Metro, so this must precede
+      # prebuild. tests/unit/buildWorkflow.test.ts locks that order. Never in
+      # eas.json, for the same fork-quota reason as the Sentry export - this
+      # is dispatch-only and defaults to off.
+      - name: Export the crash-test flag
+        if: env.CRASH_TEST == 'true'
+        run: |
+          set -euo pipefail
+          echo "EXPO_PUBLIC_KANGENTIC_CRASHTEST=1" >> "$GITHUB_ENV"
+          echo "::notice::Crash-test rows are enabled in Settings for this build. Do not submit this artifact to a store track."
 
       - name: Resolve the build plan
         id: plan

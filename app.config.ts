@@ -88,6 +88,59 @@ const config: ExpoConfig = {
       NSPhotoLibraryUsageDescription:
         'Kangentic does not read or write your photos. This declaration is required because a file-access framework the app links references the Photos API.',
     },
+    // Declares what Sentry's SDK collects. React Native links sentry-cocoa
+    // statically, so Apple does NOT auto-process its manifest the way it
+    // would for a dynamically-linked framework - the app must declare this
+    // itself (Sentry's own apple-privacy-manifest guidance). This entry
+    // MERGES into whatever the Expo template already emits
+    // (@expo/config-plugins' withPrivacyInfo), it does not replace it; see
+    // the generated ios/Kangentic/PrivacyInfo.xcprivacy artifact CI now
+    // uploads (.github/workflows/ci.yml, native-config job).
+    //
+    // PROVISIONAL pending a real native crash payload. If that payload
+    // (task: "verify Sentry crash reporting") shows sentry-cocoa attaching
+    // a per-install identifier despite sendDefaultPii: false, this needs a
+    // fourth NSPrivacyCollectedDataTypeDeviceID entry and the App Store
+    // Connect / Play declarations in docs/store-listing.md change with it.
+    // Land that together, not as a follow-up - see crash-reporting-scope.md.
+    privacyManifests: {
+      NSPrivacyCollectedDataTypes: [
+        {
+          NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeCrashData',
+          NSPrivacyCollectedDataTypeLinked: false,
+          NSPrivacyCollectedDataTypeTracking: false,
+          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+        },
+        {
+          NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePerformanceData',
+          NSPrivacyCollectedDataTypeLinked: false,
+          NSPrivacyCollectedDataTypeTracking: false,
+          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+        },
+        {
+          NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeOtherDiagnosticData',
+          NSPrivacyCollectedDataTypeLinked: false,
+          NSPrivacyCollectedDataTypeTracking: false,
+          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+        },
+      ],
+      // Required-reason APIs the Sentry SDK calls with no opt-out. Reason
+      // codes per Sentry's documented guidance.
+      NSPrivacyAccessedAPITypes: [
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+          NSPrivacyAccessedAPITypeReasons: ['CA92.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime',
+          NSPrivacyAccessedAPITypeReasons: ['35F9.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+          NSPrivacyAccessedAPITypeReasons: ['C617.1'],
+        },
+      ],
+    },
   },
   android: {
     package: 'com.kangentic.mobile',
