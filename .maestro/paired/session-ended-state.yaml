@@ -13,10 +13,13 @@ appId: com.kangentic.mobile
     timeout: 60000
 - tapOn:
     id: "activity-row-stub-session-1"
+# 45s: the session screen mounts all three panes at once, terminal WebView
+# included. 20s held only on a warm emulator - see approve-permission, where
+# the identical value passed every warm run and failed every cold one.
 - extendedWaitUntil:
     visible:
       id: "session-screen"
-    timeout: 20000
+    timeout: 45000
 - tapOn:
     id: "session-mode-chat"
 - extendedWaitUntil:
