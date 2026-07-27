@@ -843,25 +843,22 @@ provisioning profile also expires on its own, on 2027-07-26; a build after that 
 archive with a signing error rather than anything that names expiry, so it is worth knowing in
 advance.
 
-**The upload key must be registered for Android developer verification.** Google auto-registered the
-`com.kangentic.mobile` package on 2026-07-26 because it is already on Play, but that covers only the
-Play distribution path, where the binary is signed by **Play App Signing** with Google's own key. Our
-`preview` and `e2e` APKs are signed with the **upload key** and sideloaded, which is distribution
-outside Play. From **September 2026**, a package name or key pair that is not registered will no
-longer install on certified Android devices.
+**Android developer verification: already satisfied, no action pending.** Google auto-registered the
+`com.kangentic.mobile` package on 2026-07-26 because it is already on Play, and confirmed it by email.
+Nothing is required.
 
-Register the upload key's SHA-256 on Play Console's Android developer verification page:
+The same email carries a conditional "what you need to do" section about registering additional
+signing keys and apps distributed **outside** Play, ahead of a September 2026 deadline. That is
+addressed to developers shipping through other stores or by direct download. This project does not:
+the only distribution channel is Play, and the `preview` and `e2e` APKs are sideloaded onto the
+maintainer's own devices and CI emulators, which is self-testing rather than distribution.
+
+Left here only so the next person reading that email does not re-derive it. If the project ever does
+distribute outside Play, the upload key's fingerprint would need registering, and it is read with:
 
 ```
 keytool -list -v -keystore <path to kangentic-upload.jks> -storepass <store password>
 ```
-
-Two notes on scope. CI's E2E emulator is unaffected, because it deliberately runs the **`default`**
-AOSP system image rather than `google_apis` (see the emulator finding above), and only *certified*
-devices enforce this. A physical Pixel is certified, so a sideloaded `preview` build there is exactly
-the case that breaks. And the `development` profile plus the no-keystore fallback both produce
-**debug-signed** APKs; whether Google treats the universal debug key as registerable is not documented
-either way, so do not assume a debug build keeps installing after the deadline.
 
 **Only the upload keystore is unrecoverable.** Everything else regenerates in minutes. GitHub
 secrets are write-only once set, so they are not a backup: the local copy is the only readable
