@@ -158,7 +158,13 @@ echo "Pairing URI captured."
 # bundle, so pm clear here is safe and the flow's own launchApp is enough.
 adb shell pm clear com.kangentic.mobile
 
-mkdir -p "$RUNNER_TEMP/maestro-output" "$RUNNER_TEMP/maestro-debug"
+# The bootstrap gets its OWN debug dir. Both runs pass
+# --flatten-debug-output, which deliberately drops the per-run timestamped
+# subfolder, so pointing both at one directory lets the suite's artifacts land
+# on top of the ceremony's - same class of mistake as uploading
+# --test-output-dir and not --debug-output, one layer up: the evidence is
+# present but you cannot tell which run produced it.
+mkdir -p "$RUNNER_TEMP/maestro-output" "$RUNNER_TEMP/maestro-debug" "$RUNNER_TEMP/maestro-debug-bootstrap"
 
 # Unlike scripts/dev.mjs's runPairingBootstrap (fire-and-forget, only warns
 # on failure), this MUST fail the job: a green bootstrap is the only proof
@@ -169,11 +175,11 @@ mkdir -p "$RUNNER_TEMP/maestro-output" "$RUNNER_TEMP/maestro-debug"
 echo "Running the pairing bootstrap..."
 if ! maestro test \
   -e "PAIRING_URI=$pairing_uri" \
-  --debug-output "$RUNNER_TEMP/maestro-debug" \
+  --debug-output "$RUNNER_TEMP/maestro-debug-bootstrap" \
   --flatten-debug-output \
   .maestro/setup/pairing-bootstrap.yaml; then
   echo "::error::Pairing bootstrap failed. Capturing diagnostics."
-  dump_failure_diagnostics "$RUNNER_TEMP/maestro-debug"
+  dump_failure_diagnostics "$RUNNER_TEMP/maestro-debug-bootstrap"
   echo "--- relay log ---"
   cat "$relay_log" || true
   echo "--- stub log ---"

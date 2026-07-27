@@ -398,7 +398,7 @@ jobs:
           # Must match the APK's ABI (scripts/androidAbis.mjs gives e2e x86_64).
           arch: x86_64
           # `default`, NOT `google_apis` - same reasoning as the smoke job
-          # below: Play Services starves this app during boot. None of the 11
+          # above: Play Services starves this app during boot. None of the 11
           # paired flows exercise remote push, so nothing here needs it. A
           # future flow that does should get its own matrix entry rather than
           # moving this one back.
@@ -417,6 +417,7 @@ jobs:
             ${{ runner.temp }}/maestro-report.xml
             ${{ runner.temp }}/maestro-output
             ${{ runner.temp }}/maestro-debug
+            ${{ runner.temp }}/maestro-debug-bootstrap
             ${{ runner.temp }}/relay.log
             ${{ runner.temp }}/stub.log
           retention-days: 7
