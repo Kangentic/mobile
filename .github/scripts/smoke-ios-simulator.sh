@@ -46,6 +46,12 @@ if [ -z "$device_id" ]; then
   exit 1
 fi
 
+# Published so a follow-on step (the Maestro flow) can drive the same booted
+# simulator instead of provisioning a second one.
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  echo "device-id=$device_id" >> "$GITHUB_OUTPUT"
+fi
+
 echo "Booting simulator $device_id"
 # Already-booted is success, not failure: the runner image may have one running.
 xcrun simctl boot "$device_id" || true
@@ -103,4 +109,11 @@ fi
 xcrun simctl io "$device_id" screenshot "$screenshot_path"
 echo "Wrote a screenshot to $screenshot_path"
 
-xcrun simctl shutdown "$device_id" || true
+# Left booted when a Maestro flow is going to drive this same simulator next.
+# Booting one takes over a minute, so tearing it down here only to boot another
+# would be pure waste.
+if [ -n "${KEEP_SIMULATOR_BOOTED:-}" ]; then
+  echo "Leaving the simulator booted for the next step."
+else
+  xcrun simctl shutdown "$device_id" || true
+fi
