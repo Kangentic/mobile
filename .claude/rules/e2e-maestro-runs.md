@@ -90,8 +90,11 @@ alike, and succeeds the instant it is backgrounded. Maestro therefore falls back
 hierarchy" aiming before every tap. This is the single largest drag on suite runtime and it
 caused at least one real failure (the delete confirmation expiring between two taps). The cause
 is NOT an obvious animation loop - there is no `Animated.loop` or infinite `withRepeat(..., -1)`
-in `src/` - and it is unresolved. Treat a mysteriously slow flow as a symptom of this before
-assuming the flow is wrong.
+in `src/`. Treat a mysteriously slow flow as a symptom of this before assuming the flow is wrong.
+
+**Leading suspect is the emulator image, not the app.** The local AVD runs `google_apis`, and
+that image is already on record starving this app in CI - where it failed 3 of 4 runs and looked
+exactly like an app bug. Test a `default`-image AVD before hunting in `src/`.
 
 ## Enforcement (self-maintaining)
 
