@@ -450,9 +450,19 @@ mode, because Play only rejects it after a human has spent the upload.
 | `target` | `simulator` (default) is the unsigned compile check, needs no secrets. `device` archives, signs, and exports an `.ipa`. `both` runs the two jobs in parallel. |
 | `submit` | `none` (default) keeps the `.ipa` as a run artifact. `testflight` uploads it to App Store Connect. |
 
-The two jobs are deliberately independent rather than one matrix. The simulator check needs no Apple
-account, so it is the only iOS signal available when a certificate has expired or a profile has been
-revoked, and a signing problem must not be able to take it down too.
+The two build jobs are deliberately independent rather than one matrix. The simulator check needs no
+Apple account, so it is the only iOS signal available when a certificate has expired or a profile has
+been revoked, and a signing problem must not be able to take it down too.
+
+**The upload is a third job behind an approval gate**, mirroring the Play submit path:
+`submit-testflight` is bound to the `app-store-connect` GitHub Environment, which requires a
+reviewer, and it re-verifies the `.ipa` it downloads rather than trusting the build job. Splitting it
+also makes an Apple-side failure cheap: re-running that one job retries the upload against the
+already-verified artifact, with no rebuild and no new build number.
+
+If that environment is ever deleted, **recreate it with a required reviewer before dispatching**.
+GitHub silently auto-creates a missing environment with no protection rules, which would turn the
+gate into a no-op without any error.
 
 **The signed path never touches Expo, and that is the point.** `eas submit` uploads through Expo's
 own servers, so an EAS Submit outage blocks a release even when Apple is healthy. That is not

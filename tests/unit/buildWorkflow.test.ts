@@ -206,18 +206,23 @@ describe('build-ios workflow', () => {
     expect(preflightIndex).toBeLessThan(archiveIndex);
   });
 
-  it('verifies the .ipa signature before uploading to Apple', () => {
+  it('verifies the .ipa signature in both the build and the submit job', () => {
+    // The submit job re-verifies what it downloaded rather than trusting the
+    // build job. Same reasoning as the Android submit path, which caught a bad
+    // artifact twice.
+    const occurrences = iosWorkflowSource.split('verify-ios-signature.sh').length - 1;
+    expect(occurrences).toBeGreaterThanOrEqual(2);
+
     const verifyIndex = iosWorkflowSource.indexOf('verify-ios-signature.sh');
     const uploadIndex = iosWorkflowSource.indexOf('upload-ios-testflight.sh');
-    expect(verifyIndex).toBeGreaterThan(-1);
     expect(uploadIndex).toBeGreaterThan(-1);
     expect(verifyIndex).toBeLessThan(uploadIndex);
   });
 
   it('stores the artifact before attempting the upload', () => {
-    // So an Apple-side failure leaves a verified .ipa that can be retried
-    // without a rebuild. This is not hypothetical: the first attempt to submit
-    // this app hit an App Store Connect outage.
+    // So an Apple-side failure leaves a verified .ipa that can be retried by
+    // re-running the submit job alone. Not hypothetical: the first attempt to
+    // submit this app hit an App Store Connect outage.
     const artifactIndex = iosWorkflowSource.indexOf('actions/upload-artifact@v4');
     const uploadIndex = iosWorkflowSource.indexOf('upload-ios-testflight.sh');
     expect(artifactIndex).toBeGreaterThan(-1);
@@ -226,6 +231,21 @@ describe('build-ios workflow', () => {
 
   it('never uploads to Apple unless the dispatch asked for it', () => {
     expect(iosWorkflowSource).toContain("if: inputs.submit == 'testflight'");
+  });
+
+  it('puts the upload behind a protected environment, like the Play submit', () => {
+    // An upload reaches people outside this machine, so it takes a human
+    // approval rather than a dispatch input alone.
+    expect(iosWorkflowSource).toContain('environment: app-store-connect');
+    expect(iosWorkflowSource).toMatch(/^ {2}submit-testflight:$/m);
+  });
+
+  it('uploads from a macOS runner, since altool is the uploader', () => {
+    // A cheaper ubuntu runner has no xcrun, and the failure would be an opaque
+    // "command not found" after the artifact download.
+    const submitJobIndex = iosWorkflowSource.indexOf('submit-testflight:');
+    const submitJob = iosWorkflowSource.slice(submitJobIndex);
+    expect(submitJob).toContain('runs-on: macos-latest');
   });
 
   it('derives the team id and profile from the profile, never a literal', () => {
