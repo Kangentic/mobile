@@ -1,5 +1,5 @@
 import notifee, { AndroidForegroundServiceType } from '@notifee/react-native';
-import { CONNECTION_CHANNEL_ID } from './channels';
+import { ANDROID_NOTIFICATION_PRESENTATION, CONNECTION_CHANNEL_ID } from './channels';
 
 /**
  * The Android "stay connected" foreground service: a LOW-importance
@@ -39,6 +39,7 @@ export async function startConnectedForegroundService(): Promise<void> {
     title: 'Connected to your desktop',
     body: 'Keeping the secure channel alive for instant alerts.',
     android: {
+      ...ANDROID_NOTIFICATION_PRESENTATION,
       channelId: CONNECTION_CHANNEL_ID,
       asForegroundService: true,
       ongoing: true,

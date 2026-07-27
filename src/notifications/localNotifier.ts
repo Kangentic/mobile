@@ -5,6 +5,7 @@ import { useActivityStore, type SessionActivityEntry } from '@/state/activitySto
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { channelIdForCategory, titleForCategory } from './categoryCopy';
+import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
 
 /**
  * The foreground-service mode's local alerting: while the app is
@@ -77,6 +78,7 @@ export function startLocalNotifier(): () => void {
         body: resolveTaskTitle(entry),
         data: { taskId: entry.taskId, projectId: entry.projectId, sessionId: entry.sessionId },
         android: {
+          ...ANDROID_NOTIFICATION_PRESENTATION,
           channelId: channelIdForCategory(category),
           pressAction: { id: 'default', launchActivity: 'default' },
         },

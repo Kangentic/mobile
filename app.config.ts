@@ -11,6 +11,13 @@ import type { ExpoConfig } from 'expo/config';
  */
 const BRAND_BACKGROUND_COLOR = '#0f0d0a';
 
+/**
+ * Mirror of brandTokens.rust (src/components/theme/tokens.ts). Same inlining
+ * constraint as BRAND_BACKGROUND_COLOR above; tests/unit/appConfigBrand.test.ts
+ * asserts this stays equal to the token.
+ */
+const BRAND_NOTIFICATION_COLOR = '#c0562f';
+
 const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
@@ -25,6 +32,16 @@ const config: ExpoConfig = {
   ios: {
     bundleIdentifier: 'com.kangentic.mobile',
     supportsTablet: false,
+    // All three appearances are explicit because prebuild resolves the base
+    // (light) icon as `light || dark || tinted`, falling back to the
+    // top-level `icon` string only when the object carries none of the three.
+    // A dark-only object would therefore ship the DARK mark as the light
+    // icon, silently, rather than inheriting `icon` above.
+    icon: {
+      light: './assets/brand/icon.png',
+      dark: './assets/brand/icon-dark.png',
+      tinted: './assets/brand/icon-tinted.png',
+    },
     // Hand-bumped, like android.versionCode below; see the iOS without a Mac
     // section of docs/developer-guide.md. Required because
     // cli.appVersionSource is "local", which is CLI-wide and not Android-only.
@@ -86,6 +103,7 @@ const config: ExpoConfig = {
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
+      monochromeImage: './assets/brand/adaptive-icon-monochrome.png',
     },
     // FCM config for remote push, picked up only once the developer drops
     // google-services.json at the repo root (gitignored; see the Firebase
@@ -118,11 +136,14 @@ const config: ExpoConfig = {
     [
       'expo-notifications',
       {
-        // The small status-bar icon must be a white-on-transparent asset;
-        // the adaptive foreground doubles as a serviceable v1 (the OS masks
-        // and tints it). Revisit with a dedicated mono glyph later.
-        icon: './assets/brand/adaptive-icon-foreground.png',
-        color: BRAND_BACKGROUND_COLOR,
+        // Generates the `notification_icon` drawable and
+        // `notification_icon_color` colour resource. Notifee - what actually
+        // displays every notification in this app - ignores this plugin's
+        // manifest meta-data and defaults its own smallIcon/color, so
+        // src/notifications/channels.ts references these resources by name
+        // explicitly at every displayNotification call site.
+        icon: './assets/brand/notification-icon.png',
+        color: BRAND_NOTIFICATION_COLOR,
       },
     ],
     [

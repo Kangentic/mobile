@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import notifee from '@notifee/react-native';
-import { NEEDS_ATTENTION_CHANNEL_ID, channelIdForCategory } from './channels';
+import { ANDROID_NOTIFICATION_PRESENTATION, NEEDS_ATTENTION_CHANNEL_ID, channelIdForCategory } from './channels';
 import { PUSH_PLACEHOLDER_BODY, PUSH_PLACEHOLDER_TITLE, decryptPushBlob } from './pushDecrypt';
 
 /**
@@ -46,6 +46,7 @@ async function displayDecryptedOrPlaceholder(blob: string | null): Promise<void>
       body: decrypted.body,
       data: decrypted.data,
       android: {
+        ...ANDROID_NOTIFICATION_PRESENTATION,
         channelId: channelIdForCategory(decrypted.category),
         pressAction: { id: 'default', launchActivity: 'default' },
       },
@@ -56,6 +57,7 @@ async function displayDecryptedOrPlaceholder(blob: string | null): Promise<void>
     title: PUSH_PLACEHOLDER_TITLE,
     body: PUSH_PLACEHOLDER_BODY,
     android: {
+      ...ANDROID_NOTIFICATION_PRESENTATION,
       channelId: NEEDS_ATTENTION_CHANNEL_ID,
       pressAction: { id: 'default', launchActivity: 'default' },
     },

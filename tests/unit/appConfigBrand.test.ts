@@ -5,16 +5,24 @@
  * config inlines the background hex; this test is the mechanical guard that
  * keeps the inline value equal to the token.
  */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { ExpoConfig } from 'expo/config';
 import appConfig from '../../app.config';
-import { darkTerminalTheme } from '@/components/theme/tokens';
+import { brandTokens, darkTerminalTheme } from '@/components/theme/tokens';
 
 interface AndroidBuildProperties {
   usesCleartextTraffic?: boolean;
   extraMavenRepos?: string[];
+}
+
+interface NotificationPluginOptions {
+  icon?: string;
+  color?: string;
+}
+
+interface SplashScreenPluginOptions {
+  image?: string;
+  backgroundColor?: string;
 }
 
 /**
@@ -36,13 +44,23 @@ async function loadAppConfigWithE2eFlag(flagValue: string | undefined): Promise<
   }
 }
 
-function androidBuildProperties(config: ExpoConfig): AndroidBuildProperties {
+/**
+ * Options of a plugin entry in the CONFIGURED (`[name, options]` tuple) form.
+ * A bare-string entry does not match, so it throws the same not-found error a
+ * missing plugin does: either way a test asserting on options fails loudly
+ * rather than passing vacuously against `{}`.
+ */
+function pluginOptions<Options>(config: ExpoConfig, pluginName: string): Options {
   for (const plugin of config.plugins ?? []) {
-    if (!Array.isArray(plugin) || plugin[0] !== 'expo-build-properties') continue;
-    const options = plugin[1] as { android?: AndroidBuildProperties } | undefined;
-    return options?.android ?? {};
+    if (!Array.isArray(plugin) || plugin[0] !== pluginName) continue;
+    return (plugin[1] ?? {}) as Options;
   }
-  throw new Error('expo-build-properties plugin entry not found in app.config.ts');
+  throw new Error(`${pluginName} plugin entry not found (or not in tuple form) in app.config.ts`);
+}
+
+function androidBuildProperties(config: ExpoConfig): AndroidBuildProperties {
+  const options = pluginOptions<{ android?: AndroidBuildProperties }>(config, 'expo-build-properties');
+  return options.android ?? {};
 }
 
 describe('app.config.ts brand parity', () => {
@@ -54,15 +72,32 @@ describe('app.config.ts brand parity', () => {
     expect(appConfig.icon).toBe('./assets/brand/icon.png');
     expect(appConfig.android?.adaptiveIcon?.foregroundImage).toBe('./assets/brand/adaptive-icon-foreground.png');
     expect(appConfig.android?.adaptiveIcon?.backgroundImage).toBe('./assets/brand/adaptive-icon-background.png');
+    expect(appConfig.android?.adaptiveIcon?.monochromeImage).toBe('./assets/brand/adaptive-icon-monochrome.png');
   });
 
-  it('keeps the ready-to-uncomment expo-splash-screen plugin block staged in the source', () => {
-    // The plugin entry cannot be live until the Stage 0 native batch installs
-    // expo-splash-screen (an unresolvable plugin fails config evaluation), so
-    // it is staged as a comment; this guards against the block being dropped.
-    const configSource = readFileSync(fileURLToPath(new URL('../../app.config.ts', import.meta.url)), 'utf8');
-    expect(configSource).toContain("'expo-splash-screen'");
-    expect(configSource).toContain('./assets/brand/splash-icon.png');
+  it('points the iOS light/dark/tinted icons at the synced brand assets', () => {
+    const iosIcon = appConfig.ios?.icon;
+    expect(typeof iosIcon).toBe('object');
+    expect(iosIcon).toEqual({
+      light: './assets/brand/icon.png',
+      dark: './assets/brand/icon-dark.png',
+      tinted: './assets/brand/icon-tinted.png',
+    });
+  });
+
+  it('points the expo-notifications plugin at the dedicated mono icon, tinted rust', () => {
+    const options = pluginOptions<NotificationPluginOptions>(appConfig, 'expo-notifications');
+    expect(options.icon).toBe('./assets/brand/notification-icon.png');
+    expect(options.color).toBe(brandTokens.rust);
+  });
+
+  // Asserted through the evaluated config, not a source string match: the
+  // plugin is live now, and a readFileSync/toContain check would pass just as
+  // happily if the block were commented back out.
+  it('keeps the expo-splash-screen plugin block pointed at the synced splash mark', () => {
+    const options = pluginOptions<SplashScreenPluginOptions>(appConfig, 'expo-splash-screen');
+    expect(options.image).toBe('./assets/brand/splash-icon.png');
+    expect(options.backgroundColor).toBe(darkTerminalTheme.colors.background);
   });
 });
 

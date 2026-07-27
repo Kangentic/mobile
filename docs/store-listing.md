@@ -1,8 +1,14 @@
 # Store listing copy
 
 Draft copy for the Play Console (and later App Store) listing. Placeholder-grade but real text,
-ready to paste. This file is text only; screenshots, the icon, and the feature graphic are still
-to be produced and are not tracked here.
+ready to paste. This file is text only; screenshots are still to be produced and are not tracked
+here. The two Play Console image uploads are already produced, by `@kangentic/branding`, and are
+not bundled into the app - upload them by hand from
+`node_modules/@kangentic/branding/resources/mobile/`:
+
+- `android-playstore-512.png` - the store listing icon.
+- `android-feature-graphic-1024x500.png` - the feature graphic, required by Google Play for
+  every track beyond internal testing.
 
 ## App title
 

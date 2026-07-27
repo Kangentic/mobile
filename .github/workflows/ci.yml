@@ -68,6 +68,11 @@ jobs:
       - uses: ./.github/actions/setup-node-deps
       - name: Lint (ESLint)
         run: npm run lint
+      # syncBranding.mjs's outputs (assets/brand/*, src/brand/*.generated.ts)
+      # previously had no automated check anywhere, despite the script's own
+      # header once claiming this ran inside /pull-request. This is that check.
+      - name: Brand assets in sync
+        run: npm run sync:branding:check
 
   typecheck:
     name: Type check (tsc)

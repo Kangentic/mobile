@@ -314,7 +314,7 @@ Three workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
-| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint, typecheck, sharded unit and component tiers, native config |
+| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus a `sync:branding:check` step for brand-asset drift), typecheck, sharded unit and component tiers, native config |
 | `e2e.yml` | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs Maestro on an emulator |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
 | `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload |
