@@ -112,9 +112,16 @@ describe('scripts/dev.mjs never derives a kill target from a command line', () =
   });
 
   it('kills only pids that came from the registry', () => {
-    // Every taskkill/process.kill target in the rig must be a recorded child
-    // (record.pid), this run's own child (child.pid), or adb.exe by image
-    // name. A pid from any other source is the bug this test exists for.
+    // Every taskkill target must be a recorded child (record.pid) or this
+    // run's own child (child.pid). A pid from any other source is the bug this
+    // test exists for.
+    //
+    // ONE deliberate exemption: `taskkill /IM adb.exe /F` in `adb` mode. adb
+    // is a single shared server by design - one process the whole machine
+    // talks to - so there is no "ours" to record, and `adb kill-server` hangs
+    // against the wedged server that mode exists to recover. It is kill-by-
+    // name, and it is allowed because the target is a named singleton service,
+    // not a guess about which of many processes might be ours.
     const killTargets = [...devRig.matchAll(/taskkill',\s*\[([^\]]*)\]/g)].map((match) => match[1]);
     expect(killTargets.length).toBeGreaterThan(0);
     for (const target of killTargets) {

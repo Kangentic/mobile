@@ -1266,9 +1266,14 @@ async function doctor({ relayRepo, avdName, requestedSerial }) {
   // The old machine-wide command-line scan counted the npx wrapper twice and
   // needed a filter for it; a record is one child, so nothing to un-double.
   const liveRecords = readProcessRegistry().filter(({ record }) => decideRecordAction(record, processIdentity(record.pid)).action === 'kill');
-  const stubCount = liveRecords.filter(({ record }) => record.label.startsWith('stub')).length;
+  // Sharded stubs (labels stub0, stub1, ...) each get their own --identity-file
+  // and therefore their own relay slot and emulator, so N of them is the point
+  // of --shard, not a collision. Only the unsharded 'stub' can be doubled.
+  const stubCount = liveRecords.filter(({ record }) => record.label === 'stub').length;
+  const shardedStubCount = liveRecords.filter(({ record }) => /^stub\d+$/.test(record.label)).length;
   const metroCount = liveRecords.filter(({ record }) => record.label === 'metro').length;
   add(stubCount <= 1, `rig stub peers running: ${stubCount}`, 'more than one stub dials the same relay slot and they steal the session from each other - run: npm run dev:stop');
+  if (shardedStubCount > 0) add(true, `sharded stub peers running: ${shardedStubCount} (one per shard, each on its own relay slot)`);
   add(metroCount <= 1, `rig Metro bundlers running: ${metroCount}`, `more than one bundler wants port ${METRO_PORT}; the loser serves nothing - run: npm run dev:stop`);
 
   // The registry cannot see a Metro someone started by hand, and the rig no
