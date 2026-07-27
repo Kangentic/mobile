@@ -1548,6 +1548,18 @@ async function main() {
     if (flags.pair) void runPairingBootstrap(process.env.ANDROID_SERIAL ?? '');
   }
 
+  // A bundle built by live mode carries EXPO_PUBLIC_KANGENTIC_DEV_PAIRING
+  // INLINED (bundle time, not runtime), which auto-links the app to the
+  // desktop. Serving that bundle in any other mode is not just stale, it
+  // silently defeats what the mode exists to test: pair mode would link
+  // instantly and the QR/SAS ceremony would never run, reporting a pass for a
+  // ceremony nobody performed. Force one clean cache when switching away.
+  const inheritsQuickPairBundle = mode !== 'live' && Boolean(loadState().lastQuickPairEnv);
+  if (inheritsQuickPairBundle) {
+    log('the last run inlined the dev quick-pair identity; clearing the Metro cache so it cannot leak into this mode');
+    saveState({ lastQuickPairEnv: null });
+  }
+
   if (mode === 'live') {
     const quickPairEnv = await prepareQuickPair(kangenticRepo);
     if (quickPairEnv) {
@@ -1559,14 +1571,14 @@ async function main() {
       startMetro({ ...flags, clear: flags.clear || changed || protocolRelinked }, { EXPO_PUBLIC_KANGENTIC_DEV_PAIRING: quickPairEnv });
     } else {
       printLiveChecklist();
-      startMetro({ ...flags, clear: flags.clear || protocolRelinked });
+      startMetro({ ...flags, clear: flags.clear || protocolRelinked || inheritsQuickPairBundle });
     }
   } else if (mode === 'mock') {
     log('mock mode: in-app fake desktop, no relay or pairing involved');
     log('(switching mock on/off later needs a Metro restart with --clear: the flag is inlined at bundle time)');
-    startMetro({ ...flags, clear: flags.clear || protocolRelinked }, { EXPO_PUBLIC_KANGENTIC_MOCK: '1' });
+    startMetro({ ...flags, clear: flags.clear || protocolRelinked || inheritsQuickPairBundle }, { EXPO_PUBLIC_KANGENTIC_MOCK: '1' });
   } else {
-    startMetro({ ...flags, clear: flags.clear || protocolRelinked });
+    startMetro({ ...flags, clear: flags.clear || protocolRelinked || inheritsQuickPairBundle });
   }
 
   // Sharding (stub mode): boot and pair the extra instances AFTER Metro is

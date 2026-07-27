@@ -46,23 +46,27 @@ relay at `ws://127.0.0.1:8080` via USB `adb reverse`.
 
 ## NOT verified, and why
 
-- **iOS: nothing.** This app has never been compiled for iOS. There is no Mac, and an iOS build
-  is a cloud build the maintainer declined on cost grounds. Every iOS statement in this branch is
-  reasoning, not evidence. Component choice does not substitute: React Native primitives already
-  render native iOS views, so the open risks are elsewhere. The largest is the terminal, which is
-  a `WKWebView` running xterm.js with WebGL and entirely untested there. Notifications are
-  Android-only by design (`src/notifications/index.ts` returns early off Android; the iOS
-  Notification Service Extension is a later phase).
+- **iOS: builds, launches, and renders - nothing beyond that.** Since this section was first
+  written, iOS went from never-compiled to compiling, signing, and uploading on a free GitHub
+  Actions macOS runner, and it has been seen launching and rendering in a simulator (screenshot
+  evidence). What that does NOT cover is every iOS-specific runtime risk that matters here. The
+  largest is the terminal, a `WKWebView` running xterm.js with WebGL, still entirely untested on
+  the platform. Notifications remain Android-only by design (`src/notifications/index.ts` returns
+  early off Android; the iOS Notification Service Extension is a later phase). No iOS device has
+  ever paired, connected to a relay, or rendered a real session.
 - **`expo-router/unstable-native-tabs`** carries a vendor warning that its API may change in a
   minor version. Adopted deliberately for iOS native feel.
 - **Remote push** end to end, which needs FCM credentials and a real push round trip.
-- **The completed-task feature's desktop half.** The Done column, its empty state, and the
-  graceful degradation against a pre-0.10.0 desktop are verified on the Pixel. Everything that
-  needs the new bridge is NOT: no real completed task has been fetched, no session summary
-  rendered, and no archived transcript read. That last one is the load-bearing claim - a
-  finished conversation is most of why the screen exists - and it rests on reasoning about
-  `resolveTaskTranscript` reading from disk, not on having seen it work. Verifying it needs a
-  desktop restart, and the desktop is the app running these sessions.
+- **The production pairing ceremony over the HOSTED relay.** The phone reaching
+  `wss://relay.kangentic.com` is verified, but through the dev-only quick-pair path
+  (`src/connection/devPairing.ts`), which is compiled out of production builds. The real path
+  every user takes - desktop QR, camera scan, SAS confirm, over `wss://` rather than a loopback
+  `adb reverse` - has only ever run against the local dev relay. It is also newly load-bearing:
+  the relay-address validation was hardened in this branch and the QR now carries a public host
+  instead of loopback.
+- **Network transitions.** Wifi to cellular handover, a long background, and phone-sleep
+  reconnect have never been exercised against the hosted relay; all live testing so far kept the
+  phone on USB.
 
 ## Fixed in this branch, worth knowing about
 
@@ -118,6 +122,21 @@ nothing triggering the FIRST transcript fetch for a never-subscribed session, an
 `transcriptStore.applyWindow` silently discarding any window whose session is not retained. That
 last one is worth remembering: the desktop returned all 418 entries and the phone binned them,
 which is indistinguishable from a desktop that returned nothing.
+
+## Verified against the HOSTED relay
+
+The Pixel talking to the desktop over `wss://relay.kangentic.com`: session established three
+times across restarts, a full board (15 projects) read over the wss channel, and the connection
+holding across a rekey. This is the first evidence for anything off loopback - real TLS, real
+latency, and the relay-address rules that the `ws://10.0.2.2` dev carve-out bypasses. Reached
+via quick-pair, so the CEREMONY over that path remains unverified (see "NOT verified").
+
+`rekeyCount` reading 0 was what exposed a defect in the gauge, not in the rekey. It was
+incremented inside `markEstablished`, guarded on the session already being established - but
+`markEstablished` only ever runs from `onEstablished`, which by design never re-fires on a rekey,
+and a transport drop clears the flag before the next handshake. Both paths missed, so it read 0
+forever and looked exactly like a re-handshake that never happened. `SessionManager.onRekey` now
+carries the signal; it reached 1 over the hosted relay with the session intact.
 
 ## Protocol 0.10.0, 0.11.0 and 0.11.1 (published)
 
