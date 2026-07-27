@@ -141,6 +141,8 @@ src/
   state/           # Zustand stores (activity/board/transcript/diff/channel/settings) +
                   #   the non-Zustand terminalFeed PTY ring buffers
   voice/           # Dictation hook over the OS speech engines
+  observability/   # Sentry crash reporting: the ONLY module allowed to import the SDK, plus
+                  #   the pure event/breadcrumb scrubber (lint-enforced, crash-reporting-scope.md)
   lib/             # Shared pure utilities (crypto polyfills)
 ```
 

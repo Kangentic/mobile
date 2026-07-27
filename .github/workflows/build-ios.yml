@@ -247,6 +247,10 @@ jobs:
       # incident. An app-specific password comes from appleid.apple.com, a
       # different service, so it stays available when ASC does not.
       HAS_ASC_API_KEY: ${{ secrets.ASC_API_KEY_BASE64 != '' && secrets.ASC_KEY_ID != '' && secrets.ASC_ISSUER_ID != '' }}
+      # DSN is a repository VARIABLE, not a secret: it ships in the public app
+      # bundle, and a variable can be read back to confirm which project a
+      # build reports to. Same rationale as build-android.yml.
+      HAS_SENTRY: ${{ secrets.SENTRY_AUTH_TOKEN != '' && vars.SENTRY_DSN != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -308,6 +312,33 @@ jobs:
             echo "KANGENTIC_IOS_PROFILE_UUID=$PROFILE_UUID"
             echo "KANGENTIC_IOS_SIGNING_IDENTITY=$SIGNING_IDENTITY"
           } >> "$GITHUB_ENV"
+
+      # Same pre-prebuild requirement, and the same reason it is a secret
+      # rather than an eas.json entry, as build-android.yml: app.config.ts
+      # reads SENTRY_AUTH_TOKEN at config-evaluation time to decide whether
+      # to add the Sentry plugin, and a DSN committed to a public repo would
+      # route every fork's crashes into this project's free-tier quota.
+      - name: Export the Sentry build env
+        if: env.HAS_SENTRY == 'true'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          # Token masked (it can upload releases); DSN deliberately not, since
+          # it ships in the published bundle and a legible value makes this log
+          # answer "which project did this build report to?".
+          echo "::add-mask::$SENTRY_AUTH_TOKEN"
+          {
+            echo "SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN"
+            echo "EXPO_PUBLIC_SENTRY_DSN=$SENTRY_DSN"
+          } >> "$GITHUB_ENV"
+          echo "Sentry is enabled for this build: dSYMs and source maps upload, crash reporting is active."
+          echo "Reporting to: $SENTRY_DSN"
+
+      - name: Note when Sentry is not configured
+        if: env.HAS_SENTRY != 'true'
+        run: echo "::notice::SENTRY_AUTH_TOKEN/SENTRY_DSN are not both set. This build ships with crash reporting inert and uploads no symbols."
 
       - name: Generate the native iOS project
         run: npx expo prebuild --platform ios --no-install

@@ -174,6 +174,25 @@ const config: ExpoConfig = {
     // .github/workflows/build-ios.yml does. See the plugin for why signing has
     // to be scoped to the app target instead of passed to xcodebuild.
     './plugins/withIosManualSigning.ts',
+    // Source-map + debug-symbol upload only, gated on SENTRY_AUTH_TOKEN. The
+    // plugin entry is omitted entirely rather than passed empty options: an
+    // absent auth token must not make the plugin run and fail (or silently
+    // no-op) inside ci.yml's Native config (expo prebuild) job, which
+    // prebuilds both platforms with zero secrets. Crash reporting itself is
+    // gated separately (EXPO_PUBLIC_SENTRY_DSN, read at runtime in
+    // src/observability/crashReporting.ts) - this only controls whether a
+    // build uploads symbols, see docs/security.md.
+    ...(process.env.SENTRY_AUTH_TOKEN
+      ? ([
+          [
+            '@sentry/react-native/expo',
+            {
+              organization: 'kangentic',
+              project: 'react-native',
+            },
+          ],
+        ] satisfies NonNullable<ExpoConfig['plugins']>)
+      : []),
     [
       'expo-camera',
       {

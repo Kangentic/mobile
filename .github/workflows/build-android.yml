@@ -127,6 +127,12 @@ jobs:
       # resolved once here as a plain boolean and the steps branch on that.
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
       HAS_GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
+      # The DSN is a repository VARIABLE, not a secret, and deliberately so: it
+      # ships inside the public app bundle, so it is not confidential, and a
+      # variable can be read back (`gh variable list`) to confirm which Sentry
+      # project a build is wired to. A secret cannot, which would leave a
+      # mistyped DSN undetectable - builds would report nowhere and look fine.
+      HAS_SENTRY: ${{ secrets.SENTRY_AUTH_TOKEN != '' && vars.SENTRY_DSN != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +159,41 @@ jobs:
       # merely before Gradle. tests/unit/buildWorkflow.test.ts locks that order.
       - name: Export the profile env from eas.json
         run: node scripts/easProfile.mjs "$BUILD_PROFILE" --github-env
+
+      # Crash reporting is the one build-time value that CANNOT live in
+      # eas.json: that file is committed to a public repo, and a DSN baked
+      # into a fork's build would send that fork's crashes into this
+      # project's (free-tier, 5k/month) Sentry project. That is a quota and
+      # noise concern, NOT confidentiality - see the HAS_SENTRY comment.
+      # Everything stays inert without these: no DSN means
+      # src/observability/crashReporting.ts never calls Sentry.init(), and no
+      # auth token means app.config.ts omits the Sentry plugin entirely.
+      #
+      # Must precede prebuild for the same reason the eas.json export does:
+      # app.config.ts reads SENTRY_AUTH_TOKEN at config-evaluation time to
+      # decide whether to add the plugin, and GITHUB_ENV only affects LATER
+      # steps. tests/unit/buildWorkflow.test.ts locks that order.
+      - name: Export the Sentry build env
+        if: env.HAS_SENTRY == 'true'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          # The token is a real secret (it can upload releases), so mask it in
+          # case a later tool echoes it. The DSN is deliberately NOT masked:
+          # it ships in the published app bundle, so it is already public, and
+          # leaving it legible lets this log answer "which Sentry project did
+          # this build report to?" without guessing.
+          echo "::add-mask::$SENTRY_AUTH_TOKEN"
+          echo "SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN" >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_SENTRY_DSN=$SENTRY_DSN" >> "$GITHUB_ENV"
+          echo "Sentry is enabled for this build: source maps upload and crash reporting is active."
+          echo "Reporting to: $SENTRY_DSN"
+
+      - name: Note when Sentry is not configured
+        if: env.HAS_SENTRY != 'true'
+        run: echo "::notice::SENTRY_AUTH_TOKEN/SENTRY_DSN are not both set. This build ships with crash reporting inert and uploads no source maps."
 
       - name: Resolve the build plan
         id: plan

@@ -18,6 +18,10 @@
         "--only",
         "core,messaging"
       ]
+    },
+    "sentry": {
+      "type": "http",
+      "url": "https://mcp.sentry.dev/mcp/kangentic/react-native"
     }
   }
 }

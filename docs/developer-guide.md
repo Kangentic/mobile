@@ -146,11 +146,17 @@ scale was wrong, which no RN-side probe could see.
 ## Agent tooling (MCP servers)
 
 Agent sessions in this repo get MCP tools from two different mechanisms. `.mcp.json` wires three
-servers: `context7` (library documentation lookup, no setup needed), `maestro` (the Maestro CLI's
-built-in `maestro mcp` server), and `firebase` (the Firebase CLI's built-in `firebase mcp`
-server). Separately, `.claude/settings.json`'s `enabledPlugins` turns on the official Expo plugin,
-enabled in this repo only. `maestro`, `firebase`, and the Expo plugin each need one-time setup on
-a fresh clone.
+servers: `context7` (library documentation lookup, no setup needed), `firebase` (the Firebase
+CLI's built-in `firebase mcp` server), and `sentry` (a remote HTTP server at
+`https://mcp.sentry.dev/mcp/kangentic/react-native`, scoped to the one project rather than the
+org so it brings fewer discovery tools into context; needs a one-time OAuth via `/mcp`).
+Separately, `.claude/settings.json`'s `enabledPlugins` turns on the official Expo plugin, enabled
+in this repo only. `firebase`, `sentry`, and the Expo plugin each need one-time setup on a fresh
+clone.
+
+The `maestro` MCP server was removed deliberately on 2026-07-25 and is not in `.mcp.json`; drive
+Maestro through the CLI instead. See `CLAUDE.md`'s MCP section for the reasoning and for which
+tools on each server are gated behind an explicit user request.
 
 - **Maestro CLI on PATH.** `.mcp.json` starts the server with `cmd /c maestro mcp`, resolved via
   PATH deliberately rather than an absolute path (an absolute path would violate
@@ -263,6 +269,8 @@ src/
   notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
   state/          # Zustand stores + the non-Zustand terminalFeed PTY ring buffers
   voice/          # Dictation hook over the OS speech engines
+  observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
+                  #   pure event/breadcrumb scrubber (see crash-reporting-scope.md)
   lib/            # Shared pure utilities (crypto polyfills)
 tests/unit/       # vitest
 tests/components/ # Jest + RNTL
@@ -490,6 +498,15 @@ smoke build and says so.
 | `ASC_ISSUER_ID` | same | the team's issuer UUID |
 | `APPLE_ID` | fallback upload auth | the Apple ID email |
 | `APPLE_APP_SPECIFIC_PASSWORD` | same | generated at appleid.apple.com |
+| `SENTRY_AUTH_TOKEN` | de-minified stack traces | a Sentry org auth token |
+
+Plus one repository **variable**, `SENTRY_DSN` (crash reporting at runtime; from the Sentry
+project's Client Keys page). It is a variable rather than a secret on purpose - it ships in the
+published bundle, so it is not confidential, and a variable can be read back to verify which
+project a build is wired to. Both are optional and gated together on a job-level `HAS_SENTRY`:
+without both, the build ships with crash reporting inert and uploads no symbols, and says so in
+the log. They are the only build-time env deliberately kept out of `eas.json` - see the Crash
+reporting section for why.
 
 The iOS secrets are optional in the same way: with none of them, dispatch with `target=simulator`
 for the unsigned check. A `device` build fails immediately and says which secret is missing, rather
@@ -956,6 +973,65 @@ Expo Push itself is free: no per-notification charge, no paid plan requirement, 
 Until all of this exists, `build-android.yml` emits a warning on every run and the resulting
 binary cannot receive remote notifications.
 
+## Crash reporting (Sentry)
+
+Like Firebase above, this is optional infrastructure that degrades to inert rather than breaking a
+build. It is configured in exactly one place, `src/observability/crashReporting.ts`, and governed
+by `.claude/rules/crash-reporting-scope.md`.
+
+**Two secrets, two different jobs.** They are deliberately separate:
+
+| Name | Kind | What it does | Absent means |
+|---|---|---|---|
+| `SENTRY_DSN` | repository **variable** | Exported to the bundle as `EXPO_PUBLIC_SENTRY_DSN`. Decides whether the app reports at runtime. | `Sentry.init()` is never called; the native SDK never starts; nothing is collected |
+| `SENTRY_AUTH_TOKEN` | repository **secret** | Uploads source maps and debug symbols at build time, and is what makes `app.config.ts` include the Sentry config plugin at all. | The plugin entry is omitted; stack traces arrive minified |
+
+Both live on the GitHub repo, for the Sentry org `kangentic`, project `react-native`. **Neither
+goes in `eas.json`**, which is the one deviation from "eas.json is the single source of truth for
+build-time env": that file is committed to a public repo, and a DSN in it would route every
+fork's crashes into this project's 5k/month quota. `build-android.yml` and `build-ios.yml` each
+export them to `$GITHUB_ENV` *before* prebuild (the config plugin reads the token at
+config-evaluation time), gated on a job-level `HAS_SENTRY` boolean that requires **both**.
+`tests/unit/buildWorkflow.test.ts` locks that ordering.
+
+**Why the DSN is a variable and not a secret.** A DSN is not confidential: it ships inside the
+published app bundle, so anyone with the APK can read it, and Sentry displays it in plaintext in
+the project's Client Keys page. It is write-only - it can submit an event and read nothing back.
+Keeping it out of the repo is about fork quota and noise, not secrecy, and a variable achieves
+that just as well while being **readable back** (`gh variable list --repo Kangentic/mobile`). A
+secret cannot be read back, so a mistyped DSN would be undetectable: builds would report nowhere
+and still look healthy. For the same reason the workflows mask the auth token in logs but
+deliberately do not mask the DSN - a legible value lets a build log answer "which project did
+this report to?".
+
+Set them with:
+
+```
+gh variable set SENTRY_DSN --repo Kangentic/mobile
+gh secret set SENTRY_AUTH_TOKEN --repo Kangentic/mobile
+```
+
+**Free tier, and why that shapes the config.** The plan is the free Developer tier: 5,000 errors
+per month, 30-day retention, one seat. Nothing is sampled down, because at this app's volume
+every error is worth having. Volume is controlled instead by not generating noise -
+`ignoreErrors` drops expected transport churn (a phone loses its socket constantly), tracing and
+session tracking are off, and Session Replay is absent. Two server-side backstops are worth
+setting once in the Sentry UI and are not expressible in code:
+
+1. **Spike Protection**, per project, so one user in a crash loop cannot drain the month.
+2. A **per-key rate limit** on the Client Key (start around 500 events/hour).
+
+**Testing it locally.** Put `EXPO_PUBLIC_SENTRY_DSN` in `.env` (gitignored) and rebuild. Events
+land in the `development` environment, kept separate from `production` so dev noise does not
+pollute real crash stats. `sentry-cli` is not required for this; it is only useful for manual
+source-map work, and `sentry-cli login` writes `~/.sentryclirc` outside the repo.
+
+**What it does and does not collect** is in [docs/security.md](security.md) and
+[docs/privacy-policy.md](privacy-policy.md). Read those before changing any `Sentry.init()`
+option: several defaults in the SDK (console breadcrumbs especially) capture things this app
+promises it does not, and a JavaScript `beforeSend` cannot filter native crash events, so the
+controls have to stay at the source.
+
 ## Credential inventory
 
 Every credential this project uses, where it lives, and what happens if it is lost. No values here,
@@ -978,6 +1054,8 @@ Expo's servers.
 | App Store provisioning profile (+ base64) | `~/kangentic-secrets/apple/` | GitHub secret `IOS_PROVISIONING_PROFILE_BASE64` | Regenerate via `eas credentials`. Expires 2027-07-26 regardless |
 | APNs key (`.p8`) | Expo project credentials only | - | Revoke in the Apple portal and mint a new one |
 | App Store Connect API key (`.p8`) | `~/kangentic-secrets/apple/` once created | GitHub secrets `ASC_*` | Revoke in App Store Connect and mint a new one |
+| Sentry org auth token | `~/.sentryclirc` (written by `sentry-cli login`, outside the repo) | GitHub secret `SENTRY_AUTH_TOKEN` | Revoke and mint a new one in Sentry settings; nothing else breaks |
+| Sentry DSN | GitHub **variable** `SENTRY_DSN` (readable back) | The Sentry Client Keys page, and every published app bundle | Re-copy from Sentry. Not a credential: write-only, and public by design |
 
 **The Apple certificate is recoverable but not free.** Reissuing the distribution certificate
 invalidates the provisioning profile built against it, so both have to be regenerated together. The
@@ -1087,6 +1165,10 @@ Two things to settle before anything leaves internal testing:
 
 Any variable prefixed `EXPO_PUBLIC_` is baked directly into the JS bundle at build time and is
 **never** an appropriate place for a secret. There are no runtime secrets embedded in this app.
+The one embedded credential is the Sentry DSN, and it is not a secret in this sense: a DSN is a
+write-only ingest key that can submit a crash event and read nothing back. It is still kept out
+of the repo, because a DSN committed to a public repo would route every fork's crashes into this
+project's Sentry quota. See the Crash reporting section above.
 Push credentials (FCM service account, APNs key) live only in the maintainer's EAS account,
 uploaded at build time. The Android upload keystore and the Play Console service-account key live
 in a directory outside the repo on the maintainer's machine, and are mirrored into GitHub Actions
@@ -1100,6 +1182,18 @@ CI workflow.
 
 - `EXPO_PUBLIC_KANGENTIC_E2E=1` - set by the `e2e` profile. Marks the build as the Maestro E2E
   target.
+
+Build-time variables that deliberately do NOT come from `eas.json`, because that file is
+committed to a public repo (see Crash reporting above for why):
+
+- `EXPO_PUBLIC_SENTRY_DSN` - from the `SENTRY_DSN` GitHub repository variable (a variable, not a
+  secret: it ships in the bundle and is write-only). Unset means crash reporting is inert:
+  `Sentry.init()` is never called and the native SDK never starts. Every build made from source
+  is in that state.
+- `SENTRY_AUTH_TOKEN` - from the GitHub secret of the same name. Not `EXPO_PUBLIC_`, so it is
+  never inlined into the bundle. Read by `app.config.ts` at config-evaluation time to decide
+  whether to include the Sentry config plugin, and by the plugin's Gradle/Xcode hooks to upload
+  source maps.
 
 Dev-only variables:
 

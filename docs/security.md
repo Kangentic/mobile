@@ -204,7 +204,9 @@ awkwardly next to `.claude/rules/accountless-core.md`:
   Expo also holds a credential that can push to every install of the app.
 - **What it costs a self-hoster:** an Expo account, and uploading their own FCM key to Expo, for
   remote push to work at all. Everything else in the pairing, transport, and capability path is
-  genuinely accountless; push is the one exception.
+  genuinely accountless. Push is one of two places a third party sits in a path at all; crash
+  reporting, below, is the other, and it costs a self-hoster nothing because it is inert without
+  a build secret they will not have.
 - **Why we accept it:** Expo Push is free (no per-notification charge, no paid plan required) and
   covers Android and iOS through one token and one API. Going direct means implementing FCM v1
   *and* APNs separately, and APNs is the expensive half.
@@ -215,6 +217,56 @@ The exit path, if the metadata exposure or the account requirement ever becomes 
 switch to `getDevicePushTokenAsync()` for a raw FCM token and have the desktop call FCM v1
 directly. That is a `@kangentic/protocol` change first (`RegisterPushRequestPayload.expoPushToken`),
 per `.claude/rules/protocol-types-from-package.md`, then desktop send-path work, then APNs for iOS.
+
+## Crash reporting
+
+Official builds report crashes to [Sentry](https://sentry.io). Like Expo push above, this is a
+conscious trade rather than an oversight, and it sits next to the same accountless-core rule, so
+it gets the same plain accounting.
+
+The controls are set at their source rather than in a filter, because **a JavaScript `beforeSend`
+hook does not filter native events**: a hard iOS or Android crash is captured and sent by
+sentry-cocoa / sentry-android without passing through the JS layer at all. JS breadcrumbs are
+also synced into the native scope, so a console breadcrumb recorded in JS would ride a native
+crash past any JS scrubber. Anything that must not be sent is therefore never collected, rather
+than collected and stripped. `src/observability/crashReporting.ts` is the single place this is
+configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps it that way.
+
+- **What Sentry cannot see:** session content. No screenshots, no view hierarchy, no console
+  output, no network breadcrumbs, no Session Replay, no performance traces, and no PII - each
+  disabled explicitly, several of them ON by default in the SDK. Transcripts, terminal output,
+  diff content, board data, pairing material and notification payloads are never collected, and
+  `src/pairing/`, `src/channel/` and `src/notifications/` are forbidden by lint from reporting to
+  Sentry at all, because their error messages can echo ciphertext, key material, or
+  attacker-controlled bytes (see `src/notifications/pushDecrypt.ts`).
+- **What Sentry can see:** that this app crashed, where in the code, and on what kind of device.
+  A stack trace, the exception type and message, device model and OS version, and app version.
+  A crash is by definition an unplanned state, so a message could in principle carry a fragment
+  of app data; the exception is code that runs on the paths above, which cannot report.
+- **What it costs a self-hoster:** nothing. The DSN is injected at build time from a GitHub
+  repository variable (`vars.SENTRY_DSN`, not a secret: a DSN ships inside the published bundle
+  and is write-only, so it is not confidential) and is never committed, so a build made from this
+  repository never calls `Sentry.init()`, starts no native SDK, and sends nothing. This is deliberate twice over: it keeps self-hosted builds free of any
+  Kangentic-operated service, and it stops a fork's crashes consuming this project's free-tier
+  quota.
+- **Why we accept it:** the alternative is shipping blind. The app has no logger, no error
+  boundary, and no other diagnostics, so before this a production crash was simply invisible.
+  Store dashboards (Play Console, App Store Connect) report crash counts but no JavaScript
+  frames, which for a React Native app is most of the story.
+- **Degradation:** entirely optional and entirely absent when unconfigured. There is no runtime
+  dependency on it, no user-facing behaviour attached to it, and no failure mode if Sentry is
+  unreachable.
+
+Two things are deliberately off and are worth naming because they would each be a defensible
+default elsewhere. **Session tracking** is disabled: it produces crash-free rate, a genuinely
+useful stability metric, but it is a per-foreground ping and therefore usage telemetry, which
+this app tells users it does not collect. **Sampling** is not used; every error is sent, because
+the volume is low and the free tier's budget is better spent on completeness than on smoothing.
+
+The exit path, if this ever becomes unacceptable: delete the `SENTRY_DSN` repository variable
+(GitHub Settings, Variables rather than Secrets) and the SDK goes inert
+across every build with no code change. Removing the dependency outright is a `package.json`
+change plus deleting `src/observability/`; nothing else imports it.
 
 ## Reporting a vulnerability
 

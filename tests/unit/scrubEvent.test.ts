@@ -1,0 +1,108 @@
+import { describe, expect, it } from 'vitest';
+import type { Breadcrumb, ErrorEvent } from '@sentry/react-native';
+import { allowlistBreadcrumb, scrubEvent } from '@/observability/scrubEvent';
+
+/**
+ * These lock the payload shape that leaves the device. The privacy claims in
+ * docs/privacy-policy.md and docs/security.md are only true if this holds.
+ */
+
+function errorEvent(overrides: Partial<ErrorEvent> = {}): ErrorEvent {
+  return {
+    type: undefined,
+    event_id: 'abc123',
+    exception: { values: [{ type: 'TypeError', value: 'undefined is not a function' }] },
+    ...overrides,
+  };
+}
+
+describe('scrubEvent', () => {
+  it('strips the user, so no per-device identity leaves with a crash', () => {
+    const scrubbed = scrubEvent(errorEvent({ user: { id: 'device-42', ip_address: '10.0.0.7' } }));
+    expect(scrubbed.user).toBeUndefined();
+    expect('user' in scrubbed).toBe(false);
+  });
+
+  it('strips captured request data, which can carry the relay URL and headers', () => {
+    const scrubbed = scrubEvent(
+      errorEvent({ request: { url: 'wss://relay.kangentic.com/slot/deadbeef', headers: { cookie: 'x' } } }),
+    );
+    expect(scrubbed.request).toBeUndefined();
+  });
+
+  it('strips arbitrary extra data', () => {
+    const scrubbed = scrubEvent(errorEvent({ extra: { transcript: 'the agent said something private' } }));
+    expect(scrubbed.extra).toBeUndefined();
+  });
+
+  it('strips server_name, which on a phone is the device hostname', () => {
+    const scrubbed = scrubEvent(errorEvent({ server_name: "tyler's iPhone" }));
+    expect(scrubbed.server_name).toBeUndefined();
+  });
+
+  it('drops contexts.response but keeps the diagnostic contexts around it', () => {
+    const scrubbed = scrubEvent(
+      errorEvent({
+        contexts: {
+          response: { status_code: 200, headers: { authorization: 'Bearer secret' } },
+          device: { model: 'Pixel 8' },
+          os: { name: 'Android', version: '15' },
+        },
+      }),
+    );
+    expect(scrubbed.contexts?.response).toBeUndefined();
+    expect(scrubbed.contexts?.device).toEqual({ model: 'Pixel 8' });
+    expect(scrubbed.contexts?.os).toEqual({ name: 'Android', version: '15' });
+  });
+
+  it('leaves contexts absent rather than inventing an empty object', () => {
+    const scrubbed = scrubEvent(errorEvent());
+    expect('contexts' in scrubbed).toBe(false);
+  });
+
+  it('preserves contexts untouched when there is no response context', () => {
+    const scrubbed = scrubEvent(errorEvent({ contexts: { device: { model: 'Pixel 8' } } }));
+    expect(scrubbed.contexts).toEqual({ device: { model: 'Pixel 8' } });
+  });
+
+  it('keeps the exception itself: the whole point is still to report the crash', () => {
+    const scrubbed = scrubEvent(errorEvent({ user: { id: 'device-42' } }));
+    expect(scrubbed.exception?.values?.[0]).toEqual({
+      type: 'TypeError',
+      value: 'undefined is not a function',
+    });
+    expect(scrubbed.event_id).toBe('abc123');
+  });
+});
+
+describe('allowlistBreadcrumb', () => {
+  function breadcrumb(category: string | undefined): Breadcrumb {
+    return category === undefined ? { message: 'x' } : { category, message: 'x' };
+  }
+
+  it("lets Sentry's own event bookkeeping through", () => {
+    expect(allowlistBreadcrumb(breadcrumb('sentry.event'))).not.toBeNull();
+  });
+
+  it('drops console breadcrumbs, the category that would carry app output', () => {
+    expect(allowlistBreadcrumb(breadcrumb('console'))).toBeNull();
+  });
+
+  it('drops network breadcrumbs, which carry request URLs', () => {
+    expect(allowlistBreadcrumb(breadcrumb('xhr'))).toBeNull();
+    expect(allowlistBreadcrumb(breadcrumb('fetch'))).toBeNull();
+  });
+
+  it('drops navigation breadcrumbs, whose route params are desktop task IDs', () => {
+    expect(allowlistBreadcrumb(breadcrumb('navigation'))).toBeNull();
+  });
+
+  it('is default-deny: an unanticipated category is dropped, not forwarded', () => {
+    expect(allowlistBreadcrumb(breadcrumb('some.future.native.category'))).toBeNull();
+    expect(allowlistBreadcrumb(breadcrumb('ui.click'))).toBeNull();
+  });
+
+  it('drops a breadcrumb with no category at all', () => {
+    expect(allowlistBreadcrumb(breadcrumb(undefined))).toBeNull();
+  });
+});
