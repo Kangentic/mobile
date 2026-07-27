@@ -20,6 +20,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -391,6 +392,47 @@ describe('build-ios workflow', () => {
     expect(readIosJob('submit-testflight')).toContain("github.event_name != 'schedule'");
     // And the cheap check must still run, or the schedule detects nothing.
     expect(readIosJob('simulator')).toContain("github.event_name == 'schedule'");
+  });
+});
+
+describe('workflow env-gated steps are defined in their own job', () => {
+  // `env` does not cross a job boundary. A step gated on `env.FOO` in a job that
+  // never declares FOO does not error: the condition is simply false and the step
+  // SKIPS, while the job still reports success.
+  //
+  // That is not hypothetical. `submit-testflight` gated its "Wait for Apple to
+  // accept the build" step on HAS_ASC_API_KEY, which was declared only on the
+  // `device` job. The step skipped on every run, the job went green, and a build
+  // Apple had rejected passed for a successful release - the exact failure the step
+  // was written to catch.
+  //
+  // Parsed with the yaml package that is already a transitive dependency, because
+  // this needs job structure rather than a text match.
+  const workflowFiles = ['build-ios.yml', 'build-android.yml', 'ci.yml', 'e2e.yml'];
+
+  it.each(workflowFiles)('%s gates steps only on env its job defines', (workflowFile) => {
+    const source = readFileSync(`${repositoryRoot}.github/workflows/${workflowFile}`, 'utf8');
+    const workflow = parseYaml(source) as {
+      env?: Record<string, unknown>;
+      jobs: Record<string, { env?: Record<string, unknown>; steps?: { if?: string }[] }>;
+    };
+
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      const declared = new Set([
+        ...Object.keys(workflow.env ?? {}),
+        ...Object.keys(job.env ?? {}),
+      ]);
+
+      for (const step of job.steps ?? []) {
+        for (const match of (step.if ?? '').matchAll(/env\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
+          expect(
+            declared.has(match[1]),
+            `${workflowFile}: job "${jobName}" gates a step on env.${match[1]}, which that job does not define. ` +
+              'The step will silently skip and the job will still pass.'
+          ).toBe(true);
+        }
+      }
+    }
   });
 });
 

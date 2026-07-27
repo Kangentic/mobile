@@ -532,6 +532,15 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     environment: app-store-connect
+    env:
+      # Declared HERE and not only on the `device` job. `env` does not cross a job
+      # boundary, and the first version of this workflow assumed it did: the
+      # "Wait for Apple to accept the build" step is gated on this, so it silently
+      # SKIPPED on every run while the job still reported success. That is the
+      # precise failure this whole job exists to prevent, reintroduced one level up
+      # by a scoping mistake. tests/unit/buildWorkflow.test.ts now checks that every
+      # job gating a step on an env boolean also defines it.
+      HAS_ASC_API_KEY: ${{ secrets.ASC_API_KEY_BASE64 != '' && secrets.ASC_KEY_ID != '' && secrets.ASC_ISSUER_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
