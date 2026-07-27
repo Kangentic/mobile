@@ -9,7 +9,13 @@
  * react-native).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { resyncPushRegistrationCategories, revokePushRegistrationForUnpair } from '@/connection/connectionManager';
+import {
+  resyncPushRegistrationCategories,
+  revokePushRegistrationForUnpair,
+  startConnectionLifecycle,
+  stopConnectionLifecycle,
+} from '@/connection/connectionManager';
+import { useChannelStore } from '@/state/channelStore';
 
 const pushRegistrationMocks = vi.hoisted(() => ({
   unregisterPushWithDesktop: vi.fn<(verbs: unknown) => Promise<void>>(),
@@ -41,12 +47,24 @@ vi.mock('react-native', () => ({
 // deviceIdentity.ts and trustAnchor.ts (both statically imported by
 // connectionManager.ts) read/write expo-secure-store at module use time,
 // never at import time, but they still need the module to resolve.
+// Hoisted so a test can make the trust-anchor read REJECT, which is the shape
+// that stranded pairedState at 'unknown' on iOS.
+const secureStoreMocks = vi.hoisted(() => ({
+  getItemAsync: vi.fn<(key: string) => Promise<string | null>>(async () => null),
+}));
+
 vi.mock('expo-secure-store', () => ({
-  getItemAsync: vi.fn(async () => null),
+  getItemAsync: secureStoreMocks.getItemAsync,
   setItemAsync: vi.fn(async () => undefined),
   deleteItemAsync: vi.fn(async () => undefined),
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'whenUnlockedThisDeviceOnly',
 }));
+
+// React Native defines __DEV__ globally; the node/vitest tier does not. The
+// earlier tests here never reached a line that reads it, but the lifecycle ones
+// below do (the dev-only inspect bridge, and the dev log in openConnection's
+// catch). False, because these assert production behaviour.
+vi.stubGlobal('__DEV__', false);
 
 /**
  * These tests never call openConnection/startConnectionLifecycle, so the
@@ -116,5 +134,61 @@ describe('resyncPushRegistrationCategories', () => {
     pushRegistrationMocks.registerPushWithDesktop.mockRejectedValue(new Error('transport closed'));
 
     await expect(resyncPushRegistrationCategories()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The unpaired dead end.
+ *
+ * `pairedState` starts at 'unknown' and only leaves it inside openConnection, which
+ * every call site invokes as a bare `void openConnection()`. So a rejection before
+ * the trust anchor resolves is swallowed and the state is stranded at 'unknown'
+ * forever. TriageHomeScreen renders the pair CTA only for 'unpaired', so the user
+ * sits on "Connecting to your desktop..." permanently: no error, no retry, and no
+ * way to reach pairing.
+ *
+ * Found on iOS by the CI simulator smoke test, where a fresh install never offered
+ * to pair. Task #14 fixed the SIBLING of this independently (a lost bootstrap
+ * stranding a PAIRED app on the same screen), which is corroboration rather than
+ * coincidence: this screen has no state meaning "something failed, recover here".
+ */
+describe('openConnection failure leaves a route to pairing', () => {
+  beforeEach(() => {
+    stopConnectionLifecycle();
+    useChannelStore.getState().setPairedState('unknown');
+    secureStoreMocks.getItemAsync.mockReset();
+  });
+
+  it('falls back to unpaired when the trust-anchor read rejects', async () => {
+    // The regression. Without the catch, pairedState stays 'unknown' and the
+    // screen shows "Connecting..." with no pair CTA, permanently.
+    secureStoreMocks.getItemAsync.mockRejectedValue(new Error('keychain unavailable'));
+
+    startConnectionLifecycle();
+
+    await vi.waitFor(() => expect(useChannelStore.getState().pairedState).toBe('unpaired'));
+  });
+
+  it('still reports unpaired normally when there is simply no anchor', async () => {
+    // The non-vacuity half: the fallback must not become the only reason this ever
+    // reads 'unpaired', or the test above would pass against a broken app.
+    secureStoreMocks.getItemAsync.mockResolvedValue(null);
+
+    startConnectionLifecycle();
+
+    await vi.waitFor(() => expect(useChannelStore.getState().pairedState).toBe('unpaired'));
+  });
+
+  it('does not overwrite an already-resolved paired state', async () => {
+    // Only the stranded 'unknown' case is rescued. A failure after the anchor
+    // resolved belongs to the reconnect paths, and clobbering 'paired' would send a
+    // genuinely paired user to the pairing screen.
+    secureStoreMocks.getItemAsync.mockRejectedValue(new Error('later failure'));
+    useChannelStore.getState().setPairedState('paired');
+
+    startConnectionLifecycle();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(useChannelStore.getState().pairedState).toBe('paired');
   });
 });
