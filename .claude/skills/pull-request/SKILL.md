@@ -148,8 +148,41 @@ link once it reconnects. If it never returns this run, report the PR number prom
 Treat a non-zero exit while checks are pending as status, not a tool failure; re-run the same
 `--watch` command if the timeout fires with checks still only pending. If `CLA Assistant` is the
 only check registered, do not call that all-green: the `ci.yml` checks may not have registered
-yet, so re-poll before concluding it is genuinely the only one. Expect six checks in total (the
-five `ci.yml` jobs plus `cla`).
+yet, so re-poll before concluding it is genuinely the only one. Expect seven checks in total (the
+`ci.yml` jobs plus `E2E tests (Maestro)` and `cla`).
+
+**A stacked PR reports green having run nothing.** `ci.yml` and `e2e.yml` both filter
+`pull_request` to `branches: [main]`, so a PR whose base is another feature branch gets only
+`cla`. If the base is not `main`, the PR checks are not the gate: dispatch it instead with
+`gh workflow run ci.yml --ref <branch>` (and `e2e.yml`), watch those runs, and link them from the
+PR so a reviewer can see the gate was exercised. Do not report all-green off a check list that
+only contains `cla`.
+
+## Step 6b - Build both platforms before handing off
+
+**Neither build workflow is PR-triggered**, so every check above can be green while nothing has
+ever been compiled for either platform. A PR that changes native config, a config plugin,
+`app.config.ts`, `eas.json`, `package.json`, or anything under `plugins/` can pass the whole gate
+and then fail the first real build. That is exactly how a broken config-plugin import shipped once.
+
+So before reporting green, dispatch both and drive them to success:
+
+```
+gh workflow run build-android.yml --ref <branch> -f profile=preview
+gh workflow run build-ios.yml --ref <branch> -f target=simulator
+```
+
+- Get the run ids from `gh run list --workflow <file> --limit 1 --json databaseId,status`, then
+  watch with `gh run view <id> --json status,conclusion,jobs`.
+- Roughly 13 minutes for Android `preview` and 11 for the iOS simulator, and they run in parallel.
+- **iOS `target=simulator`, never `device`.** A device build consumes signing material and is a
+  release path, not a check. Leave `submit` alone entirely.
+- The iOS simulator job also **launches** the app and uploads a screenshot, so this doubles as a
+  runtime smoke test rather than only a compile check.
+- Feed failures into the Step 7 auto-fix loop the same as any other check.
+
+Skip this only for a docs-only or `.claude/`-only diff, and say in the report that it was skipped
+and why. When in doubt, run them: a runner is free and a broken build found after merge is not.
 
 ## Step 7 - Auto-fix loop (max 3 rounds, fully automatic)
 
@@ -162,8 +195,13 @@ PR URL, and do not `--admin` bypass.
 
 ## Step 8 - Report (success)
 
-Report the PR URL, branch name, commit count, and "All checks green." Next step: the user moves
-the task Tests -> Ship It, where `/merge-pull-request` merges it. Do NOT merge.
+Report the PR URL, branch name, commit count, and "All checks green." Include the two build runs
+from Step 6b with their conclusions, or say plainly that they were skipped and why. "All checks
+green" without a build run behind it overstates what was verified, because the PR gate does not
+build either platform.
+
+Next step: the user moves the task Tests -> Ship It, where `/merge-pull-request` merges it. Do
+NOT merge.
 
 ## Rules
 
