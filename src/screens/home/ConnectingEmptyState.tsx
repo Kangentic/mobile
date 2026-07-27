@@ -40,7 +40,7 @@ export function ConnectingEmptyState(): React.JSX.Element {
         title="Connecting to your desktop…"
         caption="Your agents appear here once it connects."
         overseerSize={90}
-        overseerAnimate="blink-loop"
+        overseerAnimate="waiting-loop"
       />
     );
   }

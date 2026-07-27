@@ -99,8 +99,11 @@ export interface MotionEasingBezier {
 
 /**
  * Motion timings as pure data (milliseconds and curve control points), so the
- * later motion module (reanimated presets, skeletons, the Overseer mascot)
- * shares one timing vocabulary and vitest can import it without react-native.
+ * motion module (reanimated presets, skeletons) shares one timing vocabulary
+ * and vitest can import it without react-native. The Overseer mascot's own
+ * timings are not here: they are generated output from the shared branding
+ * package's motion manifest (src/brand/overseerFrames.generated.ts), so they
+ * cannot drift from the assets they animate.
  */
 export interface MotionTokens {
   durations: {
@@ -123,15 +126,6 @@ export interface MotionTokens {
     durationMs: number;
     opacityMin: number;
     opacityMax: number;
-  };
-  overseer: {
-    /** Random blink phase window per mascot instance. */
-    blinkIntervalMinMs: number;
-    blinkIntervalMaxMs: number;
-    /** How long the blink frame holds before returning to the canonical frame. */
-    blinkHoldMs: number;
-    /** Total duration of the one-shot wave (canonical -> wave -> canonical). */
-    waveDurationMs: number;
   };
 }
 
@@ -203,12 +197,6 @@ export const motionTokens: MotionTokens = {
     durationMs: 1200,
     opacityMin: 0.4,
     opacityMax: 0.8,
-  },
-  overseer: {
-    blinkIntervalMinMs: 2800,
-    blinkIntervalMaxMs: 6400,
-    blinkHoldMs: 140,
-    waveDurationMs: 640,
   },
 };
 
