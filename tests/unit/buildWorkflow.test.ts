@@ -242,7 +242,10 @@ describe('build-ios workflow', () => {
   });
 
   it('never uploads to Apple unless the dispatch asked for it', () => {
-    expect(iosWorkflowSource).toContain("if: inputs.submit == 'testflight'");
+    // Asserted against the submit job's condition rather than a whole-file literal,
+    // so tightening the condition (as the schedule trigger required) does not read
+    // as a regression.
+    expect(readIosJob('submit-testflight')).toContain("inputs.submit == 'testflight'");
   });
 
   it('puts the upload behind a protected environment, like the Play submit', () => {
@@ -376,6 +379,37 @@ describe('build-ios workflow', () => {
 
   it('caps artifact retention so storage does not accrue', () => {
     expect(iosWorkflowSource).toMatch(/retention-days: \d+/);
+  });
+
+  it('never signs or uploads on the weekly schedule', () => {
+    // The trap: `inputs` are all empty on a schedule, so `inputs.target != 'device'`
+    // and `inputs.target != 'simulator'` are BOTH true on a cron run. Left to input
+    // defaults, the drift check would quietly fire a signed device build every
+    // Monday, and with submit wired it could have uploaded one.
+    expect(iosWorkflowSource).toContain('schedule:');
+    expect(readIosJob('device')).toContain("github.event_name != 'schedule'");
+    expect(readIosJob('submit-testflight')).toContain("github.event_name != 'schedule'");
+    // And the cheap check must still run, or the schedule detects nothing.
+    expect(readIosJob('simulator')).toContain("github.event_name == 'schedule'");
+  });
+});
+
+describe('build-android staged rollout', () => {
+  it('keeps the rollout and full-release uploads as separate steps', () => {
+    // `userFraction` is only valid with an inProgress status; Play rejects it
+    // alongside `completed`. One step with interpolated values would be a silent
+    // misconfiguration, so they are two mutually exclusive steps.
+    expect(workflowSource).toContain('status: inProgress');
+    expect(workflowSource).toContain('status: completed');
+    expect(workflowSource).toContain("if: inputs.rollout != ''");
+    expect(workflowSource).toContain("if: inputs.rollout == ''");
+  });
+
+  it('defaults to a full release rather than a surprise partial one', () => {
+    // An empty default means an unqualified dispatch behaves as it always has.
+    // A staged rollout has to be asked for, because an unfinished rollout that
+    // nobody completes is its own failure mode.
+    expect(workflowSource).toMatch(/rollout:[\s\S]{0,200}default: ''/);
   });
 });
 
