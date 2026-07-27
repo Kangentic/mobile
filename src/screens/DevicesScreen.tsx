@@ -125,20 +125,13 @@ export function DevicesScreen(): React.JSX.Element {
               </Stack>
             </Card>
 
-            {/* This phone holds ONE desktop trust anchor: pairing again is
-                a REPLACEMENT, so it sits here with unpair and says so. */}
-            <Stack gap="xs">
-              <Button
-                label="Pair a different desktop"
-                variant="ghost"
-                onPress={() => router.push('/pair')}
-                testID="devices-pair-different"
-              />
-              <Text variant="caption" color="muted" style={styles.centered}>
-                Replaces the pairing on this phone
-              </Text>
-            </Stack>
-
+            {/* Unpair is the ONLY control here on purpose. This phone holds
+                one desktop trust anchor, so a "pair a different desktop"
+                button was a second route to the same place with different
+                words: it unpairs first either way. Two buttons invited the
+                user to work out which one they wanted; one button plus the
+                cards above says the true thing - this phone is paired to that
+                desktop, and unpairing is how you start over. */}
             <Button
               label={unpairing ? 'Unpairing...' : unpairArmed ? 'Tap again to confirm' : 'Unpair'}
               variant="danger"
@@ -154,9 +147,6 @@ export function DevicesScreen(): React.JSX.Element {
           </>
         )}
 
-        <Text variant="caption" color="muted">
-          {"Revoke phones from the desktop app's Mobile Devices settings."}
-        </Text>
         {relayUrl && pairedInfo.status !== 'paired' ? (
           <LabeledValue label="Active relay">
             <MonoText size="caption" numberOfLines={1}>
