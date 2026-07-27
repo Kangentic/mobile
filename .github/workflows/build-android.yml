@@ -48,6 +48,10 @@ on:
           - internal
           - alpha
           - beta
+      rollout:
+        description: 'Fraction of users for a staged rollout, e.g. 0.1. Empty means release to everyone.'
+        type: string
+        default: ''
   push:
     tags:
       - 'v*'
@@ -428,7 +432,24 @@ jobs:
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$version_code"
 
-      - name: Upload to Google Play
+      # A staged rollout and a full release are different Play API calls, not one
+      # call with an extra field: `userFraction` is only valid with an inProgress
+      # status, and Play rejects it outright alongside `completed`. So the two are
+      # separate steps rather than one step with interpolated values, which would
+      # be a silent misconfiguration waiting to happen.
+      - name: Upload to Google Play (staged rollout)
+        if: inputs.rollout != ''
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.kangentic.mobile
+          releaseFiles: artifact/*
+          track: ${{ inputs.submit_track }}
+          status: inProgress
+          userFraction: ${{ inputs.rollout }}
+
+      - name: Upload to Google Play (full release)
+        if: inputs.rollout == ''
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -436,3 +457,20 @@ jobs:
           releaseFiles: artifact/*
           track: ${{ inputs.submit_track }}
           status: completed
+
+      - name: Write the submit summary
+        if: always()
+        run: |
+          {
+            echo "### Google Play upload"
+            echo ""
+            echo "Track: \`${{ inputs.submit_track }}\`"
+            if [ -n "${{ inputs.rollout }}" ]; then
+              echo "Staged rollout to \`${{ inputs.rollout }}\` of users, status \`inProgress\`."
+              echo ""
+              echo "**A staged rollout is not finished.** Increase the fraction or complete it in the"
+              echo "Play Console, or it stays partial indefinitely. To pull it, use Halt rollout there."
+            else
+              echo "Full release, status \`completed\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
