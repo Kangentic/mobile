@@ -39,6 +39,13 @@ on:
         options:
           - none
           - testflight
+      maestro:
+        description: 'Run a Maestro flow against the simulator. EXPERIMENTAL, see the job comment.'
+        type: choice
+        default: none
+        options:
+          - none
+          - smoke
   # Weekly drift detection. Nothing here is PR-triggered, so without a schedule the
   # only way to learn that a runner Xcode bump, a dependency update, or an Apple
   # toolchain change broke the iOS build is to want a release and discover it then.
@@ -140,7 +147,59 @@ jobs:
         id: smoke
         env:
           APP_PATH: ${{ steps.verify.outputs.app-path }}
+          # Keeps the simulator up for the Maestro step below, which drives the
+          # same one. Booting a simulator takes over a minute.
+          KEEP_SIMULATOR_BOOTED: ${{ inputs.maestro != 'none' && '1' || '' }}
         run: bash .github/scripts/smoke-ios-simulator.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/launch.png"
+
+      # EXPERIMENTAL, and opt-in for a reason. Maestro's iOS driver needs Facebook's
+      # idb_companion, and there is an open upstream issue where a recent
+      # macOS + Xcode pairing breaks its simulator connection entirely
+      # (mobile-dev-inc/Maestro#2906). This runner is on Xcode 26.5, so it may
+      # simply not work.
+      #
+      # Gated behind an input rather than folded into the default path: the launch
+      # smoke above is now a proven, reliable signal, and an experiment with a known
+      # upstream failure mode must not be able to take it down. Promote this to
+      # default only once it has been green repeatedly.
+      #
+      # Worth knowing what this can and cannot reach. `.maestro/smoke.yaml` runs
+      # against a fresh unpaired install, so it exercises real UI interaction on iOS
+      # (tap handling, tab navigation, empty states) but NOT the terminal. The
+      # terminal needs a paired session, which needs the stub desktop peer and the
+      # `usesCleartextTraffic` carve-out that is still unlanded.
+      - name: Install Maestro and its iOS driver
+        if: inputs.maestro != 'none'
+        run: |
+          set -euo pipefail
+          brew tap facebook/fb
+          brew install facebook/fb/idb-companion
+          curl -Ls 'https://get.maestro.mobile.dev' | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Run the Maestro smoke flow
+        if: inputs.maestro != 'none'
+        env:
+          MAESTRO_DEVICE: ${{ steps.smoke.outputs.device-id }}
+        run: |
+          set -euo pipefail
+          maestro --version
+          maestro --device "$MAESTRO_DEVICE" test .maestro/smoke.yaml \
+            --format JUNIT \
+            --output "$RUNNER_TEMP/maestro-ios-report.xml" \
+            --debug-output "$RUNNER_TEMP/maestro-ios-debug" \
+            --flatten-debug-output
+
+      - name: Upload the Maestro output
+        if: always() && inputs.maestro != 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-ios-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/maestro-ios-report.xml
+            ${{ runner.temp }}/maestro-ios-debug
+          retention-days: 14
+          if-no-files-found: warn
 
       # Uploaded even on failure: a screenshot of a blank or red screen is the
       # single most useful artifact when a launch goes wrong, and a process can be
