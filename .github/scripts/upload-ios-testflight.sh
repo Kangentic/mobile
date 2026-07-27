@@ -108,22 +108,43 @@ while [ "$attempt" -le "$max_attempts" ]; do
   fi
 
   upload_output="$(cat "$work_dir/altool-upload.log")"
-
-  # An upload that reached Apple and was rejected as a duplicate means the build
-  # is already there. That is the goal state, not a failure.
-  if contains "$upload_output" "already exists" \
-    || contains "$upload_output" "redundant" \
-    || contains "$upload_output" "The bundle version must be higher"; then
-    echo "$upload_output"
-    echo "::warning::App Store Connect already has this build. Treating as success."
-    echo "::warning::Bump ios.buildNumber in app.config.ts before the next upload."
-    exit 0
-  fi
-
   echo "$upload_output"
 
-  # Authentication and validation failures are deterministic; retrying just
-  # burns runner minutes and muddies the log.
+  # A build number already taken. Whether that is success or failure depends
+  # entirely on WHOSE binary is sitting there, and the message does not say.
+  #
+  # On a re-run of this job the artifact is byte-identical to whatever a previous
+  # attempt uploaded, so "already exists" means the upload landed and the retry is
+  # redundant: success. On a first attempt it means something else already
+  # occupies that build number, our binary was rejected, and exiting 0 would
+  # report a worthless outcome as a release. GITHUB_RUN_ATTEMPT distinguishes
+  # them; re-running a job increments it.
+  #
+  # "The bundle version must be higher" is NEVER success. It is Apple rejecting
+  # this binary outright, which is why it is handled below with the other
+  # deterministic failures rather than here. Treating it as success was a real bug
+  # in the first version of this script.
+  if contains "$upload_output" "already exists" || contains "$upload_output" "redundant"; then
+    if [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ]; then
+      echo "::warning::App Store Connect already has this build, and this is run attempt ${GITHUB_RUN_ATTEMPT}."
+      echo "::warning::A previous attempt's upload landed, so this retry is redundant. Treating as success."
+      exit 0
+    fi
+    echo "::error::Build number is already taken on App Store Connect, and this is the first attempt,"
+    echo "::error::so this binary was rejected rather than accepted."
+    echo "::error::Bump ios.buildNumber in app.config.ts and rebuild. Apple will not accept a duplicate."
+    exit 1
+  fi
+
+  # Deterministic failures. Retrying only burns runner minutes and buries the
+  # cause further up a growing log.
+  if contains "$upload_output" "The bundle version must be higher"; then
+    echo "::error::Apple rejected this binary: the bundle version must be higher than an existing build."
+    echo "::error::Bump ios.buildNumber in app.config.ts and rebuild."
+    echo "::error::scripts/checkAppStoreBuild.mjs catches this before the archive when an ASC API key is set."
+    exit 1
+  fi
+
   if contains "$upload_output" "Unable to authenticate" \
     || contains "$upload_output" "authentication failed" \
     || contains "$upload_output" "Invalid Credentials"; then
@@ -139,8 +160,11 @@ while [ "$attempt" -le "$max_attempts" ]; do
     exit 1
   fi
 
-  # Apple-side incidents last minutes, not seconds.
-  echo "Retrying in 60 seconds..."
-  sleep 60
+  # Apple-side incidents last minutes, not seconds. Overridable only so
+  # tests/unit/iosTestflightUpload.test.ts can exercise the retry path without
+  # waiting two minutes for it.
+  retry_delay="${UPLOAD_RETRY_DELAY_SECONDS:-60}"
+  echo "Retrying in $retry_delay seconds..."
+  sleep "$retry_delay"
   attempt=$((attempt + 1))
 done
