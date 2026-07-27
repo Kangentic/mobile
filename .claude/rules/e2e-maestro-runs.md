@@ -127,6 +127,10 @@ exactly like an app bug. Test a `default`-image AVD before hunting in `src/`.
 - **Test (planned):** a scan of `.maestro/**` for `tapOn`/`assertVisible` on a bare string that
   matches a label in `src/screens/**` or `src/components/**`, which is the mechanical form of the
   testID rule above.
+- **CI (live now, advisory):** `e2e.yml`'s `maestro-paired` job runs `.maestro/paired/` on every
+  PR, following the same sequence as `/e2e` (checked-out relay instead of a sibling clone, `--yes`
+  instead of an interactive SAS confirm) via `.github/scripts/run-maestro-paired.sh`. It is not a
+  required check yet - see `docs/developer-guide.md`'s "Two E2E suites, two jobs, one required".
 
 **Prefer the `e2e` build profile over the dev client.** `eas.json`'s `e2e` profile builds a
 release-shaped binary carrying `EXPO_PUBLIC_KANGENTIC_E2E=1`, the second build-time gate on the

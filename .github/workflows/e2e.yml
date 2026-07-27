@@ -5,22 +5,27 @@ name: E2E
 # releases be cut from main at will without worrying about E2E timing. Release
 # builds stay in build-android.yml and never gate a PR.
 #
-# WHAT RUNS HERE, AND WHY IT IS ONLY SMOKE FOR NOW
+# TWO SUITES, TWO DIFFERENT JOBS ON PURPOSE
 #
 # .maestro/smoke.yaml runs against a fresh, unpaired install: no relay, no
-# pairing, nothing external. It works in CI today.
+# pairing, nothing external. It is the `maestro` job below, and it is what the
+# required `E2E tests (Maestro)` check actually gates on.
 #
-# The 11 flows under .maestro/paired/ do NOT work in CI yet. Each needs a
-# completed pairing to scripts/stubDesktopPeer.mjs over a local relay on ws://,
-# and Android blocks cleartext traffic in a release-shaped build. The
-# usesCleartextTraffic carve-out that fixes it is gated on
-# EXPO_PUBLIC_KANGENTIC_E2E in app.config.ts and has not landed on main yet, so
-# a paired flow here would fail at relay connect with code 1006. Wiring them up
-# is a follow-up once that lands: Kangentic/relay is public, so CI can check it
-# out, and the stub peer already runs from this repo.
+# The 11 flows under .maestro/paired/ run in the `maestro-paired` job: it
+# checks out the public Kangentic/relay repo, runs it locally on the runner,
+# pairs the app to scripts/stubDesktopPeer.mjs over it (both already used by
+# the local dev rig, see .claude/skills/e2e/SKILL.md), then runs the suite.
+# The usesCleartextTraffic carve-out this depends on (app.config.ts, gated on
+# EXPO_PUBLIC_KANGENTIC_E2E) is on main.
 #
-# Deliberately only the flows that can pass are run. A required check that
-# cannot go green blocks every merge.
+# `maestro-paired` is deliberately advisory: it reports as its own check but
+# is NOT in the `e2e` gate's `needs:` below, so a red run does not block a
+# merge. A required check that cannot pass blocks every merge, which is
+# exactly why only smoke was wired into the gate before this suite had any CI
+# runs to prove it stable. Promote it once it has been green across several
+# PRs: add it to the gate's `needs:`, fold its result into the gate condition,
+# and drop "(advisory)" from its name. The required context name itself never
+# changes.
 
 on:
   pull_request:
@@ -220,9 +225,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One entry per suite that actually works in CI. Add a `paired` entry
-        # once the cleartext carve-out lands on main and the relay plus stub peer
-        # are wired in.
+        # The smoke suite only. The paired suite is the separate
+        # `maestro-paired` job below, kept out of this matrix because it needs
+        # extra steps (relay checkout, Node) that would otherwise run for
+        # smoke too, and because it must NOT contribute to `needs.maestro.result`
+        # below, which is what the required gate tests.
         include:
           - suite: smoke
             flows: .maestro/smoke.yaml
@@ -293,10 +300,126 @@ jobs:
           path: |
             ${{ runner.temp }}/maestro-report.xml
             ${{ runner.temp }}/maestro-output
+            ${{ runner.temp }}/maestro-debug
           retention-days: 7
           # A failing flow is exactly when these matter, so upload on failure too
           # (the `if: !cancelled()` above), but never fail the job over a missing
-          # screenshot.
+          # screenshot. maestro-debug (not maestro-output) is where --debug-output
+          # actually writes the failure screenshot, command log, and view
+          # hierarchy - it was missing from this upload for a while, which is how
+          # the first failing run's artifact turned out to hold nothing
+          # diagnostic.
+          if-no-files-found: ignore
+
+  # The paired suite: checks out the relay, pairs to the stub, runs
+  # .maestro/paired. Advisory (see the header comment above) - its result is
+  # deliberately NOT read by the `e2e` gate job below.
+  maestro-paired:
+    name: Maestro paired (advisory)
+    needs: [changes, build-apk]
+    if: needs.changes.outputs.run-e2e == 'true'
+    runs-on: ubuntu-latest
+    # Local runtime for the 11 flows is 15-20 minutes (.claude/skills/e2e/SKILL.md),
+    # on top of emulator boot, APK install, relay start, and pairing. The app
+    # never reports UI-idle, so Maestro falls back to settled-hierarchy aiming
+    # and pays 6-8s per tap - tracked separately, but it is why this budget is
+    # roughly double the smoke job's.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-deps
+
+      # scripts/stubDesktopPeer.mjs imports @kangentic/protocol, so the runner
+      # needs Node + node_modules - the smoke job needs neither.
+
+      # Kangentic/relay is public, so CI can check it out directly. Pinned to
+      # a SHA rather than `main`: an unpinned checkout would let a commit in a
+      # sibling repo redden every mobile PR, which is exactly the "required
+      # check that cannot pass" hazard this job is built to avoid, arriving
+      # through a side door. Bump by updating the ref below once the new SHA
+      # has been smoke-tested against this suite.
+      - uses: actions/checkout@v4
+        with:
+          repository: Kangentic/relay
+          ref: 7a8d3a69b522c81fb72dbac373e607a178d51855
+          path: relay-src
+
+      # Builds with whatever Node setup-node-deps selected from THIS repo's
+      # .nvmrc (22). The relay's own engines field is >=20 and its
+      # .node-version is 22, so that lines up - but by coincidence, not by
+      # construction. If this repo's .nvmrc ever drops below the relay's
+      # floor, this step is where it surfaces.
+      - name: Build the relay
+        working-directory: relay-src
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-apk.outputs.apk-name }}
+          path: apk
+
+      # Maestro is a JVM tool. The runner image happens to ship a JDK, but
+      # pinning it means an image change cannot silently break this job.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Maestro
+        run: |
+          set -euo pipefail
+          curl -Ls https://get.maestro.mobile.dev > "$RUNNER_TEMP/install-maestro.sh"
+          bash "$RUNNER_TEMP/install-maestro.sh"
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Report the Maestro version
+        run: maestro --version
+
+      # The emulator needs hardware acceleration to be usable. ubuntu-latest has
+      # KVM available but not world-writable by default.
+      - name: Enable KVM
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Pair and run the paired Maestro suite on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          # Must match the APK's ABI (scripts/androidAbis.mjs gives e2e x86_64).
+          arch: x86_64
+          # `default`, NOT `google_apis` - same reasoning as the smoke job
+          # below: Play Services starves this app during boot. None of the 11
+          # paired flows exercise remote push, so nothing here needs it. A
+          # future flow that does should get its own matrix entry rather than
+          # moving this one back.
+          target: default
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -camera-back none -memory 4096
+          disable-animations: true
+          script: bash .github/scripts/run-maestro-paired.sh "$(ls apk/*.apk | head -n 1)" "$GITHUB_WORKSPACE/relay-src" .maestro/paired
+
+      - name: Upload Maestro paired artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-paired-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/maestro-report.xml
+            ${{ runner.temp }}/maestro-output
+            ${{ runner.temp }}/maestro-debug
+            ${{ runner.temp }}/relay.log
+            ${{ runner.temp }}/stub.log
+          retention-days: 7
+          # A paired failure with no relay or stub log is undiagnosable, so
+          # both ride along with the same never-fail-the-job semantics as the
+          # smoke job's upload.
           if-no-files-found: ignore
 
   # Thin required gate, mirroring the ci.yml tiers: this single check is what
@@ -336,15 +459,14 @@ jobs:
           {
             echo "### E2E coverage for this run"
             echo ""
-            echo "| Suite | Flows | Status |"
+            echo "| Suite | Flows | Gates the merge? |"
             echo "|---|---|---|"
-            echo "| smoke | 1 | ran |"
-            echo "| paired | 11 | **not run** |"
+            echo "| smoke | 1 | yes - this check |"
+            echo "| paired | 11 | no - see the separate \"Maestro paired (advisory)\" check |"
             echo ""
-            echo "The paired flows are not in CI yet. Each needs a completed pairing to"
-            echo "\`scripts/stubDesktopPeer.mjs\` over a local relay on \`ws://\`, and Android blocks"
-            echo "cleartext in a release-shaped build. Treat this check as a smoke gate, not full"
-            echo "E2E coverage, until that lands."
+            echo "The paired suite runs in its own job and reports its own check, but is not"
+            echo "read by this gate: it is advisory until it has been green across several PRs,"
+            echo "at which point it is promoted into this gate (see e2e.yml's header comment)."
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$MAESTRO_RESULT" != "success" ]; then
