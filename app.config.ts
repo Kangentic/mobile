@@ -28,7 +28,12 @@ const config: ExpoConfig = {
     // Hand-bumped, like android.versionCode below; see the iOS without a Mac
     // section of docs/developer-guide.md. Required because
     // cli.appVersionSource is "local", which is CLI-wide and not Android-only.
-    buildNumber: '1',
+    //
+    // Build 1 was uploaded to App Store Connect on 2026-07-26 and is spent.
+    // Apple rejects a duplicate, and scripts/checkAppStoreBuild.mjs only catches
+    // that in advance once an ASC API key is configured, so this value is the
+    // only thing standing between a dispatch and a wasted archive.
+    buildNumber: '2',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
