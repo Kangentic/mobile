@@ -147,6 +147,21 @@ jobs:
       - uses: ./.github/actions/setup-node-deps
       - name: Generate the native Android project
         run: npx expo prebuild --platform android --no-install
+
+      # iOS too, and this is not symmetry for its own sake. Prebuilding only
+      # Android is what let a broken config-plugin import reach an iOS build: the
+      # plugin evaluated fine for Android and this gate went green on every PR
+      # while iOS could not even read the app config. Prebuild runs on Linux for
+      # either platform (it is file generation; CocoaPods and Xcode are not
+      # involved), so covering iOS costs a few seconds and closes that hole.
+      #
+      # Note this is weaker than it looks: `expo prebuild` resolves plugin imports
+      # through Expo CLI's own loader, which is more forgiving than the strict Node
+      # ESM resolution `eas build` uses. It catches a plugin that throws; it does
+      # not catch every import that only fails under strict package exports.
+      - name: Generate the native iOS project
+        run: npx expo prebuild --platform ios --no-install
+
       - name: Confirm the generated project is not committed
         # CNG: android/ must exist only as a build artifact. If prebuild output
         # ever shows up as tracked changes, someone committed the native tree.
