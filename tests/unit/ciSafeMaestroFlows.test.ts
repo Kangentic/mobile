@@ -31,6 +31,19 @@ const e2eWorkflowSource = readFileSync(`${repositoryRoot}.github/workflows/e2e.y
 /** Entries proven to run on a GitHub runner. */
 const CI_SAFE_ENTRIES = ['.maestro/smoke.yaml', '.maestro/paired'];
 
+/**
+ * The job names listed in the required `E2E tests (Maestro)` gate's `needs:`.
+ * Text-parsed for the same reason as the flow entries below.
+ */
+function readRequiredGateNeeds(): string[] {
+  const gate = e2eWorkflowSource.match(/name:\s*E2E tests \(Maestro\)\s*\n\s*needs:\s*\[([^\]]*)\]/);
+  if (gate === null) return [];
+  return gate[1]
+    .split(',')
+    .map((jobName) => jobName.trim())
+    .filter((jobName) => jobName.length > 0);
+}
+
 function readWorkflowFlowEntries(): string[] {
   const entries: string[] = [];
 
@@ -74,6 +87,26 @@ describe('CI runs only the Maestro entries this guard knows about', () => {
     for (const entry of readWorkflowFlowEntries()) {
       expect(entry).not.toMatch(/^\.maestro\/?$/);
     }
+  });
+
+  it('finds the required gate\'s needs at all', () => {
+    // Non-vacuity guard for the assertion below, which is otherwise vacuously
+    // true the moment the gate job is reformatted out of this regex's reach.
+    expect(readRequiredGateNeeds().length).toBeGreaterThan(0);
+  });
+
+  it('keeps the advisory paired job OUT of the required gate', () => {
+    // The whole safety design of the paired suite. `E2E tests (Maestro)` is a
+    // required check on `main`, so anything in its `needs:` can block every
+    // merge in the repository. The paired suite is 11 flows against a relay, a
+    // stub peer, and an emulator, and it has no CI track record yet, so it
+    // reports its own advisory check instead.
+    //
+    // This test failing is the intended cost of PROMOTING that job once it has
+    // been green across several PRs: delete this assertion in the same change
+    // that adds `maestro-paired` to the gate. That is the point - promotion
+    // should be a deliberate edit, not a side effect.
+    expect(readRequiredGateNeeds()).not.toContain('maestro-paired');
   });
 
   it('every allowlisted entry exists on disk, as a file or a directory', () => {
