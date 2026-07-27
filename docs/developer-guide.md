@@ -10,12 +10,16 @@ Windows-first: this project develops without a Mac in the loop.
 - **Node 22** (see `.nvmrc`). On Windows, `nvm-windows` is the simplest way to pin it.
 - **JDK 17** and **Android Studio** with an Android Virtual Device (emulator) configured. The
   emulator is the daily local target.
-- **`eas-cli`** (`npm install -g eas-cli`), for cloud builds, including all iOS builds.
+- **`eas-cli`** (`npm install -g eas-cli`), optional. Builds run on GitHub Actions
+  (`.github/workflows/build-android.yml` and `build-ios.yml`), so `eas-cli` is needed only for
+  managing Apple and Google credentials and as the cloud-build fallback.
 - **Maestro CLI**, installable on Windows, for E2E flows against the emulator and for the
   Maestro MCP server; see "Agent tooling (MCP servers)" below for the PATH setup and a gotcha
   worth reading before you hit it.
-- No Mac, no Xcode, no local iOS Simulator: iOS builds and iOS E2E both happen in the cloud via
-  EAS (see "iOS without a Mac" below).
+- No Mac, no Xcode, no local iOS Simulator. Every iOS build runs on a free GitHub-hosted macOS
+  runner, including the signed ones (see "iOS without a Mac" below). Note `expo prebuild --platform
+  ios` refuses to run on Windows at all, so anything that inspects the generated iOS project has to
+  happen on a runner.
 
 ## Quick Start
 

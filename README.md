@@ -83,7 +83,7 @@ See [docs/developer-guide.md](docs/developer-guide.md) for full setup.
 |---|---|---|
 | Unit | vitest | Any OS, CI |
 | Component | Jest + React Native Testing Library | Any OS, CI |
-| E2E | Maestro | Windows + Android emulator locally; cloud iOS simulators via EAS Workflows |
+| E2E | Maestro | Windows + Android emulator locally, and a CI emulator. No iOS E2E yet |
 | Web | Playwright via react-native-web | Later phase |
 
 ## Security
