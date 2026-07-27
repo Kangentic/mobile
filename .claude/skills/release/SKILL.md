@@ -158,7 +158,8 @@ gh workflow run build-ios.yml --ref main -f target=device -f submit=<none|testfl
   this.** If `eas submit` is the thing that failed, this is the workaround, not a parallel attempt at
   the same thing.
 
-Watch either with `gh run watch`. Expect roughly 20 to 30 minutes for Android, 20 to 40 for iOS.
+Watch either with `gh run watch`. Measured: roughly 20 to 30 minutes for Android, about **11 minutes**
+for iOS (the `xcodebuild archive` step is 8.5 of those and everything else is noise).
 
 ## Step 5 - Approve the environment gate
 
