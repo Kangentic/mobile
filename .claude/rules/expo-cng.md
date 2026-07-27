@@ -41,13 +41,22 @@ unreproducible for any other contributor or CI machine.
   `package.json` diff, so review cannot tell which command was run. It can only flag a version
   that looks unresolved against the pinned SDK. The install discipline above is enforced in
   practice by the `--check` gate below, not by review.
+- **Check (live now, every PR):** the `Native config (expo prebuild)` job in
+  `.github/workflows/ci.yml` runs `npx expo prebuild` for **both** platforms on a clean
+  checkout, so a config-plugin or native-config change that cannot prebuild fails the PR. It
+  covered only Android at first, which is precisely how a broken `expo/config-plugins` import
+  reached an iOS build with every gate green. Know its limit even now: `expo prebuild` resolves
+  plugin imports through Expo CLI's own loader, which is more forgiving than the strict Node ESM
+  resolution `eas build` uses, so it catches a plugin that throws but not every import that only
+  fails under strict package exports.
+- **Check (live now, every PR):** `npx expo install --check` in the same job makes
+  SDK-resolved dependency drift a PR gate. This was previously deferred on the grounds that it
+  would redden a green check over cosmetic drift. That was the wrong call: the drift it would
+  have caught included `expo` itself three patches behind, and it was masking the config-plugin
+  failure above. Drift is not cosmetic when the SDK is one of the drifting packages.
 - **Check (live now, on dispatch):** `.github/workflows/build-android.yml` and
-  `build-ios.yml` each run a real `npx expo prebuild --no-install` on a clean checkout, so a
-  config-plugin or native-config change that cannot prebuild fails there. Both are
-  dispatch-triggered rather than PR-triggered, so this catches breakage before a build, not
-  before a merge.
-- **Check (planned):** an `npx expo install --check` (or `npx expo-doctor`) step in
-  `.github/workflows/ci.yml`, which would make SDK-resolved dependency drift a PR gate.
+  `build-ios.yml` each also prebuild for real before building, so the same class of breakage
+  fails a build even if it somehow reached `main`.
 
 Mind the read-trigger gap: because `ios/`/`android/` are gitignored, this path-scoped rule
 rarely enters context on its own. The same summary is restated always-on in `CLAUDE.md`'s
