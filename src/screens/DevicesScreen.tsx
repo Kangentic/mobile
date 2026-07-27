@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Card, MonoText, Row, Screen, Stack, StatusDot, Text, useTheme } from '@/components';
@@ -9,9 +9,6 @@ import { useChannelStore } from '@/state/channelStore';
 import { formatKeyFingerprint, usePairedDesktopInfo } from './usePairedDesktopInfo';
 
 const trustAnchorStore = new TrustAnchorStore();
-
-/** How long the armed unpair confirmation stays armed before it relaxes back. */
-const UNPAIR_CONFIRM_WINDOW_MS = 5000;
 
 /**
  * The paired-desktop overview: what this phone trusts, how it is connected,
@@ -28,19 +25,25 @@ export function DevicesScreen(): React.JSX.Element {
   const relayUrl = useChannelStore((state) => state.relayUrl);
   const [unpairArmed, setUnpairArmed] = useState(false);
   const [unpairing, setUnpairing] = useState(false);
+  const [unpairError, setUnpairError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!unpairArmed) return;
-    const disarmTimer = setTimeout(() => setUnpairArmed(false), UNPAIR_CONFIRM_WINDOW_MS);
-    return () => clearTimeout(disarmTimer);
-  }, [unpairArmed]);
-
+  /**
+   * Two-step confirm with no clock on it, for the same reason the task sheet's
+   * delete has none: an armed destructive control that relaxes on a timer
+   * relaxes SILENTLY, so a confirm tap arriving late is reinterpreted as a
+   * fresh arm and the user sees the button they just pressed, unchanged and
+   * unexplained. This one was worse - five seconds to read "Tap again to
+   * confirm" and decide whether to drop the pairing. The second tap is the
+   * guard; the clock never was.
+   */
   const onUnpairPress = useCallback(() => {
     if (!unpairArmed) {
       setUnpairArmed(true);
       return;
     }
+    setUnpairArmed(false);
     setUnpairing(true);
+    setUnpairError(null);
     void revokePushRegistrationForUnpair()
       .then(() => trustAnchorStore.clear())
       .then(() => {
@@ -51,6 +54,12 @@ export function DevicesScreen(): React.JSX.Element {
         reconnectNow();
         router.back();
       })
+      // Unpair had no failure path at all: a rejected revoke or a Keychain
+      // write that threw left the phone still paired, the button back to
+      // "Unpair", and nothing said so. Say so.
+      .catch((error: unknown) =>
+        setUnpairError(error instanceof Error ? error.message : 'Unpair failed - try again'),
+      )
       .finally(() => setUnpairing(false));
   }, [unpairArmed, router]);
 
@@ -137,6 +146,11 @@ export function DevicesScreen(): React.JSX.Element {
               disabled={unpairing}
               testID={unpairArmed ? 'devices-unpair-confirm' : 'devices-unpair'}
             />
+            {unpairError ? (
+              <Text variant="caption" color="danger" style={styles.centered} testID="devices-unpair-error">
+                {unpairError}
+              </Text>
+            ) : null}
           </>
         )}
 

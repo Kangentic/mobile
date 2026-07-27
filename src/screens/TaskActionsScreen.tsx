@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -9,16 +9,12 @@ import { findTaskById, selectColumnsOrdered, useBoardStore } from '@/state/board
 import { triggerHaptic } from '@/lib/haptics';
 
 /**
- * How long the armed delete confirmation stays armed before it relaxes back.
- *
- * The armed row asks the reader to notice the label changed, read the
- * consequence ("Removes the task and stops its session on your desktop") and
- * then decide. Five seconds was not enough time to do all three without
- * hurrying, which is the wrong pressure to apply to a destructive action -
- * the window exists to prevent an accidental double-tap, not to impose a
- * deadline. Ten still disarms well within the "did I mean to do that" span.
+ * Every row here needs both route params. Missing one is a routing defect the
+ * user cannot act on, but a row that does NOTHING when tapped is worse than
+ * one that admits it: a broken app and a deliberate refusal look identical
+ * from the outside, and on the destructive row that is unforgivable.
  */
-const DELETE_CONFIRM_WINDOW_MS = 10_000;
+const MISSING_TASK_CONTEXT = 'Cannot act on this task - close and reopen it';
 
 function messageForActionError(error: unknown, fallback: string): string {
   return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
@@ -54,14 +50,27 @@ export function TaskActionsScreen(): React.JSX.Element {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
 
-  useEffect(() => {
-    if (!deleteArmed) return;
-    const disarmTimer = setTimeout(() => setDeleteArmed(false), DELETE_CONFIRM_WINDOW_MS);
-    return () => clearTimeout(disarmTimer);
-  }, [deleteArmed]);
+  const onMove = useCallback(() => {
+    if (!taskId || !projectId) {
+      setErrorMessage(MISSING_TASK_CONTEXT);
+      return;
+    }
+    router.replace({ pathname: '/move-task', params: { taskId, projectId } });
+  }, [taskId, projectId, router]);
+
+  const onEdit = useCallback(() => {
+    if (!taskId || !projectId) {
+      setErrorMessage(MISSING_TASK_CONTEXT);
+      return;
+    }
+    router.replace({ pathname: '/edit-task', params: { taskId, projectId } });
+  }, [taskId, projectId, router]);
 
   const onArchive = useCallback(() => {
-    if (!taskId || !projectId) return;
+    if (!taskId || !projectId) {
+      setErrorMessage(MISSING_TASK_CONTEXT);
+      return;
+    }
     setActionInFlight(true);
     setErrorMessage(null);
     void archiveTask({ projectId, taskId })
@@ -70,13 +79,30 @@ export function TaskActionsScreen(): React.JSX.Element {
       .finally(() => setActionInFlight(false));
   }, [taskId, projectId, router]);
 
+  /**
+   * Two-step confirm: the first tap arms, the second fires. The armed state
+   * ends when the user acts or the sheet goes away - never on a clock.
+   *
+   * It used to relax after ten seconds, and that deadline was invisible. The
+   * row reverted to "Delete task" with no signal, so a confirm tap arriving a
+   * beat late was silently reinterpreted as a FRESH arm: the user saw the
+   * same words they had just tapped, no delete, and no reason, with no way to
+   * tell a missed deadline from a broken app. It punished exactly the user
+   * who stopped to read the consequence line. The expiry never did the job it
+   * claimed either - an accidental rapid double-tap fires the delete whatever
+   * the window is, because the guard is the second tap, not the clock - so
+   * dropping it costs nothing that was ever there.
+   */
   const onDeletePress = useCallback(() => {
     if (!deleteArmed) {
       setDeleteArmed(true);
       return;
     }
     setDeleteArmed(false);
-    if (!taskId || !projectId) return;
+    if (!taskId || !projectId) {
+      setErrorMessage(MISSING_TASK_CONTEXT);
+      return;
+    }
     setActionInFlight(true);
     setErrorMessage(null);
     void deleteTaskFromBoard({ projectId, taskId })
@@ -107,18 +133,14 @@ export function TaskActionsScreen(): React.JSX.Element {
         <ActionRow
           label="Move to column"
           iconName="swap-horizontal"
-          onPress={() => {
-            if (taskId && projectId) router.replace({ pathname: '/move-task', params: { taskId, projectId } });
-          }}
+          onPress={onMove}
           disabled={actionInFlight}
           testID="task-action-move"
         />
         <ActionRow
           label="Edit task"
           iconName="create"
-          onPress={() => {
-            if (taskId && projectId) router.replace({ pathname: '/edit-task', params: { taskId, projectId } });
-          }}
+          onPress={onEdit}
           disabled={actionInFlight}
           testID="task-action-edit"
         />
@@ -140,7 +162,7 @@ export function TaskActionsScreen(): React.JSX.Element {
           testID={deleteArmed ? 'task-action-delete-confirm' : 'task-action-delete'}
         />
         {errorMessage ? (
-          <Text variant="caption" color="danger">
+          <Text variant="caption" color="danger" testID="task-action-error">
             {errorMessage}
           </Text>
         ) : null}

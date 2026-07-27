@@ -81,6 +81,46 @@ describe('DevicesScreen', () => {
     expect(mockRevokePushRegistrationForUnpair.mock.invocationCallOrder[0]).toBeLessThan(mockClear.mock.invocationCallOrder[0]);
   });
 
+  /**
+   * The armed confirmation must not expire on a clock. It used to relax after
+   * five seconds, silently, so a confirm tap arriving late re-armed instead of
+   * unpairing and the button read exactly as it had before the tap. The second
+   * tap is the guard against an accidental press; the timer never was.
+   */
+  it('still unpairs on the second tap long after the first', async () => {
+    jest.useFakeTimers();
+    try {
+      renderDevices();
+      fireEvent.press(screen.getByTestId('devices-unpair'));
+
+      act(() => {
+        jest.advanceTimersByTime(120_000);
+      });
+      expect(screen.getByTestId('devices-unpair-confirm')).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
+      });
+      expect(mockClear).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /** Unpair had no failure path at all: it left the phone paired and said nothing. */
+  it('says why when the unpair fails instead of silently staying paired', async () => {
+    mockRevokePushRegistrationForUnpair.mockRejectedValueOnce(new Error('Keystore is locked'));
+    renderDevices();
+    fireEvent.press(screen.getByTestId('devices-unpair'));
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
+    });
+    expect(screen.getByText('Keystore is locked')).toBeTruthy();
+    expect(mockClear).not.toHaveBeenCalled();
+    expect(mockBack).not.toHaveBeenCalled();
+  });
+
   it('shows the pairing CTA when nothing is paired', () => {
     mockPairedState = { status: 'unpaired' };
     renderDevices();
