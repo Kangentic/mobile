@@ -35,6 +35,18 @@ function readIosScript(name: string): string {
   return readFileSync(`${repositoryRoot}.github/scripts/${name}`, 'utf8');
 }
 
+/**
+ * The section of build-ios.yml belonging to one job. Ordering assertions need
+ * this: `expo prebuild --platform ios` appears in both the simulator and the
+ * device job, so a whole-file indexOf silently compares against the wrong one.
+ */
+function readIosJob(jobName: string): string {
+  const start = iosWorkflowSource.indexOf(`\n  ${jobName}:\n`);
+  expect(start).toBeGreaterThan(-1);
+  const nextJob = iosWorkflowSource.slice(start + 1).search(/\n {2}[a-z][\w-]*:\n/);
+  return nextJob === -1 ? iosWorkflowSource.slice(start) : iosWorkflowSource.slice(start, start + 1 + nextJob);
+}
+
 interface EasConfig {
   build: Record<string, { extends?: string; channel?: string; distribution?: string }>;
 }
@@ -286,8 +298,40 @@ describe('build-ios workflow', () => {
     // Sidesteps the two-names problem entirely, and unlike the common name a
     // hash is not a person's legal name in a public log.
     expect(iosWorkflowSource).toContain('steps.signing.outputs.signing-identity');
-    expect(iosWorkflowSource).toContain('CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"');
     expect(readIosScript('export-ios-ipa.sh')).toContain('<string>$SIGNING_IDENTITY</string>');
+  });
+
+  it('scopes signing to the app target instead of the xcodebuild command line', () => {
+    // Command-line build settings apply to EVERY target, and one that produces
+    // no signed bundle rejects a provisioning profile outright. The first signed
+    // archive died on a Swift Package target for exactly this reason.
+    expect(iosWorkflowSource).not.toMatch(/xcodebuild archive[\s\S]{0,900}PROVISIONING_PROFILE_SPECIFIER=/);
+    expect(iosWorkflowSource).not.toMatch(/xcodebuild archive[\s\S]{0,900}CODE_SIGN_STYLE=/);
+    expect(iosWorkflowSource).toContain('KANGENTIC_IOS_PROFILE_UUID');
+  });
+
+  it('exports the signing inputs before prebuild, not just before the archive', () => {
+    // withIosManualSigning runs during prebuild, and GITHUB_ENV only affects
+    // LATER steps, so exporting late leaves the generated project on automatic
+    // signing. Identical in shape to the eas.json env ordering on Android, and
+    // identically silent when wrong.
+    const deviceJob = readIosJob('device');
+    const exportIndex = deviceJob.indexOf('Export the signing inputs for the config plugin');
+    const prebuildIndex = deviceJob.indexOf('expo prebuild --platform ios');
+    expect(exportIndex).toBeGreaterThan(-1);
+    expect(prebuildIndex).toBeGreaterThan(-1);
+    expect(exportIndex).toBeLessThan(prebuildIndex);
+  });
+
+  it('asserts the app target actually got manual signing', () => {
+    // The plugin is inert without its environment variables, and a silently
+    // unsigned archive is the failure mode this workflow exists to prevent.
+    const deviceJob = readIosJob('device');
+    const assertIndex = deviceJob.indexOf('-showBuildSettings');
+    const archiveIndex = deviceJob.indexOf('xcodebuild archive');
+    expect(assertIndex).toBeGreaterThan(-1);
+    expect(archiveIndex).toBeGreaterThan(-1);
+    expect(assertIndex).toBeLessThan(archiveIndex);
   });
 
   it('fails a build whose entitlements lost push', () => {
