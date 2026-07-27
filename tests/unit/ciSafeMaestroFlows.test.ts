@@ -20,6 +20,14 @@
  * `run-maestro-paired.sh` in the job's `script:` step. This guard has to
  * scan for that too, or it silently stops covering the paired entry the
  * moment the smoke matrix entry alone satisfies the non-vacuity check.
+ *
+ * The allowlists are kept PER JOB, not pooled. The required gate exits on
+ * `needs.maestro.result`, so a `flows: .maestro/paired` line added to the
+ * `maestro` job's matrix puts all 11 flows behind the required check just as
+ * surely as adding `maestro-paired` to the gate's `needs:` does. A single
+ * pooled allowlist accepted that silently, because the entry was on it for
+ * the other job's sake. Which job may run an entry is the thing being
+ * guarded, so it is what the lists encode.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,8 +36,19 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const e2eWorkflowSource = readFileSync(`${repositoryRoot}.github/workflows/e2e.yml`, 'utf8');
 
-/** Entries proven to run on a GitHub runner. */
-const CI_SAFE_ENTRIES = ['.maestro/smoke.yaml', '.maestro/paired'];
+/**
+ * Entries the REQUIRED `Tests (Maestro)` gate may run, via the `maestro` job's
+ * matrix. Deliberately narrower than the advisory list: everything here feeds
+ * `needs.maestro.result`, which the gate exits non-zero on, so an entry added
+ * here can block every merge in the repository.
+ */
+const REQUIRED_GATE_SAFE_ENTRIES = ['.maestro/smoke.yaml'];
+
+/** Entries the advisory `maestro-paired` job may run. A red run here blocks nothing. */
+const ADVISORY_SAFE_ENTRIES = ['.maestro/paired'];
+
+/** Every entry either job may run. */
+const CI_SAFE_ENTRIES = [...REQUIRED_GATE_SAFE_ENTRIES, ...ADVISORY_SAFE_ENTRIES];
 
 /**
  * The job names listed in the required `Tests (Maestro)` gate's `needs:`.
@@ -44,34 +63,61 @@ function readRequiredGateNeeds(): string[] {
     .filter((jobName) => jobName.length > 0);
 }
 
-function readWorkflowFlowEntries(): string[] {
-  const entries: string[] = [];
+/**
+ * Entries run by the `maestro` job, whose result the required gate reads.
+ * Text-parsed rather than via a YAML dependency, matching buildWorkflow.test.ts.
+ *
+ * The scan is FILE-WIDE and assumes `maestro` is the only job with a `flows:`
+ * key, which it is today (one match in e2e.yml). That assumption is what lets
+ * a regex stand in for "belongs to the job the gate needs". If a THIRD job
+ * with its own `flows:` key is ever added, entries meant for it will surface
+ * here and be rejected against the required-gate allowlist. The fix then is to
+ * scope this scan to the `maestro` job's block, NOT to widen
+ * `REQUIRED_GATE_SAFE_ENTRIES` - widening it reopens the exact door the split
+ * allowlists close.
+ */
+function readRequiredGateFlowEntries(): string[] {
+  return [...e2eWorkflowSource.matchAll(/^\s*(?:- )?flows:\s*(\S+)\s*$/gm)].map((match) => match[1]);
+}
 
-  // The smoke suite's matrix. Text-parsed rather than via a YAML dependency,
-  // matching buildWorkflow.test.ts.
-  for (const match of e2eWorkflowSource.matchAll(/^\s*(?:- )?flows:\s*(\S+)\s*$/gm)) {
-    entries.push(match[1]);
-  }
-
-  // The paired suite's script invocation: the flows directory is the trailing
-  // literal argument on the run-maestro-paired.sh line, not a `flows:` key.
+/**
+ * Entries run by the advisory `maestro-paired` job. It has no matrix, so its
+ * flows directory is not a `flows:` key like the smoke job's - it is the
+ * trailing literal argument on the `run-maestro-paired.sh` line.
+ */
+function readAdvisoryFlowEntries(): string[] {
   const pairedInvocation = e2eWorkflowSource.match(/run-maestro-paired\.sh\b.*?(\.maestro\/\S+)\s*$/m);
-  if (pairedInvocation) entries.push(pairedInvocation[1]);
+  return pairedInvocation ? [pairedInvocation[1]] : [];
+}
 
-  return entries;
+function readWorkflowFlowEntries(): string[] {
+  return [...readRequiredGateFlowEntries(), ...readAdvisoryFlowEntries()];
 }
 
 describe('CI runs only the Maestro entries this guard knows about', () => {
   it('finds both entries', () => {
-    // Non-vacuity guard, raised to 2 (was 1): a scan that silently stops
-    // matching the paired entry is worse than no scan, because the smoke
-    // entry alone would still satisfy a bare ">0" check.
-    expect(readWorkflowFlowEntries().length).toBeGreaterThanOrEqual(2);
+    // Non-vacuity guard, asserting MEMBERSHIP rather than a count. A count is
+    // the weaker form: `>= 2` also passes when the paired regex has silently
+    // stopped matching and a second smoke matrix entry has been added, which
+    // is exactly the drift this guard exists to notice.
+    expect(readRequiredGateFlowEntries()).toContain('.maestro/smoke.yaml');
+    expect(readAdvisoryFlowEntries()).toContain('.maestro/paired');
   });
 
-  it('runs only allowlisted entries', () => {
-    for (const entry of readWorkflowFlowEntries()) {
-      expect(CI_SAFE_ENTRIES).toContain(entry);
+  it('keeps the paired suite out of the REQUIRED gate job', () => {
+    // The gate reads `needs.maestro.result`, so a paired entry added to the
+    // `maestro` job's matrix routes all 11 flows into the required check just
+    // as surely as adding `maestro-paired` to the gate's `needs:` does. The
+    // separate allowlist is what closes that second door; a single combined
+    // allowlist accepted this silently.
+    for (const entry of readRequiredGateFlowEntries()) {
+      expect(REQUIRED_GATE_SAFE_ENTRIES).toContain(entry);
+    }
+  });
+
+  it('runs only allowlisted entries in the advisory job', () => {
+    for (const entry of readAdvisoryFlowEntries()) {
+      expect(ADVISORY_SAFE_ENTRIES).toContain(entry);
     }
   });
 

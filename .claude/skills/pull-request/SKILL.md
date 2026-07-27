@@ -152,8 +152,9 @@ link once it reconnects. If it never returns this run, report the PR number prom
 Treat a non-zero exit while checks are pending as status, not a tool failure; re-run the same
 `--watch` command if the timeout fires with checks still only pending. If `CLA Assistant` is the
 only check registered, do not call that all-green: the `ci.yml` checks may not have registered
-yet, so re-poll before concluding it is genuinely the only one. Expect seven checks in total (the
-`ci.yml` jobs plus `Tests (Maestro)` and `cla`), plus the advisory `Maestro (paired)`.
+yet, so re-poll before concluding it is genuinely the only one. Expect eight checks to report:
+seven required (the `ci.yml` jobs plus `Tests (Maestro)` and `cla`) and one advisory
+(`Maestro (paired)`). Only the seven required ones have to be green to merge.
 
 **A stacked PR reports green having run nothing.** `ci.yml` and `e2e.yml` both filter
 `pull_request` to `branches: [main]`, so a PR whose base is another feature branch gets only

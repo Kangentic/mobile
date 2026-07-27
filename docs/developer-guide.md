@@ -310,7 +310,7 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
 
 ## CI builds (GitHub Actions)
 
-Three workflows live in `.github/workflows/`:
+The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the CLA bot):
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
