@@ -5,6 +5,7 @@ import {
   deriveSecretstreamPair,
   deriveShortAuthenticationString,
   encodeMessage,
+  FrameTag,
   openPairingConfirm,
   SessionFrameKind,
   unwrapSessionFrame,
@@ -115,6 +116,7 @@ export class StubSessionInitiator {
   private readonly unsubscribe: Unsubscribe;
   private readonly receivedMessages: BridgeMessage[] = [];
   private establishedCountValue = 0;
+  private finalFrameCountValue = 0;
   private requestHandler: ((request: CapabilityRequestMessage) => CapabilityResponseMessage | null) | null = null;
 
   constructor(transport: Transport, options: StubSessionInitiatorOptions) {
@@ -131,6 +133,11 @@ export class StubSessionInitiator {
   /** Increments every time a handshake round (initial or rekey) completes - a deterministic signal tests can wait on. */
   get establishedCount(): number {
     return this.establishedCountValue;
+  }
+
+  /** Counts inbound FrameTag.Final frames - the phone's deliberate goodbye, which the desktop turns into an immediate Offline. */
+  get finalFrameCount(): number {
+    return this.finalFrameCountValue;
   }
 
   get messages(): readonly BridgeMessage[] {
@@ -188,7 +195,27 @@ export class StubSessionInitiator {
 
   private handleApplicationFrame(payload: Uint8Array): void {
     if (!this.streams) return;
-    const opened = this.streams.receive.open(payload);
+    let opened: ReturnType<SecretstreamDirectionPair['receive']['open']>;
+    try {
+      opened = this.streams.receive.open(payload);
+    } catch {
+      // A frame that will not open is DROPPED, matching both the real receiver
+      // (SessionManager.handleApplicationFrame) and scripts/stubDesktopPeer.mjs.
+      // Letting it throw instead would surface a counter desync as an unhandled
+      // exception from inside LoopbackTransport's queueMicrotask - which vitest
+      // reports as "might cause false positive tests" and which buries the
+      // assertion that actually explains the failure.
+      return;
+    }
+    // A Final's plaintext is empty and decodeMessage throws on empty bytes, so
+    // without this branch a goodbye frame crashes the peer - and because
+    // LoopbackTransport delivers inside queueMicrotask, that throw becomes an
+    // unhandled rejection that takes the remaining listeners with it. The real
+    // desktop and scripts/stubDesktopPeer.mjs both branch here.
+    if (opened.tag === FrameTag.Final) {
+      this.finalFrameCountValue += 1;
+      return;
+    }
     const message = decodeMessage(opened.plaintext);
     this.receivedMessages.push(message);
     if (message.type === 'capability-request' && this.requestHandler) {

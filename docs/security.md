@@ -65,6 +65,10 @@ the wire.
   the damage of a compromised session key.
 - **Replay protection:** per-direction 64-bit counter nonces reject anything at or below the last
   seen value.
+- **A goodbye is a courtesy, not a proof.** A deliberate teardown (unpairing) sends a
+  `FrameTag.Final`-tagged frame so the desktop can drop the device promptly, but its *absence*
+  proves nothing: anyone who can drop the socket can suppress it. The desktop's presence probing
+  stays load-bearing, and a missing Final must never be read as evidence a device is still there.
 - **No Double Ratchet.** Double Ratchet solves offline, asynchronous message queuing, which this
   interactive link does not have; adding it would be unjustified complexity.
 - **Relay scheme enforcement:** the pairing token is mixed into the handshake as the Noise PSK
@@ -158,6 +162,14 @@ connection timing, frame sizes and frequency, and the pairing graph (which devic
 relay slot). This app does not claim otherwise. Mitigations: self-hosting your own
 `relay` instance, single-use pairing tokens, and relay slot tokens so only paired
 devices can consume relay capacity at all.
+
+One frame size is worth naming rather than leaving under "frame sizes". The deliberate-teardown
+goodbye seals an EMPTY plaintext, so it is the only frame the phone ever sends at the
+secretstream minimum (a tag byte plus the Poly1305 tag); every ordinary `BridgeMessage` is
+encoded JSON and far larger. A relay operator can therefore tell a deliberate unpair from a
+dropped socket by length alone, without breaking anything. That is a departure signal, not
+content, and it is information the operator would get from the slot going quiet moments later
+anyway - but it is newly precise, so it is stated here rather than implied.
 
 ## Push privacy
 

@@ -20,6 +20,22 @@ export interface ChannelControllerOptions {
 }
 
 /**
+ * Mechanism, not intent: this layer is the pure protocol composer and does
+ * not know what "unpair" means. The lifecycle owner
+ * (src/connection/connectionManager.ts) translates its
+ * ConnectionTeardownIntent into this flag.
+ */
+export interface ChannelDisposeOptions {
+  /**
+   * Announce departure with an empty FrameTag.Final frame before tearing the
+   * channel down, so the desktop marks this phone Offline immediately rather
+   * than inferring it from a dropped socket. Defaults to false: an ordinary
+   * dispose (backgrounding, a reconnect) must stay silent.
+   */
+  sendFinalFrame?: boolean;
+}
+
+/**
  * Composes the relay transport, the KK session (responder), and capability
  * request/response correlation into the one object a screen needs. Wires
  * the "transport resumes, crypto restarts" reconnect model: whenever the
@@ -71,7 +87,11 @@ export class ChannelController {
     await this.transport.connect();
   }
 
-  dispose(): void {
+  dispose(options: ChannelDisposeOptions = {}): void {
+    // FIRST, before anything else: every line below makes a Final impossible -
+    // session.dispose() drops the key material and transport.close() puts the
+    // transport past 'connected'. Ordering, not merely sending, is the feature.
+    if (options.sendFinalFrame) this.session.sendFinalFrame();
     this.unsubscribeTransportState();
     this.feed.dispose();
     this.capabilities.dispose();

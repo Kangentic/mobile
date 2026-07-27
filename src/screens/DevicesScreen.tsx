@@ -51,7 +51,10 @@ export function DevicesScreen(): React.JSX.Element {
         // store and cache holding the desktop's content is cleared so
         // nothing readable outlives the pairing on an unlocked phone.
         wipeDesktopContent();
-        reconnectNow();
+        // Unpair is a permanent departure: tell the desktop so its Mobile
+        // Devices badge flips to Offline now, instead of inferring it from a
+        // dropped socket ~12s later.
+        reconnectNow('announce-departure');
         router.back();
       })
       // Unpair had no failure path at all: a rejected revoke or a Keychain

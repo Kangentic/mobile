@@ -7,6 +7,21 @@ import type { Transport, TransportState, Unsubscribe } from '@kangentic/protocol
  * microtask (not synchronous) so consumers exercise the same "send doesn't
  * synchronously invoke the peer's listener" ordering a real transport has,
  * without needing a real socket.
+ *
+ * KNOWN TRAP - a synchronous peer close EATS undelivered frames. Because
+ * send() re-checks `peer.currentState` when its microtask drains (below), any
+ * code that sends and then synchronously closes the PEER loses the frame. That
+ * is exactly what connectionManager's teardownThisAttempt does:
+ * `controller.dispose()` then `mockDesktop?.dispose()`, and the latter closes
+ * the desktop transport before the queue drains. So a lifecycle-level test
+ * asserting that a frame reached the mock desktop during teardown reads zero
+ * NO MATTER WHETHER THE PRODUCTION CODE IS CORRECT.
+ *
+ * The danger is not a false pass, it is a false FAIL that invites "fixing"
+ * correct code. Assert wire-level behaviour on a plain loopback pair with no
+ * mockDesktop wrapper (tests/unit/channelController.test.ts), where close()
+ * queues the peer close AFTER the send-delivery microtask; at the lifecycle
+ * level, spy on the sender instead (tests/unit/connectionManagerBootstrapRetry.test.ts).
  */
 export class LoopbackTransport implements Transport {
   private peer: LoopbackTransport | null = null;

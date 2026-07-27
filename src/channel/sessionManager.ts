@@ -94,6 +94,41 @@ export class SessionManager {
     this.transport.send(wrapSessionFrame(SessionFrameKind.Application, frame));
   }
 
+  /**
+   * Best-effort goodbye on a DELIBERATE teardown: an empty Final-tagged frame
+   * tells the desktop this phone is leaving on purpose, so its Mobile Devices
+   * badge flips to Offline at once instead of waiting out the reconnect grace
+   * plus two presence probes (~12s). An involuntary teardown (app killed,
+   * phone off, network gone) cannot reach here at all, which is exactly why
+   * the desktop's probe path stays load-bearing.
+   *
+   * Deliberately NOT a tag parameter on send(): a Final carries no
+   * BridgeMessage (its plaintext is empty, and decodeMessage throws on empty
+   * bytes), send() throws by contract when unestablished - the opposite of
+   * what a teardown path needs - and MAX_FRAME_LENGTH is vacuous for zero
+   * bytes. Three of send()'s four behaviours are wrong here.
+   *
+   * Never throws. It runs as the first line of a dispose chain, and an
+   * escaping error would abandon the rest of that teardown with the transport
+   * still live - see the orphan-connection failure connectionManager.ts
+   * documents around its teardownThisAttempt.
+   */
+  sendFinalFrame(): void {
+    if (!this.streams) return;
+    // Only seal when the frame can actually leave: seal advances this
+    // direction's counter, and burning a counter slot on a frame the
+    // transport rejects desyncs us from the desktop's receive counter.
+    if (this.transport.state !== 'connected') return;
+    try {
+      const frame = this.streams.send.seal(new Uint8Array(0), FrameTag.Final);
+      this.transport.send(wrapSessionFrame(SessionFrameKind.Application, frame));
+    } catch {
+      // The socket dropped between the state check and the send. Nothing
+      // productive to retry - the desktop's probes cover this exact case.
+      // Same swallow as handleHandshakeFrame's transport.send below.
+    }
+  }
+
   /** Drops session key material without touching the transport - call this when the transport disconnects, before a reconnect drives a fresh handshake. */
   reset(): void {
     this.streams = null;

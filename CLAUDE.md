@@ -72,11 +72,13 @@ src/
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library
+  helpers/        # Shared cross-tier test utilities (async waitUntil / flushMicrotasks)
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
-                  #   profiles through it), androidAbis.mjs, and the store preflights
+                  #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
+                  #   pretypecheck stale-node_modules guard), and the store preflights
                   #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs + repo scripts
 ```
 
@@ -112,7 +114,14 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
   - `eas build --profile production --platform android` (`npm run build:prod`) - store-release build
   - `eas build --profile production --platform ios` - App Store build (cloud, no Mac needed). The
     fallback if the runner path breaks; `build-ios.yml -f target=device` is the path.
-- `npm run typecheck` - `tsc --noEmit`
+- `npm run typecheck` - `tsc --noEmit`. A `pretypecheck` hook runs
+  `scripts/checkInstallDrift.mjs` first, which fails fast when this checkout resolves
+  `@kangentic/protocol` from **another** checkout's `node_modules` (every worktree lives inside
+  the main one, so Node walks up and finds it) or at a version outside the declared range. That
+  drift presents as a wall of "has no exported member" errors in files nobody touched, and the
+  obvious way to check them - stash, re-run, "same before and after, so pre-existing" - confirms
+  the wrong answer, because both runs resolve the same stale package. Fix: `npm install`.
+  Run it alone with `npm run check:install`.
 - `npm run lint` - `eslint . --max-warnings 0`
 - `npm run test:unit` - Unit tests (`vitest run tests/unit`)
 - `npm run test:components` - Component tests (`jest tests/components`)

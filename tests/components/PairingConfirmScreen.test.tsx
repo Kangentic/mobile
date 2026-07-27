@@ -94,6 +94,7 @@ describe('PairingConfirmScreen', () => {
 
   it('calls confirmActivePairing when the user accepts', async () => {
     const { confirmActivePairing } = jest.requireMock<{ confirmActivePairing: jest.Mock }>('@/pairing/activePairing');
+    const { reconnectNow } = jest.requireMock<{ reconnectNow: jest.Mock }>('@/connection/connectionManager');
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
       sas: sasFixture('042917'),
@@ -103,6 +104,12 @@ describe('PairingConfirmScreen', () => {
     fireEvent.press(screen.getByTestId('sas-accept'));
 
     await waitFor(() => expect(confirmActivePairing).toHaveBeenCalledTimes(1));
+    // A fresh pairing is not a goodbye to the OLD desktop - it must reconnect
+    // silently, never announcing a departure. Asserting the NEGATIVE rather
+    // than toHaveBeenCalledWith(): the latter pins arity, so it would redden
+    // on an explicit reconnectNow('stay-silent') that means the same thing.
+    expect(reconnectNow).toHaveBeenCalled();
+    expect(reconnectNow).not.toHaveBeenCalledWith('announce-departure');
   });
 
   it('calls rejectActivePairing when the user leaves without confirming', () => {
