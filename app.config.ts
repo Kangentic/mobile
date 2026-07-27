@@ -29,11 +29,11 @@ const config: ExpoConfig = {
     // section of docs/developer-guide.md. Required because
     // cli.appVersionSource is "local", which is CLI-wide and not Android-only.
     //
-    // Build 1 was uploaded to App Store Connect on 2026-07-26 and is spent.
-    // Apple rejects a duplicate, and scripts/checkAppStoreBuild.mjs only catches
-    // that in advance once an ASC API key is configured, so this value is the
-    // only thing standing between a dispatch and a wasted archive.
-    buildNumber: '2',
+    // Builds 1 and 2 are both spent (2026-07-26). Both uploaded successfully and
+    // were then REJECTED in processing for ITMS-90683, and a rejected build number
+    // is consumed just as a released one is: Apple requires the next upload to use
+    // a higher number. Hence 3.
+    buildNumber: '3',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -48,6 +48,28 @@ const config: ExpoConfig = {
       // legal conclusion. It is set now because TestFlight internal testing
       // does not act on it and changing it is a one-line edit plus a rebuild.
       ITSAppUsesNonExemptEncryption: false,
+      // Required by Apple even though this app never touches the photo library.
+      // Builds 1 and 2 were both REJECTED in post-upload processing with
+      // ITMS-90683 for its absence, and the rejection is worth understanding
+      // because it is invisible to everything upstream: `altool --validate-app`
+      // passed, the upload reported UPLOAD SUCCEEDED, and Apple then refused the
+      // binary by email.
+      //
+      // The cause is a linked symbol, not a feature. Apple scans the binary
+      // statically, and `expo-file-system/ios/Legacy/FileSystemHelpers.swift`
+      // calls `PHPhotoLibrary.authorizationStatus` in a helper for reading `ph://`
+      // URIs. Nothing in src/ uses that path, but expo-file-system is a core
+      // transitive dependency and cannot be dropped, so the string is mandatory.
+      //
+      // Worded truthfully rather than inventing a feature. The OS only ever shows
+      // a purpose string when the matching API is actually called, and no code
+      // path here calls it, so this text is read by App Review and not by users.
+      // The dependency scan that found this also checked for location, contacts,
+      // calendar, health, bluetooth, NFC and media-library APIs and found none;
+      // camera and speech recognition already have their strings from their config
+      // plugins.
+      NSPhotoLibraryUsageDescription:
+        'Kangentic does not read or write your photos. This declaration is required because a file-access framework the app links references the Photos API.',
     },
   },
   android: {

@@ -563,6 +563,38 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: bash .github/scripts/upload-ios-testflight.sh "$IPA_PATH"
 
+      # An upload succeeding is NOT a build reaching TestFlight. Builds 1 and 2 were
+      # both refused by Apple AFTER `UPLOAD SUCCEEDED`, with ITMS-90683 for a missing
+      # purpose string, and the only notification was an email: altool reported
+      # success, `--validate-app` had passed, and this job went green over a rejected
+      # binary. This step closes that gap by waiting for the state Apple actually
+      # lands on.
+      #
+      # Skipped without an ASC API key, since it needs the API to ask.
+      - name: Wait for Apple to accept the build
+        if: env.HAS_ASC_API_KEY == 'true'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
+          BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/checkAppStoreBuild.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id "$BUNDLE_ID" \
+            --build-number "$BUILD_NUMBER" \
+            --await-processing 1 \
+            --timeout-minutes 25
+
+      - name: Warn that Apple's verdict was not checked
+        if: env.HAS_ASC_API_KEY != 'true'
+        run: echo "::warning::No App Store Connect API key, so Apple's processing verdict was not checked. An upload can still be rejected afterwards, by email only."
+
       - name: Write the submit summary
         if: always()
         env:

@@ -535,12 +535,27 @@ unsigned.
 instead of a whole build followed by a rejection. It resolves the numeric app id from the bundle id
 so nobody has to look it up, and it is skipped with a warning when no ASC API key is set.
 
-**It has a measured blind spot, and the wording reflects that.** A build Apple has not finished
-ingesting is invisible to the API. After the 2026-07-26 upload, both `/v1/builds` and
-`/v1/preReleaseVersions` returned zero for the app for well over 45 minutes while it processed, so the
-check would have called the just-uploaded number free. That window is exactly when someone is most
-likely to re-run. So the script reports what it checked ("no registered build uses this number") rather
-than a verdict, and says so explicitly when it can see no builds at all.
+**It has a blind spot, and the wording reflects that.** A build that has not registered is invisible
+to the API, so the script reports what it checked ("no registered build uses this number") rather than
+a verdict.
+
+An earlier version of this section explained that absence as slow ingestion. **That was wrong, and
+the correction is the most important thing in this section.** Builds 1 and 2 were not slow, they were
+**rejected**: both uploaded successfully and were then refused in processing for ITMS-90683 (a missing
+`NSPhotoLibraryUsageDescription`). A build Apple refuses does not appear as `INVALID` in the API; it
+simply never becomes a Build resource at all. `/v1/builds` returned zero two hours later, which reads
+identically to "still processing".
+
+**So `UPLOAD SUCCEEDED` is not delivery.** There is a processing stage after the upload that can
+refuse the binary, it reports only by email, and nothing in the pipeline could see it: `altool
+--validate-app` passed, the upload reported success, and the submit job went green over a binary Apple
+threw away. That is why `submit-testflight` now runs `checkAppStoreBuild.mjs --await-processing`, which
+polls for the build and **fails when it never registers** rather than treating the silence as
+patience. If a genuinely slow build ever trips it, the fix is a longer `--timeout-minutes`; the
+opposite error is a green release over nothing.
+
+**A rejected build number is spent.** Apple requires the next upload to use a higher one, exactly as
+for a released build, so 1 and 2 are both gone.
 
 The authority is the upload, not the preflight: altool rejects a duplicate and
 `.github/scripts/upload-ios-testflight.sh` fails on that rejection. Which is worth stating because the
