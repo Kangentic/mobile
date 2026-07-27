@@ -12,28 +12,36 @@
  * It deliberately does not auto-increment. The hand-bumped, code-reviewed build
  * number stays a decision; this only guards it.
  *
- * KNOWN BLIND SPOT, measured rather than assumed: a build Apple has not finished
- * ingesting is invisible here. After an upload on 2026-07-26, `/v1/builds` and
- * `/v1/preReleaseVersions` both returned zero for that app for well over 45
- * minutes while the build was processing, so this script would happily have
- * called the just-uploaded number free. That window is exactly when someone is
- * most likely to re-run.
+ * KNOWN BLIND SPOT: a build that has not registered is invisible here, so a "free"
+ * answer is not a guarantee. This script is a fast early check, not the authority.
  *
- * So this is a fast early check, not the authority. The authority is the upload
- * itself: altool rejects a duplicate, and
- * .github/scripts/upload-ios-testflight.sh fails on that rejection rather than
- * treating it as success. Do not add logic here that assumes a "free" answer is
- * a guarantee.
+ * An earlier version of this comment explained that absence as slow ingestion,
+ * citing `/v1/builds` returning zero for 45+ minutes after an upload. That was
+ * wrong, and the correction matters: those builds were **rejected**, not slow.
+ * Builds 1 and 2 were both refused for ITMS-90683 and never appeared in the API at
+ * all. A build Apple refuses during processing does not show up as INVALID; it
+ * simply never becomes a Build resource. Reading that silence as latency is exactly
+ * what let a rejected binary pass for a successful release.
+ *
+ * Hence `--await-processing`, which treats non-registration as failure rather than
+ * patience. See awaitProcessing below.
  *
  * No dependencies. App Store Connect wants an ES256 JWT, which node:crypto can
  * produce as long as the signature is asked for in raw R||S form rather than the
  * DER that ECDSA signing defaults to. That is the dsaEncoding option below, and
  * getting it wrong yields a token Apple rejects as malformed with no hint why.
  *
- * Usage:
+ * Usage, before a build (assert the number is free):
  *   node scripts/checkAppStoreBuild.mjs \
  *     --key <AuthKey.p8> --key-id <kid> --issuer-id <iss> \
  *     --bundle-id <com.example.app> --version <1.2.3> --build-number <n>
+ *
+ * Usage, after an upload (wait for Apple's verdict and fail on a rejection):
+ *   node scripts/checkAppStoreBuild.mjs ... --await-processing 1 --timeout-minutes 25
+ *
+ * Note `--await-processing` takes a value it ignores. Arguments are parsed strictly
+ * in flag/value pairs, so a bare flag would silently consume the next flag as its
+ * value; requiring a throwaway value is the honest version of that constraint.
  */
 import { Buffer } from 'node:buffer';
 import { createSign } from 'node:crypto';
@@ -61,6 +69,86 @@ function parseArguments(argv) {
     }
   }
   return parsed;
+}
+
+/**
+ * Terminal `processingState` values on an App Store Connect build.
+ *
+ * VALID is the only success. INVALID is the state that matters here: it is what a
+ * binary Apple refuses AFTER accepting the upload looks like, and it is reported by
+ * email rather than to whatever uploaded it.
+ */
+const TERMINAL_PROCESSING_STATES = new Set(['VALID', 'INVALID', 'FAILED']);
+
+/**
+ * Waits for a just-uploaded build to finish Apple's processing, and fails on a
+ * rejection.
+ *
+ * This exists because of a gap that cost two builds. `altool --validate-app`
+ * passed, the upload printed UPLOAD SUCCEEDED, and Apple then rejected the binary
+ * in post-upload processing with ITMS-90683 (a missing purpose string). Nothing in
+ * the pipeline knew: the only notification was an email. So an upload succeeding is
+ * NOT the same as a build reaching TestFlight, and the release path has to check
+ * the state Apple lands on rather than the one altool reports.
+ */
+async function awaitProcessing(token, appId, buildNumber, timeoutMinutes) {
+  const deadline = Date.now() + timeoutMinutes * 60_000;
+  let lastState = 'not yet registered';
+
+  while (Date.now() < deadline) {
+    const builds = await callAppStoreConnect(
+      token,
+      `/builds?filter[app]=${appId}&filter[version]=${encodeURIComponent(buildNumber)}&limit=10`
+    );
+    const build = (builds.body?.data ?? []).find(
+      (candidate) => candidate.attributes?.version === buildNumber
+    );
+    const state = build?.attributes?.processingState;
+
+    if (state && state !== lastState) {
+      process.stdout.write(`Build ${buildNumber} processingState: ${state}\n`);
+      lastState = state;
+    }
+
+    if (state && TERMINAL_PROCESSING_STATES.has(state)) {
+      if (state === 'VALID') {
+        process.stdout.write(`Build ${buildNumber} is VALID and available in TestFlight.\n`);
+        return;
+      }
+      throw new Error(
+        `Apple rejected build ${buildNumber} during processing (state: ${state}). The upload ` +
+          'succeeded and the binary was still refused, so check the App Store Connect email for ' +
+          'the ITMS code. A rejected build number is spent: bump ios.buildNumber and rebuild.'
+      );
+    }
+
+    // Apple's ingestion is slow and a build is invisible for a long while before it
+    // registers at all, so a long poll interval is correct rather than lazy.
+    await new Promise((resolve) => setTimeout(resolve, 30_000));
+  }
+
+  // A timeout is treated as FAILURE, and the reasoning is worth keeping because the
+  // obvious choice is the wrong one.
+  //
+  // A build refused in processing never becomes a Build resource at all: it does not
+  // appear as INVALID, it simply never appears. Measured on this app, where builds 1
+  // and 2 were both rejected for ITMS-90683 and `/v1/builds` still returned zero
+  // entries two hours later. An earlier version of this file recorded that absence as
+  // "Apple's ingestion is slow", which was wrong: the builds were not slow, they were
+  // refused, and reading it as latency is what let a rejected binary pass for a
+  // successful release.
+  //
+  // So non-registration is evidence of rejection rather than of patience, and the
+  // honest default is to fail. If a legitimately slow build ever trips this, the fix
+  // is a longer --timeout-minutes, which is a cheap correction. The opposite error is
+  // a green release over a binary Apple threw away.
+  throw new Error(
+    `Build ${buildNumber} never registered on App Store Connect within ${timeoutMinutes} minutes ` +
+      `(last state: "${lastState}").\n` +
+      'A build rejected during processing never appears in the API at all, so this most likely ' +
+      'means Apple refused it. Check the App Store Connect email for an ITMS code. If instead the ' +
+      'build did land and was merely slow, re-run with a longer --timeout-minutes.'
+  );
 }
 
 function base64Url(input) {
@@ -156,6 +244,15 @@ async function main() {
   );
   if (!builds.ok) {
     throw new Error(`Could not list builds (${builds.status}): ${describeApiErrors(builds.body)}`);
+  }
+
+  // --await-processing flips the script's job: instead of asserting the number is
+  // free before a build, wait for the build that just uploaded to reach a terminal
+  // state and fail if Apple rejected it.
+  if (options['await-processing'] !== undefined) {
+    const timeoutMinutes = Number(options['timeout-minutes'] ?? 25);
+    await awaitProcessing(token, app.id, buildNumber, timeoutMinutes);
+    return;
   }
 
   const conflicting = (builds.body.data ?? []).filter(
