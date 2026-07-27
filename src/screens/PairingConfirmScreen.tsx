@@ -9,6 +9,8 @@ import { reconnectNow } from '@/connection/connectionManager';
 
 const CONNECTING_OVERSEER_SIZE = 72;
 const SUCCESS_OVERSEER_SIZE = 90;
+/** Wide enough to separate the digits for comparison without breaking them into two visual groups. */
+const SAS_LETTER_SPACING = 6;
 
 export function PairingConfirmScreen(): React.JSX.Element {
   const router = useRouter();
@@ -31,6 +33,17 @@ export function PairingConfirmScreen(): React.JSX.Element {
       }
     };
   }, []);
+
+  /**
+   * The mismatch path. Rejecting tears the ceremony down and returns to the
+   * scan screen; the pairing token is single-use, so the desktop must mint a
+   * fresh QR either way.
+   */
+  const handleReject = (): void => {
+    rejectActivePairing();
+    triggerHaptic('destructiveConfirmed');
+    router.back();
+  };
 
   const handleAccept = async (): Promise<void> => {
     setIsConfirming(true);
@@ -104,17 +117,27 @@ export function PairingConfirmScreen(): React.JSX.Element {
   return (
     <Screen testID="pairing-confirm-screen">
       <Stack gap="lg" style={{ padding: theme.spacing.lg, flex: 1, justifyContent: 'center' }}>
-        <Text variant="title">Confirm this matches your desktop</Text>
-        <Text testID="sas-digits" variant="heading">
+        <Text variant="body" color="secondary">
+          Confirm this matches your desktop
+        </Text>
+        {/* The digits are the whole point of the screen, so they carry the
+            hierarchy: display size, and MONOSPACE with wide tracking because
+            this is a character-by-character comparison against another
+            screen, where proportional digits make the reader work harder. */}
+        <Text
+          testID="sas-digits"
+          variant="display"
+          style={{ fontFamily: theme.fontFamilyMono, letterSpacing: SAS_LETTER_SPACING }}
+        >
           {sas.digits}
         </Text>
-        {/* Single action: confirming is the only thing to DO here. Backing
-            out (gesture / header back) is the rejection, and this screen's
-            unmount already tears the ceremony down. */}
+        {/* Two explicit actions. A mismatch is the one thing this screen
+            exists to catch - an active relay-in-the-middle - so rejecting it
+            must be a deliberate button, not a back-swipe the user has to
+            infer is safe. Cancel is ghost so Confirm stays the primary path
+            for the overwhelmingly common case where the codes DO match. */}
         <Button testID="sas-accept" label="Confirm" onPress={() => void handleAccept()} disabled={isConfirming} />
-        <Text variant="caption" color="muted">
-          Codes not matching? Go back and pair again.
-        </Text>
+        <Button testID="sas-reject" label="Cancel" variant="ghost" onPress={handleReject} disabled={isConfirming} />
         {confirmError ? (
           <Text testID="sas-confirm-error" variant="caption" color="danger">
             {confirmError}

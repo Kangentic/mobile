@@ -146,6 +146,7 @@ export interface TypographyTokens {
   bodyStrong: TypographyToken;
   caption: TypographyToken;
   title: TypographyToken;
+  display: TypographyToken;
   heading: TypographyToken;
 }
 
@@ -282,6 +283,11 @@ export const darkTerminalTheme: Theme = {
     caption: { fontSize: 12, lineHeight: 16, fontWeight: '400' },
     title: { fontSize: 18, lineHeight: 24, fontWeight: '600' },
     heading: { fontSize: 22, lineHeight: 28, fontWeight: '700' },
+    // For a value the screen exists to display - today the pairing SAS, which
+    // the user compares digit by digit against another screen. `heading` sat
+    // 4px and one weight above `title`, which is not a hierarchy: the code and
+    // its instruction line read as equals.
+    display: { fontSize: 40, lineHeight: 48, fontWeight: '700' },
   },
   spacing: {
     xs: 4,

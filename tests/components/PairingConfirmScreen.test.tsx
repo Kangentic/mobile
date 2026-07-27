@@ -45,7 +45,7 @@ describe('PairingConfirmScreen', () => {
     usePairingStore.getState().reset();
   });
 
-  it('renders the SAS digits and a single confirm action (no emoji row, no reject button)', () => {
+  it('renders the SAS digits with both a confirm and a cancel action (no emoji row)', () => {
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
       sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
@@ -57,9 +57,24 @@ describe('PairingConfirmScreen', () => {
     expect(screen.getByTestId('sas-accept')).toBeTruthy();
     // The digits carry the whole SAS; the emoji rendering was redundant.
     expect(screen.queryByTestId('sas-emoji')).toBeNull();
-    // Backing out IS the rejection (the unmount effect tears the ceremony
-    // down), so the screen offers exactly one action.
-    expect(screen.queryByTestId('sas-reject')).toBeNull();
+    // A mismatch is the one thing this screen exists to catch, so it gets an
+    // explicit control. The unmount effect still rejects on a back-swipe, but
+    // requiring the user to INFER that leaving is the safe move is the wrong
+    // interface for the app's only defence against a relay-in-the-middle.
+    expect(screen.getByTestId('sas-reject')).toBeTruthy();
+  });
+
+  it('rejects the ceremony when the user cancels on a mismatch', () => {
+    const { rejectActivePairing } = jest.requireMock<{ rejectActivePairing: jest.Mock }>('@/pairing/activePairing');
+    usePairingStore.getState().setMachineState({
+      status: 'awaiting-sas',
+      sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
+    });
+
+    render(<PairingConfirmScreen />);
+    fireEvent.press(screen.getByTestId('sas-reject'));
+
+    expect(rejectActivePairing).toHaveBeenCalled();
   });
 
   it('calls confirmActivePairing when the user accepts', async () => {
