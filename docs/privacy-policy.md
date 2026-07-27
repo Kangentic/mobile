@@ -26,19 +26,26 @@ When the app crashes or hits an unexpected error, official builds send a crash r
 and fixed. This is diagnostics, not analytics: it is about the app breaking, not about you using
 it.
 
-A crash report contains the technical details of the failure and nothing else:
+A crash report contains the technical details of the failure, and nothing about what you were
+doing in the app:
 
 - the error type, message, and the stack trace showing where in the app's code it happened
-- the app version, and your device model and operating system version
+- the app version, plus the standard device diagnostics that accompany any crash report: your
+  device model, its operating system version, and the ordinary technical state alongside them
+  (things like battery level, free memory and storage, screen size and orientation, and device
+  timezone)
+- when the crash is caught by the operating system rather than by the app's own code, a short
+  trail of coarse lifecycle events, for example the app being sent to the background or the
+  network connection changing. These describe the app's state, never yours
 
 It deliberately does **not** contain your session content. No screenshots, no screen recording,
 no on-screen text, no keystrokes, no console output, no network request details, no transcripts,
 terminal output, code or diffs, no notification content, and no pairing or encryption keys. Those
 are not stripped out afterwards; they are never collected in the first place.
 
-Crash reporting also carries no identifier for you. The app does not send an account, email,
-username, device identifier, or IP-based user profile with a crash report, and does not use it to
-build any picture of how you use the app.
+Crash reporting also carries no identifier for you. There is no account to attach one to, and the
+app sends no account, email, username, or user profile with a crash report, sets no user identity
+on it, and does not use crash data to build any picture of how you use the app.
 
 Builds you compile yourself from the open-source repository have crash reporting switched off
 entirely and send nothing.

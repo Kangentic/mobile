@@ -36,7 +36,7 @@ describe('scrubEvent', () => {
   });
 
   it('strips server_name, which on a phone is the device hostname', () => {
-    const scrubbed = scrubEvent(errorEvent({ server_name: "tyler's iPhone" }));
+    const scrubbed = scrubEvent(errorEvent({ server_name: "dev's iPhone" }));
     expect(scrubbed.server_name).toBeUndefined();
   });
 
@@ -57,6 +57,15 @@ describe('scrubEvent', () => {
 
   it('leaves contexts absent rather than inventing an empty object', () => {
     const scrubbed = scrubEvent(errorEvent());
+    expect('contexts' in scrubbed).toBe(false);
+  });
+
+  it('omits contexts entirely when response was its only key', () => {
+    // The same claim as the case above, reached by a different route: an
+    // emptied container must not be sent as `contexts: {}`.
+    const scrubbed = scrubEvent(
+      errorEvent({ contexts: { response: { status_code: 500, headers: { authorization: 'Bearer secret' } } } }),
+    );
     expect('contexts' in scrubbed).toBe(false);
   });
 

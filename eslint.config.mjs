@@ -46,7 +46,10 @@ export default defineConfig([
   },
   {
     // index.js is the bundle entry and is plain JS, so it gets the base rule.
-    files: ['**/*.js'],
+    // `.mjs` and `.cjs` are in the glob because scripts/ is entirely `.mjs`: a
+    // `**/*.js` glob does not match it, which would leave ~15 build-time scripts
+    // outside the "one door" ban while the rule file claims it is mechanical.
+    files: ['**/*.js', '**/*.mjs', '**/*.cjs'],
     ignores: ['src/observability/**'],
     rules: {
       'no-restricted-imports': [
