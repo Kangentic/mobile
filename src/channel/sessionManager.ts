@@ -41,6 +41,7 @@ export class SessionManager {
   private unsubscribeFrame: Unsubscribe | null = null;
   private readonly messageListeners = new Set<(message: BridgeMessage) => void>();
   private readonly establishedListeners = new Set<() => void>();
+  private readonly rekeyListeners = new Set<() => void>();
   private readonly remoteClosedListeners = new Set<() => void>();
 
   constructor(options: SessionManagerOptions) {
@@ -66,6 +67,16 @@ export class SessionManager {
   onEstablished(listener: () => void): Unsubscribe {
     this.establishedListeners.add(listener);
     return () => this.establishedListeners.delete(listener);
+  }
+
+  /**
+   * Fires on every re-handshake that lands on an already-established session
+   * (the desktop's ~2 minute WireGuard-style rekey). Separate from
+   * onEstablished on purpose: a rekey must not look like a fresh connection.
+   */
+  onRekey(listener: () => void): Unsubscribe {
+    this.rekeyListeners.add(listener);
+    return () => this.rekeyListeners.delete(listener);
   }
 
   onRemoteClosed(listener: () => void): Unsubscribe {
@@ -149,7 +160,13 @@ export class SessionManager {
     this.streams = deriveSecretstreamPair(chainingKey, false);
     if (!wasEstablished) {
       for (const listener of this.establishedListeners) listener();
+      return;
     }
+    // A rekey: new key epoch on a session that was already up. Deliberately
+    // NOT reported through onEstablished - subscriptions and streams survive
+    // a rekey untouched, and re-firing it would reset them (see
+    // subscriptionManager). This is the only signal a rekey happened at all.
+    for (const listener of this.rekeyListeners) listener();
   }
 
   private handleApplicationFrame(payload: Uint8Array): void {

@@ -79,6 +79,10 @@ describe('SessionManager (KK responder)', () => {
     sessionManager.onEstablished(() => {
       establishedFiredAgain = true;
     });
+    let rekeysObserved = 0;
+    sessionManager.onRekey(() => {
+      rekeysObserved += 1;
+    });
 
     const received: BridgeMessage[] = [];
     sessionManager.onMessage((message) => received.push(message));
@@ -93,6 +97,11 @@ describe('SessionManager (KK responder)', () => {
 
     // onEstablished should not fire again for a rekey (only for the first establishment).
     expect(establishedFiredAgain).toBe(false);
+    // ...but a rekey must still be OBSERVABLE. It is the only evidence the
+    // periodic re-handshake is happening at all: because onEstablished stays
+    // silent here, anything counting rekeys off it reads 0 forever and looks
+    // exactly like a rekey that never fired.
+    expect(rekeysObserved).toBe(1);
 
     desktop.send({ type: 'heartbeat' });
     await waitFor(() => received.length > 0);

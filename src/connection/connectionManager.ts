@@ -281,6 +281,12 @@ async function openConnectionOrThrow(): Promise<void> {
     }
   });
 
+  // The only observable that a rekey happened. Streams and subscriptions
+  // survive it untouched, so nothing else here reacts.
+  const unsubscribeRekey = controller.session.onRekey(() => {
+    useChannelStore.getState().noteRekey();
+  });
+
   useChannelStore.getState().setRelayUrl(anchor.relayAddress);
   activeConnection = { controller, verbs: controller.verbs, subscriptions };
   teardownActiveConnection = () => {
@@ -289,6 +295,7 @@ async function openConnectionOrThrow(): Promise<void> {
     if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
     unsubscribeTransportState();
     unsubscribeEstablished();
+    unsubscribeRekey();
     unbindFeed();
     subscriptions.dispose();
     controller.dispose();

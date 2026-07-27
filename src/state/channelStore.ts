@@ -20,6 +20,7 @@ interface ChannelState {
 interface ChannelActions {
   setTransportState: (state: TransportState) => void;
   markEstablished: () => void;
+  noteRekey: () => void;
   setRelayUrl: (relayUrl: string) => void;
   setPairedState: (pairedState: ChannelState['pairedState']) => void;
   reset: () => void;
@@ -45,11 +46,16 @@ export const useChannelStore = create<ChannelState & ChannelActions>((set, get) 
       established: transportState === 'connected' ? get().established : false,
     }),
   markEstablished: () =>
-    set((state) => ({
+    set({
       established: true,
       everEstablished: true,
-      rekeyCount: state.established ? state.rekeyCount + 1 : state.rekeyCount,
-    })),
+    }),
+  // Counted from SessionManager.onRekey, NOT from markEstablished. A rekey
+  // never re-fires onEstablished, and a transport drop clears `established`
+  // before the next handshake, so an increment guarded on `established` here
+  // could never fire at all - the gauge read 0 forever and looked like proof
+  // that rekeys were not happening.
+  noteRekey: () => set((state) => ({ rekeyCount: state.rekeyCount + 1 })),
   setRelayUrl: (relayUrl) => set({ relayUrl }),
   setPairedState: (pairedState) => set({ pairedState }),
   reset: () => set({ ...initialState, relayUrl: get().relayUrl, pairedState: get().pairedState }),
