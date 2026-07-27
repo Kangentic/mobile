@@ -26,6 +26,9 @@
  * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
  *        --kangentic-repo <path>, --clear, --no-metro, --no-protocol-link,
  *        --stub (pair mode), --fresh (stub mode: ignore the saved phone key),
+ *        --pair (stub mode: clear the app and run the pairing bootstrap with
+ *        the URI the stub just minted, rather than copying it by hand - the
+ *        copy is a real failure class, see runPairingBootstrap),
  *        --headless (boot the emulator with -no-window; Maestro and
  *        screenshots work identically, there is just no window to watch),
  *        --wifi (physical device: switch it onto wireless adb, which keeps a
@@ -181,6 +184,7 @@ function parseRigArgs(argv) {
       'no-protocol-link': { type: 'boolean', default: false },
       stub: { type: 'boolean', default: false },
       fresh: { type: 'boolean', default: false },
+      pair: { type: 'boolean', default: false },
       headless: { type: 'boolean', default: false },
       shard: { type: 'string' },
       wifi: { type: 'boolean', default: false },
@@ -894,6 +898,35 @@ function startMetro(flags, extraEnv = {}) {
 // ---------------------------------------------------------------------------
 // Stub peer
 
+/** The most recent pairing URI the stub printed, for --pair to consume. */
+let lastPairingUri = null;
+
+/**
+ * Drive `.maestro/setup/pairing-bootstrap.yaml` with the URI the stub just
+ * minted, instead of a human copying it between two terminals.
+ *
+ * That copy is a genuine failure class, not a chore: the flow reads
+ * `${PAIRING_URI}` from the environment, and when it is absent Maestro types
+ * the literal placeholder. The app rejects it and the run dies on
+ * "sas-accept is not visible" - which points at the pairing screen, not at
+ * the missing variable. A stale URI from a previous `--fresh` run fails
+ * identically. Passing it from the process that produced it removes both.
+ */
+async function runPairingBootstrap(serial) {
+  for (let attempt = 0; attempt < 30 && lastPairingUri === null; attempt += 1) await sleep(1000);
+  if (lastPairingUri === null) {
+    warn('no pairing URI printed within 30s; skipping the bootstrap (is the stub in pairing mode? --fresh forces it)');
+    return;
+  }
+  log('clearing app state and running the pairing bootstrap...');
+  run('adb', ['-s', serial, 'shell', 'pm', 'clear', APP_PACKAGE]);
+  const result = run('maestro', ['--device', serial, 'test', '-e', `PAIRING_URI=${lastPairingUri}`, '.maestro/setup/pairing-bootstrap.yaml'], {
+    stdio: 'inherit',
+  });
+  if (result.status === 0) log('paired; the suite can run now');
+  else warn(`pairing bootstrap failed (exit ${result.status}) - see the Maestro output above`);
+}
+
 function startStub(state, flags, restartCount = 0) {
   const args = ['scripts/stubDesktopPeer.mjs', '--relay', RELAY_URL];
   const phoneKey = flags.fresh ? null : state.stubPhoneKey;
@@ -913,6 +946,13 @@ function startStub(state, flags, restartCount = 0) {
         saveState({ stubPhoneKey: keyMatch[1] });
         log(`saved the phone static key to ${STATE_FILE}`);
       }
+      // Capture the freshly minted pairing URI so --pair can drive the
+      // bootstrap itself. Copying it by hand is how it goes stale: --fresh
+      // mints a NEW one each run, and an old URI fails as
+      // "sas-accept is not visible", which reads like a broken pairing screen
+      // rather than the wrong input it is.
+      const uriMatch = line.match(/(kangentic-pair:\/\/\S+)/);
+      if (uriMatch) lastPairingUri = uriMatch[1];
     },
   });
   // A dead stub silently strands every paired Maestro flow after it, so a
@@ -1328,7 +1368,13 @@ async function main() {
     }
   }
 
-  if (mode === 'stub') startStub(state, flags);
+  if (mode === 'stub') {
+    startStub(state, flags);
+    // --pair: hand the freshly minted URI straight to the bootstrap flow.
+    // Fire-and-forget so the rig keeps supervising the stub while Maestro
+    // drives the device.
+    if (flags.pair) void runPairingBootstrap(process.env.ANDROID_SERIAL ?? '');
+  }
 
   if (mode === 'live') {
     const quickPairEnv = await prepareQuickPair(kangenticRepo);
