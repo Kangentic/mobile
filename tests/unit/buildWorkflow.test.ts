@@ -323,6 +323,27 @@ describe('build-ios workflow', () => {
     expect(exportIndex).toBeLessThan(prebuildIndex);
   });
 
+  it('sources the profile env from eas.json, like the Android build does', () => {
+    // Without this, an EXPO_PUBLIC_* value added to an eas.json profile reaches an
+    // Android build and silently not an iOS one. Nobody notices until a feature
+    // flag is inexplicably off on one platform.
+    const deviceJob = readIosJob('device');
+    const exportIndex = deviceJob.indexOf('scripts/easProfile.mjs');
+    const prebuildIndex = deviceJob.indexOf('expo prebuild --platform ios');
+    expect(exportIndex).toBeGreaterThan(-1);
+    // Same ordering requirement as Android: app.config.ts reads EXPO_PUBLIC_* at
+    // config-evaluation time, which happens during prebuild.
+    expect(exportIndex).toBeLessThan(prebuildIndex);
+  });
+
+  it('gates native config on BOTH platforms, not just Android', () => {
+    // Prebuilding only Android is what let a broken config-plugin import reach an
+    // iOS build while every PR check stayed green.
+    const ciSource = readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8');
+    expect(ciSource).toContain('expo prebuild --platform android');
+    expect(ciSource).toContain('expo prebuild --platform ios');
+  });
+
   it('asserts the app target actually got manual signing', () => {
     // The plugin is inert without its environment variables, and a silently
     // unsigned archive is the failure mode this workflow exists to prevent.

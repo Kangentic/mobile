@@ -9,6 +9,11 @@ kangentic.local.json
 
 # Local dev rig state (relay repo path, stub phone key, AVD override)
 .devrig.local.json
+# Runtime pid records written by scripts/dev.mjs so it only ever stops processes
+# it started. Machine-local state, and the recorded `commandLine` can contain a
+# developer's home directory, which must not land in a public repo
+# (.claude/rules/no-personal-info.md).
+.devrig-processes/
 
 # Node
 node_modules/

@@ -169,4 +169,20 @@ fi
 # Team id and bundle id are public identifiers that ship inside the app's own
 # entitlements, so they are fine to log. TeamName is not, and is never read.
 echo "Installed profile $profile_uuid for $bundle_id (team $team_id)."
-echo "Profile expires $(read_profile_field ExpirationDate)."
+
+# Expiry warning. A provisioning profile expires on its own schedule, and the
+# archive failure it eventually causes is a generic signing error that names
+# neither expiry nor the profile. Better to see it coming for a month than to
+# debug it under release pressure. Not fatal: an expired profile fails the archive
+# anyway, and failing early on a still-valid one would be worse than the warning.
+expiration_date="$(read_profile_field ExpirationDate)"
+echo "Profile expires $expiration_date."
+
+expires_at_epoch="$(date -j -f '%Y-%m-%dT%H:%M:%SZ' "$expiration_date" '+%s' 2>/dev/null || echo '')"
+if [ -n "$expires_at_epoch" ]; then
+  days_remaining=$(( (expires_at_epoch - $(date '+%s')) / 86400 ))
+  echo "Days until the profile expires: $days_remaining"
+  if [ "$days_remaining" -lt 30 ]; then
+    echo "::warning::The provisioning profile expires in $days_remaining days. Regenerate it with \`eas credentials\` and update IOS_PROVISIONING_PROFILE_BASE64 before it lapses."
+  fi
+fi
