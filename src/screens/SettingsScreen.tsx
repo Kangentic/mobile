@@ -6,6 +6,7 @@ import type { PushCategory } from '@kangentic/protocol';
 import { Brandmark, Button, Card, Icon, MonoText, Row, Screen, SectionHeader, Stack, StatusDot, Text, useTheme } from '@/components';
 import { resyncPushRegistrationCategories } from '@/connection/connectionManager';
 import { getPushRegistrationStatus, type PushRegistrationStatus } from '@/notifications';
+import { crashNatively, crashTestEnabled, throwTestError } from '@/observability/crashReporting';
 import { useChannelStore } from '@/state/channelStore';
 import {
   useSettingsStore,
@@ -263,6 +264,39 @@ export function SettingsScreen(): React.JSX.Element {
             </Stack>
           </Card>
         </Stack>
+
+        {crashTestEnabled() ? (
+          <Stack gap="xs">
+            <SectionHeader title="Crash reporting test" testID="settings-section-crash-test" />
+            <Card>
+              <Stack gap="xs">
+                <Pressable
+                  accessibilityRole="button"
+                  testID="settings-crash-test-js"
+                  onPress={throwTestError}
+                  style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
+                >
+                  <Text variant="body" color="primary">
+                    Throw a JS error
+                  </Text>
+                  <Icon name="chevron-forward" color="muted" size={16} />
+                </Pressable>
+                <RowDivider />
+                <Pressable
+                  accessibilityRole="button"
+                  testID="settings-crash-test-native"
+                  onPress={crashNatively}
+                  style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
+                >
+                  <Text variant="body" color="primary">
+                    Crash natively
+                  </Text>
+                  <Icon name="chevron-forward" color="muted" size={16} />
+                </Pressable>
+              </Stack>
+            </Card>
+          </Stack>
+        ) : null}
 
         <Stack gap="xs">
           <SectionHeader title="About" testID="settings-section-about" />

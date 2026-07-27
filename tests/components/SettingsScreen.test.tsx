@@ -35,7 +35,14 @@ function renderSettings(): void {
   );
 }
 
+function setCrashTestFlag(value: string | undefined): void {
+  if (value === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST;
+  else process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST = value;
+}
+
 describe('SettingsScreen', () => {
+  const originalCrashTestFlag = process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST;
+
   beforeEach(() => {
     mockPush.mockClear();
     useSettingsStore.setState({
@@ -53,6 +60,11 @@ describe('SettingsScreen', () => {
       hydrated: true,
     });
     useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true, relayUrl: 'ws://127.0.0.1:8080' });
+    setCrashTestFlag(undefined);
+  });
+
+  afterEach(() => {
+    setCrashTestFlag(originalCrashTestFlag);
   });
 
   it('renders the connection section with live status and relay', () => {
@@ -123,5 +135,20 @@ describe('SettingsScreen', () => {
     fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
     expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(true);
     expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(true);
+  });
+
+  it('hides the crash-test section by default', () => {
+    renderSettings();
+    expect(screen.queryByTestId('settings-section-crash-test')).toBeNull();
+    expect(screen.queryByTestId('settings-crash-test-js')).toBeNull();
+    expect(screen.queryByTestId('settings-crash-test-native')).toBeNull();
+  });
+
+  it('reveals the crash-test rows only when EXPO_PUBLIC_KANGENTIC_CRASHTEST is "1"', () => {
+    setCrashTestFlag('1');
+    renderSettings();
+    expect(screen.getByTestId('settings-section-crash-test')).toBeTruthy();
+    expect(screen.getByTestId('settings-crash-test-js')).toBeTruthy();
+    expect(screen.getByTestId('settings-crash-test-native')).toBeTruthy();
   });
 });

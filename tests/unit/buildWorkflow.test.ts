@@ -182,6 +182,29 @@ describe('build-android workflow and eas.json parity', () => {
     expect(workflowSource).toContain('::add-mask::$SENTRY_AUTH_TOKEN');
     expect(workflowSource).not.toContain('::add-mask::$SENTRY_DSN');
   });
+
+  it('exports the crash-test flag before prebuild, for the same GITHUB_ENV reason', () => {
+    // EXPO_PUBLIC_KANGENTIC_CRASHTEST is inlined by Metro and read by
+    // app.config.ts (through crashTestEnabled callers) at config-evaluation
+    // time, same as every other EXPO_PUBLIC_* flag. Exporting after prebuild
+    // would ship a build where Settings never reveals the crash-test rows.
+    const exportIndex = workflowSource.indexOf('Export the crash-test flag');
+    const prebuildIndex = workflowSource.indexOf('expo prebuild --platform android');
+    expect(exportIndex).toBeGreaterThan(-1);
+    expect(exportIndex).toBeLessThan(prebuildIndex);
+  });
+
+  it('keeps the crash-test flag out of eas.json and off by default', () => {
+    // Same fork-quota reasoning as the Sentry export: dispatch-only, never
+    // committed, defaults to false so a store-track build never carries it.
+    expect(workflowSource).toContain("default: false");
+    const easSource = readFileSync(`${repositoryRoot}eas.json`, 'utf8');
+    expect(easSource).not.toContain('CRASHTEST');
+  });
+
+  it('forces the crash-test flag off on a tag build regardless of a stale dispatch input', () => {
+    expect(workflowSource).toContain("CRASH_TEST: ${{ github.event_name != 'push' && inputs.crash_test == true }}");
+  });
 });
 
 describe('build-android release safety gates', () => {

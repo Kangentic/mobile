@@ -21,6 +21,7 @@ const sentryState = vi.hoisted(() => {
   return {
     init: vi.fn(),
     breadcrumbsIntegration: vi.fn(() => freshBreadcrumbsIntegration),
+    nativeCrash: vi.fn(),
     freshBreadcrumbsIntegration,
   };
 });
@@ -28,6 +29,7 @@ const sentryState = vi.hoisted(() => {
 vi.mock('@sentry/react-native', () => ({
   init: sentryState.init,
   breadcrumbsIntegration: sentryState.breadcrumbsIntegration,
+  nativeCrash: sentryState.nativeCrash,
 }));
 
 type ReactNativeInitOptions = Parameters<typeof SentryReactNative.init>[0];
@@ -74,6 +76,11 @@ function setE2eFlag(value: string | undefined): void {
   else process.env.EXPO_PUBLIC_KANGENTIC_E2E = value;
 }
 
+function setCrashTestFlag(value: string | undefined): void {
+  if (value === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST;
+  else process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST = value;
+}
+
 function requireCapturedInitOptions(): ReactNativeInitOptions {
   const firstCall = sentryState.init.mock.calls[0];
   if (firstCall === undefined) {
@@ -85,16 +92,19 @@ function requireCapturedInitOptions(): ReactNativeInitOptions {
 describe('initializeCrashReporting', () => {
   const originalDsn = process.env.EXPO_PUBLIC_SENTRY_DSN;
   const originalE2eFlag = process.env.EXPO_PUBLIC_KANGENTIC_E2E;
+  const originalCrashTestFlag = process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST;
 
   beforeEach(() => {
     sentryState.init.mockClear();
     sentryState.breadcrumbsIntegration.mockClear();
+    sentryState.nativeCrash.mockClear();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     setSentryDsn(originalDsn);
     setE2eFlag(originalE2eFlag);
+    setCrashTestFlag(originalCrashTestFlag);
   });
 
   it('sets every privacy-critical option, so no screenshot, view hierarchy, PII, or telemetry leaves the device', async () => {
@@ -241,6 +251,30 @@ describe('initializeCrashReporting', () => {
     expect(requireCapturedInitOptions().environment).toBe('development');
   });
 
+  it('passes debug: true to Sentry.init only when the crash-test flag is "1"', async () => {
+    setSentryDsn(testDsn);
+    setE2eFlag(undefined);
+    setCrashTestFlag('1');
+    vi.stubGlobal('__DEV__', false);
+
+    const crashReporting = await loadFreshCrashReporting();
+    crashReporting.initializeCrashReporting();
+
+    expect(requireCapturedInitOptions().debug).toBe(true);
+  });
+
+  it('passes debug: false to Sentry.init when the crash-test flag is unset', async () => {
+    setSentryDsn(testDsn);
+    setE2eFlag(undefined);
+    setCrashTestFlag(undefined);
+    vi.stubGlobal('__DEV__', false);
+
+    const crashReporting = await loadFreshCrashReporting();
+    crashReporting.initializeCrashReporting();
+
+    expect(requireCapturedInitOptions().debug).toBe(false);
+  });
+
   it('never calls Sentry.init when EXPO_PUBLIC_SENTRY_DSN is unset', async () => {
     setSentryDsn(undefined);
     setE2eFlag(undefined);
@@ -273,5 +307,58 @@ describe('initializeCrashReporting', () => {
     crashReporting.initializeCrashReporting();
 
     expect(sentryState.init).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('crashTestEnabled', () => {
+  const originalCrashTestFlag = process.env.EXPO_PUBLIC_KANGENTIC_CRASHTEST;
+
+  afterEach(() => {
+    setCrashTestFlag(originalCrashTestFlag);
+  });
+
+  it('is true only when the flag is exactly "1"', async () => {
+    setCrashTestFlag('1');
+    const crashReporting = await loadFreshCrashReporting();
+    expect(crashReporting.crashTestEnabled()).toBe(true);
+  });
+
+  it('is false when the flag is unset', async () => {
+    setCrashTestFlag(undefined);
+    const crashReporting = await loadFreshCrashReporting();
+    expect(crashReporting.crashTestEnabled()).toBe(false);
+  });
+
+  it('is false for a truthy-looking but non-"1" value, since EXPO_PUBLIC_* flags are strings', async () => {
+    setCrashTestFlag('true');
+    const crashReporting = await loadFreshCrashReporting();
+    expect(crashReporting.crashTestEnabled()).toBe(false);
+  });
+});
+
+describe('crashNatively', () => {
+  beforeEach(() => {
+    sentryState.nativeCrash.mockClear();
+  });
+
+  it('calls Sentry.nativeCrash()', async () => {
+    const crashReporting = await loadFreshCrashReporting();
+    crashReporting.crashNatively();
+    expect(sentryState.nativeCrash).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('throwTestError', () => {
+  it('throws asynchronously, past the caller, rather than synchronously from the press handler', async () => {
+    vi.useFakeTimers();
+    const crashReporting = await loadFreshCrashReporting();
+
+    // The point of a timer-deferred throw is that calling it does NOT throw
+    // synchronously - that is what lets it escape a React error boundary
+    // sitting around the caller.
+    expect(() => crashReporting.throwTestError()).not.toThrow();
+    expect(() => vi.runAllTimers()).toThrow('crash-test');
+
+    vi.useRealTimers();
   });
 });

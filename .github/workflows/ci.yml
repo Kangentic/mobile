@@ -229,6 +229,21 @@ jobs:
           fi
           echo "Sentry plugin wired into the iOS build."
 
+      # PrivacyInfo.xcprivacy is a build artifact (app.config.ts's
+      # ios.privacyManifests merges into the template's file at prebuild
+      # time via @expo/config-plugins' withPrivacyInfo), so it never exists
+      # as a tracked file, and no other workflow surfaces it: build-ios.yml
+      # ships only the signed .ipa, and prebuild refuses to run for iOS on
+      # Windows at all. Without this, confirming what the app actually
+      # declares needs a full signed build. This job already generated it.
+      - name: Upload the generated iOS privacy manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-privacy-manifest
+          path: ios/*/PrivacyInfo.xcprivacy
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Confirm the generated project is not committed
         # CNG: android/ must exist only as a build artifact. If prebuild output
         # ever shows up as tracked changes, someone committed the native tree.
