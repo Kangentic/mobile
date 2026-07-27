@@ -1031,6 +1031,51 @@ you specifically want to exercise symbolication. `sentry-cli` is not required fo
 only useful for manual source-map work, and `sentry-cli login` writes `~/.sentryclirc` outside
 the repo.
 
+**Verifying what a delivered crash report actually contains.** `Sentry.init()` options are a
+claim, not an observation - a JS `beforeSend` cannot filter a native crash, so the only way to
+know what sentry-cocoa / sentry-android actually send is to read a delivered event. Set
+`EXPO_PUBLIC_KANGENTIC_CRASHTEST=1` (dispatch `build-android.yml` with `crash_test: true`, never
+in `eas.json`) to reveal a "Crash reporting test" section in Settings with a JS-throw row and a
+`Sentry.nativeCrash()` row, and to turn on the SDK's `debug: true` native logging. A native crash
+does not upload at crash time: sentry-android writes it to its outbox and flushes on the *next*
+`Sentry.init()`, so relaunch the app and watch `adb logcat -s Sentry` across the relaunch, not
+just the tap. Never dispatch a store-track build with this flag on.
+
+**What that verification actually found**, on a `preview`-profile (arm64-v8a, release-signed,
+non-debuggable) install, cross-checked with `adb logcat`, mitmproxy on the same device, and the
+delivered events read back through the Sentry MCP:
+
+- On the JS-captured event: zero console, network/XHR, or unrecognized-category breadcrumbs; no
+  `request`, `extra`, or `server_name`; no screenshot or view hierarchy; no `session` item in any
+  envelope, checked across a cold launch, a background/foreground cycle, and the crash itself.
+  The native path is different - see the next bullet.
+- `environment` reads `production` on a `preview`-profile build, as designed.
+- Stack frames arrive symbolicated - the source-map upload path works.
+- The native path (`Sentry.nativeCrash()` - see the "not tested" note below for what this is and
+  is not) DOES carry native auto-breadcrumbs and a per-install `user.id` that `beforeSend`
+  cannot reach. `Sentry.setUser(null)` right after `Sentry.init()` was tried as a suppression:
+  with it in place, a fresh native crash still carried `user.id` equal to `contexts.device.id`,
+  so it did not visibly suppress the identifier. There is no known JS-reachable fix; see
+  `.claude/rules/crash-reporting-scope.md`'s Known Limitations section for the full finding.
+  `docs/privacy-policy.md` and `docs/store-listing.md` were updated to describe the identifier
+  rather than claim it does not exist.
+- A build with neither `EXPO_PUBLIC_SENTRY_DSN` nor `SENTRY_AUTH_TOKEN` set is genuinely silent:
+  zero Sentry SDK log lines, zero network traffic to `*.ingest.us.sentry.io` (confirmed via a
+  live mitmproxy tunnel, sanity-checked against a known request to rule out a dead proxy) even
+  when a crash is deliberately triggered.
+- A JS-thrown error produces exactly one delivered event, not two: sentry-android's own dedup
+  drops the re-caught `com.facebook.react.common.JavascriptException` wrapper ("Event was
+  dropped as the exception class ... is ignored") because the JS layer already sent it. Worth
+  knowing before assuming a missing second event means the native path is broken - it means the
+  SDK is not double-billing the free tier for one crash.
+- **Not tested: a real native (NDK/signal-handler) crash.** `Sentry.nativeCrash()` throws a Java
+  `RuntimeException` caught by Android's `UncaughtExceptionHandler` (`platform: java`,
+  `mechanism: UncaughtExceptionHandler`) - it exercises the "bypasses `beforeSend`" property, but
+  it is not a SIGSEGV or other signal caught by sentry-android's NDK handler. No specific reason
+  to expect different breadcrumb/`user.id` behavior on that path, but it was not observed, and
+  iOS native crash reporting was not verified at all (no Mac, no iOS device, and neither CI route
+  produces an interactively-testable signed build).
+
 **The `eas build` fallback is NOT wired for Sentry.** Both values are exported by
 `build-android.yml` and `build-ios.yml` only. `eas.json` deliberately holds neither (that is the
 whole point of keeping them out of a committed file), and nothing configures them as EAS
@@ -1044,6 +1089,16 @@ for a release, or accept the gap knowingly.
 option: several defaults in the SDK (console breadcrumbs especially) capture things this app
 promises it does not, and a JavaScript `beforeSend` cannot filter native crash events, so the
 controls have to stay at the source.
+
+**A native crash signature worth watching, not yet acting on.** While diagnosing a flaky
+`Maestro (paired)` run on PR #27, the app died of a native SIGSEGV 0.9s after launch: GWP-ASan
+(`gwp_asan::GuardedPoolAllocator::deallocate`) under `android_unsafe_frame_pointer_chase`, with
+`libhermesvm.so` frames beneath it and zero app frames. Confirmed unrelated to the Sentry change
+(the dependency predated it) and a re-run on the identical APK went green, so n=1 and it was
+correctly left alone rather than papered over with `android:gwpAsanMode="never"`. Now that the
+DSN is live in production builds, this exact signature would arrive in Sentry as a native crash
+if it recurs. Only a real rate on user devices justifies the `gwpAsanMode` change; do not make it
+pre-emptively.
 
 ## Credential inventory
 

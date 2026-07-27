@@ -97,12 +97,16 @@ const config: ExpoConfig = {
     // the generated ios/Kangentic/PrivacyInfo.xcprivacy artifact CI now
     // uploads (.github/workflows/ci.yml, native-config job).
     //
-    // PROVISIONAL pending a real native crash payload. If that payload
-    // (task: "verify Sentry crash reporting") shows sentry-cocoa attaching
-    // a per-install identifier despite sendDefaultPii: false, this needs a
-    // fourth NSPrivacyCollectedDataTypeDeviceID entry and the App Store
-    // Connect / Play declarations in docs/store-listing.md change with it.
-    // Land that together, not as a follow-up - see crash-reporting-scope.md.
+    // A real native crash payload (task: "verify Sentry crash reporting"),
+    // read back through the Sentry MCP, confirmed sentry-android attaches a
+    // per-install identifier to an OS-caught crash despite
+    // sendDefaultPii: false - see .claude/rules/crash-reporting-scope.md's
+    // Known Limitations section. sentry-cocoa was not itself tested (no Mac,
+    // no iOS device), but it is the same SDK family with the same
+    // documented device.id behavior, so the fourth entry below is declared
+    // rather than assumed absent. This list and the App Store Connect / Play
+    // declarations in docs/store-listing.md are one consistency requirement;
+    // they were updated together.
     privacyManifests: {
       NSPrivacyCollectedDataTypes: [
         {
@@ -119,6 +123,15 @@ const config: ExpoConfig = {
         },
         {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeOtherDiagnosticData',
+          NSPrivacyCollectedDataTypeLinked: false,
+          NSPrivacyCollectedDataTypeTracking: false,
+          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+        },
+        {
+          // The per-install identifier confirmed above (contexts.device.id,
+          // promoted into user.id on an OS-caught crash). Not your device's
+          // hardware ID or an advertising ID - resets on reinstall.
+          NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeDeviceID',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
           NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],

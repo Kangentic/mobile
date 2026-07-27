@@ -51,6 +51,12 @@ scrubber is therefore a second line of defence, never the control itself.
 - **Changing any of the above changes what leaves a user's device**, so it also requires
   updating `docs/privacy-policy.md` and `docs/security.md`, and re-checking the Play Data Safety
   and App Store privacy declarations.
+- **The crash-test affordance (`crashTestEnabled`, `throwTestError`, `crashNatively` in
+  `crashReporting.ts`) exists to verify the above against a real delivered payload, not to
+  relax it.** `EXPO_PUBLIC_KANGENTIC_CRASHTEST` follows the DSN's own rule: dispatch-only, never
+  in `eas.json`, defaults off, forced off on a tag build. It also gates `debug: true`, which DOES
+  reach native (`initNativeSdk` does not strip it) - see the crash reporting section of
+  `docs/developer-guide.md`.
 
 ## Known limitations, deliberately not papered over
 
@@ -67,14 +73,50 @@ a check that can never fire is worse than none, because it reads as protection.
 the options object before passing the rest to `initNativeSdk`
 (`node_modules/@sentry/react-native/dist/js/wrapper.js`), and neither `RNSentryModuleImpl.java`
 nor `RNSentry.mm` bridges a replacement. So `breadcrumbsIntegration({ console: false, ... })`
-and `allowlistBreadcrumb` govern the JS scope only. sentry-cocoa and sentry-android keep their
-own default auto-breadcrumbs (app foreground/background, activity or view-controller lifecycle,
-connectivity and system events) and those ride a NATIVE crash unfiltered. They carry no session
-content, but "the allowlist is default-deny" is true of the JS path and not of the native one.
-Closing it needs native configuration through a config plugin (Android reads
-`io.sentry.breadcrumbs.*` manifest meta-data; iOS has no equivalent plist switch), which is a
-larger change than this rule should smuggle in. Say "JS breadcrumbs are allowlisted", not
+and `allowlistBreadcrumb` govern the JS scope only. sentry-android keeps its own default
+auto-breadcrumbs and those ride a NATIVE crash unfiltered. **Observed directly** (a
+crash-test build with `debug: true`, a real native crash, the delivered event read back through
+the Sentry MCP - not inferred from source): `app.lifecycle` (foreground/background transitions),
+`device.event` (battery level, charging state, screen on/off), and `network.event`, which is
+more detailed than "coarse app-lifecycle timing" suggests - it carries `action`,
+`network_type`, `vpn_active`, `signal_strength`, `download_bandwidth`, and `upload_bandwidth`.
+None of it is session content, but "the allowlist is default-deny" is true of the JS path and
+not of the native one. Closing it needs native configuration through a config plugin (Android
+reads `io.sentry.breadcrumbs.*` manifest meta-data; iOS has no equivalent plist switch), which
+is a larger change than this rule should smuggle in. Say "JS breadcrumbs are allowlisted", not
 "breadcrumbs are allowlisted".
+
+**A crash caught by the operating system, not by the app's own code, carries a per-install
+identifier in `user.id` - `sendDefaultPii: false` does not stop it.** sentry-android always
+populates `contexts.device.id` (a random UUID generated once per app install, unrelated to
+`Secure.ANDROID_ID` or any advertising ID; confirmed against docs.sentry.io) in the device
+context, and on the uncaught-exception path it additionally promotes that same value into
+`user.id` before the JS layer, and `scrubEvent`, ever sees the event - `beforeSend` does not run
+for a native-captured event at all. Confirmed with two real delivered events off the same
+install: a JS-caught throw carried `Users: 0` (`scrubEvent` strips `user`), the OS-caught crash
+carried `Users: 1` with `user.id` identical to that event's `contexts.device.id`. This is the
+sharpest instance of "`beforeSend` cannot reach native" in the whole file: it is not a missing
+breadcrumb, it is an identifier. **`Sentry.setUser(null)` was tried as a suppression, called
+immediately after `Sentry.init()`, and did not visibly suppress it**: a fresh native crash with
+that call in place still carried `user.id` equal to `contexts.device.id`. `setUser` does bridge
+to the native scope (`RNSentry.setUser`, a runtime call, unlike an init option destructured out
+in wrapper.js) and Sentry's own docs describe `contexts.device.id` as populated by the device
+context independent of the user scope, which is the likely reason nulling the user did not
+touch it - but that explanation was not confirmed by reading sentry-android's source in this
+session, and the probe run also crossed a fresh app install (a new `device.id` on its own), so
+the observation does not isolate `setUser(null)` as cleanly as a controlled before/after would.
+There is no known JS-reachable way to suppress this identifier; the control point is disclosure,
+not removal. `docs/privacy-policy.md` and `docs/store-listing.md` describe this identifier
+rather than claim it does not exist.
+
+**What was NOT tested: a real native (NDK/signal-handler) crash.** Every native-path observation
+above came from `Sentry.nativeCrash()`, which is `RNSentryModuleImpl.crash()` throwing a
+`RuntimeException` caught by Android's `UncaughtExceptionHandler` - `platform: java`,
+`mechanism: UncaughtExceptionHandler`. That is the Java-uncaught path, not a SIGSEGV or other
+signal caught by sentry-android's NDK handler. The two paths share the same auto-breadcrumb and
+`user.id` machinery in sentry-android, so there is no specific reason to expect them to differ,
+but that is an inference, not an observation, and this file says so rather than implying full
+coverage.
 
 **Channel-origin exception messages already reach Sentry today.** The import ban stops
 `src/pairing/`, `src/channel/` and `src/notifications/` making a deliberate capture call; it
