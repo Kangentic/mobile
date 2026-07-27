@@ -12,6 +12,19 @@
  * It deliberately does not auto-increment. The hand-bumped, code-reviewed build
  * number stays a decision; this only guards it.
  *
+ * KNOWN BLIND SPOT, measured rather than assumed: a build Apple has not finished
+ * ingesting is invisible here. After an upload on 2026-07-26, `/v1/builds` and
+ * `/v1/preReleaseVersions` both returned zero for that app for well over 45
+ * minutes while the build was processing, so this script would happily have
+ * called the just-uploaded number free. That window is exactly when someone is
+ * most likely to re-run.
+ *
+ * So this is a fast early check, not the authority. The authority is the upload
+ * itself: altool rejects a duplicate, and
+ * .github/scripts/upload-ios-testflight.sh fails on that rejection rather than
+ * treating it as success. Do not add logic here that assumes a "free" answer is
+ * a guarantee.
+ *
  * No dependencies. App Store Connect wants an ES256 JWT, which node:crypto can
  * produce as long as the signature is asked for in raw R||S form rather than the
  * DER that ECDSA signing defaults to. That is the dsaEncoding option below, and
@@ -163,15 +176,32 @@ async function main() {
   // string, not globally increasing, so a lower number is legal after a version
   // bump and must not fail the build.
   const allBuilds = await callAppStoreConnect(token, `/builds?filter[app]=${app.id}&limit=200`);
-  const existingNumbers = (allBuilds.body?.data ?? [])
+  const registeredBuilds = allBuilds.body?.data ?? [];
+  const existingNumbers = registeredBuilds
     .map((build) => Number(build.attributes?.version))
     .filter((value) => Number.isFinite(value));
   const highest = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
 
+  // Deliberately worded as what was checked rather than as a verdict. "Build
+  // number N is free" reads like a guarantee, and it is not one while a build can
+  // still be in ingestion (see the blind spot note at the top of this file).
   process.stdout.write(
-    `Build number ${buildNumber} is free for ${bundleId} version ${shortVersion ?? '(unspecified)'} ` +
-      `(highest numeric build currently on App Store Connect: ${highest || 'none'}).\n`
+    `No registered build on App Store Connect uses build number ${buildNumber} for ${bundleId} ` +
+      `version ${shortVersion ?? '(unspecified)'}.\n`
   );
+  process.stdout.write(
+    `Registered builds visible: ${registeredBuilds.length}` +
+      `${highest ? ` (highest numeric build number ${highest})` : ''}.\n`
+  );
+
+  if (registeredBuilds.length === 0) {
+    process.stdout.write(
+      'Note: this app has no registered builds at all. That means either nothing has been uploaded ' +
+        'yet, or an upload is still being processed and is therefore invisible to this check. A ' +
+        'recently uploaded build can take well over 45 minutes to appear. The upload step is the ' +
+        'authoritative check.\n'
+    );
+  }
 }
 
 // Guarded so the module can be imported by a test without firing a network call
