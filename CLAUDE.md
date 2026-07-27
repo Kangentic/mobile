@@ -50,7 +50,8 @@ src/
                   #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
                   #   column chips, composer/, diff/ cells
-  brand/          # Generated brand data (brandmark XML, Overseer frames) - syncBranding.mjs owns them
+  brand/          # Generated brand data (brandmark XML, Overseer frames + motion sequences) -
+                  #   syncBranding.mjs owns them
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager

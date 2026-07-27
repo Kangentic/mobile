@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
-import { Screen, Stack, Text, Button, Overseer, useTheme } from '@/components';
+import { Screen, Stack, Text, Button, Overseer, overseerOneShotDurationMs, useTheme } from '@/components';
 import { triggerHaptic } from '@/lib/haptics';
 import { usePairingStore } from '@/state/pairingStore';
 import { confirmActivePairing, rejectActivePairing } from '@/pairing/activePairing';
@@ -58,7 +58,7 @@ export function PairingConfirmScreen(): React.JSX.Element {
       reconnectNow();
       // Let the success state's Overseer wave land before leaving; the store
       // is already 'paired', so the success branch below is what shows.
-      const successHoldMs = theme.motion.overseer.waveDurationMs + theme.motion.durations.slow;
+      const successHoldMs = overseerOneShotDurationMs['wave-once'] + theme.motion.durations.slow;
       successNavigationTimerRef.current = setTimeout(() => {
         successNavigationTimerRef.current = null;
         router.replace('/');
@@ -74,7 +74,7 @@ export function PairingConfirmScreen(): React.JSX.Element {
     return (
       <Screen testID="pairing-confirm-screen">
         <Stack gap="md" style={{ padding: theme.spacing.lg, flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <Overseer size={CONNECTING_OVERSEER_SIZE} animate="blink-loop" testID="pairing-connecting-overseer" />
+          <Overseer size={CONNECTING_OVERSEER_SIZE} animate="waiting-loop" testID="pairing-connecting-overseer" />
           <Text variant="body" color="secondary">
             Connecting to the desktop...
           </Text>
@@ -122,7 +122,7 @@ export function PairingConfirmScreen(): React.JSX.Element {
     return (
       <Screen testID="pairing-confirm-screen">
         <Stack gap="md" style={{ padding: theme.spacing.lg, flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <Overseer size={CONNECTING_OVERSEER_SIZE} animate="blink-loop" testID="pairing-connecting-overseer" />
+          <Overseer size={CONNECTING_OVERSEER_SIZE} animate="waiting-loop" testID="pairing-connecting-overseer" />
         </Stack>
       </Screen>
     );

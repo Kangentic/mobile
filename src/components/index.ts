@@ -18,7 +18,13 @@ export { SegmentedSwitcher, type SegmentedSwitcherProps, type SegmentOption } fr
 export { ConnectionBanner } from './ConnectionBanner';
 export { ContextUsageBar, isContextWindowKnown, type ContextUsageBarProps } from './ContextUsageBar';
 export { MarkdownBlock, type MarkdownBlockProps } from './MarkdownBlock';
-export { Overseer, type OverseerProps, type OverseerAnimation } from './brand/Overseer';
+export {
+  Overseer,
+  type OverseerProps,
+  type OverseerAnimation,
+  overseerOneShotDurationMs,
+  type OverseerOneShotAnimation,
+} from './brand/Overseer';
 export { Brandmark, type BrandmarkProps, type BrandmarkVariant } from './brand/Brandmark';
 export { EmptyState, type EmptyStateProps } from './brand/EmptyState';
 export { useMotionPresets, type MotionPresets } from './motion/presets';

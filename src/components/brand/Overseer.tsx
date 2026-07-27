@@ -4,14 +4,17 @@ import { useReducedMotion } from 'react-native-reanimated';
 import {
   OVERSEER_GRID_COLUMNS,
   OVERSEER_GRID_ROWS,
+  OVERSEER_REST_FRAME,
   overseerFrames,
+  overseerSequences,
+  type OverseerAnimation,
   type OverseerFrameName,
   type OverseerRectRole,
 } from '@/brand/overseerFrames.generated';
 import { useTheme } from '../theme/ThemeProvider';
 import type { BrandTokens } from '../theme/tokens';
 
-export type OverseerAnimation = 'blink-loop' | 'wave-once' | 'none';
+export { type OverseerAnimation, overseerOneShotDurationMs, type OverseerOneShotAnimation } from '@/brand/overseerFrames.generated';
 
 export interface OverseerProps {
   /**
@@ -24,10 +27,6 @@ export interface OverseerProps {
   animate?: OverseerAnimation;
   testID?: string;
 }
-
-/** The wave one-shot: canonical lead-in, held wave frame, back to canonical. */
-const WAVE_LEAD_FRACTION = 0.25;
-const WAVE_HOLD_FRACTION = 0.5;
 
 function colorForRole(role: OverseerRectRole, brand: BrandTokens): string {
   switch (role) {
@@ -43,26 +42,30 @@ function colorForRole(role: OverseerRectRole, brand: BrandTokens): string {
 /**
  * The Overseer mascot as a crisp pixel grid of plain Views (no SVG rasterizing
  * at runtime, ~35 memoized Views per frame). Frames swap discretely, pixel-art
- * style: `blink-loop` blinks on a per-instance random phase so multiple
- * mascots never blink in unison, `wave-once` plays a single greeting wave.
- * When the OS requests reduced motion the mascot rests on the canonical frame.
+ * style, driven entirely by the sequence data generated from
+ * @kangentic/branding's motion manifest (overseerSequences): a `clip` is a
+ * fixed timeline of frames, an optional `idle` is a gap before each pass
+ * (right-skewed via a squared draw, per the manifest's `bias: "square"`), and
+ * an optional `repeat` is a same-pass reroll (a double blink) gated to fire
+ * at most once per pass. Adding a sequence upstream needs no code here. When
+ * the OS requests reduced motion the mascot rests on the rest frame.
  */
 export function Overseer({ size, animate = 'none', testID = 'overseer' }: OverseerProps): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
-  const [frameName, setFrameName] = useState<OverseerFrameName>('canonical');
-  const overseerTimings = theme.motion.overseer;
+  const [frameName, setFrameName] = useState<OverseerFrameName>(OVERSEER_REST_FRAME);
+  const sequence = overseerSequences[animate];
 
-  const animationActive = animate !== 'none' && !reducedMotion;
+  const animationActive = !reducedMotion && sequence.clip.length > 0;
   const animationKey = animationActive ? animate : 'none';
 
-  // Reset to the canonical frame when the animation mode changes (render-time
+  // Reset to the rest frame when the animation mode changes (render-time
   // state adjustment, not a setState-in-effect; see usePromptAnswer for the
   // same pattern). The timers below only ever advance frames asynchronously.
   const [trackedAnimationKey, setTrackedAnimationKey] = useState(animationKey);
   if (trackedAnimationKey !== animationKey) {
     setTrackedAnimationKey(animationKey);
-    setFrameName('canonical');
+    setFrameName(OVERSEER_REST_FRAME);
   }
 
   useEffect(() => {
@@ -72,33 +75,53 @@ export function Overseer({ size, animate = 'none', testID = 'overseer' }: Overse
 
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
-    if (animate === 'blink-loop') {
-      const scheduleNextBlink = (): void => {
-        const intervalRange = overseerTimings.blinkIntervalMaxMs - overseerTimings.blinkIntervalMinMs;
-        const intervalMs = overseerTimings.blinkIntervalMinMs + Math.random() * intervalRange;
-        timeoutHandle = setTimeout(() => {
-          setFrameName('blink');
-          timeoutHandle = setTimeout(() => {
-            setFrameName('canonical');
-            scheduleNextBlink();
-          }, overseerTimings.blinkHoldMs);
-        }, intervalMs);
-      };
-      scheduleNextBlink();
-    } else {
-      // wave-once: canonical -> wave -> canonical inside waveDurationMs.
+    // Every pass draws Math.random() in this fixed order: the idle gap (if
+    // any), then the repeat roll, then the repeat gap - so a test mocking
+    // Math.random can predict exactly which call it is answering.
+    const runClipStep = (stepIndex: number, alreadyRepeated: boolean): void => {
+      const step = sequence.clip[stepIndex];
+      setFrameName(step.frame);
       timeoutHandle = setTimeout(() => {
-        setFrameName('wave');
-        timeoutHandle = setTimeout(() => {
-          setFrameName('canonical');
-        }, overseerTimings.waveDurationMs * WAVE_HOLD_FRACTION);
-      }, overseerTimings.waveDurationMs * WAVE_LEAD_FRACTION);
-    }
+        if (stepIndex + 1 < sequence.clip.length) {
+          runClipStep(stepIndex + 1, alreadyRepeated);
+          return;
+        }
+        const repeat = sequence.repeat;
+        if (repeat !== undefined && !alreadyRepeated && Math.random() < repeat.chance) {
+          setFrameName(OVERSEER_REST_FRAME);
+          const gapMs = repeat.gapMinMs + Math.random() * (repeat.gapMaxMs - repeat.gapMinMs);
+          timeoutHandle = setTimeout(() => runClipStep(0, true), gapMs);
+          return;
+        }
+        if (sequence.loop) {
+          startPass();
+          return;
+        }
+        setFrameName(OVERSEER_REST_FRAME);
+      }, step.durationMs);
+    };
+
+    const startPass = (): void => {
+      const idle = sequence.idle;
+      if (idle === undefined) {
+        runClipStep(0, false);
+        return;
+      }
+      setFrameName(idle.frame);
+      // Right-skewed draw per the manifest's bias: "square" - a single draw,
+      // squared, so gaps cluster short with the odd long pause rather than a
+      // flat spread.
+      const drawn = Math.random();
+      const gapMs = idle.minMs + (idle.maxMs - idle.minMs) * drawn * drawn;
+      timeoutHandle = setTimeout(() => runClipStep(0, false), gapMs);
+    };
+
+    startPass();
 
     return () => {
       if (timeoutHandle !== null) clearTimeout(timeoutHandle);
     };
-  }, [animate, animationActive, overseerTimings]);
+  }, [animationActive, sequence]);
 
   const pixelScale = Math.max(1, Math.floor(size / OVERSEER_GRID_COLUMNS));
   const gridWidth = pixelScale * OVERSEER_GRID_COLUMNS;
