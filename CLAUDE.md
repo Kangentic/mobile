@@ -13,7 +13,9 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
   built-in `TextDecoder`)
 - **Storage:** expo-secure-store (Keychain / Android Keystore)
 - **Notifications:** Expo Push, Notifee (Android), a native iOS Notification Service Extension via config plugin
-- **Build:** EAS Build/Submit/Workflows (cloud, including all iOS builds), Continuous Native Generation (no checked-in native projects)
+- **Build:** GitHub Actions on free runners for both platforms (Gradle for Android, `xcodebuild` on
+  a macOS runner for iOS). EAS is the credential source and the fallback, not the build path.
+  Continuous Native Generation (no checked-in native projects)
 - **Testing:** vitest (unit), Jest + React Native Testing Library (components), Maestro (E2E, Windows + Android emulator locally, EAS Workflows cloud iOS simulators), Playwright via react-native-web (later)
 
 ## Project Structure
@@ -66,7 +68,8 @@ tests/
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
-                  #   profiles through it), checkPlayVersionCode.mjs + repo scripts
+                  #   profiles through it), androidAbis.mjs, and the store preflights
+                  #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs + repo scripts
 ```
 
 ## Commands
@@ -86,15 +89,21 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
   cloud credit, and uploads the APK/AAB as a run artifact. Add `-f submit_track=internal` to queue
   a Play upload (gated behind an approval). See the CI builds section of
   [docs/developer-guide.md](docs/developer-guide.md).
-- `gh workflow run build-ios.yml` - Unsigned iOS simulator compile check on a free macOS runner.
-  No Apple Developer account or signing needed.
+- `gh workflow run build-ios.yml` - **The normal way to build for iOS.** Runs on a free macOS
+  runner. Defaults to an unsigned simulator compile check, which needs no Apple Developer account
+  and no signing. Add `-f target=device` for a signed `.ipa`, and `-f submit=testflight` to upload
+  it to App Store Connect. The upload talks to Apple directly with `xcrun altool`, so an EAS Submit
+  outage cannot block it. See the CI builds section of
+  [docs/developer-guide.md](docs/developer-guide.md).
 - The `eas build` wrappers below are **cloud** builds that each spend one of the 15 free monthly
-  Android builds. Prefer the workflow; use these only when a runner will not do:
+  builds per platform and enter a low-priority queue that can take hours. Prefer the workflows above;
+  use these only when a runner will not do:
   - `eas build --profile development --platform android` (`npm run build:dev`) - dev-client build
   - `eas build --profile preview --platform android` (`npm run build:preview`) - internal
     distribution build
   - `eas build --profile production --platform android` (`npm run build:prod`) - store-release build
-  - `eas build --profile production --platform ios` - App Store build (cloud, no Mac needed)
+  - `eas build --profile production --platform ios` - App Store build (cloud, no Mac needed). The
+    fallback if the runner path breaks; `build-ios.yml -f target=device` is the path.
 - `npm run typecheck` - `tsc --noEmit`
 - `npm run lint` - `eslint . --max-warnings 0`
 - `npm run test:unit` - Unit tests (`vitest run tests/unit`)
