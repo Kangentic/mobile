@@ -184,6 +184,35 @@ jobs:
       - name: Generate the native iOS project
         run: npx expo prebuild --platform ios --no-install
 
+      # The two prebuilds above exercise only the INERT Sentry path. app.config.ts
+      # omits the Sentry plugin entirely when SENTRY_AUTH_TOKEN is absent, and this
+      # workflow deliberately holds no secrets, so without this step the plugin's
+      # own file generation is tested by nothing short of a signed release build.
+      # That is precisely the shape of hole that let a broken config-plugin import
+      # reach iOS while every gate stayed green.
+      #
+      # A DUMMY token closes it and needs no secret, so it works on fork PRs too.
+      # Prebuild only generates files: it writes the Gradle and Xcode wiring plus a
+      # sentry.properties, and never contacts Sentry. Uploads happen later, during
+      # Gradle and xcodebuild, which this job does not run - so a fake token cannot
+      # reach the network or touch the real project.
+      - name: Generate both native projects with the Sentry plugin ENABLED
+        env:
+          SENTRY_AUTH_TOKEN: dummy-token-for-ci-plugin-check
+        run: npx expo prebuild --platform all --no-install
+
+      - name: Confirm the Sentry plugin actually wired itself in
+        # Guards against the plugin silently no-opping: if a future SDK version
+        # changes how it injects, this fails loudly here instead of shipping a
+        # release whose stack traces are all minified.
+        run: |
+          set -euo pipefail
+          if ! grep -q "sentry.gradle" android/app/build.gradle; then
+            echo "::error::The Sentry Expo plugin did not add its Gradle integration. Release source maps would not upload, so every production stack trace would arrive minified."
+            exit 1
+          fi
+          echo "Sentry plugin wired into the Android build."
+
       - name: Confirm the generated project is not committed
         # CNG: android/ must exist only as a build artifact. If prebuild output
         # ever shows up as tracked changes, someone committed the native tree.

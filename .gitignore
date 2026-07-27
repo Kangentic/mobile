@@ -45,6 +45,13 @@ expo-env.d.ts
 credentials.json
 google-services.json
 GoogleService-Info.plist
+# Sentry CLI config. Both can carry an auth token (org-scoped, able to
+# upload releases and read issues) and neither matched any glob above.
+# `sentry-cli login` writes ~/.sentryclirc outside the repo, but the CLI
+# also reads a project-local copy, and the config plugin can generate a
+# sentry.properties into the native projects.
+.sentryclirc
+sentry.properties
 *.jks
 *.keystore
 *.p8

@@ -147,6 +147,41 @@ describe('build-android workflow and eas.json parity', () => {
     expect(prebuildIndex).toBeGreaterThan(-1);
     expect(exportIndex).toBeLessThan(prebuildIndex);
   });
+
+  it('exports the Sentry env before prebuild, for the same GITHUB_ENV reason', () => {
+    // app.config.ts reads SENTRY_AUTH_TOKEN at config-evaluation time to decide
+    // whether to include the Sentry plugin at all. Exporting after prebuild
+    // would produce a build that reports crashes but has no source maps
+    // uploaded, so every stack trace arrives minified and useless - green
+    // build, worthless symbolication.
+    const exportIndex = workflowSource.indexOf('Export the Sentry build env');
+    const prebuildIndex = workflowSource.indexOf('expo prebuild --platform android');
+    expect(exportIndex).toBeGreaterThan(-1);
+    expect(exportIndex).toBeLessThan(prebuildIndex);
+  });
+
+  it('keeps the Sentry DSN out of the committed config, as a variable not a secret', () => {
+    // The repo is public and the Sentry project is on the free tier (5k
+    // errors/month). A DSN committed to eas.json or the workflow would route
+    // every fork's crashes into this project's quota. That is the reason it is
+    // injected rather than committed - NOT confidentiality: a DSN ships inside
+    // the published app bundle and is write-only. So it is a repository
+    // VARIABLE, which can be read back to verify which project is wired; a
+    // secret cannot, and a mistyped one would be undetectable.
+    expect(workflowSource).toContain('vars.SENTRY_DSN');
+    expect(workflowSource).not.toContain('secrets.SENTRY_DSN');
+    expect(workflowSource).not.toMatch(/https:\/\/[0-9a-f]+@[a-z0-9.]*ingest/);
+    const easSource = readFileSync(`${repositoryRoot}eas.json`, 'utf8');
+    expect(easSource).not.toContain('SENTRY');
+  });
+
+  it('masks the Sentry auth token but not the DSN', () => {
+    // The token can upload releases, so it is masked. Masking the DSN would
+    // cost the one diagnostic the log is good for - which project a build
+    // reported to - and buy nothing, since the value ships in the bundle.
+    expect(workflowSource).toContain('::add-mask::$SENTRY_AUTH_TOKEN');
+    expect(workflowSource).not.toContain('::add-mask::$SENTRY_DSN');
+  });
 });
 
 describe('build-android release safety gates', () => {
@@ -337,6 +372,16 @@ describe('build-ios workflow', () => {
     expect(exportIndex).toBeGreaterThan(-1);
     // Same ordering requirement as Android: app.config.ts reads EXPO_PUBLIC_* at
     // config-evaluation time, which happens during prebuild.
+    expect(exportIndex).toBeLessThan(prebuildIndex);
+  });
+
+  it('exports the Sentry env before prebuild on iOS too', () => {
+    // Android and iOS drifting apart on a build-time value is a documented
+    // failure mode in this workflow pair (see the eas.json case above).
+    const deviceJob = readIosJob('device');
+    const exportIndex = deviceJob.indexOf('Export the Sentry build env');
+    const prebuildIndex = deviceJob.indexOf('expo prebuild --platform ios');
+    expect(exportIndex).toBeGreaterThan(-1);
     expect(exportIndex).toBeLessThan(prebuildIndex);
   });
 

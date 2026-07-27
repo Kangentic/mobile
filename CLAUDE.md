@@ -69,6 +69,8 @@ src/
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory) + the non-Zustand terminalFeed PTY ring buffers
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
+  observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
+                  #   pure event/breadcrumb scrubber (see crash-reporting-scope.md)
   lib/            # Shared pure utilities (crypto polyfills, haptics)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
@@ -131,13 +133,13 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 
 ## Cloud-spend and public-write MCP tools
 
-Three MCP servers are wired in: `context7` and `firebase` from `.mcp.json`, plus the official
-Expo plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is documentation-only
-and unguarded; the Expo plugin and `firebase` expose tools with consequences outside this
-machine, gated by `permissions.ask` in `.claude/settings.json` (a prompt on every call in every
-normal permission mode; a bypass mode skips it, so this section, not the prompt, is the real
-guard) - never call these without an explicit user request, and re-check this list against
-`/mcp` when any server is upgraded.
+Four MCP servers are wired in: `context7`, `firebase` and `sentry` from `.mcp.json`, plus the
+official Expo plugin from `enabledPlugins` in `.claude/settings.json`. `context7` is
+documentation-only and unguarded; the Expo plugin, `firebase` and `sentry` expose tools with
+consequences outside this machine, gated by `permissions.ask` in `.claude/settings.json` (a
+prompt on every call in every normal permission mode; a bypass mode skips it, so this section,
+not the prompt, is the real guard) - never call these without an explicit user request, and
+re-check this list against `/mcp` when any server is upgraded.
 
 **The Maestro MCP server was removed deliberately** (2026-07-25). It is `maestro mcp`, a wrapper
 over the same CLI, so it added no capability: `run`/`inspect_screen`/`list_devices`/`run_on_cloud`
@@ -174,6 +176,18 @@ see `.claude/rules/e2e-maestro-runs.md`.
   MCP is scoped to `--only core,messaging` in `.mcp.json` because this app uses Firebase solely
   for FCM. Widen that list only when a feature is actually adopted. Note `firebase_init` writes
   a `firebase.json` into the repo, which this project deliberately does not have.
+- **Reads are fine, writes need an explicit request - mutates a shared issue tracker:** the
+  Sentry MCP (remote HTTP, `https://mcp.sentry.dev/mcp/kangentic/react-native`, OAuth as the
+  individual developer's personal Sentry account). Querying issues, events, and stack traces is
+  ordinary read-only debugging and needs no ceremony. Anything that WRITES - resolving or
+  ignoring an issue, assigning it, editing alert rules, creating or deleting a project or team,
+  or triggering a Seer/autofix run that spends quota - is explicit-request-only, because the
+  issue stream is the project's shared record of what is broken and a bulk resolve is tedious to
+  undo. The URL is deliberately scoped to the one project rather than the org: it narrows the
+  blast radius and drops the org-wide discovery tools from context. Note that crash events
+  themselves are app data; treat anything read out of them as covered by
+  `.claude/rules/crash-reporting-scope.md` and never paste an event payload into a public
+  artifact.
 
 ## Architecture
 
@@ -275,6 +289,10 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   (`src/pairing/`, `src/channel/`, `src/connection/`, `src/notifications/`).
 - `e2e-notification-privacy.md` - push payloads are ciphertext plus placeholder only
   (`src/notifications/`, `plugins/`, `targets/`).
+- `crash-reporting-scope.md` - Sentry imports confined to `src/observability/` and banned outright
+  from the pairing/channel/notification paths; privacy controls set at the source because a JS
+  `beforeSend` cannot filter native crashes (`src/observability/`, `src/pairing/`, `src/channel/`,
+  `src/notifications/`).
 - `expo-cng.md` - no hand-edited `ios/`/`android/`; native config via config plugins; SDK-resolved
   dependency installs via `expo install` (`app.json`, `app.config.*`, `eas.json`, `plugins/`,
   `ios/`, `android/`, `package.json`, `package-lock.json`).
