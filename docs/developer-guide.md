@@ -47,10 +47,29 @@ For anything beyond a bare Metro session, use the dev rig below.
 | `npm run dev:doctor` | Read-only preflight: adb/emulator/AVD, the `hw.keyboard=yes` typing check, relay repo and port states, dev-client install, Node version. |
 | `npm run dev:emu` | Emulator hygiene: kill + reboot on host GPU, restore the adb reverses, relaunch the app foreground-verified. The cure for progressive emulator lag (a long-lived qemu process degrades under sustained WebGL load). |
 | `npm run dev:adb` | adb-server wedge recovery: force-kill adb, fresh server, reverses, relaunch. The cure when the phone reconnect-loops while the relay and desktop are healthy (forwarding silently stops moving data). |
-| `npm run dev:stop` | Stops every rig process, this run's and any orphaned by an earlier one, leaving the relay and emulator up (both are expensive to restart and neither is what goes wrong). Starting any mode does this first, so it is only needed to hand the machine back clean - or to free Metro before switching rig mode, since only one mode can own port 8081. |
+| `npm run dev:stop` | Stops the processes **the rig itself started**, this run's and any left by an interrupted earlier one, leaving the relay and emulator up (both are expensive to restart and neither is what goes wrong). Starting any mode does this first, so it is only needed to hand the machine back clean - or to free Metro before switching rig mode, since only one mode can own port 8081. `-- --dry-run` prints the targets and kills nothing. |
 
 Details worth knowing:
 
+- **The rig only ever kills a process it started itself.** Every child it spawns is recorded
+  synchronously to `.devrig-processes/` at the main checkout (one file per child: label, pid,
+  and the identity the OS reported for that pid at spawn time). `dev:stop` reads only those
+  records, re-queries each pid, and kills it **only if the identity still matches** - a pid the
+  OS has since recycled belongs to a stranger, so its record is pruned and nothing is killed.
+  Non-Windows falls back to a liveness check, where pids are not recycled aggressively.
+
+  This replaced a scan that matched every `node.exe` on the machine against
+  `dev\.mjs|stubDesktopPeer|expo(-cli)?.*start`. That pattern is far wider than it reads:
+  `expo(-cli)?.*start` matches `--expose-gc ... start`, and even `--expose-internals ... --restart`
+  (the "start" inside "--restart"). It killed a running Kangentic desktop and every agent session
+  under it, twice. **Never reintroduce a kill target derived from a command line or a held port**
+  - `tests/unit/rigProcessRegistry.test.ts` scans `scripts/dev.mjs` for exactly that and fails CI.
+
+  The consequence to accept: a Metro or stub started **outside** the rig is invisible to it. The
+  rig reports a foreign holder of port 8081 (in `dev:doctor`, and as a hard failure at start) and
+  tells you the pid, rather than taking it. Stop it yourself, or pass `--no-metro` to use it -
+  after checking it serves THIS repo, since an adopted bundler from another checkout serves the
+  wrong bundle and every symptom then looks like an app bug.
 - **Live-mode quick pair (dev-only hot path):** `dev:live` skips the in-app QR/SAS ceremony
   entirely. The desktop dev instance (bridge enabled, dev build) publishes its static public key
   and relay URL to its repo's gitignored `.kangentic/mobile-dev-pairing/desktop.json`; the rig

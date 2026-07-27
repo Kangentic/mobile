@@ -38,6 +38,13 @@ second rig mode silently kills the first one's bundler. Both failures look like 
   for E2E selectors trades one fragility for a worse one, so the flows select tabs by their
   LABEL (`text: "Board"`). This is the narrow carve-out: it applies where the platform owns the
   view, not to anything we render ourselves.
+- **The rig may only kill a process it started itself.** Kill targets come from the
+  `.devrig-processes/` registry (`scripts/rigProcessRegistry.mjs`) and are verified against the
+  identity the OS reported for that pid at spawn time, because Windows recycles pids. Never
+  derive a target from a command line, a process name, or who holds a port: the scan that did
+  matched `--expose-gc ... start` via `expo(-cli)?.*start` and killed a running Kangentic desktop
+  with every agent session under it. A process the rig did not start gets **reported**, not
+  taken. `npm run dev:stop -- --dry-run` prints the targets and kills nothing.
 - **A flow that calls itself self-contained must be.** The stub peer restores its canned board on
   every session establish, which is one flow; do not add state that outlives that boundary.
 - **Never edit `src/` while a suite is running against Metro.** Fast Refresh pushes every save
@@ -105,6 +112,10 @@ exactly like an app bug. Test a `default`-image AVD before hunting in `src/`.
 - **Skill (live now):** `/e2e` runs the suite in the order that actually works - APK-matches-HEAD
   check, rebuild, one rig mode, pair WITH the URI, run, triage through the agent. Two of tonight's
   wasted runs were pure sequence errors, not judgement.
+- **Test (live now):** `tests/unit/rigProcessRegistry.test.ts` unit-tests the kill/prune decision
+  (recycled pid, missing identity, dead process) and statically scans `scripts/dev.mjs` for a
+  kill target derived from a command line. The scan is the enforcement that matters: the failure
+  mode is a REINTRODUCED pattern, which no runtime test can catch.
 - **Test (live now):** `tests/unit/maestroFlows.test.ts` statically checks every flow for unknown
   commands, a missing `appId`, and a sub-45s `session-screen` wait, in under a second. An unknown
   command is a PARSE error that aborts the whole suite before any flow runs, so catching it in CI

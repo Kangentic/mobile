@@ -17,11 +17,13 @@
  *                                    Maestro E2E rig. Reuses the saved phone
  *                                    key for a no-re-pair session when it can.
  *   node scripts/dev.mjs doctor   Preflight checks only.
- *   node scripts/dev.mjs stop     Stop every rig process (this run's and any
- *                                    orphaned by an earlier one), leaving the
- *                                    relay and emulator up. Starting any mode
- *                                    does this first, so `stop` is only needed
- *                                    to hand the machine back clean.
+ *   node scripts/dev.mjs stop     Stop the processes THIS RIG started (this
+ *                                    run's and any left by an interrupted
+ *                                    earlier one), leaving the relay and
+ *                                    emulator up. Starting any mode does this
+ *                                    first, so `stop` is only needed to hand
+ *                                    the machine back clean. Add --dry-run to
+ *                                    print the targets and kill nothing.
  *
  * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
  *        --relay <wss://host> (use a HOSTED relay instead of the local one:
@@ -69,9 +71,16 @@
  * (dev phone key, stub phone key, repo paths) from the main checkout's state
  * file so it never mints a second dev identity into the desktop roster.
  *
- * The rig adopts healthy already-running pieces (relay via /healthz, Metro
- * via port 8081, emulator via adb devices) and only tears down children it
- * spawned itself. Ctrl-C stops stub/Metro; the RELAY is spawned detached
+ * The rig adopts healthy already-running pieces (relay via /healthz, emulator
+ * via adb devices) and only ever kills a process it started ITSELF, verified
+ * by pid AND the identity the OS reported for that pid at spawn time. One
+ * record per spawned child lands in .devrig-processes/ at the main checkout;
+ * that registry is the sole source of kill targets. Nothing is inferred from a
+ * command line or a held port - see scripts/rigProcessRegistry.mjs for the
+ * incident that rule comes from. A process the rig did not start (someone's
+ * own bundler on 8081) is reported, never taken.
+ *
+ * Ctrl-C stops stub/Metro; the RELAY is spawned detached
  * (logs in the OS temp dir) so it outlives the rig and whatever terminal
  * or agent session launched it - the desktop's bridge and the phone both
  * depend on it, and neither should die with a dev-loop restart. The
@@ -79,12 +88,13 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { decideRecordAction, parseRecordFileName, recordFileName } from './rigProcessRegistry.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -103,6 +113,10 @@ function resolveMainRepoRoot() {
 const mainRepoRoot = resolveMainRepoRoot();
 
 const STATE_FILE = join(repoRoot, '.devrig.local.json');
+// One record per spawned child, at the MAIN checkout so a `stop` from any
+// worktree reaps rigs started from any other - the strays that matter came
+// from a different worktree's interrupted run.
+const PROCESS_REGISTRY_DIR = join(mainRepoRoot, '.devrig-processes');
 const APP_PACKAGE = 'com.kangentic.mobile';
 const RELAY_PORT = 8080;
 const METRO_PORT = 8081;
@@ -202,6 +216,7 @@ function parseRigArgs(argv) {
       'kangentic-repo': { type: 'string' },
       clear: { type: 'boolean', default: false },
       'no-metro': { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
       'no-protocol-link': { type: 'boolean', default: false },
       stub: { type: 'boolean', default: false },
       fresh: { type: 'boolean', default: false },
@@ -349,56 +364,138 @@ function spawnPrefixed(label, command, args, options = {}) {
   forward(child.stdout);
   forward(child.stderr);
   child.on('exit', (code) => {
+    if (child.pid !== undefined) forgetSpawnedChild(label, child.pid);
     log(`${label} exited (${code ?? 'signal'})`);
   });
   spawnedChildren.push({ label, child });
+  // Before returning: an interrupted run is exactly what the registry is for.
+  if (child.pid !== undefined) recordSpawnedChild(label, child.pid);
   return child;
 }
 
 /**
- * Every rig-owned process still running, this one excluded: previous rig
- * invocations, their stub peers, and their Metro bundlers.
- *
- * The rig only ever killed the children IT spawned, so an interrupted run
- * (a killed terminal, an agent session ending, a Ctrl-C that missed) left
- * orphans behind. They do not sit idle: each stub redials the same relay
- * slot and each Metro wants port 8081, so a handful of them fight over one
- * device and the symptoms read as a flaky app - sessions that will not
- * establish, a bundler that answers but serves nothing. Observed at six
- * live processes in one session before anyone noticed.
+ * What the OS reports for a pid right now: null when no such process exists.
+ * Used both to stamp a record at spawn time and to verify it before a kill.
  */
-function findOrphanRigProcesses() {
-  if (process.platform !== 'win32') return [];
-  const query =
-    "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | " +
-    'Where-Object { $_.CommandLine -match \'dev\\.mjs|stubDesktopPeer|expo(-cli)?.*start\' } | ' +
-    'Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress';
-  const listed = spawnSync('powershell', ['-NoProfile', '-Command', query], { encoding: 'utf8' });
-  if (listed.status !== 0 || !listed.stdout?.trim()) return [];
-  let rows;
-  try {
-    rows = JSON.parse(listed.stdout);
-  } catch {
-    return [];
+function processIdentity(pid) {
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(pid, 0);
+      return { creationDate: '', commandLine: '' };
+    } catch {
+      return null;
+    }
   }
-  const all = Array.isArray(rows) ? rows : [rows];
-  return all
-    .filter((row) => row && typeof row.ProcessId === 'number' && row.ProcessId !== process.pid)
-    .map((row) => ({ pid: row.ProcessId, commandLine: String(row.CommandLine ?? '').trim() }));
+  const query =
+    `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | ` +
+    'Select-Object CreationDate, CommandLine | ConvertTo-Json -Compress';
+  const listed = spawnSync('powershell', ['-NoProfile', '-Command', query], { encoding: 'utf8' });
+  if (listed.status !== 0 || !listed.stdout?.trim()) return null;
+  try {
+    const row = JSON.parse(listed.stdout);
+    if (!row) return null;
+    return {
+      creationDate: String(row.CreationDate ?? ''),
+      commandLine: String(row.CommandLine ?? ''),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Kill the orphans above. Deliberately NOT a tree kill: the emulator is a
- * descendant of the rig that booted it, so `/T` takes qemu down with the rig
- * and costs a cold boot nobody asked for. Every process worth killing here is
- * itself a node.exe the scan already matched, so killing them individually
- * covers the same ground; their cmd.exe shims exit with their child.
+ * Record a child the rig just spawned. Synchronous and before the child is
+ * handed back: the orphan case exists because runs get interrupted, so a
+ * record written any later does not cover the case it is for.
  */
-function killOrphanRigProcesses(orphans) {
-  for (const orphan of orphans) {
-    spawnSync('taskkill', ['/PID', String(orphan.pid), '/F'], { encoding: 'utf8' });
+function recordSpawnedChild(label, pid) {
+  try {
+    mkdirSync(PROCESS_REGISTRY_DIR, { recursive: true });
+    writeFileSync(
+      join(PROCESS_REGISTRY_DIR, recordFileName(label, pid)),
+      JSON.stringify({ label, pid, platform: process.platform, startedAt: new Date().toISOString(), identity: processIdentity(pid) }, null, 2),
+    );
+  } catch (recordError) {
+    // A registry we cannot write means a later `stop` will not reap this
+    // child. Say so rather than failing the run - the rig still works, it
+    // just leaves cleanup to Ctrl-C.
+    warn(`could not record ${label} (pid ${pid}) in the rig registry: ${recordError.message}`);
   }
-  return orphans.length;
+}
+
+function forgetSpawnedChild(label, pid) {
+  try {
+    rmSync(join(PROCESS_REGISTRY_DIR, recordFileName(label, pid)), { force: true });
+  } catch {
+    // best-effort
+  }
+}
+
+/** Every record on disk, newest last, with its file path for pruning. */
+function readProcessRegistry() {
+  let fileNames = [];
+  try {
+    fileNames = readdirSync(PROCESS_REGISTRY_DIR);
+  } catch {
+    return [];
+  }
+  const records = [];
+  for (const fileName of fileNames) {
+    const parsed = parseRecordFileName(fileName);
+    if (!parsed) continue;
+    const path = join(PROCESS_REGISTRY_DIR, fileName);
+    let record = null;
+    try {
+      record = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      // A truncated or hand-edited record is unreadable, not a kill target.
+    }
+    records.push({ path, fileName, record: record ?? { ...parsed, identity: null, platform: process.platform } });
+  }
+  return records.sort((first, second) => first.fileName.localeCompare(second.fileName));
+}
+
+/**
+ * Stop the rig processes this machine recorded: this run's and any left by an
+ * interrupted earlier one. Only recorded pids whose OS identity still matches
+ * are killed; anything else prunes its record and is left alone.
+ *
+ * `/T /F` matches teardown(): spawnPrefixed runs through a shell, so the
+ * recorded pid is the cmd.exe shim and a bare kill would orphan the node
+ * grandchild. The emulator and the relay are spawned detached and never
+ * recorded, so no tree walk can reach them.
+ */
+function stopRecordedProcesses({ dryRun = false } = {}) {
+  const records = readProcessRegistry();
+  let stopped = 0;
+  let pruned = 0;
+  for (const { path, record } of records) {
+    const live = Number.isInteger(record.pid) && record.pid > 0 ? processIdentity(record.pid) : null;
+    const { action, reason } = decideRecordAction(record, live);
+    if (action === 'prune') {
+      if (!dryRun) rmSync(path, { force: true });
+      pruned += 1;
+      continue;
+    }
+    if (dryRun) {
+      log(`would stop ${record.label} (pid ${record.pid}) - ${reason}`);
+      stopped += 1;
+      continue;
+    }
+    log(`stopping ${record.label} (pid ${record.pid}) - ${reason}`);
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/PID', String(record.pid), '/T', '/F'], { encoding: 'utf8' });
+    } else {
+      try {
+        process.kill(record.pid, 'SIGTERM');
+      } catch {
+        // Raced with its own exit.
+      }
+    }
+    rmSync(path, { force: true });
+    stopped += 1;
+  }
+  return { stopped, pruned };
 }
 
 function teardown() {
@@ -408,7 +505,9 @@ function teardown() {
     reverseWatchdogTimer = null;
   }
   for (const { label, child } of spawnedChildren.splice(0)) {
-    if (child.exitCode !== null || child.pid === undefined) continue;
+    if (child.pid === undefined) continue;
+    forgetSpawnedChild(label, child.pid);
+    if (child.exitCode !== null) continue;
     log(`stopping ${label} (pid ${child.pid})`);
     if (process.platform === 'win32') {
       // kill() alone misses npm > tsx > node process trees on Windows.
@@ -889,15 +988,26 @@ async function ensureRelay(relayRepo) {
 // ---------------------------------------------------------------------------
 // Metro
 
+/**
+ * Clear port 8081 for a new bundler - but only of a process the rig started.
+ *
+ * This used to kill whatever node.exe held the port, which is the same
+ * kill-by-inference mistake as the old stop scan: a developer's own
+ * `npx expo start`, or a bundler for another repo, is a node.exe holding 8081
+ * and was force-killed without being asked. A stray of OURS is recorded, so
+ * stopRecordedProcesses has already dealt with it by the time we get here;
+ * anything still holding the port is someone else's and the rig says so
+ * instead of taking it.
+ */
 function freeStaleMetro() {
   const pid = findPortListenerPid(METRO_PORT);
   if (pid === null) return;
-  const name = processNameForPid(pid);
-  if (name !== 'node.exe') {
-    fail(`port ${METRO_PORT} is held by ${name ?? 'an unidentified process'} (pid ${pid}), which is not a stray Metro. Not killing it; free the port and re-run (or pass --no-metro).`);
-  }
-  log(`killing stale Metro/node on port ${METRO_PORT} (pid ${pid})`);
-  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8' });
+  fail(
+    `port ${METRO_PORT} is held by ${processNameForPid(pid) ?? 'an unidentified process'} (pid ${pid}), which the rig did not start.\n` +
+      '       The rig only stops processes it started, so it will not kill this one. Either stop it yourself and re-run,\n' +
+      '       or pass --no-metro to use it as-is (check it is serving THIS repo first - an adopted bundler from another\n' +
+      '       checkout serves the wrong bundle and every symptom looks like an app bug).',
+  );
 }
 
 function startMetro(flags, extraEnv = {}) {
@@ -1148,16 +1258,31 @@ async function doctor({ relayRepo, avdName, requestedSerial }) {
   const doctorTarget = requestedSerial ?? (readyDevices.length === 1 ? readyDevices[0].serial : null);
   if (doctorTarget) process.env.ANDROID_SERIAL = doctorTarget;
 
-  // One rig at most. Orphans from an interrupted run keep dialing the same
+  // One rig at most. Strays from an interrupted run keep dialing the same
   // relay slot and wanting the same Metro port, which presents as a flaky app
   // rather than as a process problem.
-  // npx spawns the real bundler as a child, so a single Metro shows up twice;
-  // count the wrapper out or a healthy rig always looks doubled.
-  const rigProcesses = findOrphanRigProcesses().filter((process) => !process.commandLine.includes('npx-cli.js'));
-  const stubCount = rigProcesses.filter((process) => process.commandLine.includes('stubDesktopPeer')).length;
-  const metroCount = rigProcesses.filter((process) => /expo(-cli)?.*start/.test(process.commandLine)).length;
-  add(stubCount <= 1, `stub peers running: ${stubCount}`, 'more than one stub dials the same relay slot and they steal the session from each other - run: npm run dev:stop');
-  add(metroCount <= 1, `Metro bundlers running: ${metroCount}`, `more than one bundler wants port ${METRO_PORT}; the loser serves nothing - run: npm run dev:stop`);
+  //
+  // Counted from the registry, so these are rig-owned processes by definition.
+  // The old machine-wide command-line scan counted the npx wrapper twice and
+  // needed a filter for it; a record is one child, so nothing to un-double.
+  const liveRecords = readProcessRegistry().filter(({ record }) => decideRecordAction(record, processIdentity(record.pid)).action === 'kill');
+  const stubCount = liveRecords.filter(({ record }) => record.label.startsWith('stub')).length;
+  const metroCount = liveRecords.filter(({ record }) => record.label === 'metro').length;
+  add(stubCount <= 1, `rig stub peers running: ${stubCount}`, 'more than one stub dials the same relay slot and they steal the session from each other - run: npm run dev:stop');
+  add(metroCount <= 1, `rig Metro bundlers running: ${metroCount}`, `more than one bundler wants port ${METRO_PORT}; the loser serves nothing - run: npm run dev:stop`);
+
+  // The registry cannot see a Metro someone started by hand, and the rig no
+  // longer goes looking for processes to kill by name. Report a foreign holder
+  // of the port as a fact to act on, never as a target.
+  const metroPortPid = findPortListenerPid(METRO_PORT);
+  if (metroPortPid !== null && !liveRecords.some(({ record }) => record.pid === metroPortPid)) {
+    const healthy = await probeMetroStatus();
+    add(
+      healthy,
+      `port ${METRO_PORT} is held by ${processNameForPid(metroPortPid) ?? 'an unidentified process'} (pid ${metroPortPid}), which the rig did not start${healthy ? ' - it is serving, so the rig will adopt it' : ''}`,
+      `it is not answering /status, so the dev client would wait forever on a bundle. The rig will not kill a process it did not start: stop pid ${metroPortPid} yourself, then re-run.`,
+    );
+  }
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   add(nodeMajor >= 22, `Node >= 22 (running ${process.versions.node})`, 'the rig uses the built-in fetch and WebSocket');
@@ -1271,13 +1396,11 @@ async function main() {
     // Back to a known-good machine in one command. Deliberately leaves the
     // relay (spawned detached, shared with the desktop) and the emulator up:
     // both are expensive to restart and neither is what goes wrong.
-    const orphans = findOrphanRigProcesses();
-    if (orphans.length === 0) {
-      log('no rig processes running');
-    } else {
-      for (const orphan of orphans) log(`stopping pid ${orphan.pid}: ${orphan.commandLine}`);
-      log(`stopped ${killOrphanRigProcesses(orphans)} rig process(es)`);
-    }
+    const dryRun = Boolean(flags['dry-run']);
+    const { stopped, pruned } = stopRecordedProcesses({ dryRun });
+    if (stopped === 0) log('no rig processes running');
+    else log(dryRun ? `${stopped} rig process(es) would be stopped (--dry-run: nothing was killed)` : `stopped ${stopped} rig process(es)`);
+    if (pruned > 0) log(`${dryRun ? 'would prune' : 'pruned'} ${pruned} stale record(s) (already exited, or the pid is now someone else's)`);
     log('relay and emulator left running (npm run dev:adb recovers a wedged adb server)');
     process.exit(0);
   }
@@ -1362,10 +1485,14 @@ async function main() {
   // spawn their own peer, so the second run half-replaced the first and both
   // sets of processes stayed alive fighting over one device. Starting a rig
   // now means exactly one rig.
-  const orphans = findOrphanRigProcesses();
-  if (orphans.length > 0) {
-    for (const orphan of orphans) log(`clearing a previous rig process (pid ${orphan.pid})`);
-    killOrphanRigProcesses(orphans);
+  //
+  // "Any previous rig" means the processes THIS rig recorded when it spawned
+  // them, and nothing else. It used to mean every node.exe whose command line
+  // resembled one of ours, which took out a running Kangentic desktop and the
+  // agent sessions under it. See scripts/rigProcessRegistry.mjs.
+  const { stopped: clearedCount } = stopRecordedProcesses();
+  if (clearedCount > 0) {
+    log(`cleared ${clearedCount} process(es) from a previous rig run`);
     // Killing a process mid-adb-transfer can leave the adb server wedged;
     // give it a beat, and let the health check below catch it if so.
     await sleep(1500);
