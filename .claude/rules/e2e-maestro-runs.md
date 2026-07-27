@@ -65,12 +65,33 @@ Three failure modes worth knowing without spawning anything:
 - **A testID built from transient state renames itself.** The feed's section header was keyed
   to the SECTION, so the same visible header answered to `-idle` or `-needs-you` depending on
   whether a prompt was pending. Key selectors to something that cannot move.
-- **Dependent taps need an assertion between them.** The delete row swaps its own testID when
-  armed; without asserting the armed state, a tap that never landed surfaces two steps later as
-  a card that would not delete.
+- **An armed confirmation must not expire on a clock.** The delete row swaps its own testID when
+  armed and used to relax after 10s. Maestro spends SECONDS between two taps ("settled
+  hierarchy" aiming), so the confirm landed 14.8s after the arm, the row had already disarmed,
+  and the second tap re-armed instead of confirming - no request, no error, and a screenshot
+  showing an unarmed row.
+
+  That screenshot is the trap: **an unarmed row looks identical whether the arm never landed or
+  the arm landed and self-expired.** An earlier revision of this rule asserted the first, and it
+  was wrong. Asserting the armed state between the taps does not distinguish them either - it
+  passed, and the row expired afterwards. Only the timestamps in
+  `~/.maestro/tests/<timestamp>/maestro.log` separate the two.
+
+  The fix was to delete the deadline, on product grounds: an accidental double-tap fires the
+  delete whatever the window is, because the guard is the SECOND TAP, not the clock. The expiry
+  protected nothing and punished the reader who paused over the consequence line.
 
 **Never raise a timeout as a first move**, and never change product behaviour to make a flow
 pass without giving the product argument on its own merits.
+
+**The app never reports UI-idle, and it costs every tap 6-8 seconds.** `adb shell uiautomator
+dump` fails with `could not get idle state` whenever the app is foregrounded, on Board and Home
+alike, and succeeds the instant it is backgrounded. Maestro therefore falls back to "settled
+hierarchy" aiming before every tap. This is the single largest drag on suite runtime and it
+caused at least one real failure (the delete confirmation expiring between two taps). The cause
+is NOT an obvious animation loop - there is no `Animated.loop` or infinite `withRepeat(..., -1)`
+in `src/` - and it is unresolved. Treat a mysteriously slow flow as a symptom of this before
+assuming the flow is wrong.
 
 ## Enforcement (self-maintaining)
 
