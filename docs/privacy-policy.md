@@ -35,17 +35,23 @@ doing in the app:
   (things like battery level, free memory and storage, screen size and orientation, and device
   timezone)
 - when the crash is caught by the operating system rather than by the app's own code, a short
-  trail of coarse lifecycle events, for example the app being sent to the background or the
-  network connection changing. These describe the app's state, never yours
+  trail of technical state changes leading up to it: the app moving to the foreground or
+  background, battery level and charging state, the screen turning on or off, and network
+  conditions such as connection type, signal strength, and approximate data throughput. These
+  describe the app's and device's technical state, never yours
 
 It deliberately does **not** contain your session content. No screenshots, no screen recording,
 no on-screen text, no keystrokes, no console output, no network request details, no transcripts,
 terminal output, code or diffs, no notification content, and no pairing or encryption keys. Those
 are not stripped out afterwards; they are never collected in the first place.
 
-Crash reporting also carries no identifier for you. There is no account to attach one to, and the
-app sends no account, email, username, or user profile with a crash report, sets no user identity
-on it, and does not use crash data to build any picture of how you use the app.
+There is no account to attach an identifier to, and the app sends no account, email, username, or
+user profile with a crash report, and does not use crash data to build any picture of how you use
+the app. A crash caught by the operating system, rather than by the app's own code, does carry one
+identifier: a random ID generated on your device by the crash-reporting software itself, not by
+Kangentic. It resets if you uninstall and reinstall the app, it is not your device's hardware ID
+or an advertising ID, and it is not used to identify you or to link a crash report to any other
+data.
 
 Builds you compile yourself from the open-source repository have crash reporting switched off
 entirely and send nothing.

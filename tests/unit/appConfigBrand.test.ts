@@ -107,12 +107,13 @@ describe('app.config.ts iOS privacy manifest', () => {
   // manifest (see the comment in app.config.ts). If this list changes,
   // docs/store-listing.md's App Store Connect answers must change with it -
   // they are one consistency requirement, not two independent edits.
-  it('declares exactly crash, performance, and other-diagnostic data, none linked or used for tracking', () => {
+  it('declares crash, performance, other-diagnostic, and device-ID data, none linked or used for tracking', () => {
     const collectedTypes = appConfig.ios?.privacyManifests?.NSPrivacyCollectedDataTypes;
     expect(collectedTypes).toBeDefined();
     expect(collectedTypes?.map((entry) => entry.NSPrivacyCollectedDataType).sort()).toEqual(
       [
         'NSPrivacyCollectedDataTypeCrashData',
+        'NSPrivacyCollectedDataTypeDeviceID',
         'NSPrivacyCollectedDataTypeOtherDiagnosticData',
         'NSPrivacyCollectedDataTypePerformanceData',
       ].sort()

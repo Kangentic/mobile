@@ -253,14 +253,33 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
 - **What the native SDKs still record, which JS cannot turn off.** The breadcrumb controls in
   `Sentry.init()` are JavaScript-side only: `@sentry/react-native` strips `beforeSend`,
   `beforeBreadcrumb` and `integrations` out of the options before handing them to the native SDK
-  (`node_modules/@sentry/react-native/dist/js/wrapper.js`), so sentry-cocoa and sentry-android
-  keep their own default breadcrumbs (app foreground/background, activity or view-controller
-  lifecycle, connectivity and other system events) and those ride a NATIVE crash. They carry no
-  session content, but they are coarse app-lifecycle timing, so the honest statement is "not
-  nothing" rather than "nothing else". Closing this needs native configuration through a config
-  plugin, not a JS option; it is a named gap, not an oversight. iOS app-hang and
-  watchdog-termination reporting are likewise left at their native defaults (on), deliberately:
-  a hang and an out-of-memory kill are the app breaking, which is what this reports.
+  (`node_modules/@sentry/react-native/dist/js/wrapper.js`), so sentry-android keeps its own
+  default breadcrumbs and those ride a NATIVE crash. **Observed directly** (a crash-test build, a
+  real native crash, the delivered event read back through the Sentry MCP - not inferred from
+  source): `app.lifecycle` (foreground/background), `device.event` (battery level, charging,
+  screen on/off), and `network.event`, which carries `network_type`, `vpn_active`,
+  `signal_strength`, `download_bandwidth`, and `upload_bandwidth` - more detail than "coarse
+  app-lifecycle timing" suggested before this was verified. None of it is session content.
+  Closing this needs native configuration through a config plugin, not a JS option; it is a named
+  gap, not an oversight. iOS app-hang and watchdog-termination reporting are likewise left at
+  their native defaults (on), deliberately: a hang and an out-of-memory kill are the app
+  breaking, which is what this reports.
+- **What the native SDK sends that `sendDefaultPii: false` does not stop: a per-install
+  identifier, on a crash the OS catches rather than the app's own code.** sentry-android always
+  populates `contexts.device.id` (a random UUID generated once per app install - not
+  `Secure.ANDROID_ID`, not an advertising ID) and, on the uncaught-exception path, promotes that
+  same value into `user.id` before `beforeSend` ever runs - `beforeSend` does not run for a
+  native-captured event at all. Confirmed with two real delivered events off the same install: a
+  JS-caught throw carried `Users: 0` (`scrubEvent` strips `user`), the OS-caught crash carried
+  `Users: 1` with `user.id` equal to that event's `contexts.device.id`.
+  `Sentry.setUser(null)` was tried as a suppression, called immediately after `Sentry.init()`,
+  and did not visibly suppress it - a fresh native crash with that call in place still carried
+  `user.id` equal to `contexts.device.id`. There is no known JS-reachable fix. This identifier is
+  declared in the Play and App Store Connect privacy answers (`docs/store-listing.md`) and
+  described, not denied, in `docs/privacy-policy.md`.
+  **Not tested:** a real native (NDK/signal-handler) crash - every observation above came from
+  `Sentry.nativeCrash()`, a Java-uncaught `RuntimeException`, not a SIGSEGV caught by
+  sentry-android's NDK handler; and iOS native crash reporting at all (no Mac, no iOS device).
 - **What it costs a self-hoster:** nothing. The DSN is injected at build time from a GitHub
   repository variable (`vars.SENTRY_DSN`, not a secret: a DSN ships inside the published bundle
   and is write-only, so it is not confidential) and is never committed, so a build made from this
