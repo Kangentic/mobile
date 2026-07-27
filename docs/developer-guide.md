@@ -315,7 +315,7 @@ Three workflows live in `.github/workflows/`:
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
 | `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus a `sync:branding:check` step for brand-asset drift), typecheck, sharded unit and component tiers, native config |
-| `e2e.yml` | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs Maestro on an emulator |
+| `e2e.yml` | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
 | `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload |
 
@@ -385,15 +385,21 @@ assertion failure. And when a paired suite that exercises remote push eventually
 `google_apis`, add it as a **separate matrix entry** rather than putting every flow back on the
 image that caused this.
 
-**E2E scope, deliberately narrow.** `e2e.yml` runs only `.maestro/smoke.yaml`, which works against
-a fresh unpaired install with no relay and no pairing. The 11 flows under `.maestro/paired/` are
-**not** in CI yet: each needs a completed pairing to `scripts/stubDesktopPeer.mjs` over a local
-relay on `ws://`, and Android blocks cleartext in a release-shaped build. The
-`usesCleartextTraffic` carve-out that fixes it is gated on `EXPO_PUBLIC_KANGENTIC_E2E` in
-`app.config.ts` and has not landed on `main`, so a paired flow in CI would fail at relay connect
-with code 1006. Adding them is a follow-up: `Kangentic/relay` is public so CI can check it out, and
-the stub peer already lives in this repo. A required check that cannot go green blocks every merge,
-so only the flows that pass are run.
+**Two E2E suites, two jobs, one required.** `e2e.yml`'s `maestro` job runs `.maestro/smoke.yaml`
+against a fresh unpaired install (no relay, no pairing) and is what the required
+`E2E tests (Maestro)` check actually gates on. The separate `maestro-paired` job runs the 11 flows
+under `.maestro/paired/`: it checks out the public `Kangentic/relay` repo (pinned to a SHA), builds
+and runs it on the runner, pairs the app to `scripts/stubDesktopPeer.mjs` over it - the same relay
+and stub the local `dev:stub --pair` rig uses - and then runs the suite
+(`.github/scripts/run-maestro-paired.sh`). The `usesCleartextTraffic` carve-out this depends on
+(`app.config.ts`, gated on `EXPO_PUBLIC_KANGENTIC_E2E`) is on `main`.
+
+`maestro-paired` is deliberately advisory: it reports its own check but is not read by the `e2e`
+gate job, so a red run does not block a merge. A required check that cannot go green blocks every
+merge, which is why only smoke was ever wired into the gate - and why the paired job stays outside
+it until it has been green across several PRs. Promoting it at that point is a two-line change to
+the gate (add it to `needs:`, fold its result into the pass condition); the required check's name
+never changes.
 
 **Why this is free.** The repository is public, so standard GitHub-hosted runners are unmetered
 on Linux and macOS alike. The build runs `npx expo prebuild` then Gradle on the runner, so it
@@ -651,7 +657,7 @@ Four tiers, chosen for the fastest tier that proves the behavior:
 |------|----------|--------|-------|
 | Unit | `tests/unit/` | vitest | Pure TypeScript logic, no RN runtime |
 | Component | `tests/components/` | Jest + React Native Testing Library v13+ | Screens and components, native modules mocked |
-| E2E | `.maestro/` | Maestro | Full flows against a real build. `smoke.yaml` runs in CI; `paired/` is local-only for now |
+| E2E | `.maestro/` | Maestro | Full flows against a real build. `smoke.yaml` gates every PR; `paired/` also runs every PR (advisory) and locally |
 | Web | `tests/web/` | Playwright via react-native-web | Cross-platform component behavior (later) |
 
 Commands: `npm run typecheck`, `npm run lint`, `npm run test:unit`, `npm run test:components`,
@@ -663,10 +669,11 @@ also runs natively on Windows against a local emulator, which is the right loop 
 a change (see the stage-ownership note in `CLAUDE.md` for why local E2E is deliberately *not* a
 pre-PR gate).
 
-**Only `.maestro/smoke.yaml` runs in CI today, 1 of 12 flows.** The 11 paired flows need a completed
-pairing to `scripts/stubDesktopPeer.mjs` over a local relay on `ws://`, and Android blocks cleartext
-in a release-shaped build. Do not read the green `E2E tests (Maestro)` check as full coverage: it is
-a smoke gate until those land.
+**`E2E tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The 11 paired flows run
+in CI too, in the separate `maestro-paired` job, but that job is advisory (see "Two E2E suites, two
+jobs, one required" above) until it has been green across several PRs. A green required check is
+smoke coverage; check the `Maestro paired (advisory)` check separately for the paired suite's
+result.
 
 **iOS E2E does not exist yet, by any route.** An earlier version of this section claimed EAS
 Workflows on cloud iOS simulators was "the only supported path to iOS E2E without a Mac". That was

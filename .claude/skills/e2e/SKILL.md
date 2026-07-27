@@ -18,6 +18,12 @@ code that is not the code under review.
 Read `.claude/rules/e2e-maestro-runs.md` first. Every constraint in it fails
 as a full-timeout hang rather than an error.
 
+This is the LOCAL recipe. `.github/scripts/run-maestro-paired.sh` runs the same
+sequence unattended in CI (relay checkout instead of a sibling clone, `--yes`
+instead of an interactive SAS confirm, a fresh identity every run instead of
+`--fresh`) - see `e2e.yml`'s `maestro-paired` job. That CI job is advisory, not
+a substitute for running this locally while iterating on a flow or the app.
+
 ## Step 0 - Is the binary the code?
 
 **The single most wasteful mistake in this suite's history.** A suite run
