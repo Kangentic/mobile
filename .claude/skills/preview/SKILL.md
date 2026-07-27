@@ -1,17 +1,24 @@
 ---
-description: Boot the Android emulator if needed and run the app for previewing live changes (Expo dev client), optionally through the dev rig's mock/live/pair modes
-allowed-tools: Bash(npx:*), Bash(adb:*), Bash(emulator:*), Bash(npm:*), Bash(node:*), PowerShell(Get-NetTCPConnection:*), PowerShell(Stop-Process:*)
-argument-hint: [mock|live|pair] [--clear] [--avd <name>]
+description: Boot the Android emulator if needed and run the app for previewing live changes (Expo dev client), optionally through the dev rig's mock/live/pair modes. Pass `ios` to get an iOS look instead, via a free macOS runner that launches the app on a simulator and returns a screenshot.
+allowed-tools: Bash(npx:*), Bash(adb:*), Bash(emulator:*), Bash(npm:*), Bash(node:*), Bash(gh:*), Bash(unzip:*), Read, PowerShell(Get-NetTCPConnection:*), PowerShell(Stop-Process:*), PowerShell(Expand-Archive:*)
+argument-hint: [mock|live|pair|ios] [--clear] [--avd <name>]
 ---
 
 # Preview
 
-Get the app running on the Android emulator for previewing live code changes, end to end - boot
-an emulator if none is attached, build/install the dev client if it isn't there yet, then start
-Metro. Windows-first: the Android emulator is the daily local target; iOS previewing happens
-through EAS cloud builds and a physical device or TestFlight, never a local simulator.
+Get the app running for previewing live code changes. Android is the daily local target: boot an
+emulator if none is attached, build/install the dev client if it isn't there yet, then start Metro.
+
+**iOS is not a local target and cannot be.** There is no Mac, and `expo prebuild --platform ios`
+refuses to run on Windows at all ("Run npx expo prebuild again from macOS or Linux"). So `/preview
+ios` does the only free thing that works: dispatches the simulator job on a GitHub macOS runner,
+which builds, **launches** the app, and uploads a screenshot. See "iOS preview" below. It is a look,
+not a live-reload loop, and it costs one runner and about eight minutes.
 
 ## Instructions
+
+0a. **If `ios` was given, or the user asks how it looks on iOS / iPhone**, jump to the "iOS preview"
+   section below and do nothing on Android. Do not try to boot a simulator locally; there isn't one.
 
 0. **If a mode was given (`mock`, `live`, or `pair`), or the user asks for a connected preview**
    (mentions the relay, the stub peer, pairing, or their live desktop board), delegate to the
@@ -90,6 +97,35 @@ through EAS cloud builds and a physical device or TestFlight, never a local simu
 7. If any command fails, report the exact error message. Common causes: `JAVA_HOME`/`ANDROID_HOME`
    not set in this shell (see the note below), a stale Gradle lock from a previous crashed build,
    or the stale-port-8081 situation in step 3.
+
+## iOS preview
+
+A look at the app running on an iPhone simulator, from Windows, for free. What it is not: a live
+reload loop. Every change costs a fresh dispatch, so batch UI edits before asking for one.
+
+1. **Commit and push first.** The runner builds a pushed commit, not the working tree, so uncommitted
+   changes are invisible to it. If `git status --porcelain` is dirty, say so and stop rather than
+   dispatching a build of stale code and presenting the result as the change.
+2. **Dispatch on the current branch:**
+   `gh workflow run build-ios.yml --ref <current branch> -f target=simulator`
+   Then find the run id: `gh run list --workflow build-ios.yml --limit 1 --json databaseId,status`.
+3. **Wait for it.** Roughly 8 to 10 minutes, nearly all of it `xcodebuild`. Poll with
+   `gh run view <id> --json status,conclusion,jobs`, or watch with `gh run watch <id>`.
+4. **Read the result honestly.** The job builds, then **launches** the app and asserts the process
+   survives 15 seconds, so a red run is a real launch failure and worth reading rather than retrying.
+   `.github/scripts/smoke-ios-simulator.sh` prints any crash report it finds.
+5. **Fetch the screenshot** and look at it:
+   `gh run download <id> --name ios-simulator-launch-<sha> --dir <a temp dir>`, then `Read` the PNG.
+   It is uploaded even when the job fails, which is the whole point: a process can be alive while
+   rendering a blank or red screen, and only the image distinguishes those.
+6. **Report what the screenshot shows**, not merely that the run was green. If the screenshot is
+   blank, a splash screen, or a red box, say so plainly - that is the finding.
+
+Two things this deliberately does not use. **EAS Simulator** is a paid EAS service, and this project
+moved off paid EAS on purpose (see the CI builds section of `docs/developer-guide.md`); do not reach
+for it without the user explicitly asking. **A signed device build** (`-f target=device`) is for
+releases, not previews: it costs the same runner time, produces nothing you can look at from Windows,
+and consumes an `ios.buildNumber` if submitted.
 
 ## Notes
 
