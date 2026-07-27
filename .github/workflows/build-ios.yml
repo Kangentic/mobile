@@ -39,9 +39,18 @@ on:
         options:
           - none
           - testflight
+  # Weekly drift detection. Nothing here is PR-triggered, so without a schedule the
+  # only way to learn that a runner Xcode bump, a dependency update, or an Apple
+  # toolchain change broke the iOS build is to want a release and discover it then.
+  # Monday 06:00 UTC picks up whatever landed over the weekend.
+  #
+  # Simulator only: see the job conditions below, which are written so a cron run
+  # cannot fire a signed device build or an upload.
+  schedule:
+    - cron: '0 6 * * 1'
 
 concurrency:
-  group: build-ios-${{ github.ref }}-${{ github.event.inputs.target }}
+  group: build-ios-${{ github.ref }}-${{ github.event.inputs.target || 'scheduled' }}
   cancel-in-progress: true
 
 permissions:
@@ -54,7 +63,11 @@ jobs:
   # the cheap always-available check cannot be taken down by a signing problem.
   simulator:
     name: Simulator (unsigned compile check)
-    if: inputs.target != 'device'
+    # `inputs` are all empty on a schedule, so the conditions must name the event
+    # rather than lean on input defaults. Left implicit, `inputs.target != 'device'`
+    # AND `inputs.target != 'simulator'` are BOTH true on a cron run, which would
+    # quietly fire a signed device build every Monday.
+    if: github.event_name == 'schedule' || inputs.target != 'device'
     runs-on: macos-latest
     timeout-minutes: 90
 
@@ -158,7 +171,7 @@ jobs:
 
   device:
     name: Device (signed .ipa)
-    if: inputs.target != 'simulator'
+    if: github.event_name != 'schedule' && inputs.target != 'simulator'
     runs-on: macos-latest
     timeout-minutes: 90
     outputs:
@@ -456,7 +469,7 @@ jobs:
   submit-testflight:
     name: Submit (TestFlight)
     needs: device
-    if: inputs.submit == 'testflight'
+    if: github.event_name != 'schedule' && inputs.submit == 'testflight'
     runs-on: macos-latest
     timeout-minutes: 60
     environment: app-store-connect
