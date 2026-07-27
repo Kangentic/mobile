@@ -93,6 +93,25 @@ describe('maestro flows', () => {
     expect(readFileSync(file, 'utf8')).toMatch(/^appId:/m);
   });
 
+  /**
+   * DELIBERATELY NOT CHECKED HERE: that every `id:` selector resolves to a
+   * testID in src/.
+   *
+   * It was written, and removed after it flagged twelve VALID selectors. Most
+   * testIDs are composed at runtime - `session-mode-chat` comes from
+   * `${testIDPrefix}-${option.mode}` where the prefix arrives as a prop - so
+   * the concrete string never appears in source at all, and a static scan
+   * cannot tell that from a typo without evaluating the app.
+   *
+   * Left undone rather than tuned into an allowlist: a check that cries wolf
+   * trains everyone to ignore it, which is worse than the gap it covers. The
+   * failure it was aimed at (a selector that cannot resolve, failing at full
+   * timeout rather than with an error) is caught instead by e2e-flow-doctor,
+   * which reads the failure screenshot. If this becomes mechanical later, the
+   * honest route is emitting a testID manifest from the app at build time and
+   * checking flows against that - not guessing at template shapes.
+   */
+
   it('actually locates the session-screen waits (guards the check below against passing vacuously)', () => {
     // Without this, a regex that stops matching - a reformat, a renamed id -
     // turns the timeout check into a test that passes by finding nothing.
