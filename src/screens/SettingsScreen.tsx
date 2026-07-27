@@ -167,8 +167,13 @@ export function SettingsScreen(): React.JSX.Element {
                 onPress={() => router.push('/devices')}
                 style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
               >
+                {/* Singular, because the phone holds exactly ONE desktop
+                    trust anchor. "Paired devices" promised a list and a
+                    choice that cannot exist, and the screen behind it shows
+                    one desktop - so the label was writing a cheque the
+                    product does not cash. */}
                 <Text variant="body" color="primary">
-                  Paired devices
+                  Paired desktop
                 </Text>
                 <Icon name="chevron-forward" color="muted" size={16} />
               </Pressable>

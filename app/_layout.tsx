@@ -109,7 +109,8 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="pair" options={{ title: 'Pair a device' }} />
         <Stack.Screen name="pair-confirm" options={{ title: 'Confirm pairing' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
-        <Stack.Screen name="devices" options={{ title: 'Paired devices' }} />
+        {/* Singular: one phone, one desktop trust anchor. See SettingsScreen's row. */}
+        <Stack.Screen name="devices" options={{ title: 'Paired desktop' }} />
       </Stack>
     </>
   );
