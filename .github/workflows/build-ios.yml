@@ -132,6 +132,10 @@ jobs:
     if: inputs.target != 'simulator'
     runs-on: macos-latest
     timeout-minutes: 90
+    outputs:
+      artifact-name: ${{ steps.name.outputs.artifact-name }}
+      bundle-id: ${{ steps.signing.outputs.bundle-id }}
+      build-number: ${{ steps.version.outputs.build-number }}
     env:
       # Secrets cannot be referenced from an `if:` condition, so presence is
       # resolved once here as a plain boolean and the steps branch on that.
@@ -305,25 +309,16 @@ jobs:
           cp "$IPA_PATH" "$RUNNER_TEMP/$artifact_name.ipa"
           echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
 
-      # Uploaded before the submit step, so a failure on Apple's side leaves a
-      # verified .ipa that can be retried without rebuilding.
+      # The .ipa is stored before anything tries to upload it, so an Apple-side
+      # failure leaves a verified artifact that can be retried by re-running the
+      # submit job alone. That is not a hypothetical: the first attempt to submit
+      # this app hit an App Store Connect outage.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.name.outputs.artifact-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.ipa
           retention-days: 14
           if-no-files-found: error
-
-      - name: Upload to App Store Connect
-        if: inputs.submit == 'testflight'
-        env:
-          IPA_PATH: ${{ steps.export.outputs.ipa-path }}
-          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: bash .github/scripts/upload-ios-testflight.sh "$IPA_PATH"
 
       - name: Write the build summary
         if: always()
@@ -342,7 +337,70 @@ jobs:
             echo "| Artifact | \`${ARTIFACT_NAME:-none}\` |"
             echo "| Bundle id | \`${BUNDLE_ID:-unresolved}\` |"
             echo "| Version | \`${VERSION_NAME:-?}\` (build \`${BUILD_NUMBER:-?}\`) |"
-            echo "| Uploaded to App Store Connect | \`$SUBMIT\` |"
+            echo "| Requested upload | \`$SUBMIT\` |"
             echo ""
             echo "Bump \`ios.buildNumber\` in \`app.config.ts\` before every App Store Connect upload."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Its own job, behind the app-store-connect GitHub Environment's required
+  # reviewer, for the same reasons as build-android.yml's submit-play job: an
+  # upload reaches people outside this machine, and it should take a deliberate
+  # human approval rather than a dispatch input alone.
+  #
+  # Splitting it also makes an Apple outage cheap. Re-running this one job
+  # retries the upload against the already-verified .ipa, with no rebuild and no
+  # new build number. That is exactly the situation this workflow was written in.
+  #
+  # macOS because `xcrun altool` is the uploader. It re-verifies what it
+  # downloaded rather than trusting the build job, which is both stronger and
+  # what caught a bad Android artifact twice.
+  submit-testflight:
+    needs: device
+    if: inputs.submit == 'testflight'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    environment: app-store-connect
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.device.outputs.artifact-name }}
+          path: artifact
+
+      - name: Verify the .ipa is distribution signed
+        env:
+          BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
+        run: |
+          set -euo pipefail
+          ipa_path="$(find artifact -maxdepth 1 -name '*.ipa' | head -n 1)"
+          if [ -z "$ipa_path" ]; then
+            echo "::error::No .ipa in the downloaded artifact."
+            exit 1
+          fi
+          echo "IPA_PATH=$ipa_path" >> "$GITHUB_ENV"
+          bash .github/scripts/verify-ios-signature.sh "$ipa_path" "$BUNDLE_ID"
+
+      - name: Upload to App Store Connect
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: bash .github/scripts/upload-ios-testflight.sh "$IPA_PATH"
+
+      - name: Write the submit summary
+        if: always()
+        env:
+          BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
+          BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
+        run: |
+          {
+            echo "### App Store Connect upload"
+            echo ""
+            echo "Uploaded \`$BUNDLE_ID\` build \`$BUILD_NUMBER\`."
+            echo ""
+            echo "It appears in TestFlight once Apple finishes processing, usually 5 to 30 minutes."
+            echo "If this job failed, re-run it: the verified .ipa is attached to this run, so no rebuild is needed."
           } >> "$GITHUB_STEP_SUMMARY"
