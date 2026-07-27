@@ -62,7 +62,17 @@ permissions:
   contents: read
 
 jobs:
+  # Job display names follow the convention in ci.yml and the kangentic desktop
+  # repo: a lowercase key to reference, plus a Title Case `name` with a
+  # parenthetical saying which tool or target it is. Without one the Actions UI
+  # shows the raw key, which reads like an internal detail.
+  #
+  # Safe to rename here, unlike in ci.yml and e2e.yml, where a job name IS the
+  # branch-protection status-check context. Neither build workflow is a required
+  # check: both are dispatch or tag triggered, and requiring a check that never
+  # runs on a PR would deadlock every PR.
   plan:
+    name: Plan (resolve build matrix)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -92,6 +102,10 @@ jobs:
           echo "Building: $profiles"
 
   build-android:
+    # Named after the profile, so a `profile=all` fan-out reads as four
+    # distinguishable jobs rather than four identical rows. Same pattern as
+    # ci.yml's shard names.
+    name: Build (${{ matrix.profile }})
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -355,7 +369,8 @@ jobs:
             echo "Bump \`android.versionCode\` in \`app.config.ts\` before every Play upload."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload the artifact to the run
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.name.outputs.artifact-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.${{ steps.plan.outputs.extension }}
@@ -373,6 +388,7 @@ jobs:
   # which also keeps it correct with a matrix build (matrix job outputs are not
   # per-instance addressable).
   submit-play:
+    name: Submit (Google Play)
     needs: build-android
     if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.profile != 'all'
     runs-on: ubuntu-latest
@@ -385,7 +401,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - uses: actions/download-artifact@v4
+      - name: Download the built artifact
+        uses: actions/download-artifact@v4
         with:
           pattern: kangentic-${{ inputs.profile }}-*
           merge-multiple: true

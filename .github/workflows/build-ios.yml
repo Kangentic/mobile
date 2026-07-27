@@ -53,6 +53,7 @@ jobs:
   # Kept as its own job rather than a matrix dimension of the signed build, so
   # the cheap always-available check cannot be taken down by a signing problem.
   simulator:
+    name: Simulator (unsigned compile check)
     if: inputs.target != 'device'
     runs-on: macos-latest
     timeout-minutes: 90
@@ -60,7 +61,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-node-deps
+      - name: Set up Node and dependencies
+        uses: ./.github/actions/setup-node-deps
 
       - name: Generate the native iOS project
         # CNG: ios/ is produced here and never committed. See
@@ -129,6 +131,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   device:
+    name: Device (signed .ipa)
     if: inputs.target != 'simulator'
     runs-on: macos-latest
     timeout-minutes: 90
@@ -161,7 +164,8 @@ jobs:
           echo "::error::See the credential inventory in docs/developer-guide.md. Dispatch with target=simulator for an unsigned check."
           exit 1
 
-      - uses: ./.github/actions/setup-node-deps
+      - name: Set up Node and dependencies
+        uses: ./.github/actions/setup-node-deps
 
       - name: Install the signing certificate and provisioning profile
         id: signing
@@ -285,7 +289,7 @@ jobs:
           fi
           echo "App target is on manual signing with the installed profile."
 
-      - name: Archive
+      - name: Archive the app (xcodebuild)
         env:
           WORKSPACE: ${{ steps.xcode.outputs.workspace }}
           SCHEME: ${{ steps.xcode.outputs.scheme }}
@@ -371,7 +375,8 @@ jobs:
       # failure leaves a verified artifact that can be retried by re-running the
       # submit job alone. That is not a hypothetical: the first attempt to submit
       # this app hit an App Store Connect outage.
-      - uses: actions/upload-artifact@v4
+      - name: Upload the .ipa as a run artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.name.outputs.artifact-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.ipa
@@ -413,6 +418,7 @@ jobs:
   # downloaded rather than trusting the build job, which is both stronger and
   # what caught a bad Android artifact twice.
   submit-testflight:
+    name: Submit (TestFlight)
     needs: device
     if: inputs.submit == 'testflight'
     runs-on: macos-latest
@@ -421,7 +427,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - name: Download the verified .ipa from the build job
+        uses: actions/download-artifact@v4
         with:
           name: ${{ needs.device.outputs.artifact-name }}
           path: artifact
