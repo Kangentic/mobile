@@ -123,6 +123,61 @@ describe('TaskActionsScreen', () => {
     expect(mockBack).toHaveBeenCalled();
   });
 
+  /**
+   * The armed confirmation must NOT expire on a clock.
+   *
+   * It used to relax after ten seconds, and the E2E flow caught it the only
+   * way it could: Maestro spent 14.8s between the two tap gestures (6.2s of
+   * that waiting for the view hierarchy to settle), so the confirm tap landed
+   * on a row that had quietly disarmed and merely re-armed it. No delete_task
+   * ever reached the desktop and the sheet showed no reason. A human who
+   * stops to read "Removes the task and stops its session on your desktop"
+   * hits the same wall. The old test could not see any of this because it
+   * pressed twice in the same tick.
+   */
+  it('still deletes on the second tap long after the first, with no confirmation deadline', async () => {
+    jest.useFakeTimers();
+    try {
+      renderTaskActions();
+
+      fireEvent.press(screen.getByTestId('task-action-delete'));
+      expect(screen.getByTestId('task-action-delete-confirm')).toBeTruthy();
+
+      // Well past both the removed 10s window and any successor to it.
+      act(() => {
+        jest.advanceTimersByTime(120_000);
+      });
+      expect(screen.getByTestId('task-action-delete-confirm')).toBeTruthy();
+      expect(screen.queryByTestId('task-action-delete')).toBeNull();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+      });
+      expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
+   * A destructive row that no-ops in silence is its own defect: the user
+   * cannot tell a refusal from a broken app. Route params should always be
+   * there, so this is a defect path - which is exactly why it must speak.
+   */
+  it('says why instead of doing nothing when the route params are missing', async () => {
+    mockParams = {};
+    renderTaskActions();
+
+    fireEvent.press(screen.getByTestId('task-action-delete'));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+    });
+
+    expect(mockDeleteTaskFromBoard).not.toHaveBeenCalled();
+    expect(screen.getByTestId('task-action-error')).toBeTruthy();
+    expect(mockBack).not.toHaveBeenCalled();
+  });
+
   it('keeps the sheet open with the reason when an action fails', async () => {
     mockArchiveTask.mockRejectedValueOnce(new Error('The desktop refused'));
     renderTaskActions();
