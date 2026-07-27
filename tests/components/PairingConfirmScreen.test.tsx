@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react-native';
 import * as Haptics from 'expo-haptics';
+import type { ShortAuthenticationString } from '@kangentic/protocol';
 import { usePairingStore } from '@/state/pairingStore';
 import { PairingConfirmScreen } from '@/screens/PairingConfirmScreen';
 
@@ -32,6 +33,20 @@ const mockNotificationAsync = jest.mocked(Haptics.notificationAsync);
 // also hides it from default RNTL queries.
 const HIDDEN = { includeHiddenElements: true } as const;
 
+/**
+ * The SAS is digits, full stop: the emoji row was removed from the screen, and
+ * the desktop shows digits too. The protocol's ShortAuthenticationString still
+ * declares `emoji` as required, so fixtures have to carry the field - but they
+ * carry it EMPTY rather than inventing five emoji no screen renders, which
+ * reads as though an emoji confirmation still exists somewhere.
+ *
+ * Dropping the field for real is a change to @kangentic/protocol's sas.ts, not
+ * something this repo can do locally.
+ */
+function sasFixture(digits: string): ShortAuthenticationString {
+  return { digits, emoji: [] };
+}
+
 describe('PairingConfirmScreen', () => {
   beforeEach(() => {
     // The screen's abandon-on-unmount effect fires a rejectActivePairing on
@@ -48,7 +63,7 @@ describe('PairingConfirmScreen', () => {
   it('renders the SAS digits with both a confirm and a cancel action (no emoji row)', () => {
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
-      sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
+      sas: sasFixture('042917'),
     });
 
     render(<PairingConfirmScreen />);
@@ -68,7 +83,7 @@ describe('PairingConfirmScreen', () => {
     const { rejectActivePairing } = jest.requireMock<{ rejectActivePairing: jest.Mock }>('@/pairing/activePairing');
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
-      sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
+      sas: sasFixture('042917'),
     });
 
     render(<PairingConfirmScreen />);
@@ -81,7 +96,7 @@ describe('PairingConfirmScreen', () => {
     const { confirmActivePairing } = jest.requireMock<{ confirmActivePairing: jest.Mock }>('@/pairing/activePairing');
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
-      sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
+      sas: sasFixture('042917'),
     });
 
     render(<PairingConfirmScreen />);
@@ -94,7 +109,7 @@ describe('PairingConfirmScreen', () => {
     const { rejectActivePairing } = jest.requireMock<{ rejectActivePairing: jest.Mock }>('@/pairing/activePairing');
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
-      sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
+      sas: sasFixture('042917'),
     });
 
     // Backing out (gesture, header back, tab switch) unmounts the screen -
@@ -108,7 +123,7 @@ describe('PairingConfirmScreen', () => {
   it('fires the pairingSucceeded haptic once the accept completes', async () => {
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
-      sas: { digits: '042917', emoji: ['🐝', '🚀', '🌙', '🍕', '🔥'] },
+      sas: sasFixture('042917'),
     });
 
     render(<PairingConfirmScreen />);
