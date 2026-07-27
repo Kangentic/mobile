@@ -57,13 +57,11 @@ relay at `ws://127.0.0.1:8080` via USB `adb reverse`.
 - **`expo-router/unstable-native-tabs`** carries a vendor warning that its API may change in a
   minor version. Adopted deliberately for iOS native feel.
 - **Remote push** end to end, which needs FCM credentials and a real push round trip.
-- **The production pairing ceremony over the HOSTED relay.** The phone reaching
-  `wss://relay.kangentic.com` is verified, but through the dev-only quick-pair path
-  (`src/connection/devPairing.ts`), which is compiled out of production builds. The real path
-  every user takes - desktop QR, camera scan, SAS confirm, over `wss://` rather than a loopback
-  `adb reverse` - has only ever run against the local dev relay. It is also newly load-bearing:
-  the relay-address validation was hardened in this branch and the QR now carries a public host
-  instead of loopback.
+- **The desktop's per-device connection badge.** After a successful pairing the desktop lists the
+  phone under Paired Devices but shows it as "Connecting..." while the session is established and
+  serving board data. Same staleness the quick-pair entry shows ("Reconnecting..." over a healthy
+  session). Desktop-side display only - the phone reports `established: true` and renders content
+  fetched over that channel - so it is a `kangentic` repo fix, not a mobile one.
 - **Network transitions.** Wifi to cellular handover, a long background, and phone-sleep
   reconnect have never been exercised against the hosted relay; all live testing so far kept the
   phone on USB.
@@ -122,6 +120,34 @@ nothing triggering the FIRST transcript fetch for a never-subscribed session, an
 `transcriptStore.applyWindow` silently discarding any window whose session is not retained. That
 last one is worth remembering: the desktop returned all 418 entries and the phone binned them,
 which is indistinguishable from a desktop that returned nothing.
+
+## The production pairing ceremony, verified on the hosted relay (and the two bugs that blocked it)
+
+Desktop QR -> camera scan -> SAS confirm -> enrolled device -> established session, over
+`wss://relay.kangentic.com` on a physical Pixel. This path had **never completed against a real
+desktop**, and nothing in the suite could have said so: every green pairing result came either
+from a stub that skipped the final step or from the dev quick-pair path that bypasses the
+ceremony entirely.
+
+1. **The phone never sent the confirm frame.** `PairingMachine.confirm()` set its own state to
+   'paired', closed the transport, and sent nothing, while the desktop's `pairing-service.ts`
+   waited in its `sas-pending` phase for a sealed frame it would never get. The handshake `split`
+   needed to seal that frame was being computed and discarded. The phone pinned a trust anchor
+   and declared success; the desktop never enrolled the device and never dialled the session, so
+   the phone waited forever on "Connecting to your desktop".
+2. **A dropped pairing socket looked like nothing at all.** The machine failed only on transport
+   state `closed`, which `RelayTransport` reaches solely via an explicit `close()`. A socket that
+   died mid-ceremony went `reconnecting` then `connected` again, unnoticed - and a pairing socket
+   is not resumable, because the relay tears the peer down when either side drops and the token
+   is single-use. The confirm frame went into an emptied slot and the phone reported success
+   anyway.
+
+Both are fixed and mutation-tested. `StubPairingResponder` and `scripts/stubDesktopPeer.mjs` now
+require the confirm frame to arrive AND open, so the divergence that hid bug 1 cannot silently
+return; `LoopbackTransport.simulateReconnect()` makes bug 2's `reconnecting` path expressible in
+a test at all. The drop message now names the relay's close code, because "peer left" (4000),
+"slot busy" (4409), "park timeout" (4408) and "idle timeout" (4410) present identically and have
+unrelated causes.
 
 ## Verified against the HOSTED relay
 
