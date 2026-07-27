@@ -305,6 +305,18 @@ Three workflows live in `.github/workflows/`:
 `Submit (Google Play)`); a matrix job interpolates its dimension (`Build (${{ matrix.profile }})`).
 Without a `name` the Actions UI shows the raw key, which reads like an internal detail.
 
+**A stacked PR gets no CI.** `ci.yml` and `e2e.yml` both filter `pull_request` to
+`branches: [main]`, so a PR whose base is another feature branch runs only the CLA check and reports
+"all checks passed" having tested nothing. That is a trap, because a stacked PR is otherwise the right
+shape for dependent work: it keeps the diff to just the new commits and GitHub retargets it to `main`
+automatically when the parent merges. Two ways through it, and the second is better:
+
+- Retarget to `main`. CI runs, but the diff swallows the parent branch's commits, which makes review
+  harder for exactly the change that needed stacking.
+- **Dispatch the gate directly at the branch:** `gh workflow run ci.yml --ref <branch>`. Both
+  workflows accept `workflow_dispatch`, so this runs every job against the branch with no retargeting
+  and no diff noise. Link the run from the PR so a reviewer can see the gate was actually exercised.
+
 **A job name in `ci.yml` or `e2e.yml` is a branch-protection status-check context**, so renaming one
 there silently breaks the gate on `main` until protection is updated in the same change. The build
 workflows are free to rename because neither is a required check. Two further notes: the Actions
