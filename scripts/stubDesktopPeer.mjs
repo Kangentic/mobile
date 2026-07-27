@@ -37,6 +37,7 @@ import {
   FrameTag,
   generateX25519KeyPair,
   hexToBytes,
+  openPairingConfirm,
   PROTOCOL_VERSION,
   randomBytes,
   SessionFrameKind,
@@ -165,7 +166,27 @@ async function runPairing(relayUrl, desktopStatic, pairingToken) {
         console.log('[pairing] relay parked-connection timeout; reconnecting the pairing slot...');
         setTimeout(park, 500);
       };
+      // Two phases, exactly like the real desktop's pairing-service: read
+      // message 1 and answer it, THEN wait for the phone's sealed confirm
+      // frame before treating the device as paired.
+      let awaitingConfirm = null;
       onFrame(socket, (frame) => {
+        if (awaitingConfirm) {
+          // The AEAD open IS the SAS check: the frame only opens if both
+          // sides ran the same handshake transcript. A failed open is a
+          // failure, never a silent no-op.
+          if (!openPairingConfirm(awaitingConfirm.initiatorToResponder, frame)) {
+            settled = true;
+            reject(new Error('Pairing confirm frame failed to open (transcript mismatch)'));
+            return;
+          }
+          const { phoneStaticPublicKey, sas } = awaitingConfirm;
+          settled = true;
+          socket.onclose = null;
+          resolve({ phoneStaticPublicKey, sas, socket });
+          return;
+        }
+
         try {
           handshake.readMessage(frame);
         } catch (error) {
@@ -173,14 +194,20 @@ async function runPairing(relayUrl, desktopStatic, pairingToken) {
           reject(new Error(`Pairing handshake failed to authenticate: ${error.message}`));
           return;
         }
-        const { message } = handshake.writeMessage(new Uint8Array(0));
+        const { message, split } = handshake.writeMessage(new Uint8Array(0));
         socket.send(message.slice().buffer);
+        if (!split) {
+          settled = true;
+          reject(new Error('Pairing handshake did not split after message 2'));
+          return;
+        }
 
         const phoneStaticPublicKey = handshake.getRemoteStaticKey();
         const sas = deriveShortAuthenticationString(handshake.getHandshakeHash());
-        settled = true;
-        socket.onclose = null;
-        resolve({ phoneStaticPublicKey, sas, socket });
+        // Printed BEFORE the wait so a human can compare digits while the
+        // phone is still showing them.
+        console.log(`[pairing] SAS ${sas.digits ?? sas}: waiting for the phone to confirm...`);
+        awaitingConfirm = { phoneStaticPublicKey, sas, initiatorToResponder: split[0] };
       });
     };
 

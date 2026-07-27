@@ -5,6 +5,7 @@ import {
   deriveSecretstreamPair,
   deriveShortAuthenticationString,
   encodeMessage,
+  openPairingConfirm,
   SessionFrameKind,
   unwrapSessionFrame,
   wrapSessionFrame,
@@ -12,6 +13,7 @@ import {
   type BridgeMessage,
   type CapabilityRequestMessage,
   type CapabilityResponseMessage,
+  type CipherState,
   type HandshakeState,
   type SecretstreamDirectionPair,
   type ShortAuthenticationString,
@@ -39,6 +41,9 @@ export class StubPairingResponder {
   private handshake: HandshakeState;
   private readonly unsubscribe: Unsubscribe;
   private sas: ShortAuthenticationString | null = null;
+  /** Set once message 2 is written; the phone's confirm frame opens under it. */
+  private initiatorToResponder: CipherState | null = null;
+  private confirmed = false;
 
   constructor(transport: Transport, options: StubPairingResponderOptions) {
     this.transport = transport;
@@ -50,6 +55,15 @@ export class StubPairingResponder {
   }
 
   private onFrame(frame: Uint8Array): void {
+    // Phase 2, mirroring PairingService's 'sas-pending': the desktop enrolls
+    // the phone only when this sealed frame OPENS, because that is what
+    // proves both sides ran the same handshake transcript. Omitting this
+    // phase is how a phone that never sent a confirm frame passed every test
+    // here while the real desktop waited forever.
+    if (this.initiatorToResponder) {
+      this.confirmed = openPairingConfirm(this.initiatorToResponder, frame);
+      return;
+    }
     try {
       this.handshake.readMessage(frame);
     } catch {
@@ -61,13 +75,19 @@ export class StubPairingResponder {
       this.transport.close();
       return;
     }
-    const { message } = this.handshake.writeMessage(new Uint8Array(0));
+    const { message, split } = this.handshake.writeMessage(new Uint8Array(0));
     this.transport.send(message);
     this.sas = deriveShortAuthenticationString(this.handshake.getHandshakeHash());
+    if (split) this.initiatorToResponder = split[0];
   }
 
   getSas(): ShortAuthenticationString | null {
     return this.sas;
+  }
+
+  /** True once the phone's confirm frame has arrived AND opened - the desktop's actual "this device is paired" condition. */
+  isConfirmed(): boolean {
+    return this.confirmed;
   }
 
   dispose(): void {

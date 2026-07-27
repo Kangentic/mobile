@@ -1,6 +1,8 @@
 import {
   createPairingInitiatorHandshake,
   deriveShortAuthenticationString,
+  sealPairingConfirm,
+  type HandshakeReadResult,
   type HandshakeState,
   type PairingQrPayload,
   type ShortAuthenticationString,
@@ -53,6 +55,8 @@ export class PairingMachine {
   private readonly timeoutMs: number;
 
   private handshake: HandshakeState | null = null;
+  /** The transport keys the completed handshake produced; the confirm frame is sealed under index 0 (initiator to responder). */
+  private transportKeys: NonNullable<HandshakeReadResult['split']> | null = null;
   private state: PairingMachineState = { status: 'connecting' };
   private readonly listeners = new Set<(state: PairingMachineState) => void>();
   private unsubscribeFrame: Unsubscribe | null = null;
@@ -118,10 +122,30 @@ export class PairingMachine {
     }
   }
 
-  /** Called once the user confirms both screens show the same SAS. The caller is responsible for pinning the trust anchor first. */
+  /**
+   * Called once the user confirms both screens show the same SAS. The caller
+   * is responsible for pinning the trust anchor first.
+   *
+   * Sends the pairing-confirm frame, which is what tells the desktop to
+   * enroll this phone. Without it the desktop sits on "Waiting for your
+   * phone..." until its own timer expires and never adds the device, while
+   * the phone believes it is paired - a ceremony that completes on exactly
+   * one side. There is no reject frame by design: backing out closes the
+   * transport, and the desktop reads close-without-confirm as the rejection.
+   */
   confirm(): void {
-    if (this.state.status !== 'awaiting-sas' || this.settled) {
+    if (this.state.status !== 'awaiting-sas' || this.settled || !this.transportKeys) {
       throw new Error(`Cannot confirm pairing while state is "${this.state.status}"`);
+    }
+    try {
+      this.transport.send(sealPairingConfirm(this.transportKeys[0]));
+    } catch (error) {
+      const reason = messageOf(error, 'Failed to send the pairing confirmation to the relay.');
+      this.fail('relay-unreachable', reason);
+      // Rethrow: confirmActivePairing pinned the trust anchor before calling
+      // this, and only a throw triggers its rollback. Swallowing here would
+      // leave the phone anchored to a desktop that never enrolled it.
+      throw new Error(reason);
     }
     this.settled = true;
     this.setState({ status: 'paired' });
@@ -138,12 +162,22 @@ export class PairingMachine {
 
   private onFrame(frame: Uint8Array): void {
     if (this.settled || !this.handshake || this.state.status !== 'handshaking') return;
+    let readResult: HandshakeReadResult;
     try {
-      this.handshake.readMessage(frame);
+      readResult = this.handshake.readMessage(frame);
     } catch {
       this.fail('handshake-failed', 'Pairing failed to authenticate. Rescan the code and try again.');
       return;
     }
+    if (!readResult.split) {
+      // IKpsk0 is exactly two messages, so reading message 2 always splits.
+      this.fail('handshake-failed', 'Pairing failed to authenticate. Rescan the code and try again.');
+      return;
+    }
+    // Held for confirm(): the desktop's AEAD open of the confirm frame IS its
+    // check that both sides ran the same transcript, so these keys are the
+    // only thing that can produce a frame it will accept.
+    this.transportKeys = readResult.split;
     const sas = deriveShortAuthenticationString(this.handshake.getHandshakeHash());
     this.clearTimeout();
     this.setState({ status: 'awaiting-sas', sas });

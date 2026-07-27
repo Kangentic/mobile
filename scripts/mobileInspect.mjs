@@ -9,7 +9,7 @@
  *   node scripts/mobileInspect.mjs text "<string>"
  *   node scripts/mobileInspect.mjs key <ANDROID_KEYCODE>
  *   node scripts/mobileInspect.mjs logcat [--lines <n>] [--tag <tag>]
- *   node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route>
+ *   node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route|pairing>
  *   node scripts/mobileInspect.mjs serve
  *   node scripts/mobileInspect.mjs relaunch
  *
@@ -38,7 +38,7 @@ import { spawnSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 
 const INSPECT_PORT = 8791;
-const STATE_KINDS = ['connection', 'stores', 'subscriptions', 'feed-stats', 'route'];
+const STATE_KINDS = ['connection', 'stores', 'subscriptions', 'feed-stats', 'route', 'pairing'];
 
 function fail(message) {
   console.error(`[inspect] ${message}`);

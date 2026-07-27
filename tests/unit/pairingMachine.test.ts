@@ -55,8 +55,20 @@ describe('PairingMachine', () => {
     expect(desktopSas).not.toBeNull();
     expect(awaitingSas.sas.digits).toBe(desktopSas?.digits);
 
+    expect(responder.isConfirmed()).toBe(false);
     machine.confirm();
     expect(machine.getState().status).toBe('paired');
+    // The loopback delivers on a microtask, and confirm() closes the transport
+    // immediately after sending. Yielding here also pins the ORDERING: the
+    // frame must still reach the peer despite that close.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The half that actually matters, and the half nobody asserted: the phone
+    // saying "paired" to itself is not pairing. The desktop enrolls the device
+    // only when the sealed confirm frame reaches it and opens. Without this,
+    // confirm() could set local state and close the socket - which it did -
+    // and every test here still passed while the real desktop sat on
+    // "Waiting for your phone..." until it timed out.
+    expect(responder.isConfirmed()).toBe(true);
   });
 
   it('surfaces desktop-absent when the responder holds the wrong token (opaque, no oracle)', async () => {

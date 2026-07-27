@@ -2,6 +2,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useDiffStore } from '@/state/diffStore';
+import { usePairingStore } from '@/state/pairingStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { getTerminalFeedStats } from '@/state/terminalFeed';
 import {
@@ -38,6 +39,23 @@ export function buildInspectPayload(kind: InspectRequestKind): unknown {
         rekeyCount: channel.rekeyCount,
         relayUrl: channel.relayUrl,
         pairedState: channel.pairedState,
+      };
+    }
+    // The pairing ceremony runs on its OWN transport, so `connection` reports
+    // 'idle' throughout it and says nothing about why a ceremony failed. This
+    // is the only window into which leg stalled: 'connecting' means the relay
+    // socket, 'handshaking' means message 2 never came back from the desktop,
+    // and 'awaiting-sas' means the crypto finished and only the taps are left.
+    case 'pairing': {
+      const machineState = usePairingStore.getState().machineState;
+      if (!machineState) return { status: null };
+      return {
+        status: machineState.status,
+        // Never the SAS itself, nor the token: presence is what diagnoses,
+        // and both screens already show the digits to the person comparing.
+        hasSas: machineState.status === 'awaiting-sas',
+        errorKind: 'kind' in machineState ? machineState.kind : null,
+        errorMessage: 'message' in machineState ? machineState.message : null,
       };
     }
     case 'stores': {

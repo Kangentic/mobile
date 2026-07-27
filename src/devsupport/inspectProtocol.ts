@@ -10,7 +10,7 @@
 /** Loopback-only; reachable from the emulator solely via `adb reverse tcp:8791`. */
 export const INSPECT_PORT = 8791;
 
-export const INSPECT_REQUEST_KINDS = ['connection', 'stores', 'subscriptions', 'feed-stats', 'route'] as const;
+export const INSPECT_REQUEST_KINDS = ['connection', 'stores', 'subscriptions', 'feed-stats', 'route', 'pairing'] as const;
 export type InspectRequestKind = (typeof INSPECT_REQUEST_KINDS)[number];
 
 export interface InspectRequest {
