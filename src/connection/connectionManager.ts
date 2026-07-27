@@ -125,7 +125,41 @@ export async function resyncPushRegistrationCategories(): Promise<void> {
   }
 }
 
+/**
+ * Every call site invokes this as a bare `void openConnection()`, so a rejection
+ * has nowhere to go. That is not merely untidy: `pairedState` starts at 'unknown'
+ * and only leaves it inside openConnectionOrThrow, so a throw anywhere before that
+ * point strands it at 'unknown' forever. TriageHomeScreen renders the pair CTA only
+ * for 'unpaired', which means the user sits on "Connecting to your desktop..."
+ * permanently with no error, no retry, and no route to pairing.
+ *
+ * Found on iOS by the CI simulator smoke test, where a fresh install never offered
+ * to pair. Note the sibling bug task #14 fixed independently: a lost bootstrap
+ * leaving a PAIRED app on the same screen. Two different paths, one dead end, which
+ * is the real lesson - this screen has no state meaning "something failed, here is
+ * how to recover".
+ *
+ * Falling back to 'unpaired' is deliberate over inventing an error state. It is
+ * always recoverable (the pair CTA appears, and re-pairing overwrites the anchor),
+ * and it is self-correcting: the next foreground calls this again, and a load that
+ * now succeeds sets 'paired'. Only the stranded 'unknown' case is rescued; a failure
+ * after 'paired' is already covered by the existing reconnect paths.
+ */
 async function openConnection(): Promise<void> {
+  try {
+    await openConnectionOrThrow();
+  } catch (error: unknown) {
+    if (useChannelStore.getState().pairedState === 'unknown') {
+      useChannelStore.getState().setPairedState('unpaired');
+    }
+    if (__DEV__) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.log(`[connection] open failed before the trust anchor resolved (${reason}); showing the pairing CTA`);
+    }
+  }
+}
+
+async function openConnectionOrThrow(): Promise<void> {
   if (activeConnection) return;
   const generation = connectGeneration;
 
