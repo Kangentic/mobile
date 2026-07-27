@@ -270,6 +270,26 @@ describe('build-ios workflow', () => {
     }
   });
 
+  it('accepts both App Store certificate types', () => {
+    // Apple issues two and has retired neither: the newer unified "Apple
+    // Distribution" and the older iOS-only "iPhone Distribution", which is what
+    // `eas credentials` actually issues. Matching only the newer name rejected a
+    // perfectly good certificate on the first real run.
+    for (const scriptName of ['install-ios-signing.sh', 'verify-ios-signature.sh']) {
+      const source = readIosScript(scriptName);
+      expect(source).toContain('iPhone Distribution');
+      expect(source).toContain('Apple Distribution');
+    }
+  });
+
+  it('signs against the certificate SHA-1, not its name', () => {
+    // Sidesteps the two-names problem entirely, and unlike the common name a
+    // hash is not a person's legal name in a public log.
+    expect(iosWorkflowSource).toContain('steps.signing.outputs.signing-identity');
+    expect(iosWorkflowSource).toContain('CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"');
+    expect(readIosScript('export-ios-ipa.sh')).toContain('<string>$SIGNING_IDENTITY</string>');
+  });
+
   it('fails a build whose entitlements lost push', () => {
     // A re-sign that drops aps-environment yields an app that installs,
     // launches, and silently never receives a notification. Push is the reason

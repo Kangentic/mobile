@@ -15,6 +15,11 @@ set -euo pipefail
 : "${TEAM_ID:?TEAM_ID is required}"
 : "${PROFILE_UUID:?PROFILE_UUID is required}"
 : "${BUNDLE_ID:?BUNDLE_ID is required}"
+# The certificate's SHA-1 rather than its name. Apple issues two valid App Store
+# certificate types ("Apple Distribution" and the older iOS-only "iPhone
+# Distribution", which is what eas credentials issues), so a name here would have
+# to match either one; signingCertificate accepts a hash and sidesteps that.
+: "${SIGNING_IDENTITY:?SIGNING_IDENTITY is required}"
 
 work_dir="${RUNNER_TEMP:-/tmp}"
 archive_path="$work_dir/$SCHEME.xcarchive"
@@ -35,7 +40,7 @@ write_export_options() {
   <key>signingStyle</key>
   <string>manual</string>
   <key>signingCertificate</key>
-  <string>Apple Distribution</string>
+  <string>$SIGNING_IDENTITY</string>
   <key>provisioningProfiles</key>
   <dict>
     <key>$BUNDLE_ID</key>

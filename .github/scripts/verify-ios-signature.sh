@@ -61,9 +61,21 @@ fi
 # 3. The signing authority must be a distribution certificate. This is the
 #    check that catches a development certificate, which signs and verifies
 #    perfectly and is still rejected by App Store Connect.
+#
+#    Both valid App Store certificate types are accepted: the newer unified
+#    "Apple Distribution" and the older iOS-only "iPhone Distribution", which is
+#    what `eas credentials` issues. Matching only the newer name rejects a good
+#    build, which is how this check first failed.
 signing_info="$(codesign -dvv "$app_path" 2>&1 || true)"
-if ! contains "$signing_info" "Apple Distribution"; then
-  fail "The app is not signed by an Apple Distribution certificate. App Store Connect will reject it."
+if ! contains "$signing_info" "Apple Distribution" && ! contains "$signing_info" "iPhone Distribution"; then
+  fail "The app is not signed by an App Store distribution certificate. App Store Connect will reject it."
+fi
+
+# And a development certificate must not be what signed it. Checked separately
+# because "iPhone Developer" contains neither string above, but a bundle could
+# in principle carry several authorities.
+if contains "$signing_info" "iPhone Developer" || contains "$signing_info" "Apple Development"; then
+  fail "The app is signed by a development certificate, not a distribution one."
 fi
 
 # 4. get-task-allow true means debuggable, which means a development profile.

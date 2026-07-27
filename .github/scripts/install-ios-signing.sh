@@ -72,16 +72,46 @@ security list-keychains -d user -s "$keychain_path" $existing_keychains
 # Guard: the wrong certificate type is a silent failure until export. A
 # development certificate cannot sign for the App Store, and the error it
 # eventually produces does not name the cause.
-identities="$(security find-identity -v -p codesigning "$keychain_path")"
-if ! contains "$identities" "Apple Distribution"; then
-  echo "::error::No \"Apple Distribution\" identity in the imported certificate."
-  echo "::error::IOS_DIST_CERT_BASE64 is probably a development certificate, not a distribution one."
-  # Deliberately reporting only the count. The identity lines carry the
-  # certificate common name, which is a personal name on an individual account.
-  echo "Imported codesigning identities: $(printf '%s' "$identities" | grep -c ')' || true)"
+#
+# There are two valid App Store certificate types and Apple has never retired
+# either: the newer unified "Apple Distribution" and the older iOS-only "iPhone
+# Distribution". `eas credentials` issues the latter, so matching only on the
+# newer name rejects a perfectly good certificate. Both are accepted here;
+# anything containing Development or Developer ID is not.
+#
+# Written to a file and grepped without a pipe on purpose. `grep -m1` or `grep
+# -q` reading from a pipe exits as soon as it matches, the writer takes SIGPIPE,
+# and under `set -o pipefail` the whole pipeline reports 141. That bug already
+# cost this repository two rounds in verify-android-signature.sh, and it hides
+# behind small inputs: it only fires once the writer is slow enough to still be
+# writing when the reader leaves.
+identities_path="$work_dir/codesigning-identities.txt"
+security find-identity -v -p codesigning "$keychain_path" > "$identities_path"
+identity_line="$(grep -m1 -E '"(Apple|iPhone) Distribution: ' "$identities_path" || true)"
+
+signing_identity=""
+certificate_type=""
+# Each line looks like:   1) <40 hex SHA-1> "iPhone Distribution: Name (TEAMID)"
+if [[ "$identity_line" =~ ([0-9A-F]{40})[[:space:]]+\"([^:]+): ]]; then
+  signing_identity="${BASH_REMATCH[1]}"
+  certificate_type="${BASH_REMATCH[2]}"
+fi
+
+if [ -z "$signing_identity" ]; then
+  echo "::error::No App Store distribution identity in the imported certificate."
+  echo "::error::Expected an \"Apple Distribution\" or \"iPhone Distribution\" certificate."
+  echo "::error::IOS_DIST_CERT_BASE64 is probably a development certificate."
+  # Deliberately reporting only the count. Every identity line carries the
+  # certificate common name, which is a personal name on an individual account,
+  # and this log is public.
+  echo "Imported codesigning identities: $(grep -c ')' "$identities_path" || true)"
   exit 1
 fi
-echo "Imported an Apple Distribution codesigning identity."
+
+# Downstream steps sign against the SHA-1 rather than the certificate name.
+# It is unambiguous, it works for either certificate type without matching on a
+# name, and unlike the name it contains no personal information.
+echo "Imported a \"$certificate_type\" codesigning identity."
 
 # --- Provisioning profile --------------------------------------------------
 #
@@ -127,6 +157,8 @@ done
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "keychain-path=$keychain_path"
+    echo "signing-identity=$signing_identity"
+    echo "certificate-type=$certificate_type"
     echo "profile-uuid=$profile_uuid"
     echo "profile-name=$profile_name"
     echo "team-id=$team_id"
