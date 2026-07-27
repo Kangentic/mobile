@@ -178,6 +178,25 @@ jobs:
             "$IOS_DIST_CERT_PASSWORD" \
             "$RUNNER_TEMP/profile.mobileprovision"
 
+      # plugins/withIosManualSigning.ts reads these and applies manual signing to
+      # the app target only. It MUST run before prebuild, not merely before the
+      # archive: a config plugin executes during prebuild, and GITHUB_ENV only
+      # affects later steps, so exporting late leaves the generated project on
+      # automatic signing and the archive fails with no obvious cause. Same trap
+      # as the eas.json env export in build-android.yml, which a test locks.
+      - name: Export the signing inputs for the config plugin
+        env:
+          TEAM_ID: ${{ steps.signing.outputs.team-id }}
+          PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
+        run: |
+          set -euo pipefail
+          {
+            echo "KANGENTIC_IOS_TEAM_ID=$TEAM_ID"
+            echo "KANGENTIC_IOS_PROFILE_UUID=$PROFILE_UUID"
+            echo "KANGENTIC_IOS_SIGNING_IDENTITY=$SIGNING_IDENTITY"
+          } >> "$GITHUB_ENV"
+
       - name: Generate the native iOS project
         run: npx expo prebuild --platform ios --no-install
 
@@ -239,14 +258,38 @@ jobs:
         if: env.HAS_ASC_API_KEY != 'true'
         run: echo "::warning::No App Store Connect API key, so ios.buildNumber was not checked against existing builds. A duplicate will be rejected at upload."
 
+      # Guard: the config plugin is inert without its environment variables, and a
+      # silently unsigned archive is exactly the failure this whole workflow is
+      # built to avoid. Cheap to assert, and it names the cause.
+      - name: Verify the app target carries manual signing
+        env:
+          SCHEME: ${{ steps.xcode.outputs.scheme }}
+          PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
+        run: |
+          set -euo pipefail
+          settings_path="$RUNNER_TEMP/app-target-settings.txt"
+          xcodebuild -showBuildSettings \
+            -workspace "ios/$SCHEME.xcworkspace" \
+            -scheme "$SCHEME" \
+            -configuration Release > "$settings_path"
+
+          if ! grep -q "PROVISIONING_PROFILE_SPECIFIER = $PROFILE_UUID" "$settings_path"; then
+            echo "::error::The app target is not set to the installed provisioning profile."
+            echo "::error::plugins/withIosManualSigning.ts did not apply. Its KANGENTIC_IOS_* variables must be exported BEFORE prebuild."
+            grep -E "CODE_SIGN_STYLE|PROVISIONING_PROFILE_SPECIFIER|DEVELOPMENT_TEAM" "$settings_path" || true
+            exit 1
+          fi
+          if ! grep -q "CODE_SIGN_STYLE = Manual" "$settings_path"; then
+            echo "::error::The app target is still on automatic signing."
+            exit 1
+          fi
+          echo "App target is on manual signing with the installed profile."
+
       - name: Archive
         env:
           WORKSPACE: ${{ steps.xcode.outputs.workspace }}
           SCHEME: ${{ steps.xcode.outputs.scheme }}
-          TEAM_ID: ${{ steps.signing.outputs.team-id }}
-          PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain-path }}
-          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
         run: |
           set -euo pipefail
 
@@ -261,19 +304,29 @@ jobs:
           # archive failure is a far better trade than a silent one, and
           # verify-ios-signature.sh checks the entitlement either way.
           #
-          # If this step ever fails with "does not support provisioning
-          # profiles" (most likely once the Notification Service Extension
-          # lands, since app extensions need their own profile), the fix is to
-          # add that extension's bundle id to the provisioningProfiles dict in
-          # the export options below and give it its own profile. Do not "fix"
-          # it by archiving unsigned.
+          # No signing settings on the command line. They would apply to every
+          # target in the workspace, and a target that produces no signed bundle
+          # rejects a provisioning profile outright. The first attempt failed
+          # exactly there, on a Swift Package target:
           #
-          # CODE_SIGN_IDENTITY is the certificate's SHA-1, not a name. There are
-          # two valid App Store certificate types ("Apple Distribution" and the
-          # older iOS-only "iPhone Distribution", which is what eas credentials
-          # issues), so a name would have to match either. The hash matches
-          # neither-and-both, and unlike the common name it is not a person's
-          # legal name in a public log.
+          #   RaTeX_RaTeX does not support provisioning profiles, but
+          #   provisioning profile <uuid> has been manually specified.
+          #
+          # plugins/withIosManualSigning.ts now writes the four properties into
+          # the app target's build settings during prebuild instead. Exempting
+          # each offending target by name would be whack-a-mole: the dependency
+          # graph decides how many exist.
+          #
+          # OTHER_CODE_SIGN_FLAGS stays here because pointing codesign at the
+          # throwaway keychain is harmless for targets that never sign.
+          #
+          # If a "does not support provisioning profiles" error returns, the
+          # cause is a target the plugin did not cover. Once the Notification
+          # Service Extension lands it will need its own profile, added both to
+          # the plugin and to the provisioningProfiles dict in
+          # .github/scripts/export-ios-ipa.sh. Do not "fix" it by archiving
+          # unsigned: an unsigned archive can silently lose aps-environment at
+          # export, which ships an app that never receives a push.
           xcodebuild archive \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -281,10 +334,6 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
 
       - name: Export the .ipa
