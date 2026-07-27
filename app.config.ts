@@ -99,6 +99,10 @@ const config: ExpoConfig = {
       },
     ],
     './plugins/withAndroidPushService.ts',
+    // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
+    // .github/workflows/build-ios.yml does. See the plugin for why signing has
+    // to be scoped to the app target instead of passed to xcodebuild.
+    './plugins/withIosManualSigning.ts',
     [
       'expo-camera',
       {
