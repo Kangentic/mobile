@@ -293,7 +293,7 @@ Three workflows live in `.github/workflows/`:
 | `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint, typecheck, sharded unit and component tiers, native config |
 | `e2e.yml` | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs Maestro on an emulator |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
-| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check |
+| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload |
 
 **The gate and the release are separate concerns by design.** `ci.yml` and `e2e.yml` gate every PR,
 so `main` is always stable. `build-android.yml` and `build-ios.yml` are dispatch or tag triggered
@@ -407,6 +407,24 @@ smoke build and says so.
 | `ANDROID_KEY_PASSWORD` | same | keystore credentials |
 | `GOOGLE_SERVICES_JSON` | working remote push | base64 of the Firebase `google-services.json` |
 | `PLAY_SERVICE_ACCOUNT_JSON` | submitting to Play | full JSON text of the `play-publisher` key |
+| `IOS_DIST_CERT_BASE64` | a signed `.ipa` | base64 of the Apple Distribution `.p12` |
+| `IOS_DIST_CERT_PASSWORD` | same | the `.p12` export password |
+| `IOS_PROVISIONING_PROFILE_BASE64` | same | base64 of the App Store `.mobileprovision` |
+| `ASC_API_KEY_BASE64` | uploading to App Store Connect | base64 of the `AuthKey_*.p8` |
+| `ASC_KEY_ID` | same | the key's 10-character id |
+| `ASC_ISSUER_ID` | same | the team's issuer UUID |
+| `APPLE_ID` | fallback upload auth | the Apple ID email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | same | generated at appleid.apple.com |
+
+The iOS secrets are optional in the same way: with none of them, dispatch with `target=simulator`
+for the unsigned check. A `device` build fails immediately and says which secret is missing, rather
+than degrading, because unlike Android there is no useful half-signed iOS artifact.
+
+Nothing about the Apple team is committed. The team id, the profile UUID, and the bundle id are all
+read out of the provisioning profile on the runner. That is not only tidiness: the team name on an
+individual Apple Developer account is a person's legal name, which
+`.claude/rules/no-personal-info.md` forbids in a public repo, and the EAS-issued profile name embeds
+a timestamp that changes every time the profile is reissued, so a literal would rot as well as leak.
 
 There is no `EXPO_TOKEN` and no Expo robot user. CI holds no Expo credential at all.
 
@@ -424,9 +442,59 @@ version code is already spent and fails fast if it is.
 signature. A green build that quietly produced an unsignable artifact is the expensive failure
 mode, because Play only rejects it after a human has spent the upload.
 
-**iOS.** `build-ios.yml` is a compile check, not a distribution path. It needs no Apple Developer
-Program membership, no certificates, and no secrets, because an unsigned simulator build needs
-none of those. Its job is to tell us whether the iOS native tree builds at all.
+**Triggering an iOS build.** Actions -> Build iOS -> Run workflow, or
+`gh workflow run build-ios.yml -f target=device -f submit=testflight`. Two inputs:
+
+| Input | Meaning |
+|---|---|
+| `target` | `simulator` (default) is the unsigned compile check, needs no secrets. `device` archives, signs, and exports an `.ipa`. `both` runs the two jobs in parallel. |
+| `submit` | `none` (default) keeps the `.ipa` as a run artifact. `testflight` uploads it to App Store Connect. |
+
+The two jobs are deliberately independent rather than one matrix. The simulator check needs no Apple
+account, so it is the only iOS signal available when a certificate has expired or a profile has been
+revoked, and a signing problem must not be able to take it down too.
+
+**The signed path never touches Expo, and that is the point.** `eas submit` uploads through Expo's
+own servers, so an EAS Submit outage blocks a release even when Apple is healthy. That is not
+hypothetical: on 2026-07-26 this project's first iOS submission attempt failed with EAS Build
+reporting operational and EAS Submit degraded. `.github/scripts/upload-ios-testflight.sh` calls
+`xcrun altool` from the runner, straight to Apple's delivery endpoints.
+
+**Two upload auth mechanisms, and the fallback is the interesting one.** An App Store Connect API
+key (`.p8` plus key id and issuer id, signed as an ES256 JWT) is preferred: non-interactive,
+revocable, no expiring session. But minting one requires App Store Connect's Users and Access page,
+which is exactly the surface that goes down during an ASC incident. An app-specific password comes
+from appleid.apple.com, a different service, so it stays available when ASC does not. The script
+prefers the API key and falls back to the Apple ID automatically, and refuses to retry an
+authentication failure, which never fixes itself.
+
+**Signing is verified, not assumed** - the same rule as Android, for the same reason.
+`.github/scripts/verify-ios-signature.sh` unzips the `.ipa` and fails unless all of the following
+hold: `embedded.mobileprovision` is present, `codesign --verify --deep --strict` passes, the signing
+authority is an **Apple Distribution** certificate, `get-task-allow` is not true, the
+`application-identifier` and `Info.plist` bundle id both match, and `aps-environment` is
+`production`.
+
+That last one is not paranoia. Remote push is the reason this app has an iOS build, and an app
+signed without the push entitlement installs, launches, and silently never receives a notification -
+a failure a tester would report as "the app is broken" with nothing in any log. It is fatal here
+rather than a warning.
+
+**Why the archive is signed rather than exported-then-signed.** Passing manual signing settings on
+the `xcodebuild` command line applies them to every target including CocoaPods ones, which is the
+classic source of "target does not support provisioning profiles". The usual dodge is to archive
+unsigned and let `-exportArchive` do all the signing. This workflow does not, because an unsigned
+archive carries no `archived-expanded-entitlements.xcent`, and the re-sign at export can then
+silently drop custom entitlements - including `aps-environment`. A loud archive failure beats a
+silent one. If that error ever appears (most likely once the Notification Service Extension lands,
+since an app extension needs its own profile), add the extension's bundle id to the
+`provisioningProfiles` dict in `.github/scripts/export-ios-ipa.sh`. Do not fix it by archiving
+unsigned.
+
+**Build number preflight.** `scripts/checkAppStoreBuild.mjs` asks App Store Connect whether
+`ios.buildNumber` is already used and fails before the archive starts, so a duplicate costs seconds
+instead of a 30 minute build followed by a rejection. It resolves the numeric app id from the bundle
+id so nobody has to look it up, and it is skipped with a warning when no ASC API key is set.
 
 ## Testing
 
@@ -466,20 +534,33 @@ working on a task vs. the full gate).
 
 ## iOS without a Mac
 
-`.github/workflows/build-ios.yml` compiles the app for the iOS simulator on a free macOS runner.
-It is unsigned, so it needs no Apple Developer Program membership and no certificates, and it is
-the cheapest way to find out whether the iOS native tree still builds. It produces nothing
-installable on a device.
+Every iOS build for this project happens on a GitHub-hosted macOS runner. There is no Mac in the
+loop and no local iOS toolchain; day-to-day development happens on the Android emulator.
 
-For an actual device or TestFlight build, `eas build --platform ios` compiles and signs in the
-cloud from Windows, and TestFlight submission happens via `npx testflight` (or `eas submit`).
-Both need the $99/yr Apple Developer Program. Local day-to-day development happens on the Android
-emulator.
+`.github/workflows/build-ios.yml` does both jobs (see the CI builds section for the inputs, the
+secrets, and what is verified):
+
+- `target=simulator` compiles unsigned for the simulator. No Apple Developer Program membership, no
+  certificates, no secrets. The cheapest way to find out whether the iOS native tree still builds,
+  and it produces nothing installable.
+- `target=device` archives, signs, exports an `.ipa`, and optionally uploads it to App Store Connect.
+  Needs the $99/yr Apple Developer Program and the five iOS secrets.
+
+**Credentials were provisioned through EAS, then exported.** `eas credentials` is a genuinely good
+interactive tool for the one-time work: registering the bundle identifier, creating the distribution
+certificate, generating the provisioning profile, and minting the APNs key. That work was done once,
+the resulting `.p12` and `.mobileprovision` were exported to `~/kangentic-secrets/apple/` and set as
+GitHub secrets, and the build path is now Expo-free. Using EAS to obtain credentials is not the same
+as depending on EAS to build with them.
+
+`eas build --platform ios` still works from Windows and remains the fallback if the runner path ever
+breaks. It costs one of the 15 free monthly iOS cloud builds and enters a low-priority queue that
+can take hours, which is precisely why it is the fallback and not the path.
 
 `cli.appVersionSource: "local"` is a CLI-wide setting, not an Android-only one, so `ios.buildNumber`
 in `app.config.ts` is hand-bumped for the same reason `android.versionCode` is. App Store Connect
-rejects a build number it has already seen, so bump it before every TestFlight submission. No iOS
-build has been produced yet, which is why both start at 1.
+rejects a build number it has already seen, so bump it before every upload;
+`scripts/checkAppStoreBuild.mjs` checks this before the archive rather than after.
 
 ## Android release and Google Play Console
 
@@ -643,6 +724,16 @@ Expo's servers.
 | Play publishing key (`play-publisher@kangentic-mobile`) | `~/kangentic-secrets/google-play/` | GitHub secret `PLAY_SERVICE_ACCOUNT_JSON` | Regenerate in Google Cloud, re-grant in Play Console |
 | FCM V1 key (`firebase-adminsdk-fbsvc@kangentic-b43ff`) | `~/kangentic-secrets/firebase/` | Expo project credentials (FCM V1) | Regenerate with `gcloud`, re-upload via `eas credentials` |
 | `google-services.json` (+ base64) | `~/kangentic-secrets/firebase/`, plus repo root (gitignored) | GitHub secret `GOOGLE_SERVICES_JSON` | Re-download from Firebase console |
+| Apple distribution cert `.p12` (+ base64, + password) | `~/kangentic-secrets/apple/` | GitHub secrets `IOS_DIST_CERT_*`, Expo project credentials | Revoke and reissue via `eas credentials`; the profile must be regenerated with it |
+| App Store provisioning profile (+ base64) | `~/kangentic-secrets/apple/` | GitHub secret `IOS_PROVISIONING_PROFILE_BASE64` | Regenerate via `eas credentials`. Expires 2027-07-26 regardless |
+| APNs key (`.p8`) | Expo project credentials only | - | Revoke in the Apple portal and mint a new one |
+| App Store Connect API key (`.p8`) | `~/kangentic-secrets/apple/` once created | GitHub secrets `ASC_*` | Revoke in App Store Connect and mint a new one |
+
+**The Apple certificate is recoverable but not free.** Reissuing the distribution certificate
+invalidates the provisioning profile built against it, so both have to be regenerated together. The
+provisioning profile also expires on its own, on 2027-07-26; a build after that date fails at the
+archive with a signing error rather than anything that names expiry, so it is worth knowing in
+advance.
 
 **Only the upload keystore is unrecoverable.** Everything else regenerates in minutes. GitHub
 secrets are write-only once set, so they are not a backup: the local copy is the only readable
@@ -657,6 +748,8 @@ The second layer matters because the first is inherently leaky: Google Cloud nam
 `git check-ignore -v <name>` rather than assuming.
 
 ## Deployment tracks
+
+### Android (Google Play)
 
 The Play developer account is a **Personal** account created on 2026-07-20, which is after
 Google's 13 November 2023 cutoff. That makes the closed-testing gate mandatory: **internal
@@ -686,6 +779,42 @@ The ladder, in order:
 Treat steps 3 and 4 as their own piece of work. The 14-day clock means production is at minimum
 three weeks out from the day a closed test starts, and none of the content declarations are
 filled in yet.
+
+### iOS (App Store Connect)
+
+Shorter and less gated than Play. There is no 12-tester, 14-day equivalent, and internal TestFlight
+testing needs no review at all.
+
+| Track | Testers | Review | Status |
+|---|---|---|---|
+| TestFlight internal | up to 100, must be App Store Connect users on the team | none | the target |
+| TestFlight external | up to 10,000, by link or email | yes, a lighter Beta App Review | not started |
+| App Store | everyone | yes, full App Review | not started |
+
+The ladder:
+
+1. **Upload a build.** `gh workflow run build-ios.yml -f target=device -f submit=testflight`. Unlike
+   Play, the first upload can be automated: there is no "the API only works after a manual release"
+   rule, only the requirement that the app record exists in App Store Connect, which
+   `checkAppStoreBuild.mjs` checks for and names explicitly if it does not.
+2. **Internal testing.** The build appears in TestFlight after Apple finishes processing, usually 5
+   to 30 minutes. Internal testers can install it immediately.
+3. **External testing** needs a Beta App Review, plus a description, feedback email, and beta test
+   information.
+4. **App Store submission** additionally needs screenshots, the privacy questionnaire, the age
+   rating, and a resolved answer on export compliance.
+
+Two things to settle before anything leaves internal testing:
+
+- **`ITSAppUsesNonExemptEncryption` is set to `false` and that answer is not verified.** This app
+  does not merely use OS-provided TLS; it implements its own Noise KK channel (X25519,
+  ChaCha20-Poly1305, BLAKE2s) via `@noble`. Those are published standard algorithms, which is the
+  usual basis for treating an app as exempt, but that is a reasoned default rather than a legal
+  conclusion. TestFlight internal testing does not act on the value. See the comment in
+  `app.config.ts`.
+- **The iOS runtime is still unproven.** The app compiles for iOS and now signs, but no iOS build has
+  ever been run. The WKWebView terminal and the notification stack (Android uses Notifee; iOS needs
+  the Notification Service Extension, a later phase) are untested on the platform.
 
 ## Environment Variables
 

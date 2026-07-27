@@ -1,47 +1,71 @@
-name: Build iOS (simulator compile check)
+name: Build iOS
 
-# An unsigned iOS simulator build. It needs no Apple Developer Program
-# membership, no certificates, and no secrets, and macOS standard runners are
-# free and unmetered on public repositories, so this costs nothing.
+# Two independent paths, both on free unmetered macOS runners (standard runners
+# are free on public repositories), and neither spends an EAS cloud build:
 #
-# Its purpose is not distribution. This app has never been compiled for iOS at
-# all, so the native tree (the WKWebView terminal, the notification plugin set,
-# the New Architecture dependency graph) is entirely unverified. A red run here
-# is a useful result.
+#   simulator - unsigned compile check. No Apple account, no certificates, no
+#               secrets. Cheap enough to run on any change.
+#   device    - signed .ipa for TestFlight and the App Store, archived and
+#               exported with xcodebuild and uploaded straight to Apple.
 #
-# Dispatch only. Once it is reliably green, a weekly schedule is a cheap way to
-# catch drift.
+# The device path exists for the same reason build-android.yml does: EAS Free
+# gives 15 iOS cloud builds a month at concurrency 1 in a low-priority queue,
+# which can mean hours of wait, and that allowance is Expo's to change. A
+# GitHub runner has neither cap nor queue.
+#
+# It also removes Expo from the submission path entirely. `eas submit` uploads
+# through Expo's own servers; the steps here talk to Apple directly, so an EAS
+# Submit outage cannot block a release. See the iOS release section of
+# docs/developer-guide.md.
+#
+# Dispatch only, deliberately. A native iOS build is 20 to 40 minutes, which is
+# far too slow for a PR gate; ci.yml stays the gate.
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'simulator = unsigned compile check. device = signed .ipa.'
+        type: choice
+        default: simulator
+        options:
+          - simulator
+          - device
+          - both
+      submit:
+        description: 'Upload the signed .ipa to App Store Connect (device builds only).'
+        type: choice
+        default: none
+        options:
+          - none
+          - testflight
 
 concurrency:
-  group: build-ios-${{ github.ref }}
+  group: build-ios-${{ github.ref }}-${{ github.event.inputs.target }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  build-ios:
+  # An unsigned iOS simulator build. Its purpose is not distribution: it proves
+  # the native tree compiles at all, which for a long time was unverified here.
+  # Kept as its own job rather than a matrix dimension of the signed build, so
+  # the cheap always-available check cannot be taken down by a signing problem.
+  simulator:
+    if: inputs.target != 'device'
     runs-on: macos-latest
     timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
+      - uses: ./.github/actions/setup-node-deps
 
       - name: Generate the native iOS project
         # CNG: ios/ is produced here and never committed. See
-        # .claude/rules/expo-cng.md. --no-install because npm ci already ran;
-        # it also skips CocoaPods, which the next step runs explicitly.
+        # .claude/rules/expo-cng.md. --no-install because setup-node-deps
+        # already installed; it also skips CocoaPods, which the next step runs.
         run: npx expo prebuild --platform ios --no-install
 
       - name: Install pods
@@ -52,26 +76,7 @@ jobs:
 
       - name: Resolve the workspace and scheme
         id: xcode
-        run: |
-          set -euo pipefail
-          workspace="$(ls -d ios/*.xcworkspace | head -n 1)"
-          # The app scheme is named after the workspace, which expo prebuild
-          # names after the project. Never take schemes[0]: that list is
-          # alphabetical and full of Pod schemes, so it silently picks
-          # something like EXApplication and "succeeds" without compiling any
-          # app code.
-          scheme="$(basename "$workspace" .xcworkspace)"
-
-          xcodebuild -list -json -workspace "$workspace" > "$RUNNER_TEMP/schemes.json"
-          if ! node -e "const w=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.exit(w.workspace.schemes.includes(process.argv[2])?0:1)" "$RUNNER_TEMP/schemes.json" "$scheme"; then
-            echo "::error::Scheme \"$scheme\" is not in $workspace. Available schemes are in the log below."
-            cat "$RUNNER_TEMP/schemes.json"
-            exit 1
-          fi
-
-          echo "workspace=$workspace" >> "$GITHUB_OUTPUT"
-          echo "scheme=$scheme" >> "$GITHUB_OUTPUT"
-          echo "Building app scheme \"$scheme\" from $workspace."
+        run: bash .github/scripts/resolve-ios-scheme.sh
 
       - name: Build for the simulator
         env:
@@ -90,7 +95,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO
 
       # xcodebuild exits 0 for a build that compiled nothing we care about, so
-      # the exit code is not proof. The app bundle existing is.
+      # the exit code is not proof. The app bundle existing is. This is not
+      # hypothetical: the first version of this job "succeeded" in three minutes
+      # while building a CocoaPods scheme and no app code at all.
       - name: Verify an app bundle was produced
         env:
           SCHEME: ${{ steps.xcode.outputs.scheme }}
@@ -119,4 +126,223 @@ jobs:
             echo "App scheme: \`${SCHEME:-unresolved}\`"
             echo ""
             echo "Unsigned simulator build. Not installable on a device and not a distribution artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  device:
+    if: inputs.target != 'simulator'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      # Secrets cannot be referenced from an `if:` condition, so presence is
+      # resolved once here as a plain boolean and the steps branch on that.
+      HAS_SIGNING: ${{ secrets.IOS_DIST_CERT_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+      # Two upload auth paths, deliberately. An App Store Connect API key is the
+      # better one, but minting it requires App Store Connect's Users and Access
+      # page to be up, and that is exactly the surface that fails during an ASC
+      # incident. An app-specific password comes from appleid.apple.com, a
+      # different service, so it stays available when ASC does not.
+      HAS_ASC_API_KEY: ${{ secrets.ASC_API_KEY_BASE64 != '' && secrets.ASC_KEY_ID != '' && secrets.ASC_ISSUER_ID != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fails immediately rather than degrading. The Android job can fall back
+      # to a debug-signed APK because that is still installable and still proves
+      # the toolchain; there is no equivalent useful unsigned iOS artifact, and
+      # the simulator job above already covers "does it compile".
+      - name: Require signing material
+        if: env.HAS_SIGNING != 'true'
+        run: |
+          echo "::error::A device build needs IOS_DIST_CERT_BASE64, IOS_DIST_CERT_PASSWORD and IOS_PROVISIONING_PROFILE_BASE64."
+          echo "::error::See the credential inventory in docs/developer-guide.md. Dispatch with target=simulator for an unsigned check."
+          exit 1
+
+      - uses: ./.github/actions/setup-node-deps
+
+      - name: Install the signing certificate and provisioning profile
+        id: signing
+        env:
+          IOS_DIST_CERT_BASE64: ${{ secrets.IOS_DIST_CERT_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$IOS_DIST_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/dist-cert.p12"
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          bash .github/scripts/install-ios-signing.sh \
+            "$RUNNER_TEMP/dist-cert.p12" \
+            "$IOS_DIST_CERT_PASSWORD" \
+            "$RUNNER_TEMP/profile.mobileprovision"
+
+      - name: Generate the native iOS project
+        run: npx expo prebuild --platform ios --no-install
+
+      # Keyed on the Podfile.lock that prebuild just generated, so the cache is
+      # only reused when the resolved pod set is byte-identical. pod install on
+      # an Expo project is minutes of downloads.
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: ${{ runner.os }}-pods-
+
+      - name: Install pods
+        working-directory: ios
+        run: pod install
+
+      - name: Resolve the workspace and scheme
+        id: xcode
+        run: bash .github/scripts/resolve-ios-scheme.sh
+
+      - name: Read the app version
+        id: version
+        run: |
+          set -euo pipefail
+          npx expo config --json > "$RUNNER_TEMP/expo-config.json"
+          read_config_field() {
+            node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String($1))" "$RUNNER_TEMP/expo-config.json"
+          }
+          echo "version-name=$(read_config_field 'c.version')" >> "$GITHUB_OUTPUT"
+          echo "build-number=$(read_config_field 'c.ios.buildNumber')" >> "$GITHUB_OUTPUT"
+
+      # Runs before the archive so a duplicate build number costs seconds rather
+      # than a 30 minute build followed by an App Store Connect rejection. This
+      # is the iOS half of the lesson scripts/checkPlayVersionCode.mjs encodes.
+      - name: Check the build number is free on App Store Connect
+        if: env.HAS_ASC_API_KEY == 'true'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUNDLE_ID: ${{ steps.signing.outputs.bundle-id }}
+          VERSION_NAME: ${{ steps.version.outputs.version-name }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build-number }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/checkAppStoreBuild.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id "$BUNDLE_ID" \
+            --version "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER"
+
+      - name: Warn when the build number cannot be preflighted
+        if: env.HAS_ASC_API_KEY != 'true'
+        run: echo "::warning::No App Store Connect API key, so ios.buildNumber was not checked against existing builds. A duplicate will be rejected at upload."
+
+      - name: Archive
+        env:
+          WORKSPACE: ${{ steps.xcode.outputs.workspace }}
+          SCHEME: ${{ steps.xcode.outputs.scheme }}
+          TEAM_ID: ${{ steps.signing.outputs.team-id }}
+          PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
+          KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain-path }}
+        run: |
+          set -euo pipefail
+
+          # Signed here rather than only at export time. Exporting an unsigned
+          # archive is the usual way to dodge the "target does not support
+          # provisioning profiles" error these command-line settings can cause
+          # on Pods targets, but an unsigned archive carries no
+          # archived-expanded-entitlements.xcent, so the re-sign at export can
+          # silently drop custom entitlements. This app needs
+          # aps-environment=production for push, and losing it produces a build
+          # that installs, launches, and never receives a notification. A loud
+          # archive failure is a far better trade than a silent one, and
+          # verify-ios-signature.sh checks the entitlement either way.
+          #
+          # If this step ever fails with "does not support provisioning
+          # profiles" (most likely once the Notification Service Extension
+          # lands, since app extensions need their own profile), the fix is to
+          # add that extension's bundle id to the provisioningProfiles dict in
+          # the export options below and give it its own profile. Do not "fix"
+          # it by archiving unsigned.
+          xcodebuild archive \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
+
+      - name: Export the .ipa
+        id: export
+        env:
+          SCHEME: ${{ steps.xcode.outputs.scheme }}
+          TEAM_ID: ${{ steps.signing.outputs.team-id }}
+          PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
+          BUNDLE_ID: ${{ steps.signing.outputs.bundle-id }}
+        run: bash .github/scripts/export-ios-ipa.sh
+
+      # An .ipa that is unsigned, development-signed, or missing the push
+      # entitlement is indistinguishable from a good one until Apple rejects it
+      # or a tester reports silence. Checked here, before the upload.
+      - name: Verify the .ipa is distribution signed
+        env:
+          IPA_PATH: ${{ steps.export.outputs.ipa-path }}
+          BUNDLE_ID: ${{ steps.signing.outputs.bundle-id }}
+        run: bash .github/scripts/verify-ios-signature.sh "$IPA_PATH" "$BUNDLE_ID"
+
+      - name: Name the artifact
+        id: name
+        env:
+          IPA_PATH: ${{ steps.export.outputs.ipa-path }}
+          VERSION_NAME: ${{ steps.version.outputs.version-name }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build-number }}
+        run: |
+          set -euo pipefail
+          artifact_name="kangentic-ios-v$VERSION_NAME-b$BUILD_NUMBER-${GITHUB_SHA::7}"
+          cp "$IPA_PATH" "$RUNNER_TEMP/$artifact_name.ipa"
+          echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      # Uploaded before the submit step, so a failure on Apple's side leaves a
+      # verified .ipa that can be retried without rebuilding.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.artifact-name }}
+          path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.ipa
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload to App Store Connect
+        if: inputs.submit == 'testflight'
+        env:
+          IPA_PATH: ${{ steps.export.outputs.ipa-path }}
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: bash .github/scripts/upload-ios-testflight.sh "$IPA_PATH"
+
+      - name: Write the build summary
+        if: always()
+        env:
+          ARTIFACT_NAME: ${{ steps.name.outputs.artifact-name }}
+          VERSION_NAME: ${{ steps.version.outputs.version-name }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build-number }}
+          BUNDLE_ID: ${{ steps.signing.outputs.bundle-id }}
+          SUBMIT: ${{ inputs.submit }}
+        run: |
+          {
+            echo "### iOS device build"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Artifact | \`${ARTIFACT_NAME:-none}\` |"
+            echo "| Bundle id | \`${BUNDLE_ID:-unresolved}\` |"
+            echo "| Version | \`${VERSION_NAME:-?}\` (build \`${BUILD_NUMBER:-?}\`) |"
+            echo "| Uploaded to App Store Connect | \`$SUBMIT\` |"
+            echo ""
+            echo "Bump \`ios.buildNumber\` in \`app.config.ts\` before every App Store Connect upload."
           } >> "$GITHUB_STEP_SUMMARY"
