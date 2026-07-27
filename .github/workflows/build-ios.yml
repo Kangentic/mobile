@@ -208,6 +208,16 @@ jobs:
             "$IOS_DIST_CERT_PASSWORD" \
             "$RUNNER_TEMP/profile.mobileprovision"
 
+      # eas.json stays the source of truth for per-profile env on BOTH platforms.
+      # Without this, an EXPO_PUBLIC_* value added to a profile would reach an
+      # Android build and silently not reach an iOS one, which is the kind of
+      # divergence nobody notices until a feature flag is mysteriously off on one
+      # platform. iOS has no profile input yet (see the parity notes in
+      # docs/developer-guide.md), so it takes production's env, which is what a
+      # signed distribution build should carry.
+      - name: Export the profile env from eas.json
+        run: node scripts/easProfile.mjs production --github-env
+
       # plugins/withIosManualSigning.ts reads these and applies manual signing to
       # the app target only. It MUST run before prebuild, not merely before the
       # archive: a config plugin executes during prebuild, and GITHUB_ENV only
