@@ -52,6 +52,8 @@ export interface MockDesktop {
 // `color` exercises the project accent theme (the whole app's active accent
 // derives from it while browsing that project) - two distinct hues so
 // switching projects visibly re-themes rather than coincidentally matching.
+/** Fallback page size when an archived read names no limit; matches actions.ts's ARCHIVED_PAGE_SIZE. */
+const ARCHIVED_MOCK_PAGE_SIZE = 25;
 const MOCK_PROJECT = { id: 'mock-project', name: 'Project 1', color: '#58a6ff' };
 /** A second project: exercises the board project switcher and cross-project Home rows. */
 const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'Project 2', color: '#3fb950' };
@@ -898,6 +900,65 @@ export function createMockDesktop(): MockDesktop {
     } as unknown as JsonValue;
   }
 
+  /**
+   * The Done column's rows, which live in neither board projection and so have
+   * to be paged by their own `archived` action. Without this the mock answers
+   * an archived read with an ordinary snapshot, verbClient rejects it as the
+   * wrong shape, and mock mode shows a permanently empty Done column and an
+   * unreachable completed-task screen.
+   */
+  function archivedPage(projectId: string, limit: number | undefined, offset: number | undefined): JsonValue {
+    const isSecondProject = projectId === MOCK_PROJECT_2.id;
+    const doneColumnId = isSecondProject ? 'lane2-shipped' : 'lane-done';
+    const archivedTasks = [
+      boardTaskFixture({
+        id: `${projectId}-archived-1`,
+        display_id: 901,
+        title: 'Shipped: the completed mock task',
+        swimlane_id: doneColumnId,
+        session_id: `${projectId}-archived-session-1`,
+        archived_at: '2026-07-20T18:30:00.000Z',
+      }),
+      boardTaskFixture({
+        id: `${projectId}-archived-2`,
+        display_id: 902,
+        title: 'Closed without an agent',
+        swimlane_id: doneColumnId,
+        position: 1,
+        session_id: null,
+        archived_at: '2026-07-19T09:15:00.000Z',
+      }),
+    ];
+    const pageOffset = offset ?? 0;
+    const pageLimit = limit ?? ARCHIVED_MOCK_PAGE_SIZE;
+    return {
+      projectId,
+      archivedTasks: archivedTasks.slice(pageOffset, pageOffset + pageLimit),
+      archivedTotalCount: archivedTasks.length,
+      // Only the session-bearing task carries a summary, so the screen's
+      // no-summary branch stays reachable in mock mode too.
+      summariesByTaskId: {
+        [`${projectId}-archived-1`]: {
+          sessionId: `${projectId}-archived-session-1`,
+          totalCostUsd: 1.2345,
+          totalInputTokens: 120_000,
+          totalOutputTokens: 8_400,
+          modelDisplayName: 'Sonnet 5',
+          durationMs: 3_720_000,
+          toolCallCount: 42,
+          compactionCount: 1,
+          linesAdded: 210,
+          linesRemoved: 18,
+          filesChanged: 7,
+          taskCreatedAt: '2026-07-19T12:00:00.000Z',
+          startedAt: '2026-07-20T17:00:00.000Z',
+          exitedAt: '2026-07-20T18:02:00.000Z',
+          exitCode: 0,
+        },
+      },
+    } as unknown as JsonValue;
+  }
+
   /** Board write verbs address tasks by id only; resolve which project owns one. */
   function locateTask(taskId: string | undefined): { task: BoardTaskWire; taskList: BoardTaskWire[]; projectId: string } | null {
     const inFirst = tasks.find((candidate) => candidate.id === taskId);
@@ -913,6 +974,7 @@ export function createMockDesktop(): MockDesktop {
         const payload = parseCapabilityRequestPayload('read-board', request.payload);
         if (!payload.projectId) return ok(request, { projects: [MOCK_PROJECT, MOCK_PROJECT_2] });
         if (payload.action === 'unsubscribe') return ok(request);
+        if (payload.action === 'archived') return ok(request, archivedPage(payload.projectId, payload.limit, payload.offset));
         return ok(request, boardSnapshot(payload.projectId, payload.view));
       }
       case 'read-stream': {

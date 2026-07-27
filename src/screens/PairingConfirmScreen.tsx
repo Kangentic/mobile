@@ -96,7 +96,13 @@ export function PairingConfirmScreen(): React.JSX.Element {
     );
   }
 
-  if (machineState.status !== 'awaiting-sas') {
+  // Matched on 'paired' alone, never as the fall-through for every status that
+  // is not 'awaiting-sas'. Cancel sets the machine to 'rejected' and this
+  // screen stays mounted for the whole pop transition, so a fall-through
+  // success branch renders "Pairing complete." at the user who just rejected a
+  // mismatched code - the one answer the app's only defence against a
+  // relay-in-the-middle must never give.
+  if (machineState.status === 'paired') {
     return (
       <Screen testID="pairing-confirm-screen">
         <Stack gap="md" style={{ padding: theme.spacing.lg, flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -104,6 +110,19 @@ export function PairingConfirmScreen(): React.JSX.Element {
           <Text variant="body" color="secondary">
             Pairing complete.
           </Text>
+        </Stack>
+      </Screen>
+    );
+  }
+
+  // Rejected: the ceremony is torn down and the caller is already navigating
+  // away. Hold the neutral connecting state for the transition rather than
+  // claiming any outcome.
+  if (machineState.status !== 'awaiting-sas') {
+    return (
+      <Screen testID="pairing-confirm-screen">
+        <Stack gap="md" style={{ padding: theme.spacing.lg, flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Overseer size={CONNECTING_OVERSEER_SIZE} animate="blink-loop" testID="pairing-connecting-overseer" />
         </Stack>
       </Screen>
     );

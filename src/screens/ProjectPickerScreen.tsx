@@ -102,7 +102,19 @@ export function ProjectPickerScreen(): React.JSX.Element {
         // rather than leaving a header over nothing.
         return members.length > 0 ? [{ id: group.id, title: group.name, projects: members }] : [];
       });
-    const ungrouped = byGroupId.get(null) ?? [];
+    // A project whose groupId matches no known group joins the ungrouped
+    // bucket rather than vanishing: the groups list and the project list are
+    // two separate desktop reads, so they can legitimately arrive out of step,
+    // and dropping the project would make a paired project unreachable from
+    // the only screen that can switch to it.
+    const knownGroupIds = new Set(projectGroups.map((group) => group.id));
+    // Re-sorted after the concatenation, not just within each bucket: the
+    // buckets were sorted individually above, so joining them would otherwise
+    // interleave by Map insertion order and show position 5 above position 1.
+    const ungrouped = [...byGroupId.entries()]
+      .filter(([groupId]) => groupId === null || !knownGroupIds.has(groupId))
+      .flatMap(([, members]) => members)
+      .sort((first, second) => (first.position ?? 0) - (second.position ?? 0));
     return ungrouped.length > 0
       ? [...grouped, { id: '__ungrouped__', title: grouped.length > 0 ? 'Ungrouped' : null, projects: ungrouped }]
       : grouped;

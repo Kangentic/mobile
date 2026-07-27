@@ -129,7 +129,7 @@ export async function archiveTask(input: { projectId: string; taskId: string }):
 }
 
 /** Page size for the Done column. One screenful plus headroom, so the common board needs a single round trip. */
-const ARCHIVED_PAGE_SIZE = 25;
+export const ARCHIVED_PAGE_SIZE = 25;
 
 /**
  * Loads a page of a project's completed tasks into the board store.

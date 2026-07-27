@@ -17,7 +17,7 @@ import {
   type ProjectBoard,
 } from '@/state/boardStore';
 import { useActivityStore, sectionForEntry } from '@/state/activityStore';
-import { loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
+import { ARCHIVED_PAGE_SIZE, loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
 
 /** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
 const NO_TASKS: BoardTaskWire[] = [];
@@ -73,7 +73,16 @@ export function BoardScreen(): React.JSX.Element {
       // projection, so without this the Done column has nothing to draw. A
       // failure here leaves that one column empty and must not take the rest
       // of the board down with it.
-      void loadArchivedTasks({ projectId }).catch(reportArchivedFetchFailure);
+      //
+      // Skipped once the user has paged past the first page. This read is
+      // append:false, which REPLACES the held rows and rewinds the cursor to
+      // one page, so refetching on every focus would throw their paging away
+      // on a gesture as ordinary as switching to Home and back. Pull-to-refresh
+      // is the deliberate way to re-read the archive from the top.
+      const heldArchive = useBoardStore.getState().archivedByProjectId[projectId];
+      if (heldArchive === undefined || heldArchive.nextOffset <= ARCHIVED_PAGE_SIZE) {
+        void loadArchivedTasks({ projectId }).catch(reportArchivedFetchFailure);
+      }
     }, [projectId]),
   );
   // ...and it does not paint until that upgrade lands. Rendering a 'sessions'
@@ -122,10 +131,19 @@ export function BoardScreen(): React.JSX.Element {
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    void refreshSnapshots()
+    // The archive is in neither board projection, so refreshSnapshots does not
+    // touch it. Without this second read, pulling to refresh ON the Done column
+    // refreshes every column except the one under the user's thumb, and a task
+    // archived from the desktop stays invisible until the tab is left and
+    // re-entered. append:false, so it also rewinds the cursor to page one -
+    // which is what a pull-to-refresh should mean.
+    void Promise.all([
+      refreshSnapshots(),
+      projectId ? loadArchivedTasks({ projectId }).catch(reportArchivedFetchFailure) : undefined,
+    ])
       .catch(() => undefined)
       .finally(() => setRefreshing(false));
-  }, []);
+  }, [projectId]);
 
   const activeColumnIndex = Math.max(
     0,

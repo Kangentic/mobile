@@ -94,6 +94,10 @@ describe('BoardScreen', () => {
     mockPush.mockClear();
     mockMoveTaskOptimistic.mockClear();
     mockCreateTask.mockClear();
+    // Without this, a prior test's selectProject('project-2') (or an
+    // archived-page cursor, or a pending move) survives into the next test's
+    // freshly-seeded board, which only overwrites the fields seedBoard names.
+    useBoardStore.getState().reset();
     seedBoard();
   });
 
@@ -377,5 +381,31 @@ describe('BoardScreen', () => {
       </ThemeProvider>,
     );
     expect(screen.getByText('Connect to your desktop to see the board.')).toBeTruthy();
+  });
+
+  /**
+   * The archive is in neither board projection, so refreshSnapshots alone
+   * does not touch it. Without this second read, pulling to refresh ON the
+   * Done column refreshed every column except the one under the user's
+   * thumb, and a task archived from the desktop stayed invisible until the
+   * tab was left and re-entered.
+   */
+  it('pull-to-refresh reloads the archive alongside the board snapshots', async () => {
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    // The focus effect already fetched the archive once on mount; clear that
+    // call so the assertion below reflects only the refresh gesture itself.
+    mockLoadArchivedTasks.mockClear();
+
+    const list = screen.getByTestId('board-column-lane-todo-list');
+    const onRefresh = list.props.refreshControl.props.onRefresh as () => void;
+    await act(async () => {
+      onRefresh();
+    });
+
+    expect(mockLoadArchivedTasks).toHaveBeenCalledWith({ projectId: 'project-1' });
   });
 });

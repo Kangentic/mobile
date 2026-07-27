@@ -181,6 +181,11 @@ describe('TriageHomeScreen', () => {
     mockPush.mockClear();
     mockPeekAwaitedPrompt.mockReset();
     mockPeekAwaitedPrompt.mockResolvedValue(null);
+    // Reset here, not just at the end of the tests that override it: a test
+    // that throws before its own cleanup line would otherwise leak a stale
+    // resolved value into whichever test runs next.
+    jest.mocked(peekLastAssistantMessage).mockReset();
+    jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
     mockFlashListScrollToOffset.mockClear();
     seedStores();
   });
@@ -570,6 +575,81 @@ describe('TriageHomeScreen', () => {
 
     expect(mockPeekAwaitedPrompt).toHaveBeenCalled();
     expect(screen.queryByText('Not what this row should show.')).toBeNull();
+  });
+
+  /**
+   * The warm-on-register effect (TriageHomeScreen's own pre-warm, separate
+   * from each row's own peek effect) must not re-fetch, over the wire, the
+   * exact line a 0.8.0+ desktop already pushed on the activity feed. A
+   * session with no preview still needs warming, or its card would arrive
+   * blank until its row mounts and peeks for itself.
+   */
+  it('skips the warm-on-register peek for an idle session with a pushed preview, but still warms one with none', async () => {
+    jest.mocked(peekLastAssistantMessage).mockClear();
+    useActivityStore.getState().registerSession('sess-idle-no-preview', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-idle-no-preview',
+      taskId: 'task-1',
+      payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
+    });
+    useActivityStore.getState().registerSession('sess-idle-with-preview', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-idle-with-preview',
+      taskId: 'task-1',
+      payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
+    });
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-idle-with-preview',
+      taskId: 'task-1',
+      payload: { type: 'message-preview', text: 'Already pushed by the desktop.' },
+    });
+
+    renderHome();
+    await act(async () => {});
+
+    expect(peekLastAssistantMessage).toHaveBeenCalledWith('sess-idle-no-preview', 0);
+    expect(peekLastAssistantMessage).not.toHaveBeenCalledWith('sess-idle-with-preview', 0);
+  });
+
+  /**
+   * Body preference: the desktop's pushed preview outranks this row's own
+   * transcript peek (cheapest first - the preview already rode in on a feed
+   * the app receives). Constructed so BOTH exist and differ: the row peeks
+   * its own snippet before any preview exists, the desktop preview then
+   * arrives, and the earlier peeked snippet is still held (never cleared on
+   * a refetch) - so only the PREFERENCE, not merely which one is present,
+   * decides which text renders.
+   */
+  it('prefers the desktop-pushed preview over an already-resolved fetched snippet', async () => {
+    jest.mocked(peekLastAssistantMessage).mockClear();
+    jest.mocked(peekLastAssistantMessage).mockResolvedValue('Older fetched snippet.');
+    // seedStores leaves sess-1 awaiting a prompt (the prompt-peek path);
+    // move it to idle with no preview yet so it peeks its own message first.
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
+    });
+
+    renderHome();
+    expect(await screen.findByText('Older fetched snippet.')).toBeTruthy();
+
+    act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'message-preview', text: 'Newer pushed preview.' },
+      });
+    });
+
+    expect(screen.getByText('Newer pushed preview.')).toBeTruthy();
+    expect(screen.queryByText('Older fetched snippet.')).toBeNull();
+    jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
   });
 
   it('shows the pairing CTA when unpaired', () => {

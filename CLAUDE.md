@@ -26,11 +26,14 @@ this tree and the rule `paths:` globs together.
 
 ```
 app.config.ts                 # Expo config; CNG - config plugins only, no checked-in native projects
-eas.json                      # EAS Build/Submit/Workflows profiles (development/preview/production)
+eas.json                      # EAS Build/Submit/Workflows profiles (development/preview/e2e/production)
 app/                           # expo-router route wrappers (thin - render the src/screens/ implementation)
-  _layout.tsx, (tabs)/         # root Stack + bottom Tabs (Home, Board); boots connection + notifications + splash
-  task/[taskId]/               # index.tsx = the SESSION view (terminal/chat lenses); changes.tsx = the diff destination
-  file-diff.tsx                 # per-file unified diff, pushed over the changes screen
+  _layout.tsx, (tabs)/         # root Stack + native bottom Tabs (Home, Board); boots connection + notifications + splash
+  task/[taskId]/               # index.tsx = the SESSION view (terminal/chat/changes segments)
+  file-diff.tsx                 # per-file unified diff, pushed over the session's changes segment
+  completed-task.tsx            # a finished task's transcript + run summary
+  create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx
+                                #   native form-sheet routes (they replaced the custom board sheets)
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen (OS deep-link routing of kangentic-pair:// is a later phase)
   settings.tsx, devices.tsx
 assets/brand/                 # Synced identity rasters (icon/splash/adaptive) - scripts/syncBranding.mjs owns them
@@ -40,10 +43,13 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
-                  #   input bar, ChatPane, ChangesScreen), FileDiff, Pairing (Scan/Confirm), Settings, Devices
-  components/     # Design system primitives + brand/ (Overseer, Brandmark, EmptyState), motion/
-                  #   (presets, Skeleton, PressScale), conversation/ cells and prompt cards, terminal/
-                  #   xterm pane + quick keys, board/ sheets (actions/move/create/edit), composer/, diff/ cells
+                  #   input bar, ChatPane, ChangesTab), CompletedTask, the form-sheet screens
+                  #   (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker), FileDiff,
+                  #   Pairing (Scan/Confirm), Settings, Devices
+  components/     # Design system primitives (incl. the shared SegmentedSwitcher) + brand/ (Overseer,
+                  #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/
+                  #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
+                  #   column chips, composer/, diff/ cells
   brand/          # Generated brand data (brandmark XML, Overseer frames) - syncBranding.mjs owns them
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
@@ -183,9 +189,10 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   read-only four plus `register-push` (which only lets the desktop send the device encrypted
   notifications), and every write/control verb needs an explicit per-verb grant on the desktop.
   **There is no shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**
-- **Session view (two lenses):** a task's screen is one SESSION with a terminal/chat mode pill
-  in the input bar - Terminal (the raw mirror, the default) and Chat (the readable feed) - plus
-  a separate pushed Changes destination. Chat renders the structured transcript when the agent
+- **Session view (three surfaces):** a task's screen is one SESSION with a full-width segmented
+  switcher as its primary navigation - Terminal (the raw mirror, the default), Chat (the
+  readable feed), and Changes - all three pager pages of the one screen, not pushed
+  destinations. Chat renders the structured transcript when the agent
   has one, and degrades agent-agnostically to a cleaned live reading view derived from the
   terminal (a headless xterm in the WebView) when it does not.
 - **Transcript-terminal rendering:** the chat lens renders the transcript styled as a

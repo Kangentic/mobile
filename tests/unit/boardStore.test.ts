@@ -20,6 +20,12 @@ const COLUMNS = [
   boardColumnFixture({ id: 'lane-todo', name: 'To Do', position: 0 }),
   boardColumnFixture({ id: 'lane-doing', name: 'Doing', position: 1 }),
   boardColumnFixture({ id: 'lane-ghost', name: 'Ghost', position: 2, is_ghost: true }),
+  // Archived because it ARCHIVES what lands in it, not because it is hidden -
+  // the done lane's deliberate exception to "archived means hidden".
+  boardColumnFixture({ id: 'lane-done', name: 'Done', position: 3, role: 'done', is_archived: true }),
+  // A genuinely hidden archived column (role stays 'todo') - proves the
+  // carve-out is role-specific, not "any archived column is now visible".
+  boardColumnFixture({ id: 'lane-old-sprint', name: 'Old Sprint', position: 4, is_archived: true }),
 ];
 
 function snapshotWithTasks(): ReturnType<typeof boardSnapshotFixture> {
@@ -43,9 +49,28 @@ describe('boardStore', () => {
     useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
     const board = useBoardStore.getState().boardsByProjectId['project-1'];
 
-    expect(selectColumnsOrdered(board).map((column) => column.id)).toEqual(['lane-todo', 'lane-doing']);
+    expect(selectColumnsOrdered(board).map((column) => column.id)).toEqual(['lane-todo', 'lane-doing', 'lane-done']);
     expect(selectTasksForColumn(board, 'lane-todo').map((task) => task.id)).toEqual(['task-1', 'task-2']);
     expect(selectTasksForColumn(board, 'lane-doing')).toEqual([]);
+  });
+
+  /**
+   * Regression: the done lane ships with `is_archived: true` because it is
+   * the lane that ARCHIVES what lands in it, not because it is hidden - the
+   * desktop's own column config builder marks a column hidden with
+   * `is_archived && role !== 'done'`. Reading `is_archived` without that
+   * carve-out shipped once and kept completed work off the phone entirely
+   * (see selectColumnsOrdered's doc comment in src/state/boardStore.ts).
+   */
+  it('selectColumnsOrdered keeps the archived done column but still drops a genuinely hidden archived column and a ghost column', () => {
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    const board = useBoardStore.getState().boardsByProjectId['project-1'];
+    const columnIds = selectColumnsOrdered(board).map((column) => column.id);
+
+    expect(columnIds).toContain('lane-done');
+    expect(columnIds).not.toContain('lane-ghost');
+    expect(columnIds).not.toContain('lane-old-sprint');
+    expect(columnIds).toEqual(['lane-todo', 'lane-doing', 'lane-done']);
   });
 
   /**

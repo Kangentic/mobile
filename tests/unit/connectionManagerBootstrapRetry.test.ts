@@ -9,6 +9,12 @@
  * push-registration hooks with the module-level activeConnection staying
  * null throughout).
  *
+ * Also covers connectionManager's OTHER wiring onto this same real
+ * established session: controller.session.onRekey -> channelStore.noteRekey
+ * (see the 'rekey wiring' describe block below). Reusing this file's
+ * harness rather than a new one, since a real rekey needs the same real
+ * SessionManager-over-loopback machinery this file already builds.
+ *
  * Reaching a real established connection needs neither a relay nor a
  * SecureStore trust anchor: '@/connection/mockDesktop' is mocked here with a
  * minimal stand-in over the SAME real loopback transport + StubSessionInitiator
@@ -219,5 +225,59 @@ describe('connectionManager bootstrap retry', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('connectionManager rekey wiring', () => {
+  beforeEach(() => {
+    (globalThis as { __DEV__?: boolean }).__DEV__ = true;
+    process.env.EXPO_PUBLIC_KANGENTIC_MOCK = '1';
+    useSettingsStore.setState({ backgroundNotificationsMode: 'off' });
+    mockRunBootstrap.mockReset();
+    mockDesktopSeam.stub = null;
+  });
+
+  afterEach(async () => {
+    const { stopConnectionLifecycle } = await import('@/connection/connectionManager');
+    stopConnectionLifecycle();
+    vi.useRealTimers();
+    delete (globalThis as { __DEV__?: boolean }).__DEV__;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_MOCK;
+    useChannelStore.getState().reset();
+  });
+
+  /**
+   * connectionManager wires controller.session.onRekey -> useChannelStore's
+   * noteRekey (src/connection/connectionManager.ts, near the onEstablished
+   * listener). This is the only place that wiring runs for real: noteRekey
+   * alone (tests/unit/channelStore.test.ts) cannot prove the store method is
+   * ever actually called by the app.
+   */
+  it('wires SessionManager.onRekey to channelStore.noteRekey on a real established session', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    mockRunBootstrap.mockResolvedValue(undefined);
+
+    startConnectionLifecycle();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 1);
+    expect(useChannelStore.getState().established).toBe(true);
+    expect(useChannelStore.getState().rekeyCount).toBe(0);
+
+    // A rekey: the stub initiator starts a SECOND handshake WITHOUT
+    // resetting the phone's session first, so the phone's streams stay
+    // non-null when the reply lands - the exact condition SessionManager
+    // uses to fire onRekey instead of re-firing onEstablished.
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const establishedCountBeforeRekey = stub.establishedCount;
+    stub.beginHandshake();
+    await waitUntil(() => stub.establishedCount === establishedCountBeforeRekey + 1);
+
+    expect(useChannelStore.getState().rekeyCount).toBe(1);
+    // onRekey deliberately does not re-fire onEstablished's bootstrap retry -
+    // still just the one call from the initial establishment.
+    expect(mockRunBootstrap).toHaveBeenCalledTimes(1);
+
+    stub.beginHandshake();
+    await waitUntil(() => stub.establishedCount === establishedCountBeforeRekey + 2);
+    expect(useChannelStore.getState().rekeyCount).toBe(2);
   });
 });

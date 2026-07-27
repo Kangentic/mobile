@@ -74,16 +74,10 @@ function RootStack(): React.JSX.Element {
     sheetCornerRadius: theme.radii.lg,
     sheetGrabberVisible: true,
   } as const;
-  /**
-   * The two sheets the user WRITES in, which the content-sized default serves
-   * badly: it hugs a fixed-height description box, so a sheet whose whole
-   * purpose is typing a paragraph opens barely taller than its own buttons.
-   *
-   * Fractional detents instead - opens at 70% of the screen and drags to
-   * near-full for a long description. This is also what lifts the
-   * 'fitToContents' ban on `flex: 1`, so the description box can grow into
-   * the space rather than leaving it blank.
-   */
+  // Every sheet shares the options above, the writing ones included.
+  // Fractional detents were tried for those two and reverted: a fixed-fraction
+  // sheet does not shrink when the keyboard opens, so its lower third went
+  // unreachable. See CreateTaskScreen's comment for the reasoning that stuck.
   return (
     <>
       <StatusBar style="light" />

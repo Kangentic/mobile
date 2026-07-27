@@ -150,6 +150,21 @@ describe('PairingConfirmScreen', () => {
     expect(screen.getByTestId('pairing-success-overseer', HIDDEN)).toBeTruthy();
   });
 
+  it('never claims success on the rejected state', () => {
+    // The screen stays mounted for the whole pop transition after Cancel, and
+    // Cancel drives the machine to 'rejected'. A success branch written as
+    // "anything that is not awaiting-sas" therefore rendered "Pairing
+    // complete." at the user who had just rejected a mismatched SAS - the one
+    // answer the app's only defence against a relay-in-the-middle must never
+    // give.
+    usePairingStore.getState().setMachineState({ status: 'rejected' });
+
+    render(<PairingConfirmScreen />);
+
+    expect(screen.queryByText('Pairing complete.')).toBeNull();
+    expect(screen.queryByTestId('pairing-success-overseer', HIDDEN)).toBeNull();
+  });
+
   it('shows the error message and no SAS controls on a handshake failure', () => {
     usePairingStore.getState().setMachineState({
       status: 'error',

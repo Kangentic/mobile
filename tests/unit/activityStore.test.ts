@@ -129,6 +129,25 @@ describe('activityStore', () => {
     expect(useActivityStore.getState().bySessionId['sess-1'].unreadCount).toBe(1);
   });
 
+  /**
+   * Protocol 0.8.0+'s message-preview push replaces a per-session transcript
+   * fetch that cost 2.3-34.6 KB and up to 3.8s to produce this same one line.
+   * A desktop that predates it sends none, so the entry stays null and the
+   * Home feed's own peek is the fallback - that null default is pinned in
+   * emptyEntry, and this only exercises the event handler that populates it.
+   */
+  it('a message-preview event stores the desktop-pushed line', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    expect(useActivityStore.getState().bySessionId['sess-1'].messagePreview).toBeNull();
+
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'message-preview', text: 'Fixed the redirect loop.' }));
+    expect(useActivityStore.getState().bySessionId['sess-1'].messagePreview).toBe('Fixed the redirect loop.');
+
+    // A later push REPLACES it, rather than merging or appending.
+    useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'message-preview', text: 'Now running the test suite.' }));
+    expect(useActivityStore.getState().bySessionId['sess-1'].messagePreview).toBe('Now running the test suite.');
+  });
+
   it('permission events set and clear the awaited prompt (and force the permission state)', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
 
