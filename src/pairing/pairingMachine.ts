@@ -63,6 +63,8 @@ export class PairingMachine {
   private unsubscribeTransportState: Unsubscribe | null = null;
   private timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   private settled = false;
+  /** True once the transport has been connected at least once, so the initial idle-to-connected climb is not mistaken for a drop. */
+  private hasConnected = false;
 
   constructor(options: PairingMachineOptions) {
     this.identity = options.identity;
@@ -85,8 +87,23 @@ export class PairingMachine {
     this.setState({ status: 'connecting' });
     this.armTimeout();
     this.unsubscribeTransportState = this.transport.onStateChange((transportState) => {
-      if (transportState === 'closed' && !this.settled) {
-        this.fail('desktop-absent', 'The relay connection closed before pairing completed.');
+      if (transportState === 'connected') {
+        this.hasConnected = true;
+        return;
+      }
+      if (this.settled) return;
+      // A DROP is as fatal as a close, and only 'closed' was treated that way.
+      // RelayTransport reaches 'closed' solely through an explicit close(), so
+      // a socket that dies mid-ceremony goes 'reconnecting' then 'connected'
+      // again and the machine noticed nothing. That silence is expensive here:
+      // the relay tears the PEER down when either side drops, and the pairing
+      // token is single-use, so the reconnected socket rejoins a slot the
+      // desktop has already left. The ceremony cannot be resumed - it can only
+      // be restarted - and without this the phone sealed its confirm frame
+      // into an empty slot, reported success, and pinned a trust anchor for a
+      // desktop that never enrolled it.
+      if (transportState === 'closed' || (transportState === 'reconnecting' && this.hasConnected)) {
+        this.fail('desktop-absent', 'The pairing connection dropped. Rescan the code to pair again.');
       }
     });
     this.unsubscribeFrame = this.transport.onFrame((frame) => this.onFrame(frame));

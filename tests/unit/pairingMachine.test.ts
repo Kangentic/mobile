@@ -133,6 +133,41 @@ describe('PairingMachine', () => {
     expect(finalState.errorKind).toBe('timeout');
   });
 
+  it('fails when the pairing socket drops while the user is reading the SAS', async () => {
+    const phoneIdentity = generateX25519KeyPair();
+    const desktopStatic = generateX25519KeyPair();
+    const pairingToken = randomBytes(32);
+    const [phoneTransport, desktopTransport] = createLoopbackPair();
+
+    new StubPairingResponder(desktopTransport, { desktopStatic, pairingToken });
+    await desktopTransport.connect();
+
+    const payload: PairingQrPayload = {
+      desktopStaticPublicKey: desktopStatic.publicKey,
+      pairingToken,
+      relayAddress: 'wss://relay.example.com',
+      expiresAt: futureIsoTimestamp(600),
+      protocolVersion: PROTOCOL_VERSION,
+    };
+
+    const machine = new PairingMachine({ identity: phoneIdentity, payload, transport: phoneTransport, deviceName: 'test-phone' });
+    void machine.start();
+    await waitForState(machine, (state) => state.status === 'awaiting-sas');
+
+    // A real RelayTransport reconnects on a dropped socket, so the ceremony
+    // used to sail on: confirm() sealed a frame into a slot the relay had
+    // already emptied, and the phone reported success while the desktop never
+    // enrolled it. Comparing six digits takes long enough for this to happen.
+    phoneTransport.simulateReconnect();
+
+    const finalState = machine.getState();
+    expect(finalState.status).toBe('error');
+    if (finalState.status !== 'error') throw new Error('unreachable');
+    expect(finalState.errorKind).toBe('desktop-absent');
+    // And it must be unconfirmable afterwards, not merely flagged.
+    expect(() => machine.confirm()).toThrow();
+  });
+
   it('lets the user reject after seeing a mismatched SAS', async () => {
     const phoneIdentity = generateX25519KeyPair();
     const desktopStatic = generateX25519KeyPair();

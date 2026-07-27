@@ -8,7 +8,7 @@ import type { Transport, TransportState, Unsubscribe } from '@kangentic/protocol
  * synchronously invoke the peer's listener" ordering a real transport has,
  * without needing a real socket.
  */
-class LoopbackTransport implements Transport {
+export class LoopbackTransport implements Transport {
   private peer: LoopbackTransport | null = null;
   private currentState: TransportState = 'idle';
   private readonly frameListeners = new Set<(frame: Uint8Array) => void>();
@@ -23,6 +23,18 @@ class LoopbackTransport implements Transport {
   }
 
   async connect(): Promise<void> {
+    this.setState('connected');
+  }
+
+  /**
+   * Drop the socket the way a real relay client does: 'reconnecting', then
+   * back to 'connected', WITHOUT ever passing through 'closed'. That path is
+   * the one a network blip actually takes, and code which only watches for
+   * 'closed' treats it as if nothing happened - so it needs to be expressible
+   * here to be testable at all.
+   */
+  simulateReconnect(): void {
+    this.setState('reconnecting');
     this.setState('connected');
   }
 
@@ -62,7 +74,9 @@ class LoopbackTransport implements Transport {
   }
 }
 
-export function createLoopbackPair(): [Transport, Transport] {
+// Returns the concrete type, not the bare Transport interface: the pair is a
+// TEST double, and simulateReconnect is only reachable if callers can see it.
+export function createLoopbackPair(): [LoopbackTransport, LoopbackTransport] {
   const a = new LoopbackTransport();
   const b = new LoopbackTransport();
   a.linkTo(b);
