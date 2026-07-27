@@ -24,6 +24,11 @@
  *                                    to hand the machine back clean.
  *
  * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
+ *        --relay <wss://host> (use a HOSTED relay instead of the local one:
+ *        nothing local is started, the 8080 reverse is skipped since the phone
+ *        dials over the network, and the desktop checklist advertises the
+ *        hosted URL because the pairing QR carries it. Rejects a remote ws://
+ *        outright - the phone will not pair through plaintext off-loopback),
  *        --kangentic-repo <path>, --clear, --no-metro, --no-protocol-link,
  *        --stub (pair mode), --fresh (stub mode: ignore the saved phone key),
  *        --pair (stub mode: clear the app and run the pairing bootstrap with
@@ -104,7 +109,22 @@ const METRO_PORT = 8081;
 // The dev inspect loop (scripts/mobileInspect.mjs state dumps): the app's
 // dev-only bridge dials out to 127.0.0.1:8791 via adb reverse.
 const INSPECT_PORT = 8791;
-const RELAY_URL = `ws://127.0.0.1:${RELAY_PORT}`;
+const LOCAL_RELAY_URL = `ws://127.0.0.1:${RELAY_PORT}`;
+/**
+ * The relay this run uses. Defaults to the local one the rig starts itself;
+ * `--relay wss://host` points every consumer at a HOSTED relay instead.
+ *
+ * A hosted relay changes four things, and getting any of them wrong looks
+ * like a broken pairing rather than a misconfigured rig: nothing local is
+ * spawned, the 8080 `adb reverse` is pointless (the phone dials a public host
+ * over the network, so USB stops mattering), the desktop checklist must
+ * advertise the hosted URL because the QR carries it, and the address is
+ * `wss://` so the loopback carve-out in src/pairing/qr.ts never applies -
+ * which is the whole point of testing it.
+ */
+let RELAY_URL = LOCAL_RELAY_URL;
+/** True when RELAY_URL points somewhere this machine is not hosting. */
+let relayIsRemote = false;
 // Until every local relay checkout carries the widened default, always start
 // the relay with the session slot length allowed (32-hex session slot plus
 // the 64-hex pairing slot). Harmless once the relay default matches.
@@ -178,6 +198,7 @@ function parseRigArgs(argv) {
       avd: { type: 'string' },
       serial: { type: 'string' },
       'relay-repo': { type: 'string' },
+      relay: { type: 'string' },
       'kangentic-repo': { type: 'string' },
       clear: { type: 'boolean', default: false },
       'no-metro': { type: 'boolean', default: false },
@@ -1160,7 +1181,14 @@ function printLiveChecklist() {
 [rig]   2. Relay URL: ${RELAY_URL}
 [rig]   3. Pair a device, copy the pairing link, paste it into the app, confirm the SAS
 [rig]   4. Grant the write verbs you want to exercise (messages, prompts, terminal, tasks)
-`);
+${relayIsRemote ? `[rig]
+[rig] HOSTED relay. Two things differ from the local rig:
+[rig]   - The desktop must be pointed at ${RELAY_URL} BEFORE it mints the QR.
+[rig]     The QR carries the relay address, so a desktop still set to
+[rig]     ws://127.0.0.1:8080 pairs the phone to loopback whatever this rig says.
+[rig]   - The relay address is baked into the trust anchor at pairing time, so an
+[rig]     EXISTING pairing cannot be redirected. Re-pair (npm run dev:pair).
+` : ''}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1225,7 +1253,19 @@ async function main() {
   const relayRepo = resolveRelayRepo(flags, state);
   const avdName = flags.avd ?? state.avdName ?? DEFAULT_AVD;
   const requestedSerial = flags.serial ?? (process.env.ANDROID_SERIAL || null);
-  const needsRelay = mode === 'live' || mode === 'pair' || mode === 'stub';
+  // --relay points this run at a HOSTED relay: nothing local is started, no
+  // 8080 reverse is applied, and the desktop checklist advertises the hosted
+  // URL (the QR carries it, so the desktop side has to match or the phone
+  // pairs against the wrong host).
+  if (flags.relay) {
+    RELAY_URL = flags.relay;
+    relayIsRemote = !/^wss?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(RELAY_URL);
+    if (relayIsRemote && !RELAY_URL.startsWith('wss://')) {
+      fail(`--relay ${RELAY_URL} is a remote plaintext address. The pairing token IS the Noise PSK and is dialed verbatim as the relay slot, so the phone refuses anything but wss:// off-loopback (src/pairing/qr.ts). Use wss://.`);
+    }
+    log(`relay: ${RELAY_URL}${relayIsRemote ? ' (hosted - nothing local started)' : ''}`);
+  }
+  const needsRelay = !relayIsRemote && (mode === 'live' || mode === 'pair' || mode === 'stub');
 
   if (mode === 'stop') {
     // Back to a known-good machine in one command. Deliberately leaves the
