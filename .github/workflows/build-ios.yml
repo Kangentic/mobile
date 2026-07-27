@@ -101,6 +101,7 @@ jobs:
       # hypothetical: the first version of this job "succeeded" in three minutes
       # while building a CocoaPods scheme and no app code at all.
       - name: Verify an app bundle was produced
+        id: verify
         env:
           SCHEME: ${{ steps.xcode.outputs.scheme }}
         run: |
@@ -116,6 +117,29 @@ jobs:
             exit 1
           fi
           echo "Produced $SCHEME.app ($(du -sh "$app_path" | cut -f1))."
+          echo "app-path=$app_path" >> "$GITHUB_OUTPUT"
+
+      # Compiling is not running. Until this step existed the iOS app had never
+      # been launched anywhere, so a missing Info.plist key, a native module that
+      # throws in its constructor, or a JS bundle that dies on first render would
+      # all have passed the build unnoticed.
+      - name: Launch the app on a simulator
+        id: smoke
+        env:
+          APP_PATH: ${{ steps.verify.outputs.app-path }}
+        run: bash .github/scripts/smoke-ios-simulator.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/launch.png"
+
+      # Uploaded even on failure: a screenshot of a blank or red screen is the
+      # single most useful artifact when a launch goes wrong, and a process can be
+      # alive while rendering nothing at all.
+      - name: Upload the launch screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-launch-${{ github.sha }}
+          path: ${{ runner.temp }}/launch.png
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Write the build summary
         if: always()
@@ -123,11 +147,13 @@ jobs:
           SCHEME: ${{ steps.xcode.outputs.scheme }}
         run: |
           {
-            echo "### iOS simulator compile check"
+            echo "### iOS simulator build and launch"
             echo ""
             echo "App scheme: \`${SCHEME:-unresolved}\`"
             echo ""
-            echo "Unsigned simulator build. Not installable on a device and not a distribution artifact."
+            echo "Unsigned simulator build, so it is not installable on a device and not a"
+            echo "distribution artifact. It IS launched on a simulator, and the run's"
+            echo "\`ios-simulator-launch-*\` artifact holds a screenshot of what rendered."
           } >> "$GITHUB_STEP_SUMMARY"
 
   device:
