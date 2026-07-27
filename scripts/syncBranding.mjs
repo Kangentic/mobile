@@ -20,7 +20,7 @@
  *                                          exits nonzero on any drift.
  *
  * Run after an @kangentic/branding upgrade, then commit the regenerated
- * outputs. The check mode runs inside /pull-request.
+ * outputs. The check mode runs as a step in the `Lint (ESLint)` CI job.
  */
 import { Buffer } from 'node:buffer';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -42,10 +42,28 @@ const PNG_COPIES = [
     source: join('resources', 'mobile', 'android-adaptive-background.png'),
     destination: join('assets', 'brand', 'adaptive-icon-background.png'),
   },
-  // The desktop 512 card-K (alpha knockout) doubles as the splash mark: the
-  // splash displays large, so it takes the card-K tier per the brand's
-  // displayed-size rule.
-  { source: join('resources', 'desktop', 'icon-512.png'), destination: join('assets', 'brand', 'splash-icon.png') },
+  // A dedicated mobile splash source as of v2.4.0. It replaced a borrowed
+  // desktop icon-512, so the displayed-size reasoning that justified that
+  // borrow no longer applies: the branding package now sizes this one.
+  { source: join('resources', 'mobile', 'splash-1024.png'), destination: join('assets', 'brand', 'splash-icon.png') },
+  {
+    source: join('resources', 'mobile', 'ios-appstore-1024-dark.png'),
+    destination: join('assets', 'brand', 'icon-dark.png'),
+  },
+  {
+    source: join('resources', 'mobile', 'ios-appstore-1024-tinted.png'),
+    destination: join('assets', 'brand', 'icon-tinted.png'),
+  },
+  {
+    source: join('resources', 'mobile', 'android-adaptive-monochrome.png'),
+    destination: join('assets', 'brand', 'adaptive-icon-monochrome.png'),
+  },
+  {
+    source: join('resources', 'mobile', 'notification-icon.png'),
+    destination: join('assets', 'brand', 'notification-icon.png'),
+  },
+  // android-feature-graphic-1024x500.png is a Play Console upload, not a
+  // bundled asset - deliberately absent from this table.
 ];
 
 /**

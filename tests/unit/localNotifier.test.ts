@@ -14,6 +14,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { brandTokens } from '@/components/theme/tokens';
 
 // settingsStore.ts persists via expo-secure-store; mocked (not the store
 // itself) so the REAL zustand store still runs, matching this file's
@@ -125,6 +126,10 @@ describe('startLocalNotifier', () => {
     expect(notification.body).toBe('Ship the release');
     expect(notification.android?.channelId).toBe('needs-attention');
     expect(notification.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    // Notifee defaults smallIcon to ic_launcher (a full-colour asset the OS
+    // strips to a silhouette) unless set explicitly - see channels.ts.
+    expect(notification.android?.smallIcon).toBe('notification_icon');
+    expect(notification.android?.color).toBe(brandTokens.rust);
   });
 
   /**

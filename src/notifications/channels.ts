@@ -1,4 +1,5 @@
 import notifee, { AndroidImportance, AuthorizationStatus } from '@notifee/react-native';
+import { brandTokens } from '@/components/theme/tokens';
 import {
   NEEDS_ATTENTION_CHANNEL_ID,
   COMPLETIONS_CHANNEL_ID,
@@ -30,6 +31,26 @@ export {
   channelIdForCategory,
   titleForCategory,
 };
+
+/**
+ * Notifee defaults `smallIcon` to `ic_launcher` - a full-colour asset the OS
+ * strips to its alpha channel, which is what turns the mark into a
+ * silhouette - and it does NOT read the FCM/expo-notifications manifest
+ * meta-data. Every displayNotification call must set these explicitly.
+ * `notification_icon` is the drawable the expo-notifications plugin
+ * generates from assets/brand/notification-icon.png (see app.config.ts).
+ * The tint is the raw token hex, NOT the plugin's generated
+ * `notification_icon_color` resource, which consequently has no reader while
+ * Notifee owns every display call.
+ *
+ * Lives here rather than in categoryCopy.ts because it is Notifee-specific
+ * presentation: categoryCopy.ts is deliberately notifee-free so the pure
+ * decrypt path can import it.
+ */
+export const ANDROID_NOTIFICATION_PRESENTATION = {
+  smallIcon: 'notification_icon',
+  color: brandTokens.rust,
+} as const;
 
 let channelsCreated = false;
 

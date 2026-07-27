@@ -5,6 +5,7 @@
  * (e2e-notification-privacy.md).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { brandTokens } from '@/components/theme/tokens';
 
 const secureStoreState = vi.hoisted(() => ({ storedValues: new Map<string, string>() }));
 const taskManagerState = vi.hoisted(() => ({
@@ -38,6 +39,26 @@ vi.mock('@notifee/react-native', () => ({
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
 }));
 
+const decryptPushBlobMock = vi.hoisted(() => vi.fn<(blob: string) => Promise<unknown>>());
+
+/**
+ * Captured so the mock can DELEGATE to the real decrypt by default. Only the
+ * test that needs a successful decrypt overrides it (with mockResolvedValueOnce,
+ * which takes precedence). Without this default, a bare vi.fn() returns
+ * undefined, and the placeholder test below would reach its branch by
+ * coincidence rather than by exercising the real decrypt-failure path that
+ * e2e-notification-privacy.md exists to protect.
+ */
+const pushDecryptState = vi.hoisted(() => ({
+  realDecryptPushBlob: null as ((blob: string) => Promise<unknown>) | null,
+}));
+
+vi.mock('@/notifications/pushDecrypt', async () => {
+  const actual = await vi.importActual<typeof import('@/notifications/pushDecrypt')>('@/notifications/pushDecrypt');
+  pushDecryptState.realDecryptPushBlob = actual.decryptPushBlob;
+  return { ...actual, decryptPushBlob: decryptPushBlobMock };
+});
+
 type BackgroundPushTaskModule = typeof import('@/notifications/backgroundPushTask');
 
 async function loadModule(): Promise<BackgroundPushTaskModule> {
@@ -53,6 +74,14 @@ describe('backgroundPushTask', () => {
     taskManagerState.defineTask.mockClear();
     taskManagerState.registerTaskAsync.mockClear();
     taskManagerState.displayNotification.mockClear();
+    decryptPushBlobMock.mockReset();
+    decryptPushBlobMock.mockImplementation(async (blob) => {
+      const { realDecryptPushBlob } = pushDecryptState;
+      if (realDecryptPushBlob === null) {
+        throw new Error('pushDecrypt mock invoked before the mocked module was ever imported');
+      }
+      return realDecryptPushBlob(blob);
+    });
   });
 
   it('extracts the blob from the direct and dataString-wrapped payload shapes', async () => {
@@ -85,11 +114,45 @@ describe('backgroundPushTask', () => {
     const notification = taskManagerState.displayNotification.mock.calls[0][0] as {
       title: string;
       body: string;
-      android?: { channelId?: string };
+      android?: { channelId?: string; smallIcon?: string; color?: string };
     };
     expect(notification.title).toBe('Kangentic');
     expect(notification.body).toBe('Agent needs attention');
     expect(notification.android?.channelId).toBe('needs-attention');
+    // Notifee defaults smallIcon to ic_launcher (a full-colour asset the OS
+    // strips to a silhouette) unless set explicitly - see channels.ts.
+    expect(notification.android?.smallIcon).toBe('notification_icon');
+    expect(notification.android?.color).toBe(brandTokens.rust);
+  });
+
+  it('displays the rich notification, with the branded small icon and color, when the blob decrypts', async () => {
+    decryptPushBlobMock.mockResolvedValueOnce({
+      title: 'Agent needs your input',
+      body: 'Ship the release',
+      category: 'input-required',
+      data: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
+    });
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+    const notification = taskManagerState.displayNotification.mock.calls[0][0] as {
+      title: string;
+      body: string;
+      android?: { channelId?: string; smallIcon?: string; color?: string };
+    };
+    expect(notification.title).toBe('Agent needs your input');
+    expect(notification.body).toBe('Ship the release');
+    expect(notification.android?.channelId).toBe('needs-attention');
+    expect(notification.android?.smallIcon).toBe('notification_icon');
+    expect(notification.android?.color).toBe(brandTokens.rust);
   });
 
   it('ignores notification-response payloads (action taps are the tap router job)', async () => {
