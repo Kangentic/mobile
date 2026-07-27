@@ -139,6 +139,11 @@ gh workflow run build-android.yml --ref main -f profile=production -f artifact=a
 ```
 
 - `submit_track=none` for an artifact-only release.
+- **Add `-f rollout=0.1` for any track with real users.** It releases to 10% with an
+  `inProgress` status, which is the only state Play lets you **halt** later. A
+  `completed` release cannot be pulled back, only superseded by a higher versionCode.
+  Internal testing is small and known enough not to need it; closed, open, and
+  production are not. See step 8.
 - **Use dispatch, not a `v*` tag.** A tag build produces the AAB but can never submit: the
   `submit-play` job requires `github.event_name == 'workflow_dispatch'`. Tags are for cutting a
   release candidate artifact, not for releasing.
@@ -192,6 +197,39 @@ need a new build number.
 - Note the release on the Kangentic task if one is in flight (`kangentic_get_current_task`).
 - If anything about the flow changed, update the release and deployment-track sections in
   `docs/developer-guide.md`. `.claude/rules/docs-stay-in-sync.md` applies.
+
+## Step 8 - If the release is bad
+
+Know this before shipping, not while panicking. **Neither store lets you delete a
+release that users already have.** The only real lever is stopping further spread and
+pushing a fix forward.
+
+**Android:**
+
+1. **Halt the rollout.** Play Console -> the track -> the release -> **Halt rollout**.
+   Only possible if the release is a staged rollout (`status: inProgress`), which is
+   what `-f rollout=0.1` produces. A `completed` release cannot be halted, only
+   superseded. That is the argument for defaulting to a staged rollout on any track
+   with real users.
+2. **Ship a higher versionCode.** Even after halting, whoever already updated stays
+   updated. Bump, rebuild, release.
+3. **Do not** attempt to re-upload the same versionCode. Play rejects it, and
+   `scripts/checkPlayVersionCode.mjs` fails first.
+
+**iOS:**
+
+1. **Expire the build** in TestFlight, or stop distributing it to the group. Testers
+   who already installed keep it.
+2. **For an App Store release**, remove it from sale, or submit an expedited review
+   for the fix. Apple has phased release for automatic updates, which can be paused
+   in App Store Connect, but that only affects users who have not updated yet.
+3. **Bump `ios.buildNumber`** and rebuild. The previous number is spent forever.
+
+**Either platform, and this is the one people forget:** a JS-only bug in an app with
+`expo-updates` could be fixed over the air without a store round trip. This project
+does **not** have `expo-updates` installed, so there is no OTA escape hatch. Every
+fix is a full build and a store submission. Do not promise a fast rollback that does
+not exist.
 
 ## Things that have already gone wrong here
 
