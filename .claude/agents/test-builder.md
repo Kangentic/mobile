@@ -87,7 +87,7 @@ expected result. This is **self-review bias**. Two non-negotiable rules counter 
 |------|----------|--------|-------|------------|
 | Unit | `tests/unit/` | vitest | Pure TypeScript logic, no RN runtime: protocol glue, parsers, Zustand store logic, the Noise handshake state machine against test vectors | Locally, any OS, CI |
 | Component | `tests/components/` | Jest + React Native Testing Library v13+ | Screens and components; native modules (`expo-secure-store`, `notifee`) are mocked via `jest.mock` | Locally, any OS, CI |
-| E2E | `.maestro/` | Maestro | Full flows against a real dev build: pairing, board navigation, sending a message | Locally on Windows against the Android emulator; cloud iOS simulators via EAS Workflows (the only iOS E2E path - there is never a local iOS simulator, no Mac) |
+| E2E | `.maestro/` | Maestro | Full flows against a real dev build: pairing, board navigation, sending a message | Locally on Windows against the Android emulator, and on a CI emulator via `.github/workflows/e2e.yml`. **No iOS E2E exists**, by any route: there is no `.eas/workflows/` in this repo on any branch, so the EAS Workflows path this table used to claim was never wired. Running Maestro against a simulator on the macOS runner is the plausible future route |
 | Web | `tests/web/` | Playwright via react-native-web target | Cross-platform component behavior in a browser | Later phase, once the react-native-web target exists |
 
 **Decision rule:** could this pass without an emulator or device? If yes, it belongs in Unit or
