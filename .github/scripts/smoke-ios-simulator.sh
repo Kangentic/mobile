@@ -34,23 +34,11 @@ screenshot_path="${3:?missing screenshot output path}"
 devices_json="${RUNNER_TEMP:-/tmp}/simulator-devices.json"
 xcrun simctl list devices available --json > "$devices_json"
 
-device_id="$(node -e "
-  const catalog = JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'));
-  // Prefer the newest iOS runtime, and an iPhone over an iPad.
-  const runtimes = Object.keys(catalog.devices)
-    .filter((runtime) => runtime.includes('iOS'))
-    .sort()
-    .reverse();
-  for (const runtime of runtimes) {
-    const iphone = catalog.devices[runtime].find(
-      (device) => device.isAvailable && device.name.startsWith('iPhone'),
-    );
-    if (iphone) {
-      process.stdout.write(iphone.udid);
-      return;
-    }
-  }
-" "$devices_json")"
+# A script rather than an inline `node -e`. The first version of this was inline
+# and used a top-level `return`, which `node -e` rejects as a syntax error, so the
+# picker died and took the launch step with it. It is also parsing Apple's JSON
+# shape, which changes with Xcode, so it has a unit test.
+device_id="$(node scripts/pickIosSimulator.mjs "$devices_json" || true)"
 
 if [ -z "$device_id" ]; then
   echo "::error::No available iPhone simulator on this runner."

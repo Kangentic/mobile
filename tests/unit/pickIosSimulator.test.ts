@@ -1,0 +1,82 @@
+/**
+ * Covers scripts/pickIosSimulator.mjs, which chooses the simulator the iOS launch
+ * smoke test runs on.
+ *
+ * It exists because the logic already broke in CI. As an inline `node -e` snippet
+ * it used a top-level `return`, which Node rejects as "Illegal return statement",
+ * so the picker died and reported the launch step as a failure that looked like the
+ * app crashing. It parses Apple's JSON, whose shape moves with Xcode, so it is
+ * exactly the sort of thing that should not be trusted un-tested.
+ */
+import { describe, expect, it } from 'vitest';
+
+import { pickIphoneSimulator } from '../../scripts/pickIosSimulator.mjs';
+
+const IPHONE_16 = { udid: 'AAAA-1111', name: 'iPhone 16', isAvailable: true };
+const IPHONE_15 = { udid: 'BBBB-2222', name: 'iPhone 15', isAvailable: true };
+const IPAD = { udid: 'CCCC-3333', name: 'iPad Pro 13-inch (M4)', isAvailable: true };
+
+describe('pickIphoneSimulator', () => {
+  it('picks an available iPhone', () => {
+    const chosen = pickIphoneSimulator({
+      devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [IPAD, IPHONE_16] },
+    });
+    expect(chosen?.udid).toBe(IPHONE_16.udid);
+  });
+
+  it('prefers the newest iOS runtime by version, not by string order', () => {
+    // The trap: sorting runtime keys as strings puts "iOS-9-0" after "iOS-26-0",
+    // so a naive sort would choose a nine-year-old runtime.
+    const chosen = pickIphoneSimulator({
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-9-0': [IPHONE_15],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [IPHONE_16],
+      },
+    });
+    expect(chosen?.runtime).toContain('iOS-26-1');
+    expect(chosen?.udid).toBe(IPHONE_16.udid);
+  });
+
+  it('skips a runtime whose iPhones are all unavailable', () => {
+    const chosen = pickIphoneSimulator({
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [{ ...IPHONE_16, isAvailable: false }],
+        'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [IPHONE_15],
+      },
+    });
+    expect(chosen?.udid).toBe(IPHONE_15.udid);
+  });
+
+  it('treats a missing isAvailable as available', () => {
+    // Older simctl output omits the field. Skipping those would find nothing at all.
+    const chosen = pickIphoneSimulator({
+      devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [{ udid: 'D-4', name: 'iPhone SE' }] },
+    });
+    expect(chosen?.udid).toBe('D-4');
+  });
+
+  it('ignores non-iOS runtimes', () => {
+    // watchOS and tvOS runtimes are in the same list and cannot run this app.
+    const chosen = pickIphoneSimulator({
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.watchOS-11-0': [{ udid: 'W-1', name: 'Apple Watch Series 10' }],
+        'com.apple.CoreSimulator.SimRuntime.tvOS-18-0': [{ udid: 'T-1', name: 'Apple TV' }],
+        'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [IPHONE_15],
+      },
+    });
+    expect(chosen?.udid).toBe(IPHONE_15.udid);
+  });
+
+  it('returns null rather than an iPad when no iPhone exists', () => {
+    // The launch smoke asserts an iPhone-shaped app starts; silently substituting
+    // an iPad would change what is being tested.
+    expect(
+      pickIphoneSimulator({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [IPAD] } })
+    ).toBeNull();
+  });
+
+  it('returns null on an empty or malformed catalog', () => {
+    expect(pickIphoneSimulator({ devices: {} })).toBeNull();
+    expect(pickIphoneSimulator({})).toBeNull();
+  });
+});
