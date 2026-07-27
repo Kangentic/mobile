@@ -40,6 +40,13 @@ concurrency:
 # node_modules cache warm, a run looked like: unit shards 14s/15s/21s, component
 # shards 35s/40s/42s/51s, lint 23s, typecheck 17s, native-config 16s.
 #
+# Those component numbers predate jest.config.js running every component test on
+# BOTH platforms (jest-expo's default preset only ever resolved iOS), which roughly
+# doubles that tier's test count. Measured locally: 82 suites / 526 tests in 88s
+# unsharded, and 21 suites / 101 tests in 20s for shard 1 of 4. Expect the shards
+# nearer 60 to 90s, so the non-E2E gate is now closer to 90s than 60s. Still far
+# below the E2E path, which is what actually sets PR latency.
+#
 # Two things follow. First, these tiers sit close to the job spin-up and
 # cache-restore floor (~10-15s), so extra shards buy almost nothing: the unit
 # tier is 2 shards rather than 3 because a third runner spent more time starting
@@ -145,6 +152,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-deps
+      # Closes the other half of the gate pre-registered in
+      # .claude/rules/expo-cng.md. This was deliberately left out once, on the
+      # grounds that it would redden an otherwise-green check over cosmetic drift.
+      # That reasoning was wrong and cost real time: the drift it would have caught
+      # included `expo` itself being three patches behind, and it was masking a
+      # config-plugin import that failed under `eas build` while every gate passed.
+      # Drift is not cosmetic when the SDK is one of the drifting packages.
+      - name: Check for dependency drift
+        run: npx expo install --check
+
       - name: Generate the native Android project
         run: npx expo prebuild --platform android --no-install
 
