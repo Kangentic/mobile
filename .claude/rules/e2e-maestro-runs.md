@@ -78,6 +78,14 @@ pass without giving the product argument on its own merits.
   `.maestro/**` diffs.
 - **Agent (live now):** `e2e-flow-doctor` diagnoses a failing or flaky flow against this rule
   and is the intended first responder for a red suite.
+- **Skill (live now):** `/e2e` runs the suite in the order that actually works - APK-matches-HEAD
+  check, rebuild, one rig mode, pair WITH the URI, run, triage through the agent. Two of tonight's
+  wasted runs were pure sequence errors, not judgement.
+- **Test (live now):** `tests/unit/maestroFlows.test.ts` statically checks every flow for unknown
+  commands, a missing `appId`, and a sub-45s `session-screen` wait, in under a second. An unknown
+  command is a PARSE error that aborts the whole suite before any flow runs, so catching it in CI
+  rather than 15 minutes into a run is the difference. It carries an explicit
+  non-vacuity guard, because a scan that silently stops matching is worse than no scan.
 - **Docs (live now):** `docs/developer-guide.md`'s "Running the E2E suite" section carries the
   full reasoning, the measured cost of each workaround, and the build-profile change that would
   remove them.
