@@ -1,9 +1,11 @@
 import React from 'react';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react-native';
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react-native';
 import * as Haptics from 'expo-haptics';
 import type { ShortAuthenticationString } from '@kangentic/protocol';
 import { usePairingStore } from '@/state/pairingStore';
 import { PairingConfirmScreen } from '@/screens/PairingConfirmScreen';
+import { overseerOneShotDurationMs } from '@/brand/overseerFrames.generated';
+import { motionTokens } from '@/components/theme/tokens';
 
 jest.mock('@/pairing/activePairing', () => ({
   confirmActivePairing: jest.fn().mockResolvedValue(undefined),
@@ -15,8 +17,12 @@ jest.mock('@/connection/connectionManager', () => ({
   reconnectNow: jest.fn(),
 }));
 
+// A stable replace mock (not a fresh jest.fn() per useRouter() call) so the
+// success-hold test below can assert on it across the render.
+const mockReplace = jest.fn();
+
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: jest.fn() }),
+  useRouter: () => ({ replace: mockReplace, back: jest.fn(), push: jest.fn() }),
 }));
 
 jest.mock('expo-haptics', () => ({
@@ -130,6 +136,79 @@ describe('PairingConfirmScreen', () => {
     fireEvent.press(screen.getByTestId('sas-accept'));
 
     await waitFor(() => expect(mockNotificationAsync).toHaveBeenCalledWith(Haptics.NotificationFeedbackType.Success));
+  });
+
+  /**
+   * The success hold used to be a hand-typed literal; it is now derived
+   * (wave-once's own published playback time plus the theme's "slow" motion
+   * duration) so the wave animation and the navigation hold cannot drift
+   * apart. That derivation is exactly the kind of change that can silently
+   * regress with no test noticing, so this pins both the wiring (the screen
+   * actually uses those two constants to gate router.replace) and the
+   * resulting figure itself (920ms today).
+   */
+  it('replaces home only once the derived success hold elapses, not a moment before', async () => {
+    jest.useFakeTimers();
+    try {
+      usePairingStore.getState().setMachineState({
+        status: 'awaiting-sas',
+        sas: sasFixture('042917'),
+      });
+
+      render(<PairingConfirmScreen />);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('sas-accept'));
+      });
+
+      const successHoldMs = overseerOneShotDurationMs['wave-once'] + motionTokens.durations.slow;
+      // Pinned literal: a silent change to either input (the wave clip's
+      // total, or the theme's slow duration) is exactly the drift this test
+      // exists to catch, since it gates a route replace the user is mid
+      // transition for.
+      expect(successHoldMs).toBe(920);
+      expect(mockReplace).not.toHaveBeenCalled();
+
+      act(() => {
+        jest.advanceTimersByTime(successHoldMs - 1);
+      });
+      expect(mockReplace).not.toHaveBeenCalled();
+
+      act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(mockReplace).toHaveBeenCalledWith('/');
+      expect(mockReplace).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels the pending success-hold timer if the screen unmounts before it fires', async () => {
+    jest.useFakeTimers();
+    try {
+      usePairingStore.getState().setMachineState({
+        status: 'awaiting-sas',
+        sas: sasFixture('042917'),
+      });
+
+      const { unmount } = render(<PairingConfirmScreen />);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('sas-accept'));
+      });
+
+      const successHoldMs = overseerOneShotDurationMs['wave-once'] + motionTokens.durations.slow;
+      unmount();
+
+      // A stray timer firing setState (or a route replace) after unmount is
+      // exactly the class of bug the unmount cleanup effect exists to
+      // prevent; advancing well past the hold must produce no navigation.
+      act(() => {
+        jest.advanceTimersByTime(successHoldMs + 1_000);
+      });
+      expect(mockReplace).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('shows the blinking Overseer while connecting', () => {
