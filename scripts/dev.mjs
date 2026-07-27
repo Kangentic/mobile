@@ -50,7 +50,8 @@
  *
  * Local state lives in the gitignored .devrig.local.json at the repo root:
  *   { "relayRepoPath": "...", "kangenticRepoPath": "...", "stubPhoneKey":
- *     "<64 hex>", "avdName": "...", "linkedProtocolHash": "..." }
+ *     "<64 hex>", "avdName": "...", "linkedProtocolHash": "...",
+ *     "installedDepsHash": "..." }
  * Relay repo resolution: --relay-repo > KANGENTIC_RELAY_REPO env >
  * .devrig.local.json > ../kangentic-relay (sibling of the MAIN checkout; in
  * an agent worktree under .kangentic/worktrees/ the siblings still live next
@@ -133,7 +134,7 @@ function fail(message) {
 // Keys a worktree run inherits from the main checkout's state file: identity
 // and machine paths must be shared (a fresh dev phone identity per worktree
 // would pollute the desktop roster with duplicate devices). Cache keys
-// (linkedProtocolHash, lastQuickPairEnv, inspectEnvEnabled) stay
+// (linkedProtocolHash, installedDepsHash, lastQuickPairEnv, inspectEnvEnabled) stay
 // per-checkout: they describe this checkout's node_modules and Metro cache.
 const SHARED_STATE_KEYS = ['relayRepoPath', 'kangenticRepoPath', 'avdName', 'stubPhoneKey', 'devPhoneKeyPair'];
 
@@ -741,6 +742,31 @@ function startReverseWatchdog(serial) {
   reverseWatchdogTimer.unref?.();
 }
 
+/**
+ * True when package-lock.json has changed since the last rig run, so this run
+ * must start Metro with a clean cache.
+ *
+ * `npm install` swaps files under node_modules while the bundler holds a
+ * module map built from the old resolution, and Metro does not notice. The app
+ * then dies on the next reload with `<pkg> could not be found within the
+ * project` - which reads as a missing dependency and is nothing of the sort:
+ * the package is on disk and typecheck passes against it. It cost two live
+ * outages on a phone the user was holding before this check existed, both
+ * times found by the user rather than the tooling.
+ *
+ * Hashing the lockfile rather than watching node_modules: the lockfile is one
+ * small file, changes exactly when the installed tree does, and cannot be
+ * fooled by a partially-written directory.
+ */
+function dependenciesChanged() {
+  const lockfile = join(repoRoot, 'package-lock.json');
+  if (!existsSync(lockfile)) return false;
+  const hash = createHash('sha256').update(readFileSync(lockfile)).digest('hex');
+  if (loadState().installedDepsHash === hash) return false;
+  saveState({ installedDepsHash: hash });
+  return true;
+}
+
 /** Serial-scoped reverse for sharded instances (the plain helpers target ANDROID_SERIAL). */
 function ensureAdbReverseFor(serial, port) {
   const result = run('adb', ['-s', serial, 'reverse', `tcp:${port}`, `tcp:${port}`]);
@@ -1271,6 +1297,11 @@ async function main() {
   // Link the sibling protocol build into node_modules; a change forces a
   // clean Metro cache so the bundler re-resolves the dependency.
   const protocolRelinked = ensureLocalProtocol(kangenticRepo, flags);
+  // Same reasoning, one level up: ANY dependency change leaves the bundler's
+  // module map pointing at the old resolution. See dependenciesChanged.
+  const depsChanged = dependenciesChanged();
+  if (depsChanged) log('dependencies changed since the last rig run; clearing the Metro cache');
+  flags.clear = flags.clear || depsChanged;
   ensureInspectAdbReverse();
   // The inspect env flag is inlined at bundle time; force one clean Metro
   // cache the first time a rig run enables it so existing bundles pick it up.
