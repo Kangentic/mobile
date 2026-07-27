@@ -164,7 +164,34 @@ async function openConnection(): Promise<void> {
   }
 }
 
-async function openConnectionOrThrow(): Promise<void> {
+/**
+ * Serializes opens, between the swallowing wrapper above and the work below.
+ * performOpenConnection awaits secure storage before it can even tell whether
+ * it should proceed, so two callers arriving in that window (the lifecycle's
+ * initial connect and an AppState 'active', say) both saw no active connection
+ * and both built one. Whichever finished last became `activeConnection` and the
+ * other was orphaned while still connected - reconnecting on its own backoff
+ * forever and writing its transport state into the shared channel store, which
+ * presented as a status flickering between connected and reconnecting on a
+ * phone whose session was fine. Concurrent callers now join the attempt already
+ * running.
+ */
+let openAttempt: Promise<void> | null = null;
+
+function openConnectionOrThrow(): Promise<void> {
+  if (activeConnection) return Promise.resolve();
+  if (openAttempt) return openAttempt;
+  const attempt = performOpenConnection().finally(() => {
+    // Only clear if this attempt is still the current one: closeConnection
+    // abandons it deliberately, and a newer attempt may already have taken
+    // its place.
+    if (openAttempt === attempt) openAttempt = null;
+  });
+  openAttempt = attempt;
+  return attempt;
+}
+
+async function performOpenConnection(): Promise<void> {
   if (activeConnection) return;
   const generation = connectGeneration;
 
@@ -287,9 +314,7 @@ async function openConnectionOrThrow(): Promise<void> {
     useChannelStore.getState().noteRekey();
   });
 
-  useChannelStore.getState().setRelayUrl(anchor.relayAddress);
-  activeConnection = { controller, verbs: controller.verbs, subscriptions };
-  teardownActiveConnection = () => {
+  const teardownThisAttempt = (): void => {
     inspectStateModule?.setInspectSubscriptions(null);
     bootstrapGeneration += 1;
     if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
@@ -302,6 +327,28 @@ async function openConnectionOrThrow(): Promise<void> {
     mockDesktop?.dispose();
   };
 
+  // The generation check at the top of this function guards the awaits BEFORE
+  // the controller exists. Everything built since then has to be re-checked
+  // here, because there are awaits in between (the inspect module's dynamic
+  // import) and a close or a second open can land inside one.
+  //
+  // Dropping an attempt without this teardown does not leave it inert: its
+  // transport is already dialing and reconnects on its own backoff forever,
+  // and its onStateChange listener keeps writing into the shared channel
+  // store. Two connections then fight over one store - the live one writing
+  // 'connected' while the orphan writes 'reconnecting' - which is exactly the
+  // status that was seen flickering on a phone whose session was fine. The
+  // orphan can never recover either: the relay slot already holds the desktop
+  // and the winning connection, so it is refused and loops.
+  if (generation !== connectGeneration || activeConnection) {
+    teardownThisAttempt();
+    return;
+  }
+
+  useChannelStore.getState().setRelayUrl(anchor.relayAddress);
+  activeConnection = { controller, verbs: controller.verbs, subscriptions };
+  teardownActiveConnection = teardownThisAttempt;
+
   await controller.connect().catch(() => {
     // The transport keeps retrying with backoff on its own; channelStore
     // already reflects the connecting/reconnecting state.
@@ -313,6 +360,11 @@ async function openConnectionOrThrow(): Promise<void> {
 
 function closeConnection(): void {
   connectGeneration += 1;
+  // Abandon any attempt still in flight rather than letting the next
+  // openConnection join it: that attempt is bound to the OLD generation and
+  // will bail, so joining it would return a connection that never opens.
+  // It still tears itself down on the generation check.
+  openAttempt = null;
   teardownActiveConnection?.();
   teardownActiveConnection = null;
   activeConnection = null;
