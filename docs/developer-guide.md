@@ -299,6 +299,19 @@ Three workflows live in `.github/workflows/`:
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
 | `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload |
 
+**Naming convention, matching the kangentic desktop repo.** A workflow `name` is short Title Case
+(`CI`, `E2E`, `Build iOS`). Every job carries a lowercase key to reference plus an explicit Title Case
+`name` with a parenthetical naming the tool or target (`Lint (ESLint)`, `Device (signed .ipa)`,
+`Submit (Google Play)`); a matrix job interpolates its dimension (`Build (${{ matrix.profile }})`).
+Without a `name` the Actions UI shows the raw key, which reads like an internal detail.
+
+**A job name in `ci.yml` or `e2e.yml` is a branch-protection status-check context**, so renaming one
+there silently breaks the gate on `main` until protection is updated in the same change. The build
+workflows are free to rename because neither is a required check. Two further notes: the Actions
+sidebar shows the workflow `name` from the **default branch**, so a rename appears stale until it
+lands on `main`; and a `run` step with no `name` renders as its whole shell command, so name any step
+whose script is longer than a line.
+
 **The gate and the release are separate concerns by design.** `ci.yml` and `e2e.yml` gate every PR,
 so `main` is always stable. `build-android.yml` and `build-ios.yml` are dispatch or tag triggered
 only, so a release can be cut from `main` whenever wanted without waiting on E2E timing, and a
