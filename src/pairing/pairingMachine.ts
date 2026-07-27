@@ -103,7 +103,13 @@ export class PairingMachine {
       // into an empty slot, reported success, and pinned a trust anchor for a
       // desktop that never enrolled it.
       if (transportState === 'closed' || (transportState === 'reconnecting' && this.hasConnected)) {
-        this.fail('desktop-absent', 'The pairing connection dropped. Rescan the code to pair again.');
+        // The relay's close code is appended when known: "the peer left"
+        // (4000), "this slot already has two peers" (4409) and "nobody joined
+        // in time" (4408) are one symptom with three unrelated causes, and
+        // without the code a bug report cannot tell them apart.
+        const closeCode = relayCloseCodeOf(this.transport);
+        const detail = closeCode === null ? '' : ` (relay code ${closeCode})`;
+        this.fail('desktop-absent', `The pairing connection dropped. Rescan the code to pair again.${detail}`);
       }
     });
     this.unsubscribeFrame = this.transport.onFrame((frame) => this.onFrame(frame));
@@ -239,4 +245,15 @@ export class PairingMachine {
 
 function messageOf(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * The relay close code, when the transport happens to expose one. Kept as a
+ * structural check rather than importing RelayTransport: the machine is
+ * written against the Transport interface so it runs over the loopback in
+ * tests and over a WebRTC data channel later, and neither carries a code.
+ */
+function relayCloseCodeOf(transport: Transport): number | null {
+  const candidate = (transport as { relayCloseCode?: unknown }).relayCloseCode;
+  return typeof candidate === 'number' ? candidate : null;
 }

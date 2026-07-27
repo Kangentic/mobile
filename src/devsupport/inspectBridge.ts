@@ -54,8 +54,8 @@ export function buildInspectPayload(kind: InspectRequestKind): unknown {
         // Never the SAS itself, nor the token: presence is what diagnoses,
         // and both screens already show the digits to the person comparing.
         hasSas: machineState.status === 'awaiting-sas',
-        errorKind: 'kind' in machineState ? machineState.kind : null,
-        errorMessage: 'message' in machineState ? machineState.message : null,
+        errorKind: machineState.status === 'error' ? machineState.errorKind : null,
+        errorMessage: machineState.status === 'error' ? machineState.message : null,
       };
     }
     case 'stores': {

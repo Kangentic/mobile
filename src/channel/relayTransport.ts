@@ -49,6 +49,14 @@ export class RelayTransport implements Transport {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private explicitlyClosed = false;
   private pendingDialReject: ((error: Error) => void) | null = null;
+  /**
+   * The last close code the relay sent, for diagnosis. A dropped socket is
+   * reported to callers as a bare state change, which cannot distinguish
+   * "the peer left" (4000) from "this slot already has two peers" (4409) or
+   * "nobody joined in time" (4408) - and those have completely different
+   * causes. See RELAY_CLOSE_CODE above.
+   */
+  private lastRelayCloseCode: number | null = null;
 
   private readonly frameListeners = new Set<(frame: Uint8Array) => void>();
   private readonly stateListeners = new Set<(state: TransportState) => void>();
@@ -60,6 +68,11 @@ export class RelayTransport implements Transport {
 
   get state(): TransportState {
     return this.currentState;
+  }
+
+  /** The relay's last close code, or null if the socket has never closed. */
+  get relayCloseCode(): number | null {
+    return this.lastRelayCloseCode;
   }
 
   async connect(): Promise<void> {
@@ -118,6 +131,7 @@ export class RelayTransport implements Transport {
 
       socket.onclose = (event: WebSocketCloseEvent) => {
         this.socket = null;
+        this.lastRelayCloseCode = event.code ?? null;
         if (this.explicitlyClosed) {
           this.setState('closed');
           rejectOnce(new Error('Relay connection closed before it opened'));
