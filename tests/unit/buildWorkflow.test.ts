@@ -1,15 +1,19 @@
 /**
- * Guards the Android build workflow against the two ways it can silently rot.
+ * Guards the build workflows against the ways they can silently rot.
  *
- * The workflow builds with Gradle rather than `eas build`, so eas.json is no
- * longer read by the build tool itself. That is a deliberate trade (see the CI
+ * The Android workflow builds with Gradle rather than `eas build`, so eas.json is
+ * no longer read by the build tool itself. That is a deliberate trade (see the CI
  * builds section of docs/developer-guide.md), and these tests are what keeps it
  * honest: the workflow's profile list must stay equal to eas.json's, which is
  * the EAS profile anchor named in .claude/rules/docs-stay-in-sync.md.
  *
- * The second group covers the safety gates on the Play submit job. Those are
- * the difference between "a release needs a deliberate decision" and "a release
- * happens because someone clicked Run workflow".
+ * The release-gate groups cover the safety gates on the Play submit job and the
+ * iOS upload step. Those are the difference between "a release needs a
+ * deliberate decision" and "a release happens because someone clicked Run
+ * workflow".
+ *
+ * The iOS group additionally locks two orderings and one logging rule that are
+ * each load bearing and none of which any other check would catch.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -20,10 +24,16 @@ import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const workflowPath = `${repositoryRoot}.github/workflows/build-android.yml`;
+const iosWorkflowPath = `${repositoryRoot}.github/workflows/build-ios.yml`;
 const easProfileScript = `${repositoryRoot}scripts/easProfile.mjs`;
 const androidAbisScript = `${repositoryRoot}scripts/androidAbis.mjs`;
 
 const workflowSource = readFileSync(workflowPath, 'utf8');
+const iosWorkflowSource = readFileSync(iosWorkflowPath, 'utf8');
+
+function readIosScript(name: string): string {
+  return readFileSync(`${repositoryRoot}.github/scripts/${name}`, 'utf8');
+}
 
 interface EasConfig {
   build: Record<string, { extends?: string; channel?: string; distribution?: string }>;
@@ -150,6 +160,117 @@ describe('build-android release safety gates', () => {
 
   it('caps artifact retention so storage does not accrue', () => {
     expect(workflowSource).toMatch(/retention-days: \d+/);
+  });
+});
+
+describe('build-ios workflow', () => {
+  it('keeps the unsigned simulator check as its own job', () => {
+    // Not a matrix dimension of the signed build. The simulator check needs no
+    // Apple account and is the only iOS signal available when signing material
+    // is missing or expired, so a signing problem must not be able to take it
+    // down with it.
+    expect(iosWorkflowSource).toMatch(/^ {2}simulator:$/m);
+    expect(iosWorkflowSource).toMatch(/^ {2}device:$/m);
+  });
+
+  it('generates the native project instead of expecting a committed one', () => {
+    // .claude/rules/expo-cng.md: ios/ is a prebuild artifact.
+    expect(iosWorkflowSource).toContain('expo prebuild --platform ios --no-install');
+  });
+
+  it('resolves the scheme through the shared script in both jobs', () => {
+    // Taking schemes[0] from `xcodebuild -list` once built a CocoaPods scheme
+    // and reported success without compiling any app code. Both jobs must use
+    // the same resolution so they cannot disagree about what they build.
+    const occurrences = iosWorkflowSource.split('resolve-ios-scheme.sh').length - 1;
+    expect(occurrences).toBe(2);
+  });
+
+  it('installs pods before anything reads the workspace', () => {
+    // The .xcworkspace is a CocoaPods artifact and does not exist until
+    // pod install completes, so resolving the scheme first finds nothing.
+    const podInstallIndex = iosWorkflowSource.indexOf('working-directory: ios');
+    const resolveIndex = iosWorkflowSource.indexOf('resolve-ios-scheme.sh');
+    expect(podInstallIndex).toBeGreaterThan(-1);
+    expect(podInstallIndex).toBeLessThan(resolveIndex);
+  });
+
+  it('preflights the build number before spending an archive', () => {
+    // A duplicate build number is rejected by App Store Connect, and finding
+    // that out after a 30 minute archive is the Android versionCode lesson
+    // repeated on a slower platform.
+    const preflightIndex = iosWorkflowSource.indexOf('scripts/checkAppStoreBuild.mjs');
+    const archiveIndex = iosWorkflowSource.indexOf('xcodebuild archive');
+    expect(preflightIndex).toBeGreaterThan(-1);
+    expect(archiveIndex).toBeGreaterThan(-1);
+    expect(preflightIndex).toBeLessThan(archiveIndex);
+  });
+
+  it('verifies the .ipa signature before uploading to Apple', () => {
+    const verifyIndex = iosWorkflowSource.indexOf('verify-ios-signature.sh');
+    const uploadIndex = iosWorkflowSource.indexOf('upload-ios-testflight.sh');
+    expect(verifyIndex).toBeGreaterThan(-1);
+    expect(uploadIndex).toBeGreaterThan(-1);
+    expect(verifyIndex).toBeLessThan(uploadIndex);
+  });
+
+  it('stores the artifact before attempting the upload', () => {
+    // So an Apple-side failure leaves a verified .ipa that can be retried
+    // without a rebuild. This is not hypothetical: the first attempt to submit
+    // this app hit an App Store Connect outage.
+    const artifactIndex = iosWorkflowSource.indexOf('actions/upload-artifact@v4');
+    const uploadIndex = iosWorkflowSource.indexOf('upload-ios-testflight.sh');
+    expect(artifactIndex).toBeGreaterThan(-1);
+    expect(artifactIndex).toBeLessThan(uploadIndex);
+  });
+
+  it('never uploads to Apple unless the dispatch asked for it', () => {
+    expect(iosWorkflowSource).toContain("if: inputs.submit == 'testflight'");
+  });
+
+  it('derives the team id and profile from the profile, never a literal', () => {
+    // The Apple team name is a personal name on an individual account
+    // (.claude/rules/no-personal-info.md), and the EAS-issued profile name
+    // embeds a timestamp that changes on every reissue, so a literal would both
+    // leak and rot.
+    expect(iosWorkflowSource).toContain('steps.signing.outputs.team-id');
+    expect(iosWorkflowSource).toContain('steps.signing.outputs.profile-uuid');
+    expect(iosWorkflowSource).not.toMatch(/DEVELOPMENT_TEAM=["']?[A-Z0-9]{10}["']?/);
+  });
+
+  it('keeps signing material out of a public log', () => {
+    // This repository is public, so Actions logs are public. `codesign -dvv` and
+    // `security find-identity` both print the certificate common name, which is
+    // a person's legal name on an individual Apple Developer account. Both
+    // scripts must capture that output and match against it, never cat it.
+    for (const scriptName of ['install-ios-signing.sh', 'verify-ios-signature.sh']) {
+      const source = readIosScript(scriptName);
+      expect(source).toContain('no-personal-info.md');
+      expect(source).not.toMatch(/^\s*(cat|echo)\s+"?\$(identities|signing_info)/m);
+    }
+  });
+
+  it('fails a build whose entitlements lost push', () => {
+    // A re-sign that drops aps-environment yields an app that installs,
+    // launches, and silently never receives a notification. Push is the reason
+    // this app exists, so this is fatal rather than a warning.
+    const verifySource = readIosScript('verify-ios-signature.sh');
+    expect(verifySource).toContain('aps-environment');
+    expect(verifySource).toContain('could not receive push');
+  });
+
+  it('supports both App Store Connect auth mechanisms', () => {
+    // An ASC API key is preferred, but minting one needs App Store Connect's
+    // Users and Access page, which is exactly what fails during an ASC
+    // incident. An app-specific password comes from appleid.apple.com instead.
+    const uploadSource = readIosScript('upload-ios-testflight.sh');
+    expect(uploadSource).toContain('--apiKey');
+    expect(uploadSource).toContain('--apiIssuer');
+    expect(uploadSource).toContain('--username');
+  });
+
+  it('caps artifact retention so storage does not accrue', () => {
+    expect(iosWorkflowSource).toMatch(/retention-days: \d+/);
   });
 });
 
