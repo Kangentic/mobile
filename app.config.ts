@@ -55,7 +55,12 @@ const config: ExpoConfig = {
     // Hand-bumped, code-reviewed version code (cli.appVersionSource: "local"
     // in eas.json, so EAS does not track it server-side). Read the Android
     // release section of docs/developer-guide.md before bumping.
-    versionCode: 1,
+    //
+    // Version code 1 was released to the Play internal track on 2026-07-26 and
+    // is spent. scripts/checkPlayVersionCode.mjs would catch a duplicate before
+    // the upload, but leaving a spent value here means every build produces an
+    // artifact that cannot be submitted.
+    versionCode: 2,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
