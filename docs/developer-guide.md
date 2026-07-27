@@ -266,6 +266,7 @@ src/
   lib/            # Shared pure utilities (crypto polyfills)
 tests/unit/       # vitest
 tests/components/ # Jest + RNTL
+tests/helpers/    # Shared cross-tier test utilities (async waitUntil / flushMicrotasks)
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
@@ -662,6 +663,14 @@ Four tiers, chosen for the fastest tier that proves the behavior:
 
 Commands: `npm run typecheck`, `npm run lint`, `npm run test:unit`, `npm run test:components`,
 `maestro test .maestro/`.
+
+`npm run typecheck` runs `scripts/checkInstallDrift.mjs` first through a `pretypecheck` hook (also
+available alone as `npm run check:install`). It fails fast when this checkout resolves
+`@kangentic/protocol` out of ANOTHER checkout's `node_modules` - every worktree lives inside the
+main one, so Node walks up and finds it - or at a version outside the declared range. That drift
+presents as a wall of "has no exported member" errors in files nobody touched, and the obvious way
+to check them (stash, re-run, "identical before and after, so pre-existing") confirms the wrong
+answer, because both runs resolve the same stale package. The fix is `npm install`.
 
 **Where each tier runs.** Unit and component run on every PR, sharded, from `ci.yml`. Android E2E
 runs on every PR from `e2e.yml`: it builds a signed `e2e` APK and drives it on an emulator. Maestro

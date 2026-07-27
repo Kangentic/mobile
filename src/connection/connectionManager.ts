@@ -52,12 +52,26 @@ export interface ActiveConnection {
   subscriptions: SubscriptionManager;
 }
 
+/**
+ * Why a connection is being torn down, expressed as what the desktop is TOLD
+ * rather than as a cause - because the causes do not sort cleanly. Unpairing
+ * is deliberate and permanent; backgrounding is equally deliberate but the
+ * phone intends to come back, and announcing on every foreground/background
+ * cycle would flap the desktop's badge. An app kill or a dead network never
+ * gets here at all.
+ *
+ * 'stay-silent' is the default everywhere on purpose: a new call site that
+ * forgets to think about this falls back to today's behaviour (the desktop
+ * infers departure from the dropped socket), never to a spurious goodbye.
+ */
+export type ConnectionTeardownIntent = 'announce-departure' | 'stay-silent';
+
 const deviceIdentityManager = new DeviceIdentityManager();
 const trustAnchorStore = new TrustAnchorStore();
 
 let appStateSubscription: NativeEventSubscription | null = null;
 let activeConnection: ActiveConnection | null = null;
-let teardownActiveConnection: (() => void) | null = null;
+let teardownActiveConnection: ((intent: ConnectionTeardownIntent) => void) | null = null;
 let connectGeneration = 0;
 
 export class NotConnectedError extends Error {
@@ -314,7 +328,7 @@ async function performOpenConnection(): Promise<void> {
     useChannelStore.getState().noteRekey();
   });
 
-  const teardownThisAttempt = (): void => {
+  const teardownThisAttempt = (intent: ConnectionTeardownIntent): void => {
     inspectStateModule?.setInspectSubscriptions(null);
     bootstrapGeneration += 1;
     if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
@@ -323,7 +337,7 @@ async function performOpenConnection(): Promise<void> {
     unsubscribeRekey();
     unbindFeed();
     subscriptions.dispose();
-    controller.dispose();
+    controller.dispose({ sendFinalFrame: intent === 'announce-departure' });
     mockDesktop?.dispose();
   };
 
@@ -341,7 +355,9 @@ async function performOpenConnection(): Promise<void> {
   // orphan can never recover either: the relay slot already holds the desktop
   // and the winning connection, so it is refused and loops.
   if (generation !== connectGeneration || activeConnection) {
-    teardownThisAttempt();
+    // This attempt never reached controller.connect(), so it has no session
+    // to say goodbye on - silent by construction, not merely by guard.
+    teardownThisAttempt('stay-silent');
     return;
   }
 
@@ -358,14 +374,14 @@ async function performOpenConnection(): Promise<void> {
   await mockDesktop?.start();
 }
 
-function closeConnection(): void {
+function closeConnection(intent: ConnectionTeardownIntent = 'stay-silent'): void {
   connectGeneration += 1;
   // Abandon any attempt still in flight rather than letting the next
   // openConnection join it: that attempt is bound to the OLD generation and
   // will bail, so joining it would return a connection that never opens.
   // It still tears itself down on the generation check.
   openAttempt = null;
-  teardownActiveConnection?.();
+  teardownActiveConnection?.(intent);
   teardownActiveConnection = null;
   activeConnection = null;
   useChannelStore.getState().reset();
@@ -456,8 +472,12 @@ export function stopConnectionLifecycle(): void {
  * restart. Callers reacting to a CHANGED trust context (unpair, a completed
  * pairing) must call actions.ts's wipeDesktopContent() first - this only
  * swaps the connection, it does not clear the previous desktop's content.
+ *
+ * The intent describes the CLOSE half only, not the reopen that always
+ * follows - 'announce-departure' tells the OLD desktop this phone is
+ * deliberately leaving it, which is exactly unpair's situation.
  */
-export function reconnectNow(): void {
-  closeConnection();
+export function reconnectNow(intent: ConnectionTeardownIntent = 'stay-silent'): void {
+  closeConnection(intent);
   void openConnection();
 }

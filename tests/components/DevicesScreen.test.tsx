@@ -4,6 +4,9 @@ import { ThemeProvider } from '@/components';
 import { DevicesScreen } from '@/screens/DevicesScreen';
 import { useChannelStore } from '@/state/channelStore';
 import type { PairedDesktopInfoState } from '@/screens/usePairedDesktopInfo';
+// Type-only, so it is erased before jest hoists the factory below and can be
+// referenced inside it without tripping the out-of-scope-variable guard.
+import type { ConnectionTeardownIntent } from '@/connection/connectionManager';
 
 const mockBack = jest.fn();
 jest.mock('expo-router', () => ({
@@ -28,8 +31,13 @@ jest.mock('@/pairing/trustAnchor', () => ({
 
 const mockReconnectNow = jest.fn();
 const mockRevokePushRegistrationForUnpair = jest.fn().mockResolvedValue(undefined);
+// The arrow defers the mock read past import-time hoisting - but it MUST forward
+// its arguments. Written as `() => mockReconnectNow()` the wrapper silently drops
+// them, so any toHaveBeenCalledWith assertion fails against correct production
+// code and a bare toHaveBeenCalled passes no matter what is passed. If a factory
+// needs no hoisting dodge, prefer a bare `jest.fn()` (see PairingConfirmScreen.test.tsx).
 jest.mock('@/connection/connectionManager', () => ({
-  reconnectNow: () => mockReconnectNow(),
+  reconnectNow: (intent?: ConnectionTeardownIntent) => mockReconnectNow(intent),
   revokePushRegistrationForUnpair: () => mockRevokePushRegistrationForUnpair(),
 }));
 
@@ -73,7 +81,9 @@ describe('DevicesScreen', () => {
     });
     expect(mockRevokePushRegistrationForUnpair).toHaveBeenCalled();
     expect(mockClear).toHaveBeenCalled();
-    expect(mockReconnectNow).toHaveBeenCalled();
+    // Unpair is a deliberate departure: the desktop should be told, so its
+    // Mobile Devices badge flips to Offline immediately.
+    expect(mockReconnectNow).toHaveBeenCalledWith('announce-departure');
     expect(mockBack).toHaveBeenCalled();
     // Push revocation happens BEFORE the trust anchor is cleared, while the
     // channel (and thus the desktop connection to send "unregister" over)

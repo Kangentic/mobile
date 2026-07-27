@@ -75,6 +75,11 @@ and to every later peer-initiated rekey.
 - Sessions rekey roughly every 2 minutes (WireGuard's `REKEY_AFTER_TIME`) for bounded
   post-compromise security.
 - Per-direction 64-bit counter nonces reject anything at or below the last seen value.
+- A **deliberate** teardown (unpairing) seals an empty `FrameTag.Final` frame before the socket
+  closes, so the desktop marks the phone offline immediately instead of waiting out reconnect
+  grace plus its presence probes. Backgrounding and reconnects stay silent on purpose - the phone
+  intends to return - and an involuntary teardown (killed app, dead network) cannot announce
+  anything at all.
 - Crypto library: `@kangentic/protocol` is pure TypeScript on `@noble/curves`/`@noble/hashes`/
   `@noble/ciphers` - no native crypto module. The exact same handshake and `secretstream`-style
   AEAD framing code runs on Node (the desktop) and on Hermes (this app), tested once against

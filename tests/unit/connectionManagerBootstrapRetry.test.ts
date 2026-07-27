@@ -24,9 +24,12 @@
  * pins the retry behavior around.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AppState } from 'react-native';
+import { SessionManager } from '@/channel';
 import type { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useChannelStore } from '@/state/channelStore';
+import { waitUntil } from '../helpers/async';
 
 const mockRunBootstrap = vi.hoisted(() => vi.fn<() => Promise<void>>());
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: mockRunBootstrap }));
@@ -86,20 +89,11 @@ vi.mock('expo-secure-store', () => ({
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'whenUnlockedThisDeviceOnly',
 }));
 
-/**
- * Polls with REAL timers - deliberately runs before vi.useFakeTimers() is
- * engaged in each test below, so the handshake's own microtask/await chain
- * (openConnection's several `await`s, the loopback transport's queued
- * microtask delivery) resolves the ordinary way rather than fighting a
- * fake clock it was never meant to interact with.
- */
-async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) throw new Error('waitUntil timed out');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
+// waitUntil polls on REAL timers - every call below deliberately runs BEFORE
+// vi.useFakeTimers() is engaged, so the handshake's own microtask/await chain
+// (openConnection's several `await`s, the loopback transport's queued
+// microtask delivery) resolves the ordinary way rather than fighting a fake
+// clock it was never meant to interact with. See tests/helpers/async.ts.
 
 describe('connectionManager bootstrap retry', () => {
   beforeEach(() => {
@@ -225,6 +219,86 @@ describe('connectionManager bootstrap retry', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('connectionManager teardown intent', () => {
+  beforeEach(() => {
+    (globalThis as { __DEV__?: boolean }).__DEV__ = true;
+    process.env.EXPO_PUBLIC_KANGENTIC_MOCK = '1';
+    useSettingsStore.setState({ backgroundNotificationsMode: 'off' });
+    mockRunBootstrap.mockReset();
+    mockRunBootstrap.mockResolvedValue(undefined);
+    mockDesktopSeam.stub = null;
+  });
+
+  afterEach(async () => {
+    const { stopConnectionLifecycle } = await import('@/connection/connectionManager');
+    stopConnectionLifecycle();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete (globalThis as { __DEV__?: boolean }).__DEV__;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_MOCK;
+    useChannelStore.getState().reset();
+  });
+
+  it('announces departure on an unpair-style reconnect and stays silent by default', async () => {
+    const { startConnectionLifecycle, reconnectNow } = await import('@/connection/connectionManager');
+    const sendFinalFrameSpy = vi.spyOn(SessionManager.prototype, 'sendFinalFrame');
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established);
+
+    reconnectNow();
+    expect(sendFinalFrameSpy).not.toHaveBeenCalled();
+
+    await waitUntil(() => useChannelStore.getState().established);
+
+    reconnectNow('announce-departure');
+    expect(sendFinalFrameSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays silent when the app is merely backgrounded', async () => {
+    const { startConnectionLifecycle, getActiveConnection } = await import('@/connection/connectionManager');
+    const sendFinalFrameSpy = vi.spyOn(SessionManager.prototype, 'sendFinalFrame');
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established);
+
+    // That file's own mock never calls vi.clearAllMocks(), so
+    // addEventListener's calls accumulate across every test that has run
+    // startConnectionLifecycle() so far - .at(-1), not [0], is the handler
+    // THIS test's lifecycle actually registered.
+    const onAppStateChange = vi.mocked(AppState.addEventListener).mock.calls.at(-1)?.[1];
+    if (!onAppStateChange) throw new Error('expected an AppState change handler to be registered');
+
+    onAppStateChange('background');
+
+    expect(sendFinalFrameSpy).not.toHaveBeenCalled();
+    expect(getActiveConnection()).toBeNull();
+  });
+
+  /**
+   * stopConnectionLifecycle is the deliberate-shutdown entry point, and the
+   * tempting change is to make it announce. It must not: it has no production
+   * caller (app/_layout.tsx only ever calls start), while this file calls it
+   * from afterEach and tests/unit/connectionManager.test.ts calls it from
+   * beforeEach - so an announcing version would seal a Final around every
+   * single test in both files.
+   */
+  it('stays silent when the lifecycle is stopped', async () => {
+    const { startConnectionLifecycle, stopConnectionLifecycle, getActiveConnection } = await import(
+      '@/connection/connectionManager'
+    );
+    const sendFinalFrameSpy = vi.spyOn(SessionManager.prototype, 'sendFinalFrame');
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established);
+
+    stopConnectionLifecycle();
+
+    expect(sendFinalFrameSpy).not.toHaveBeenCalled();
+    expect(getActiveConnection()).toBeNull();
   });
 });
 
