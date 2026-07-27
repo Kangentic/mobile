@@ -503,8 +503,46 @@ unsigned.
 
 **Build number preflight.** `scripts/checkAppStoreBuild.mjs` asks App Store Connect whether
 `ios.buildNumber` is already used and fails before the archive starts, so a duplicate costs seconds
-instead of a 30 minute build followed by a rejection. It resolves the numeric app id from the bundle
-id so nobody has to look it up, and it is skipped with a warning when no ASC API key is set.
+instead of a whole build followed by a rejection. It resolves the numeric app id from the bundle id
+so nobody has to look it up, and it is skipped with a warning when no ASC API key is set.
+
+**Signing is set on the app target, not on the xcodebuild command line.** Command-line build
+settings apply to every target in the workspace, and a target that produces no signed bundle rejects
+a provisioning profile outright. The first signed archive died on exactly that, on a **Swift Package**
+target (`RaTeX_RaTeX`), not a CocoaPods one. Exempting offending targets by name is whack-a-mole
+since the dependency graph decides how many there are, so `plugins/withIosManualSigning.ts` writes
+the four properties into the app target's build settings during prebuild instead.
+
+Two consequences worth knowing before touching that plugin:
+
+- **Its `KANGENTIC_IOS_*` variables must be exported before `expo prebuild`**, not merely before the
+  archive. A config plugin runs during prebuild and `GITHUB_ENV` only affects later steps, so
+  exporting late leaves the project on automatic signing with nothing in the log to say so. Same trap
+  as the `eas.json` env export on Android, and locked by the same kind of test. A
+  `-showBuildSettings` step asserts the target really is on manual signing before the archive.
+- **`tsc` cannot check the plugin's pbxproj call.** The `xcode` package ships no type declarations,
+  so `XcodeProject` degrades to `any`. `tests/unit/iosManualSigning.test.ts` pins the argument shape
+  instead, and the plugin declares a local interface for the one method it uses. There is also no way
+  to run `expo prebuild --platform ios` on Windows to check it by hand.
+
+**Measured build time: about 11 minutes**, which is faster than the Android release build, and not
+where you would guess:
+
+| Step | Time |
+|---|---|
+| Node + dependency cache restore | 20s |
+| Certificate and profile install | 1s |
+| `expo prebuild --platform ios` | 2s |
+| `pod install` (cold CocoaPods cache) | 46s |
+| Resolve workspace and scheme | 19s |
+| **`xcodebuild archive`** | **8m 23s** |
+| `-exportArchive` | 6s |
+| Signature verification | 1s |
+| Artifact upload (21 MB) | 2s |
+
+So the archive is 76% of the run and everything else is noise. The CocoaPods cache was a miss on this
+first run and will not be again, but at 46s it was never the lever. If iOS build time ever needs
+attacking, it is the archive or nothing.
 
 ## Testing
 
