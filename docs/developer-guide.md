@@ -510,16 +510,25 @@ bump was expected to miss outright:
 | run 30397988677 | v4 | 7m 23s | `1055 actionable tasks: 640 executed, 415 from cache` |
 | run 30401393044 | v5 | 8m 28s | `1055 actionable tasks: 640 executed, 415 from cache` |
 | run 30403140412 | v5 | 8m 14s | - |
+| run 30404363470 | v5 | 8m 19s | - |
 
 **Cache invalidation is ruled out**, and by the task line, not the duration. Reuse is byte-identical:
 the Gradle User Home entry resolved through a **restore key** rather than an exact one, and every
 sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright. Whatever the version bump
 did, it did not reach a task.
 
-**Whether v5 is marginally slower for some other reason is undetermined**, and worth stating rather
-than rounding off. Both v5 runs landed above the single v4 sample, but all three sit inside this
-job's recorded 6m 03s to 8m 37s spread, which is wider than the difference being argued about. Two
-samples against one cannot separate those.
+**Whether v5 is marginally slower for some other reason is open**, and the shape of the data is
+worth reading before anyone re-opens it. The three v5 samples cluster inside **14 seconds** of each
+other, roughly 55s above the single v4 sample. That tightness is the interesting part: it says this
+job is far more deterministic than the 6m 03s to 8m 37s spread recorded above implies, so appealing
+to that spread to wave the gap away is weaker than it looks. The spread came from a period that
+included the CMake-cache experiments, which makes it a poor baseline.
+
+But there is still exactly **one** v4 sample, so the honest answer is that it is not settled.
+Settling it means deliberately re-running v4 on this branch for three samples, which nobody should
+do unless a decision depends on it: 55 seconds on a job that is not the critical path's bottleneck
+buys nothing, and the bump is not optional anyway, since v4 declares a Node runtime that is being
+removed.
 
 The reason this is written up at all: the duration alone would have "confirmed" the prediction. The
 run WAS 65 seconds slower, a comment in `e2e.yml` said to expect exactly that, and stopping there
