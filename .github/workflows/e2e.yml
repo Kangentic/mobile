@@ -111,8 +111,14 @@ jobs:
             echo "Non-documentation changes present: running E2E."
             echo "run-e2e=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Documentation-only change: skipping the E2E build and emulator."
+            # `no-app-change`, not `docs`: this list now covers store imagery,
+            # and a check reading "skipped (docs)" on a screenshots-only PR
+            # would be a lie of exactly the kind naming the reason was meant to
+            # prevent. Same wording PR #29 lands for its tests/ entry, so the
+            # two agree once both are in.
+            echo "Nothing in this diff can change the APK: skipping the E2E build and emulator."
             echo "run-e2e=false" >> "$GITHUB_OUTPUT"
+            echo "skip-reason=no-app-change" >> "$GITHUB_OUTPUT"
           fi
 
   # Builds the binary the flows run against. The e2e profile is release-shaped
