@@ -55,6 +55,53 @@ describe('pickIphoneSimulator', () => {
     expect(chosen?.udid).toBe('D-4');
   });
 
+  it('honours a preferred device name over the default first-iPhone pick', () => {
+    // The store screenshots need a 6.9-inch screen (1320x2868) specifically, and
+    // the default pick is whatever simctl happens to list first.
+    const proMax = { udid: 'PM-1', name: 'iPhone 17 Pro Max', isAvailable: true };
+    const chosen = pickIphoneSimulator(
+      { devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [IPHONE_16, proMax] } },
+      ['iPhone 17 Pro Max'],
+    );
+    expect(chosen?.udid).toBe(proMax.udid);
+  });
+
+  it('prefers the named device even when it only exists on an older runtime', () => {
+    // The screen size matters more than the iOS version here: settling for the
+    // newest runtime's first iPhone would silently change the capture size.
+    const proMax = { udid: 'PM-2', name: 'iPhone 16 Pro Max', isAvailable: true };
+    const chosen = pickIphoneSimulator(
+      {
+        devices: {
+          'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [IPHONE_16],
+          'com.apple.CoreSimulator.SimRuntime.iOS-18-0': [proMax],
+        },
+      },
+      ['iPhone 16 Pro Max'],
+    );
+    expect(chosen?.udid).toBe(proMax.udid);
+  });
+
+  it('takes preferences in order, so the first listed wins', () => {
+    const seventeen = { udid: 'PM-17', name: 'iPhone 17 Pro Max', isAvailable: true };
+    const sixteen = { udid: 'PM-16', name: 'iPhone 16 Pro Max', isAvailable: true };
+    const chosen = pickIphoneSimulator(
+      { devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [sixteen, seventeen] } },
+      ['iPhone 17 Pro Max', 'iPhone 16 Pro Max'],
+    );
+    expect(chosen?.udid).toBe(seventeen.udid);
+  });
+
+  it('falls back to any iPhone when no preferred device is present', () => {
+    // A preference must never turn a working smoke test into a red build just
+    // because a runner image dropped one model.
+    const chosen = pickIphoneSimulator(
+      { devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [IPHONE_16] } },
+      ['iPhone 17 Pro Max'],
+    );
+    expect(chosen?.udid).toBe(IPHONE_16.udid);
+  });
+
   it('ignores non-iOS runtimes', () => {
     // watchOS and tvOS runtimes are in the same list and cannot run this app.
     const chosen = pickIphoneSimulator({
