@@ -23,12 +23,23 @@
 #   startup and shows "Searching for development servers...", so the embedded
 #   bundle is never loaded and the app never renders. Captured the launcher.
 #
+#   Attempt 3 - Debug build, Metro on the runner, launcher pointed at it by
+#   `simctl openurl`. BLOCKED ON A SYSTEM DIALOG. iOS asks
+#   "Open in "Kangentic"?" (Cancel / Open) for a scheme opened from outside the
+#   app, and nothing on the runner taps it. The capture is that dialog, and
+#   Metro's log confirms it: the server came up and was never asked for a
+#   bundle. `simctl` has no tap primitive, so this needs a UI driver.
+#
 # What is left to try, in order:
-#   1. Run Metro on the runner and hand the launcher its URL
-#      (`xcrun simctl openurl <udid> "exp+mobile://expo-development-client/?url=http://localhost:8081"`).
-#      Known-working RN path and the natural next step now that Debug is proven
-#      to give __DEV__. Costs a background Metro process in the job.
-#   2. Widening the mock gate in source so a release-shaped build can show mock
+#   1. Maestro's iOS driver, to tap "Open" and then walk the same waypoints the
+#      Android flow does. The workflow already has an opt-in `maestro` input
+#      that installs idb-companion, and whether it works on this runner is
+#      itself unverified - see the EXPERIMENTAL note on that job step and
+#      upstream mobile-dev-inc/Maestro#2906. If it works, the whole
+#      .maestro/screenshots flow becomes reusable for iOS.
+#   2. Pre-seeding the dev launcher's saved server URL so no deep link, and so
+#      no dialog, is needed at all.
+#   3. Widening the mock gate in source so a release-shaped build can show mock
 #      content. This weakens a deliberate guard and needs an explicit decision,
 #      not a convenience - do not reach for it to save a CI cycle.
 #
