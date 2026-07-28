@@ -366,7 +366,13 @@ describe('build-ios workflow', () => {
     // So an Apple-side failure leaves a verified .ipa that can be retried by
     // re-running the submit job alone. Not hypothetical: the first attempt to
     // submit this app hit an App Store Connect outage.
-    const artifactIndex = iosWorkflowSource.indexOf('actions/upload-artifact@v4');
+    //
+    // Matched WITHOUT the version pin. This assertion used to search for
+    // `actions/upload-artifact@v4` and broke the moment the action was bumped,
+    // reporting "expected -1 to be greater than -1" - which reads like the
+    // upload step vanished rather than like a version changed. The ordering is
+    // what this test is about; the version is somebody else's business.
+    const artifactIndex = iosWorkflowSource.search(/actions\/upload-artifact@v\d+/);
     const uploadIndex = iosWorkflowSource.indexOf('upload-ios-testflight.sh');
     expect(artifactIndex).toBeGreaterThan(-1);
     expect(artifactIndex).toBeLessThan(uploadIndex);

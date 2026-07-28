@@ -86,7 +86,7 @@ jobs:
       run-e2e: ${{ steps.filter.outputs.run-e2e }}
       skip-reason: ${{ steps.filter.outputs.skip-reason }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -185,7 +185,7 @@ jobs:
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
       HAS_GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
 
       - uses: actions/setup-java@v4
@@ -286,7 +286,7 @@ jobs:
           echo "apk-name=kangentic-e2e-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/kangentic-e2e-${GITHUB_SHA::7}.apk"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.name.outputs.apk-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.apk-name }}.apk
@@ -315,9 +315,9 @@ jobs:
           - suite: smoke
             flows: .maestro/smoke.yaml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build-apk.outputs.apk-name }}
           path: apk
@@ -375,7 +375,7 @@ jobs:
 
       - name: Upload Maestro artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: maestro-${{ matrix.suite }}-${{ github.run_attempt }}
           path: |
@@ -425,7 +425,7 @@ jobs:
     # which today matches a single trailing literal argument.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-node-deps
 
@@ -438,7 +438,7 @@ jobs:
       # check that cannot pass" hazard this job is built to avoid, arriving
       # through a side door. Bump by updating the ref below once the new SHA
       # has been smoke-tested against this suite.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Kangentic/relay
           ref: 7a8d3a69b522c81fb72dbac373e607a178d51855
@@ -456,7 +456,7 @@ jobs:
           npm ci
           npm run build
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build-apk.outputs.apk-name }}
           path: apk
@@ -506,7 +506,7 @@ jobs:
 
       - name: Upload Maestro paired artifacts
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: maestro-paired-${{ github.run_attempt }}
           path: |

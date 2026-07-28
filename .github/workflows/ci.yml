@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       - name: Lint (ESLint)
         run: npm run lint
@@ -131,7 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       - name: Type check (tsc)
         run: npm run typecheck
@@ -153,7 +153,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       - name: Unit Tests (Vitest)
         run: npx vitest run tests/unit
@@ -168,7 +168,7 @@ jobs:
         shardIndex: [1, 2]
         shardTotal: [2]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       - name: Component Tests (shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
         run: npx jest tests/components --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
@@ -196,7 +196,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       # Closes the other half of the gate pre-registered in
       # .claude/rules/expo-cng.md. This was deliberately left out once, on the
@@ -278,7 +278,7 @@ jobs:
       # Windows at all. Without this, confirming what the app actually
       # declares needs a full signed build. This job already generated it.
       - name: Upload the generated iOS privacy manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-privacy-manifest
           path: ios/*/PrivacyInfo.xcprivacy
@@ -365,7 +365,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The base commit has to exist locally for the comparison below.
           fetch-depth: 0

@@ -88,11 +88,14 @@ jobs:
     outputs:
       profiles: ${{ steps.matrix.outputs.profiles }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Node pinned from .nvmrc, plus the shared node_modules cache, because the
       # version-code preflight below reads the resolved Expo config. This job
       # decides the matrix, so if it breaks nothing builds at all.
+      #
+      # The composite action is also where the Node 24 bump lives, so this picks
+      # it up without naming a version here.
       - uses: ./.github/actions/setup-node-deps
 
       # The crash-test flag reveals a Sentry.nativeCrash() button and turns on
@@ -204,9 +207,9 @@ jobs:
       CRASH_TEST: ${{ github.event_name != 'push' && inputs.crash_test == true }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -496,7 +499,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the artifact to the run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.name.outputs.artifact-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.${{ steps.plan.outputs.extension }}
@@ -530,15 +533,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
 
       - name: Download the built artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: kangentic-${{ inputs.profile }}-*
           merge-multiple: true
