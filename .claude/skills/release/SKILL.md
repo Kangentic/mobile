@@ -135,8 +135,11 @@ exactly what sent the 2026-07-28 release at an iOS build number Apple had alread
 3. The submit jobs themselves, which re-check to close the window where another machine took the
    number mid-build.
 
-Note that (1) is **not a required status check** unless it has been added to main's branch
-protection. Check before relying on it to block a merge.
+(1) **is** a required status check on `main` as of 2026-07-28, so a spent counter blocks the merge
+rather than merely reporting. Confirm rather than assume when it matters:
+`gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`.
+Note it runs on `pull_request` only, so a counter bumped by a direct push to `main` never passes
+under it.
 
 ## Step 3 - Land the bump through the PR gate
 
