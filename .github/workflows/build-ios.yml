@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node and dependencies
         uses: ./.github/actions/setup-node-deps
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload the Maestro output
         if: always() && inputs.maestro != 'none'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: maestro-ios-${{ github.sha }}
           path: |
@@ -213,7 +213,7 @@ jobs:
       # alive while rendering nothing at all.
       - name: Upload the launch screenshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-simulator-launch-${{ github.sha }}
           path: ${{ runner.temp }}/launch.png
@@ -263,7 +263,7 @@ jobs:
       HAS_SENTRY: ${{ secrets.SENTRY_AUTH_TOKEN != '' && vars.SENTRY_DSN != '' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Fails immediately rather than degrading. The Android job can fall back
       # to a debug-signed APK because that is still installable and still proves
@@ -357,7 +357,7 @@ jobs:
       # only reused when the resolved pod set is byte-identical. pod install on
       # an Expo project is minutes of downloads.
       - name: Cache CocoaPods
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ios/Pods
@@ -525,7 +525,7 @@ jobs:
       # submit job alone. That is not a hypothetical: the first attempt to submit
       # this app hit an App Store Connect outage.
       - name: Upload the .ipa as a run artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.name.outputs.artifact-name }}
           path: ${{ runner.temp }}/${{ steps.name.outputs.artifact-name }}.ipa
@@ -588,10 +588,10 @@ jobs:
       # job gating a step on an env boolean also defines it.
       HAS_ASC_API_KEY: ${{ secrets.ASC_API_KEY_BASE64 != '' && secrets.ASC_KEY_ID != '' && secrets.ASC_ISSUER_ID != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download the verified .ipa from the build job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.device.outputs.artifact-name }}
           path: artifact
