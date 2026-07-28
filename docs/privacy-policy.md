@@ -37,8 +37,8 @@ doing in the app:
 - when the crash is caught by the operating system rather than by the app's own code, a short
   trail of technical state changes leading up to it: the app moving to the foreground or
   background, battery level and charging state, the screen turning on or off, and network
-  conditions such as connection type, signal strength, and approximate data throughput. These
-  describe the app's and device's technical state, never yours
+  conditions such as connection type, whether a VPN is active, signal strength, and approximate
+  data throughput. These describe the app's and device's technical state, never yours
 
 It deliberately does **not** contain your session content. No screenshots, no screen recording,
 no on-screen text, no keystrokes, no console output, no network request details, no transcripts,
@@ -47,11 +47,12 @@ are not stripped out afterwards; they are never collected in the first place.
 
 There is no account to attach an identifier to, and the app sends no account, email, username, or
 user profile with a crash report, and does not use crash data to build any picture of how you use
-the app. A crash caught by the operating system, rather than by the app's own code, does carry one
-identifier: a random ID generated on your device by the crash-reporting software itself, not by
-Kangentic. It resets if you uninstall and reinstall the app, it is not your device's hardware ID
-or an advertising ID, and it is not used to identify you or to link a crash report to any other
-data.
+the app. A crash report does carry one identifier: a random ID generated on your device by the
+crash-reporting software itself, not by Kangentic. It resets if you uninstall and reinstall the
+app, it is not your device's hardware ID or an advertising ID, and it is not used to identify you
+or to link a crash report to any other data. When the crash is caught by the operating system
+rather than by the app's own code, that same random ID is additionally recorded as the report's
+user field, which is why it is declared to both app stores.
 
 Builds you compile yourself from the open-source repository have crash reporting switched off
 entirely and send nothing.

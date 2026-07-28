@@ -27,6 +27,19 @@ jest.mock('@/connection/connectionManager', () => ({
   resyncPushRegistrationCategories: () => mockResyncPushRegistrationCategories(),
 }));
 
+// Only the two crash triggers are stubbed; `crashTestEnabled` stays real so
+// the visibility tests below still exercise the actual env gating. Stubbing
+// matters here beyond assertion convenience: the real `crashNatively` calls
+// `Sentry.nativeCrash()`, and the real `throwTestError` schedules a throw on
+// a timer that would surface as an unhandled error in a later test.
+const mockThrowTestError = jest.fn();
+const mockCrashNatively = jest.fn();
+jest.mock('@/observability/crashReporting', () => ({
+  ...jest.requireActual('@/observability/crashReporting'),
+  throwTestError: () => mockThrowTestError(),
+  crashNatively: () => mockCrashNatively(),
+}));
+
 function renderSettings(): void {
   render(
     <ThemeProvider>
@@ -61,6 +74,8 @@ describe('SettingsScreen', () => {
     });
     useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true, relayUrl: 'ws://127.0.0.1:8080' });
     setCrashTestFlag(undefined);
+    mockThrowTestError.mockClear();
+    mockCrashNatively.mockClear();
   });
 
   afterEach(() => {
@@ -150,5 +165,22 @@ describe('SettingsScreen', () => {
     expect(screen.getByTestId('settings-section-crash-test')).toBeTruthy();
     expect(screen.getByTestId('settings-crash-test-js')).toBeTruthy();
     expect(screen.getByTestId('settings-crash-test-native')).toBeTruthy();
+  });
+
+  // Visibility alone would still pass with the two handlers swapped, which is
+  // the one mistake that makes the whole affordance lie: the row labelled
+  // "Crash natively" is the only way to exercise the path a JS `beforeSend`
+  // cannot filter, so wiring it to the JS throw would silently verify nothing.
+  it('wires each crash-test row to its own trigger', () => {
+    setCrashTestFlag('1');
+    renderSettings();
+
+    fireEvent.press(screen.getByTestId('settings-crash-test-js'));
+    expect(mockThrowTestError).toHaveBeenCalledTimes(1);
+    expect(mockCrashNatively).not.toHaveBeenCalled();
+
+    fireEvent.press(screen.getByTestId('settings-crash-test-native'));
+    expect(mockCrashNatively).toHaveBeenCalledTimes(1);
+    expect(mockThrowTestError).toHaveBeenCalledTimes(1);
   });
 });

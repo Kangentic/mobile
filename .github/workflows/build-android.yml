@@ -94,6 +94,22 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      # The crash-test flag reveals a Sentry.nativeCrash() button and turns on
+      # verbose native SDK logging, so that artifact must never reach a store
+      # track. The CRASH_TEST expression below only excludes a `push` (tag)
+      # build, and a tag is NOT how this project releases: CLAUDE.md documents
+      # the release path as a DISPATCH with `-f submit_track=internal`, which
+      # that expression does not cover at all. So one dispatch carrying both
+      # `crash_test: true` and a real `submit_track` would build a crash-test
+      # APK and upload it to Play. Refused here, in the job everything else
+      # needs, so it costs one cheap job rather than a full build.
+      - name: Refuse a crash-test build that is also a store submission
+        if: inputs.crash_test == true && inputs.submit_track != 'none'
+        run: |
+          set -euo pipefail
+          echo "::error::crash_test and submit_track are mutually exclusive. A crash-test build reveals the Settings crash rows and enables Sentry debug logging, so it must never be submitted to a Play track. Dispatch them as two separate runs."
+          exit 1
+
       - name: Resolve the profile matrix
         id: matrix
         env:
@@ -454,7 +470,12 @@ jobs:
   submit-play:
     name: Submit (Google Play)
     needs: build-android
-    if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.profile != 'all'
+    # `inputs.crash_test != true` is belt-and-braces: the plan job already
+    # refuses that combination outright, so this condition should be
+    # unreachable. It stays because this is the last gate before a real Play
+    # upload, and a skipped submit is a recoverable mistake where a submitted
+    # crash-test build is not.
+    if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.profile != 'all' && inputs.crash_test != true
     runs-on: ubuntu-latest
     environment: google-play
     steps:
