@@ -249,7 +249,60 @@ jobs:
           # Read, not just uploaded: the capture waits for Metro to actually
           # serve a bundle before screenshotting.
           METRO_LOG: ${{ runner.temp }}/metro.log
+          # The Maestro step below drives this same simulator, and the
+          # status-bar override would be lost with a shutdown.
+          KEEP_SIMULATOR_BOOTED: '1'
         run: bash .github/scripts/capture-ios-screenshots.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/ios-screenshots"
+
+      # The App Store wants a MINIMUM OF THREE screenshots per shelf, and the
+      # step above deliberately produces exactly one: it needs no UI driver, so
+      # it always works and is the floor.
+      #
+      # The rest need navigation, which needs a driver. Maestro's iOS driver
+      # depends on Facebook's idb_companion and has an open upstream break on
+      # recent macOS/Xcode pairings (mobile-dev-inc/Maestro#2906), so this is
+      # attempted rather than relied on - `continue-on-error` keeps a driver
+      # failure from throwing away the frame we already have.
+      #
+      # It runs the SAME flow as Android. Every selector in it is a testID,
+      # which maps to accessibilityIdentifier on iOS, so if the driver works the
+      # whole six-shot set comes for free rather than needing an iOS-specific
+      # flow to maintain alongside it.
+      - name: Install Maestro for the screenshot flow
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          brew tap facebook/fb
+          brew install idb-companion
+          curl -Ls https://get.maestro.mobile.dev > "$RUNNER_TEMP/install-maestro.sh"
+          bash "$RUNNER_TEMP/install-maestro.sh"
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Capture the remaining screenshots with Maestro
+        id: ios-maestro
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          maestro --device "$(xcrun simctl list devices booted -j | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);for(const runtime of Object.values(j.devices))for(const device of runtime)if(device.state==="Booted")return process.stdout.write(device.udid)})')" \
+            test \
+            --debug-output "$RUNNER_TEMP/maestro-ios" \
+            -e OUTPUT_DIR=shots \
+            .maestro/screenshots/store-capture.yaml
+          # Maestro re-roots takeScreenshot paths under its own run directory,
+          # exactly as it does on Android, so collect them into the shelf folder.
+          find "$RUNNER_TEMP/maestro-ios" -name '*.png' -path '*shots*' -exec cp {} "$RUNNER_TEMP/ios-screenshots/" \;
+          ls -la "$RUNNER_TEMP/ios-screenshots"
+
+      - name: Upload the Maestro iOS output
+        if: ${{ inputs.screenshots == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshot-maestro-${{ github.sha }}
+          path: ${{ runner.temp }}/maestro-ios
+          retention-days: 14
+          if-no-files-found: warn
 
       # Metro's log is the first thing worth reading when the capture shows a
       # loading screen or a red box: it names the failing module directly, which

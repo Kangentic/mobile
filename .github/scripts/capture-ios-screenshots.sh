@@ -86,6 +86,20 @@ xcrun simctl bootstatus "$device_id" -b
 echo "Installing $(basename "$app_path")"
 xcrun simctl install "$device_id" "$app_path"
 
+# Apple's own marketing status bar. 9:41 is the time Apple has used in iPhone
+# imagery since the original keynote, and a full battery with no carrier text is
+# what every App Store listing shows - a real clock and a half-empty battery is
+# the iOS equivalent of the emulator clock that spoiled the Android captures.
+# This is simctl's own override, so it needs no UI interaction.
+xcrun simctl status_bar "$device_id" override \
+  --time "9:41" \
+  --dataNetwork wifi \
+  --wifiMode active \
+  --wifiBars 3 \
+  --cellularMode notSupported \
+  --batteryState charged \
+  --batteryLevel 100
+
 # Hand the dev client its server as a LAUNCH ARGUMENT, not a deep link.
 #
 # expo-dev-launcher checks `--initialUrl` out of its own process arguments
@@ -200,4 +214,13 @@ if [ "$width" != "$REQUIRED_WIDTH" ] || [ "$height" != "$REQUIRED_HEIGHT" ]; the
 fi
 
 echo "Wrote $capture_path at the required 6.9-inch size."
-xcrun simctl shutdown "$device_id" || true
+
+# Left booted for the Maestro step, which drives this same simulator to collect
+# the remaining shots. Booting one takes over a minute, so shutting it down here
+# only to boot another would be pure waste - and the status-bar override would
+# be lost with it.
+if [ -n "${KEEP_SIMULATOR_BOOTED:-}" ]; then
+  echo "Leaving the simulator booted for the screenshot flow."
+else
+  xcrun simctl shutdown "$device_id" || true
+fi
