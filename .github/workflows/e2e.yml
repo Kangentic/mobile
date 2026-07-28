@@ -334,9 +334,18 @@ jobs:
       # support pending a reimplementation inside that same proprietary
       # component. Revisit only with the licence question answered first.
       #
-      # Expect the FIRST build after this bump to be a full cache miss and run
-      # long: the action version is part of the cache key. That is the bump, not
-      # a regression - compare against the second run, not the first.
+      # The bump was expected to cost a full cache miss on the first build, since
+      # the action version feeds the cache key. MEASURED, and it did not:
+      #
+      #   v4, run 30397988677   Gradle 6m 05s   1055 tasks: 640 executed, 415 from cache
+      #   v5, run 30401393044   Gradle 7m 12s   1055 tasks: 640 executed, 415 from cache
+      #
+      # Byte-identical task reuse. The Gradle User Home entry resolved through a
+      # RESTORE KEY rather than an exact one, and every sub-cache (dependencies,
+      # transforms, kotlin-dsl, wrapper) hit outright. The 67 seconds sit inside
+      # this job's own documented 6m 03s to 8m 37s spread, so there is no
+      # evidence the bump cost anything. Recorded because the prediction was
+      # wrong: do not "confirm" it by reading a slow first run as the cache.
       - uses: gradle/actions/setup-gradle@v5
 
       - name: Build the release APK
