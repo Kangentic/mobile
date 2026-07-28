@@ -31,10 +31,12 @@ concurrency:
 #
 # Concurrency budget (GitHub Free caps concurrent jobs around 20): the shard
 # phase is lint 1 + typecheck 1 + native-config 1 + unit 2 + components 4 = 9,
-# plus the CLA workflow and e2e.yml's build job = 11. The thin gates run after
-# their shards via `needs`, so they do not consume a shard-phase slot. Queueing
-# was observed at 12 concurrent jobs, so the practical cap is lower than the
-# documented one and the headroom here is deliberate.
+# plus release-counters 1 on pull_request only = 10, plus the CLA workflow and
+# e2e.yml's build job = 12. The thin gates run after their shards via `needs`,
+# so they do not consume a shard-phase slot. Queueing was observed at 12
+# concurrent jobs, so the practical cap is lower than the documented one. The
+# headroom here is deliberate and is now thinner than it was; adding another
+# always-on job should come with a measurement rather than a guess.
 #
 # Shard counts are sized against MEASURED timings, not file counts. With the
 # node_modules cache warm, a run looked like: unit shards 14s/15s/21s, component
@@ -255,3 +257,119 @@ jobs:
             exit 1
           fi
           echo "Native project generated cleanly and stayed untracked."
+
+  # Catches a release counter that is already spent on a store, at PR time
+  # instead of at release time. This is precisely the check that was missing on
+  # 2026-07-28: app.config.ts declared ios.buildNumber 3, Apple had already
+  # taken 3, and nothing noticed until the release dispatch failed.
+  #
+  # It runs ONLY when the PR actually changes a counter's value, and that
+  # condition is load bearing. Between releases the declared counter is the one
+  # just shipped, so asserting "the declared counter is free" unconditionally
+  # would leave main permanently red until somebody bumped it. A release PR is
+  # the one moment the assertion is both meaningful and free.
+  #
+  # Change detection compares the RESOLVED VALUE at the base against the value
+  # at HEAD, rather than looking for the field in the diff text. Those are not
+  # the same test: editing a comment next to `versionCode:` shows up in the
+  # diff without changing anything that ships, and this job must not fail for
+  # that. The commit that recorded which counters v0.2.0 spent did exactly that.
+  #
+  # NOT a required status check until it is added to main's branch protection.
+  # See the job-name note at the top of this file.
+  release-counters:
+    name: Release counters (store preflight)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base commit has to exist locally for the comparison below.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-node-deps
+
+      - name: Detect which counters this PR changes
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Anchored at line start so the many comments mentioning versionCode
+          # and buildNumber by name cannot match: comments begin with //.
+          extract_version_code() { grep -oE "^[[:space:]]*versionCode:[[:space:]]*[0-9]+" | grep -oE "[0-9]+" | head -n 1; }
+          extract_build_number() { grep -oE "^[[:space:]]*buildNumber:[[:space:]]*'[0-9]+'" | grep -oE "[0-9]+" | head -n 1; }
+
+          git show "$BASE_SHA:app.config.ts" > "$RUNNER_TEMP/base-app.config.ts"
+          base_version_code="$(extract_version_code < "$RUNNER_TEMP/base-app.config.ts" || true)"
+          base_build_number="$(extract_build_number < "$RUNNER_TEMP/base-app.config.ts" || true)"
+          head_version_code="$(extract_version_code < app.config.ts || true)"
+          head_build_number="$(extract_build_number < app.config.ts || true)"
+
+          echo "versionCode: base=${base_version_code:-none} head=${head_version_code:-none}"
+          echo "buildNumber: base=${base_build_number:-none} head=${head_build_number:-none}"
+
+          android=false
+          ios=false
+          if [ "$base_version_code" != "$head_version_code" ]; then android=true; fi
+          if [ "$base_build_number" != "$head_build_number" ]; then ios=true; fi
+          echo "android=$android" >> "$GITHUB_OUTPUT"
+          echo "ios=$ios" >> "$GITHUB_OUTPUT"
+
+      - name: Read the declared counters
+        id: declared
+        if: steps.changed.outputs.android == 'true' || steps.changed.outputs.ios == 'true'
+        run: |
+          set -euo pipefail
+          # The regex above is only a change DETECTOR. The value actually
+          # checked against the store comes from the resolved Expo config, the
+          # same source the build and submit jobs read.
+          npx expo config --json > "$RUNNER_TEMP/expo-config.json"
+          read_config_field() {
+            node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String($1))" "$RUNNER_TEMP/expo-config.json"
+          }
+          echo "version-name=$(read_config_field 'c.version')" >> "$GITHUB_OUTPUT"
+          echo "version-code=$(read_config_field 'c.android.versionCode')" >> "$GITHUB_OUTPUT"
+          echo "build-number=$(read_config_field 'c.ios.buildNumber')" >> "$GITHUB_OUTPUT"
+
+      - name: Check the Play version code is free
+        if: steps.changed.outputs.android == 'true'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          VERSION_CODE: ${{ steps.declared.outputs.version-code }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "::warning::No PLAY_SERVICE_ACCOUNT_JSON, which is expected on a fork PR, so versionCode $VERSION_CODE was NOT checked against Play. The submit job still checks it."
+            exit 0
+          fi
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$VERSION_CODE"
+
+      - name: Check the App Store build number is free
+        if: steps.changed.outputs.ios == 'true'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUILD_NUMBER: ${{ steps.declared.outputs.build-number }}
+          VERSION_NAME: ${{ steps.declared.outputs.version-name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ASC_API_KEY_BASE64:-}" ]; then
+            echo "::warning::No ASC_API_KEY_BASE64, which is expected on a fork PR, so buildNumber $BUILD_NUMBER was NOT checked against App Store Connect. The device build still checks it."
+            exit 0
+          fi
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/checkAppStoreBuild.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id com.kangentic.mobile \
+            --version "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER"
+
+      - name: Note when no counter changed
+        if: steps.changed.outputs.android != 'true' && steps.changed.outputs.ios != 'true'
+        run: echo "No release counter changed in app.config.ts, so there is nothing to preflight."
