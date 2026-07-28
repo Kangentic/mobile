@@ -196,9 +196,14 @@ env:
       id: "board-screen"
     timeout: 30000
 # Page to Executing before capturing. The board opens on To Do, which holds a
-# single card and leaves three quarters of the frame empty; Executing is where
+# single card and leaves three quarters of the frame empty. Executing is where
 # the live sessions are, with agent status, model badges, context bars, labels
 # and PR pills - the column that actually shows what the product does.
+#
+# `lane-executing` is the MOCK's column id (src/connection/mockDesktop.ts), not
+# a product constant: a real desktop's columns are user-defined and carry
+# generated ids. This flow only ever runs against the mock, so pinning it is
+# safe, but do not copy the selector into a paired flow.
 - tapOn:
     id: "board-column-chip-lane-executing"
 - waitForAnimationToEnd:
