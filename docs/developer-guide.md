@@ -501,20 +501,30 @@ eventually remove. `actions/setup-java@v5`, `android-actions/setup-android@v4` a
   `Build (APK)` breaks shortly after, pin `cmdline-tools-version` rather than reverting to a
   runtime that is going away. It built green first time on run 30401393044.
 
-**The `setup-gradle` bump was predicted to cost a cold cache, and did not.** The action version
-feeds the cache key, so the first build after the bump was expected to miss outright. Measured
-instead:
+**The `setup-gradle` bump was predicted to cost a cold cache. It did not, and the way that was
+established is the point.** The action version feeds the cache key, so the first build after the
+bump was expected to miss outright:
 
-| | Gradle | Task reuse |
-|---|---|---|
-| v4, run 30397988677 | 6m 05s | `1055 actionable tasks: 640 executed, 415 from cache` |
-| v5, run 30401393044 | 7m 12s | `1055 actionable tasks: 640 executed, 415 from cache` |
+| | Gradle action | `Build (APK)` | Task reuse |
+|---|---|---|---|
+| run 30397988677 | v4 | 7m 23s | `1055 actionable tasks: 640 executed, 415 from cache` |
+| run 30401393044 | v5 | 8m 28s | `1055 actionable tasks: 640 executed, 415 from cache` |
+| run 30403140412 | v5 | 8m 14s | - |
 
-Byte-identical reuse. The Gradle User Home entry resolved through a **restore key** rather than an
-exact one, and every sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright. The
-67-second difference sits inside this job's own documented 6m 03s to 8m 37s spread, so there is no
-evidence the bump cost anything. Recorded because the prediction was wrong in a way that would have
-been easy to "confirm" by reading one slow run as proof.
+**Cache invalidation is ruled out**, and by the task line, not the duration. Reuse is byte-identical:
+the Gradle User Home entry resolved through a **restore key** rather than an exact one, and every
+sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright. Whatever the version bump
+did, it did not reach a task.
+
+**Whether v5 is marginally slower for some other reason is undetermined**, and worth stating rather
+than rounding off. Both v5 runs landed above the single v4 sample, but all three sit inside this
+job's recorded 6m 03s to 8m 37s spread, which is wider than the difference being argued about. Two
+samples against one cannot separate those.
+
+The reason this is written up at all: the duration alone would have "confirmed" the prediction. The
+run WAS 65 seconds slower, a comment in `e2e.yml` said to expect exactly that, and stopping there
+would have written "measured" over a guess. The number that settles it is one nobody would have
+looked at once the stopwatch already agreed.
 
 **One required check still runs on Node 20, and there is no upgrade for it.** `cla` uses
 `contributor-assistant/github-action@v2.6.1`, which declares `node20`, and v2.6.1 is the latest
