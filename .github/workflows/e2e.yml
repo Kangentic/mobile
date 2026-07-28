@@ -247,55 +247,33 @@ jobs:
       - name: Generate the native Android project
         run: npx expo prebuild --platform android --no-install
 
-      # EXPERIMENT (2026-07-28), keep or delete on the evidence below.
+      # DO NOT CACHE android/app/.cxx HERE. It was tried on 2026-07-28 and
+      # measured, and it does not work. Recorded so nobody spends the afternoon
+      # again.
       #
-      # `:app:buildCMakeRelWithDebInfo[x86_64]` is ~1m53 of a 6m28 Gradle build
-      # and is the only large task Gradle's own build cache cannot help with:
-      # external native build tasks are not cacheable, so while dex, javac and
-      # mergeExtDex all report FROM-CACHE (415 of 1055 tasks on run 30382297806),
-      # CMake is re-executed on every single PR.
+      # The motivation was sound: `:app:buildCMakeRelWithDebInfo[x86_64]` is ~2m
+      # of a ~6m30 Gradle build and is the only large task Gradle's own build
+      # cache cannot help with, because external native build tasks are not
+      # cacheable. Everything else expensive already reports FROM-CACHE (415 of
+      # 1055 tasks), so CMake is the whole remaining target.
       #
-      # Keyed on NATIVE inputs only, and that is the correctness argument rather
-      # than a guess: these .so files are built from node_modules plus native
-      # config. Nothing under src/ can change them - app source only reaches the
-      # JS bundle - so if the lockfile, the app config, the plugins, the profile
-      # env and the ABI set are all unchanged, the native output is too.
+      # An actions/cache over android/app/.cxx, keyed on native inputs only and
+      # restored AFTER prebuild (prebuild CLEARS android/, so restoring before it
+      # is useless), produced a genuine hit on a 16 MB entry:
       #
-      # RESTORED AFTER PREBUILD, deliberately. `expo prebuild` CLEARS android/
-      # when it already exists ("- Clearing android"), so a cache restored before
-      # it would be deleted before Gradle ever saw it.
+      #   cache MISS, run 30387646820   CMake 2m 07s
+      #   cache HIT,  run 30389177999   CMake 1m 48s
       #
-      # THE OPEN QUESTION: whether ninja actually reuses the restored objects.
-      # Prebuild regenerates android/ with fresh mtimes and ninja is mtime-driven,
-      # so a perfect cache hit may still rebuild everything.
+      # ~19 seconds, on a job whose own run-to-run spread is 6m 03s to 8m 37s. So
+      # the saving is inside the noise, and the reason is mtimes: `expo prebuild`
+      # regenerates android/ with fresh timestamps, ninja is mtime-driven, and it
+      # therefore rebuilt nearly everything despite having every object file.
       #
-      # BASELINE, cache MISS (run 30387646820): buildCMakeRelWithDebInfo[x86_64]
-      # took 2m 07s, and the step saved a 16 MB entry. Compare the next run,
-      # which hits: the key covers native inputs only, so editing this file does
-      # not invalidate it.
-      #
-      # If CMake stays near 2m with a HIT, this buys nothing and should be
-      # DELETED rather than tuned - the content-addressed fix is ccache, which
-      # needs plumbing through CNG and is more machinery than ~2 minutes is worth.
-      - name: Cache the native CMake build
-        id: cxx-cache
-        uses: actions/cache@v6
-        with:
-          path: android/app/.cxx
-          key: cxx-${{ runner.os }}-${{ steps.abis.outputs.abis }}-${{ hashFiles('package-lock.json', 'app.config.ts', 'eas.json', 'plugins/**', 'scripts/androidAbis.mjs', 'scripts/easProfile.mjs') }}
-
-      - name: Report the native cache outcome
-        # So the experiment above is readable from the run summary without
-        # digging through Gradle output for task timings.
-        env:
-          CACHE_HIT: ${{ steps.cxx-cache.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          if [ "${CACHE_HIT:-}" = "true" ]; then
-            echo "::notice::Native CMake cache HIT. If buildCMakeRelWithDebInfo is still ~1m53 below, ninja ignored it and this cache should be deleted."
-          else
-            echo "::notice::Native CMake cache MISS (expected on the first run with a new key, or after a dependency or native-config change)."
-          fi
+      # The fix that WOULD work is content-addressed rather than timestamp-driven
+      # (ccache, via CMAKE_C_COMPILER_LAUNCHER). Under CNG that means a config
+      # plugin plus a Gradle property, which is real machinery for ~2 minutes on
+      # a job that is not on the critical path for a merge. Not obviously wrong
+      # to revisit, but go in knowing the mtime trap is what has to be solved.
 
       - uses: gradle/actions/setup-gradle@v4
 
