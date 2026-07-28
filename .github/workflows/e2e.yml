@@ -570,7 +570,8 @@ jobs:
     # - of which a single `Input text ${PAIRING_URI}` command is 40.7s
     # (20:58:53.19 to 20:59:33.90). Maestro types the URI a character at a time
     # over the driver, and the URI is a public key plus a token plus a relay
-    # address.
+    # address. Reproduced at 40.5s on run 30401393044, so it is a property of
+    # the command and not the bursty launchApp stall described below.
     #
     # NOT FIXED, deliberately. Every route to it is worse than 40 seconds on a
     # job that is advisory and off the critical path for a merge: the clipboard
