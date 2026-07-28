@@ -338,26 +338,20 @@ jobs:
       # the action version feeds the cache key. It did not, and the DURATION is
       # not what says so:
       #
-      #   v4, run 30397988677   Build (APK) 7m 23s   640 executed, 415 from cache
-      #   v5, run 30401393044   Build (APK) 8m 28s   640 executed, 415 from cache
-      #   v5, run 30403140412   Build (APK) 8m 14s
-      #   v5, run 30404363470   Build (APK) 8m 19s
+      #   v4   Build (APK) 7m 23s                            640 executed, 415 from cache
+      #   v5   Build (APK) 7m 52s, 8m 14s, 8m 19s, 8m 28s    640 executed, 415 from cache
       #
       # Byte-identical task reuse rules out invalidation: the Gradle User Home
       # entry resolved through a RESTORE KEY rather than an exact one, and every
       # sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright.
+      # That is the settled part, and the DURATIONS are not what settled it.
       #
-      # Whether v5 is marginally slower for some OTHER reason is OPEN. The three
-      # v5 samples sit within 14s of each other and ~55s above the one v4
-      # sample, and that tightness matters: this job is more deterministic than
-      # the 6m 03s to 8m 37s spread recorded in the developer guide suggests, so
-      # citing that spread to dismiss the gap is weaker than it looks. One v4
-      # sample is still one. Not worth settling unless a decision needs it - the
-      # bump is not optional, since v4 declares a Node runtime being removed.
-      #
-      # Recorded because the stopwatch would have "confirmed" the wrong answer:
-      # the run WAS slower and the comment here said to expect that. Read the
-      # task line, not the duration.
+      # Four v5 samples spanning 36s against one v4 sample is not a comparison.
+      # Do not build one out of it: this note was rewritten three times as
+      # samples arrived and was confidently wrong each time, most recently on an
+      # argument about three runs "clustering" that a fourth run dissolved. The
+      # bump is not optional anyway, since v4 declares a Node runtime being
+      # removed. Full write-up in docs/developer-guide.md.
       - uses: gradle/actions/setup-gradle@v5
 
       - name: Build the release APK
