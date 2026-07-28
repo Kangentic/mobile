@@ -71,8 +71,8 @@ anti-flake patterns. This skill does not re-implement that knowledge inline.
 
 | Entry | What it is | How to run it |
 |---|---|---|
-| `.maestro/smoke.yaml` | 1 flow, fresh unpaired install, no relay and no pairing. What the required `Tests (Maestro)` check gates on | `maestro --device <serial> test .maestro/smoke.yaml` |
-| `.maestro/paired/` | 11 flows against a relay plus `scripts/stubDesktopPeer.mjs`, pairing completed first. Reports as the advisory `Maestro (paired)` check | `/e2e` sequences the setup. Direct: `maestro --device <serial> test .maestro/paired` |
+| `.maestro/smoke.yaml` | 1 flow, fresh unpaired install, no relay and no pairing. What the required `E2E tests (Maestro)` check gates on | `maestro --device <serial> test .maestro/smoke.yaml` |
+| `.maestro/paired/` | 11 flows against a relay plus `scripts/stubDesktopPeer.mjs`, pairing completed first. Reports as the advisory `E2E Test (paired)` check | `/e2e` sequences the setup. Direct: `maestro --device <serial> test .maestro/paired` |
 | `.maestro/setup/` | NOT a suite. A rig fixture needing a `PAIRING_URI` handed to it | Never directly. `run-maestro-paired.sh` invokes it by name |
 
 A bare `.maestro/` root sweeps in the `setup/` fixture, which then fails for lacking `PAIRING_URI`

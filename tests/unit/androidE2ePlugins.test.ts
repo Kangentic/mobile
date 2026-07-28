@@ -2,7 +2,7 @@
  * The INERT direction of the e2e-only Android carve-outs: with the flag unset,
  * the plugin must hand back the config untouched.
  *
- * The enabled direction is checked in `ci.yml`'s `Native config (expo prebuild)`
+ * The enabled direction is checked in `ci.yml`'s `Native config (CNG)`
  * job, by prebuilding with EXPO_PUBLIC_KANGENTIC_E2E=1 and grepping the real
  * manifest, because only a prebuild proves the attribute survives Expo's
  * manifest merge. Splitting it this way keeps the expensive half to one prebuild

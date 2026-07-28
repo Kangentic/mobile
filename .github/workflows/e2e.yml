@@ -1,4 +1,4 @@
-name: E2E
+name: Emulator
 
 # Maestro E2E against a real APK on an Android emulator, as a PR gate. The point
 # is that main stays stable because E2E is a merge requirement, which then lets
@@ -9,7 +9,7 @@ name: E2E
 #
 # .maestro/smoke.yaml runs against a fresh, unpaired install: no relay, no
 # pairing, nothing external. It is the `maestro` job below, and it is what the
-# required `Tests (Maestro)` check actually gates on.
+# required `E2E tests (Maestro)` check actually gates on.
 #
 # The 11 flows under .maestro/paired/ run in the `maestro-paired` job: it
 # checks out the public Kangentic/relay repo, runs it locally on the runner,
@@ -71,7 +71,7 @@ jobs:
   # Decides whether the expensive jobs need to run at all. A docs-only PR should
   # not build an APK and boot an emulator for 30 minutes.
   #
-  # This is deliberately NOT `paths-ignore` on the trigger. `Tests (Maestro)`
+  # This is deliberately NOT `paths-ignore` on the trigger. `E2E tests (Maestro)`
   # is a required status check, and a workflow skipped by paths-ignore never
   # reports its checks at all, so protection would wait forever and the PR could
   # never merge. Instead the workflow always runs, the costly jobs are
@@ -79,7 +79,7 @@ jobs:
   #
   # Fail-safe direction is to RUN: anything we cannot classify builds.
   changes:
-    name: Detect relevant changes
+    name: Changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -159,7 +159,7 @@ jobs:
   # made a reusable workflow so a change here cannot break the release path;
   # consolidating is a follow-up once both are proven in anger.
   build-apk:
-    name: Build e2e APK
+    name: Build (APK)
     needs: changes
     if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
@@ -205,7 +205,7 @@ jobs:
       # KNOWN LIMITATION: a FORK PR cannot pass this check.
       #
       # Forks get no secrets, so this step fires and the required
-      # `Tests (Maestro)` check goes red with nothing the contributor can do
+      # `E2E tests (Maestro)` check goes red with nothing the contributor can do
       # about it. A maintainer has to push the branch in-repo and let CI run
       # there. That is a real gap for a public repo with a CLA bot, and it is
       # deliberately left open rather than papered over, because the obvious
@@ -284,7 +284,7 @@ jobs:
           if-no-files-found: error
 
   maestro:
-    name: Maestro (${{ matrix.suite }})
+    name: E2E Test (${{ matrix.suite }})
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
@@ -383,7 +383,7 @@ jobs:
   # deliberately NOT read by the `e2e` gate job below, and it carries no
   # "Required" badge in the checks list, which is what says so.
   maestro-paired:
-    name: Maestro (paired)
+    name: E2E Test (paired)
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
@@ -514,16 +514,25 @@ jobs:
   # It must run on every event, including when the suites were skipped for a
   # docs-only change, or protection would never see the check report.
   #
-  # `Tests (Maestro)`, not `E2E tests (Maestro)`: GitHub renders a check as
-  # "<workflow> / <job>", so the latter stuttered as "E2E / E2E tests (Maestro)".
+  # NAMED to match the kangentic desktop repo's gate convention (lowercase
+  # plural plus the tool: `E2E tests (Electron)` there, `E2E tests (Maestro)`
+  # here), so the two repos' check lists read as one system. The suite jobs
+  # above are its Title Case singular counterparts, `E2E Test (smoke)` and
+  # `E2E Test (paired)`, exactly as desktop pairs `E2E Test (1/5)` with
+  # `E2E tests (Electron)`.
   #
-  # This name IS a required-check context, so it does not change casually.
+  # This is also why the WORKFLOW is called `Emulator` rather than `E2E`.
+  # GitHub renders a check as "<workflow> / <job>", so keeping both would have
+  # stuttered as "E2E / E2E tests (Maestro)". The workflow name is not a
+  # protection context, so it was the free half of the pair to change.
+  #
+  # The job name IS a required-check context, so it does not change casually.
   # Renaming it means updating main's branch protection in the same change, or
   # every PR blocks on a context that will never report. Honesty about current
   # coverage goes in the run summary below, where it is visible at the point of
   # use, rather than in the name.
   e2e:
-    name: Tests (Maestro)
+    name: E2E tests (Maestro)
     needs: [changes, maestro]
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -545,7 +554,7 @@ jobs:
           # `!= "true"`, which an empty string satisfies - so without this guard a
           # `changes` job that failed on a checkout flake, a git error, or its own
           # timeout made this REQUIRED check exit 0, green, having run nothing and
-          # having built nothing. `Detect relevant changes` is not itself a required
+          # having built nothing. `Changes` is not itself a required
           # context, so nothing else stopped that PR merging.
           #
           # `!= success` rather than `== failure`, matching ci.yml's thin gates: a
@@ -577,7 +586,7 @@ jobs:
             echo "| Suite | Flows | Gates the merge? |"
             echo "|---|---|---|"
             echo "| smoke | 1 | yes - this check |"
-            echo "| paired | 11 | no - see the separate \"Maestro (paired)\" check |"
+            echo "| paired | 11 | no - see the separate \"E2E Test (paired)\" check |"
             echo ""
             echo "The paired suite runs in its own job and reports its own check, but is not"
             echo "read by this gate: it is advisory until it has been green across several PRs,"

@@ -1,16 +1,16 @@
 /**
- * Extracts the `Tests (Maestro)` gate script out of `.github/workflows/e2e.yml`
+ * Extracts the `E2E tests (Maestro)` gate script out of `.github/workflows/e2e.yml`
  * and EXECUTES it against the job states the workflow can hand it, asserting the
  * exit code rather than grepping the source. Same approach, and same reasoning,
  * as `iosTestflightUpload.test.ts`.
  *
- * The regression this file exists for: `Tests (Maestro)` is a REQUIRED status
+ * The regression this file exists for: `E2E tests (Maestro)` is a REQUIRED status
  * check on `main`, and it used to FAIL OPEN. `run-e2e` is a job output, so it is
  * the empty string whenever the `changes` job did not finish successfully, and
  * the skip branch tests `!= "true"`, which an empty string satisfies. So a
  * `changes` job that died on a checkout flake or its own timeout made the
  * required check exit 0, green, having built nothing and run nothing. Nothing
- * else stopped that PR merging, because `Detect relevant changes` is not itself
+ * else stopped that PR merging, because `Changes` is not itself
  * a required context.
  *
  * A source grep would not have caught it. Every string involved was present, in
@@ -151,7 +151,7 @@ const ALL_GREEN: GateInputs = {
 // Skipped rather than failed when no usable bash exists, so a Windows developer
 // without Git Bash sees the reason instead of a mystery. The ubuntu runner that
 // hosts the unit tier always runs it, so this is never skipped in CI.
-describe.skipIf(!bashExecutable)('the Tests (Maestro) required gate', () => {
+describe.skipIf(!bashExecutable)('the E2E tests (Maestro) required gate', () => {
   it('passes a full run where every suite is green', () => {
     const result = runGate(ALL_GREEN);
     expect(result.exitCode).toBe(0);
