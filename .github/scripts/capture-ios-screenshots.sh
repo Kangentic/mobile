@@ -132,6 +132,27 @@ DEV_MENU_ARGS=(
   -EXDevMenuShowFloatingActionButton NO
 )
 
+# PERSIST the same settings, because the argument domain only lasts one launch.
+#
+# Maestro's `launchApp` starts the app itself and carries none of our launch
+# arguments, so a flow-driven relaunch landed back on the dev-client launcher
+# and the first assertion failed on a screen that was not the app. Writing the
+# defaults makes them survive any relaunch, whoever performs it.
+#
+# EXDevLauncherTryToLaunchLastBundle is the one that matters most: it tells the
+# launcher to reopen the last bundle it loaded instead of showing its server
+# list. Our scripted launch below records localhost:8081 as that bundle, so
+# every subsequent launch goes straight into the app.
+for pref_write in \
+  "EXDevLauncherTryToLaunchLastBundle YES" \
+  "EXDevMenuShowsAtLaunch NO" \
+  "EXDevMenuIsOnboardingFinished YES" \
+  "EXDevMenuShowFloatingActionButton NO"; do
+  set -- $pref_write
+  xcrun simctl spawn "$device_id" defaults write "$bundle_id" "$1" -bool "$2" || true
+done
+echo "Persisted the dev-launcher and dev-menu preferences for relaunches."
+
 echo "Launching $bundle_id"
 if [ -n "${METRO_URL:-}" ]; then
   echo "  pointing the dev client at $METRO_URL"
