@@ -112,24 +112,30 @@ jobs:
           WORKSPACE: ${{ steps.xcode.outputs.workspace }}
           SCHEME: ${{ steps.xcode.outputs.scheme }}
           # Store-screenshot mode only. The mock desktop is gated on
-          # `__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'`, and this job builds
-          # Release, so __DEV__ is false and the app shows an unpaired
-          # "Connecting to your desktop..." screen with nothing to capture.
+          # `__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'`, so a Release build
+          # shows an unpaired empty state with nothing worth capturing.
           #
-          # FORCE_BUNDLING + DEV=true ask Expo's bundling phase for a DEV
-          # javascript bundle embedded in the app: __DEV__ becomes true with no
-          # Metro server at runtime, and the guard in source is left alone. That
-          # this works at all is UNVERIFIED - it is what the probe run answers.
-          # Empty on a normal build, so the compile check is untouched.
+          # DEBUG CONFIGURATION IS THE LOAD-BEARING PART, and it was learned the
+          # hard way. Passing DEV=true to a Release build does nothing: React
+          # Native's bundling script derives --dev from $CONFIGURATION and
+          # OVERWRITES any inherited DEV, so the first probe bundled with
+          # `--dev false` and captured a "No desktop paired" screen at exactly
+          # the right resolution.
+          #
+          # FORCE_BUNDLING is what keeps a Debug build self-contained: without
+          # it a Debug app expects a Metro server the runner is not running, and
+          # with it the dev bundle is embedded in the .app. So: Debug for
+          # __DEV__, FORCE_BUNDLING for no-Metro, and the guard in source is
+          # left alone.
           FORCE_BUNDLING: ${{ inputs.screenshots == 'true' && '1' || '' }}
-          DEV: ${{ inputs.screenshots == 'true' && 'true' || '' }}
           EXPO_PUBLIC_KANGENTIC_MOCK: ${{ inputs.screenshots == 'true' && '1' || '' }}
+          BUILD_CONFIGURATION: ${{ inputs.screenshots == 'true' && 'Debug' || 'Release' }}
         run: |
           set -euo pipefail
           xcodebuild build \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
-            -configuration Release \
+            -configuration "$BUILD_CONFIGURATION" \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
@@ -144,9 +150,12 @@ jobs:
         id: verify
         env:
           SCHEME: ${{ steps.xcode.outputs.scheme }}
+          # Must track the build step's configuration, or the screenshot run
+          # looks for a Release product that was never built.
+          BUILD_CONFIGURATION: ${{ inputs.screenshots == 'true' && 'Debug' || 'Release' }}
         run: |
           set -euo pipefail
-          app_path="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphonesimulator/$SCHEME.app"
+          app_path="$RUNNER_TEMP/DerivedData/Build/Products/$BUILD_CONFIGURATION-iphonesimulator/$SCHEME.app"
           if [ ! -d "$app_path" ]; then
             echo "::error::No $SCHEME.app was produced. The build compiled something, but not the app."
             ls -R "$RUNNER_TEMP/DerivedData/Build/Products" || true
