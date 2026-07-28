@@ -242,6 +242,17 @@ function enterDemoMode() {
   adb(['shell', 'settings', 'put', 'global', 'sysui_demo_allowed', '1']);
   const demo = (extraArgs) =>
     adb(['shell', 'am', 'broadcast', '-a', 'com.android.systemui.demo', ...extraArgs], { allowFailure: true });
+  // EXIT BEFORE ENTERING. `enter` is not idempotent: issued while demo mode is
+  // already on, the network commands below ADD a second wifi glyph rather than
+  // replacing the first, and the frame ships with two identical icons side by
+  // side. Reproduced deliberately, and it is not hypothetical - a capture run
+  // in this state produced exactly that.
+  //
+  // Demo mode outlives this script whenever the exit in `finally` does not run
+  // (a kill, a crash, a disconnected device), so "already on" is the normal
+  // state after any interrupted run, not an exotic one. Starting from a known
+  // clean bar costs one broadcast.
+  demo(['-e', 'command', 'exit']);
   demo(['-e', 'command', 'enter']);
   demo(['-e', 'command', 'clock', '-e', 'hhmm', '0930']);
   demo(['-e', 'command', 'battery', '-e', 'level', '100', '-e', 'plugged', 'false']);
