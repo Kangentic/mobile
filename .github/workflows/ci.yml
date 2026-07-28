@@ -75,9 +75,18 @@ concurrency:
 # SHARD COUNTS WERE CUT on those numbers, from unit 2 and components 4 to unit
 # UNSHARDED and components 2. Both tiers were far under the re-shard threshold
 # below, so the extra runners were buying wall-clock nothing while costing four
-# rows in a checks list that had grown to 17. Expect components nearer 80s each
-# and the whole gate nearer 90-110s, which is still an order of magnitude below
-# the E2E path that actually sets PR latency.
+# rows in a checks list that had grown to 17.
+#
+# MEASURED AFTER the cut (run 30375728595), and it cost less than predicted:
+#
+#   unit, unsharded    30s        (was 2 shards at 16-25s, plus a 3s gate)
+#   component shards   52s, 63s   (was 4 shards at 43-71s)
+#   whole gate         ~80s       (was 73-90s)
+#
+# So halving the component shards did NOT double their runtime, because ~25s of
+# each job is checkout plus cache restore before a single test runs. Sharding
+# only ever divided the part of the job that was already the smaller half. Worth
+# knowing before anyone reaches for more shards to make this faster.
 #
 # Two things follow, and the second is the one that matters as the suite grows.
 #

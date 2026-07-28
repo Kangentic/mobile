@@ -341,7 +341,7 @@ what each one actually proves and roughly what it costs. Durations are measured,
 |---|---|---|---|
 | `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift | 29s |
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
-| `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | ~40s |
+| `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
 | `Native config (CNG)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (docs-only or draft) and it says which | 3s |
@@ -351,7 +351,7 @@ what each one actually proves and roughly what it costs. Durations are measured,
 
 | Check | Workflow | Why it is not required | Typical |
 |---|---|---|---|
-| `Component Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Component Tests (Jest)` gate, so shard counts can be retuned without touching branch protection | ~80s each |
+| `Component Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Component Tests (Jest)` gate, so shard counts can be retuned without touching branch protection | 52-63s each |
 | `Changes` | `e2e.yml` | Intermediate. It only classifies the diff. Note the gate now **fails closed** if this job does not succeed, so it cannot silently wave a PR through | 5s |
 | `Build (APK)` | `e2e.yml` | Intermediate. Its failure reaches you as a red `E2E Tests (Maestro)`, because a skipped suite is not a pass | 6 to 9m |
 | `E2E Tests (smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |
