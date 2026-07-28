@@ -158,6 +158,26 @@ fi
 echo "Letting the mock desktop stream for 45s..."
 sleep 45
 
+# ASSERT THE KEYCHAIN WORKS, rather than trusting that LogBox is hiding it.
+#
+# The capture suppresses LogBox so a warning cannot land in a listing image, and
+# that suppression would equally hide a real fault - so the fault is checked for
+# directly instead. Metro records console errors whatever LogBox does on screen.
+#
+# This specific error is why the build is ad-hoc signed: an unsigned app has no
+# `application-identifier` entitlement, so every keychain call fails with
+# errSecMissingEntitlement. It matters far beyond screenshots, because the
+# pairing trust anchor lives in expo-secure-store (.claude/rules/secure-storage.md),
+# and iOS keychain access had never been exercised anywhere before this job.
+if [ -n "${METRO_LOG:-}" ]; then
+  if grep -qE "KeyChainException|ERR_NOTIFICATIONS_KEYCHAIN_ACCESS" "$METRO_LOG"; then
+    echo "::error::iOS keychain access failed, so expo-secure-store is unusable in this build. Pairing depends on it, so this is not a screenshot problem. Relevant Metro output:"
+    grep -nE "KeyChainException|ERR_NOTIFICATIONS_KEYCHAIN_ACCESS" "$METRO_LOG" || true
+    exit 1
+  fi
+  echo "Keychain access is clean: expo-secure-store raised no entitlement error."
+fi
+
 if ! xcrun simctl spawn "$device_id" launchctl list | grep -q "$bundle_id"; then
   echo "::error::$bundle_id is no longer running. It launched and then died."
   exit 1

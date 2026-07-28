@@ -130,8 +130,34 @@ jobs:
           FORCE_BUNDLING: ${{ inputs.screenshots == 'true' && '1' || '' }}
           EXPO_PUBLIC_KANGENTIC_MOCK: ${{ inputs.screenshots == 'true' && '1' || '' }}
           BUILD_CONFIGURATION: ${{ inputs.screenshots == 'true' && 'Debug' || 'Release' }}
+          SIGN_AD_HOC: ${{ inputs.screenshots == 'true' && '1' || '' }}
         run: |
           set -euo pipefail
+
+          # AD-HOC SIGN THE SCREENSHOT BUILD, and only that one.
+          #
+          # An unsigned app has no entitlements at all, including
+          # `application-identifier` - and without it every keychain call fails
+          # with errSecMissingEntitlement. That is not hypothetical here:
+          # expo-secure-store threw "A required entitlement isn't present" on
+          # boot, expo-notifications followed with ERR_NOTIFICATIONS_KEYCHAIN_ACCESS,
+          # and LogBox put a red banner across the capture.
+          #
+          # Ad-hoc signing (identity "-") needs no Apple account, no certificate
+          # and no provisioning profile, so it costs the runner nothing. It also
+          # turns the capture into the first real exercise of iOS keychain
+          # access, which matters well beyond screenshots: the pairing trust
+          # anchor lives in expo-secure-store.
+          #
+          # The plain compile check stays UNSIGNED. It exists to be runnable by
+          # anyone with no Apple setup whatsoever, and nothing about it needs the
+          # keychain.
+          if [ "${SIGN_AD_HOC:-}" = "1" ]; then
+            signing_args=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=-)
+          else
+            signing_args=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
+          fi
+
           xcodebuild build \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -139,8 +165,7 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            "${signing_args[@]}"
 
       # xcodebuild exits 0 for a build that compiled nothing we care about, so
       # the exit code is not proof. The app bundle existing is. This is not
