@@ -100,8 +100,14 @@ Use descriptive branch names: `fix/pairing-timeout`, `feature/board-swipe`, `doc
 
 - **Unit** (`tests/unit/`, vitest): `npx vitest run tests/unit`
 - **Component** (`tests/components/`, Jest + React Native Testing Library): `npx jest tests/components`
-- **E2E** (`.maestro/`, Maestro): `maestro test .maestro/`, locally against the Android emulator, and
-  on an emulator in CI. There is no iOS E2E yet by any route
+- **E2E** (`.maestro/`, Maestro), two suites run separately, never the bare `.maestro/` root
+  (which would sweep in the `setup/` rig fixture and fail confusingly):
+  - smoke: `maestro --device <serial> test .maestro/smoke.yaml`, against a fresh unpaired install
+  - paired: `maestro --device <serial> test .maestro/paired`, which needs a relay plus
+    `scripts/stubDesktopPeer.mjs` and a completed pairing first
+
+  Both run locally against the Android emulator and on an emulator in CI. There is no iOS E2E yet
+  by any route
 
 Quick local pass before opening a PR:
 

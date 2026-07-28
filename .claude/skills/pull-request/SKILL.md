@@ -148,13 +148,28 @@ link once it reconnects. If it never returns this run, report the PR number prom
 
 ## Step 6 - Monitor checks until green
 
-`gh pr checks <branch> --watch --fail-fast --interval 30`, Bash `timeout` at its max (600000ms).
-Treat a non-zero exit while checks are pending as status, not a tool failure; re-run the same
-`--watch` command if the timeout fires with checks still only pending. If `CLA Assistant` is the
-only check registered, do not call that all-green: the `ci.yml` checks may not have registered
-yet, so re-poll before concluding it is genuinely the only one. Expect eight checks to report:
-seven required (the `ci.yml` jobs plus `Tests (Maestro)` and `cla`) and one advisory
-(`Maestro (paired)`). Only the seven required ones have to be green to merge.
+`gh pr checks <branch> --required --watch --fail-fast --interval 30`, Bash `timeout` at its max
+(600000ms). Treat a non-zero exit while checks are pending as status, not a tool failure; re-run
+the same `--watch` command if the timeout fires with checks still only pending. If `CLA Assistant`
+is the only check registered, do not call that all-green: the `ci.yml` checks may not have
+registered yet, so re-poll before concluding it is genuinely the only one.
+
+**`--required` is load-bearing, do not drop it.** Without it the watch also waits on
+`Maestro (paired)`, which is advisory and cannot block a merge, and `--fail-fast` then aborts the
+whole poll on a red check that blocks nothing. Measured on PR #28: the required gate went green at
+04:06:15 and paired at 04:12:40, so an unfiltered watch spends **6m25 of dead wait on every PR**.
+
+Roughly **17 check runs report** on a PR to `main` (11 from `ci.yml`, 5 from `e2e.yml`, 1 from
+`cla.yml`). Seven of them are required and are the only ones this watch sees:
+`Lint (ESLint)`, `Type check (tsc)`, `Unit tests (Vitest)`, `Component tests (Jest)`,
+`Native config (expo prebuild)`, `Tests (Maestro)`, and `cla`. The rest are shard jobs and
+intermediate jobs that the thin gate checks already aggregate.
+
+**Then read the advisory check once, without blocking on it.** After the required watch returns
+green, run `gh pr checks <branch> --json name,state,link` and pull out `Maestro (paired)`. Report
+its state in Step 8: green, red, or still running. If it is red, diagnose it through
+`e2e-flow-doctor` per the rule above; never drive it green by weakening the job. If it is still
+running, say so plainly rather than waiting for it.
 
 **A stacked PR reports green having run nothing.** `ci.yml` and `e2e.yml` both filter
 `pull_request` to `branches: [main]`, so a PR whose base is another feature branch gets only
@@ -170,7 +185,18 @@ ever been compiled for either platform. A PR that changes native config, a confi
 `app.config.ts`, `eas.json`, `package.json`, or anything under `plugins/` can pass the whole gate
 and then fail the first real build. That is exactly how a broken config-plugin import shipped once.
 
-So before reporting green, dispatch both and drive them to success:
+**Dispatch only when the diff can actually break a build.** These are expensive and slow, and the
+hazard they guard is native-config breakage, so run them when the diff touches any of:
+`app.config.ts`, `plugins/**`, `package.json`, `package-lock.json`, `eas.json`, `targets/**`, or
+`.github/workflows/build-*.yml`. A JS-only or docs-only diff skips both and says so in the report.
+When in doubt, run them: a runner is free and a broken build found after merge is not.
+
+**Dispatch AFTER Step 6's required checks are green, never alongside them.** These runs compete
+with `e2e.yml` for the same free-tier runner pool, and the E2E emulator jobs are the ones that
+suffer: on run 30305146576 the `Maestro (paired)` job was eligible at 21:11 and did not start
+until 21:29, an 18 minute queue, with both build workflows dispatched on the same branch at 21:02.
+Other runs showed no gap, so this is contention rather than a guaranteed stall, but sequencing
+costs nothing and removes it.
 
 ```
 gh workflow run build-android.yml --ref <branch> -f profile=preview
@@ -179,15 +205,16 @@ gh workflow run build-ios.yml --ref <branch> -f target=simulator
 
 - Get the run ids from `gh run list --workflow <file> --limit 1 --json databaseId,status`, then
   watch with `gh run view <id> --json status,conclusion,jobs`.
-- Roughly 13 minutes for Android `preview` and 11 for the iOS simulator, and they run in parallel.
+- **Budget roughly 11 minutes for Android `preview` and 30 for the iOS simulator**, running in
+  parallel, so about half an hour in total. Measured, not estimated: run 30305149504 took 10m41
+  and run 30305151823's `Simulator (unsigned compile check)` job took 30m31. An earlier version of
+  this skill said "11 minutes" for iOS, which is off by 3x and invites treating a healthy run as a
+  hang.
 - **iOS `target=simulator`, never `device`.** A device build consumes signing material and is a
   release path, not a check. Leave `submit` alone entirely.
 - The iOS simulator job also **launches** the app and uploads a screenshot, so this doubles as a
   runtime smoke test rather than only a compile check.
 - Feed failures into the Step 7 auto-fix loop the same as any other check.
-
-Skip this only for a docs-only or `.claude/`-only diff, and say in the report that it was skipped
-and why. When in doubt, run them: a runner is free and a broken build found after merge is not.
 
 ## Step 7 - Auto-fix loop (max 3 rounds, fully automatic)
 
@@ -200,10 +227,14 @@ PR URL, and do not `--admin` bypass.
 
 ## Step 8 - Report (success)
 
-Report the PR URL, branch name, commit count, and "All checks green." Include the two build runs
-from Step 6b with their conclusions, or say plainly that they were skipped and why. "All checks
-green" without a build run behind it overstates what was verified, because the PR gate does not
-build either platform.
+Report the PR URL, branch name, commit count, and "All required checks green." Include:
+
+- The two build runs from Step 6b with their conclusions, or say plainly that they were skipped
+  and why. "All checks green" without a build run behind it overstates what was verified, because
+  the PR gate does not build either platform.
+- **`Maestro (paired)`'s state**, read non-blocking in Step 6. Say green, red, or still running.
+  Never fold it into "all green": it is advisory, so a green required gate proves smoke coverage
+  only. A reader who wants the paired suite's verdict has to be told it separately.
 
 Next step: the user moves the task Tests -> Ship It, where `/merge-pull-request` merges it. Do
 NOT merge.

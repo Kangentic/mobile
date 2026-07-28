@@ -31,7 +31,10 @@ anti-flake patterns. This skill does not re-implement that knowledge inline.
 2. **Launch in parallel** (each command its own Bash call): `npx vitest run tests/unit` and
    `npx jest tests/components`.
 3. **E2E.** Confirm an emulator is attached (`adb devices`); if none, skip E2E and note it in
-   the report. Otherwise run `maestro test .maestro/`.
+   the report. Otherwise run the two suites separately (see "The two Maestro suites" below):
+   `maestro --device <serial> test .maestro/smoke.yaml`, then, only if the paired rig is up,
+   `maestro --device <serial> test .maestro/paired`. If the rig is not up, run smoke and say
+   plainly in the report that paired was skipped.
 4. **Coverage audit.** Gather `git diff` context and launch a single `test-builder` agent in
    audit-only mode (see "Coverage delegation"). Relay its report.
 5. Present results in the Reporting Format below.
@@ -57,7 +60,25 @@ anti-flake patterns. This skill does not re-implement that knowledge inline.
 
 1. `npm run typecheck`. Stop on failure.
 2. `adb devices` - if no emulator/device attached, report and stop.
-3. `maestro test .maestro/` (scoped: `maestro test .maestro/<flow>.yaml` for a single flow).
+3. Run the suites separately, never the bare root (see below). Smoke:
+   `maestro --device <serial> test .maestro/smoke.yaml`. Paired, only with the rig up:
+   `maestro --device <serial> test .maestro/paired`. A single flow:
+   `maestro --device <serial> test .maestro/paired/<flow>.yaml`.
+
+## The two Maestro suites, and why never the bare root
+
+**Never `maestro test .maestro/`.** The root holds three things, and only two are suites:
+
+| Entry | What it is | How to run it |
+|---|---|---|
+| `.maestro/smoke.yaml` | 1 flow, fresh unpaired install, no relay and no pairing. What the required `Tests (Maestro)` check gates on | `maestro --device <serial> test .maestro/smoke.yaml` |
+| `.maestro/paired/` | 11 flows against a relay plus `scripts/stubDesktopPeer.mjs`, pairing completed first. Reports as the advisory `Maestro (paired)` check | `/e2e` sequences the setup. Direct: `maestro --device <serial> test .maestro/paired` |
+| `.maestro/setup/` | NOT a suite. A rig fixture needing a `PAIRING_URI` handed to it | Never directly. `run-maestro-paired.sh` invokes it by name |
+
+A bare `.maestro/` root sweeps in the `setup/` fixture, which then fails for lacking `PAIRING_URI`
+and reads as a broken pairing screen rather than a misconfigured command. It also runs the paired
+flows with no relay and no stub. `tests/unit/ciSafeMaestroFlows.test.ts` fails CI if a workflow
+ever points at the bare root, for exactly this reason.
 
 For iOS E2E, there is no local path (no Mac). iOS Maestro flows run on cloud simulators via EAS
 Workflows in CI, not through this skill.
