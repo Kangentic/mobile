@@ -591,7 +591,9 @@ noise on a headless GPU, not a failure. It appeared three times in an 11/11 gree
 SDK install 30s, emulator boot 33s, APK install 5s, relay plus stub plus pairing URI 2s, and the
 **pairing bootstrap at 1m 12s** - of which a single `Input text ${PAIRING_URI}` command is **40.7s**
 (20:58:53.19 to 20:59:33.90). Maestro types the URI a character at a time over its driver, and the
-URI is a public key plus a token plus a relay address.
+URI is a public key plus a token plus a relay address. It reproduced at **40.5s** on run
+30401393044, so this is a property of the command rather than the bursty `launchApp` stall
+described below, which is what a single sample could not have told you.
 
 That 40.7s is **not being fixed**, deliberately. Every route to it is worse than 40 seconds on a job
 that is advisory and off the critical path: the clipboard cannot be set from adb on API 29+ without
