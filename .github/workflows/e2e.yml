@@ -63,9 +63,52 @@ on:
 permissions:
   contents: read
 
+env:
+  # PIN THE E2E RUNNER ITSELF. `curl -Ls https://get.maestro.mobile.dev` fetches
+  # `releases/latest` when this is unset, so before it existed every run installed
+  # whatever Maestro had shipped that morning, and a Maestro release could turn
+  # the REQUIRED `E2E Tests (Maestro)` check red overnight with no commit in this
+  # repository. That is the same hazard the relay checkout below is pinned to a
+  # SHA to avoid, arriving through the tool instead of a sibling repo.
+  #
+  # The installer reads this from the environment and resolves
+  # `releases/download/cli-$MAESTRO_VERSION/maestro.zip`, so the value is a bare
+  # version and the `cli-` prefix is the installer's. Verified against the real
+  # tag before pinning, because `maestro --version` prints `2.7.0` while the tag
+  # is `cli-2.7.0`, and a pin that 404s would have converted this fix into the
+  # outage it exists to prevent.
+  #
+  # Declared once at WORKFLOW level rather than twice at step level: both the
+  # smoke and paired jobs install Maestro, and two literals are two things to
+  # bump. tests/unit/ciSafeMaestroFlows.test.ts asserts this is set, that no job
+  # shadows it, and that it matches the version .claude/rules/e2e-maestro-runs.md
+  # tells a developer to run locally - a local CLI ahead of CI is how a flow
+  # passes on a laptop and fails the gate.
+  #
+  # Bump deliberately: read Maestro's release notes, run both suites, then move
+  # this line and the rule's in the same commit.
+  MAESTRO_VERSION: '2.7.0'
+  # No telemetry from CI. Maestro phones home on every invocation unless this is
+  # set, which is 13 calls per paired run, and the runner has nothing to say that
+  # this project wants said on its behalf. It also silences the notice that the
+  # version guard below would otherwise have to parse around.
+  MAESTRO_CLI_NO_ANALYTICS: '1'
+
 concurrency:
   group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, NEVER a run on main. The push-to-main run is the
+  # only one that WRITES the Gradle build cache: gradle/actions/setup-gradle
+  # restores everywhere but saves only on the default branch, which is where the
+  # "415 from cache" tasks in every PR's Gradle build come from. With a blanket
+  # `true`, two merges landing close together cancelled the first main run
+  # mid-build, so the cache it was about to write never landed and the next PR
+  # paid for it. A main run is also the last unconditional proof the suites pass
+  # on the merged result.
+  #
+  # `push` and `workflow_dispatch` runs use a different `github.ref` from a PR's
+  # `refs/pull/N/merge`, so they were never contending with PR runs anyway - the
+  # cancellation this stops is main-versus-main.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Decides whether the expensive jobs need to run at all. A docs-only PR should
@@ -188,12 +231,18 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # v4, not v3. v3 declared `node20`, which GitHub is already force-running on
+      # node24. The bump also moves the default cmdline-tools to 20.0, which is a
+      # real behaviour change and not just a runtime bump: if this job breaks
+      # right after this line changed, that default is the first suspect, and
+      # pinning `cmdline-tools-version` is the fix rather than reverting to a
+      # runtime that is being removed.
+      - uses: android-actions/setup-android@v4
 
       # Must precede prebuild: app.config.ts reads EXPO_PUBLIC_KANGENTIC_E2E at
       # config-evaluation time, and GITHUB_ENV only affects later steps.
@@ -275,7 +324,20 @@ jobs:
       # a job that is not on the critical path for a merge. Not obviously wrong
       # to revisit, but go in knowing the mtime trap is what has to be solved.
 
-      - uses: gradle/actions/setup-gradle@v4
+      # v5, and DELIBERATELY NOT the latest. v5's only breaking change is the
+      # move to node24, which is the whole reason for the bump. v6 extracted the
+      # caching half of this action into `gradle-actions-caching`, a proprietary
+      # component that is NOT open source and is governed by Gradle's commercial
+      # Terms of Use, which upgrading accepts on the project's behalf. This
+      # repository is AGPLv3 and dual-licensed, so that is a licensing decision
+      # for a human, not a version bump. v6 also removed configuration-cache
+      # support pending a reimplementation inside that same proprietary
+      # component. Revisit only with the licence question answered first.
+      #
+      # Expect the FIRST build after this bump to be a full cache miss and run
+      # long: the action version is part of the cache key. That is the bump, not
+      # a regression - compare against the second run, not the first.
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Build the release APK
         env:
@@ -326,7 +388,11 @@ jobs:
           if-no-files-found: error
 
   maestro:
-    name: E2E Tests (${{ matrix.suite }})
+    # `matrix.label`, not `matrix.suite`: `suite` is the slug (it names the
+    # artifact), `label` is what a human reads in the checks list. One key would
+    # have to be both, and the last time this job named itself from the slug the
+    # checks list read `E2E Tests (smoke)` next to `E2E Tests (Maestro)`.
+    name: E2E Tests (${{ matrix.label }})
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
@@ -341,6 +407,7 @@ jobs:
         # below, which is what the required gate tests.
         include:
           - suite: smoke
+            label: Smoke
             flows: .maestro/smoke.yaml
     steps:
       - uses: actions/checkout@v7
@@ -352,11 +419,13 @@ jobs:
 
       # Maestro is a JVM tool. The runner image happens to ship a JDK, but
       # pinning it means an image change cannot silently break this job.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # Installs the PINNED version: the installer reads MAESTRO_VERSION from the
+      # workflow-level `env:` at the top of this file. Do not set it here.
       - name: Install Maestro
         run: |
           set -euo pipefail
@@ -364,8 +433,25 @@ jobs:
           bash "$RUNNER_TEMP/install-maestro.sh"
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
+      # Asserts the pin took, rather than just printing it for a human who is not
+      # reading. An installer change, a typo in the version, or a job-level `env:`
+      # shadowing the pin all fail HERE, in two seconds, instead of surfacing as
+      # inexplicable flow behaviour ten minutes later.
       - name: Report the Maestro version
-        run: maestro --version
+        run: |
+          set -euo pipefail
+          # `tail -n 1`, not the whole output. `maestro --version` prints an
+          # analytics notice and a blank line BEFORE the number, so comparing the
+          # raw capture would never match and this guard would redden the required
+          # check on every run. MAESTRO_CLI_NO_ANALYTICS (workflow-level `env:`)
+          # already suppresses that notice; the tail is the belt to its braces,
+          # because a future banner would otherwise break the gate, not the tool.
+          installed="$(maestro --version | tr -d '\r' | tail -n 1)"
+          echo "Maestro $installed (pinned: $MAESTRO_VERSION)"
+          if [ "$installed" != "$MAESTRO_VERSION" ]; then
+            echo "::error::Maestro $installed was installed but $MAESTRO_VERSION is pinned in e2e.yml. The suites are not running the version this repository tests against."
+            exit 1
+          fi
 
       # The emulator needs hardware acceleration to be usable. ubuntu-latest has
       # KVM available but not world-writable by default.
@@ -397,6 +483,20 @@ jobs:
           target: default
           profile: pixel_6
           # -no-snapshot-save keeps teardown from writing a snapshot we never reuse.
+          #
+          # DO NOT set ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL. Teardown prints
+          # "Wait for emulator (pid N) 20 seconds to shutdown gracefully before
+          # kill", which reads like 20 seconds this job spends on an emulator
+          # nobody will ever use again. It is a CEILING, not a cost: the emulator
+          # exits well inside it and the wait ends. Measured on run 30397988677,
+          # `emu kill` to the last teardown line - smoke 20:58:33.83 to
+          # 20:58:34.86 (1.0s), paired 21:05:38.70 to 21:05:39.58 (0.9s).
+          # Overriding it would save nothing and would introduce a hard kill on a
+          # process mid-write.
+          #
+          # `ERROR | Failed to find ColorBuffer: <n>` in the paired log is
+          # swiftshader bookkeeping noise on a headless GPU, not a failure. It
+          # appeared three times in an 11/11 green run.
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -camera-back none -memory 4096
           disable-animations: true
           script: bash .github/scripts/run-maestro.sh "$(ls apk/*.apk | head -n 1)" ${{ matrix.flows }}
@@ -424,8 +524,12 @@ jobs:
   # .maestro/paired. Advisory (see the header comment above) - its result is
   # deliberately NOT read by the `e2e` gate job below, and it carries no
   # "Required" badge in the checks list, which is what says so.
+  #
+  # Named `E2E Tests (Paired)` in the same Title Case as every other row; the
+  # badge, not the casing, is what distinguishes it from the gate. See the gate
+  # job's naming comment at the bottom of this file.
   maestro-paired:
-    name: E2E Tests (paired)
+    name: E2E Tests (Paired)
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
@@ -450,6 +554,23 @@ jobs:
     # correctness; both runs were 11/11. run-maestro-paired.sh prints a per-flow
     # table into the run summary so a recurrence is visible without downloading
     # an artifact. Full write-up in .claude/rules/e2e-maestro-runs.md.
+    #
+    # WHERE THE NON-FLOW TIME GOES, measured on run 30397988677 (8m 58s job,
+    # 5m 48s of actual flows). SDK install 30s, emulator boot 33s, APK install
+    # 5s, relay + stub + pairing URI 2s, and then the PAIRING BOOTSTRAP at 1m 12s
+    # - of which a single `Input text ${PAIRING_URI}` command is 40.7s
+    # (20:58:53.19 to 20:59:33.90). Maestro types the URI a character at a time
+    # over the driver, and the URI is a public key plus a token plus a relay
+    # address.
+    #
+    # NOT FIXED, deliberately. Every route to it is worse than 40 seconds on a
+    # job that is advisory and off the critical path for a merge: the clipboard
+    # cannot be set from adb on API 29+ without a foreground app; `adb shell
+    # input text` types character by character too and would need the URI's `//`
+    # escaped; and the deep-link route needs OS routing of kangentic-pair://,
+    # which is a later phase. The remaining option is changing the pairing
+    # ceremony itself, which is the security-critical path this suite exists to
+    # prove. Recorded so the next reader sees a decision, not an oversight.
     #
     # THIS SUITE IS SERIAL AND UNSHARDED, which is the growth cliff worth knowing:
     # each flow added costs its own ~35s plus a `launchApp` cold boot, and nothing
@@ -499,11 +620,13 @@ jobs:
 
       # Maestro is a JVM tool. The runner image happens to ship a JDK, but
       # pinning it means an image change cannot silently break this job.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # Installs the PINNED version: the installer reads MAESTRO_VERSION from the
+      # workflow-level `env:` at the top of this file. Do not set it here.
       - name: Install Maestro
         run: |
           set -euo pipefail
@@ -511,8 +634,25 @@ jobs:
           bash "$RUNNER_TEMP/install-maestro.sh"
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
+      # Asserts the pin took, rather than just printing it for a human who is not
+      # reading. An installer change, a typo in the version, or a job-level `env:`
+      # shadowing the pin all fail HERE, in two seconds, instead of surfacing as
+      # inexplicable flow behaviour ten minutes later.
       - name: Report the Maestro version
-        run: maestro --version
+        run: |
+          set -euo pipefail
+          # `tail -n 1`, not the whole output. `maestro --version` prints an
+          # analytics notice and a blank line BEFORE the number, so comparing the
+          # raw capture would never match and this guard would redden the required
+          # check on every run. MAESTRO_CLI_NO_ANALYTICS (workflow-level `env:`)
+          # already suppresses that notice; the tail is the belt to its braces,
+          # because a future banner would otherwise break the gate, not the tool.
+          installed="$(maestro --version | tr -d '\r' | tail -n 1)"
+          echo "Maestro $installed (pinned: $MAESTRO_VERSION)"
+          if [ "$installed" != "$MAESTRO_VERSION" ]; then
+            echo "::error::Maestro $installed was installed but $MAESTRO_VERSION is pinned in e2e.yml. The suites are not running the version this repository tests against."
+            exit 1
+          fi
 
       # The emulator needs hardware acceleration to be usable. ubuntu-latest has
       # KVM available but not world-writable by default.
@@ -564,12 +704,18 @@ jobs:
   # It must run on every event, including when the suites were skipped for a
   # docs-only change, or protection would never see the check report.
   #
-  # NAMED to match the kangentic desktop repo's gate convention (lowercase
-  # plural plus the tool: `E2E Tests (Electron)` there, `E2E Tests (Maestro)`
-  # here), so the two repos' check lists read as one system. The suite jobs
-  # above are its Title Case singular counterparts, `E2E Tests (smoke)` and
-  # `E2E Tests (paired)`, exactly as desktop pairs `E2E Tests (1/5)` with
-  # `E2E Tests (Electron)`.
+  # NAMED to match the kangentic desktop repo's gate convention (`E2E Tests
+  # (Electron)` there, `E2E Tests (Maestro)` here), so the two repos' check
+  # lists read as one system.
+  #
+  # The qualifier is Title Case in EVERY row: `E2E Tests (Smoke)`,
+  # `E2E Tests (Paired)`, `E2E Tests (Maestro)`. Lowercasing the suite jobs was
+  # tried and dropped - it spent a casing distinction on saying "worker, not
+  # gate", which GitHub's own "Required" badge already says, and it read as a
+  # typo sitting next to the capitalised gate. Same argument as the advisory
+  # note above: the badge is the honest signal, so the name does not have to
+  # carry it. Shard rows keep `n/m` because a number is self-evidently a piece
+  # of something.
   #
   # This is also why the WORKFLOW is called `Emulator` rather than `E2E`.
   # GitHub renders a check as "<workflow> / <job>", so keeping both would have
@@ -635,8 +781,8 @@ jobs:
             echo ""
             echo "| Suite | Flows | Gates the merge? |"
             echo "|---|---|---|"
-            echo "| smoke | 1 | yes - this check |"
-            echo "| paired | 11 | no - see the separate \"E2E Tests (paired)\" check |"
+            echo "| Smoke | 1 | yes - this check |"
+            echo "| Paired | 11 | no - see the separate \"E2E Tests (Paired)\" check |"
             echo ""
             echo "The paired suite runs in its own job and reports its own check, but is not"
             echo "read by this gate: it is advisory until it has been green across several PRs,"

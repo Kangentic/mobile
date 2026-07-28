@@ -214,12 +214,14 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # v4's bump also moves the default cmdline-tools to 20.0; see the same
+      # `uses:` in e2e.yml for what to suspect first if this job breaks.
+      - uses: android-actions/setup-android@v4
 
       - name: Install dependencies
         run: npm ci
@@ -384,7 +386,12 @@ jobs:
       # Deliberately after prebuild: android/ does not exist at checkout time,
       # so an earlier setup-gradle would have no Gradle files to key its cache
       # on. The cache is per-profile because the ABI set differs.
-      - uses: gradle/actions/setup-gradle@v4
+      #
+      # v5 and NOT the latest, for a licensing reason rather than a technical
+      # one: v6 moved this action's caching into a proprietary component under
+      # Gradle's commercial Terms of Use. Full reasoning at the same `uses:` in
+      # e2e.yml. Keep the two workflows on the same major.
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Read the app version
         id: version

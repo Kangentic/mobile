@@ -18,6 +18,16 @@ second rig mode silently kills the first one's bundler. Both failures look like 
 - **Run flows with the Maestro CLI**, never the MCP `run` tool:
   `maestro --device <serial> test <flow-or-dir>`. The MCP server is for authoring only
   (`inspect_screen` against an otherwise idle device), and even then not while a suite is running.
+- **Run the version CI runs: Maestro 2.7.0.** `.github/workflows/e2e.yml` pins it in a
+  workflow-level `MAESTRO_VERSION`, because `curl -Ls https://get.maestro.mobile.dev` otherwise
+  installs whatever shipped that morning and a Maestro release could redden the required
+  `E2E Tests (Maestro)` check with no commit in this repository. Check yours with
+  `maestro --version`; install a specific one with
+  `MAESTRO_VERSION=2.7.0 bash <(curl -Ls https://get.maestro.mobile.dev)`. A local CLI ahead of
+  CI is how a flow passes on a laptop and fails the gate, with nothing in either place saying
+  why. `tests/unit/ciSafeMaestroFlows.test.ts` asserts this line and the workflow agree, so
+  bumping means editing both in one commit, after reading Maestro's release notes and running
+  both suites.
 - **One rig mode per session.** `dev:live` and `dev:stub` both own Metro on port 8081; starting
   one tears the other's bundler out from under the device. Pick the mode for the job.
 - **Against a dev client, never `launchApp: clearState: true`.** Clearing state also wipes the

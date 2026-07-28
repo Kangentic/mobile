@@ -30,7 +30,7 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
   far longer for it than the other tiers and do not mistake its pending state for a hang. The
   component tier also surfaces per-shard jobs (`Component Tests (1/2)`, `(2/2)`); those are an
   implementation detail, and the single gate check per tier is what protection requires.
-- **`E2E Tests (paired)` is advisory and must stay that way.** It runs the 11 paired flows and
+- **`E2E Tests (Paired)` is advisory and must stay that way.** It runs the 11 paired flows and
   reports on every PR, but is not a required check. If it goes red, diagnose it through
   `e2e-flow-doctor`; never drive it green by weakening the job, raising a timeout, or relaxing
   `tests/unit/ciSafeMaestroFlows.test.ts`. A red advisory check does not block the merge.
@@ -155,7 +155,7 @@ is the only check registered, do not call that all-green: the `ci.yml` checks ma
 registered yet, so re-poll before concluding it is genuinely the only one.
 
 **`--required` is load-bearing, do not drop it.** Without it the watch also waits on
-`E2E Tests (paired)`, which is advisory and cannot block a merge, and `--fail-fast` then aborts the
+`E2E Tests (Paired)`, which is advisory and cannot block a merge, and `--fail-fast` then aborts the
 whole poll on a red check that blocks nothing. Measured on PR #28: the required gate went green at
 04:06:15 and paired at 04:12:40, so an unfiltered watch spends **6m25 of dead wait on every PR**.
 
@@ -193,7 +193,7 @@ case above, one level up: absence reads exactly like success, and only an explic
 tells them apart.
 
 **Then read the advisory check once, without blocking on it.** After the required watch returns
-green, run `gh pr checks <branch> --json name,state,link` and pull out `E2E Tests (paired)`. Report
+green, run `gh pr checks <branch> --json name,state,link` and pull out `E2E Tests (Paired)`. Report
 its state in Step 8: green, red, or still running. If it is red, diagnose it through
 `e2e-flow-doctor` per the rule above; never drive it green by weakening the job. If it is still
 running, say so plainly rather than waiting for it.
@@ -231,7 +231,7 @@ When in doubt, run them: a runner is free and a broken build found after merge i
 
 **Dispatch AFTER Step 6's required checks are green, never alongside them.** These runs compete
 with `e2e.yml` for the same free-tier runner pool, and the E2E emulator jobs are the ones that
-suffer: on run 30305146576 the `E2E Tests (paired)` job was eligible at 21:11 and did not start
+suffer: on run 30305146576 the `E2E Tests (Paired)` job was eligible at 21:11 and did not start
 until 21:29, an 18 minute queue, with both build workflows dispatched on the same branch at 21:02.
 Other runs showed no gap, so this is contention rather than a guaranteed stall, but sequencing
 costs nothing and removes it.
@@ -270,7 +270,7 @@ Report the PR URL, branch name, commit count, and "All required checks green." I
 - The two build runs from Step 6b with their conclusions, or say plainly that they were skipped
   and why. "All checks green" without a build run behind it overstates what was verified, because
   the PR gate does not build either platform.
-- **`E2E Tests (paired)`'s state**, read non-blocking in Step 6. Say green, red, or still running.
+- **`E2E Tests (Paired)`'s state**, read non-blocking in Step 6. Say green, red, or still running.
   Never fold it into "all green": it is advisory, so a green required gate proves smoke coverage
   only. A reader who wants the paired suite's verdict has to be told it separately.
 

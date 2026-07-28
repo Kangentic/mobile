@@ -12,7 +12,12 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, never a run on main. Same reasoning as e2e.yml's:
+  # a cache is only shared with every branch once it has been written from the
+  # DEFAULT branch, so the push-to-main run is what fills the node_modules cache
+  # that .github/actions/setup-node-deps restores. Cancelling it mid-flight
+  # leaves the next PR to run a cold `npm ci` in all six parallel jobs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI architecture, following the pattern in Kangentic/kangentic's ci.yml:
 #
@@ -26,23 +31,33 @@ concurrency:
 #   required check, so main's protection must be updated in the same change or
 #   every PR blocks on a check that will never report.
 #
-# NAMING. Every job is `<Subject> (<qualifier>)`, and the QUALIFIER says which
-# kind of job it is:
+# NAMING. Every job is `<Subject> (<qualifier>)`, and the qualifier is written
+# the way the thing it names is normally written:
 #
-#   `Unit Tests (1/2)`      a DIMENSION -> does the work, one slice of it
-#   `Unit Tests (Vitest)`   a TOOL      -> the thin gate that aggregates them
-#   `Lint (ESLint)`         a TOOL      -> a standalone check, no shards
+#   a TOOL keeps its own casing   `Lint (ESLint)`, `Type check (tsc)`,
+#                                 `Unit Tests (Vitest)`, `Native config (CNG)`,
+#                                 `E2E Tests (Maestro)`
+#   a SHARD is `n/m`              `Component Tests (1/2)`
+#   anything else is prose        `Release counters (store preflight)`,
+#                                 `E2E Tests (Smoke)`, `E2E Tests (Paired)`
 #
-# Deliberately NOT the case trick the desktop repo uses (`Unit Test (1/3)` for a
-# shard against `Unit tests (Vitest)` for its gate). One capital letter is too
-# little signal to survive being skimmed in a narrow column, and mobile had
-# already drifted off it once, silently, which is what made those two rows look
-# interchangeable in the first place. The qualifier carries the distinction
-# instead, and a reader does not need to know the rule to feel it: "1/2" is
-# obviously a piece of something, "Vitest" is obviously the whole tier.
+# `tsc` is lowercase because that is the binary's name, not because it is a
+# lesser kind of job. A slug is never a qualifier: `E2E Tests (smoke)` was the
+# matrix key leaking into the checks list, and it read as a typo sitting beside
+# the capitalised gate it belongs to.
+#
+# WHAT THE NAME DOES NOT ENCODE: whether a row is a worker or the gate that
+# aggregates it. That was tried, as the desktop repo's case trick (`Unit Test
+# (1/3)` against `Unit tests (Vitest)`) and then as lowercase suite names here,
+# and both spend a casing distinction on saying something GitHub's own
+# "Required" badge already says, in a column too narrow for one capital letter
+# to survive a skim. `1/2` is self-evidently a piece of something; the badge
+# says the rest. Same argument e2e.yml uses for not writing "advisory" into the
+# paired job's name.
 #
 # The cost is that desktop's list reads slightly differently. Accepted
 # deliberately, in favour of legibility here.
+#
 # - node_modules is cached under one shared lockfile-keyed key
 #   (.github/actions/setup-node-deps), so npm ci runs only when dependencies
 #   change. The install was a larger share of each tier than the tier itself.
