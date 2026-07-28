@@ -39,7 +39,9 @@ app/                           # expo-router route wrappers (thin - render the s
 assets/brand/                 # Synced identity rasters (icon/splash/adaptive) - scripts/syncBranding.mjs owns them
 plugins/                      # Local Expo config plugins (withAndroidPushService: notification
                               #   permissions + FGS type; withIosManualSigning: App Store signing on
-                              #   the app target only, inert outside CI)
+                              #   the app target only, inert outside CI;
+                              #   withAndroidE2eGwpAsanOff: disables GWP-ASan for the e2e APK only,
+                              #   inert unless EXPO_PUBLIC_KANGENTIC_E2E=1)
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,

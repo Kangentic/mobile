@@ -140,8 +140,12 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
   **`Native config (CNG)`**. From `.github/workflows/e2e.yml`:
   **`E2E Tests (Maestro)`**, which builds a real APK and runs the smoke flow on an Android
   emulator, so it takes appreciably longer than the rest. Plus **`cla`** (CLA Assistant).
-- The unit and component tiers are sharded across runners. The shards show up as their own jobs
-  (`Component Tests (1/2)` and so on) but are not themselves required: the gate check per tier is.
+- The component tier is split across two runners. Those shards show up as their own jobs
+  (`Component Tests (1/2)` and `(2/2)`) but are not themselves required: the `Component Tests (Jest)`
+  gate is. The unit tier is unsharded, so `Unit Tests (Vitest)` both runs the tests and is the
+  required check.
+- `Release counters (store preflight)` also registers on every PR. It guards the hand-managed
+  release counters and is not required, so a red run there does not block you.
 - `E2E Tests (paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required
   and cannot block a merge. GitHub prints a "Required" badge on the checks that are, so the
   absence of one is how the list tells you. Do not silence a red run there: it is real coverage

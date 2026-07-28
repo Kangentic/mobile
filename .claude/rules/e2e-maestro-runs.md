@@ -97,7 +97,29 @@ alike, and succeeds the instant it is backgrounded. Maestro therefore falls back
 hierarchy" aiming before every tap. This is the single largest drag on suite runtime and it
 caused at least one real failure (the delete confirmation expiring between two taps). The cause
 is NOT an obvious animation loop - there is no `Animated.loop` or infinite `withRepeat(..., -1)`
-in `src/`. Treat a mysteriously slow flow as a symptom of this before assuming the flow is wrong.
+in `src/`. Treat a DIFFUSELY slow flow as a symptom of this before assuming the flow is wrong.
+
+**But a single flow at ~6.5 minutes is a DIFFERENT bug, and reading it as the tap tax wastes the
+afternoon.** Check which one you have before theorising, because
+`maestro-debug/<flow>/commands.json` records a per-command `duration` and settles it in seconds:
+
+- **UI-idle tax:** the cost is spread across every tap in the flow. Many commands at 6-8s.
+- **The launchApp stall:** ONE command is enormous and everything else is normal. Measured twice,
+  on two different flows: `launchApp` at 362.2s and 370.5s while every other command in the same
+  flow was 17-40s, and while every other flow's `launchApp` in the same run was 1.1-2.9s.
+
+The stall is host-side, not the app: it hangs inside `launchApp`'s first `adb shell pm grant`
+(649ms healthy, 369.6s stalled), and `device-logcat.txt` runs continuously through the whole
+window with no ANR, no crash, and no mention of our package until the launch finally proceeds. The
+emulator is alive and idle the entire time. It self-resolves and the flow then passes, so it costs
+duration rather than correctness.
+
+An earlier version of this rule attributed one of those spikes to "tap-settling across ~8
+interaction points". That was arithmetic on a flow total, never a measurement, and it was wrong:
+the taps in that flow took 31s. Do not re-derive it - open `commands.json`.
+
+`.github/scripts/run-maestro-paired.sh` prints a per-flow duration table into the run summary, so
+a recurrence is visible without downloading an artifact.
 
 **Leading suspect is the emulator image, not the app.** The local AVD runs `google_apis`, and
 that image is already on record starving this app in CI - where it failed 3 of 4 runs and looked

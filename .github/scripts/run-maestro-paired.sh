@@ -213,11 +213,13 @@ maestro test \
 # PER-FLOW DURATIONS INTO THE RUN SUMMARY.
 #
 # This suite has a known bursty stall: one flow occasionally takes ~6m35s while
-# every other flow in the same run finishes in 17 to 40s. It has now happened
-# twice, on two DIFFERENT flows, so it tracks the runner rather than any one
-# flow. Both times the suite still PASSED, so nothing failed and nothing said
-# anything: the only evidence was a job that took 15 minutes instead of 9, and
-# recovering the detail meant downloading an artifact and reading timestamps.
+# every other flow in the same run finishes in 17 to 40s. Diagnosed from
+# commands.json as a hung `launchApp` blocking on host-side adb, twice on two
+# DIFFERENT flows, with the emulator provably alive throughout - see
+# .claude/rules/e2e-maestro-runs.md. Both times the suite still PASSED, so
+# nothing failed and nothing said anything: the only evidence was a job that took
+# 15 minutes instead of 9, and recovering the detail meant downloading an
+# artifact and reading timestamps.
 #
 # Printing the table makes the anomaly visible at a glance, run over run,
 # which is what turns "the suite feels slow lately" into a measurement. It is
