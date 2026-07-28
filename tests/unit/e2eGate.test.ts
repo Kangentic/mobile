@@ -187,10 +187,10 @@ describe.skipIf(!bashExecutable)('the E2E Tests (Maestro) required gate', () => 
   describe('passes a legitimate skip, and NAMES which one it was', () => {
     // A green check reading only "skipped" invites the reader to assume coverage
     // it did not provide, so each reason has to identify itself.
-    for (const skipReason of ['docs', 'draft']) {
+    for (const skipReason of ['no-app-change', 'draft']) {
       it(`passes, and names the reason, for a "${skipReason}" skip`, () => {
-        // Safe for both: a docs-only diff needs no E2E, and GitHub refuses to
-        // merge a draft, so nothing can land on either result.
+        // Safe for both: a diff that cannot change the APK needs no E2E, and
+        // GitHub refuses to merge a draft, so nothing can land on either result.
         const result = runGate({
           changesResult: 'success',
           runE2e: 'false',

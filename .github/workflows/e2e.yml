@@ -33,9 +33,9 @@ name: Emulator
 #
 # WHEN THE EXPENSIVE JOBS DO NOT RUN
 #
-# The `changes` job skips them for a documentation-only diff and for a DRAFT
-# pull request, and the gate treats a legitimate skip as a pass while naming
-# which skip it was. Draft is safe because GitHub refuses to merge a draft, so
+# The `changes` job skips them for a diff that cannot change the APK (docs,
+# .claude/, tests/ - reported as `no-app-change`) and for a DRAFT pull request,
+# and the gate treats a legitimate skip as a pass while naming which skip it was. Draft is safe because GitHub refuses to merge a draft, so
 # nothing can land on that result; marking the PR ready re-fires this workflow
 # (hence `ready_for_review` in the trigger types) and pays for the suites once,
 # before the merge that needs them.
@@ -156,9 +156,12 @@ jobs:
             echo "Non-documentation changes present: running E2E."
             echo "run-e2e=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Documentation-only change: skipping the E2E build and emulator."
+            # `no-app-change`, not `docs`: this branch now covers tests/ too, and
+            # a check reading "skipped (docs)" on a tests-only PR would be a lie
+            # of exactly the kind naming the reason was supposed to prevent.
+            echo "Nothing in this diff can change the APK: skipping the E2E build and emulators."
             echo "run-e2e=false" >> "$GITHUB_OUTPUT"
-            echo "skip-reason=docs" >> "$GITHUB_OUTPUT"
+            echo "skip-reason=no-app-change" >> "$GITHUB_OUTPUT"
           fi
 
   # Builds the binary the flows run against. The e2e profile is release-shaped
