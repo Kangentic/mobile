@@ -107,25 +107,45 @@ const config: ExpoConfig = {
     // rather than assumed absent. This list and the App Store Connect / Play
     // declarations in docs/store-listing.md are one consistency requirement;
     // they were updated together.
+    //
+    // Every type declares Analytics alongside AppFunctionality. That is not
+    // belt-and-braces, it is what the Play Data safety form actually accepted
+    // (2026-07-28): Play offers no "Diagnostics" PURPOSE at all - Diagnostics is
+    // a data TYPE there, next to Crash logs - so crash reporting has to be
+    // declared under App functionality plus Analytics. docs/store-listing.md
+    // previously prescribed "App functionality / Diagnostics only, not
+    // analytics", which named a purpose the form does not offer. Apple
+    // cross-checks the App Privacy answers against this generated manifest, so
+    // the ASC questionnaire declares the same two purposes and all three
+    // surfaces now agree.
     privacyManifests: {
       NSPrivacyCollectedDataTypes: [
         {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeCrashData',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
         {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePerformanceData',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
         {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeOtherDiagnosticData',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
         {
           // The per-install identifier confirmed above (contexts.device.id,
@@ -134,7 +154,10 @@ const config: ExpoConfig = {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeDeviceID',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
       ],
       // Required-reason APIs the Sentry SDK calls with no opt-out. Reason
