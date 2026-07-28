@@ -31,6 +31,7 @@ const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url)).replaceA
 const workflowPath = `${repositoryRoot}.github/workflows/e2e.yml`;
 
 interface GateStep {
+  name?: string;
   run?: string;
 }
 interface GateJob {
@@ -47,17 +48,30 @@ interface E2eWorkflow {
  * would keep passing after the workflow drifted away from it, which is the
  * failure mode this whole file is guarding against.
  */
+const GATE_STEP_NAME = 'Gate on suite results';
+
 function readGateScript(): string {
   const workflow = parseYaml(readFileSync(workflowPath, 'utf8')) as E2eWorkflow;
   const gateJob = workflow.jobs?.e2e;
   if (!gateJob) {
-    throw new Error('e2e.yml has no `e2e` job. If the gate was renamed, update this test AND main\'s branch protection.');
+    throw new Error("e2e.yml has no `e2e` job. If the gate was renamed, update this test AND main's branch protection.");
   }
-  const script = gateJob.steps?.find((step) => typeof step.run === 'string')?.run;
-  if (!script) {
-    throw new Error('The `e2e` gate job has no `run:` step to execute.');
+  // Selected BY NAME, not as "the first step with a `run:`". The gate job has one
+  // run step today, so positional selection works right up until someone adds a
+  // setup step above it, at which point this file would quietly start executing
+  // that instead and pass while testing nothing. Throwing beats guessing.
+  const gateStep = gateJob.steps?.find((step) => step.name === GATE_STEP_NAME);
+  if (!gateStep) {
+    const found = (gateJob.steps ?? []).map((step) => step.name ?? '(unnamed)').join(', ');
+    throw new Error(
+      `The \`e2e\` gate job has no step named "${GATE_STEP_NAME}". Found: ${found}. ` +
+        'Rename this constant to match, do NOT fall back to picking a step by position.',
+    );
   }
-  return script;
+  if (typeof gateStep.run !== 'string') {
+    throw new Error(`Step "${GATE_STEP_NAME}" has no \`run:\` script to execute.`);
+  }
+  return gateStep.run;
 }
 
 /**

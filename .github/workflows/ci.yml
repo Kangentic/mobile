@@ -38,24 +38,42 @@ concurrency:
 # headroom here is deliberate and is now thinner than it was; adding another
 # always-on job should come with a measurement rather than a guess.
 #
-# Shard counts are sized against MEASURED timings, not file counts. With the
-# node_modules cache warm, a run looked like: unit shards 14s/15s/21s, component
-# shards 35s/40s/42s/51s, lint 23s, typecheck 17s, native-config 16s.
+# Shard counts are sized against MEASURED timings, not file counts.
 #
-# Those component numbers predate jest.config.js running every component test on
-# BOTH platforms (jest-expo's default preset only ever resolved iOS), which roughly
-# doubles that tier's test count. Measured locally: 82 suites / 526 tests in 88s
-# unsharded, and 21 suites / 101 tests in 20s for shard 1 of 4. Expect the shards
-# nearer 60 to 90s, so the non-E2E gate is now closer to 90s than 60s. Still far
-# below the E2E path, which is what actually sets PR latency.
+# MEASURED 2026-07-28 (run 30330724138 and 30331755550, node_modules cache warm,
+# 66 unit files / 43 component files). Re-measure with:
+#   gh api repos/Kangentic/mobile/actions/runs/<run-id>/jobs \
+#     --jq '.jobs[] | [.name, .started_at, .completed_at] | @tsv'
 #
-# Two things follow. First, these tiers sit close to the job spin-up and
-# cache-restore floor (~10-15s), so extra shards buy almost nothing: the unit
-# tier is 2 shards rather than 3 because a third runner spent more time starting
-# up than testing. Components keep 4 because they are genuinely the slower tier.
-# Second, and more important: the whole non-E2E gate now finishes in under a
-# minute of wall clock, so PR latency is entirely E2E-bound. Do not re-shard
-# these tiers looking for a speedup that is not there - look at e2e.yml instead.
+#   unit shards        20s, 25s
+#   component shards   57s, 59s, 1m11s, 57s   (each runs BOTH platforms)
+#   lint               25-36s
+#   typecheck          19-21s
+#   native-config      25-33s
+#   whole gate         73-90s wall clock
+#
+# Three things follow, and the third is the one that matters as the suite grows.
+#
+# First, these tiers sit close to the job spin-up and cache-restore floor
+# (~10-15s), so extra shards buy almost nothing: the unit tier is 2 shards
+# rather than 3 because a third runner spent more time starting up than testing.
+# Components keep 4 because they are genuinely the slower tier (jest.config.js
+# runs every component test on both platforms, which roughly doubles its count).
+#
+# Second, the whole non-E2E gate finishes in about a minute, so PR latency is
+# entirely E2E-bound. Do not re-shard looking for a speedup that is not here.
+#
+# Third, the RE-SHARD RULE, so this does not need re-deriving. Add a shard to a
+# tier when its slowest shard passes ~3 minutes, and only then. Below that the
+# gate is dominated by e2e.yml and a faster tier changes nothing a human notices;
+# above it the tier starts to matter and the spin-up floor is amortised. Mind the
+# concurrency budget above when you do: the shard phase is currently 9 jobs
+# against an observed practical cap near 12.
+#
+# Deliberately NOT enforced by a tight `timeout-minutes`. A timeout that fires on
+# healthy growth turns a "should re-shard someday" into a broken gate, which is
+# the opposite of stable. The timeouts below are hang guards, sized generously on
+# purpose.
 #
 # The E2E tier lives in e2e.yml: it needs an Android emulator and a real APK, so
 # it has a different shape and a much longer runtime.

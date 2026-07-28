@@ -197,13 +197,44 @@ reset_logcat
 # No pm clear between the bootstrap and the suite below - that would unpair
 # the app that was just paired.
 exit_code=0
+suite_log="$RUNNER_TEMP/maestro-suite.log"
+# Through `tee` so the run still streams live (this job is 9 to 15 minutes; a
+# buffered redirect would show nothing until the end) while leaving a copy to
+# summarise from. `set -o pipefail` above is what keeps $? as maestro's status
+# rather than tee's.
 maestro test \
   --format JUNIT \
   --output "$RUNNER_TEMP/maestro-report.xml" \
   --test-output-dir "$RUNNER_TEMP/maestro-output" \
   --debug-output "$RUNNER_TEMP/maestro-debug" \
   --flatten-debug-output \
-  "$paired_flows_dir" || exit_code=$?
+  "$paired_flows_dir" 2>&1 | tee "$suite_log" || exit_code=$?
+
+# PER-FLOW DURATIONS INTO THE RUN SUMMARY.
+#
+# This suite has a known bursty stall: one flow occasionally takes ~6m35s while
+# every other flow in the same run finishes in 17 to 40s. It has now happened
+# twice, on two DIFFERENT flows, so it tracks the runner rather than any one
+# flow. Both times the suite still PASSED, so nothing failed and nothing said
+# anything: the only evidence was a job that took 15 minutes instead of 9, and
+# recovering the detail meant downloading an artifact and reading timestamps.
+#
+# Printing the table makes the anomaly visible at a glance, run over run,
+# which is what turns "the suite feels slow lately" into a measurement. It is
+# also the number to watch before promoting this job to a required check.
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### Paired suite, per flow"
+    echo ""
+    echo "| Result | Flow | Duration |"
+    echo "|---|---|---|"
+    grep -oE '\[(Passed|Failed)\] [^ ]+ \([^)]*\)' "$suite_log" \
+      | sed -E 's/\[(Passed|Failed)\] ([^ ]+) \((.*)\)/| \1 | `\2` | \3 |/' || true
+    echo ""
+    echo "Normal is 17 to 40s per flow. A single flow far outside that, with the rest normal,"
+    echo "is the known runner-side stall rather than a regression in that flow."
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
 
 if [ "$exit_code" -ne 0 ]; then
   echo "Maestro failed (exit $exit_code). Capturing diagnostics."
