@@ -52,18 +52,48 @@ reset_logcat() {
 dump_failure_diagnostics() {
   local debug_dir="$1"
 
-  # Whole buffer, not a tail: it was cleared just before the run.
+  # Whole buffer, not a tail: it was cleared just before the run. Know its
+  # limit though - on a suite that runs for minutes the emulator's buffer
+  # rolls over, so this can easily begin AFTER the interesting event. Run
+  # 30308333829 crashed at 22:01:54 and this file started at 22:07:47.
   adb logcat -d -v time > "$debug_dir/logcat-full.txt" || true
   adb exec-out screencap -p > "$debug_dir/final-screen.png" || true
 
-  # Is the process even alive? A dead app and a hung splash screen produce
-  # the same failed assertion but are completely different bugs.
+  # Maestro writes a per-flow crash-report.txt (the bionic tombstone) beside
+  # that flow's logs whenever the app process dies mid-flow, and it is the
+  # ONLY crash evidence that survives the buffer rollover above. Echo it
+  # first, because everything below is a point-in-time reading taken after
+  # the run and none of it can tell you a flow crashed. In run 30308333829
+  # this file existed, was never echoed, and the job instead reported a live
+  # pid - so a hard SIGSEGV 838ms into the first flow's launchApp read as a
+  # silent render failure.
+  local crash_report
+  local flow_name
+  local found_crash=""
+  for crash_report in "$debug_dir"/*/logs/crash-report.txt; do
+    [ -f "$crash_report" ] || continue
+    found_crash=1
+    flow_name="$(basename "$(dirname "$(dirname "$crash_report")")")"
+    echo "::error::The app process crashed during flow: $flow_name"
+    echo "--- native crash report ($flow_name) ---"
+    cat "$crash_report" || true
+  done
+  if [ -z "$found_crash" ]; then
+    echo "--- no per-flow crash-report.txt: no flow's app process died mid-flow ---"
+  fi
+
+  # Is the process alive RIGHT NOW? This runs once, after the whole run has
+  # finished, so it describes the end state and nothing else. It must not be
+  # read as "the app never died": a flow that crashes early is followed by
+  # later flows whose own launchApp starts a fresh process, and that healthy
+  # pid is exactly what disguised the crash above. The tombstones are the
+  # authority on whether anything died; this line is not.
   local app_pid
   app_pid="$(adb shell pidof com.kangentic.mobile 2>/dev/null | tr -d '\r' || true)"
   if [ -n "$app_pid" ]; then
-    echo "App process IS alive (pid $app_pid) - the app started and did not render, rather than dying."
+    echo "App process is alive (pid $app_pid) as of this dump, taken AFTER the run finished."
   else
-    echo "App process is NOT running - it either crashed or never started."
+    echo "App process is not running as of this dump, taken AFTER the run finished."
   fi
 
   # What the window manager thinks is focused, which distinguishes "our app
@@ -73,9 +103,14 @@ dump_failure_diagnostics() {
   grep -E 'mFocusedApp|mResumedActivity|topResumedActivity' "$debug_dir/activities.txt" || true
 
   # ActivityManager logs process start, death, and ANRs; ReactNativeJS and
-  # AndroidRuntime carry JS and native crashes. Filtering by these plus our
-  # package is what makes the dump readable.
+  # AndroidRuntime carry JS crashes. Filtering by these plus our package is
+  # what makes the dump readable. The bionic tombstone terms are here because
+  # a NATIVE crash matches none of the others: the fatal line is logged as
+  # `F/libc` by the dying process and the backtrace as `F/DEBUG` by the
+  # crash_dump helper, neither line carries our package name (logcat -v time
+  # prints a tag and a pid, not a package), and the header reads "Fatal
+  # signal", which the uppercase FATAL above does not match.
   echo "--- app, ActivityManager and crash lines ---"
-  grep -E 'com\.kangentic\.mobile|ReactNativeJS|AndroidRuntime|ActivityManager|FATAL|ANR |Hermes|SoLoader' \
+  grep -E 'com\.kangentic\.mobile|ReactNativeJS|AndroidRuntime|ActivityManager|FATAL|ANR |Hermes|SoLoader|F/libc|F/DEBUG|beginning of crash|Fatal signal|SIGSEGV|SIGABRT|tombstone' \
     "$debug_dir/logcat-full.txt" | tail -n 120 || true
 }

@@ -284,6 +284,11 @@ const config: ExpoConfig = {
       },
     ],
     './plugins/withAndroidPushService.ts',
+    // Inert unless EXPO_PUBLIC_KANGENTIC_E2E=1, which only the `e2e` build
+    // profile sets. Disables GWP-ASan for the E2E APK: the sampling allocator
+    // crashed the app 838ms after launch on a CI emulator, inside its own
+    // backtrace bookkeeping on a Hermes fcontext stack. See the plugin.
+    './plugins/withAndroidE2eGwpAsanOff.ts',
     // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
     // .github/workflows/build-ios.yml does. See the plugin for why signing has
     // to be scoped to the app target instead of passed to xcodebuild.

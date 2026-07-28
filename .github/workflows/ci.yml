@@ -246,6 +246,49 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # Runs AFTER the privacy-manifest upload above, deliberately: that step
+      # reads ios/ as produced by the Sentry-enabled `prebuild --platform all`,
+      # and this one regenerates the ANDROID project with a different flag set.
+      #
+      # Same shape, and same reasoning, as the Sentry steps above: every prebuild
+      # so far ran with EXPO_PUBLIC_KANGENTIC_E2E unset, so the ENABLED half of
+      # the two e2e-only native carve-outs was exercised by nothing short of an
+      # actual e2e APK build. Both are load-bearing for the paired Maestro suite
+      # and both are one silent plugin no-op away from costing a whole CI run to
+      # rediscover:
+      #
+      #   usesCleartextTraffic - without it Android refuses the dev relay's ws://
+      #     socket before any of our code runs, and pairing reports a bare
+      #     "connection closed (1006)".
+      #   gwpAsanMode=never    - without it the sampling allocator can take the
+      #     app down ~800ms after launchApp inside its own backtrace bookkeeping
+      #     (run 30308333829). It presents as an ordinary assertVisible failure
+      #     on whichever flow drew the sample, which reads as a product bug.
+      #
+      # No secret involved, so this works on fork PRs too.
+      - name: Generate the native project with the E2E carve-outs ENABLED
+        env:
+          EXPO_PUBLIC_KANGENTIC_E2E: '1'
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Confirm the E2E-only manifest carve-outs actually landed
+        # Only the ENABLED direction is checked here, because only it needs a
+        # prebuild. The inert direction is a plain `if` inside each plugin, which
+        # tests/unit/androidE2ePlugins.test.ts covers far more cheaply than a
+        # second prebuild and a second grep would.
+        run: |
+          set -euo pipefail
+          manifest=android/app/src/main/AndroidManifest.xml
+          if ! grep -q 'android:usesCleartextTraffic="true"' "$manifest"; then
+            echo "::error::The e2e build lost usesCleartextTraffic, so the app cannot reach the dev relay over ws:// and every paired Maestro flow would fail at pairing."
+            exit 1
+          fi
+          if ! grep -q 'android:gwpAsanMode="never"' "$manifest"; then
+            echo "::error::The e2e build lost gwpAsanMode=never, so GWP-ASan can crash the app moments after launch and redden an arbitrary paired flow."
+            exit 1
+          fi
+          echo "Both E2E-only manifest carve-outs are present."
+
       - name: Confirm the generated project is not committed
         # CNG: android/ must exist only as a build artifact. If prebuild output
         # ever shows up as tracked changes, someone committed the native tree.

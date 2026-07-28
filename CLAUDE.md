@@ -128,7 +128,13 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 - `npm run lint` - `eslint . --max-warnings 0`
 - `npm run test:unit` - Unit tests (`vitest run tests/unit`)
 - `npm run test:components` - Component tests (`jest tests/components`)
-- `maestro test .maestro/` - E2E flows against the Android emulator
+- `maestro --device <serial> test .maestro/smoke.yaml` - the unpaired smoke flow against the
+  Android emulator. The paired suite is a separate command with setup:
+  `maestro --device <serial> test .maestro/paired` needs a relay plus
+  `scripts/stubDesktopPeer.mjs` and a completed pairing first, which `/e2e` sequences for you.
+  **Never `maestro test .maestro/`**: the bare root sweeps in the `setup/` rig fixture, which
+  fails for lacking a `PAIRING_URI` and reads as a broken pairing screen rather than a
+  misconfigured command.
 - `eas update` - Push a JS-only OTA update
 
 ## Cloud-spend and public-write MCP tools
@@ -246,8 +252,8 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
 - Running tests you just added or modified, scoped to those files.
 
 **Never run unless the user explicitly asks, or `/test` is executing:**
-- An unscoped full-tier run - `npx vitest run` with no path, `maestro test .maestro/` for the
-  full suite.
+- An unscoped full-tier run - `npx vitest run` with no path, or either Maestro suite in full
+  (`.maestro/smoke.yaml`, `.maestro/paired`).
 
 If a run would execute tests you did not add or modify, it is a full-tier run regardless of
 mechanism: stop and let `/test` handle it.

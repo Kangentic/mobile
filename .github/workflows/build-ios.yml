@@ -51,6 +51,13 @@ on:
   # toolchain change broke the iOS build is to want a release and discover it then.
   # Monday 06:00 UTC picks up whatever landed over the weekend.
   #
+  # WEEKLY, not nightly, and that was considered. The drift this catches is
+  # toolchain drift, and GitHub's runner images roll roughly weekly, so a nightly
+  # cadence would spend seven 30-minute macOS jobs to observe the same change
+  # once. Breakage from our OWN code has a different net: /pull-request dispatches
+  # this workflow whenever a diff touches native inputs, so it is caught the same
+  # day without the cron.
+  #
   # Simulator only: see the job conditions below, which are written so a cron run
   # cannot fire a signed device build or an upload.
   schedule:
