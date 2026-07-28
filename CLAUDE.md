@@ -126,8 +126,8 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
   the wrong answer, because both runs resolve the same stale package. Fix: `npm install`.
   Run it alone with `npm run check:install`.
 - `npm run lint` - `eslint . --max-warnings 0`
-- `npm run test:unit` - Unit tests (`vitest run tests/unit`)
-- `npm run test:components` - Component tests (`jest tests/components`)
+- `npm run test:unit` - Unit Tests (`vitest run tests/unit`)
+- `npm run test:components` - Component Tests (`jest tests/components`)
 - `maestro --device <serial> test .maestro/smoke.yaml` - the unpaired smoke flow against the
   Android emulator. The paired suite is a separate command with setup:
   `maestro --device <serial> test .maestro/paired` needs a relay plus
@@ -360,7 +360,7 @@ ones:
 
 **Linting:** live. `.github/workflows/ci.yml` runs each check as its own parallel job, and each
 job name is a required status check on the protected `main`: `Lint (ESLint)`, `Type check (tsc)`,
-`Unit tests (Vitest)`, `Component tests (Jest)`, `Native config (CNG)`. Renaming a job
+`Unit Tests (Vitest)`, `Component Tests (Jest)`, `Native config (CNG)`. Renaming a job
 renames the required check, so main's branch protection must be updated in the same change.
 Conventions with no mechanical check of their own (shorthand names, em-dashes, personal info, UI
 copy brevity) remain enforced by review (`/code-review`, `crypto-pairing-auditor`,

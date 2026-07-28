@@ -1,10 +1,10 @@
 /**
- * Extracts the `E2E tests (Maestro)` gate script out of `.github/workflows/e2e.yml`
+ * Extracts the `E2E Tests (Maestro)` gate script out of `.github/workflows/e2e.yml`
  * and EXECUTES it against the job states the workflow can hand it, asserting the
  * exit code rather than grepping the source. Same approach, and same reasoning,
  * as `iosTestflightUpload.test.ts`.
  *
- * The regression this file exists for: `E2E tests (Maestro)` is a REQUIRED status
+ * The regression this file exists for: `E2E Tests (Maestro)` is a REQUIRED status
  * check on `main`, and it used to FAIL OPEN. `run-e2e` is a job output, so it is
  * the empty string whenever the `changes` job did not finish successfully, and
  * the skip branch tests `!= "true"`, which an empty string satisfies. So a
@@ -151,7 +151,7 @@ const ALL_GREEN: GateInputs = {
 // Skipped rather than failed when no usable bash exists, so a Windows developer
 // without Git Bash sees the reason instead of a mystery. The ubuntu runner that
 // hosts the unit tier always runs it, so this is never skipped in CI.
-describe.skipIf(!bashExecutable)('the E2E tests (Maestro) required gate', () => {
+describe.skipIf(!bashExecutable)('the E2E Tests (Maestro) required gate', () => {
   it('passes a full run where every suite is green', () => {
     const result = runGate(ALL_GREEN);
     expect(result.exitCode).toBe(0);
