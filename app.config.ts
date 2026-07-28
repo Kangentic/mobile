@@ -46,11 +46,26 @@ const config: ExpoConfig = {
     // section of docs/developer-guide.md. Required because
     // cli.appVersionSource is "local", which is CLI-wide and not Android-only.
     //
-    // Builds 1 and 2 are both spent (2026-07-26). Both uploaded successfully and
-    // were then REJECTED in processing for ITMS-90683, and a rejected build number
-    // is consumed just as a released one is: Apple requires the next upload to use
-    // a higher number. Hence 3.
-    buildNumber: '3',
+    // Builds 1 and 2 were uploaded on 2026-07-26 and REJECTED in processing for
+    // ITMS-90683. Build 3 was uploaded on 2026-07-27 and is VALID. The previous
+    // comment here claimed only 1 and 2 were spent, "hence 3", and was already
+    // stale: the 2026-07-28 release run was refused before the archive with
+    // "Build number 3 already exists on App Store Connect (state: VALID)".
+    //
+    // THE GATE IS GLOBAL PER APP, NOT PER VERSION STRING. Apple's own rule
+    // scopes CFBundleVersion uniqueness to the marketing version, and the
+    // comment in scripts/checkAppStoreBuild.mjs repeats that, but the conflict
+    // filter it actually fails on queries every build for the app and never
+    // looks at the version. The script is what stops the build, so its rule is
+    // the one that governs: bumping `version` does NOT free a used build number.
+    // Do not reason from Apple's documented rule here and expect a lower number
+    // to pass.
+    //
+    // Rejected builds never become Build resources, so they are invisible to
+    // that check: the 2026-07-27 run logged "Registered builds visible: 0"
+    // moments before uploading 3. The registered set is therefore {3}, and the
+    // next free number is 4.
+    buildNumber: '4',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
