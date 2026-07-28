@@ -21,16 +21,16 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
 
 - **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
   parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit tests (Vitest)`,
-  `Component tests (Jest)`, `Native config (expo prebuild)`. `.github/workflows/e2e.yml` adds
-  `Tests (Maestro)`. Plus `cla`. Never treat `CLA Assistant` alone as all-green: confirm the
+  `Component tests (Jest)`, `Native config (CNG)`. `.github/workflows/e2e.yml` adds
+  `E2E tests (Maestro)`. Plus `cla`. Never treat `CLA Assistant` alone as all-green: confirm the
   registered check names with `gh pr checks <branch>` and wait for every one of them. A real check
   can take a moment to register after a push, so if only `CLA Assistant` appears, re-poll rather
   than concluding no other check is coming.
 - **E2E is the long pole.** It builds a real signed APK and boots an Android emulator, so budget
   far longer for it than the other tiers and do not mistake its pending state for a hang. The
-  sharded tiers also surface per-shard jobs (`Unit test (1/2)`, `Component test (2/4)`); those are
+  sharded tiers also surface per-shard jobs (`Unit Test (1/2)`, `Component Test (2/4)`); those are
   an implementation detail, and the single gate check per tier is what protection requires.
-- **`Maestro (paired)` is advisory and must stay that way.** It runs the 11 paired flows and
+- **`E2E Test (paired)` is advisory and must stay that way.** It runs the 11 paired flows and
   reports on every PR, but is not a required check. If it goes red, diagnose it through
   `e2e-flow-doctor`; never drive it green by weakening the job, raising a timeout, or relaxing
   `tests/unit/ciSafeMaestroFlows.test.ts`. A red advisory check does not block the merge.
@@ -155,18 +155,18 @@ is the only check registered, do not call that all-green: the `ci.yml` checks ma
 registered yet, so re-poll before concluding it is genuinely the only one.
 
 **`--required` is load-bearing, do not drop it.** Without it the watch also waits on
-`Maestro (paired)`, which is advisory and cannot block a merge, and `--fail-fast` then aborts the
+`E2E Test (paired)`, which is advisory and cannot block a merge, and `--fail-fast` then aborts the
 whole poll on a red check that blocks nothing. Measured on PR #28: the required gate went green at
 04:06:15 and paired at 04:12:40, so an unfiltered watch spends **6m25 of dead wait on every PR**.
 
 Roughly **17 check runs report** on a PR to `main` (11 from `ci.yml`, 5 from `e2e.yml`, 1 from
 `cla.yml`). Seven of them are required and are the only ones this watch sees:
 `Lint (ESLint)`, `Type check (tsc)`, `Unit tests (Vitest)`, `Component tests (Jest)`,
-`Native config (expo prebuild)`, `Tests (Maestro)`, and `cla`. The rest are shard jobs and
+`Native config (CNG)`, `E2E tests (Maestro)`, and `cla`. The rest are shard jobs and
 intermediate jobs that the thin gate checks already aggregate.
 
 **Then read the advisory check once, without blocking on it.** After the required watch returns
-green, run `gh pr checks <branch> --json name,state,link` and pull out `Maestro (paired)`. Report
+green, run `gh pr checks <branch> --json name,state,link` and pull out `E2E Test (paired)`. Report
 its state in Step 8: green, red, or still running. If it is red, diagnose it through
 `e2e-flow-doctor` per the rule above; never drive it green by weakening the job. If it is still
 running, say so plainly rather than waiting for it.
@@ -204,7 +204,7 @@ When in doubt, run them: a runner is free and a broken build found after merge i
 
 **Dispatch AFTER Step 6's required checks are green, never alongside them.** These runs compete
 with `e2e.yml` for the same free-tier runner pool, and the E2E emulator jobs are the ones that
-suffer: on run 30305146576 the `Maestro (paired)` job was eligible at 21:11 and did not start
+suffer: on run 30305146576 the `E2E Test (paired)` job was eligible at 21:11 and did not start
 until 21:29, an 18 minute queue, with both build workflows dispatched on the same branch at 21:02.
 Other runs showed no gap, so this is contention rather than a guaranteed stall, but sequencing
 costs nothing and removes it.
@@ -243,7 +243,7 @@ Report the PR URL, branch name, commit count, and "All required checks green." I
 - The two build runs from Step 6b with their conclusions, or say plainly that they were skipped
   and why. "All checks green" without a build run behind it overstates what was verified, because
   the PR gate does not build either platform.
-- **`Maestro (paired)`'s state**, read non-blocking in Step 6. Say green, red, or still running.
+- **`E2E Test (paired)`'s state**, read non-blocking in Step 6. Say green, red, or still running.
   Never fold it into "all green": it is advisory, so a green required gate proves smoke coverage
   only. A reader who wants the paired suite's verdict has to be told it separately.
 
