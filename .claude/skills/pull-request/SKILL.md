@@ -171,6 +171,17 @@ its state in Step 8: green, red, or still running. If it is red, diagnose it thr
 `e2e-flow-doctor` per the rule above; never drive it green by weakening the job. If it is still
 running, say so plainly rather than waiting for it.
 
+**A CONFLICTING PR reports only `cla`, and it looks identical to "checks have not registered
+yet".** GitHub cannot compute a merge ref for a PR with conflicts, and `pull_request` workflows
+run from that merge ref, so `ci.yml` and `e2e.yml` never start at all. `cla.yml` still reports,
+because it triggers on `pull_request_target`, which resolves against the base branch instead.
+
+So the re-poll advice above has a floor: if only `cla` has reported after a couple of polls,
+check `gh pr view <pr> --json mergeable,mergeStateStatus` before waiting any longer.
+`CONFLICTING` / `DIRTY` means no amount of polling will help. Rebase onto `origin/main` and
+force-push with `--force-with-lease`. This is easy to hit when another PR merges while yours is
+in flight, which is exactly when you are least expecting the check list to be empty.
+
 **A stacked PR reports green having run nothing.** `ci.yml` and `e2e.yml` both filter
 `pull_request` to `branches: [main]`, so a PR whose base is another feature branch gets only
 `cla`. If the base is not `main`, the PR checks are not the gate: dispatch it instead with
