@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { LogBox } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -15,6 +16,18 @@ SplashScreen.preventAutoHideAsync().catch(() => {
   // Already hidden (fast refresh): nothing to hold.
 });
 SplashScreen.setOptions({ fade: true, duration: 220 });
+
+// Store-screenshot capture only: silence LogBox so its banner cannot land in a
+// listing image.
+//
+// Deliberately its OWN flag rather than riding on the mock flag. Mock mode is
+// the everyday UI-iteration rig, and hiding warnings there would turn a visible
+// mistake into an invisible one - the opposite of what a dev build is for. The
+// flag is set by the iOS capture job and nowhere else, and `__DEV__` keeps the
+// call out of production regardless.
+if (__DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_SHOTS === '1') {
+  LogBox.ignoreAllLogs(true);
+}
 
 // Dev-only inspect loop: the route probe mirrors the current router
 // location for `mobileInspect state route`. The compile-time-false gate in

@@ -195,6 +195,10 @@ jobs:
         if: inputs.screenshots == 'true'
         env:
           EXPO_PUBLIC_KANGENTIC_MOCK: '1'
+          # Silences LogBox for this bundle only. An unsigned simulator build
+          # has no keychain entitlement, so expo-secure-store throws on boot and
+          # LogBox puts a red banner across the bottom of every frame.
+          EXPO_PUBLIC_KANGENTIC_SHOTS: '1'
         run: |
           set -euo pipefail
           nohup npx expo start --dev-client --port 8081 > "$RUNNER_TEMP/metro.log" 2>&1 &
