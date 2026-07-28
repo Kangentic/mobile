@@ -217,6 +217,9 @@ jobs:
         env:
           APP_PATH: ${{ steps.verify.outputs.app-path }}
           METRO_URL: http://localhost:8081
+          # Read, not just uploaded: the capture waits for Metro to actually
+          # serve a bundle before screenshotting.
+          METRO_LOG: ${{ runner.temp }}/metro.log
         run: bash .github/scripts/capture-ios-screenshots.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/ios-screenshots"
 
       # Metro's log is the first thing worth reading when the capture shows a

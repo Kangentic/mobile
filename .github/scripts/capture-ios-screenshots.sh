@@ -86,23 +86,51 @@ xcrun simctl bootstatus "$device_id" -b
 echo "Installing $(basename "$app_path")"
 xcrun simctl install "$device_id" "$app_path"
 
-echo "Launching $bundle_id"
-xcrun simctl launch "$device_id" "$bundle_id"
-
-# Hand the dev-client launcher a server, or it sits on "Searching for
-# development servers..." forever and never loads any bundle - embedded or not.
+# Hand the dev client its server as a LAUNCH ARGUMENT, not a deep link.
 #
-# This is the step attempt 2 was missing. A Debug build gets us __DEV__ (and so
-# the mock desktop), but expo-dev-client owns startup and waits to be told where
-# to load from. The deep link is what the dev rig's own pointDevClientAtMetro
-# does on Android, and what `expo start` prints for a human to tap.
+# expo-dev-launcher checks `--initialUrl` out of its own process arguments
+# (EXDevLauncherController's initialUrlFromProcessInfo) BEFORE it shows any
+# launcher UI, so the app goes straight to the bundle. The simulator reaches the
+# runner's loopback directly, so no tunnel or LAN address is involved.
+#
+# The obvious alternative - `simctl openurl` with the
+# exp+mobile://expo-development-client/?url=... link - does reach the device, and
+# then iOS puts up an "Open in "Kangentic"?" confirmation that nothing on a
+# runner can tap. simctl has no tap primitive, so that route needs a UI driver
+# and this one does not. Metro's log was the tell: server up, never asked for a
+# bundle.
+echo "Launching $bundle_id"
 if [ -n "${METRO_URL:-}" ]; then
-  echo "Pointing the dev client at $METRO_URL"
-  # The simulator reaches the runner's own loopback directly, so no tunnel or
-  # LAN address is involved.
-  xcrun simctl openurl "$device_id" "exp+mobile://expo-development-client/?url=$METRO_URL"
-  echo "Waiting for the bundle to download and render..."
-  sleep 60
+  echo "  pointing the dev client at $METRO_URL"
+  xcrun simctl launch "$device_id" "$bundle_id" --initialUrl "$METRO_URL"
+
+  # Wait for Metro to actually SERVE the bundle rather than sleeping a guess.
+  # A cold bundle is slow enough that a fixed wait either races it (capturing a
+  # loading screen) or wastes minutes, and "the server was never asked" is
+  # precisely the failure the previous attempt hit - so it is worth detecting
+  # rather than hoping. The line looks like "iOS Bundled 41441ms index.js".
+  if [ -n "${METRO_LOG:-}" ]; then
+    echo "Waiting for Metro to serve the bundle..."
+    served=0
+    for _attempt in $(seq 1 60); do
+      if grep -q "Bundled" "$METRO_LOG" 2>/dev/null; then
+        served=1
+        echo "  Metro served the bundle."
+        break
+      fi
+      sleep 5
+    done
+    if [ "$served" -ne 1 ]; then
+      echo "::error::Metro never served a bundle, so the app never loaded. The dev client was not reached."
+      tail -n 40 "$METRO_LOG" || true
+      exit 1
+    fi
+  fi
+
+  echo "Letting the first render settle..."
+  sleep 20
+else
+  xcrun simctl launch "$device_id" "$bundle_id"
 fi
 
 # The mock's agent-life simulator raises its permission prompt at tick 20, and
