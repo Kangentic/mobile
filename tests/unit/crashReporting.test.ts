@@ -351,14 +351,18 @@ describe('crashNatively', () => {
 describe('throwTestError', () => {
   it('throws asynchronously, past the caller, rather than synchronously from the press handler', async () => {
     vi.useFakeTimers();
-    const crashReporting = await loadFreshCrashReporting();
+    try {
+      const crashReporting = await loadFreshCrashReporting();
 
-    // The point of a timer-deferred throw is that calling it does NOT throw
-    // synchronously - that is what lets it escape a React error boundary
-    // sitting around the caller.
-    expect(() => crashReporting.throwTestError()).not.toThrow();
-    expect(() => vi.runAllTimers()).toThrow('crash-test');
-
-    vi.useRealTimers();
+      // The point of a timer-deferred throw is that calling it does NOT throw
+      // synchronously - that is what lets it escape a React error boundary
+      // sitting around the caller.
+      expect(() => crashReporting.throwTestError()).not.toThrow();
+      expect(() => vi.runAllTimers()).toThrow('crash-test');
+    } finally {
+      // In a finally, so a failing assertion above cannot leave timers faked
+      // for whatever test is appended after this one.
+      vi.useRealTimers();
+    }
   });
 });

@@ -1039,7 +1039,9 @@ in `eas.json`) to reveal a "Crash reporting test" section in Settings with a JS-
 `Sentry.nativeCrash()` row, and to turn on the SDK's `debug: true` native logging. A native crash
 does not upload at crash time: sentry-android writes it to its outbox and flushes on the *next*
 `Sentry.init()`, so relaunch the app and watch `adb logcat -s Sentry` across the relaunch, not
-just the tap. Never dispatch a store-track build with this flag on.
+just the tap. You cannot dispatch a store-track build with this flag on: the `plan` job refuses a
+run that sets both `crash_test` and a `submit_track`, and `submit-play` additionally will not run
+for one. Dispatch them as two separate runs.
 
 **What that verification actually found**, on a `preview`-profile (arm64-v8a, release-signed,
 non-debuggable) install, cross-checked with `adb logcat`, mitmproxy on the same device, and the

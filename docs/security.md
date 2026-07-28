@@ -257,7 +257,7 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   default breadcrumbs and those ride a NATIVE crash. **Observed directly** (a crash-test build, a
   real native crash, the delivered event read back through the Sentry MCP - not inferred from
   source): `app.lifecycle` (foreground/background), `device.event` (battery level, charging,
-  screen on/off), and `network.event`, which carries `network_type`, `vpn_active`,
+  screen on/off), and `network.event`, which carries `action`, `network_type`, `vpn_active`,
   `signal_strength`, `download_bandwidth`, and `upload_bandwidth` - more detail than "coarse
   app-lifecycle timing" suggested before this was verified. None of it is session content.
   Closing this needs native configuration through a config plugin, not a JS option; it is a named

@@ -20,17 +20,30 @@ import { allowlistBreadcrumb, scrubEvent } from './scrubEvent';
  * `@sentry/react-native` destructures `beforeSend`, `beforeBreadcrumb` and
  * `integrations` out of the options before calling `initNativeSdk` (see
  * dist/js/wrapper.js), so the breadcrumb hardening below governs the JS
- * scope ONLY. sentry-cocoa and sentry-android keep their own default
- * auto-breadcrumbs (app foreground/background, activity or view-controller
- * lifecycle, connectivity and system events) and those ride a native crash
- * unfiltered. They carry no session content, but do not read the block
- * below as covering them: closing that needs native config through a config
- * plugin. Same story for iOS app-hang and watchdog-termination reporting,
+ * scope ONLY. sentry-android keeps its own default auto-breadcrumbs and
+ * those ride a native crash unfiltered. Observed directly on a delivered
+ * payload, not inferred: `app.lifecycle` (foreground/background),
+ * `device.event` (battery level, charging, screen on/off), and
+ * `network.event` (action, network type, VPN active, signal strength, and
+ * up/down bandwidth). sentry-cocoa was not itself tested, so treat iOS
+ * parity as an assumption. They carry no session content, but do not read
+ * the block below as covering them: closing that needs native config
+ * through a config plugin. A crash the OS catches also carries a
+ * per-install identifier (`contexts.device.id`, promoted into `user.id`)
+ * that `sendDefaultPii: false` does not stop and `scrubEvent` never sees;
+ * it is disclosed in docs/privacy-policy.md rather than suppressed.
+ * Same story for iOS app-hang and watchdog-termination reporting,
  * left at their native defaults (on) deliberately, because a hang and an
  * out-of-memory kill are the app breaking, which is what this reports.
  * `sendDefaultPii`, `attachScreenshot`, `attachViewHierarchy`,
  * `maxBreadcrumbs`, `ignoreErrors` and `enableAutoSessionTracking` DO reach
- * native (RNSentryModuleImpl.java bridges each explicitly).
+ * native (RNSentryModuleImpl.java bridges each explicitly). `ignoreErrors`
+ * is the one to read carefully: wrapper.js DOES list it in the destructure
+ * that strips options, so it looks stripped, but the lines just above that
+ * first translate it into `ignoreErrorsStr` / `ignoreErrorsRegex`, and those
+ * survive. The effect reaches native; only the key name changes. One real
+ * limit falls out of that translation - it keeps strings and RegExps only,
+ * so a function predicate would filter in JS and not natively.
  *
  * See docs/security.md and .claude/rules/crash-reporting-scope.md.
  */

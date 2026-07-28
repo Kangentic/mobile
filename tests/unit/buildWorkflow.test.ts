@@ -184,10 +184,13 @@ describe('build-android workflow and eas.json parity', () => {
   });
 
   it('exports the crash-test flag before prebuild, for the same GITHUB_ENV reason', () => {
-    // EXPO_PUBLIC_KANGENTIC_CRASHTEST is inlined by Metro and read by
-    // app.config.ts (through crashTestEnabled callers) at config-evaluation
-    // time, same as every other EXPO_PUBLIC_* flag. Exporting after prebuild
-    // would ship a build where Settings never reveals the crash-test rows.
+    // EXPO_PUBLIC_KANGENTIC_CRASHTEST is inlined by Metro when the bundle is
+    // built. Unlike SENTRY_AUTH_TOKEN, app.config.ts does NOT read this one
+    // (nothing in it references CRASHTEST) - the ordering requirement comes
+    // purely from the bundling step that prebuild sets up, so do not go
+    // looking for a config-evaluation reference that does not exist.
+    // Exporting after prebuild would ship a build where Settings never
+    // reveals the crash-test rows.
     const exportIndex = workflowSource.indexOf('Export the crash-test flag');
     const prebuildIndex = workflowSource.indexOf('expo prebuild --platform android');
     expect(exportIndex).toBeGreaterThan(-1);
@@ -197,13 +200,49 @@ describe('build-android workflow and eas.json parity', () => {
   it('keeps the crash-test flag out of eas.json and off by default', () => {
     // Same fork-quota reasoning as the Sentry export: dispatch-only, never
     // committed, defaults to false so a store-track build never carries it.
-    expect(workflowSource).toContain("default: false");
+    //
+    // Parsed rather than substring-matched: `toContain('default: false')` is
+    // green as long as ANY input in the file defaults to false, so a second
+    // boolean input would let crash_test's default silently flip to true
+    // while this still passed. A check that cannot fire is worse than none
+    // (.claude/rules/crash-reporting-scope.md).
+    const workflow = parseYaml(workflowSource) as {
+      on: { workflow_dispatch: { inputs: Record<string, { default?: unknown }> } };
+    };
+    expect(workflow.on.workflow_dispatch.inputs.crash_test.default).toBe(false);
     const easSource = readFileSync(`${repositoryRoot}eas.json`, 'utf8');
     expect(easSource).not.toContain('CRASHTEST');
   });
 
   it('forces the crash-test flag off on a tag build regardless of a stale dispatch input', () => {
     expect(workflowSource).toContain("CRASH_TEST: ${{ github.event_name != 'push' && inputs.crash_test == true }}");
+  });
+
+  it('refuses a crash-test build that also asks for a store submission', () => {
+    // The CRASH_TEST expression only excludes a `push` (tag) build, but a tag
+    // is not this project's release path - CLAUDE.md documents a DISPATCH with
+    // `-f submit_track=internal`. Without this, one dispatch carrying both
+    // crash_test and a real submit_track would upload a build with a
+    // Sentry.nativeCrash() button in Settings to a live Play track.
+    const workflow = parseYaml(workflowSource) as {
+      on: { workflow_dispatch: { inputs: Record<string, { default?: unknown }> } };
+      jobs: Record<string, { if?: string; steps?: { name?: string; if?: string }[] }>;
+    };
+
+    // The refusal below compares against the literal 'none', so it only stays
+    // a targeted guard while that is the default. If the default became ''
+    // the condition would be true on every ordinary dispatch and refuse every
+    // crash-test build - the affordance would silently stop existing.
+    expect(workflow.on.workflow_dispatch.inputs.submit_track.default).toBe('none');
+
+    const refusal = workflow.jobs.plan.steps?.find((step) =>
+      step.name === 'Refuse a crash-test build that is also a store submission'
+    );
+    expect(refusal?.if).toBe("inputs.crash_test == true && inputs.submit_track != 'none'");
+
+    // And the submit job itself will not run for a crash-test build even if
+    // the refusal above were ever removed.
+    expect(workflow.jobs['submit-play'].if).toContain('inputs.crash_test != true');
   });
 });
 
@@ -414,6 +453,20 @@ describe('build-ios workflow', () => {
     const ciSource = readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8');
     expect(ciSource).toContain('expo prebuild --platform android');
     expect(ciSource).toContain('expo prebuild --platform ios');
+  });
+
+  it('surfaces the generated iOS privacy manifest as an artifact, and fails rather than warns if it is missing', () => {
+    // PrivacyInfo.xcprivacy is a prebuild artifact, so this upload is the only
+    // way to read what the app actually declares to Apple without a signed
+    // build. `if-no-files-found: error` is the load-bearing half: downgraded to
+    // `warn`, a manifest that stopped generating would leave the job green and
+    // the declaration unverifiable, which is the exact failure the step exists
+    // to catch. The glob matches ios/<projectName>/, which is ios/Kangentic/
+    // for `name: 'Kangentic'` in app.config.ts.
+    const ciSource = readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8');
+    expect(ciSource).toContain('name: ios-privacy-manifest');
+    expect(ciSource).toContain('path: ios/*/PrivacyInfo.xcprivacy');
+    expect(ciSource).toContain('if-no-files-found: error');
   });
 
   it('asserts the app target actually got manual signing', () => {

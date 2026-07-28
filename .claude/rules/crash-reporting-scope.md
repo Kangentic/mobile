@@ -54,8 +54,12 @@ scrubber is therefore a second line of defence, never the control itself.
 - **The crash-test affordance (`crashTestEnabled`, `throwTestError`, `crashNatively` in
   `crashReporting.ts`) exists to verify the above against a real delivered payload, not to
   relax it.** `EXPO_PUBLIC_KANGENTIC_CRASHTEST` follows the DSN's own rule: dispatch-only, never
-  in `eas.json`, defaults off, forced off on a tag build. It also gates `debug: true`, which DOES
-  reach native (`initNativeSdk` does not strip it) - see the crash reporting section of
+  in `eas.json`, defaults off, forced off on a tag build. Note the tag clause is the weaker half:
+  this project releases by DISPATCH (`-f submit_track=internal`), not by tag, so the gate that
+  actually matters is the `plan` job refusing any dispatch that sets both `crash_test` and a real
+  `submit_track`, backed by `submit-play`'s own `inputs.crash_test != true`. Both are pinned by
+  `tests/unit/buildWorkflow.test.ts`. It also gates `debug: true`, which DOES reach native
+  (`initNativeSdk` does not strip it) - see the crash reporting section of
   `docs/developer-guide.md`.
 
 ## Known limitations, deliberately not papered over
