@@ -4,21 +4,37 @@
 #
 # Usage: capture-ios-screenshots.sh <path to .app> <bundle id> <output directory>
 #
-# THIS IS A PROBE, not a finished pipeline. The open question it answers is
-# whether the mock desktop can be made to appear in a simulator build at all.
+# THIS IS A PROBE, not a finished pipeline. It captures at the right size, but
+# it does NOT yet capture the right CONTENT. Two runs have narrowed why, and
+# both findings are recorded here so nobody pays for them twice.
 #
 # The problem: `isMockDesktopEnabled()` is `__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK
-# === '1'` (src/connection/mockDesktop.ts), and the simulator job builds
-# `-configuration Release`, so __DEV__ is false and the app comes up on the
-# unpaired "Connecting to your desktop..." screen. Without mock content there is
-# nothing worth screenshotting.
+# === '1'` (src/connection/mockDesktop.ts). Without mock content the app has an
+# empty feed and there is nothing worth screenshotting.
 #
-# The approach: the workflow builds with FORCE_BUNDLING=1 and DEV=true, which
-# should embed a DEV javascript bundle (__DEV__ true) into the Release-configured
-# app - no Metro server at runtime, and the __DEV__ guard in source untouched.
-# Whether Expo's bundling phase honours those variables is exactly what this run
-# finds out, and the artifact is the answer: populated feed = it worked, an
-# unpaired empty state = it did not.
+#   Attempt 1 - Release build with FORCE_BUNDLING=1 and DEV=true.
+#   FAILED. React Native's bundling script derives --dev from $CONFIGURATION and
+#   OVERWRITES any inherited DEV, so it bundled `--dev false` (visible in the
+#   build log's export:embed line) and __DEV__ stayed false. Captured a
+#   correctly-sized "No desktop paired" screen.
+#
+#   Attempt 2 - Debug build, keeping FORCE_BUNDLING=1.
+#   The bundle is now a dev bundle, but expo-dev-client's LAUNCHER takes over
+#   startup and shows "Searching for development servers...", so the embedded
+#   bundle is never loaded and the app never renders. Captured the launcher.
+#
+# What is left to try, in order:
+#   1. Run Metro on the runner and hand the launcher its URL
+#      (`xcrun simctl openurl <udid> "exp+mobile://expo-development-client/?url=http://localhost:8081"`).
+#      Known-working RN path and the natural next step now that Debug is proven
+#      to give __DEV__. Costs a background Metro process in the job.
+#   2. Widening the mock gate in source so a release-shaped build can show mock
+#      content. This weakens a deliberate guard and needs an explicit decision,
+#      not a convenience - do not reach for it to save a CI cycle.
+#
+# Note this is NOT on the critical path for an App Store submission: that shelf
+# is also blocked on the privacy questionnaire, the age rating and export
+# compliance (see .claude/skills/release/SKILL.md).
 #
 # Apple requires 1320x2868 for the 6.9-inch shelf and rejects anything else at
 # upload, so the size is ASSERTED here rather than assumed from the device name.
