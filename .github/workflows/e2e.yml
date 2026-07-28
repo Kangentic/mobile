@@ -335,17 +335,23 @@ jobs:
       # component. Revisit only with the licence question answered first.
       #
       # The bump was expected to cost a full cache miss on the first build, since
-      # the action version feeds the cache key. MEASURED, and it did not:
+      # the action version feeds the cache key. It did not, and the DURATION is
+      # not what says so:
       #
-      #   v4, run 30397988677   Gradle 6m 05s   1055 tasks: 640 executed, 415 from cache
-      #   v5, run 30401393044   Gradle 7m 12s   1055 tasks: 640 executed, 415 from cache
+      #   v4, run 30397988677   Build (APK) 7m 23s   640 executed, 415 from cache
+      #   v5, run 30401393044   Build (APK) 8m 28s   640 executed, 415 from cache
+      #   v5, run 30403140412   Build (APK) 8m 14s
       #
-      # Byte-identical task reuse. The Gradle User Home entry resolved through a
-      # RESTORE KEY rather than an exact one, and every sub-cache (dependencies,
-      # transforms, kotlin-dsl, wrapper) hit outright. The 67 seconds sit inside
-      # this job's own documented 6m 03s to 8m 37s spread, so there is no
-      # evidence the bump cost anything. Recorded because the prediction was
-      # wrong: do not "confirm" it by reading a slow first run as the cache.
+      # Byte-identical task reuse rules out invalidation: the Gradle User Home
+      # entry resolved through a RESTORE KEY rather than an exact one, and every
+      # sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright.
+      # Whether v5 is marginally slower for some OTHER reason is undetermined -
+      # both v5 runs are above the one v4 sample, but all three are inside this
+      # job's 6m 03s to 8m 37s spread, which is wider than the difference.
+      #
+      # Recorded because the stopwatch would have "confirmed" the wrong answer:
+      # the run WAS slower and the comment here said to expect that. Read the
+      # task line, not the duration.
       - uses: gradle/actions/setup-gradle@v5
 
       - name: Build the release APK
