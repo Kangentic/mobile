@@ -331,7 +331,7 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 ### What each check on a PR means
 
-A PR to `main` reports **about 17 check runs**, of which **7 are required**. GitHub prints a
+A PR to `main` reports **13 check runs**, of which **7 are required**. GitHub prints a
 "Required" badge on those and nothing on the rest, so the badge is the authority; this table is
 what each one actually proves and roughly what it costs. Durations are measured, not estimated.
 
@@ -341,18 +341,17 @@ what each one actually proves and roughly what it costs. Durations are measured,
 |---|---|---|---|
 | `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift | 29s |
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
-| `Unit Tests (Vitest)` | `ci.yml` | A thin gate: every `Unit Tests (n/2)` shard passed | 5s |
-| `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/4)` shard passed, on **both** platforms | 2s |
+| `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | ~40s |
+| `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
 | `Native config (CNG)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (docs-only or draft) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
 
-**The other ~10 are not required, and that is deliberate.** They fall into three groups:
+**The other 6 are not required, and that is deliberate.** They fall into two groups:
 
 | Check | Workflow | Why it is not required | Typical |
 |---|---|---|---|
-| `Unit Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Unit Tests (Vitest)` gate, so shard counts can be retuned without touching branch protection | ~22s each |
-| `Component Tests (1/4)`..`(4/4)` | `ci.yml` | Shards, same reasoning | ~55s each |
+| `Component Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Component Tests (Jest)` gate, so shard counts can be retuned without touching branch protection | ~80s each |
 | `Changes` | `e2e.yml` | Intermediate. It only classifies the diff. Note the gate now **fails closed** if this job does not succeed, so it cannot silently wave a PR through | 5s |
 | `Build (APK)` | `e2e.yml` | Intermediate. Its failure reaches you as a red `E2E Tests (Maestro)`, because a skipped suite is not a pass | 6 to 9m |
 | `E2E Tests (smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |
@@ -378,7 +377,7 @@ like an internal detail.
 
 | Qualifier | Means | Examples |
 |---|---|---|
-| A **dimension** | Does the work. One slice of a tier, or one suite | `Unit Tests (1/2)`, `Component Tests (3/4)`, `E2E Tests (smoke)`, `E2E Tests (paired)` |
+| A **dimension** | Does the work. One slice of a tier, or one suite | `Component Tests (1/2)`, `E2E Tests (smoke)`, `E2E Tests (paired)` |
 | A **tool** | The thin gate that aggregates the above, or a standalone check | `Unit Tests (Vitest)`, `Component Tests (Jest)`, `E2E Tests (Maestro)`, `Lint (ESLint)` |
 
 This deliberately does **not** copy the desktop repo, which distinguishes the two by case

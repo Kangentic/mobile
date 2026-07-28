@@ -28,8 +28,8 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
   than concluding no other check is coming.
 - **E2E is the long pole.** It builds a real signed APK and boots an Android emulator, so budget
   far longer for it than the other tiers and do not mistake its pending state for a hang. The
-  sharded tiers also surface per-shard jobs (`Unit Tests (1/2)`, `Component Tests (2/4)`); those are
-  an implementation detail, and the single gate check per tier is what protection requires.
+  component tier also surfaces per-shard jobs (`Component Tests (1/2)`, `(2/2)`); those are an
+  implementation detail, and the single gate check per tier is what protection requires.
 - **`E2E Tests (paired)` is advisory and must stay that way.** It runs the 11 paired flows and
   reports on every PR, but is not a required check. If it goes red, diagnose it through
   `e2e-flow-doctor`; never drive it green by weakening the job, raising a timeout, or relaxing
@@ -159,7 +159,7 @@ registered yet, so re-poll before concluding it is genuinely the only one.
 whole poll on a red check that blocks nothing. Measured on PR #28: the required gate went green at
 04:06:15 and paired at 04:12:40, so an unfiltered watch spends **6m25 of dead wait on every PR**.
 
-Roughly **17 check runs report** on a PR to `main` (11 from `ci.yml`, 5 from `e2e.yml`, 1 from
+**13 check runs report** on a PR to `main` (7 from `ci.yml`, 5 from `e2e.yml`, 1 from
 `cla.yml`). Seven of them are required and are the only ones this watch sees:
 `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`, `Component Tests (Jest)`,
 `Native config (CNG)`, `E2E Tests (Maestro)`, and `cla`. The rest are shard jobs and
