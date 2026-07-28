@@ -265,12 +265,18 @@ jobs:
       # when it already exists ("- Clearing android"), so a cache restored before
       # it would be deleted before Gradle ever saw it.
       #
-      # THE OPEN QUESTION this run answers: whether ninja actually reuses the
-      # restored objects. Prebuild regenerates android/ with fresh mtimes, and
-      # ninja is mtime-driven, so it may rebuild regardless of a perfect cache
-      # hit. If CMake stays near 1m53 with a hit, this buys nothing and should be
-      # deleted rather than tuned - the content-addressed fix is ccache, which
-      # needs plumbing through CNG and is a bigger change than this is worth.
+      # THE OPEN QUESTION: whether ninja actually reuses the restored objects.
+      # Prebuild regenerates android/ with fresh mtimes and ninja is mtime-driven,
+      # so a perfect cache hit may still rebuild everything.
+      #
+      # BASELINE, cache MISS (run 30387646820): buildCMakeRelWithDebInfo[x86_64]
+      # took 2m 07s, and the step saved a 16 MB entry. Compare the next run,
+      # which hits: the key covers native inputs only, so editing this file does
+      # not invalidate it.
+      #
+      # If CMake stays near 2m with a HIT, this buys nothing and should be
+      # DELETED rather than tuned - the content-addressed fix is ccache, which
+      # needs plumbing through CNG and is more machinery than ~2 minutes is worth.
       - name: Cache the native CMake build
         id: cxx-cache
         uses: actions/cache@v6
