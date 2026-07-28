@@ -156,13 +156,20 @@ env:
 - takeScreenshot:
     path: ${OUTPUT_DIR}/06-file-diff
     label: Unified diff for a changed file
+# `back` is not the same gesture on both platforms: Android has a real back
+# button, iOS gets an edge swipe, and on iOS this landed somewhere other than
+# the changes list - which failed the run AFTER four good frames had been taken.
+#
+# So do not assert where it landed. Return to the feed from wherever we are: tap
+# the session's back button only if we are still on the session screen.
 - back
-- extendedWaitUntil:
-    visible:
-      id: "changes-file-list"
-    timeout: 30000
-- tapOn:
-    id: "task-back-button"
+- runFlow:
+    when:
+      visible:
+        id: "session-screen"
+    commands:
+      - tapOn:
+          id: "task-back-button"
 - extendedWaitUntil:
     visible:
       id: "triage-home-list"

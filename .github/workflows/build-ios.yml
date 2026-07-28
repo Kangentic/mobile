@@ -306,10 +306,19 @@ jobs:
             test \
             --debug-output "$RUNNER_TEMP/maestro-ios" \
             -e OUTPUT_DIR=shots \
-            .maestro/screenshots/store-capture.yaml
+            .maestro/screenshots/store-capture.yaml \
+            || echo "::warning::The capture flow did not run to completion. Collecting whatever it captured before stopping."
+          # ALWAYS collect, even from a failed run.
+          #
+          # `set -e` plus a non-zero maestro exit skipped these lines entirely,
+          # which is how a run that captured four good frames handed back none:
+          # the flow died at the end and took the collection with it. A partial
+          # set is worth having - the App Store needs three, and a late failure
+          # can still have produced them.
+          #
           # Maestro re-roots takeScreenshot paths under its own run directory,
-          # exactly as it does on Android, so collect them into the shelf folder.
-          find "$RUNNER_TEMP/maestro-ios" -name '*.png' -path '*shots*' -exec cp {} "$RUNNER_TEMP/ios-screenshots/" \;
+          # exactly as it does on Android.
+          find "$RUNNER_TEMP/maestro-ios" -name '*.png' -path '*shots*' -exec cp {} "$RUNNER_TEMP/ios-screenshots/" \; || true
           ls -la "$RUNNER_TEMP/ios-screenshots"
 
       # SAY SO WHEN THE DRIVER PRODUCED NOTHING.
@@ -348,6 +357,11 @@ jobs:
           path: ${{ runner.temp }}/maestro-ios
           retention-days: 14
           if-no-files-found: warn
+          # Maestro writes its run under a DOT directory (.maestro/tests/...),
+          # and upload-artifact skips hidden files by default - so this artifact
+          # uploaded empty and the failure screenshot, which is the first thing
+          # worth reading when a flow stops, was unreachable.
+          include-hidden-files: true
 
       # Metro's log is the first thing worth reading when the capture shows a
       # loading screen or a red box: it names the failing module directly, which
