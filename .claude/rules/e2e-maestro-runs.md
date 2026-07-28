@@ -136,7 +136,7 @@ exactly like an app bug. Test a `default`-image AVD before hunting in `src/`.
   flaky suite to required is the "cannot go green" hazard the advisory status exists to avoid.
   The full promotion checklist is in `docs/developer-guide.md`'s "Two E2E suites, two jobs, one
   required".
-- **Test (live now):** `tests/unit/e2eGate.test.ts` extracts the `E2E tests (Maestro)` gate script out
+- **Test (live now):** `tests/unit/e2eGate.test.ts` extracts the `E2E Tests (Maestro)` gate script out
   of `e2e.yml` and EXECUTES it against every job state the workflow can produce, asserting exit
   codes. It exists because that required check used to **fail open**: `run-e2e` is a job output, so
   it is empty whenever the `changes` job did not succeed, and the skip branch's `!= "true"` test

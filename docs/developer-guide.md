@@ -341,29 +341,29 @@ what each one actually proves and roughly what it costs. Durations are measured,
 |---|---|---|---|
 | `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift | 29s |
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
-| `Unit tests (Vitest)` | `ci.yml` | A thin gate: every `Unit Test (n/2)` shard passed | 5s |
-| `Component tests (Jest)` | `ci.yml` | A thin gate: every `Component Test (n/4)` shard passed, on **both** platforms | 2s |
+| `Unit Tests (Vitest)` | `ci.yml` | A thin gate: every `Unit Tests (n/2)` shard passed | 5s |
+| `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/4)` shard passed, on **both** platforms | 2s |
 | `Native config (CNG)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
-| `E2E tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Test (smoke)` passed, **or** the suites were legitimately skipped (docs-only or draft) and it says which | 3s |
+| `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (docs-only or draft) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
 
 **The other ~10 are not required, and that is deliberate.** They fall into three groups:
 
 | Check | Workflow | Why it is not required | Typical |
 |---|---|---|---|
-| `Unit Test (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Unit tests (Vitest)` gate, so shard counts can be retuned without touching branch protection | ~22s each |
-| `Component Test (1/4)`..`(4/4)` | `ci.yml` | Shards, same reasoning | ~55s each |
+| `Unit Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Unit Tests (Vitest)` gate, so shard counts can be retuned without touching branch protection | ~22s each |
+| `Component Tests (1/4)`..`(4/4)` | `ci.yml` | Shards, same reasoning | ~55s each |
 | `Changes` | `e2e.yml` | Intermediate. It only classifies the diff. Note the gate now **fails closed** if this job does not succeed, so it cannot silently wave a PR through | 5s |
-| `Build (APK)` | `e2e.yml` | Intermediate. Its failure reaches you as a red `E2E tests (Maestro)`, because a skipped suite is not a pass | 6 to 9m |
-| `E2E Test (smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |
-| `E2E Test (paired)` | `e2e.yml` | **Advisory**, and the only one here that is a real signal rather than plumbing. See below | ~9m |
+| `Build (APK)` | `e2e.yml` | Intermediate. Its failure reaches you as a red `E2E Tests (Maestro)`, because a skipped suite is not a pass | 6 to 9m |
+| `E2E Tests (smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |
+| `E2E Tests (paired)` | `e2e.yml` | **Advisory**, and the only one here that is a real signal rather than plumbing. See below | ~9m |
 
 Two consequences worth internalising:
 
-- **A green `E2E tests (Maestro)` means smoke coverage, not the paired suite.** Read `E2E Test (paired)`
+- **A green `E2E Tests (Maestro)` means smoke coverage, not the paired suite.** Read `E2E Tests (paired)`
   separately, every time. `/pull-request` reports it explicitly for this reason.
 - **The required gate clears well before the workflow finishes.** Measured on PR #28: the seven
-  required checks were green at 04:06:15 while `E2E Test (paired)` ran until 04:12:40. Waiting on
+  required checks were green at 04:06:15 while `E2E Tests (paired)` ran until 04:12:40. Waiting on
   the whole check list costs about six minutes of nothing, which is why `/pull-request` watches
   with `gh pr checks --required`.
 
@@ -374,19 +374,22 @@ Title Case `name` with a parenthetical naming the tool or target (`Lint (ESLint)
 (`Build (${{ matrix.profile }})`). Without a `name` the Actions UI shows the raw key, which reads
 like an internal detail.
 
-**Sharded tiers encode shard-vs-gate in the CASE, and that is load-bearing:**
+**Every job is `<Subject> (<qualifier>)`, and the qualifier says which kind of job it is:**
 
-| Role | Form | Mobile | Desktop |
-|---|---|---|---|
-| Shard | Title Case, **singular** | `Unit Test (1/2)`, `Component Test (1/4)`, `E2E Test (smoke)` | `Unit Test (1/3)`, `E2E Test (1/5)` |
-| Gate (required) | lowercase, **plural**, plus the tool | `Unit tests (Vitest)`, `Component tests (Jest)`, `E2E tests (Maestro)` | `Unit tests (Vitest)`, `E2E tests (Electron)` |
+| Qualifier | Means | Examples |
+|---|---|---|
+| A **dimension** | Does the work. One slice of a tier, or one suite | `Unit Tests (1/2)`, `Component Tests (3/4)`, `E2E Tests (smoke)`, `E2E Tests (paired)` |
+| A **tool** | The thin gate that aggregates the above, or a standalone check | `Unit Tests (Vitest)`, `Component Tests (Jest)`, `E2E Tests (Maestro)`, `Lint (ESLint)` |
 
-`Unit test (1/2)` beside `Unit tests (Vitest)` differs by a single letter, and one of the two is a
-required check while the other is an implementation detail. Mobile had drifted to lowercase on the
-shards, which erased exactly that signal; restoring Title Case restores it and matches desktop.
+This deliberately does **not** copy the desktop repo, which distinguishes the two by case
+(`Unit Test (1/3)` for a shard against `Unit tests (Vitest)` for its gate). One capital letter is
+too little signal to survive being skimmed in a narrow column, and mobile had already drifted off
+that convention once, silently, which is what made the two rows look interchangeable. Putting the
+distinction in the qualifier means a reader does not have to know the rule to feel it: `1/2` is
+obviously a piece of something, `Vitest` is obviously the whole tier.
 
 The E2E workflow is named `Emulator`, not `E2E`, for the same reason: GitHub renders a check as
-`<workflow> / <job>`, so `E2E` plus `E2E tests (Maestro)` would have stuttered. A workflow name is
+`<workflow> / <job>`, so `E2E` plus `E2E Tests (Maestro)` would have stuttered. A workflow name is
 not a protection context, so it was the free half of that pair to change.
 
 **A stacked PR gets no CI.** `ci.yml` and `e2e.yml` both filter `pull_request` to
@@ -416,7 +419,7 @@ deadlock every PR on a check that never runs.
 
 **Docs-only PRs skip the E2E build.** `e2e.yml`'s `changes` job classifies the diff and the
 expensive jobs are conditional on it. This is deliberately not `paths-ignore` on the trigger:
-`E2E tests (Maestro)` is a required check, and a workflow skipped by `paths-ignore` never reports
+`E2E Tests (Maestro)` is a required check, and a workflow skipped by `paths-ignore` never reports
 its checks, so branch protection would wait forever and the PR could never merge. The workflow
 always runs, the costly jobs are skipped, and the gate treats a skipped suite as a pass. The
 fail-safe direction is to run: anything the classifier cannot confidently call documentation
@@ -475,7 +478,7 @@ image that caused this.
 
 **Two E2E suites, two jobs, one required.** `e2e.yml`'s `maestro` job runs `.maestro/smoke.yaml`
 against a fresh unpaired install (no relay, no pairing) and is what the required
-`E2E tests (Maestro)` check actually gates on. The separate `maestro-paired` job runs the 11 flows
+`E2E Tests (Maestro)` check actually gates on. The separate `maestro-paired` job runs the 11 flows
 under `.maestro/paired/`: it checks out the public `Kangentic/relay` repo (pinned to a SHA), builds
 and runs it on the runner, pairs the app to `scripts/stubDesktopPeer.mjs` over it - the same relay
 and stub the local `dev:stub --pair` rig uses - and then runs the suite
@@ -489,7 +492,7 @@ it until it has earned promotion.
 
 **The promotion criteria, concretely.** "Green across several PRs" was too vague to act on, so:
 
-1. **10 consecutive green `E2E Test (paired)` runs** across at least 5 distinct PRs. Consecutive
+1. **10 consecutive green `E2E Tests (paired)` runs** across at least 5 distinct PRs. Consecutive
    means no red run in between, not 10 greens cherry-picked out of a longer history.
 2. **No re-runs among them.** A flow that passes on the second attempt is a flaky flow, and
    promoting a flaky suite to required is precisely the "cannot go green" hazard. A re-run resets
@@ -497,7 +500,7 @@ it until it has earned promotion.
 3. **No open `e2e-flow-doctor` verdict** against any of the 11 flows.
 
 Check the streak with `gh run list --workflow=e2e.yml --limit 30 --json conclusion,headBranch,url`
-and read the `E2E Test (paired)` job on each, because the run-level conclusion also reflects the
+and read the `E2E Tests (paired)` job on each, because the run-level conclusion also reflects the
 required jobs.
 
 On meeting all three, promotion is a small deliberate edit, and every piece of it is meant to be
@@ -811,10 +814,10 @@ also runs natively on Windows against a local emulator, which is the right loop 
 a change (see the stage-ownership note in `CLAUDE.md` for why local E2E is deliberately *not* a
 pre-PR gate).
 
-**`E2E tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The 11 paired flows run in
+**`E2E Tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The 11 paired flows run in
 CI too, in the separate `maestro-paired` job, but that job is advisory (see "Two E2E suites, two
 jobs, one required" above) until it has been green across several PRs. A green required check is
-smoke coverage; read the `E2E Test (paired)` check separately for the paired suite's result. It
+smoke coverage; read the `E2E Tests (paired)` check separately for the paired suite's result. It
 carries no "Required" badge, which is how the checks list says it cannot block a merge.
 
 **iOS E2E does not exist yet, by any route.** An earlier version of this section claimed EAS
@@ -1208,7 +1211,7 @@ promises it does not, and a JavaScript `beforeSend` cannot filter native crash e
 controls have to stay at the source.
 
 **A native crash signature worth watching, not yet acting on.** While diagnosing a flaky
-`E2E Test (paired)` run on PR #27, the app died of a native SIGSEGV 0.9s after launch: GWP-ASan
+`E2E Tests (paired)` run on PR #27, the app died of a native SIGSEGV 0.9s after launch: GWP-ASan
 (`gwp_asan::GuardedPoolAllocator::deallocate`) under `android_unsafe_frame_pointer_chase`, with
 `libhermesvm.so` frames beneath it and zero app frames. Confirmed unrelated to the Sentry change
 (the dependency predated it) and a re-run on the identical APK went green, so n=1 and it was
