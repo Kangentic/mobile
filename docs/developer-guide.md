@@ -248,7 +248,9 @@ bound into the Noise prologue and forces all peers to upgrade in lockstep.
 ```
 app.config.ts                # Expo config; CNG - config plugins only, no checked-in native projects
 eas.json                     # EAS Build/Submit/Workflows profiles
-plugins/                     # Local Expo config plugins (NSE injection, keychain access group, notifee) - later phase
+plugins/                     # Local Expo config plugins: withAndroidPushService (notification
+                             #   permissions + FGS type), withIosManualSigning (App Store signing,
+                             #   inert outside CI), withAndroidE2eGwpAsanOff (e2e APK only)
 targets/nse/                 # iOS Notification Service Extension source, injected via plugin - later phase
 app/                          # expo-router route wrappers (thin - render the src/screens/ implementation)
   task/[taskId].tsx           # full-screen task view; file-diff.tsx hosts the per-file diff
@@ -324,14 +326,14 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
-| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus a `sync:branding:check` step for brand-asset drift), typecheck, sharded unit and component tiers, native config |
-| `e2e.yml` | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
+| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus a `sync:branding:check` step for brand-asset drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
+| `e2e.yml` (workflow name: `Emulator`) | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
 | `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload |
 
 ### What each check on a PR means
 
-A PR to `main` reports **13 check runs**, of which **7 are required**. GitHub prints a
+A PR to `main` reports **14 check runs**, of which **7 are required**. GitHub prints a
 "Required" badge on those and nothing on the rest, so the badge is the authority; this table is
 what each one actually proves and roughly what it costs. Durations are measured, not estimated.
 
@@ -347,11 +349,12 @@ what each one actually proves and roughly what it costs. Durations are measured,
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
 
-**The other 6 are not required, and that is deliberate.** They fall into two groups:
+**The other 7 are not required, and that is deliberate.** They fall into three groups:
 
 | Check | Workflow | Why it is not required | Typical |
 |---|---|---|---|
 | `Component Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Component Tests (Jest)` gate, so shard counts can be retuned without touching branch protection | 52-63s each |
+| `Release counters (store preflight)` | `ci.yml` | Registers on every PR, but is not in branch protection. It guards the hand-managed `versionCode` and `buildNumber` against reuse; promote it by adding the context, not by editing the job | seconds |
 | `Changes` | `e2e.yml` | Intermediate. It only classifies the diff. Note the gate now **fails closed** if this job does not succeed, so it cannot silently wave a PR through | 5s |
 | `Build (APK)` | `e2e.yml` | Intermediate. Its failure reaches you as a red `E2E Tests (Maestro)`, because a skipped suite is not a pass | 6 to 9m |
 | `E2E Tests (smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |
@@ -453,6 +456,25 @@ end to end, of which the Gradle step was 7m15):
 | `createBundleReleaseJsAndAssets` (Metro plus Hermes) | ~3m10 |
 | `buildCMakeRelWithDebInfo[x86_64]` | ~2m00 |
 | `mergeReleaseNativeLibs` through `packageRelease` (dex, package, sign) | ~1m00 |
+
+**Where the emulator job's time goes**, measured on run 30375937249's `E2E Tests (smoke)`. The
+job is ~2m and the emulator step is 1m 37s of it:
+
+| Phase | Cost |
+|---|---|
+| SDK component installs (build tools, emulator, system image) | 32s |
+| Emulator start to `Boot completed in 31552 ms` | 32s |
+| APK install | 5s |
+| The flow itself (`1/1 Flow Passed in 8s`) | 16s |
+| Settle and teardown | ~12s |
+
+**AVD snapshot caching was considered here and rejected on those numbers.** The obvious move is to
+cache `~/.android/avd` so the emulator boots from a snapshot, and the intuition was that boot
+dominates. It does not: boot is 32s, snapshot restore might take it to ~10s, so the ceiling is
+about 20 seconds off a ten-minute gate. It also costs a duplicated `android-emulator-runner` block
+and a cache step **on both emulator jobs**, and the SDK install is an equally large 32s that
+snapshot caching does not touch at all. Not worth the moving parts. Revisit only if the emulator
+jobs ever land on the critical path for a merge, which today only smoke does.
 
 Two things follow. The **JS bundle is the largest single phase and is not cacheable**: its input is
 the app's own source, which is what changed on every PR by definition.
@@ -835,7 +857,8 @@ presents as a wall of "has no exported member" errors in files nobody touched, a
 to check them (stash, re-run, "identical before and after, so pre-existing") confirms the wrong
 answer, because both runs resolve the same stale package. The fix is `npm install`.
 
-**Where each tier runs.** Unit and component run on every PR, sharded, from `ci.yml`. Android E2E
+**Where each tier runs.** Unit and component run on every PR from `ci.yml`: unit as one unsharded
+job, component split across two shards behind a thin gate. Android E2E
 runs on every PR from `e2e.yml`: it builds a signed `e2e` APK and drives it on an emulator. Maestro
 also runs natively on Windows against a local emulator, which is the right loop while implementing
 a change (see the stage-ownership note in `CLAUDE.md` for why local E2E is deliberately *not* a
@@ -1237,15 +1260,31 @@ option: several defaults in the SDK (console breadcrumbs especially) capture thi
 promises it does not, and a JavaScript `beforeSend` cannot filter native crash events, so the
 controls have to stay at the source.
 
-**A native crash signature worth watching, not yet acting on.** While diagnosing a flaky
-`E2E Tests (paired)` run on PR #27, the app died of a native SIGSEGV 0.9s after launch: GWP-ASan
-(`gwp_asan::GuardedPoolAllocator::deallocate`) under `android_unsafe_frame_pointer_chase`, with
-`libhermesvm.so` frames beneath it and zero app frames. Confirmed unrelated to the Sentry change
-(the dependency predated it) and a re-run on the identical APK went green, so n=1 and it was
-correctly left alone rather than papered over with `android:gwpAsanMode="never"`. Now that the
-DSN is live in production builds, this exact signature would arrive in Sentry as a native crash
-if it recurs. Only a real rate on user devices justifies the `gwpAsanMode` change; do not make it
-pre-emptively.
+**A native crash signature, now n=2 and suppressed for E2E only.** The app dies of a native
+SIGSEGV under 1s after launch: GWP-ASan (`gwp_asan::GuardedPoolAllocator::deallocate`) under
+`android_unsafe_frame_pointer_chase`, with `libhermesvm.so` frames beneath it and zero app frames.
+Seen first on PR #27, then again on run 30308333829, where it presented as
+`session-respawn-recovery` failing an `assertVisible` and read exactly like a product regression:
+the failure screenshot was the AOSP launcher, because the app was already dead.
+
+**It is not a detection**, which is the part that governs what to do about it.
+`deallocate` calling `RecordBacktrace` is the routine bookkeeping path that records where a
+guarded allocation was freed, not the error-reporting path, and no "GWP-ASan detected a memory
+error" report appears anywhere in the artifacts. The sampling allocator crashed doing its own
+housekeeping; nothing about our code was flagged.
+
+`plugins/withAndroidE2eGwpAsanOff.ts` therefore sets `android:gwpAsanMode="never"`, **gated on
+`EXPO_PUBLIC_KANGENTIC_E2E` so it reaches the `e2e` APK and nothing else**. That is not the same
+decision as suppressing it on user devices, and it does not pre-empt it: because every paired flow
+opens with `launchApp`, a sampled crash lands on whichever flow drew it, so leaving it on in CI
+means an arbitrary flow reddens for a reason that has nothing to do with the flow. That is a test
+harness problem, and it is worth solving separately from the product question.
+
+**The shipping question is still open, and is the thing to answer next.** The tombstone proves
+GWP-ASan was active on an AOSP `userdebug` x86_64 emulator. Whether the same default applies to
+`user` builds on arm64 devices, where users would hit the same crash, is unverified. Now that the
+DSN is live in production builds this exact signature would arrive in Sentry as a native crash, so
+a real rate there is what would justify widening the opt-out. Do not widen it pre-emptively.
 
 ## Credential inventory
 

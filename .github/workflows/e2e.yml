@@ -436,12 +436,20 @@ jobs:
     # roughly double the smoke job's.
     #
     # MEASURED in CI 2026-07-28: 9m 08s and 15m 11s for the SAME commit. Per flow
-    # is 17-40s; the whole spread between those two runs is ONE flow taking
-    # 6m 35s while the rest were normal. That stall has now happened twice, on two
-    # DIFFERENT flows, so it follows the runner rather than any one flow, and both
-    # runs still passed 11/11. run-maestro-paired.sh prints a per-flow table into
-    # the run summary so the next occurrence is visible without downloading an
-    # artifact.
+    # is 17-40s; the whole spread between those two runs is ONE flow stalling.
+    #
+    # DIAGNOSED, from commands.json in the paired artifacts: it is a hung
+    # `launchApp`, not diffuse slowness. Twice, on two different flows, that one
+    # command took 362.2s and 370.5s while every other command in the flow was
+    # normal and every other flow's launchApp in the same run was 1.1-2.9s. It
+    # blocks inside launchApp's first `adb shell pm grant` (649ms healthy), and
+    # device-logcat runs continuously through the window with no ANR and no
+    # mention of our package, so the emulator is alive and it is host-side adb.
+    #
+    # It self-resolves and the flow then passes, so it costs duration and not
+    # correctness; both runs were 11/11. run-maestro-paired.sh prints a per-flow
+    # table into the run summary so a recurrence is visible without downloading
+    # an artifact. Full write-up in .claude/rules/e2e-maestro-runs.md.
     #
     # THIS SUITE IS SERIAL AND UNSHARDED, which is the growth cliff worth knowing:
     # each flow added costs its own ~35s plus a `launchApp` cold boot, and nothing

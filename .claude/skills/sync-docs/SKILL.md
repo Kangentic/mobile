@@ -52,11 +52,11 @@ individual anchors whose source is genuinely not written yet stay forward-lookin
 
 | Anchor | What to extract | Source file(s) | Target doc | WHY |
 |--------|------------------|-----------------|------------|-----|
-| Capability verb list | The v1 capability verbs (`read-stream`, `read-board`, `read-diff`, `send-user-message`, `move-task`, `answer-permission-prompt`) | `@kangentic/protocol`'s `CAPABILITY_VERBS` (consumed via `src/channel/capabilityClient.ts`, never redeclared locally - see `protocol-types-from-package.md`) | architecture.md (canonical); security.md (cross-reference only) | The protocol's entire authorization surface; drift here is a security-relevant gap, not just a docs gap. |
+| Capability verb list | All **ten** capability verbs (`read-stream`, `read-board`, `read-diff`, `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`, `board-tool-read`, `board-tool-write`, `register-push`). Count them from the source rather than this cell: it listed only the first six for a while, which silently narrowed what the auditor checked | `@kangentic/protocol`'s `CAPABILITY_VERBS` (consumed via `src/channel/capabilityClient.ts`, never redeclared locally - see `protocol-types-from-package.md`) | architecture.md (canonical); security.md (cross-reference only) | The protocol's entire authorization surface; drift here is a security-relevant gap, not just a docs gap. |
 | Key-storage inventory | Every secret stored via `expo-secure-store` (identity key, per-pairing key, push-decrypt key, ExponentPushToken) | `src/pairing/**`, `src/notifications/**` | security.md | The key-storage rule (`secure-storage.md`) is only auditable if the inventory is complete. |
 | Notification categories | The set of push notification categories and their placeholder copy | `src/notifications/categoryCopy.ts`, `src/notifications/channels.ts` | architecture.md | Push privacy claims in security.md depend on an accurate category list. |
 | Test-tier commands | The exact `npm run`/`npx` command for each test tier | `package.json` scripts | developer-guide.md | Stale commands break the getting-started flow for new contributors. |
-| EAS profile names | The `development`/`preview`/`production` EAS Build/Submit profile names | `eas.json` | developer-guide.md | Contributors reference these by name when running `eas build`. |
+| EAS profile names | All **four** profile names: `development`, `preview`, `e2e`, `production`. Read them from `eas.json` rather than this cell, which omitted `e2e` for a while | `eas.json` | developer-guide.md | Contributors reference these by name when running `eas build`, and CI resolves them through `scripts/easProfile.mjs`. |
 
 ## Workflow
 

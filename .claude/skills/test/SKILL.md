@@ -80,8 +80,15 @@ and reads as a broken pairing screen rather than a misconfigured command. It als
 flows with no relay and no stub. `tests/unit/ciSafeMaestroFlows.test.ts` fails CI if a workflow
 ever points at the bare root, for exactly this reason.
 
-For iOS E2E, there is no local path (no Mac). iOS Maestro flows run on cloud simulators via EAS
-Workflows in CI, not through this skill.
+**iOS E2E does not exist, by any route.** Not locally (no Mac) and not in CI. An earlier version
+of this line claimed iOS Maestro flows "run on cloud simulators via EAS Workflows in CI", which was
+never true: there is no `.eas/workflows/` directory in this repo on any branch, so nothing was ever
+wired. `docs/developer-guide.md` debunks it at length and `README.md` says the same; this file was
+the last place still repeating it.
+
+What DOES exist for iOS is `build-ios.yml`'s simulator job, which compiles the app, launches it,
+and uploads a screenshot. That is a compile-and-launch smoke check, not a flow suite, and it is
+dispatch-triggered rather than part of any test tier.
 
 ---
 

@@ -159,11 +159,16 @@ registered yet, so re-poll before concluding it is genuinely the only one.
 whole poll on a red check that blocks nothing. Measured on PR #28: the required gate went green at
 04:06:15 and paired at 04:12:40, so an unfiltered watch spends **6m25 of dead wait on every PR**.
 
-**13 check runs report** on a PR to `main` (7 from `ci.yml`, 5 from `e2e.yml`, 1 from
+**14 check runs report** on a PR to `main` (8 from `ci.yml`, 5 from `e2e.yml`, 1 from
 `cla.yml`). Seven of them are required and are the only ones this watch sees:
 `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`, `Component Tests (Jest)`,
-`Native config (CNG)`, `E2E Tests (Maestro)`, and `cla`. The rest are shard jobs and
-intermediate jobs that the thin gate checks already aggregate.
+`Native config (CNG)`, `E2E Tests (Maestro)`, and `cla`. The rest are shard jobs, intermediate
+jobs that the thin gate checks already aggregate, and `Release counters (store preflight)`, which
+registers on every PR but is deliberately not a required context.
+
+Treat that list as a sanity check, not the source of truth. It has gone stale twice, once per
+rename and once when a new job landed on `main` mid-PR, which is exactly why the step below reads
+protection over the API instead of trusting it.
 
 ### The watch can return green having seen only SOME of the required checks
 
