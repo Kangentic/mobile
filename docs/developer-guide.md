@@ -495,7 +495,22 @@ eventually remove. `actions/setup-java@v5`, `android-actions/setup-android@v4` a
 - **`setup-android@v4` also changes the default cmdline-tools to 20.0**, which is a behaviour
   change and not just a runtime bump. It is the only one of the three on the critical path, so if
   `Build (APK)` breaks shortly after, pin `cmdline-tools-version` rather than reverting to a
-  runtime that is going away.
+  runtime that is going away. It built green first time on run 30401393044.
+
+**The `setup-gradle` bump was predicted to cost a cold cache, and did not.** The action version
+feeds the cache key, so the first build after the bump was expected to miss outright. Measured
+instead:
+
+| | Gradle | Task reuse |
+|---|---|---|
+| v4, run 30397988677 | 6m 05s | `1055 actionable tasks: 640 executed, 415 from cache` |
+| v5, run 30401393044 | 7m 12s | `1055 actionable tasks: 640 executed, 415 from cache` |
+
+Byte-identical reuse. The Gradle User Home entry resolved through a **restore key** rather than an
+exact one, and every sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright. The
+67-second difference sits inside this job's own documented 6m 03s to 8m 37s spread, so there is no
+evidence the bump cost anything. Recorded because the prediction was wrong in a way that would have
+been easy to "confirm" by reading one slow run as proof.
 
 **`cla`, the fourth required check, still runs on Node 20 and there is no upgrade.**
 `contributor-assistant/github-action@v2.6.1` declares `node20` and v2.6.1 is the latest release.
