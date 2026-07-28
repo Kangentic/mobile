@@ -91,9 +91,20 @@ commit and skipped its check:
    will usually read `BLOCKED` because the maintainer's own PR has no approving review; that
    block is expected and waived by `--admin` in Step 3. If a required CHECK is failing or still
    pending, stop or wait; never `--admin` past a red or pending check.
+3b. **Check the SET, not just the states.** A check that has not registered yet is absent from the
+   rollup, and absent reads exactly like green when you are only scanning states. `E2E Tests
+   (Maestro)` registers late by design: its job `needs` the APK build and the smoke suite, so it
+   does not appear for roughly ten minutes after a push. Compare explicitly:
+   - `gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`
+   - `gh pr checks <pr> --required --json name,state`
+
+   Every context from the first must appear in the second, passing. A missing one means "not
+   reported yet", so wait; it does **not** mean the check does not apply. `--admin` waives the
+   review requirement only, so it will happily merge past a required check that never ran.
 4. If the rebase re-triggered checks and they are pending, wait with
-   `gh pr checks <pr> --watch --fail-fast --interval 30` (Bash `timeout` up to its max,
-   600000ms). If they go red, stop and report.
+   `gh pr checks <pr> --required --watch --fail-fast --interval 30` (Bash `timeout` up to its max,
+   600000ms), then re-run the 3b comparison, because the watch returns as soon as the checks
+   registered SO FAR are done. If they go red, stop and report.
 
 ## Step 3 - Merge the PR
 

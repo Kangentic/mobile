@@ -165,6 +165,26 @@ Roughly **17 check runs report** on a PR to `main` (11 from `ci.yml`, 5 from `e2
 `Native config (CNG)`, `E2E Tests (Maestro)`, and `cla`. The rest are shard jobs and
 intermediate jobs that the thin gate checks already aggregate.
 
+### The watch can return green having seen only SOME of the required checks
+
+`--watch` finishes when every **currently registered** check is done. It has no idea a required
+check is still coming, and `E2E Tests (Maestro)` registers LATE: its job `needs` the APK build and
+the smoke suite, so it does not appear for roughly ten minutes. Observed on PR #29: the watch
+exited 0 with six required checks green, `Build (APK)` still running, and `E2E Tests (Maestro)`
+not yet registered at all. Reporting all-green there would have been wrong.
+
+So a returned watch is **not** the completion signal. Confirm the set before believing it:
+
+1. Read the authoritative list, rather than trusting the one written above to be current:
+   `gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`
+2. Read what has actually reported: `gh pr checks <branch> --required --json name,state`
+3. **Every context from step 1 must be present in step 2 and in a passing state.** If any is
+   missing, it has not registered yet: re-run the watch. If any is pending, same.
+
+Only when the two sets match is the PR green. This is the same trap as the `CLA Assistant`-only
+case above, one level up: absence reads exactly like success, and only an explicit comparison
+tells them apart.
+
 **Then read the advisory check once, without blocking on it.** After the required watch returns
 green, run `gh pr checks <branch> --json name,state,link` and pull out `E2E Tests (paired)`. Report
 its state in Step 8: green, red, or still running. If it is red, diagnose it through
