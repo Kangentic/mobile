@@ -333,11 +333,16 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 ### What each check on a PR means
 
-A PR to `main` reports **14 check runs**, of which **7 are required**. GitHub prints a
+A PR to `main` reports **14 check runs**, of which **8 are required**. GitHub prints a
 "Required" badge on those and nothing on the rest, so the badge is the authority; this table is
 what each one actually proves and roughly what it costs. Durations are measured, not estimated.
 
-**The 7 required checks** (these, and only these, block a merge):
+**Treat the count below as a snapshot, not a contract.** It has been wrong three times in a single
+day: twice from renames, and once when `Release counters (store preflight)` was promoted to
+required while an unrelated PR was in flight. `gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`
+is the only authority, which is why `/pull-request` reads it rather than trusting a list.
+
+**The 8 required checks** (these, and only these, block a merge):
 
 | Check | Workflow | What a green result proves | Typical |
 |---|---|---|---|
@@ -346,15 +351,15 @@ what each one actually proves and roughly what it costs. Durations are measured,
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
 | `Native config (CNG)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
+| `Release counters (store preflight)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
 
-**The other 7 are not required, and that is deliberate.** They fall into three groups:
+**The other 6 are not required, and that is deliberate.** They fall into two groups:
 
 | Check | Workflow | Why it is not required | Typical |
 |---|---|---|---|
 | `Component Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Component Tests (Jest)` gate, so shard counts can be retuned without touching branch protection | 52-63s each |
-| `Release counters (store preflight)` | `ci.yml` | Registers on every PR, but is not in branch protection. It guards the hand-managed `versionCode` and `buildNumber` against reuse; promote it by adding the context, not by editing the job | seconds |
 | `Changes` | `e2e.yml` | Intermediate. It only classifies the diff. Note the gate now **fails closed** if this job does not succeed, so it cannot silently wave a PR through | 5s |
 | `Build (APK)` | `e2e.yml` | Intermediate. Its failure reaches you as a red `E2E Tests (Maestro)`, because a skipped suite is not a pass | 6 to 9m |
 | `E2E Tests (smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |

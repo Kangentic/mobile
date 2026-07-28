@@ -357,8 +357,13 @@ jobs:
   # diff without changing anything that ships, and this job must not fail for
   # that. The commit that recorded which counters v0.2.0 spent did exactly that.
   #
-  # NOT a required status check until it is added to main's branch protection.
-  # See the job-name note at the top of this file.
+  # THIS IS NOW A REQUIRED STATUS CHECK on main (promoted 2026-07-28), so its
+  # `name:` below is a protection context and cannot be renamed without updating
+  # protection in the same change. See the job-name note at the top of this file.
+  #
+  # It runs on `pull_request` only, which is deliberate and worth understanding
+  # before anyone widens the trigger: a required context that never reports on a
+  # given event would block every merge that arrives by that path.
   release-counters:
     name: Release counters (store preflight)
     if: github.event_name == 'pull_request'
