@@ -368,6 +368,19 @@ jobs:
               echo "::warning::$name.png is not one of the expected store shots. Something other than the capture flow wrote into the output directory."
             fi
           done
+
+          # NAME WHAT IS MISSING. The capture flow now SKIPS a page it cannot
+          # reach rather than aborting the run, so that one bad navigation
+          # cannot also cost every frame after it. That is the right trade only
+          # if a skip is loud: otherwise a short set reads as "the flow ran"
+          # and nobody learns which screen stopped working.
+          while read -r name; do
+            [ -n "$name" ] || continue
+            if [ ! -f "$RUNNER_TEMP/ios-screenshots/$name.png" ]; then
+              echo "::warning::$name.png was never captured. That page was not reached - read the ios-screenshot-maestro artifact's failure screenshot."
+              echo "- Missing: \`$name.png\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done <<< "$expected"
           {
             echo "### iOS store screenshots"
             echo ""

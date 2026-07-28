@@ -126,6 +126,15 @@ env:
 # the mock emits one line per second.
 - tapOn:
     id: "session-mode-terminal"
+# Retried for the same reason the Changes tap below is: same switcher, same
+# dispatched-but-ignored failure mode. Guarded, so a tap that worked is free.
+- runFlow:
+    when:
+      notVisible:
+        id: "terminal-webview"
+    commands:
+      - tapOn:
+          id: "session-mode-terminal"
 - extendedWaitUntil:
     visible:
       id: "terminal-webview"
@@ -135,27 +144,64 @@ env:
 - takeScreenshot:
     path: ${OUTPUT_DIR}/02-session-terminal
     label: Live terminal mirror of the desktop PTY
+# PAGING TO CHANGES IS RETRIED, because a tap here has been observed to
+# DISPATCH AND DO NOTHING.
+#
+# On one iOS run Maestro reported this tap COMPLETED after 3.6s and the pager
+# never turned - the failure screenshot showed the Terminal page still
+# selected. `retryIfNoChange` is false, so nothing tried again and the flow
+# died holding two frames. The likely mechanism is the quick-key bar: it
+# appears with the Terminal page and shifts this switcher, so a tap aimed from
+# a hierarchy read a moment earlier lands beside the segment rather than on it.
+# A second tap re-reads the hierarchy and hits.
+#
+# Each retry is guarded on the destination, so a tap that worked costs one
+# hierarchy read and nothing else.
 - tapOn:
     id: "session-mode-changes"
-- extendedWaitUntil:
-    visible:
-      id: "changes-file-list"
-    timeout: 30000
-- takeScreenshot:
-    path: ${OUTPUT_DIR}/04-session-changes
-    label: Changed files in the agent's worktree
-# The unified diff itself. The file LIST alone left most of a phone screen
-# empty and sells the review story weakly; the coloured +/- lines are the frame
-# that actually says "read your agent's changes before they land".
-- tapOn:
-    id: "changes-file-0"
-- extendedWaitUntil:
-    visible:
-      id: "file-diff-lines"
-    timeout: 30000
-- takeScreenshot:
-    path: ${OUTPUT_DIR}/06-file-diff
-    label: Unified diff for a changed file
+- runFlow:
+    when:
+      notVisible:
+        id: "changes-file-list"
+    commands:
+      - tapOn:
+          id: "session-mode-changes"
+- runFlow:
+    when:
+      notVisible:
+        id: "changes-file-list"
+    commands:
+      - tapOn:
+          id: "session-mode-changes"
+# CONDITIONAL, NOT ASSERTED, so that losing this page cannot also cost the feed
+# and board frames that come after it.
+#
+# Twice now a single mid-flow navigation failure has thrown away every
+# remaining shot: once at the file diff (losing the feed and the board), once
+# here (losing four). An assert is the right tool when the run exists to prove
+# the screen works - this run exists to COLLECT, and a partial set is worth
+# having. What is missing is reported by name afterwards rather than inferred
+# from a count, so a skipped page is still loud.
+- runFlow:
+    when:
+      visible:
+        id: "changes-file-list"
+    commands:
+      - takeScreenshot:
+          path: ${OUTPUT_DIR}/04-session-changes
+          label: Changed files in the agent's worktree
+      # The unified diff itself. The file LIST alone left most of a phone screen
+      # empty and sells the review story weakly; the coloured +/- lines are the
+      # frame that actually says "read your agent's changes before they land".
+      - tapOn:
+          id: "changes-file-0"
+      - extendedWaitUntil:
+          visible:
+            id: "file-diff-lines"
+          timeout: 30000
+      - takeScreenshot:
+          path: ${OUTPUT_DIR}/06-file-diff
+          label: Unified diff for a changed file
 # RETURNING TO THE FEED IS PLATFORM-SPLIT, and getting it wrong cost a whole
 # iOS run: `back` did nothing on the file-diff screen, the flow stopped there,
 # and the two frames that come after it were never taken.
