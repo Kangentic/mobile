@@ -107,7 +107,11 @@ Use descriptive branch names: `fix/pairing-timeout`, `feature/board-swipe`, `doc
     `scripts/stubDesktopPeer.mjs` and a completed pairing first
 
   Both run locally against the Android emulator and on an emulator in CI. There is no iOS E2E yet
-  by any route
+  by any route.
+
+  **CI pins the Maestro CLI to a specific version**, so match it locally or a flow can pass on your
+  machine and fail the gate. The version is in `.claude/rules/e2e-maestro-runs.md` (one place, so it
+  cannot drift), and `maestro --version` tells you what you have
 
 Quick local pass before opening a PR:
 
@@ -148,7 +152,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - `Release counters (store preflight)` guards the hand-managed `versionCode` and `buildNumber`
   against reuse. It runs on pull requests only, and it **is** required, so a red run there blocks
   the merge.
-- `E2E Tests (paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required
+- `E2E Tests (Paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required
   and cannot block a merge. GitHub prints a "Required" badge on the checks that are, so the
   absence of one is how the list tells you. Do not silence a red run there: it is real coverage
   of the pairing ceremony and the secure channel.

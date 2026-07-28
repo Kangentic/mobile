@@ -70,6 +70,15 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The SAME pin as e2e.yml, because this runs the SAME `.maestro/smoke.yaml`.
+  # Two platforms on two Maestro versions means the next iOS-only flow failure
+  # gets attributed to iOS when the variable that actually differed was the tool.
+  # tests/unit/ciSafeMaestroFlows.test.ts asserts the two workflows agree, so
+  # bumping means editing both plus .claude/rules/e2e-maestro-runs.md together.
+  MAESTRO_VERSION: '2.7.0'
+  MAESTRO_CLI_NO_ANALYTICS: '1'
+
 jobs:
   # An unsigned iOS simulator build. Its purpose is not distribution: it proves
   # the native tree compiles at all, which for a long time was unverified here.
@@ -181,6 +190,7 @@ jobs:
           set -euo pipefail
           brew tap facebook/fb
           brew install facebook/fb/idb-companion
+          # Installs the pinned MAESTRO_VERSION from the workflow-level `env:`.
           curl -Ls 'https://get.maestro.mobile.dev' | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 

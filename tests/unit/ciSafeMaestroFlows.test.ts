@@ -31,10 +31,13 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const e2eWorkflowSource = readFileSync(`${repositoryRoot}.github/workflows/e2e.yml`, 'utf8');
+const iosWorkflowSource = readFileSync(`${repositoryRoot}.github/workflows/build-ios.yml`, 'utf8');
+const maestroRuleSource = readFileSync(`${repositoryRoot}.claude/rules/e2e-maestro-runs.md`, 'utf8');
 
 /**
  * Entries the REQUIRED `E2E Tests (Maestro)` gate may run, via the `maestro` job's
@@ -161,5 +164,84 @@ describe('CI runs only the Maestro entries this guard knows about', () => {
     for (const entry of CI_SAFE_ENTRIES) {
       expect(existsSync(`${repositoryRoot}${entry}`)).toBe(true);
     }
+  });
+});
+
+/**
+ * The E2E RUNNER is pinned, not just the flows it runs.
+ *
+ * `curl -Ls https://get.maestro.mobile.dev` installs `releases/latest` when
+ * MAESTRO_VERSION is unset, so an unpinned workflow installs whatever Maestro
+ * shipped that morning. `E2E Tests (Maestro)` is a REQUIRED status check, so a
+ * release in someone else's repository could turn it red overnight with no
+ * commit here - the exact hazard e2e.yml pins the relay checkout to a SHA to
+ * avoid, arriving through the tool rather than a sibling repo.
+ *
+ * Two jobs install Maestro, which is why the pin lives in a workflow-level
+ * `env:` instead of twice at step level: one literal cannot drift from the
+ * other if there is only one literal. These assertions cover what is left -
+ * that it exists, that no job shadows it, and that CI and a developer's laptop
+ * are told to run the same version.
+ */
+interface WorkflowEnvelope {
+  env?: Record<string, string>;
+  jobs?: Record<string, { env?: Record<string, string>; steps?: { run?: string }[] }>;
+}
+
+function readE2eWorkflow(): WorkflowEnvelope {
+  return parseYaml(e2eWorkflowSource) as WorkflowEnvelope;
+}
+
+/** Jobs with a step that runs the Maestro installer. */
+function readJobsInstallingMaestro(): string[] {
+  const jobs = readE2eWorkflow().jobs ?? {};
+  return Object.entries(jobs)
+    .filter(([, job]) => (job.steps ?? []).some((step) => step.run?.includes('get.maestro.mobile.dev')))
+    .map(([jobName]) => jobName);
+}
+
+describe('the Maestro CLI is pinned, not floating', () => {
+  it('declares a concrete version at workflow level', () => {
+    // A bare `x.y.z`. The installer prefixes it to resolve
+    // `releases/download/cli-<version>/maestro.zip`, so a value carrying the
+    // `cli-` prefix already would 404 and redden the required check.
+    expect(readE2eWorkflow().env?.MAESTRO_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('finds the jobs that install it', () => {
+    // Non-vacuity guard. Every assertion below iterates this list, so an
+    // extraction that silently stops matching would leave them all trivially
+    // true while the pin went unenforced.
+    expect(readJobsInstallingMaestro()).toEqual(expect.arrayContaining(['maestro', 'maestro-paired']));
+  });
+
+  it('lets no job shadow the pin with its own MAESTRO_VERSION', () => {
+    // A job-level `env:` wins over the workflow-level one, so this is how a
+    // single job could quietly go back to floating while the top of the file
+    // still reads as pinned.
+    const jobs = readE2eWorkflow().jobs ?? {};
+    for (const jobName of readJobsInstallingMaestro()) {
+      expect(jobs[jobName]?.env?.MAESTRO_VERSION).toBeUndefined();
+    }
+  });
+
+  it('installs the same version the local recipe tells a developer to run', () => {
+    // Pinning CI without pinning the local instruction just moves the problem:
+    // a developer on a newer CLI writes a flow that passes on their machine and
+    // fails the gate, and nothing in either place explains why. The rule file is
+    // where the local recipe is read, so it carries the same number.
+    const pinnedInCi = readE2eWorkflow().env?.MAESTRO_VERSION;
+    expect(maestroRuleSource).toContain(`Maestro ${pinnedInCi}`);
+  });
+
+  it('runs the iOS smoke flow on that same version', () => {
+    // build-ios.yml runs `.maestro/smoke.yaml` too, on a macOS runner. Two
+    // platforms on two Maestro versions means the next iOS-only flow failure
+    // gets attributed to iOS when the variable that actually differed was the
+    // tool. That workflow is dispatch-only and cannot block a PR, which is why
+    // it is asserted here rather than given its own guard - the point is that
+    // the versions agree, not that iOS has a gate.
+    const iosWorkflow = parseYaml(iosWorkflowSource) as WorkflowEnvelope;
+    expect(iosWorkflow.env?.MAESTRO_VERSION).toBe(readE2eWorkflow().env?.MAESTRO_VERSION);
   });
 });

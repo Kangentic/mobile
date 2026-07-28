@@ -352,7 +352,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
 | `Native config (CNG)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
 | `Release counters (store preflight)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
-| `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
+| `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (Smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
 
 **The other 6 are not required, and that is deliberate.** They fall into two groups:
@@ -362,15 +362,15 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Component Tests (1/2)`, `(2/2)` | `ci.yml` | Shards. An implementation detail behind the `Component Tests (Jest)` gate, so shard counts can be retuned without touching branch protection | 52-63s each |
 | `Changes` | `e2e.yml` | Intermediate. It only classifies the diff. Note the gate now **fails closed** if this job does not succeed, so it cannot silently wave a PR through | 5s |
 | `Build (APK)` | `e2e.yml` | Intermediate. Its failure reaches you as a red `E2E Tests (Maestro)`, because a skipped suite is not a pass | 6 to 9m |
-| `E2E Tests (smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |
-| `E2E Tests (paired)` | `e2e.yml` | **Advisory**, and the only one here that is a real signal rather than plumbing. See below | ~9m |
+| `E2E Tests (Smoke)` | `e2e.yml` | Intermediate. This is the suite the required gate reads | ~2m |
+| `E2E Tests (Paired)` | `e2e.yml` | **Advisory**, and the only one here that is a real signal rather than plumbing. See below | ~9m |
 
 Two consequences worth internalising:
 
-- **A green `E2E Tests (Maestro)` means smoke coverage, not the paired suite.** Read `E2E Tests (paired)`
+- **A green `E2E Tests (Maestro)` means smoke coverage, not the paired suite.** Read `E2E Tests (Paired)`
   separately, every time. `/pull-request` reports it explicitly for this reason.
 - **The required gate clears well before the workflow finishes.** Measured on PR #28: the seven
-  required checks were green at 04:06:15 while `E2E Tests (paired)` ran until 04:12:40. Waiting on
+  required checks were green at 04:06:15 while `E2E Tests (Paired)` ran until 04:12:40. Waiting on
   the whole check list costs about six minutes of nothing, which is why `/pull-request` watches
   with `gh pr checks --required`.
 
@@ -381,19 +381,29 @@ Title Case `name` with a parenthetical naming the tool or target (`Lint (ESLint)
 (`Build (${{ matrix.profile }})`). Without a `name` the Actions UI shows the raw key, which reads
 like an internal detail.
 
-**Every job is `<Subject> (<qualifier>)`, and the qualifier says which kind of job it is:**
+**Every job is `<Subject> (<qualifier>)`, and the qualifier is written the way the thing it names
+is normally written:**
 
-| Qualifier | Means | Examples |
+| The qualifier is | Written as | Examples |
 |---|---|---|
-| A **dimension** | Does the work. One slice of a tier, or one suite | `Component Tests (1/2)`, `E2E Tests (smoke)`, `E2E Tests (paired)` |
-| A **tool** | The thin gate that aggregates the above, or a standalone check | `Unit Tests (Vitest)`, `Component Tests (Jest)`, `E2E Tests (Maestro)`, `Lint (ESLint)` |
+| A **tool** | Its own name, whatever case that is | `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`, `Native config (CNG)`, `E2E Tests (Maestro)` |
+| A **shard** | `n/m` | `Component Tests (1/2)`, `(2/2)` |
+| Anything else | Sentence case prose | `E2E Tests (Smoke)`, `E2E Tests (Paired)`, `Release counters (store preflight)` |
 
-This deliberately does **not** copy the desktop repo, which distinguishes the two by case
-(`Unit Test (1/3)` for a shard against `Unit tests (Vitest)` for its gate). One capital letter is
-too little signal to survive being skimmed in a narrow column, and mobile had already drifted off
-that convention once, silently, which is what made the two rows look interchangeable. Putting the
-distinction in the qualifier means a reader does not have to know the rule to feel it: `1/2` is
-obviously a piece of something, `Vitest` is obviously the whole tier.
+`tsc` is lowercase because that is the binary's name, not because it is a lesser kind of job.
+**A slug is never a qualifier:** `E2E Tests (smoke)` was `e2e.yml`'s matrix key leaking into the
+checks list, and it read as a typo next to the capitalised gate it belongs to. The matrix now
+carries a separate `label:` for display, so the artifact name can stay a slug while the check name
+is prose.
+
+**What the name deliberately does not encode: whether a row is a worker or the gate above it.**
+Two attempts at that are recorded here so a third does not get made. The desktop repo does it by
+case (`Unit Test (1/3)` for a shard against `Unit tests (Vitest)` for its gate); mobile then tried
+lowercase suite names. Both spend a casing distinction on saying something GitHub's own "Required"
+badge already says, in a column too narrow for one capital letter to survive a skim, and mobile had
+already drifted off the desktop convention once, silently. `1/2` is self-evidently a piece of
+something; the badge says the rest. It is the same argument `e2e.yml` uses for not writing
+"advisory" into the paired job's name.
 
 The E2E workflow is named `Emulator`, not `E2E`, for the same reason: GitHub renders a check as
 `<workflow> / <job>`, so `E2E` plus `E2E Tests (Maestro)` would have stuttered. A workflow name is
@@ -451,27 +461,129 @@ it; that was deferred so a change to the E2E path could not break the release pa
 to watch when doing it is the reusable workflow's concurrency group colliding with a direct
 dispatch. Separately, `profile=all` is implemented but unmeasured.
 
-**Where the E2E build's time actually goes**, measured on run 30305146576 (`Build (APK)`, 8m37
-end to end, of which the Gradle step was 7m15):
+### What is pinned, and what is deliberately not
+
+A required status check can be reddened by a release in somebody else's repository, with no commit
+here. `E2E Tests (Maestro)` has three such exposures and they are treated differently on purpose.
+
+- **The Maestro CLI is pinned.** `curl -Ls https://get.maestro.mobile.dev` installs
+  `releases/latest` unless `MAESTRO_VERSION` is set, so every run used to install whatever shipped
+  that morning - currently 2.7.0. It is now a workflow-level `env:` in `e2e.yml`, read by both
+  emulator jobs, and the `Report the Maestro version` step **asserts** the installed version equals
+  the pin rather than printing it for a human who is not reading. Maestro is the thing whose
+  behaviour against these specific flows can change under you, which is what earns it a pin.
+- **The relay is pinned to a SHA**, for the same reason, one repository over.
+- **`reactivecircus/android-emulator-runner@v2` is deliberately left floating.** Its surface is
+  "boot an emulator and run a script", which is stable in a way a test runner's flow semantics are
+  not, and pinning it to a SHA buys a maintenance chore against a risk that has not materialised.
+  This is a judgement, not an oversight; revisit it if that action ever breaks a run.
+- **The local recipe carries the same Maestro version** (`.claude/rules/e2e-maestro-runs.md`), and
+  `tests/unit/ciSafeMaestroFlows.test.ts` asserts the two agree, that the pin exists at all, and
+  that no job shadows it with its own `env:`. Pinning CI alone would just move the problem: a
+  developer on a newer CLI writes a flow that passes locally and fails the gate, with nothing in
+  either place explaining why.
+
+**GitHub Actions are kept off Node 20**, which GitHub is already force-running on Node 24 and will
+eventually remove. `actions/setup-java@v5`, `android-actions/setup-android@v4` and
+`gradle/actions/setup-gradle@v5` were the last three declaring `node20`. Two notes on those bumps:
+
+- **`setup-gradle` is on v5 and must not be bumped to v6 casually.** v6 extracted this action's
+  caching into `gradle-actions-caching`, a proprietary component that is not open source and is
+  governed by Gradle's commercial Terms of Use, which upgrading accepts on the project's behalf.
+  This repository is AGPLv3 and dual-licensed, so that is a licensing decision for a human. v6 also
+  removed configuration-cache support pending a reimplementation inside that same component.
+- **`setup-android@v4` also changes the default cmdline-tools to 20.0**, which is a behaviour
+  change and not just a runtime bump. It is the only one of the three on the critical path, so if
+  `Build (APK)` breaks shortly after, pin `cmdline-tools-version` rather than reverting to a
+  runtime that is going away.
+
+**`cla`, the fourth required check, still runs on Node 20 and there is no upgrade.**
+`contributor-assistant/github-action@v2.6.1` declares `node20` and v2.6.1 is the latest release.
+It passes today because GitHub force-runs it on Node 24. Watch it: when Node 20 is removed for
+real, the fix is a fork, a replacement action, or dropping the bot, and none of those is a
+five-minute job to discover under time pressure.
+
+**Concurrency cancels superseded PR runs, never runs on `main`.** Both workflows use
+`cancel-in-progress: ${{ github.event_name == 'pull_request' }}` rather than a blanket `true`.
+A cache is only shared with every branch once it has been written from the **default** branch, so
+the push-to-`main` run is what fills both the Gradle build cache (`setup-gradle` restores
+everywhere but saves only on the default branch, which is where `Build (APK)`'s "415 from cache"
+comes from) and the `node_modules` cache. Under a blanket `true`, two merges landing close together
+cancelled the first `main` run mid-build and the cache it was about to write never landed, so the
+next PR paid for it. PR runs use `refs/pull/N/merge` and were never in the same concurrency group
+as a `main` run, so nothing about PR cancellation changes.
+
+**The critical path to a merge is ~9m30**, and only three jobs are on it. Measured end to end on
+run 30397988677:
+
+| Job | Window | Cost |
+|---|---|---|
+| `Changes` | 20:49:13 to 20:49:18 | 5s |
+| `Build (APK)` | 20:49:20 to 20:56:43 | 7m 23s |
+| `E2E Tests (Smoke)` | 20:56:51 to 20:58:36 | 1m 45s |
+| `E2E Tests (Maestro)` (the gate) | 20:58:39 to 20:58:41 | 2s |
+
+`E2E Tests (Paired)` runs alongside smoke and finishes at 21:05:43, six to seven minutes after the
+gate is already green. It is not on this path, which is exactly why `/pull-request` does not wait
+for it, and why optimising it buys no merge latency.
+
+**Where `Build (APK)`'s 7m 23s goes** (same run; Gradle itself reported `BUILD SUCCESSFUL in 6m 5s`,
+`1055 actionable tasks: 640 executed, 415 from cache`):
 
 | Phase | Cost |
 |---|---|
-| Job setup, checkout, Node, JDK, Android SDK, prebuild | ~1m20 |
-| Gradle configure and dependency resolution | ~1m10 |
-| `createBundleReleaseJsAndAssets` (Metro plus Hermes) | ~3m10 |
-| `buildCMakeRelWithDebInfo[x86_64]` | ~2m00 |
-| `mergeReleaseNativeLibs` through `packageRelease` (dex, package, sign) | ~1m00 |
+| Job setup, checkout, Node deps (cache hit), JDK, Android SDK, prebuild | ~1m 05 |
+| `setup-gradle` (Gradle cache restore) | 26s |
+| Gradle configure and dependency resolution | ~1m 01 |
+| Metro bundle, `Android Bundled 86307ms index.js (4282 modules)` | 1m 26 |
+| Third-party CMake (`expo-modules-core`, `reanimated`, `gesture-handler`) | overlaps the above, tails ~1m 35 past it |
+| `:app:buildCMakeRelWithDebInfo[x86_64]` | 1m 45 |
+| `mergeReleaseNativeLibs` through `packageRelease` | 13s |
 
-**Where the emulator job's time goes**, measured on run 30375937249's `E2E Tests (smoke)`. The
-job is ~2m and the emulator step is 1m 37s of it:
+**Read that table as a graph, not a list.** An earlier version of it summed the phases and made
+Metro look like the largest, at "~3m10". It is not: Metro runs *concurrently* with the third-party
+CMake builds under `--parallel`, and the 3m10 was the two of them wall-clocked together. **Native
+C++ compilation is the long pole**, roughly 3m20 of a 6m05 Gradle build once the dependency
+modules and `:app:` are counted together. That matters because it changes where a speedup would
+have to come from: not from Metro, and not from anything Gradle's own build cache can reach, since
+external native build tasks are not cacheable. ccache is the only lever, and see below for why it
+has not been pulled.
+
+**Where the emulator job's time goes**, measured on run 30397988677's `E2E Tests (Smoke)`. The job
+is 1m 45s and the emulator step is 1m 30s of it:
 
 | Phase | Cost |
 |---|---|
-| SDK component installs (build tools, emulator, system image) | 32s |
-| Emulator start to `Boot completed in 31552 ms` | 32s |
-| APK install | 5s |
-| The flow itself (`1/1 Flow Passed in 8s`) | 16s |
-| Settle and teardown | ~12s |
+| SDK component installs (build tools, emulator, system image) | 29s |
+| AVD create | 1s |
+| Emulator start to `Emulator booted.` | 33s |
+| Unlock, ABI probe, APK install | 6s |
+| The flow itself (`1/1 Flow Passed in 8s`) | 17s |
+| Teardown | ~1s |
+
+**The "20 seconds to shutdown gracefully" line is not a cost.** Teardown prints `Wait for emulator
+(pid N) 20 seconds to shutdown gracefully before kill; you can set environment variable
+ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL...`, which reads like 20 seconds spent politely closing an
+emulator nobody will use again. It is a **ceiling**. The emulator exits well inside it and the wait
+ends: `emu kill` to the last teardown line was **1.0s** on smoke (20:58:33.83 to 20:58:34.86) and
+**0.9s** on paired (21:05:38.70 to 21:05:39.58). Setting that variable would save nothing and would
+introduce a hard kill on a process mid-write. Do not.
+
+Likewise `ERROR | Failed to find ColorBuffer: <n>` in the paired log is swiftshader bookkeeping
+noise on a headless GPU, not a failure. It appeared three times in an 11/11 green run.
+
+**Where `E2E Tests (Paired)`'s non-flow time goes** (8m 58s job, `11/11 Flows Passed in 5m 48s`):
+SDK install 30s, emulator boot 33s, APK install 5s, relay plus stub plus pairing URI 2s, and the
+**pairing bootstrap at 1m 12s** - of which a single `Input text ${PAIRING_URI}` command is **40.7s**
+(20:58:53.19 to 20:59:33.90). Maestro types the URI a character at a time over its driver, and the
+URI is a public key plus a token plus a relay address.
+
+That 40.7s is **not being fixed**, deliberately. Every route to it is worse than 40 seconds on a job
+that is advisory and off the critical path: the clipboard cannot be set from adb on API 29+ without
+a foreground app; `adb shell input text` also types character by character and would need the URI's
+`//` escaped; and the deep-link route needs OS routing of `kangentic-pair://`, which is a later
+phase. What is left is changing the pairing ceremony itself, which is the security-critical path
+this suite exists to prove.
 
 **AVD snapshot caching was considered here and rejected on those numbers.** The obvious move is to
 cache `~/.android/avd` so the emulator boots from a snapshot, and the intuition was that boot
@@ -481,8 +593,8 @@ and a cache step **on both emulator jobs**, and the SDK install is an equally la
 snapshot caching does not touch at all. Not worth the moving parts. Revisit only if the emulator
 jobs ever land on the critical path for a merge, which today only smoke does.
 
-Two things follow. The **JS bundle is the largest single phase and is not cacheable**: its input is
-the app's own source, which is what changed on every PR by definition.
+The **JS bundle is not cacheable** in any case: its input is the app's own source, which is what
+changed on every PR by definition.
 
 And **caching `android/app/.cxx` does not work.** This was tried and measured on 2026-07-28 rather
 than argued about, so the numbers are the answer:
@@ -546,15 +658,18 @@ it until it has earned promotion.
 
 **The promotion criteria, concretely.** "Green across several PRs" was too vague to act on, so:
 
-1. **10 consecutive green `E2E Tests (paired)` runs** across at least 5 distinct PRs. Consecutive
-   means no red run in between, not 10 greens cherry-picked out of a longer history.
+1. **10 consecutive green `E2E Tests (Paired)` runs** across at least 5 distinct PRs. Consecutive
+   means no red run in between, not 10 greens cherry-picked out of a longer history. The check was
+   called `E2E Tests (paired)` before 2026-07-28, so a streak spanning that date shows under two
+   names in the run history and is still one streak - the rename changed a display string, not the
+   job, and does not reset the count.
 2. **No re-runs among them.** A flow that passes on the second attempt is a flaky flow, and
    promoting a flaky suite to required is precisely the "cannot go green" hazard. A re-run resets
    the count to zero.
 3. **No open `e2e-flow-doctor` verdict** against any of the 11 flows.
 
 Check the streak with `gh run list --workflow=e2e.yml --limit 30 --json conclusion,headBranch,url`
-and read the `E2E Tests (paired)` job on each, because the run-level conclusion also reflects the
+and read the `E2E Tests (Paired)` job on each, because the run-level conclusion also reflects the
 required jobs.
 
 On meeting all three, promotion is a small deliberate edit, and every piece of it is meant to be
@@ -872,7 +987,7 @@ pre-PR gate).
 **`E2E Tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The 11 paired flows run in
 CI too, in the separate `maestro-paired` job, but that job is advisory (see "Two E2E suites, two
 jobs, one required" above) until it has been green across several PRs. A green required check is
-smoke coverage; read the `E2E Tests (paired)` check separately for the paired suite's result. It
+smoke coverage; read the `E2E Tests (Paired)` check separately for the paired suite's result. It
 carries no "Required" badge, which is how the checks list says it cannot block a merge.
 
 **iOS E2E does not exist yet, by any route.** An earlier version of this section claimed EAS
