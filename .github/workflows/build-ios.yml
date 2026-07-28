@@ -186,11 +186,50 @@ jobs:
       # exists to answer. Android's shelves are captured locally by
       # scripts/storeScreenshots.mjs, but iOS needs a booted simulator, so it can
       # only happen here.
+      # Metro has to run for the screenshot capture, and it has to carry the mock
+      # flag ITSELF: EXPO_PUBLIC_* variables are inlined into the bundle at
+      # bundle time, so setting it only on xcodebuild leaves the served bundle
+      # without it. A Debug build asks the dev client where to load from, and
+      # this is the answer.
+      - name: Start Metro for the screenshot capture
+        if: inputs.screenshots == 'true'
+        env:
+          EXPO_PUBLIC_KANGENTIC_MOCK: '1'
+        run: |
+          set -euo pipefail
+          nohup npx expo start --dev-client --port 8081 > "$RUNNER_TEMP/metro.log" 2>&1 &
+          # Poll Metro's own status endpoint rather than sleeping a guessed
+          # duration: a cold bundler start is minutes on a fresh runner, and a
+          # capture that races it screenshots a loading screen.
+          for attempt in $(seq 1 60); do
+            if curl -sf http://localhost:8081/status | grep -q 'packager-status:running'; then
+              echo "Metro is up after ${attempt} attempts."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Metro never reported packager-status:running."
+          cat "$RUNNER_TEMP/metro.log" || true
+          exit 1
+
       - name: Capture App Store screenshots
         if: inputs.screenshots == 'true'
         env:
           APP_PATH: ${{ steps.verify.outputs.app-path }}
+          METRO_URL: http://localhost:8081
         run: bash .github/scripts/capture-ios-screenshots.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/ios-screenshots"
+
+      # Metro's log is the first thing worth reading when the capture shows a
+      # loading screen or a red box: it names the failing module directly, which
+      # a screenshot cannot.
+      - name: Upload the Metro log
+        if: ${{ inputs.screenshots == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshot-metro-log-${{ github.sha }}
+          path: ${{ runner.temp }}/metro.log
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Upload the App Store screenshots
         if: ${{ inputs.screenshots == 'true' && !cancelled() }}

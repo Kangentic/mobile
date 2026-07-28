@@ -78,6 +78,22 @@ xcrun simctl install "$device_id" "$app_path"
 echo "Launching $bundle_id"
 xcrun simctl launch "$device_id" "$bundle_id"
 
+# Hand the dev-client launcher a server, or it sits on "Searching for
+# development servers..." forever and never loads any bundle - embedded or not.
+#
+# This is the step attempt 2 was missing. A Debug build gets us __DEV__ (and so
+# the mock desktop), but expo-dev-client owns startup and waits to be told where
+# to load from. The deep link is what the dev rig's own pointDevClientAtMetro
+# does on Android, and what `expo start` prints for a human to tap.
+if [ -n "${METRO_URL:-}" ]; then
+  echo "Pointing the dev client at $METRO_URL"
+  # The simulator reaches the runner's own loopback directly, so no tunnel or
+  # LAN address is involved.
+  xcrun simctl openurl "$device_id" "exp+mobile://expo-development-client/?url=$METRO_URL"
+  echo "Waiting for the bundle to download and render..."
+  sleep 60
+fi
+
 # The mock's agent-life simulator raises its permission prompt at tick 20, and
 # the ticker only starts once a read-stream subscription attaches. Waiting past
 # that means the landing feed has something in it rather than being mid-connect.
