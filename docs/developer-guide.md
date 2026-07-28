@@ -505,30 +505,27 @@ eventually remove. `actions/setup-java@v5`, `android-actions/setup-android@v4` a
 established is the point.** The action version feeds the cache key, so the first build after the
 bump was expected to miss outright:
 
-| | Gradle action | `Build (APK)` | Task reuse |
-|---|---|---|---|
-| run 30397988677 | v4 | 7m 23s | `1055 actionable tasks: 640 executed, 415 from cache` |
-| run 30401393044 | v5 | 8m 28s | `1055 actionable tasks: 640 executed, 415 from cache` |
-| run 30403140412 | v5 | 8m 14s | - |
-| run 30404363470 | v5 | 8m 19s | - |
+| Gradle action | `Build (APK)` samples | Task reuse |
+|---|---|---|
+| v4 | 7m 23s | `1055 actionable tasks: 640 executed, 415 from cache` |
+| v5 | 7m 52s, 8m 14s, 8m 19s, 8m 28s | `1055 actionable tasks: 640 executed, 415 from cache` |
 
-**Cache invalidation is ruled out**, and by the task line, not the duration. Reuse is byte-identical:
-the Gradle User Home entry resolved through a **restore key** rather than an exact one, and every
-sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright. Whatever the version bump
-did, it did not reach a task.
+**Cache invalidation is ruled out, by the task line and not by any duration.** Reuse is
+byte-identical: the Gradle User Home entry resolved through a **restore key** rather than an exact
+one, and every sub-cache (dependencies, transforms, kotlin-dsl, wrapper) hit outright. Whatever the
+version bump did, it did not reach a task. That is the settled part, and it was settled by a number
+nobody would have checked once the stopwatch already agreed with the prediction.
 
-**Whether v5 is marginally slower for some other reason is open**, and the shape of the data is
-worth reading before anyone re-opens it. The three v5 samples cluster inside **14 seconds** of each
-other, roughly 55s above the single v4 sample. That tightness is the interesting part: it says this
-job is far more deterministic than the 6m 03s to 8m 37s spread recorded above implies, so appealing
-to that spread to wave the gap away is weaker than it looks. The spread came from a period that
-included the CMake-cache experiments, which makes it a poor baseline.
+**The durations say nothing, and the way that became clear is the more useful lesson.** This
+paragraph was rewritten three times as samples arrived, and each rewrite was confidently wrong in a
+new direction. First a cold cache was predicted and the first slow run appeared to confirm it. Then
+"no evidence it cost anything", which two more samples made too strong. Then an argument built on
+three v5 runs clustering within 14 seconds, which read as real signal until a fourth landed at
+7m 52s and widened the range to 36s, putting its low end 29 seconds from the v4 sample.
 
-But there is still exactly **one** v4 sample, so the honest answer is that it is not settled.
-Settling it means deliberately re-running v4 on this branch for three samples, which nobody should
-do unless a decision depends on it: 55 seconds on a job that is not the critical path's bottleneck
-buys nothing, and the bump is not optional anyway, since v4 declares a Node runtime that is being
-removed.
+Four v5 samples spanning 36 seconds against one v4 sample is not a comparison. Do not build one out
+of it, and note that the temptation each time came from having *just enough* data to see a shape.
+The bump is not optional anyway: v4 declares a Node runtime that is being removed.
 
 The reason this is written up at all: the duration alone would have "confirmed" the prediction. The
 run WAS 65 seconds slower, a comment in `e2e.yml` said to expect exactly that, and stopping there
