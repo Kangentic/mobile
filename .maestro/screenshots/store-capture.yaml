@@ -156,13 +156,38 @@ env:
 - takeScreenshot:
     path: ${OUTPUT_DIR}/06-file-diff
     label: Unified diff for a changed file
-# `back` is not the same gesture on both platforms: Android has a real back
-# button, iOS gets an edge swipe, and on iOS this landed somewhere other than
-# the changes list - which failed the run AFTER four good frames had been taken.
+# RETURNING TO THE FEED IS PLATFORM-SPLIT, and getting it wrong cost a whole
+# iOS run: `back` did nothing on the file-diff screen, the flow stopped there,
+# and the two frames that come after it were never taken.
 #
-# So do not assert where it landed. Return to the feed from wherever we are: tap
-# the session's back button only if we are still on the session screen.
-- back
+# `- back` is not one gesture. Android has a real back button; iOS has no
+# equivalent, so Maestro swipes from the left edge - and an edge swipe is
+# ambiguous here, because the screen underneath is a THREE-PAGE HORIZONTAL
+# PAGER (Terminal / Chat / Changes). A swipe can page the segments instead of
+# popping the route, so on iOS it is not merely useless, it is unsafe.
+#
+# Use the native bar button where it exists instead. iOS exposes it with
+# resource-id "BackButton" (confirmed in a captured hierarchy dump, not
+# assumed); Android's header has no such element, so the condition is simply
+# false there and the real back button is used.
+#
+# Each step is guarded on what is actually on screen, so no platform fires the
+# other's gesture:
+#   iOS     - taps BackButton (-> session), skips `back`, taps task-back-button.
+#   Android - skips BackButton, `back` (-> session), taps task-back-button.
+- runFlow:
+    when:
+      visible:
+        id: "BackButton"
+    commands:
+      - tapOn:
+          id: "BackButton"
+- runFlow:
+    when:
+      notVisible:
+        id: "session-screen"
+    commands:
+      - back
 - runFlow:
     when:
       visible:

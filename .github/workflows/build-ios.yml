@@ -262,7 +262,11 @@ jobs:
           # The Maestro step below drives this same simulator, and the
           # status-bar override would be lost with a shutdown.
           KEEP_SIMULATOR_BOOTED: '1'
-        run: bash .github/scripts/capture-ios-screenshots.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/ios-screenshots"
+        # Its own directory, deliberately NOT the one the store set is collected
+        # into: this step produces a diagnostic launch frame, and mixing it in
+        # with the listing images is how an un-navigated screenshot shipped as
+        # the feed shot. See the comment on capture_path in that script.
+        run: bash .github/scripts/capture-ios-screenshots.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/ios-launch-check"
 
       # The App Store wants a MINIMUM OF THREE screenshots per shelf, and the
       # step above deliberately produces exactly one: it needs no UI driver, so
@@ -318,7 +322,16 @@ jobs:
           #
           # Maestro re-roots takeScreenshot paths under its own run directory,
           # exactly as it does on Android.
-          find "$RUNNER_TEMP/maestro-ios" -name '*.png' -path '*shots*' -exec cp {} "$RUNNER_TEMP/ios-screenshots/" \; || true
+          #
+          # MATCH THE takeScreenshot DIRECTORY EXACTLY. The earlier `-path
+          # '*shots*'` also matched Maestro's own `screenshots/` folder, which
+          # holds a frame per failed step, so a debug capture named
+          # `step-029-assertCondition-...png` was collected as though it were a
+          # listing image. Substring globs are too loose for a directory that
+          # sits beside one with a superset name.
+          mkdir -p "$RUNNER_TEMP/ios-screenshots"
+          find "$RUNNER_TEMP/maestro-ios" -name '*.png' -path '*/takeScreenshot/shots/*' \
+            -exec cp {} "$RUNNER_TEMP/ios-screenshots/" \; || true
           ls -la "$RUNNER_TEMP/ios-screenshots"
 
       # SAY SO WHEN THE DRIVER PRODUCED NOTHING.
@@ -338,6 +351,23 @@ jobs:
           set -euo pipefail
           count="$(find "$RUNNER_TEMP/ios-screenshots" -name '*.png' | wc -l | tr -d ' ')"
           echo "Captured $count screenshot(s)."
+
+          # CHECK THE NAMES, NOT JUST THE COUNT.
+          #
+          # A count alone called a run successful when one of its "screenshots"
+          # was a Maestro failure frame and another was an un-navigated launch
+          # capture. Both were real PNGs at the right size, so every check in
+          # place at the time passed. Android gets this for free from
+          # verifyCaptures(); this is the same guard for the shelf that has no
+          # local rig. SHOT_NAMES is read from the script so there is one list.
+          expected="$(node -e 'import("./scripts/storeScreenshots.mjs").then(m=>console.log(m.SHOT_NAMES.join("\n")))')"
+          for png in "$RUNNER_TEMP/ios-screenshots"/*.png; do
+            [ -e "$png" ] || continue
+            name="$(basename "$png" .png)"
+            if ! echo "$expected" | grep -qx "$name"; then
+              echo "::warning::$name.png is not one of the expected store shots. Something other than the capture flow wrote into the output directory."
+            fi
+          done
           {
             echo "### iOS store screenshots"
             echo ""
@@ -365,13 +395,17 @@ jobs:
 
       # Metro's log is the first thing worth reading when the capture shows a
       # loading screen or a red box: it names the failing module directly, which
-      # a screenshot cannot.
+      # a screenshot cannot. The launch-check frame rides along: it is not a
+      # listing image (see capture-ios-screenshots.sh), but when the flow fails
+      # on its first assertion it answers "did the app even render?" outright.
       - name: Upload the Metro log
         if: ${{ inputs.screenshots == 'true' && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: ios-screenshot-metro-log-${{ github.sha }}
-          path: ${{ runner.temp }}/metro.log
+          path: |
+            ${{ runner.temp }}/metro.log
+            ${{ runner.temp }}/ios-launch-check
           retention-days: 14
           if-no-files-found: warn
 

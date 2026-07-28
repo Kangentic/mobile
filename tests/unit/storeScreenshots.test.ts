@@ -157,3 +157,60 @@ describe('the shot list matches the capture flow', () => {
     expect([...SHOT_NAMES]).toEqual([...SHOT_NAMES].sort());
   });
 });
+
+/**
+ * The terminal mirror renders the desktop's real 120-column grid and pans the
+ * overflow, so how much is VISIBLE depends on the auto-fitted font - and that
+ * font is fitted to the screen HEIGHT. A taller phone picks a bigger font and
+ * therefore shows FEWER columns, which makes the 6.9-inch iPhone (tall enough
+ * to hit the 20px auto-fit ceiling, leaving 36-37 columns) the binding case,
+ * not the widest device.
+ *
+ * The first iOS store capture clipped its header mid-word. Nothing failed: the
+ * PNG was the right size and the flow was green, so this is the repo's
+ * green-but-worthless-artifact shape again, and it is worth a mechanical check
+ * rather than an eye on every future capture.
+ */
+describe('the mock terminal script fits the narrowest device', () => {
+  const VISIBLE_COLUMN_BUDGET = 34;
+  const mockSource = readFileSync(
+    fileURLToPath(new URL('../../src/connection/mockDesktop.ts', import.meta.url)),
+    'utf8',
+  );
+
+  /** Pulls the string literals out of a named array declaration in the source. */
+  function arrayLiterals(declaration: string): string[] {
+    const block = new RegExp(`${declaration}[^[]*\\[([^\\]]*)\\]`).exec(mockSource);
+    if (block === null) return [];
+    return [...block[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((match) => match[1]);
+  }
+
+  const scriptLines = arrayLiterals('MOCK_TERMINAL_LINES');
+  const headerLines = arrayLiterals('const header =');
+
+  it('finds the script and header lines at all', () => {
+    // Non-vacuity guard: every assertion below passes trivially against an
+    // empty array, so a regex that stops matching would read as success.
+    expect(scriptLines.length).toBeGreaterThan(10);
+    expect(headerLines.length).toBeGreaterThan(0);
+  });
+
+  it('keeps every line inside the visible column budget', () => {
+    const tooWide = [...scriptLines, ...headerLines]
+      .filter((line) => line.length > VISIBLE_COLUMN_BUDGET)
+      .map((line) => `${line.length} cols: ${line}`);
+    // Named individually: a bare count tells whoever broke it nothing, and the
+    // failure is invisible on the Android emulator they are probably using.
+    expect(tooWide).toEqual([]);
+  });
+
+  it('counts the indent, because a wrapped line is cut and not re-flowed', () => {
+    // The indented continuation lines are the ones that actually overflowed:
+    // they read as short in source and are two columns longer than they look.
+    const indented = scriptLines.filter((line) => line.startsWith('  '));
+    expect(indented.length).toBeGreaterThan(0);
+    for (const line of indented) {
+      expect(line.length).toBeLessThanOrEqual(VISIBLE_COLUMN_BUDGET);
+    }
+  });
+});

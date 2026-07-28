@@ -218,7 +218,21 @@ if ! xcrun simctl spawn "$device_id" launchctl list | grep -q "$bundle_id"; then
   exit 1
 fi
 
-capture_path="$output_directory/01-agents.png"
+# A DIAGNOSTIC FRAME, NOT A LISTING IMAGE. The name matters.
+#
+# This used to be written as `01-agents.png` - the same name the Maestro flow
+# gives its feed capture - into the same directory Maestro collects into. When
+# the flow stopped early, this frame survived under that name and shipped as
+# part of the store set. It looked plausible and was not: nothing had navigated
+# or scrolled, so it caught the feed mid-list with a sliver of a card at the
+# top edge.
+#
+# Two names that can occupy one slot is a collision waiting for a bad day, so
+# the scripted capture no longer claims a shot name at all. What it is actually
+# for is proving three things cheaply, before the driver is even installed:
+# the app renders, the keychain works, and this runner's simulator really is
+# the 6.9-inch shelf.
+capture_path="$output_directory/00-launch-check.png"
 xcrun simctl io "$device_id" screenshot "$capture_path"
 
 # Assert the size rather than trusting the device name. A wrong-sized upload is

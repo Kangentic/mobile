@@ -111,7 +111,21 @@ export function FileDiffScreen(): React.JSX.Element {
 
   return (
     <Screen testID="file-diff-screen">
-      <RouterStack.Screen options={{ title: fileName.length > 0 ? fileName : 'Changes' }} />
+      {/*
+        headerBackTitle is set explicitly because iOS derives the back button's
+        label from the PREVIOUS screen's title, and the screen this is always
+        pushed from - task/[taskId]/index - renders headerShown: false and so
+        has no title to borrow. expo-router then falls back to the route's
+        FILE PATH, and the back button read literally "task/[taskId]/index"
+        on every iPhone. Android draws a bare chevron and never showed it,
+        which is why it survived to a store screenshot.
+      */}
+      <RouterStack.Screen
+        options={{
+          title: fileName.length > 0 ? fileName : 'Changes',
+          headerBackTitle: 'Session',
+        }}
+      />
       <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
         <MonoText size="caption" color="secondary" numberOfLines={1} testID="file-diff-path">
           {filePath}

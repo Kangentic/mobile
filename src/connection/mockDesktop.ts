@@ -259,23 +259,50 @@ function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): Transcript
  * reported PTY width, and anything longer clips at the right edge of a portrait
  * phone, which reads as a broken terminal rather than a wide one.
  */
+/**
+ * EVERY LINE FITS IN 34 COLUMNS, INCLUDING ITS INDENT.
+ *
+ * Not a style preference - it is the narrowest terminal window any target
+ * device gives us, measured rather than guessed. The mirror renders the
+ * desktop's real grid (120 cols) and lets the overflow pan, so what is VISIBLE
+ * is set by the auto-fitted font, and that font is fitted to the screen HEIGHT:
+ * a taller viewport picks a bigger font and therefore shows FEWER columns.
+ *
+ * The 6.9-inch iPhone is tall enough to hit the 20px auto-fit ceiling, which
+ * leaves 36-37 columns visible; a 1080x1920 Android phone lands near 11px and
+ * shows ~53. So iOS is the binding constraint, and the first store capture
+ * caught it: a 41-column header clipped mid-word to "fix/sign-in-return-".
+ *
+ * 34 keeps two columns of margin against the measured 36. Widening any line
+ * past that does not wrap - it is CUT, silently, on the narrowest device only.
+ * The obvious-looking fix (fit the font to width as well as height) was
+ * rejected: 120 columns across a phone is a 6px font, and it would defeat the
+ * deliberate mirror-1:1-and-pan behaviour of the Desktop view.
+ */
 const MOCK_TERMINAL_LINES = [
   '> Reading src/auth/login.ts',
-  '  loginRedirect() drops its path argument',
-  '> Searching for callers of loginRedirect',
-  '  4 call sites, every one passing a path',
+  '  loginRedirect() drops the path',
+  '> Searching for its callers',
+  '  4 call sites, all pass a path',
   '> Editing src/auth/login.ts',
   '  1 edit applied (+8 -2)',
+  // These four mirror the second hunk of the diff the Changes lens shows, so
+  // the terminal and the diff describe the same edit rather than two unrelated
+  // pieces of work sitting one swipe apart.
+  '> Reading src/router/index.ts',
+  '  resolveNext() needs a default',
+  '> Editing src/router/index.ts',
+  '  1 edit applied (+4 -0)',
   '$ npm run typecheck',
   '  tsc --noEmit: no errors',
-  '> Writing tests/auth-redirect.test.ts',
+  '> Writing auth-redirect.test.ts',
   '  1 file added (+31)',
   '$ npx vitest run tests/unit',
   '  Test Files  38 passed (38)',
   '       Tests  305 passed (305)',
   '    Duration  2.72s',
-  '> Sign-in keeps the requested path now.',
-  '  Component tests need your approval.',
+  '> Sign-in keeps the path now.',
+  '  Component tests need approval.',
 ];
 
 /**
@@ -287,11 +314,14 @@ const MOCK_TERMINAL_LINES = [
  * Seeding most of the script makes the lens look like a session in progress the
  * instant it mounts, and leaves the last few lines to stream in live.
  */
-const MOCK_TERMINAL_SEEDED_LINES = 12;
+const MOCK_TERMINAL_SEEDED_LINES = 16;
 
 /** The scrollback a subscriber receives: a shell header plus the played-so-far script. */
 function mockTerminalScrollback(): string {
-  const header = ['storefront-web on fix/sign-in-return-path', '$ claude'];
+  // Both header lines obey the same 34-column budget as MOCK_TERMINAL_LINES.
+  // The original branch name was 41 columns and was the most visible casualty
+  // of the first iOS capture, clipping to "storefront-web on fix/sign-in-".
+  const header = ['storefront-web on fix/redirect', '$ claude'];
   return [...header, ...MOCK_TERMINAL_LINES.slice(0, MOCK_TERMINAL_SEEDED_LINES)].join('\r\n') + '\r\n';
 }
 
