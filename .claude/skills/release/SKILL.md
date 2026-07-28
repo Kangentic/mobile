@@ -26,12 +26,12 @@ wastes a 20 minute build and can leave a dangling Play edit.
 |---|---|---|
 | either + artifact only | **Works** | - |
 | android + internal | **Works** | - |
-| android + closed (alpha) | **Blocked** | Play Console app-content declarations: store listing, content rating, data safety, target audience, ads, privacy policy URL. None are filled in. Text is drafted in `docs/privacy-policy.md` and `docs/store-listing.md`. |
+| android + closed (alpha) | **Blocked** | Play Console app-content declarations: store listing, content rating, data safety, target audience, ads, privacy policy URL. None are filled in. Text is drafted in `docs/privacy-policy.md` and `docs/store-listing.md`. The listing IMAGES are no longer part of this gap: all three Play shelves are captured in `store/screenshots/`, and the icon plus feature graphic ship in `@kangentic/branding`. |
 | android + open (beta) | **Blocked** | Same declarations as closed. |
 | android + production | **Blocked** | Personal Play account created 2026-07-20, so production access needs a closed test with **12+ testers opted in for 14 continuous days** first. Opt-outs reset the clock. See the deployment-track ladder in `docs/developer-guide.md`. |
 | ios + TestFlight internal | **Works** | Needs `ASC_API_KEY_BASE64` + `ASC_KEY_ID` + `ASC_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, as GitHub secrets. Check with `gh secret list` before promising it. |
 | ios + TestFlight external | **Blocked** | Needs a Beta App Review plus a beta description, feedback email, and test information. None entered. |
-| ios + App Store | **Blocked** | Needs screenshots, the privacy questionnaire, an age rating, and a resolved export-compliance answer. `ITSAppUsesNonExemptEncryption` is currently `false` as a reasoned default, not a verified conclusion; see the comment in `app.config.ts`. |
+| ios + App Store | **Blocked** | Needs 6.9-inch iPhone screenshots (1320x2868, minimum three), the privacy questionnaire, an age rating, and a resolved export-compliance answer. The Android shelves are captured (`store/screenshots/`) but iOS is not: the capture needs a booted simulator, so it cannot run from Windows, and mock content is `__DEV__`-gated while the CI simulator job builds Release. `ITSAppUsesNonExemptEncryption` is currently `false` as a reasoned default, not a verified conclusion; see the comment in `app.config.ts`. |
 
 If the user insists on a blocked path after being told, say plainly that it cannot be done and stop.
 Do not attempt a workaround.

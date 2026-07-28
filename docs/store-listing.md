@@ -1,14 +1,38 @@
 # Store listing copy
 
 Draft copy for the Play Console (and later App Store) listing. Placeholder-grade but real text,
-ready to paste. This file is text only; screenshots are still to be produced and are not tracked
-here. The two Play Console image uploads are already produced, by `@kangentic/branding`, and are
-not bundled into the app - upload them by hand from
-`node_modules/@kangentic/branding/resources/mobile/`:
+ready to paste.
+
+The two Play Console image uploads are produced by `@kangentic/branding` and are not bundled
+into the app - upload them by hand from `node_modules/@kangentic/branding/resources/mobile/`
+(run `npm install` first; both are absent from an out-of-date install):
 
 - `android-playstore-512.png` - the store listing icon.
 - `android-feature-graphic-1024x500.png` - the feature graphic, required by Google Play for
   every track beyond internal testing.
+
+## Screenshots
+
+**Produced and tracked**, in [`store/screenshots/`](../store/screenshots/README.md). Six raw
+device captures per Android shelf, regenerated with `node scripts/storeScreenshots.mjs all`
+against the mock rig:
+
+| Shelf | Size | Directory |
+|---|---|---|
+| Play phone | 1080x1920 | `store/screenshots/android/phone/` |
+| Play 7-inch tablet | 1080x1920 | `store/screenshots/android/seven-inch/` |
+| Play 10-inch tablet | 1440x2560 | `store/screenshots/android/ten-inch/` |
+
+All three shelves are required in the Play Console listing form as long as the app is
+distributed to tablets. Restricting **Test and release -> Advanced settings -> Form factors** to
+phone should drop the two tablet requirements; the tablet captures exist either way, so that is
+a reach decision rather than a blocker. `ios.supportsTablet` is `false`, so App Store Connect
+wants a single shelf - **6.9-inch iPhone, 1320x2868, minimum three** - which is not yet
+produced, because it cannot be captured from Windows.
+
+Read `store/screenshots/README.md` before regenerating: Play demands exactly 16:9 or 9:16 on
+every shelf including tablets, which is why the capture sets resolution and density
+independently rather than using the emulator's own geometry.
 
 ## App title
 

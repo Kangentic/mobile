@@ -54,9 +54,12 @@ export interface MockDesktop {
 // switching projects visibly re-themes rather than coincidentally matching.
 /** Fallback page size when an archived read names no limit; matches actions.ts's ARCHIVED_PAGE_SIZE. */
 const ARCHIVED_MOCK_PAGE_SIZE = 25;
-const MOCK_PROJECT = { id: 'mock-project', name: 'Project 1', color: '#58a6ff' };
+// Names are product-plausible rather than "Project 1"/"Project 2" because the
+// project pill renders on every TaskCard, and these fixtures are the source
+// for the store-listing screenshots (scripts/storeScreenshots.mjs).
+const MOCK_PROJECT = { id: 'mock-project', name: 'storefront-web', color: '#58a6ff' };
 /** A second project: exercises the board project switcher and cross-project Home rows. */
-const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'Project 2', color: '#3fb950' };
+const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'platform-relay', color: '#3fb950' };
 const MOCK_SESSION_ID = 'mock-session-1';
 const MOCK_TASK_ID = 'mock-task-1';
 /** A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat reading-view fallback. */
@@ -92,6 +95,30 @@ const MOCK_MODEL_FABLE = { id: 'claude-fable-5', displayName: 'Fable 5' };
 const MOCK_MODEL_CODEX = { id: 'gpt-5-codex', displayName: 'GPT-5 Codex' };
 /** After this many tick-driven Bash cells, the mock stops growing the transcript further - see tickEntryCount. */
 const MOCK_MAX_TICK_ENTRIES = 20;
+
+/**
+ * Where the streaming session's context bar starts, and how fast it climbs.
+ *
+ * The rate is deliberately gentle and the ceiling deliberately below the point
+ * where the bar turns red. At the original 900 tokens per tick the bar hit 100%
+ * after about three minutes, and the capture flow takes longer than that - so
+ * the board and feed screenshots, taken last, showed a maxed-out context window
+ * in alarm red. That is a real product state and worth keeping reachable, but it
+ * is not what a store listing should assert about the app.
+ *
+ * The bar still visibly advances during a session, which is the demo value.
+ */
+const MOCK_STREAM_TOKENS_AT_START = 42_000;
+const MOCK_STREAM_TOKENS_PER_TICK = 300;
+/** 60% of the 200k window: comfortably clear of the warning and danger thresholds. */
+const MOCK_STREAM_TOKEN_CEILING = 120_000;
+
+function streamingUsedTokens(tick: number): number {
+  return Math.min(
+    MOCK_STREAM_TOKENS_AT_START + tick * MOCK_STREAM_TOKENS_PER_TICK,
+    MOCK_STREAM_TOKEN_CEILING,
+  );
+}
 
 /** A plausible, growing usage snapshot - the mock's stand-in for the desktop's real per-turn token accounting. */
 function mockUsage(usedTokens: number, model: SessionUsageWire['model']): SessionUsageWire {
@@ -211,6 +238,63 @@ function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): Transcript
   ];
 }
 
+/**
+ * The live PTY tail for the streaming session, cycled one line per tick.
+ *
+ * A rotating script rather than `tick N: ...` because this feed IS the
+ * Terminal lens, which is the most distinctive screenshot in the store
+ * listing: a counter on every visible line reads as a test fixture, and the
+ * cleaned reading-view fallback derives from these same bytes.
+ */
+/**
+ * A FINITE script, played once in order, then silence.
+ *
+ * Finite rather than looping because a loop repeats "Reading src/auth/login.ts"
+ * a minute in, and a reader who takes the terminal seriously - which is the
+ * whole point of the lens - sees an agent going in circles. It ends on the
+ * approval request, so the terminal agrees with the permission card the chat
+ * lens is showing at the same moment.
+ *
+ * Each line is kept under ~44 columns. The mirror renders at the desktop's
+ * reported PTY width, and anything longer clips at the right edge of a portrait
+ * phone, which reads as a broken terminal rather than a wide one.
+ */
+const MOCK_TERMINAL_LINES = [
+  '> Reading src/auth/login.ts',
+  '  loginRedirect() drops its path argument',
+  '> Searching for callers of loginRedirect',
+  '  4 call sites, every one passing a path',
+  '> Editing src/auth/login.ts',
+  '  1 edit applied (+8 -2)',
+  '$ npm run typecheck',
+  '  tsc --noEmit: no errors',
+  '> Writing tests/auth-redirect.test.ts',
+  '  1 file added (+31)',
+  '$ npx vitest run tests/unit',
+  '  Test Files  38 passed (38)',
+  '       Tests  305 passed (305)',
+  '    Duration  2.72s',
+  '> Sign-in keeps the requested path now.',
+  '  Component tests need your approval.',
+];
+
+/**
+ * How much of the script is already in the scrollback when the terminal opens.
+ *
+ * A real session has history; more practically, at one line per second an
+ * empty-then-filling terminal is only a full screen after a quarter of a
+ * minute, and a capture taken before then shows three lines adrift in black.
+ * Seeding most of the script makes the lens look like a session in progress the
+ * instant it mounts, and leaves the last few lines to stream in live.
+ */
+const MOCK_TERMINAL_SEEDED_LINES = 12;
+
+/** The scrollback a subscriber receives: a shell header plus the played-so-far script. */
+function mockTerminalScrollback(): string {
+  const header = ['storefront-web on fix/sign-in-return-path', '$ claude'];
+  return [...header, ...MOCK_TERMINAL_LINES.slice(0, MOCK_TERMINAL_SEEDED_LINES)].join('\r\n') + '\r\n';
+}
+
 /** The real Claude Code permission-dialog trio, as the desktop's PTY probe would publish it. */
 const MOCK_PERMISSION_OPTIONS = [
   'Yes',
@@ -224,19 +308,22 @@ function initialTasks(): BoardTaskWire[] {
     boardTaskFixture({
       id: MOCK_TASK_ID,
       display_id: 1,
-      title: 'Streaming mock session',
+      // The streaming session: this is the task every session-lens screenshot
+      // is taken against, so its title, diff, terminal and prompt card all
+      // describe the SAME piece of work.
+      title: 'Fix the sign-in redirect dropping the return path',
       // Deliberately long - a design-review stress test for how the body
       // text truncates against the ticket number, project pill, and PR pill
       // sharing its rows.
       description:
-        'Served by the in-app mock desktop peer, streaming a fabricated login-redirect fix through every phase - permission prompts, a follow-up question, and a context-usage bar that climbs as the fake turns pile up.',
+        'Signing in always lands on the dashboard instead of the page that was requested, because the redirect helper throws the original path away. Restore it as a next parameter and add a regression test that covers the query-string round trip.',
       swimlane_id: 'lane-executing',
       // Executing scales light -> heavy: Codex refactor (lightest, position
       // 0) first, this one (medium) second, the "full card" (position 2)
       // last.
       position: 1,
       session_id: MOCK_SESSION_ID,
-      branch_name: 'feature/mock-work',
+      branch_name: 'fix/sign-in-return-path',
       labels: ['auth', 'wave-4'],
       pr_number: 42,
       pr_state: 'open',
@@ -246,8 +333,11 @@ function initialTasks(): BoardTaskWire[] {
     boardTaskFixture({
       id: 'mock-task-2',
       display_id: 2,
-      title: 'A quiet card to move around',
-      description: 'Long-press me to try the move sheet.',
+      // Dev affordance: this is the card to long-press when trying the move
+      // sheet by hand. Kept as a comment rather than as the card's body text,
+      // which ships in the store screenshots.
+      title: 'Rate-limit the password reset endpoint',
+      description: 'Attempts are unbounded today. Cap them per address and per account before the next security review.',
       swimlane_id: 'lane-todo',
       labels: ['chore'],
       attachment_count: 2,
@@ -257,8 +347,10 @@ function initialTasks(): BoardTaskWire[] {
     boardTaskFixture({
       id: MOCK_CODEX_TASK_ID,
       display_id: 3,
-      title: 'Codex refactor (no structured transcript)',
-      description: 'Exercises the chat reading-view fallback.',
+      // Agent 'codex' and no structured transcript: this is the card that
+      // exercises the chat reading-view fallback.
+      title: 'Extract the retry policy out of the HTTP client',
+      description: 'Backoff and retry are tangled into the request path. Pull them into a policy object that can be tested on its own.',
       swimlane_id: 'lane-executing',
       position: 0,
       agent: 'codex',
@@ -327,7 +419,9 @@ function initialTasks(): BoardTaskWire[] {
 function codexTuiFrame(paintTick: number): string {
   const spinnerGlyphs = ['|', '/', '-', '\\'];
   const spinner = spinnerGlyphs[paintTick % spinnerGlyphs.length];
-  const statusLine = paintTick % 2 === 0 ? 'Refactoring src/billing/invoice.ts' : 'Running the affected tests';
+  // Names the file this session's task actually claims to be changing: the
+  // bar is the frame's last readable line, so it becomes the card snippet.
+  const statusLine = paintTick % 2 === 0 ? 'Refactoring src/http/retryPolicy.ts' : 'Running the affected tests';
   const upTokens = (8.2 + paintTick * 0.1).toFixed(1);
   return (
     '\x1b[H\x1b[2J' +
@@ -370,8 +464,9 @@ function initialTasks2(): BoardTaskWire[] {
     boardTaskFixture({
       id: MOCK_IDLE_TASK_ID,
       display_id: 1,
+      // An idle agent session: exercises the Home feed's Idle section.
       title: 'Relay load-test follow-ups',
-      description: 'An idle agent session: exercises the Home Idle section.',
+      description: 'Latency held under a millisecond across fifty pairs. Write up the headroom numbers and open issues for the two slowest cases.',
       swimlane_id: 'lane2-progress',
       session_id: MOCK_IDLE_SESSION_ID,
       branch_name: 'perf/load-test',
@@ -381,8 +476,9 @@ function initialTasks2(): BoardTaskWire[] {
     boardTaskFixture({
       id: 'mock-task-relay-2',
       display_id: 2,
+      // A quiet, session-less second-project card.
       title: 'Document the metrics endpoint',
-      description: 'A quiet second-project card.',
+      description: 'Describe every counter the relay exposes, and which ones are safe to scrape from outside the cluster.',
       swimlane_id: 'lane2-backlog',
       created_at: nowIso,
       updated_at: nowIso,
@@ -391,11 +487,19 @@ function initialTasks2(): BoardTaskWire[] {
 }
 
 /**
- * Mirrored from a REAL Claude Code session's transcript (the App Phase 1
- * overnight run) so mock parity matches genuine session shapes: an Edit
- * with real multi-line old/new strings, real command outputs, and real
- * assistant prose lengths. Machine paths sanitized to C:\Users\dev per
- * the no-personal-info rule; content is recorded data otherwise.
+ * SHAPED from a real Claude Code session's transcript (the App Phase 1
+ * overnight run) so mock parity matches genuine session shapes: an Edit with
+ * multi-line old/new strings, real command outputs, and real assistant prose
+ * lengths. Machine paths are sanitized to C:\Users\dev per the
+ * no-personal-info rule.
+ *
+ * The PROSE is authored, not recorded. It was rewritten off the original
+ * CLAUDE.md/EAS-profiles turn so that it describes the same sign-in redirect
+ * fix as this session's diff, terminal feed, labels and prompt card - the
+ * session-lens screenshots all carry the task title in a shared header, so a
+ * transcript about different work would contradict its own header inside a
+ * single frame. The recorded command outputs (typecheck, vitest) are real and
+ * unchanged.
  */
 function baseTranscript(): TranscriptEntryWire[] {
   const now = Date.now();
@@ -404,7 +508,7 @@ function baseTranscript(): TranscriptEntryWire[] {
       kind: 'user',
       uuid: 'mock-user-1',
       ts: now - 300000,
-      text: 'Update the Commands section in CLAUDE.md to match the new EAS build profiles, then verify the suites still pass.',
+      text: 'Signing in always lands on the dashboard instead of the page I asked for. Fix the redirect and verify the suites still pass.',
     },
     {
       kind: 'assistant',
@@ -415,19 +519,21 @@ function baseTranscript(): TranscriptEntryWire[] {
       blocks: [
         {
           type: 'text',
-          text: 'Reading the current Commands list, then updating the build entries to the **dev/preview/prod** profile split.',
+          text: 'Found it: `loginRedirect` takes the requested path and then throws it away, so every sign-in ends up at the default route. Threading it through as a **next** parameter.',
         },
         {
+          // old_string/new_string are the SAME edit the Changes lens shows for
+          // src/auth/login.ts (diffFileContent below), so the chat and diff
+          // screenshots describe one piece of work rather than two.
           type: 'tool_use',
           id: 'mock-tool-1',
           name: 'Edit',
           input: {
             replace_all: false,
-            file_path: 'C:\\Users\\dev\\Documents\\GitHub\\kangentic-mobile\\CLAUDE.md',
-            old_string:
-              '- `eas build --profile development --platform android` - Build a dev-client for local iteration\n- `eas build --profile production --platform ios` - Build for the App Store (cloud, no Mac needed)\n- `npm run typecheck` - `tsc --noEmit`',
+            file_path: 'C:\\Users\\dev\\Documents\\GitHub\\storefront-web\\src\\auth\\login.ts',
+            old_string: 'export function loginRedirect(path) {\n  redirect("/login");\n}',
             new_string:
-              '- `eas build --profile development --platform android` (`npm run build:dev`) - Build a dev-client\n  for local iteration in the cloud, no local Android SDK build required\n- `eas build --profile preview --platform android` (`npm run build:preview`) - Internal\n  distribution build\n- `eas build --profile production --platform android` (`npm run build:prod`) - Store-release build\n- `eas build --profile production --platform ios` - Build for the App Store (cloud, no Mac needed)\n- `npm run typecheck` - `tsc --noEmit`',
+              'export function loginRedirect(path) {\n  const next = encodeURIComponent(path);\n  redirect(`/login?next=${next}`);\n}',
           },
         },
       ],
@@ -438,7 +544,7 @@ function baseTranscript(): TranscriptEntryWire[] {
       ts: now - 270000,
       toolUseId: 'mock-tool-1',
       content:
-        'The file C:\\Users\\dev\\Documents\\GitHub\\kangentic-mobile\\CLAUDE.md has been updated successfully.',
+        'The file C:\\Users\\dev\\Documents\\GitHub\\storefront-web\\src\\auth\\login.ts has been updated successfully.',
     },
     {
       kind: 'assistant',
@@ -453,7 +559,7 @@ function baseTranscript(): TranscriptEntryWire[] {
       uuid: 'mock-result-tc',
       ts: now - 250000,
       toolUseId: 'mock-tool-tc',
-      content: '> @kangentic/mobile@0.1.0 typecheck\n> tsc --noEmit',
+      content: '> storefront-web@2.4.0 typecheck\n> tsc --noEmit',
     },
     {
       kind: 'assistant',
@@ -479,30 +585,110 @@ function baseTranscript(): TranscriptEntryWire[] {
       blocks: [
         {
           type: 'text',
-          text: 'Typecheck and the unit suite are green; the Commands section now documents all three EAS profiles. Running the component tier next needs your approval.',
+          text: 'Typecheck and the unit suite are green, and the redirect now carries the requested path through sign-in. Running the component tier next needs your approval.',
         },
       ],
     },
   ];
 }
 
+/**
+ * A change set with enough files to look like real work.
+ *
+ * Two files left most of the Changes lens empty, which sells "review your
+ * agent's diff from your phone" poorly. A sign-in redirect fix genuinely
+ * touches the helper, its callers, a test and the changelog, so the extra
+ * entries are more honest than the original pair, not less.
+ */
 function diffFileList(): DiffFileListWire {
   return {
     files: [
-      { path: 'src/auth/login.ts', status: 'M', insertions: 8, deletions: 2, binary: false },
+      { path: 'src/auth/login.ts', status: 'M', insertions: 12, deletions: 2, binary: false },
+      { path: 'src/auth/session.ts', status: 'M', insertions: 4, deletions: 1, binary: false },
+      { path: 'src/components/SignInForm.tsx', status: 'M', insertions: 6, deletions: 3, binary: false },
+      { path: 'src/routes/checkout.tsx', status: 'M', insertions: 2, deletions: 2, binary: false },
       { path: 'tests/auth-redirect.test.ts', status: 'A', insertions: 31, deletions: 0, binary: false },
+      { path: 'CHANGELOG.md', status: 'M', insertions: 3, deletions: 0, binary: false },
     ],
-    totalInsertions: 39,
-    totalDeletions: 2,
+    totalInsertions: 58,
+    totalDeletions: 8,
   };
 }
 
 function diffFileContent(filePath: string): DiffFileContentWire {
   if (filePath === 'src/auth/login.ts') {
+    // The first row in the Changes list, so this is the diff the file-diff
+    // screenshot shows. Long enough to fill a phone screen with real added and
+    // removed lines - a three-line change rendered as a mostly-empty frame and
+    // sold the review story badly - and every line is kept under ~46 columns so
+    // nothing needs horizontal scrolling to read.
     return {
-      original: 'export function loginRedirect(path) {\n  redirect("/login");\n}\n',
-      modified: 'export function loginRedirect(path) {\n  const next = encodeURIComponent(path);\n  redirect(`/login?next=${next}`);\n}\n',
+      original: [
+        'import { redirect } from "../router";',
+        '',
+        'export function loginRedirect(path) {',
+        '  redirect("/login");',
+        '  return null;',
+        '}',
+        '',
+        'export function isProtected(path) {',
+        '  return path.startsWith("/account");',
+        '}',
+        '',
+      ].join('\n'),
+      modified: [
+        'import { redirect } from "../router";',
+        '',
+        'const DEFAULT_LANDING = "/dashboard";',
+        '',
+        'export function loginRedirect(path) {',
+        '  const next = encodeURIComponent(path);',
+        '  redirect(`/login?next=${next}`);',
+        '}',
+        '',
+        'export function resolveNext(raw) {',
+        '  if (!raw) return DEFAULT_LANDING;',
+        '  const next = decodeURIComponent(raw);',
+        '  if (next.startsWith("/")) return next;',
+        '  return DEFAULT_LANDING;',
+        '}',
+        '',
+        'export function isProtected(path) {',
+        '  return path.startsWith("/account");',
+        '}',
+        '',
+      ].join('\n'),
       language: 'typescript',
+    };
+  }
+  if (filePath === 'src/auth/session.ts') {
+    return {
+      original: 'export function afterSignIn() {\n  return "/dashboard";\n}\n',
+      modified: 'export function afterSignIn(next) {\n  return next ?? "/dashboard";\n}\n',
+      language: 'typescript',
+    };
+  }
+  if (filePath === 'src/components/SignInForm.tsx') {
+    return {
+      original: 'const onSubmit = async () => {\n  await signIn(email, password);\n  navigate(afterSignIn());\n};\n',
+      modified:
+        'const onSubmit = async () => {\n  await signIn(email, password);\n  const next = params.get("next");\n  navigate(afterSignIn(next));\n};\n',
+      language: 'typescript',
+    };
+  }
+  if (filePath === 'src/routes/checkout.tsx') {
+    return {
+      original: 'if (!user) {\n  return loginRedirect();\n}\n',
+      modified: 'if (!user) {\n  return loginRedirect(location.pathname);\n}\n',
+      language: 'typescript',
+    };
+  }
+  if (filePath === 'CHANGELOG.md') {
+    return {
+      original: '# Changelog\n\n## Unreleased\n',
+      modified:
+        '# Changelog\n\n## Unreleased\n\n- Sign-in now returns you to the page you asked for\n  instead of always landing on the dashboard.\n',
+      language: 'markdown',
     };
   }
   return {
@@ -540,6 +726,17 @@ export function createMockDesktop(): MockDesktop {
   /** Whether the subscriber asked for live PTY bytes. Gates ONLY terminal emission. */
   let terminalWanted = false;
   let feedTick = 0;
+  /**
+   * Advances only when a PTY line is actually emitted, NOT with feedTick.
+   *
+   * Keyed to the global tick, the script started wherever the ticker happened
+   * to be when the terminal lens was first opened - so a session opened from
+   * the Agents feed began mid-narrative, printing "Writing the test" and
+   * "Reading login.ts" AFTER the test run that depends on them. Anyone who
+   * reads the frame sees a session that makes no sense, which is worse than a
+   * counter.
+   */
+  let terminalLineIndex = MOCK_TERMINAL_SEEDED_LINES;
   let pendingPromptId: string | null = null;
   let questionRaised = false;
   let entryCounter = 0;
@@ -615,7 +812,7 @@ export function createMockDesktop(): MockDesktop {
       kind: 'activity',
       sessionId: activeSessionId,
       taskId: MOCK_TASK_ID,
-      payload: { type: 'usage', usage: mockUsage(42_000 + feedTick * 900, MOCK_MODEL_SONNET) },
+      payload: { type: 'usage', usage: mockUsage(streamingUsedTokens(feedTick), MOCK_MODEL_SONNET) },
     });
   }
 
@@ -784,13 +981,14 @@ export function createMockDesktop(): MockDesktop {
       // below - usage, transcript growth, the permission prompt - is what a
       // list-only subscriber came for, and gating it on the terminal froze
       // the whole simulated agent whenever no session screen was open.
-      if (terminalWanted) {
+      if (terminalWanted && terminalLineIndex < MOCK_TERMINAL_LINES.length) {
         emit({
           kind: 'terminal',
           sessionId: activeSessionId,
           taskId: MOCK_TASK_ID,
-          payload: { data: `tick ${feedTick}: scanning src/auth for redirect handling...\r\n` },
+          payload: { data: `${MOCK_TERMINAL_LINES[terminalLineIndex]}\r\n` },
         });
+        terminalLineIndex += 1;
       }
       if (feedTick % 5 === 0) {
         // Grows the board card's context bar over the session, like a real
@@ -825,8 +1023,8 @@ export function createMockDesktop(): MockDesktop {
         // Varied realistic commands (real sessions never repeat one Bash
         // cell verbatim), mirroring the repo's actual verification loop.
         const tickInvocations = [
-          { command: 'npm run typecheck', result: '> @kangentic/mobile@0.1.0 typecheck\n> tsc --noEmit' },
-          { command: 'npm run lint', result: '> @kangentic/mobile@0.1.0 lint\n> eslint . --max-warnings 0' },
+          { command: 'npm run typecheck', result: '> storefront-web@2.4.0 typecheck\n> tsc --noEmit' },
+          { command: 'npm run lint', result: '> storefront-web@2.4.0 lint\n> eslint . --max-warnings 0' },
           {
             command: 'npx vitest run tests/unit',
             result: ' Test Files  38 passed (38)\n      Tests  305 passed (305)\n   Duration  2.72s',
@@ -892,8 +1090,8 @@ export function createMockDesktop(): MockDesktop {
       tasks: view === 'sessions' ? allTasks.filter((task) => task.session_id !== null) : allTasks,
       ...(view === undefined ? { backlog: [] } : {}),
       projectColor: isSecondProject ? MOCK_PROJECT_2.color : MOCK_PROJECT.color,
-      // Exercises the desktop's "hide ticket numbers" layout setting -
-      // Project 1 leaves it at the true default, Project 2 turns it off.
+      // Exercises the desktop's "hide ticket numbers" layout setting - the
+      // first project leaves it at the true default, the second turns it off.
       showTicketNumbers: !isSecondProject,
       ...(view !== undefined ? { view } : {}),
       ...(view === 'sessions' ? { taskCountsByColumnId } : {}),
@@ -1100,9 +1298,9 @@ export function createMockDesktop(): MockDesktop {
         terminalWanted = wantsTerminal;
         startFeed();
         const snapshot: ReadStreamResponsePayload = {
-          scrollback: wantsTerminal ? 'kangentic mock desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n' : '',
+          scrollback: wantsTerminal ? mockTerminalScrollback() : '',
           activity: pendingPromptId ? { state: 'permission', reason: { kind: 'permission' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
-          usage: mockUsage(42_000 + feedTick * 900, MOCK_MODEL_SONNET),
+          usage: mockUsage(streamingUsedTokens(feedTick), MOCK_MODEL_SONNET),
           awaitedPromptId: pendingPromptId,
           awaitedPromptOptions: pendingPromptId === PERMISSION_PROMPT_ID ? MOCK_PERMISSION_OPTIONS : null,
           ptyDimensions: { ...ptyDimensions },
@@ -1136,7 +1334,7 @@ export function createMockDesktop(): MockDesktop {
             kind: 'assistant',
             uuid: `mock-assistant-reply-${replyCounter}`,
             ts: Date.now(),
-            blocks: [{ type: 'text', text: 'Got it - folding that into the fix. (This reply came from the in-app mock desktop.)' }],
+            blocks: [{ type: 'text', text: 'Got it - folding that into the fix.' }],
           });
         });
         return ok(request, { delivered: true });

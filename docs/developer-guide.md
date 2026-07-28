@@ -143,6 +143,38 @@ WebView itself over the Chrome DevTools Protocol (the dev build exposes a
 `MAX_TEXTURE_SIZE` canvas clamp was diagnosed - the layout was correct and only the painted
 scale was wrong, which no RN-side probe could see.
 
+## Store listing screenshots
+
+`scripts/storeScreenshots.mjs` captures the Play listing images. It needs the MOCK rig
+(`npm run dev:mock`) against a **dev build**, because `isMockDesktopEnabled()` is
+`__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'` - a release APK shows an unpaired
+"Connecting to your desktop..." screen instead, and does so silently. Check the install before
+trusting the screen:
+
+```
+adb shell "dumpsys package com.kangentic.mobile | grep flags="   # wants DEBUGGABLE
+node scripts/storeScreenshots.mjs all                            # phone, seven-inch, ten-inch
+```
+
+Two things about this are worth knowing before changing it.
+
+**The geometry is not the emulator's.** Play requires exactly 16:9 or 9:16 on all three Android
+shelves, tablets included, and a real tablet is not 9:16 (nor is a modern phone - the AVD is
+1080x2400). Setting `wm size` and `wm density` INDEPENDENTLY satisfies both constraints at once:
+1080x1920@480 is 360dp (phone), 1080x1920@280 is ~617dp (7-inch), 1440x2560@320 is 720dp
+(10-inch). Because crossing 600dp is what triggers large-screen layout, reviewing the tablet
+captures IS the tablet-layout verification - this app has no tablet-specific code and had never
+been run at tablet width before these were produced.
+
+**Turn expo-dev-menu's floating "Tools" button off** (dev menu -> bottom -> "Tools button"). It
+is a dev-build overlay pinned over the app's top-right corner, so it lands in every frame as a
+doubled settings icon. The script refuses to run while it is enabled, because the resulting
+captures are still correctly sized and still pass verification - nothing else would catch it.
+
+Output and per-shelf detail: [`store/screenshots/README.md`](../store/screenshots/README.md).
+iOS is not covered: App Store Connect wants a 6.9-inch iPhone shelf (1320x2868, minimum three),
+which needs a booted simulator and so cannot be captured from Windows.
+
 ## Agent tooling (MCP servers)
 
 Agent sessions in this repo get MCP tools from two different mechanisms. `.mcp.json` wires three

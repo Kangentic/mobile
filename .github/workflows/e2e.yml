@@ -97,7 +97,17 @@ jobs:
 
           # Anything that is NOT documentation-shaped forces a run. Note that
           # .github/ counts as relevant: a workflow change must be exercised.
-          if printf '%s\n' "$changed" | grep -qvE '(^|/)[^/]*\.(md|mdx)$|^docs/|^\.claude/|^LICENSE$|^CLA\.md$'; then
+          #
+          # `store/screenshots/` is listed with the docs because it holds the
+          # PNGs uploaded to the Play and App Store listings - product imagery,
+          # not code. Without it every re-capture would build an APK and boot two
+          # emulators for half an hour to validate image files. The exclusion is
+          # deliberately NARROW: only the output directory. The capture script
+          # (scripts/storeScreenshots.mjs) and the flow that drives it
+          # (.maestro/screenshots/) are code and still force a run, and this
+          # classifier fails safe by RUNNING, so widening it further is a
+          # decision to take on its own merits, not a convenience.
+          if printf '%s\n' "$changed" | grep -qvE '(^|/)[^/]*\.(md|mdx)$|^docs/|^\.claude/|^LICENSE$|^CLA\.md$|^store/screenshots/'; then
             echo "Non-documentation changes present: running E2E."
             echo "run-e2e=true" >> "$GITHUB_OUTPUT"
           else
