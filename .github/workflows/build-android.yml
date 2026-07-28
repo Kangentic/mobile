@@ -82,17 +82,18 @@ jobs:
   plan:
     name: Plan (resolve build matrix)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Was 5. The version-code preflight below needs node_modules to run
+    # `expo config`, and a cold node_modules cache pays an npm ci here.
+    timeout-minutes: 15
     outputs:
       profiles: ${{ steps.matrix.outputs.profiles }}
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned rather than relying on whatever Node the runner image ships: this
-      # job decides the matrix, so if it breaks nothing builds at all.
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
+      # Node pinned from .nvmrc, plus the shared node_modules cache, because the
+      # version-code preflight below reads the resolved Expo config. This job
+      # decides the matrix, so if it breaks nothing builds at all.
+      - uses: ./.github/actions/setup-node-deps
 
       # The crash-test flag reveals a Sentry.nativeCrash() button and turns on
       # verbose native SDK logging, so that artifact must never reach a store
@@ -109,6 +110,51 @@ jobs:
           set -euo pipefail
           echo "::error::crash_test and submit_track are mutually exclusive. A crash-test build reveals the Settings crash rows and enables Sentry debug logging, so it must never be submitted to a Play track. Dispatch them as two separate runs."
           exit 1
+
+      # A `completed` Play release cannot be halted, only superseded by a higher
+      # version code, so an unstaged release to a track with real users is
+      # irreversible the moment it lands. That was previously a prose rule in
+      # .claude/skills/release/SKILL.md telling the operator to pass
+      # `-f rollout=0.1`, which is exactly the kind of rule that holds until the
+      # one time somebody is in a hurry. Refused here instead, in the same job
+      # and the same style as the crash-test refusal above.
+      #
+      # `internal` is deliberately exempt: the track is small, known, and the
+      # documented escape hatch for it is simply shipping a higher version code.
+      - name: Refuse an unstaged release to a track with real users
+        if: (inputs.submit_track == 'alpha' || inputs.submit_track == 'beta') && inputs.rollout == ''
+        run: |
+          set -euo pipefail
+          echo "::error::submit_track '${{ inputs.submit_track }}' needs an explicit staged rollout, e.g. -f rollout=0.1. Play can only HALT a release whose status is inProgress, which is what a userFraction rollout produces; a completed release can never be pulled back, only superseded by a higher versionCode. Re-dispatch with a rollout, or use submit_track=internal."
+          exit 1
+
+      # Preflight the version code HERE rather than only in submit-play, because
+      # that job carries `environment: google-play` and its own check is step 7
+      # INSIDE it. The old ordering was: build for ~25 minutes, ask a human to
+      # approve, and only then discover the number was spent. iOS already got
+      # this right (build-ios.yml checks before `xcodebuild archive`), and the
+      # asymmetry cost a real release run on 2026-07-28.
+      #
+      # The check in submit-play stays. It is not redundant: it re-checks after
+      # the build, which is the window where a release cut from another machine
+      # could take the number.
+      #
+      # Skipped when nothing will be submitted, so an artifact-only build never
+      # needs the Play credential.
+      - name: Check the version code is free on every track
+        if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "::error::submit_track is '${{ inputs.submit_track }}' but PLAY_SERVICE_ACCOUNT_JSON is not set, so the version code cannot be preflighted and the submit would fail after a full build."
+            exit 1
+          fi
+          npx expo config --json > "$RUNNER_TEMP/expo-config.json"
+          version_code="$(node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(c.android.versionCode))" "$RUNNER_TEMP/expo-config.json")"
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$version_code"
 
       - name: Resolve the profile matrix
         id: matrix
@@ -478,6 +524,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.profile != 'all' && inputs.crash_test != true
     runs-on: ubuntu-latest
     environment: google-play
+    # Narrower than it looks: the workflow is `contents: read` at the top level,
+    # and this raises it for THIS job only, so the tag-the-spent-version-code
+    # step can create a ref. The build jobs stay read-only.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -503,13 +554,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Re-checked here even though the plan job already preflighted it. Not
+      # redundant: this closes the window between the plan job and now, in which
+      # a release cut from another machine could have taken the number.
       - name: Check the version code is free on every track
+        id: version
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
           npx expo config --json > "$RUNNER_TEMP/expo-config.json"
           version_code="$(node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(c.android.versionCode))" "$RUNNER_TEMP/expo-config.json")"
+          version_name="$(node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(c.version))" "$RUNNER_TEMP/expo-config.json")"
+          echo "version-code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "version-name=$version_name" >> "$GITHUB_OUTPUT"
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$version_code"
 
@@ -538,6 +596,37 @@ jobs:
           releaseFiles: artifact/*
           track: ${{ inputs.submit_track }}
           status: completed
+
+      # The durable record that this version code is now spent.
+      #
+      # Until now the only place that knowledge lived was a hand-edited comment
+      # in app.config.ts, which is true when written and rots silently. That is
+      # not hypothetical: a stale "builds 1 and 2 are spent, hence 3" note sent
+      # the 2026-07-28 iOS release at a build number Apple had already taken.
+      # A tag cannot drift, and it is queryable (`git tag --list 'android-vc*'`)
+      # by a human or by /release, unlike prose.
+      #
+      # Created only after the upload step succeeds, so a tag means the bytes
+      # actually reached Play, not that a job was dispatched. Failure to tag
+      # must not fail the release: the upload has already happened and is not
+      # undoable, so a tagging problem is a bookkeeping problem.
+      - name: Record the spent version code as a tag
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_CODE: ${{ steps.version.outputs.version-code }}
+          VERSION_NAME: ${{ steps.version.outputs.version-name }}
+        run: |
+          set -euo pipefail
+          tag="android-vc${VERSION_CODE}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists, leaving it alone."
+            exit 0
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${tag}" \
+            -f sha="${GITHUB_SHA}" >/dev/null
+          echo "Tagged ${GITHUB_SHA} as ${tag} (v${VERSION_NAME}, track ${{ inputs.submit_track }})."
 
       - name: Write the submit summary
         if: always()

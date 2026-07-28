@@ -19,6 +19,13 @@ Use `AskUserQuestion` for both axes. Do NOT guess.
    `TestFlight internal` / `TestFlight external` / `App Store`. Either: `artifact only, no submit`.
 
 Then check the answer against the table below and **stop with an explanation if it is blocked.**
+
+**Every row is a claim about external state, so treat it as evidence with an age, not as fact.**
+The table is accurate **as of 2026-07-28**. This matters because it has already been wrong twice
+in ways that cost real time: it asserted the Play API path was proven when nothing had ever
+exercised it, and it listed data safety as unfilled after it had been submitted. When a row
+decides whether you refuse a release, say when it was last verified and against what. If a row
+can be checked in seconds with a script, check it rather than quoting it.
 Refusing precisely is the job here. Half-executing a blocked release and failing at the upload
 wastes a 20 minute build and can leave a dangling Play edit.
 
@@ -113,6 +120,24 @@ the number in advance, not about enforcement.
 
 Report both the local and the store-side numbers before changing anything.
 
+**Read the tags, not the comments.** Every successful submit now records what it spent:
+`git tag --list 'android-vc*'` and `git tag --list 'ios-b*'`. Those are written by the submit jobs
+after the upload lands (for iOS, after Apple *accepts*), so they cannot drift. The comments in
+`app.config.ts` are maintained by hand and are a courtesy, not a source of truth. A stale one is
+exactly what sent the 2026-07-28 release at an iOS build number Apple had already taken.
+
+**Three places now catch a spent counter, in increasing cost:**
+
+1. `Release counters (store preflight)` in `ci.yml`, on any PR that changes a counter's value.
+   Seconds, and it is where a bad bump should die.
+2. The `plan` job in `build-android.yml` and the pre-archive check in `build-ios.yml`. Both run
+   before anything expensive.
+3. The submit jobs themselves, which re-check to close the window where another machine took the
+   number mid-build.
+
+Note that (1) is **not a required status check** unless it has been added to main's branch
+protection. Check before relying on it to block a merge.
+
 ## Step 3 - Land the bump through the PR gate
 
 **`main` is protected, so the bump cannot be pushed directly.** This is the step people try to skip.
@@ -144,6 +169,10 @@ gh workflow run build-android.yml --ref main -f profile=production -f artifact=a
   `completed` release cannot be pulled back, only superseded by a higher versionCode.
   Internal testing is small and known enough not to need it; closed, open, and
   production are not. See step 8.
+  **This is now enforced, not advisory:** the `plan` job refuses `alpha` or `beta` with an empty
+  `rollout` and names the reason. `internal` is deliberately exempt. It was moved out of prose
+  because a rule that only exists in a skill file holds right up until somebody is in a hurry,
+  and the action it guards is irreversible.
 - **Use dispatch, not a `v*` tag.** A tag build produces the AAB but can never submit: the
   `submit-play` job requires `github.event_name == 'workflow_dispatch'`. Tags are for cutting a
   release candidate artifact, not for releasing.

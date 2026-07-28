@@ -237,6 +237,9 @@ jobs:
       artifact-name: ${{ steps.name.outputs.artifact-name }}
       bundle-id: ${{ steps.signing.outputs.bundle-id }}
       build-number: ${{ steps.version.outputs.build-number }}
+      # Exposed for the spent-build-number tag in submit-testflight. The step
+      # already computed it for the ASC preflight; it just was not published.
+      version-name: ${{ steps.version.outputs.version-name }}
     env:
       # Secrets cannot be referenced from an `if:` condition, so presence is
       # resolved once here as a plain boolean and the steps branch on that.
@@ -563,6 +566,11 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     environment: app-store-connect
+    # The workflow is `contents: read` at the top level. Raised for THIS job
+    # only, so the spent-build-number tag step can create a ref. The archive
+    # job stays read-only.
+    permissions:
+      contents: write
     env:
       # Declared HERE and not only on the `device` job. `env` does not cross a job
       # boundary, and the first version of this workflow assumed it did: the
@@ -634,6 +642,37 @@ jobs:
       - name: Warn that Apple's verdict was not checked
         if: env.HAS_ASC_API_KEY != 'true'
         run: echo "::warning::No App Store Connect API key, so Apple's processing verdict was not checked. An upload can still be rejected afterwards, by email only."
+
+      # The durable record that this build number is now spent. See the matching
+      # step in build-android.yml for the reasoning; the short version is that
+      # this knowledge previously lived only in a hand-edited comment in
+      # app.config.ts, and a stale one sent the 2026-07-28 release at a build
+      # number Apple had already taken.
+      #
+      # Deliberately placed AFTER the accept-verdict step, so on a run with an
+      # ASC key the tag means Apple accepted the build, not merely that altool
+      # said UPLOAD SUCCEEDED. Builds 1 and 2 are exactly why that distinction
+      # matters: both uploaded fine and were then refused.
+      #
+      # Never fails the job. The upload is already done and cannot be undone, so
+      # a tagging problem is bookkeeping, not a release failure.
+      - name: Record the spent build number as a tag
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
+          VERSION_NAME: ${{ needs.device.outputs.version-name }}
+        run: |
+          set -euo pipefail
+          tag="ios-b${BUILD_NUMBER}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists, leaving it alone."
+            exit 0
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${tag}" \
+            -f sha="${GITHUB_SHA}" >/dev/null
+          echo "Tagged ${GITHUB_SHA} as ${tag} (v${VERSION_NAME})."
 
       - name: Write the submit summary
         if: always()
