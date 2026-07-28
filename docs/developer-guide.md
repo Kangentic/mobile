@@ -344,7 +344,7 @@ what each one actually proves and roughly what it costs. Durations are measured,
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
 | `Native config (CNG)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
-| `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (docs-only or draft) and it says which | 3s |
+| `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
 
 **The other 6 are not required, and that is deliberate.** They fall into two groups:
@@ -416,13 +416,25 @@ only, so a release can be cut from `main` whenever wanted without waiting on E2E
 build workflow never blocks a PR. Do not add a build workflow to the required checks: it would
 deadlock every PR on a check that never runs.
 
-**Docs-only PRs skip the E2E build.** `e2e.yml`'s `changes` job classifies the diff and the
-expensive jobs are conditional on it. This is deliberately not `paths-ignore` on the trigger:
-`E2E Tests (Maestro)` is a required check, and a workflow skipped by `paths-ignore` never reports
-its checks, so branch protection would wait forever and the PR could never merge. The workflow
-always runs, the costly jobs are skipped, and the gate treats a skipped suite as a pass. The
-fail-safe direction is to run: anything the classifier cannot confidently call documentation
-builds. Changes under `.github/` always run, because a workflow change must be exercised.
+**A PR that cannot change the APK skips the E2E build.** `e2e.yml`'s `changes` job classifies the
+diff and the expensive jobs are conditional on it. Skippable: markdown anywhere, `docs/`,
+`.claude/`, **`tests/`**, `LICENSE`, `CLA.md`. It reports as `skip-reason=no-app-change`.
+
+`tests/` is on that list because nothing under it ships in the binary, so a tests-only diff
+produces a byte-identical APK and the suites could only re-confirm the previous run. The unit and
+component tiers still run on it, since `ci.yml` has no path filter at all.
+
+This is deliberately not `paths-ignore` on the trigger: `E2E Tests (Maestro)` is a required check,
+and a workflow skipped by `paths-ignore` never reports its checks, so branch protection would wait
+forever and the PR could never merge. The workflow always runs, the costly jobs are skipped, and
+the gate treats a skipped suite as a pass. The fail-safe direction is to run: anything the
+classifier cannot confidently place on that list builds. Changes under `.github/` always run,
+because a workflow change must be exercised.
+
+**That list is a fail-open surface**, so it is guarded. Everything on it means E2E does not run
+while the required check reports green, so a careless addition would silently stop testing real app
+changes rather than break anything visibly. `tests/unit/e2eGate.test.ts` extracts the pattern from
+the workflow and runs it through the same `grep -qvE` the job uses, over 17 representative diffs.
 
 **Two known costs, not yet paid down.** `e2e.yml` has its own build job that overlaps with
 `build-android.yml`. `setup-gradle` scopes its cache per workflow, so the two do not share a warm
