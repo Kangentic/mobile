@@ -99,10 +99,29 @@ xcrun simctl install "$device_id" "$app_path"
 # runner can tap. simctl has no tap primitive, so that route needs a UI driver
 # and this one does not. Metro's log was the tell: server up, never asked for a
 # bundle.
+# Silence expo-dev-menu through the ARGUMENT DOMAIN.
+#
+# All three of these are UserDefaults, and every one of them defaults AGAINST a
+# clean capture on iOS: EXDevMenuShowsAtLaunch is true, so the menu opens by
+# itself; EXDevMenuIsOnboardingFinished is false, so the "This is the developer
+# menu" explainer covers the app; and EXDevMenuShowFloatingActionButton is true,
+# so the dev-tools FAB sits over the UI - the same overlay that spoiled every
+# Android capture until it was turned off there.
+#
+# Passing them as `-Key Value` launch arguments puts them in NSArgumentDomain,
+# which outranks the registration defaults the module sets. That beats writing
+# them with `defaults write`: nothing is left behind on the simulator, and there
+# is no question about which container the write landed in.
+DEV_MENU_ARGS=(
+  -EXDevMenuShowsAtLaunch NO
+  -EXDevMenuIsOnboardingFinished YES
+  -EXDevMenuShowFloatingActionButton NO
+)
+
 echo "Launching $bundle_id"
 if [ -n "${METRO_URL:-}" ]; then
   echo "  pointing the dev client at $METRO_URL"
-  xcrun simctl launch "$device_id" "$bundle_id" --initialUrl "$METRO_URL"
+  xcrun simctl launch "$device_id" "$bundle_id" --initialUrl "$METRO_URL" "${DEV_MENU_ARGS[@]}"
 
   # Wait for Metro to actually SERVE the bundle rather than sleeping a guess.
   # A cold bundle is slow enough that a fixed wait either races it (capturing a
@@ -130,7 +149,7 @@ if [ -n "${METRO_URL:-}" ]; then
   echo "Letting the first render settle..."
   sleep 20
 else
-  xcrun simctl launch "$device_id" "$bundle_id"
+  xcrun simctl launch "$device_id" "$bundle_id" "${DEV_MENU_ARGS[@]}"
 fi
 
 # The mock's agent-life simulator raises its permission prompt at tick 20, and
