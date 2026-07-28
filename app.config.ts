@@ -63,8 +63,12 @@ const config: ExpoConfig = {
     //
     // Rejected builds never become Build resources, so they are invisible to
     // that check: the 2026-07-27 run logged "Registered builds visible: 0"
-    // moments before uploading 3. The registered set is therefore {3}, and the
-    // next free number is 4.
+    // moments before uploading 3.
+    //
+    // SPENT: 3 (uploaded 2026-07-27) and 4 (uploaded 2026-07-28 under 0.2.0,
+    // and ACCEPTED by Apple, confirmed by the submit job's --await-processing
+    // step rather than inferred from a green check). 1 and 2 were rejected in
+    // processing and never registered. The next release takes 5.
     buildNumber: '4',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
@@ -199,10 +203,16 @@ const config: ExpoConfig = {
     // in eas.json, so EAS does not track it server-side). Read the Android
     // release section of docs/developer-guide.md before bumping.
     //
-    // Version code 1 was released to the Play internal track on 2026-07-26 and
-    // is spent. scripts/checkPlayVersionCode.mjs would catch a duplicate before
-    // the upload, but leaving a spent value here means every build produces an
-    // artifact that cannot be submitted.
+    // SPENT: 1 (internal, 2026-07-26, uploaded by hand through the Console) and
+    // 2 (internal, 2026-07-28, the first release the API ever committed).
+    // The next release takes 3.
+    //
+    // Keep this list current on the way OUT of a release, not the way in. The
+    // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
+    // into 2026-07-28 and cost a failed release run, because build 3 had in
+    // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
+    // duplicate, but only in the submit job, which is after the ~25 minute
+    // build AND after the approval gate.
     versionCode: 2,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
