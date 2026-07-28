@@ -199,6 +199,16 @@ jobs:
       # all have passed the build unnoticed.
       - name: Launch the app on a simulator
         id: smoke
+        # Skipped for a screenshot run, and that is worth 12 minutes.
+        #
+        # This step boots its OWN simulator, and `pickIosSimulator` without a
+        # preference returns whatever iPhone simctl lists first - while the
+        # capture step below insists on a 6.9-inch Pro Max for the App Store
+        # shelf. So a screenshot run was booting two different simulators back
+        # to back, at roughly six minutes each, to prove the same thing twice.
+        # The capture asserts the process survives and produces a screenshot of
+        # a rendered app, which is strictly more than this step checks.
+        if: inputs.screenshots != 'true'
         env:
           APP_PATH: ${{ steps.verify.outputs.app-path }}
           # Keeps the simulator up for the Maestro step below, which drives the
@@ -301,6 +311,34 @@ jobs:
           # exactly as it does on Android, so collect them into the shelf folder.
           find "$RUNNER_TEMP/maestro-ios" -name '*.png' -path '*shots*' -exec cp {} "$RUNNER_TEMP/ios-screenshots/" \;
           ls -la "$RUNNER_TEMP/ios-screenshots"
+
+      # SAY SO WHEN THE DRIVER PRODUCED NOTHING.
+      #
+      # The step above is continue-on-error so a broken iOS driver cannot throw
+      # away the frame the scripted capture already took. That protection cost
+      # two runs: it reported success while doing nothing at all - once because
+      # Homebrew refused an untrusted tap, once for another reason entirely -
+      # and the green tick hid both. A step that can silently no-op is worse
+      # than one that fails, so the count is checked and surfaced explicitly.
+      #
+      # A warning rather than a failure, because one verified frame is still a
+      # real result and worth keeping.
+      - name: Report how many screenshots were captured
+        if: inputs.screenshots == 'true'
+        run: |
+          set -euo pipefail
+          count="$(find "$RUNNER_TEMP/ios-screenshots" -name '*.png' | wc -l | tr -d ' ')"
+          echo "Captured $count screenshot(s)."
+          {
+            echo "### iOS store screenshots"
+            echo ""
+            echo "Captured **$count** at 1320x2868 (App Store 6.9-inch shelf)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -lt 3 ]; then
+            echo "::warning::Only $count screenshot(s). The App Store needs at least 3 per shelf, so the Maestro pass did not add its frames - check the ios-screenshot-maestro artifact."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Below the App Store minimum of 3. The Maestro pass added nothing." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload the Maestro iOS output
         if: ${{ inputs.screenshots == 'true' && !cancelled() }}
