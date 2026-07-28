@@ -139,9 +139,20 @@ jobs:
           echo "Changed files:"
           printf '%s\n' "$changed"
 
-          # Anything that is NOT documentation-shaped forces a run. Note that
-          # .github/ counts as relevant: a workflow change must be exercised.
-          if printf '%s\n' "$changed" | grep -qvE '(^|/)[^/]*\.(md|mdx)$|^docs/|^\.claude/|^LICENSE$|^CLA\.md$'; then
+          # Anything that cannot change the APK is skippable. Two notes on the
+          # list below, both learned the expensive way:
+          #
+          #   ^tests/  is safe because NOTHING under tests/ ships in the binary.
+          #            A tests-only diff produces a byte-identical APK, so the
+          #            E2E suites could only re-confirm what the last run
+          #            already proved, at the cost of ~10 minutes. The unit and
+          #            component tiers still run on it, because ci.yml has no
+          #            path filter at all - so a broken test is still caught,
+          #            just not by an emulator.
+          #
+          #   .github/ is deliberately NOT here. A workflow change must be
+          #            exercised by the thing it changes.
+          if printf '%s\n' "$changed" | grep -qvE '(^|/)[^/]*\.(md|mdx)$|^docs/|^\.claude/|^tests/|^LICENSE$|^CLA\.md$'; then
             echo "Non-documentation changes present: running E2E."
             echo "run-e2e=true" >> "$GITHUB_OUTPUT"
           else

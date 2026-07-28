@@ -20,7 +20,7 @@
  * Bash is available on the ubuntu runner that hosts the unit tier, and locally
  * through Git Bash on Windows.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -222,5 +222,92 @@ describe.skipIf(!bashExecutable)('the E2E Tests (Maestro) required gate', () => 
     const script = readGateScript();
     expect(script).toContain('CHANGES_RESULT');
     expect(script).toContain('MAESTRO_RESULT');
+  });
+});
+
+/**
+ * The `changes` job's skip regex, pulled out of the workflow and run through the
+ * same `grep -qvE` the job uses.
+ *
+ * This is a FAIL-OPEN surface, same family as the gate above. The pattern lists
+ * what cannot change the APK; anything matching it entirely means the suites do
+ * not run and `E2E Tests (Maestro)` reports green-and-skipped. So a careless
+ * addition here (`^src/`, say, or dropping a `^` anchor) does not break a build,
+ * it silently stops running E2E for real app changes while the required check
+ * stays green. Exactly the shape of bug this file already exists for.
+ */
+function readSkipPattern(): string {
+  const workflow = parseYaml(readFileSync(workflowPath, 'utf8')) as E2eWorkflow;
+  const classify = workflow.jobs?.changes?.steps?.find((step) => step.name === 'Classify the diff');
+  if (typeof classify?.run !== 'string') {
+    throw new Error("e2e.yml's `changes` job has no step named \"Classify the diff\".");
+  }
+  const pattern = classify.run.match(/grep -qvE '([^']+)'/);
+  if (!pattern) {
+    throw new Error('Could not find the `grep -qvE` skip pattern in the Classify the diff step.');
+  }
+  return pattern[1];
+}
+
+/** true when the diff would RUN the suites, false when it would skip them. */
+function wouldRunE2e(changedFiles: string[]): boolean {
+  if (!bashExecutable) {
+    throw new Error('resolveBashExecutable returned null; the suite should have been skipped.');
+  }
+  // `printf | grep -qvE` exactly as the job does it: exit 0 (run) when ANY line
+  // fails to match the skip pattern.
+  const script = `printf '%s\\n' "$CHANGED" | grep -qvE '${readSkipPattern()}'`;
+  const result = spawnSync(bashExecutable, ['-c', script], {
+    encoding: 'utf8',
+    env: { ...process.env, CHANGED: changedFiles.join('\n') },
+  });
+  return result.status === 0;
+}
+
+describe.skipIf(!bashExecutable)('the changes classifier', () => {
+  it('finds the pattern at all', () => {
+    // Non-vacuity guard for everything below.
+    expect(readSkipPattern()).toContain('docs/');
+  });
+
+  describe('skips diffs that cannot change the APK', () => {
+    const skippable: [string, string[]][] = [
+      ['documentation', ['docs/developer-guide.md']],
+      ['a root markdown file', ['README.md']],
+      ['agent rules', ['.claude/rules/e2e-maestro-runs.md']],
+      ['unit tests', ['tests/unit/e2eGate.test.ts']],
+      ['both test tiers', ['tests/unit/a.test.ts', 'tests/components/B.test.tsx']],
+      ['tests plus docs', ['tests/unit/a.test.ts', 'docs/x.md']],
+      ['LICENSE', ['LICENSE']],
+    ];
+    for (const [label, files] of skippable) {
+      it(label, () => {
+        expect(wouldRunE2e(files)).toBe(false);
+      });
+    }
+  });
+
+  describe('runs for anything that can', () => {
+    const mustRun: [string, string[]][] = [
+      ['app source', ['src/screens/BoardScreen.tsx']],
+      // The one that matters most: a mixed diff must not inherit the test-only skip.
+      ['tests alongside app source', ['tests/unit/a.test.ts', 'src/state/boardStore.ts']],
+      // Deliberately not skippable: a workflow change must be exercised.
+      ['a workflow change', ['.github/workflows/e2e.yml']],
+      ['a config plugin', ['plugins/withAndroidE2eGwpAsanOff.ts']],
+      ['the app config', ['app.config.ts']],
+      ['the lockfile', ['package-lock.json']],
+      ['a Maestro flow', ['.maestro/paired/board-move.yaml']],
+      ['a build script', ['scripts/androidAbis.mjs']],
+      ['an asset', ['assets/brand/icon.png']],
+      // The `^` anchor is load-bearing: a nested directory called tests/ inside
+      // src/ ships in the binary and must not be swept up by the tests/ rule.
+      ['a nested tests directory under src', ['src/lib/tests/helper.ts']],
+    ];
+    for (const [label, files] of mustRun) {
+      it(label, () => {
+        expect(wouldRunE2e(files)).toBe(true);
+      });
+    }
   });
 });
