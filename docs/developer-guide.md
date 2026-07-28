@@ -464,24 +464,28 @@ dispatch. Separately, `profile=all` is implemented but unmeasured.
 ### What is pinned, and what is deliberately not
 
 A required status check can be reddened by a release in somebody else's repository, with no commit
-here. `E2E Tests (Maestro)` has three such exposures and they are treated differently on purpose.
+here. `E2E Tests (Maestro)` depends on three such moving parts, and they are treated differently on
+purpose.
 
 - **The Maestro CLI is pinned.** `curl -Ls https://get.maestro.mobile.dev` installs
   `releases/latest` unless `MAESTRO_VERSION` is set, so every run used to install whatever shipped
   that morning - currently 2.7.0. It is now a workflow-level `env:` in `e2e.yml`, read by both
-  emulator jobs, and the `Report the Maestro version` step **asserts** the installed version equals
-  the pin rather than printing it for a human who is not reading. Maestro is the thing whose
-  behaviour against these specific flows can change under you, which is what earns it a pin.
+  emulator jobs, and repeated in `build-ios.yml`, which runs the same `.maestro/smoke.yaml` on a
+  macOS runner. The `Report the Maestro version` step **asserts** the installed version equals the
+  pin rather than printing it for a human who is not reading. Maestro is the thing whose behaviour
+  against these specific flows can change under you, which is what earns it a pin.
 - **The relay is pinned to a SHA**, for the same reason, one repository over.
 - **`reactivecircus/android-emulator-runner@v2` is deliberately left floating.** Its surface is
   "boot an emulator and run a script", which is stable in a way a test runner's flow semantics are
   not, and pinning it to a SHA buys a maintenance chore against a risk that has not materialised.
   This is a judgement, not an oversight; revisit it if that action ever breaks a run.
-- **The local recipe carries the same Maestro version** (`.claude/rules/e2e-maestro-runs.md`), and
-  `tests/unit/ciSafeMaestroFlows.test.ts` asserts the two agree, that the pin exists at all, and
-  that no job shadows it with its own `env:`. Pinning CI alone would just move the problem: a
-  developer on a newer CLI writes a flow that passes locally and fails the gate, with nothing in
-  either place explaining why.
+
+`tests/unit/ciSafeMaestroFlows.test.ts` holds the pin in place: the value exists and is a bare
+`x.y.z` (a `cli-` prefixed one would 404 at install time), no job shadows it with its own `env:`,
+`build-ios.yml` agrees, and **the local recipe in `.claude/rules/e2e-maestro-runs.md` names the same
+version**. That last one matters as much as the pin itself. Pinning CI alone just moves the problem:
+a developer on a newer CLI writes a flow that passes locally and fails the gate, with nothing in
+either place explaining why.
 
 **GitHub Actions are kept off Node 20**, which GitHub is already force-running on Node 24 and will
 eventually remove. `actions/setup-java@v5`, `android-actions/setup-android@v4` and
@@ -512,8 +516,9 @@ exact one, and every sub-cache (dependencies, transforms, kotlin-dsl, wrapper) h
 evidence the bump cost anything. Recorded because the prediction was wrong in a way that would have
 been easy to "confirm" by reading one slow run as proof.
 
-**`cla`, the fourth required check, still runs on Node 20 and there is no upgrade.**
-`contributor-assistant/github-action@v2.6.1` declares `node20` and v2.6.1 is the latest release.
+**One required check still runs on Node 20, and there is no upgrade for it.** `cla` uses
+`contributor-assistant/github-action@v2.6.1`, which declares `node20`, and v2.6.1 is the latest
+release.
 It passes today because GitHub force-runs it on Node 24. Watch it: when Node 20 is removed for
 real, the fix is a fork, a replacement action, or dropping the bot, and none of those is a
 five-minute job to discover under time pressure.
