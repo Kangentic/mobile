@@ -1,7 +1,6 @@
 import React from 'react';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useTheme } from '@/components';
-import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 
 /**
  * Bottom tabs: Agents (the attention feed) and Board.
@@ -20,14 +19,23 @@ import { sectionForEntry, useActivityStore } from '@/state/activityStore';
  * icons (board columns, task cards, prompt cards) stay lucide precisely
  * BECAUSE they must match the desktop - see .claude/rules/ui-conventions.md.
  */
+/*
+ * NO NEEDS-YOU BADGE ON THE AGENTS TAB.
+ *
+ * There was one - a childless `NativeTabs.Trigger.Badge`, the platform's own
+ * red dot, shown whenever any session was waiting on the user. It was removed
+ * deliberately, so do not reinstate it as an obvious missing affordance.
+ *
+ * It bought nothing the screen was not already saying. The Agents feed leads
+ * with the sessions that need a turn, each card names the exact thing it is
+ * waiting for ("Approve: npx jest tests/components"), and the section header
+ * carries the count. The dot restated all of that as an unread-mail marker,
+ * one glyph deep, with no way to tell what or how many - and it sat on top of
+ * the tab icon, which is the one place in the bar where a mark reads as an
+ * alert rather than as information.
+ */
 export default function TabsLayout(): React.JSX.Element {
   const theme = useTheme();
-  // The needs-you signal, previously a custom dot drawn on the Agents tab.
-  // A childless Badge is the platform's own dot, which also means it follows
-  // the OS convention users already recognise from every other app.
-  const hasNeedsYou = useActivityStore((state) =>
-    Object.values(state.bySessionId).some((entry) => sectionForEntry(entry) === 'needs-you'),
-  );
 
   return (
     <NativeTabs
@@ -54,7 +62,6 @@ export default function TabsLayout(): React.JSX.Element {
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Icon sf="sparkles" md="auto_awesome" />
         <NativeTabs.Trigger.Label>Agents</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Badge hidden={!hasNeedsYou} />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="board">
         <NativeTabs.Trigger.Icon sf="rectangle.split.3x1" md="view_kanban" />
