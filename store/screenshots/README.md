@@ -4,11 +4,16 @@ Raw device captures for the Google Play and App Store listings. Product imagery,
 output: every file here is a claim about what the app does, so look at each one before
 uploading it.
 
-Regenerate with the emulator attached and the mock rig running:
+**Run `/store-screenshots`** to regenerate. It sequences all four shelves in the
+order that avoids waste (dispatch iOS first, capture Android while it builds),
+and carries the traps that have each cost a run.
+
+The commands it drives, if you would rather do it by hand:
 
 ```
 npm run dev:mock
 node scripts/storeScreenshots.mjs all
+gh workflow run build-ios.yml -f screenshots=true
 ```
 
 Single shelf: `node scripts/storeScreenshots.mjs phone` (or `seven-inch`, `ten-inch`).

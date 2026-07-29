@@ -83,8 +83,11 @@ tests/
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
-                  #   pretypecheck stale-node_modules guard), and the store preflights
-                  #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs + repo scripts
+                  #   pretypecheck stale-node_modules guard), the store preflights
+                  #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs, storeScreenshots.mjs
+                  #   (listing captures, driven by /store-screenshots), buildTabIcons.mjs
+                  #   + repo scripts
+store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 ```
 
 ## Commands
@@ -330,6 +333,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   messages.
 - `/sync-docs` keeps `docs/` aligned with source; the doc-anchor check runs inside `/pull-request`
   (commit time) and `/merge-pull-request` (merge time), and `/merge-back` for direct pushes.
+- `/store-screenshots` re-captures the Play and App Store listing images across all four shelves.
+  Run it whenever the captured screens, the mock content, or the tab bar change - the copy is IN
+  the frames, so all four shelves drift together. It sequences the platforms deliberately: iOS
+  costs ~45 minutes on a macOS runner per attempt, Android ~6 minutes each locally.
 
 ### Authoring a rule
 
