@@ -79,7 +79,17 @@ sleep 15
 
 # The authoritative check: is the process still there? A JS red screen keeps the
 # process alive, but a native crash does not.
-if xcrun simctl spawn "$device_id" launchctl list | grep -q "$bundle_id"; then
+#
+# Capture the listing THEN match it. Do not pipe into `grep -q`: that exits at
+# the first match and closes the pipe, `launchctl list` dies of SIGPIPE (141),
+# and `set -o pipefail` on line 20 makes 141 the pipeline's status - so the
+# check reported "no longer running" precisely BECAUSE it found the app. It is a
+# race on how much output is still unwritten when grep exits, which is why it
+# passed seven consecutive runs before failing. Observed on run 30461104088:
+# "Child process terminated with signal 13: Broken pipe", an empty crash-report
+# group, and a screenshot of a fully rendered, healthy app.
+process_list="$(xcrun simctl spawn "$device_id" launchctl list)"
+if grep -q "$bundle_id" <<< "$process_list"; then
   echo "Process for $bundle_id is still running after 15 seconds."
 else
   echo "::error::$bundle_id is no longer running. It launched and then died."
