@@ -1,7 +1,7 @@
 /**
  * Pins the fail-closed guard in `.github/workflows/ci.yml`'s `release-counters`
  * job (`Detect which counters this PR changes` step), a REQUIRED status check
- * on `main` (`Release counters (store preflight)`).
+ * on `main` (`Release counters (stores)`).
  *
  * The regression this file exists for: `extract_version_code` and
  * `extract_build_number` are both called with `|| true`, needed because `grep`
@@ -257,7 +257,7 @@ function appConfigFixture(versionCodeLine: string, buildNumberLine: string): str
 const VALID_VERSION_CODE_LINE = 'versionCode: 42,';
 const VALID_BUILD_NUMBER_LINE = "buildNumber: '17',";
 
-describe.skipIf(!bashExecutable)('the Release counters (store preflight) detector', () => {
+describe.skipIf(!bashExecutable)('the Release counters (stores) detector', () => {
   describe('against the real app.config.ts (canary)', () => {
     // The whole point of this case: it fails the day someone reformats the
     // real file in a way the regexes miss, which is the exact incident this

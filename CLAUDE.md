@@ -362,8 +362,8 @@ ones:
 
 **Linting:** live. `.github/workflows/ci.yml` runs each check as its own parallel job, and each
 job name is a required status check on the protected `main`: `Lint (ESLint)`, `Type check (tsc)`,
-`Unit Tests (Vitest)`, `Component Tests (Jest)`, `Native config (CNG)`, and
-`Release counters (store preflight)` (pull requests only). Renaming a job
+`Unit Tests (Vitest)`, `Component Tests (Jest)`, `Native config (prebuild)`, and
+`Release counters (stores)` (pull requests only). Renaming a job
 renames the required check, so main's branch protection must be updated in the same change.
 Conventions with no mechanical check of their own (shorthand names, em-dashes, personal info, UI
 copy brevity) remain enforced by review (`/code-review`, `crypto-pairing-auditor`,

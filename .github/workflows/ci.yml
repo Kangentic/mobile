@@ -35,16 +35,36 @@ concurrency:
 # the way the thing it names is normally written:
 #
 #   a TOOL keeps its own casing   `Lint (ESLint)`, `Type check (tsc)`,
-#                                 `Unit Tests (Vitest)`, `Native config (CNG)`,
+#                                 `Unit Tests (Vitest)`, `Native config (prebuild)`,
 #                                 `E2E Tests (Maestro)`
 #   a SHARD is `n/m`              `Component Tests (1/2)`
-#   anything else is prose        `Release counters (store preflight)`,
+#   anything else is prose        `Release counters (stores)`,
 #                                 `E2E Tests (Smoke)`, `E2E Tests (Paired)`
 #
 # `tsc` is lowercase because that is the binary's name, not because it is a
 # lesser kind of job. A slug is never a qualifier: `E2E Tests (smoke)` was the
 # matrix key leaking into the checks list, and it read as a typo sitting beside
 # the capitalised gate it belongs to.
+#
+# AND IT HAS TO FIT ON ONE LINE. The Actions sidebar is a narrow column, so a
+# name that wraps is the row your eye skips. Check a candidate against that
+# sidebar, never against a wide editor. Two names were retired on these grounds:
+#
+#   `Native config (CNG)`                 CNG is Continuous Native Generation, a
+#                                         methodology rather than a tool. Every
+#                                         other qualifier names something you
+#                                         could go run, so this one taught the
+#                                         reader that the parentheses mean
+#                                         nothing. `prebuild` is what the job
+#                                         actually runs, four times over.
+#   `Release counters (store preflight)`  33 characters, and the only row in the
+#                                         sidebar that wrapped onto two lines.
+#                                         `(stores)` keeps the half that carried
+#                                         information, which is what the counters
+#                                         are checked against, and drops the half
+#                                         the subject already implies.
+#
+# Both land at 24 to 25 characters, in line with `Component Tests (Jest)` at 22.
 #
 # WHAT THE NAME DOES NOT ENCODE: whether a row is a worker or the gate that
 # aggregates it. That was tried, as the desktop repo's case trick (`Unit Test
@@ -209,7 +229,7 @@ jobs:
   # Prebuild takes about 4 seconds, so catching a broken config plugin here
   # rather than partway into a native build is nearly free.
   native-config:
-    name: Native config (CNG)
+    name: Native config (prebuild)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -382,7 +402,7 @@ jobs:
   # before anyone widens the trigger: a required context that never reports on a
   # given event would block every merge that arrives by that path.
   release-counters:
-    name: Release counters (store preflight)
+    name: Release counters (stores)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10

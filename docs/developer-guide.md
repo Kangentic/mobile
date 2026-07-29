@@ -338,7 +338,7 @@ A PR to `main` reports **14 check runs**, of which **8 are required**. GitHub pr
 what each one actually proves and roughly what it costs. Durations are measured, not estimated.
 
 **Treat the count below as a snapshot, not a contract.** It has been wrong three times in a single
-day: twice from renames, and once when `Release counters (store preflight)` was promoted to
+day: twice from renames, and once when `Release counters (stores)` was promoted to
 required while an unrelated PR was in flight. `gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`
 is the only authority, which is why `/pull-request` reads it rather than trusting a list.
 
@@ -350,8 +350,8 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
-| `Native config (CNG)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
-| `Release counters (store preflight)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
+| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
+| `Release counters (stores)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (Smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
 
@@ -386,9 +386,9 @@ is normally written:**
 
 | The qualifier is | Written as | Examples |
 |---|---|---|
-| A **tool** | Its own name, whatever case that is | `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`, `Native config (CNG)`, `E2E Tests (Maestro)` |
+| A **tool** | Its own name, whatever case that is | `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`, `Native config (prebuild)`, `E2E Tests (Maestro)` |
 | A **shard** | `n/m` | `Component Tests (1/2)`, `(2/2)` |
-| Anything else | Sentence case prose | `E2E Tests (Smoke)`, `E2E Tests (Paired)`, `Release counters (store preflight)` |
+| Anything else | Sentence case prose | `E2E Tests (Smoke)`, `E2E Tests (Paired)`, `Release counters (stores)` |
 
 `tsc` is lowercase because that is the binary's name, not because it is a lesser kind of job.
 **A slug is never a qualifier:** `E2E Tests (smoke)` was `e2e.yml`'s matrix key leaking into the
