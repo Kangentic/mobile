@@ -13,6 +13,20 @@ import { brandTokens, darkTerminalTheme } from '@/components/theme/tokens';
 interface AndroidBuildProperties {
   usesCleartextTraffic?: boolean;
   extraMavenRepos?: string[];
+  enableMinifyInReleaseBuilds?: boolean;
+  enableShrinkResourcesInReleaseBuilds?: boolean;
+}
+
+interface SentryAndroidGradlePluginOptions {
+  enableAndroidGradlePlugin?: boolean;
+  uploadNativeSymbols?: boolean;
+  autoUploadNativeSymbols?: boolean;
+}
+
+interface SentryPluginOptions {
+  organization?: string;
+  project?: string;
+  experimental_android?: SentryAndroidGradlePluginOptions;
 }
 
 interface NotificationPluginOptions {
@@ -29,19 +43,34 @@ interface SplashScreenPluginOptions {
  * app.config.ts reads process.env at MODULE EVALUATION time (that is the whole
  * point - EXPO_PUBLIC_* values are build-time constants), so each flag state
  * needs its own fresh import rather than a re-read of the cached one.
+ *
+ * Takes a map rather than one flag because two independent build-time gates now
+ * need this: EXPO_PUBLIC_KANGENTIC_E2E for the cleartext carve-out, and
+ * SENTRY_AUTH_TOKEN for whether the Sentry plugin entry exists at all.
  */
-async function loadAppConfigWithE2eFlag(flagValue: string | undefined): Promise<ExpoConfig> {
-  const originalFlag = process.env.EXPO_PUBLIC_KANGENTIC_E2E;
-  if (flagValue === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_E2E;
-  else process.env.EXPO_PUBLIC_KANGENTIC_E2E = flagValue;
+async function loadAppConfigWithEnv(
+  environmentOverrides: Record<string, string | undefined>
+): Promise<ExpoConfig> {
+  const originalValues = new Map<string, string | undefined>();
+  for (const [name, value] of Object.entries(environmentOverrides)) {
+    originalValues.set(name, process.env[name]);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   try {
     vi.resetModules();
     const freshModule = await import('../../app.config');
     return freshModule.default;
   } finally {
-    if (originalFlag === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_E2E;
-    else process.env.EXPO_PUBLIC_KANGENTIC_E2E = originalFlag;
+    for (const [name, value] of originalValues) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
+}
+
+function loadAppConfigWithE2eFlag(flagValue: string | undefined): Promise<ExpoConfig> {
+  return loadAppConfigWithEnv({ EXPO_PUBLIC_KANGENTIC_E2E: flagValue });
 }
 
 /**
@@ -190,5 +219,82 @@ describe('app.config.ts cleartext-traffic gate', () => {
 
     const zeroProperties = androidBuildProperties(await loadAppConfigWithE2eFlag('0'));
     expect('usesCleartextTraffic' in zeroProperties).toBe(false);
+  });
+});
+
+/**
+ * R8. These two properties are the entire difference between a release build
+ * Play Console rates "App optimization: Low" and one it does not, and dropping
+ * them breaks nothing locally - so without a check, the first signal is a Play
+ * Console row nobody reads for weeks.
+ *
+ * This is the SOURCE-CONFIG layer of two. ci.yml's "Confirm R8 is enabled for
+ * release builds" step is the other, and it asserts against the
+ * android/gradle.properties a real prebuild produced - so it also catches a
+ * plugin-side regression that never touched app.config.ts. This test catches
+ * the same drop far more cheaply, and without a prebuild.
+ *
+ * Asserted through the evaluated config rather than a source-string match, for
+ * the same reason as the splash-screen block above: a readFileSync/toContain
+ * check would pass just as happily against a commented-out property.
+ */
+describe('app.config.ts R8 release optimization', () => {
+  it('enables minification and resource shrinking for release builds', () => {
+    const androidProperties = androidBuildProperties(appConfig);
+    expect(androidProperties.enableMinifyInReleaseBuilds).toBe(true);
+    expect(androidProperties.enableShrinkResourcesInReleaseBuilds).toBe(true);
+  });
+
+  // Not a style preference. expo-build-properties throws on shrink-without-minify
+  // ("`android.enableShrinkResourcesInReleaseBuilds` requires
+  // `android.enableMinifyInReleaseBuilds`"), which fails prebuild rather than
+  // lint, so it surfaces as a broken CI job instead of a config error.
+  //
+  // Asserted as an unconditional implication rather than an `if` around the
+  // expect. Guarding on `shrinkResources === true` would make this test pass
+  // having asserted NOTHING the moment that property went missing - which is
+  // precisely the regression the test exists to catch.
+  it('never sets shrinkResources without minify, which prebuild rejects', () => {
+    const androidProperties = androidBuildProperties(appConfig);
+    const shrinkImpliesMinify =
+      !androidProperties.enableShrinkResourcesInReleaseBuilds ||
+      androidProperties.enableMinifyInReleaseBuilds === true;
+    expect(shrinkImpliesMinify).toBe(true);
+  });
+});
+
+/**
+ * The other half of turning R8 on: without the Sentry Android Gradle Plugin no
+ * ProGuard mapping is uploaded, and every Java/Kotlin frame in an Android crash
+ * arrives as a.b.c(). JS frames (Hermes source maps) and native frames (debug
+ * symbols) travel separate paths and are unaffected by R8, so this is narrower
+ * than "R8 breaks Sentry".
+ */
+describe('app.config.ts Sentry Android Gradle Plugin', () => {
+  it('enables the Gradle plugin so R8 mapping files upload', async () => {
+    const config = await loadAppConfigWithEnv({ SENTRY_AUTH_TOKEN: 'test-token' });
+    const options = pluginOptions<SentryPluginOptions>(config, '@sentry/react-native/expo');
+    expect(options.experimental_android?.enableAndroidGradlePlugin).toBe(true);
+  });
+
+  // Scoping, not an oversight: the plugin defaults both to true, which would
+  // newly upload every React Native .so debug symbol on each dispatch build.
+  // Flipping them on is a deliberate decision, so pin the current one.
+  it('keeps native symbol upload off, leaving this scoped to the mapping file', async () => {
+    const config = await loadAppConfigWithEnv({ SENTRY_AUTH_TOKEN: 'test-token' });
+    const options = pluginOptions<SentryPluginOptions>(config, '@sentry/react-native/expo');
+    expect(options.experimental_android?.uploadNativeSymbols).toBe(false);
+    expect(options.experimental_android?.autoUploadNativeSymbols).toBe(false);
+  });
+
+  // ci.yml's "Native config (prebuild)" job prebuilds both platforms with zero
+  // secrets. The plugin entry must be absent there, not present-and-unconfigured,
+  // or that job starts failing on a missing auth token.
+  it('omits the plugin entirely when no auth token is set', async () => {
+    const config = await loadAppConfigWithEnv({ SENTRY_AUTH_TOKEN: undefined });
+    const entryNames = (config.plugins ?? []).map((plugin) =>
+      Array.isArray(plugin) ? plugin[0] : plugin
+    );
+    expect(entryNames).not.toContain('@sentry/react-native/expo');
   });
 });

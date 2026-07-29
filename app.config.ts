@@ -267,6 +267,52 @@ const config: ExpoConfig = {
           // Notifee ships its core AAR inside the npm package; this is its
           // documented Expo integration (no hand-edited android/, per CNG).
           extraMavenRepos: ['../../node_modules/@notifee/react-native/android/libs'],
+          // R8. Without these two the SDK 57 template defaults both to false, and
+          // Play Console rates the bundle "App optimization: Low" with its
+          // optimization, shrinking, and R8-configuration rows all empty.
+          //
+          // These are GRADLE PROPERTIES, not build.gradle edits: the template's
+          // release block reads them through findProperty, so anything asserting
+          // on this asserts against android/gradle.properties.
+          //
+          // They therefore apply to every build of the RELEASE variant, which is
+          // `preview`, `e2e`, AND `production` - only `development` is debug. So
+          // e2e.yml's Maestro suite runs against a minified APK on every PR. That
+          // is deliberate: it is the only gate that exercises a stripped build
+          // before Play. It also means an R8 stripping bug reddens a required
+          // check and reads exactly like an app bug - suspect R8 first, and fix
+          // it with extraProguardRules rather than by turning minify back off.
+          //
+          // Java/Kotlin frames go unreadable without a mapping file, which is why
+          // the Sentry plugin below enables its Android Gradle Plugin. JS frames
+          // (Hermes source maps) and native frames (debug symbols) are unaffected.
+          enableMinifyInReleaseBuilds: true,
+          // Requires minify: expo-build-properties throws on shrink-without-minify
+          // (the reverse is fine). Resource shrinking is the half with no escape
+          // hatch here - a wrongly-dropped resource needs res/raw/keep.xml, which
+          // this plugin has no option for, so that fix would mean a config plugin.
+          //
+          // TWO resources are named by string rather than by reference, not one:
+          //
+          //   notification_icon - the drawable src/notifications/channels.ts names
+          //     explicitly because Notifee ignores the manifest meta-data. SAFE:
+          //     the expo-notifications block above also emits a manifest
+          //     meta-data entry pointing at it, and manifest-referenced resources
+          //     are never shrunk.
+          //   xterm.html        - src/components/terminal/TerminalPane.tsx does
+          //     `require('../../terminal/xterm.html')`. Metro files every
+          //     non-drawable asset under res/raw (see @react-native/assets-registry
+          //     path-support.js: .html is not in drawableFileTypes), and the name
+          //     is resolved from the JS bundle at runtime, which the shrinker
+          //     never scans. NOT anchored by anything - it depends on aapt2's
+          //     safe-mode heuristic being conservative about res/raw.
+          //
+          // The second one is the Terminal pane, which is the DEFAULT view of the
+          // session screen, and no Maestro flow asserts WebView content
+          // (.maestro/paired/session-mode-toggle.yaml says so in its header), so
+          // the e2e gate cannot catch it. See the R8 section of
+          // docs/developer-guide.md before changing this flag.
+          enableShrinkResourcesInReleaseBuilds: true,
           // E2E BUILDS ONLY. Android blocks cleartext traffic in a
           // release-shaped build, so the dev relay's ws:// socket is refused
           // by the platform before any of our code runs - the pairing screen
@@ -308,6 +354,26 @@ const config: ExpoConfig = {
             {
               organization: 'kangentic',
               project: 'react-native',
+              // R8 (enabled in the expo-build-properties block above) renames the
+              // Java/Kotlin layer, so the ProGuard mapping has to reach Sentry or
+              // every Android frame below the JS bridge arrives as a.b.c(). This
+              // is the ONLY thing that turns the Gradle-plugin half on: without
+              // enableAndroidGradlePlugin the mapping-upload path never runs.
+              // Scope the damage correctly - JS frames come from Hermes source
+              // maps and native frames from debug symbols, both already handled
+              // by separate paths, and neither is touched by R8.
+              //
+              // includeProguardMapping and autoUploadProguardMapping both default
+              // to true, so the mapping path needs no explicit flags.
+              experimental_android: {
+                enableAndroidGradlePlugin: true,
+                // Mapping only. The defaults would ALSO start uploading every RN
+                // .so debug symbol on each dispatch build - a new behaviour, a
+                // large upload, and not what this change is for. Flip these on
+                // deliberately if Android native symbolication is ever wanted.
+                uploadNativeSymbols: false,
+                autoUploadNativeSymbols: false,
+              },
             },
           ],
         ] satisfies NonNullable<ExpoConfig['plugins']>)
