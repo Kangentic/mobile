@@ -95,13 +95,27 @@ commit and skipped its check:
 3b. **Check the SET, not just the states.** A check that has not registered yet is absent from the
    rollup, and absent reads exactly like green when you are only scanning states. `E2E Tests
    (Maestro)` registers late by design: its job `needs` the APK build and the smoke suite, so it
-   does not appear for roughly ten minutes after a push. Compare explicitly:
-   - `gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`
-   - `gh pr checks <pr> --required --json name,state`
+   does not appear for roughly ten minutes after a push. Compare explicitly, as ONE `jq`
+   expression over two JSON documents:
 
-   Every context from the first must appear in the second, passing. A missing one means "not
-   reported yet", so wait; it does **not** mean the check does not apply. `--admin` waives the
-   review requirement only, so it will happily merge past a required check that never ran.
+   ```
+   req=$(gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts')
+   rep=$(gh pr checks <pr> --repo Kangentic/mobile --required --json name,state)
+   jq -n --argjson req "$req" --argjson rep "$rep" \
+     '{required: ($req|length), green: ([$rep[]|select(.state=="SUCCESS")]|length), missing: ($req - [$rep[]|select(.state=="SUCCESS")|.name])}'
+   ```
+
+   `missing: []` is the only green. A non-empty `missing` means "not reported yet", so wait; it
+   does **not** mean the check does not apply. `--admin` waives the review requirement only, so it
+   will happily merge past a required check that never ran.
+
+   **Never implement this with `comm`, `diff`, or sort-and-compare over text lines.** `gh api --jq`
+   emits `\n` and `gh pr checks --json | jq` emits `\r\n` on Windows, so the two sides never
+   compare equal. Observed: `comm -23` called seven of eight required checks missing on a fully
+   green PR. `comm` on input not sorted in its own collation is unspecified, so treat the answer as
+   garbage rather than as wrong-but-predictable: every measured case over-reported, and nothing
+   establishes it cannot under-report, which here would be a false all-green merged by `--admin`.
+   `tests/unit/requiredChecksComparison.test.ts` pins the jq form and reproduces the failure.
 4. If the rebase re-triggered checks and they are pending, wait with
    `gh pr checks <pr> --required --watch --fail-fast --interval 30` (Bash `timeout` up to its max,
    600000ms), then re-run the 3b comparison, because the watch returns as soon as the checks
