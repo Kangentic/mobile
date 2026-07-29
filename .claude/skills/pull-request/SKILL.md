@@ -181,17 +181,46 @@ the smoke suite, so it does not appear for roughly ten minutes. Observed on PR #
 exited 0 with six required checks green, `Build (APK)` still running, and `E2E Tests (Maestro)`
 not yet registered at all. Reporting all-green there would have been wrong.
 
-So a returned watch is **not** the completion signal. Confirm the set before believing it:
+So a returned watch is **not** the completion signal. Confirm the set before believing it, and run
+the comparison as **one `jq` expression over two JSON documents**:
 
-1. Read the authoritative list, rather than trusting the one written above to be current:
-   `gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`
-2. Read what has actually reported: `gh pr checks <branch> --required --json name,state`
-3. **Every context from step 1 must be present in step 2 and in a passing state.** If any is
-   missing, it has not registered yet: re-run the watch. If any is pending, same.
+```
+req=$(gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts')
+rep=$(gh pr checks <branch> --repo Kangentic/mobile --required --json name,state)
+jq -n --argjson req "$req" --argjson rep "$rep" \
+  '{required: ($req|length), green: ([$rep[]|select(.state=="SUCCESS")]|length), missing: ($req - [$rep[]|select(.state=="SUCCESS")|.name])}'
+```
 
-Only when the two sets match is the PR green. This is the same trap as the `CLA Assistant`-only
-case above, one level up: absence reads exactly like success, and only an explicit comparison
-tells them apart.
+`missing: []` is the only green. A non-empty `missing` means those contexts have not registered
+yet, or have not passed: re-run the watch.
+
+**Do NOT implement this with `comm`, `diff`, or any sort-and-compare over text lines.** It was
+written that way first and it was broken from the start, silently:
+
+```
+gh api ... --jq '.contexts[]'                    ends every line \n
+gh pr checks ... --json name,state | jq -r ...   ends every line \r\n   (Windows)
+```
+
+So every name on one side carries a trailing carriage return, nothing compares equal, and
+`comm -23` reported **seven of eight required checks missing on a PR where all eight were green**.
+The monitor built on it waited forever on a finished PR.
+
+`comm` on input not sorted in its own collation is unspecified, not merely offset, so the answer is
+garbage rather than garbage in a predictable direction. Every case measured over-reported, which
+fails safe: with a check genuinely absent it named that check **plus six that were fine**, which is
+wrong in a way an operator cannot act on but does not merge anything. Do not lean on that. Nothing
+here establishes it cannot under-report, and under-reporting reads as "no contexts missing" - a
+false all-green, on the one comparison standing between `--admin` and a PR whose required checks
+never ran.
+
+Keep it inside `jq`, where the names are strings in a parsed document and line endings never enter
+into it. `tests/unit/requiredChecksComparison.test.ts` executes the snippet lifted out of this file
+and reproduces the `comm` failure alongside it.
+
+This is the same trap as the `CLA Assistant`-only case above, one level up: absence reads exactly
+like success, and only an explicit comparison tells them apart - so the comparison itself has to be
+one that cannot quietly compare nothing.
 
 **Then read the advisory check once, without blocking on it.** After the required watch returns
 green, run `gh pr checks <branch> --json name,state,link` and pull out `E2E Tests (Paired)`. Report
