@@ -33,7 +33,7 @@ wastes a 20 minute build and can leave a dangling Play edit.
 |---|---|---|
 | either + artifact only | **Works** | - |
 | android + internal | **Works** | - |
-| android + closed (alpha) | **Blocked** | Play Console app-content declarations: store listing, content rating, target audience, ads, privacy policy URL. **Data safety is DONE** (submitted 2026-07-28, App functionality + Analytics; see `docs/store-listing.md`), the rest are not. Text is drafted in `docs/privacy-policy.md` and `docs/store-listing.md`. The listing IMAGES are no longer part of this gap either: all three Play shelves are captured in `store/screenshots/`, and the icon plus feature graphic ship in `@kangentic/branding`. |
+| android + closed (alpha) | **Blocked** | Every app-content declaration is **entered** as of 2026-07-29 (store listing with all screenshots, content rating, target audience, ads, privacy policy URL, data safety, health apps, app category) and **none is submitted**: they sit under `Changes not yet submitted for review` in Publishing overview, and `Send app for review` is disabled until the app dashboard reads 11 of 11. Also still missing: the closed track's countries/regions and its tester list, neither of which the Play API can read or write (`edits.testers` is Google Groups only). Verify in the Console, not from this row. The uploaded screenshots are additionally **stale**: they predate the mock-fixture rewrite that stopped the listing images naming Kangentic's own roadmap, so re-upload from `store/screenshots/` before submitting. |
 | android + open (beta) | **Blocked** | Same declarations as closed. |
 | android + production | **Blocked** | Personal Play account created 2026-07-20, so production access needs a closed test with **12+ testers opted in for 14 continuous days** first. Opt-outs reset the clock. See the deployment-track ladder in `docs/developer-guide.md`. |
 | ios + TestFlight internal | **Works** | Needs `ASC_API_KEY_BASE64` + `ASC_KEY_ID` + `ASC_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, as GitHub secrets. Check with `gh secret list` before promising it. |
@@ -125,6 +125,17 @@ Report both the local and the store-side numbers before changing anything.
 after the upload lands (for iOS, after Apple *accepts*), so they cannot drift. The comments in
 `app.config.ts` are maintained by hand and are a courtesy, not a source of truth. A stale one is
 exactly what sent the 2026-07-28 release at an iOS build number Apple had already taken.
+
+**Two ways an empty tag list lies to you, both hit on 2026-07-29:**
+
+1. **`git tag --list` reads LOCAL tags.** The submit job creates the ref on the remote, and a
+   checkout that has not fetched since shows nothing. `git fetch --tags` first, or ask the remote:
+   `gh api repos/Kangentic/mobile/git/matching-refs/tags`.
+2. **The tagging step postdates the releases before it.** It landed in `5adf180` at 17:20 UTC on
+   2026-07-28; android vc2 was submitted at 06:22 UTC that morning and ios build 4 the same day,
+   so neither was tagged by CI. `android-vc2` was backfilled by hand at `4d2135b`. Absence of a
+   tag for anything released on or before 2026-07-28 means nothing. From vc3 and ios build 5
+   onward the tag is authoritative.
 
 **Three places now catch a spent counter, in increasing cost:**
 

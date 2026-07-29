@@ -515,6 +515,47 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # R8 renames the Java/Kotlin layer, and mapping.txt is the only thing that
+      # turns a minified frame back into a readable one. The Sentry Gradle plugin
+      # uploads it automatically, but only when HAS_SENTRY is true - and Play
+      # Console accepts this file for manual deobfuscation regardless. A few
+      # hundred KB, so keeping it costs nothing next to the artifact above.
+      #
+      # Gated on the variant rather than waved through with
+      # `if-no-files-found: ignore`, because the two cases are not the same
+      # failure. `development` and the keystore-less fallback both build DEBUG
+      # (see the plan step), where R8 never runs and no mapping can exist - the
+      # condition covers exactly those. A release build that produced no mapping
+      # is a real break, and `ignore` would have shipped it silently on the very
+      # profiles (`production`, `preview`) where the file matters most.
+      #
+      # A step output in `if:` needs no env declaration - the signature check
+      # above already gates this way - and buildWorkflow.test.ts's env-gating
+      # test only constrains `env.*` references, not `steps.*.outputs.*`.
+      #
+      # KEEP `mapping-` AS A PREFIX. submit-play downloads with
+      # `pattern: kangentic-<profile>-*` and `merge-multiple: true`, then passes
+      # `artifact/*` straight to the Play upload as `releaseFiles`. A name like
+      # `<artifact-name>-mapping` WOULD match that glob, and mapping.txt would be
+      # handed to Play as if it were a release binary. The prefix is what keeps
+      # the two artifact sets disjoint; it is load-bearing, not cosmetic.
+      #
+      # `if-no-files-found: ignore` is deliberately kept for now even though the
+      # variant gate above already excludes the builds that legitimately have no
+      # mapping. Promoting it to `error` is the better check and the intended
+      # next step - it would catch a release build that silently produced no
+      # mapping - but it should be flipped only once a `production` (AAB,
+      # `:app:bundleRelease`) run has confirmed R8 writes to this exact path.
+      # Flipping it on an unverified path would redden every release build.
+      - name: Upload the R8 mapping file
+        if: steps.plan.outputs.variant == 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mapping-${{ steps.name.outputs.artifact-name }}
+          path: android/app/build/outputs/mapping/release/mapping.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
   # Never runs unless a dispatch explicitly names a track, and even then it
   # waits on the google-play environment's required reviewer. The very first
   # AAB for this package has to be uploaded by hand through the Play Console

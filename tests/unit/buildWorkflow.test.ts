@@ -14,6 +14,12 @@
  *
  * The iOS group additionally locks two orderings and one logging rule that are
  * each load bearing and none of which any other check would catch.
+ *
+ * The R8 groups (build-android's mapping-file upload, ci.yml's gradle.properties
+ * and Sentry Android Gradle Plugin checks, and build-ios's dSYM check) lock the
+ * CI enforcement steps and workflow wiring that keep a minified release
+ * symbolicatable. app.config.ts's own R8 flags are covered separately, in
+ * tests/unit/appConfigBrand.test.ts.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -306,6 +312,47 @@ describe('build-android release safety gates', () => {
   });
 });
 
+describe('build-android R8 mapping upload', () => {
+  it('uploads the R8 mapping file only for a release build, not the debug fallback', () => {
+    // `development` and the keystore-less fallback both build the debug
+    // variant (see the plan step), where R8 never runs and no mapping can
+    // exist. A release build that produced no mapping is a real break, so the
+    // step is gated on the variant rather than left to `if-no-files-found:
+    // ignore` alone to notice.
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<
+        string,
+        { steps?: { name?: string; if?: string; with?: Record<string, unknown> }[] }
+      >;
+    };
+    const uploadStep = workflow.jobs['build-android'].steps?.find(
+      (step) => step.name === 'Upload the R8 mapping file'
+    );
+    expect(uploadStep?.if).toBe("steps.plan.outputs.variant == 'release'");
+    expect(uploadStep?.with?.path).toBe('android/app/build/outputs/mapping/release/mapping.txt');
+  });
+
+  it('names the R8 mapping artifact so it can never be swept into the Play upload glob', () => {
+    // submit-play downloads with `pattern: kangentic-<profile>-*` and hands
+    // `artifact/*` straight to Play as releaseFiles (merge-multiple: true). The
+    // real artifact always starts with "kangentic-", so a mapping artifact
+    // named `<artifact-name>-mapping` would match that same glob and Play
+    // would receive mapping.txt as if it were a release binary. The
+    // "mapping-" prefix is what keeps the two artifact sets disjoint.
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<string, { steps?: { name?: string; with?: Record<string, unknown> }[] } >;
+    };
+    const uploadStep = workflow.jobs['build-android'].steps?.find(
+      (step) => step.name === 'Upload the R8 mapping file'
+    );
+    const downloadStep = workflow.jobs['submit-play'].steps?.find(
+      (step) => typeof step.with?.pattern === 'string'
+    );
+    expect(uploadStep?.with?.name).toBe('mapping-${{ steps.name.outputs.artifact-name }}');
+    expect(downloadStep?.with?.pattern).toBe('kangentic-${{ inputs.profile }}-*');
+  });
+});
+
 describe('build-ios workflow', () => {
   it('keeps the unsigned simulator check as its own job', () => {
     // Not a matrix dimension of the signed build. The simulator check needs no
@@ -519,6 +566,34 @@ describe('build-ios workflow', () => {
     expect(assertIndex).toBeLessThan(archiveIndex);
   });
 
+  it('confirms the Release configuration emits dSYMs, reusing the signing settings dump', () => {
+    // The Sentry plugin's Xcode upload phase is asserted to EXIST by ci.yml,
+    // but nothing else asserts the archive actually feeds it - an upload phase
+    // with no dSYMs to upload fails silently, leaving every native iOS frame
+    // unsymbolicated with every gate green.
+    const deviceJob = readIosJob('device');
+    const settingsDumpIndex = deviceJob.indexOf('-showBuildSettings');
+    const dsymCheckIndex = deviceJob.indexOf('Verify the Release configuration emits dSYMs');
+    const archiveIndex = deviceJob.indexOf('xcodebuild archive');
+    expect(settingsDumpIndex).toBeGreaterThan(-1);
+    expect(dsymCheckIndex).toBeGreaterThan(-1);
+    expect(archiveIndex).toBeGreaterThan(-1);
+    // Reuses the settings file the signing check already wrote, rather than a
+    // second xcodebuild invocation, so the dump must precede this check.
+    expect(settingsDumpIndex).toBeLessThan(dsymCheckIndex);
+    expect(dsymCheckIndex).toBeLessThan(archiveIndex);
+
+    const workflow = parseYaml(iosWorkflowSource) as {
+      jobs: Record<string, { steps?: { name?: string; run?: string }[] }>;
+    };
+    const dsymStep = workflow.jobs.device.steps?.find(
+      (step) => step.name === 'Verify the Release configuration emits dSYMs'
+    );
+    expect(dsymStep?.run).toContain('DEBUG_INFORMATION_FORMAT = dwarf-with-dsym');
+    // Reuses the settings dump rather than a second xcodebuild invocation.
+    expect(dsymStep?.run).not.toContain('xcodebuild');
+  });
+
   it('fails a build whose entitlements lost push', () => {
     // A re-sign that drops aps-environment yields an app that installs,
     // launches, and silently never receives a notification. Push is the reason
@@ -552,6 +627,42 @@ describe('build-ios workflow', () => {
     expect(readIosJob('submit-testflight')).toContain("github.event_name != 'schedule'");
     // And the cheap check must still run, or the schedule detects nothing.
     expect(readIosJob('simulator')).toContain("github.event_name == 'schedule'");
+  });
+});
+
+describe('ci.yml Native config (prebuild) R8 checks', () => {
+  function readCiJobs(): Record<string, { steps?: { name?: string; run?: string }[] }> {
+    const ciSource = readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8');
+    const ci = parseYaml(ciSource) as {
+      jobs: Record<string, { steps?: { name?: string; run?: string }[] }>;
+    };
+    return ci.jobs;
+  }
+
+  it('confirms R8 against the generated gradle.properties, not build.gradle', () => {
+    // expo-build-properties writes these as GRADLE PROPERTIES, and the
+    // generated release block reads them through findProperty, so
+    // `minifyEnabled true` never appears literally in build.gradle. Asserting
+    // against build.gradle here would pass against a config that silently
+    // dropped both flags.
+    const step = readCiJobs()['native-config'].steps?.find(
+      (candidate) => candidate.name === 'Confirm R8 is enabled for release builds'
+    );
+    expect(step?.run).toContain('android.enableMinifyInReleaseBuilds');
+    expect(step?.run).toContain('android.enableShrinkResourcesInReleaseBuilds');
+    expect(step?.run).toContain('android/gradle.properties');
+    expect(step?.run).not.toContain('build.gradle');
+  });
+
+  it('confirms the Sentry Android Gradle Plugin in its enabled form, not just by name', () => {
+    // The plugin always writes the `autoUploadProguardMapping` line, with
+    // `false` as the value when the upload is off, so matching the bare
+    // property name alone would pass just as happily with uploads disabled.
+    const step = readCiJobs()['native-config'].steps?.find(
+      (candidate) => candidate.name === 'Confirm the Sentry plugin actually wired itself in'
+    );
+    expect(step?.run).toContain('io.sentry.android.gradle');
+    expect(step?.run).toContain('autoUploadProguardMapping = shouldSentryAutoUpload()');
   });
 });
 

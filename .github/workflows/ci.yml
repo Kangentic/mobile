@@ -316,6 +316,44 @@ jobs:
           fi
           echo "Sentry plugin wired into the iOS build."
 
+          # The Android Gradle Plugin half, which is what uploads the R8 mapping
+          # file. It is enabled by app.config.ts's experimental_android block and
+          # is worth its own assertion because withSentry.js wraps the call in a
+          # try/catch that only warnOnce()s: a broken or renamed option leaves
+          # prebuild green and silently stops uploading mappings.
+          if ! grep -q "io.sentry.android.gradle" android/app/build.gradle; then
+            echo "::error::The Sentry Android Gradle Plugin is not applied. R8 mapping files would not upload, so every Java/Kotlin frame in an Android crash would arrive as a.b.c()."
+            exit 1
+          fi
+          # Match the ENABLED form, not the bare identifier. The generated block
+          # always contains the word `autoUploadProguardMapping` - the plugin
+          # writes `autoUploadProguardMapping = <shouldSentryAutoUpload()|false>`
+          # either way - so grepping the name alone can only repeat what the
+          # check above already proved, and would pass with the upload off.
+          if ! grep -q "autoUploadProguardMapping = shouldSentryAutoUpload()" android/app/build.gradle; then
+            echo "::error::The Sentry Gradle block does not auto-upload the ProGuard mapping, so R8-renamed Java/Kotlin frames would never be deobfuscated."
+            grep -E "autoUploadProguardMapping|includeProguardMapping" android/app/build.gradle || true
+            exit 1
+          fi
+          echo "Sentry Android Gradle Plugin wired in for R8 mapping upload."
+
+      # R8 itself, which is independent of Sentry and applies to every release
+      # build. Note WHICH file: expo-build-properties writes gradle.properties,
+      # and the template's release block reads it through findProperty, so
+      # `minifyEnabled true` never appears literally in build.gradle. Grepping
+      # build.gradle here would fail against a perfectly correct config.
+      - name: Confirm R8 is enabled for release builds
+        run: |
+          set -euo pipefail
+          for property in android.enableMinifyInReleaseBuilds android.enableShrinkResourcesInReleaseBuilds; do
+            if ! grep -q "^$property=true$" android/gradle.properties; then
+              echo "::error::$property is not set to true in the generated android/gradle.properties. Release builds would ship unminified, which is what Play Console reports as \"App optimization: Low\"."
+              grep -E "^android\.(enableMinify|enableShrinkResources)" android/gradle.properties || true
+              exit 1
+            fi
+          done
+          echo "R8 minification and resource shrinking are enabled for release builds."
+
       # PrivacyInfo.xcprivacy is a build artifact (app.config.ts's
       # ios.privacyManifests merges into the template's file at prebuild
       # time via @expo/config-plugins' withPrivacyInfo), so it never exists

@@ -737,6 +737,37 @@ jobs:
           fi
           echo "App target is on manual signing with the installed profile."
 
+      # Its own step rather than an append to the signing guard above: the two
+      # fail for unrelated reasons and are fixed in different places (missing
+      # KANGENTIC_IOS_* variables vs. a build-setting override), and the Actions
+      # UI shows only the step name, not the log line that failed.
+      #
+      # iOS has no R8 counterpart - it ships compiled machine code, and the
+      # Release configuration's LLVM optimizer and linker dead-stripping have
+      # already run. What it DOES share with the Android side of this workflow
+      # pair is the symbol upload that keeps native frames readable: dSYMs here,
+      # mapping.txt there.
+      #
+      # The Sentry plugin's Xcode upload phase is asserted to EXIST by ci.yml,
+      # but nothing asserted the archive actually feeds it. Release defaults to
+      # dwarf-with-dsym and the Expo template does not override it, so this held
+      # by default rather than by check until this step existed - and an upload
+      # phase with no dSYMs to upload fails silently, leaving every native iOS
+      # frame unsymbolicated with every gate green.
+      #
+      # Reuses the settings dump the signing step already wrote, so this costs
+      # a grep rather than a second xcodebuild invocation.
+      - name: Verify the Release configuration emits dSYMs
+        run: |
+          set -euo pipefail
+          settings_path="$RUNNER_TEMP/app-target-settings.txt"
+          if ! grep -q "DEBUG_INFORMATION_FORMAT = dwarf-with-dsym" "$settings_path"; then
+            echo "::error::The Release configuration does not emit dSYMs, so the Sentry upload phase has nothing to upload and every native iOS crash would arrive unsymbolicated."
+            grep -E "DEBUG_INFORMATION_FORMAT|STRIP_INSTALLED_PRODUCT" "$settings_path" || true
+            exit 1
+          fi
+          echo "Release configuration emits dSYMs for the Sentry upload phase."
+
       - name: Archive the app (xcodebuild)
         env:
           WORKSPACE: ${{ steps.xcode.outputs.workspace }}

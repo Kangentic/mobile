@@ -350,6 +350,64 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
   Convenience scripts `npm run build:dev` / `build:preview` / `build:prod` still wrap
   `eas build --profile <profile> --platform android`, which is a **cloud** build and spends
   quota. Prefer the workflow.
+- **R8 (minification and resource shrinking)** is on for the **release** variant, which the table
+  above shows is `preview`, `e2e`, and `production` alike - only `development` is debug. One
+  caveat on that mapping: `build-android.yml` also falls back to the debug variant for ANY profile
+  when `ANDROID_KEYSTORE_BASE64` is absent, so a keystore-less run of `preview` or `production`
+  produces an unminified artifact and no `mapping.txt`. That is the pre-existing degradation the
+  release skill's preflight exists to catch. `e2e.yml` has no such fallback - it hard-fails
+  without a keystore - so the PR gate is always the minified build. It is
+  switched on by `enableMinifyInReleaseBuilds` and `enableShrinkResourcesInReleaseBuilds` in
+  `app.config.ts`'s `expo-build-properties` block. Those are **gradle properties**: prebuild writes
+  them to `android/gradle.properties`, and the generated release block reads them through
+  `findProperty`, so `minifyEnabled true` never appears literally in `build.gradle`. Check
+  `gradle.properties` when verifying, not `build.gradle`. `ci.yml` asserts both on every PR.
+
+  Two consequences worth knowing before you debug something:
+
+  1. **`e2e.yml` builds a minified APK on every PR that actually runs it**, so the Maestro suites
+     are the gate that catches a class R8 stripped. (The build is skipped, not weakened, on a draft
+     PR or a diff that touches no app code - `e2e.yml`'s `changes` job reports `draft` or
+     `no-app-change`.) That is the reason minification is not restricted to
+     `production`. It also means a stripping bug reddens a required check while looking exactly
+     like an app bug - **suspect R8 first**, and fix it with `extraProguardRules` (which appends to
+     the generated `proguard-rules.pro`) rather than by turning minification back off. React
+     Native, Notifee, Reanimated, Worklets, and the Expo modules all ship their own consumer rules,
+     so the repo deliberately carries no keep rules of its own until something proves it needs one.
+  2. **Resource shrinking has no escape hatch through `expo-build-properties`.** Code stripping is
+     fixed with an `extraProguardRules` string; a wrongly-dropped *resource* needs
+     `res/raw/keep.xml`, which the plugin has no option for, so that fix would mean writing a
+     config plugin. Two resources are named by string rather than by reference:
+
+     | Resource | Named by | Anchored? |
+     |---|---|---|
+     | `notification_icon` drawable | `src/notifications/channels.ts` (Notifee ignores the manifest meta-data, so every `displayNotification` sets it explicitly) | **Yes.** The `expo-notifications` plugin block also emits a manifest `meta-data` entry pointing at it, and manifest-referenced resources are never shrunk |
+     | `xterm.html` | `src/components/terminal/TerminalPane.tsx`'s `require('../../terminal/xterm.html')`, resolved through `Asset.fromModule` | **No.** Metro files every non-drawable asset under `res/raw` (`.html` is not in `@react-native/assets-registry`'s `drawableFileTypes`), and the name is resolved from the JS bundle at runtime, which the shrinker never scans |
+
+     **Neither risk is covered by the E2E gate.** No Maestro flow displays a notification, and
+     none asserts WebView *content* - `.maestro/paired/session-mode-toggle.yaml`'s header says so
+     outright ("WebView content is never asserted - only RN-side testIDs"). The RN-side chrome
+     around the WebView stays visible whether or not the HTML loaded, so a dropped `xterm.html`
+     would render the Terminal pane - the **default** view of the session screen - blank while
+     every check stayed green.
+
+     Resource shrinking is therefore the half of R8 whose first real proof is a hand check on a
+     `preview` build: open a task's Terminal pane and display a notification. If either breaks,
+     the fix is a config plugin writing `res/raw/keep.xml`
+     (`<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@raw/*"/>`), or
+     turning `enableShrinkResourcesInReleaseBuilds` back off - minification, which is what Play's
+     optimization rating mostly reads and what the `mapping.txt` work exists for, is independent
+     of it.
+
+  `build-android.yml` uploads `mapping.txt` as its own run artifact (`mapping-<artifact-name>`)
+  alongside the APK/AAB. That is the file Play Console accepts for manual deobfuscation, and the
+  fallback if the Sentry upload below ever fails. The step is gated on the release variant and
+  then set to **fail** when the file is missing, rather than shrugging it off: a debug build has
+  no mapping legitimately, but a release build without one is a break worth reddening the job for.
+
+  iOS has no counterpart to any of this and needs no equivalent switch: it ships compiled machine
+  code, and the LLVM optimizer and linker dead-stripping already run under `-configuration Release`.
+  Bitcode, the one historical knob, was removed by Apple in Xcode 14.
 - **EAS Update** for JS-only OTA updates (free tier, 1,000 MAU) once the app ships.
   `expo-updates` is not installed yet, so the `channel` field on each profile is currently inert.
 
@@ -383,7 +441,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
-| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
+| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
 | `Release counters (stores)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (Smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
@@ -1356,6 +1414,26 @@ export them to `$GITHUB_ENV` *before* prebuild (the config plugin reads the toke
 config-evaluation time), gated on a job-level `HAS_SENTRY` boolean that requires **both**.
 `tests/unit/buildWorkflow.test.ts` locks that ordering.
 
+**Four symbol paths, not one.** "Symbolication" is four independent mechanisms, and knowing which
+one is broken saves re-deriving this from a stack trace. All four are gated on `SENTRY_AUTH_TOKEN`,
+because without it the config plugin is omitted entirely.
+
+| Frames | Mechanism | Wired by | Status |
+|---|---|---|---|
+| JavaScript, both platforms | Hermes source maps | `sentry.gradle` (Android) and an Xcode build phase (iOS) | working, round-trip verified |
+| Android Java/Kotlin | R8 `mapping.txt` | the Sentry **Android Gradle Plugin**, enabled by `experimental_android.enableAndroidGradlePlugin` in `app.config.ts` | on; needed the moment R8 was enabled |
+| Android native (`.so`) | NDK debug symbols | the same Gradle plugin, `uploadNativeSymbols` and `autoUploadNativeSymbols` | **deliberately off.** The defaults would upload every React Native `.so` on each dispatch build. Both properties flip together in `app.config.ts` if Android native symbolication is ever wanted |
+| iOS native | dSYMs | the plugin's "Upload Debug Symbols to Sentry" Xcode phase | wired, and `build-ios.yml`'s `device` job asserts the Release configuration emits dSYMs (`DEBUG_INFORMATION_FORMAT = dwarf-with-dsym`) so the phase cannot silently upload nothing. That runs on a `target=device` dispatch, not on a PR - `build-ios.yml` is dispatch-only by design. Not yet round-trip verified with a real iOS crash |
+
+Only the second row is affected by R8. A common misreading is "R8 breaks Sentry"; it does not - it
+renames the Java/Kotlin layer and nothing else, which is exactly what `mapping.txt` undoes.
+`ci.yml` asserts the Gradle plugin is applied and that the generated block reads
+`autoUploadProguardMapping = shouldSentryAutoUpload()`, because `withSentry.js` wraps that call in
+a `try`/`catch` that only warns: a renamed option would leave prebuild green and silently stop
+uploading mappings. Note the assertion matches the **enabled** form deliberately - the plugin
+always writes the `autoUploadProguardMapping` line, with `false` as the value when the upload is
+off, so grepping the property name alone would prove nothing.
+
 **Why the DSN is a variable and not a secret.** A DSN is not confidential: it ships inside the
 published app bundle, so anyone with the APK can read it, and Sentry displays it in plaintext in
 the project's Client Keys page. It is write-only - it can submit an event and read nothing back.
@@ -1397,7 +1475,12 @@ claim, not an observation - a JS `beforeSend` cannot filter a native crash, so t
 know what sentry-cocoa / sentry-android actually send is to read a delivered event. Set
 `EXPO_PUBLIC_KANGENTIC_CRASHTEST=1` (dispatch `build-android.yml` with `crash_test: true`, never
 in `eas.json`) to reveal a "Crash reporting test" section in Settings with a JS-throw row and a
-`Sentry.nativeCrash()` row, and to turn on the SDK's `debug: true` native logging. A native crash
+`Sentry.nativeCrash()` row, and to turn on the SDK's `debug: true` native logging. That native row
+doubles as the R8 mapping test: `Sentry.nativeCrash()` reaches `RNSentryModuleImpl.crash()`, which
+throws a **Java** `RuntimeException`, so its frames are precisely the ones `mapping.txt`
+deobfuscates. A readable Java frame from a `preview` or `production` build is the only direct proof
+the mapping upload works. The profile matters - `development` builds the debug variant, where R8
+never ran, so a readable frame there proves nothing. A native crash
 does not upload at crash time: sentry-android writes it to its outbox and flushes on the *next*
 `Sentry.init()`, so relaunch the app and watch `adb logcat -s Sentry` across the relaunch, not
 just the tap. You cannot dispatch a store-track build with this flag on: the `plan` job refuses a
@@ -1549,10 +1632,19 @@ testing does not count toward production access.**
 
 | Track | Testers | Review | Status | Unlocks production? |
 |---|---|---|---|---|
-| Internal | up to 100, by email list | none, live in minutes | created, no release yet | **No** |
+| Internal | up to 100, by email list | none, live in minutes | **v0.2.0 (vc2) released 2026-07-28**, one tester list | **No** |
 | Closed (`alpha`) | 12+ required, opted in 14 continuous days | yes | not created | **Yes**, this is the gate |
 | Open (`beta`) | unlimited, publicly discoverable | yes | not created | optional |
 | Production | everyone | yes | locked until the closed test passes | n/a |
+
+**"None, live in minutes" is the steady state, not the first time.** The first internal release on
+a new app record is served under a temporary app name (`com.kangentic.mobile (unreviewed)`) while
+the app is still `Draft`, and it can take hours to a couple of days before an opted-in tester can
+actually install it. Verified 2026-07-29: the release read `Available to internal testers` in the
+Console with the tester list saved and the correct account signed in on the device, and the Play
+Store app still answered `Item not found`. Nothing in the Console fixes that window. Sideload a
+`preview` APK if you need the build on a phone the same day, and note it is signed with a
+different key than Play distributes, so the Play install needs the sideload uninstalled first.
 
 The ladder, in order:
 
@@ -1562,15 +1654,23 @@ The ladder, in order:
    known devices.
 3. **Closed track.** Requires every app-content declaration that internal testing lets you skip:
    store listing, content rating, data safety, target audience, ads, and a public privacy policy
-   URL. Build in CI, not locally on Windows, so the bundle carries every ABI.
-   Then recruit 12+ testers and keep them opted in for 14 **continuous** days. Testers who opt out
+   URL. **All of these were entered by 2026-07-29** (the en-US listing carries a 66-character short
+   description, an 870-character full description, 4 phone plus 4 seven-inch plus 4 ten-inch
+   screenshots, the icon, and the feature graphic; verified against `edits.listings` and
+   `edits.images` rather than from memory). Entered is not submitted: they sit under
+   **Changes not yet submitted for review** until `Send app for review` is pressed in Publishing
+   overview, and that button stays disabled until the app dashboard reads 11 of 11.
+   Build in CI, not locally on Windows, so the bundle carries every ABI.
+   Then set the closed track's countries and regions and its tester list (neither is reachable
+   through the Play API: `edits.testers` only exposes Google Groups, and Console email lists are
+   invisible to it), promote the existing version code rather than cutting a new one, and recruit
+   12+ testers and keep them opted in for 14 **continuous** days. Testers who opt out
    and back in reset the clock; the 14 days do not accumulate across gaps.
 4. **Apply for production access.** Only after step 3 has genuinely held for 14 days. Play asks
    about the testing process and production readiness as part of the application.
 
 Treat steps 3 and 4 as their own piece of work. The 14-day clock means production is at minimum
-three weeks out from the day a closed test starts, and none of the content declarations are
-filled in yet.
+three weeks out from the day a closed test starts.
 
 ### iOS (App Store Connect)
 
