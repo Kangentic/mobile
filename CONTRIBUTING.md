@@ -106,12 +106,15 @@ Use descriptive branch names: `fix/pairing-timeout`, `feature/board-swipe`, `doc
   - paired: `maestro --device <serial> test .maestro/paired`, which needs a relay plus
     `scripts/stubDesktopPeer.mjs` and a completed pairing first
 
-  Both run locally against the Android emulator and on an emulator in CI. There is no iOS E2E yet
-  by any route.
+  Both run locally against the Android emulator and on an emulator in CI. No iOS E2E gates a PR.
+  `build-ios.yml` can run the smoke flow on a macOS simulator when dispatched with
+  `-f maestro=smoke`, but that path is experimental, off by default, and blocks nothing.
 
   **CI pins the Maestro CLI to a specific version**, so match it locally or a flow can pass on your
-  machine and fail the gate. The version is in `.claude/rules/e2e-maestro-runs.md` (one place, so it
-  cannot drift), and `maestro --version` tells you what you have
+  machine and fail the gate. The pin is written in three places that
+  `tests/unit/ciSafeMaestroFlows.test.ts` asserts agree: `.github/workflows/e2e.yml`,
+  `.github/workflows/build-ios.yml`, and `.claude/rules/e2e-maestro-runs.md`, which is the one to
+  read. `maestro --version` tells you what you have.
 
 Quick local pass before opening a PR:
 
@@ -140,7 +143,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 - Your PR must be green on every check that registers. From
   `.github/workflows/ci.yml`, each runs as its own parallel job: **`Lint (ESLint)`**,
-  **`Type check (tsc)`**, **`Unit Tests (Vitest)`**, **`Component Tests (Jest)`**, and
+  **`Type check (tsc)`**, **`Unit Tests (Vitest)`**, **`Component Tests (Jest)`**,
   **`Native config (CNG)`**, and **`Release counters (store preflight)`**. From
   `.github/workflows/e2e.yml`: **`E2E Tests (Maestro)`**, which builds a real APK and runs the
   smoke flow on an Android emulator, so it takes appreciably longer than the rest. Plus **`cla`**

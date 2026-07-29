@@ -35,9 +35,10 @@ name: Emulator
 #
 # The `changes` job skips them for a diff that cannot change the APK (docs,
 # .claude/, tests/ - reported as `no-app-change`) and for a DRAFT pull request,
-# and the gate treats a legitimate skip as a pass while naming which skip it was. Draft is safe because GitHub refuses to merge a draft, so
-# nothing can land on that result; marking the PR ready re-fires this workflow
-# (hence `ready_for_review` in the trigger types) and pays for the suites once,
+# and the gate treats a legitimate skip as a pass while naming which skip it
+# was. Draft is safe because GitHub refuses to merge a draft, so nothing can
+# land on that result; marking the PR ready re-fires this workflow (hence
+# `ready_for_review` in the trigger types) and pays for the suites once,
 # before the merge that needs them.
 #
 # The gate FAILS CLOSED if the classifier itself did not succeed. It used to
