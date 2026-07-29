@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { ThemeProvider, SegmentedTabBar } from '@/components';
 
@@ -91,5 +92,10 @@ describe('SegmentedTabBar', () => {
     expect(screen.getByTestId('session-tabs-diff-badge')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();
     expect(screen.queryByTestId('session-tabs-chat-badge')).toBeNull();
+
+    // The segment is a 44pt row, so the Badge's default flex-start alignment
+    // would float the count above the label beside it.
+    const badgeStyle = StyleSheet.flatten(screen.getByTestId('session-tabs-diff-badge').props.style);
+    expect(badgeStyle.alignSelf).toBe('center');
   });
 });

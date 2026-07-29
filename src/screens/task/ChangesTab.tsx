@@ -155,7 +155,12 @@ const FileRow = React.memo(function FileRow({
 
   const rowContent = (
     <Row gap="sm" style={styles.flex}>
-      <Badge label={file.status} color={BADGE_COLOR_BY_STATUS[file.status]} testID={`changes-file-${index}-status`} />
+      <Badge
+        label={file.status}
+        color={BADGE_COLOR_BY_STATUS[file.status]}
+        align="center"
+        testID={`changes-file-${index}-status`}
+      />
       <MonoText size="body" numberOfLines={1} style={styles.flex}>
         {directory.length > 0 ? (
           <MonoText size="caption" color="muted">
@@ -165,7 +170,7 @@ const FileRow = React.memo(function FileRow({
         {basename}
       </MonoText>
       {file.binary ? (
-        <Badge label="binary" color="secondary" testID={`changes-file-${index}-binary`} />
+        <Badge label="binary" color="secondary" align="center" testID={`changes-file-${index}-binary`} />
       ) : (
         <Row gap="xs">
           <MonoText size="caption" style={{ color: theme.colors.diffAddText }}>
