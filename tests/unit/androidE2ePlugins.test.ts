@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ExpoConfig } from 'expo/config';
+import type { ExportedConfig } from '@expo/config-plugins';
 import withAndroidE2eGwpAsanOff from '../../plugins/withAndroidE2eGwpAsanOff';
 
 /**
@@ -36,7 +37,7 @@ function applyPluginWithE2eFlag(flagValue: string | undefined, config: ExpoConfi
     process.env.EXPO_PUBLIC_KANGENTIC_E2E = flagValue;
   }
   try {
-    return withAndroidE2eGwpAsanOff(config) as ExpoConfig;
+    return withAndroidE2eGwpAsanOff(config);
   } finally {
     if (previous === undefined) {
       delete process.env.EXPO_PUBLIC_KANGENTIC_E2E;
@@ -59,7 +60,7 @@ function baseConfig(): ExpoConfig {
  * directions. The registered mod is the only observable difference.
  */
 function registersManifestMod(config: ExpoConfig): boolean {
-  const mods = (config as { mods?: { android?: { manifest?: unknown } } }).mods;
+  const mods = (config as ExportedConfig).mods;
   return typeof mods?.android?.manifest === 'function';
 }
 

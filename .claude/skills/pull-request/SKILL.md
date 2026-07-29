@@ -21,7 +21,8 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
 
 - **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
   parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`,
-  `Component Tests (Jest)`, `Native config (CNG)`. `.github/workflows/e2e.yml` adds
+  `Component Tests (Jest)`, `Native config (CNG)`, and `Release counters (store preflight)`
+  (pull requests only). `.github/workflows/e2e.yml` adds
   `E2E Tests (Maestro)`. Plus `cla`. Never treat `CLA Assistant` alone as all-green: confirm the
   registered check names with `gh pr checks <branch>` and wait for every one of them. A real check
   can take a moment to register after a push, so if only `CLA Assistant` appears, re-poll rather

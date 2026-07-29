@@ -80,15 +80,19 @@ and reads as a broken pairing screen rather than a misconfigured command. It als
 flows with no relay and no stub. `tests/unit/ciSafeMaestroFlows.test.ts` fails CI if a workflow
 ever points at the bare root, for exactly this reason.
 
-**iOS E2E does not exist, by any route.** Not locally (no Mac) and not in CI. An earlier version
-of this line claimed iOS Maestro flows "run on cloud simulators via EAS Workflows in CI", which was
-never true: there is no `.eas/workflows/` directory in this repo on any branch, so nothing was ever
-wired. `docs/developer-guide.md` debunks it at length and `README.md` says the same; this file was
-the last place still repeating it.
+**No iOS E2E runs locally, and none gates a PR.** There is no Mac, and no iOS suite sits in any
+required check. An earlier version of this line claimed iOS Maestro flows "run on cloud simulators
+via EAS Workflows in CI", which was never true: there is no `.eas/workflows/` directory in this repo
+on any branch, so nothing was ever wired. `docs/developer-guide.md` debunks it at length and
+`README.md` says the same.
 
-What DOES exist for iOS is `build-ios.yml`'s simulator job, which compiles the app, launches it,
-and uploads a screenshot. That is a compile-and-launch smoke check, not a flow suite, and it is
-dispatch-triggered rather than part of any test tier.
+What DOES exist is `build-ios.yml`'s simulator job. It always compiles the app, launches it, and
+uploads a screenshot. Dispatched with `-f maestro=smoke` it ALSO runs `.maestro/smoke.yaml` against
+that simulator, at the same pinned Maestro version `e2e.yml` uses
+(`tests/unit/ciSafeMaestroFlows.test.ts` asserts the two workflows agree). That input defaults to
+`none` and is labelled experimental, so it is opt-in and blocks nothing - but it does mean the flat
+"no iOS E2E by any route" claim still carried elsewhere in this repo is wrong, and this is the
+route.
 
 ---
 

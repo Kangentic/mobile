@@ -65,9 +65,11 @@ concurrency:
 # Concurrency budget (GitHub Free caps concurrent jobs around 20): the parallel
 # phase is lint 1 + typecheck 1 + native-config 1 + unit 1 + components 2 = 6,
 # plus release-counters 1 on pull_request only = 7, plus the CLA workflow and
-# e2e.yml's build job = 9. The component gate runs after its shards via `needs`,
-# so it does not consume a slot. Queueing was observed at 12 concurrent jobs, so
-# the practical cap is lower than the documented one.
+# e2e.yml's `changes` classifier = 9. `changes`, NOT e2e.yml's build job: the
+# build `needs: changes`, so it cannot be running while this phase is, and the
+# emulator jobs need the build in turn. The component gate runs after its shards
+# via `needs`, so it does not consume a slot either. Queueing was observed at 12
+# concurrent jobs, so the practical cap is lower than the documented one.
 #
 # That headroom was thin at 12 and is comfortable again at 9, because the shard
 # cut below removed four jobs at the same time release-counters added one. Adding
@@ -411,6 +413,24 @@ jobs:
 
           echo "versionCode: base=${base_version_code:-none} head=${head_version_code:-none}"
           echo "buildNumber: base=${base_build_number:-none} head=${head_build_number:-none}"
+
+          # FAIL CLOSED when the detector cannot read the HEAD config, and check
+          # it BEFORE the comparison below. Same fail-open family as the e2e gate
+          # in e2e.yml, and easy to miss for the same reason: both extractions
+          # carry `|| true`, because `grep` exits 1 on no match and `set -e` is
+          # on. So a regex that stops matching (a reformat, a counter moved into
+          # a nested or computed expression, `buildNumber` requoted) yields empty
+          # on BOTH sides, empty equals empty, no counter looks changed, and this
+          # REQUIRED check reports green having preflighted nothing. The next
+          # release then fails at the store, which is the exact incident this job
+          # exists to prevent.
+          #
+          # Only HEAD is guarded. An empty BASE is legitimate: it is what a
+          # brand-new counter field looks like on the base commit.
+          if [ -z "$head_version_code" ] || [ -z "$head_build_number" ]; then
+            echo "::error::Could not read versionCode and/or buildNumber out of app.config.ts (versionCode='${head_version_code:-}', buildNumber='${head_build_number:-}'). The detector cannot tell whether this PR bumps a counter, so it fails closed rather than reporting green. Fix the extraction regexes in this step to match app.config.ts's current shape."
+            exit 1
+          fi
 
           android=false
           ios=false

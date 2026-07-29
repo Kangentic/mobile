@@ -471,8 +471,10 @@ purpose.
   `releases/latest` unless `MAESTRO_VERSION` is set, so every run used to install whatever shipped
   that morning - currently 2.7.0. It is now a workflow-level `env:` in `e2e.yml`, read by both
   emulator jobs, and repeated in `build-ios.yml`, which runs the same `.maestro/smoke.yaml` on a
-  macOS runner. The `Report the Maestro version` step **asserts** the installed version equals the
-  pin rather than printing it for a human who is not reading. Maestro is the thing whose behaviour
+  macOS runner. In `e2e.yml` only, a `Report the Maestro version` step **asserts** the installed
+  version equals the pin rather than printing it for a human who is not reading. `build-ios.yml`
+  has no such guard and only prints, so an installer change would go unnoticed on that path until
+  a flow behaved oddly. Maestro is the thing whose behaviour
   against these specific flows can change under you, which is what earns it a pin.
 - **The relay is pinned to a SHA**, for the same reason, one repository over.
 - **`reactivecircus/android-emulator-runner@v2` is deliberately left floating.** Its surface is
@@ -698,7 +700,7 @@ it until it has earned promotion.
 
 1. **10 consecutive green `E2E Tests (Paired)` runs** across at least 5 distinct PRs. Consecutive
    means no red run in between, not 10 greens cherry-picked out of a longer history. The check was
-   called `E2E Tests (paired)` before 2026-07-28, so a streak spanning that date shows under two
+   called `Maestro (paired)` before 2026-07-28, so a streak spanning that date shows under two
    names in the run history and is still one streak - the rename changed a display string, not the
    job, and does not reset the count.
 2. **No re-runs among them.** A flow that passes on the second attempt is a flaky flow, and

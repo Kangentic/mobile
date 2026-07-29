@@ -21,7 +21,8 @@ quick-push that skips the whole PR gate, use `/merge-back` instead.
 
 - **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
   parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`,
-  `Component Tests (Jest)`, `Native config (CNG)`. `.github/workflows/e2e.yml` adds
+  `Component Tests (Jest)`, `Native config (CNG)`, and `Release counters (store preflight)`
+  (pull requests only). `.github/workflows/e2e.yml` adds
   `E2E Tests (Maestro)`, which is the long pole because it builds an APK and boots an
   emulator. Plus `cla`. Step 2's green-check
   requirement means every registered check in the rollup, never `CLA Assistant` alone. Confirm
