@@ -60,7 +60,7 @@ export function SectionHeader({ title, testID, count, collapsed, onToggle }: Sec
         {/* pill + compact: rounded and visible enough to read as a real
             count (secondary color, matching the title's own weight), but
             tight enough to stay visibly smaller than the title beside it. */}
-        {count !== undefined ? <Badge label={String(count)} shape="pill" compact /> : null}
+        {count !== undefined ? <Badge label={String(count)} shape="pill" compact align="center" /> : null}
         <View style={styles.flex} />
         <Icon name={collapsed ? 'chevron-forward' : 'chevron-down'} color="muted" size={18} />
       </Row>

@@ -1,5 +1,6 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import { ThemeProvider } from '@/components';
 import { ChangesTab } from '@/screens/task/ChangesTab';
 import { useDiffStore } from '@/state/diffStore';
@@ -69,6 +70,19 @@ describe('ChangesTab', () => {
     expect(screen.getByText('M')).toBeTruthy();
     // The binary file shows a 'binary' badge instead of counts.
     expect(screen.getByTestId('changes-file-1-binary')).toBeTruthy();
+  });
+
+  it('centers every row badge against the filename, on both the text and binary branches', () => {
+    renderChangesTab(true);
+
+    // The default Badge alignment is flex-start, which on a row stretched to
+    // the 44pt touch target pins the pill above the text it labels. Two call
+    // sites opt in: the status pill, checked here through both wrappers (the
+    // binary View and the text Pressable), and the separate binary pill.
+    for (const badgeTestID of ['changes-file-0-status', 'changes-file-1-status', 'changes-file-1-binary']) {
+      const flattenedStyle = StyleSheet.flatten(screen.getByTestId(badgeTestID).props.style);
+      expect(flattenedStyle.alignSelf).toBe('center');
+    }
   });
 
   it('pushes the file-diff route when a text file row is tapped', () => {

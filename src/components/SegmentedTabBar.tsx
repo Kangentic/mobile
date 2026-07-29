@@ -60,7 +60,12 @@ export function SegmentedTabBar({ items, activeKey, onChange, testID, compact = 
               {item.label}
             </MonoText>
             {item.badgeCount !== undefined && (
-              <Badge label={String(item.badgeCount)} color={isActive ? 'accent' : 'secondary'} testID={`${testID}-${item.key}-badge`} />
+              <Badge
+                label={String(item.badgeCount)}
+                color={isActive ? 'accent' : 'secondary'}
+                align="center"
+                testID={`${testID}-${item.key}-badge`}
+              />
             )}
           </Pressable>
         );
