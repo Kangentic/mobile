@@ -4,6 +4,9 @@ import { ThemeProvider } from '@/components';
 import { FileDiffScreen } from '@/screens/FileDiffScreen';
 import { useDiffStore } from '@/state/diffStore';
 
+/** Every options object handed to Stack.Screen this render, newest last. */
+const mockStackScreenOptions: Record<string, unknown>[] = [];
+
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({
     taskId: 'task-1',
@@ -12,7 +15,14 @@ jest.mock('expo-router', () => ({
     scope: 'working',
   }),
   // The screen sets its native header title (the file name) via Stack.Screen.
-  Stack: { Screen: () => null },
+  // Recorded rather than discarded: a `() => null` mock throws the options away,
+  // so the header was the one part of this screen no test could see.
+  Stack: {
+    Screen: (props: { options?: Record<string, unknown> }) => {
+      if (props.options) mockStackScreenOptions.push(props.options);
+      return null;
+    },
+  },
 }));
 
 jest.mock('@/connection/actions', () => ({
@@ -42,6 +52,7 @@ function seedFileContent(): void {
 describe('FileDiffScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockStackScreenOptions.length = 0;
     seedFileContent();
   });
 
@@ -50,6 +61,24 @@ describe('FileDiffScreen', () => {
     // still-mounted subscriber outside act().
     cleanup();
     useDiffStore.getState().reset();
+  });
+
+  it('titles the header with the file name and names the back button Session', () => {
+    render(
+      <ThemeProvider>
+        <FileDiffScreen />
+      </ThemeProvider>,
+    );
+
+    const options = mockStackScreenOptions.at(-1);
+    expect(options?.title).toBe('alpha.ts');
+    // iOS derives the back button's label from the PREVIOUS screen's title, and
+    // the screen this is always pushed from (task/[taskId]/index) renders
+    // headerShown: false, so it has no title to lend. expo-router then falls
+    // back to the route's FILE PATH and the button read literally
+    // "task/[taskId]/index" on every iPhone. Android draws a bare chevron and
+    // never showed it, which is how it survived into a store screenshot.
+    expect(options?.headerBackTitle).toBe('Session');
   });
 
   it('renders add and remove lines from the stored file content', () => {

@@ -125,6 +125,19 @@ function runsE2eFor(changedFiles: string[]): boolean {
   return changedFiles.some((changedFile) => !isExcluded(changedFile));
 }
 
+/**
+ * vitest's default per-test timeout is 5s, which is not enough headroom here.
+ *
+ * Every case shells out to real `bash` once per changed path, and a process
+ * spawn on Windows costs orders of magnitude more than on the Linux CI runner -
+ * so the multi-file cases below sit right at the default on the machine this
+ * repo is developed on, and tip over it the moment anything else is using the
+ * box. That failure reads as "the classifier is broken" rather than "the test
+ * was not given time to spawn five shells", which is the same class of
+ * misleading local failure the header above describes.
+ */
+const BASH_SPAWN_TIMEOUT_MS = 30_000;
+
 describe('the e2e changes classifier', () => {
   it('finds the exclusion pattern at all', () => {
     // Non-vacuity guard: every assertion below is trivially satisfiable against
@@ -150,9 +163,13 @@ describe('the e2e changes classifier', () => {
       // that are excluded. This is the pair most likely to be over-matched.
       ['the capture script', 'scripts/storeScreenshots.mjs'],
       ['the capture flow', '.maestro/screenshots/store-capture.yaml'],
-    ])('runs for %s', (_label, file) => {
-      expect(runsE2eFor([file])).toBe(true);
-    });
+    ])(
+      'runs for %s',
+      (_label, file) => {
+        expect(runsE2eFor([file])).toBe(true);
+      },
+      BASH_SPAWN_TIMEOUT_MS,
+    );
   });
 
   describe('skips the suite for what cannot', () => {
@@ -172,9 +189,13 @@ describe('the e2e changes classifier', () => {
           'store/screenshots/README.md',
         ],
       ],
-    ])('skips for %s', (_label, files) => {
-      expect(runsE2eFor(files as string[])).toBe(false);
-    });
+    ])(
+      'skips for %s',
+      (_label, files) => {
+        expect(runsE2eFor(files as string[])).toBe(false);
+      },
+      BASH_SPAWN_TIMEOUT_MS,
+    );
   });
 
   describe('does not over-match a prefix exclusion', () => {
@@ -187,15 +208,23 @@ describe('the e2e changes classifier', () => {
       ['src/store/screenshotsHelper.ts'],
       // Not the screenshot OUTPUT directory, despite the shared first segment.
       ['store/config.ts'],
-    ])('runs for %s', (file) => {
-      expect(runsE2eFor([file])).toBe(true);
-    });
+    ])(
+      'runs for %s',
+      (file) => {
+        expect(runsE2eFor([file])).toBe(true);
+      },
+      BASH_SPAWN_TIMEOUT_MS,
+    );
   });
 
-  it('runs when a skippable file travels with a source change', () => {
-    // The dangerous direction: one excluded path must never license skipping a
-    // diff that also touches the app.
-    expect(runsE2eFor(['store/screenshots/android/phone/01-agents.png', 'src/screens/BoardScreen.tsx'])).toBe(true);
-    expect(runsE2eFor(['docs/developer-guide.md', 'src/state/boardStore.ts'])).toBe(true);
-  });
+  it(
+    'runs when a skippable file travels with a source change',
+    () => {
+      // The dangerous direction: one excluded path must never license skipping a
+      // diff that also touches the app.
+      expect(runsE2eFor(['store/screenshots/android/phone/01-agents.png', 'src/screens/BoardScreen.tsx'])).toBe(true);
+      expect(runsE2eFor(['docs/developer-guide.md', 'src/state/boardStore.ts'])).toBe(true);
+    },
+    BASH_SPAWN_TIMEOUT_MS,
+  );
 });

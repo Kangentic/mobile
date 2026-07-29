@@ -41,6 +41,7 @@ For anything beyond a bare Metro session, use the dev rig below.
 | Command | What you get |
 |---|---|
 | `npm run dev:mock` | The app against an **in-app fake desktop** (real channel stack over an in-process loopback). No relay, no pairing, nothing touches a real board. UI/UX iteration and full-feature demos. |
+| `npm run dev:shots` | `dev:mock` plus `EXPO_PUBLIC_KANGENTIC_SHOTS=1`, the bundle the **Play store capture** runs against. That flag silences LogBox so a warning banner cannot land in a listing image, which the iOS capture job has always done and the Android path did not. Capture only: warnings are hidden, so do not iterate on UI against this bundle. The flag is inlined at bundle time, so the rig forces a clean Metro cache when you switch either way. |
 | `npm run dev:live` | The app connected to **your real running Kangentic desktop dev instance** through a local relay. The rig prints the one-time desktop checklist (enable the mobile bridge, relay URL `ws://127.0.0.1:8080`, pair once, grant verbs). |
 | `npm run dev:pair` | Resets the app to unpaired (`pm clear`) so you can exercise the QR/paste + SAS **pairing ceremony**. Add `-- --stub` to pair against the stub peer instead of the live desktop. |
 | `npm run dev:stub` | Relay + `scripts/stubDesktopPeer.mjs` - the Maestro E2E rig. Reuses the saved phone key for a session-only reconnect when it can (`-- --fresh` forces a re-pair). |
@@ -358,10 +359,10 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
-| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus a `sync:branding:check` step for brand-asset drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
+| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus `sync:branding:check` for brand-asset drift and `check:tab-icons` for tab-icon drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
 | `e2e.yml` (workflow name: `Emulator`) | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
-| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload |
+| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
 
 ### What each check on a PR means
 

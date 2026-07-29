@@ -22,9 +22,13 @@ SplashScreen.setOptions({ fade: true, duration: 220 });
 //
 // Deliberately its OWN flag rather than riding on the mock flag. Mock mode is
 // the everyday UI-iteration rig, and hiding warnings there would turn a visible
-// mistake into an invisible one - the opposite of what a dev build is for. The
-// flag is set by the iOS capture job and nowhere else, and `__DEV__` keeps the
-// call out of production regardless.
+// mistake into an invisible one - the opposite of what a dev build is for.
+//
+// Set by exactly two things, one per platform, and it needs both: the iOS
+// capture job (`build-ios.yml`) and `npm run dev:shots` (the Android capture
+// rig). Android went without it at first, so the same warning banner the iOS
+// job was careful to suppress could still land in a Play frame. `__DEV__` keeps
+// the call out of production either way.
 if (__DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_SHOTS === '1') {
   LogBox.ignoreAllLogs(true);
 }

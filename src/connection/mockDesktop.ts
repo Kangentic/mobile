@@ -57,9 +57,23 @@ const ARCHIVED_MOCK_PAGE_SIZE = 25;
 // Names are product-plausible rather than "Project 1"/"Project 2" because the
 // project pill renders on every TaskCard, and these fixtures are the source
 // for the store-listing screenshots (scripts/storeScreenshots.mjs).
+//
+// EVERY FIXTURE IN THIS FILE IS THE FICTIONAL CUSTOMER'S WORK, NOT OURS.
+//
+// The screenshots these produce are published to the App Store, to Play, and to
+// a public repo, captioned as a customer using the product. Writing a card
+// about Kangentic's own backlog therefore publishes our engineering status as
+// if it were theirs - and the first pass did exactly that, shipping cards about
+// the register-push capability migration, the relay self-host guide, the
+// terminal font-fit heuristic, and a flaky pairing flow whose body text read
+// "the QR-scan step races the relay handshake". Reviewers read screenshots.
+//
+// So: no card, transcript, branch, label or terminal line may name Kangentic's
+// own domain - no relay, pairing, capability grant, PTY, Noise, push token, or
+// Maestro flow. Keep it all inside the storefront/checkout fiction below.
 const MOCK_PROJECT = { id: 'mock-project', name: 'storefront-web', color: '#58a6ff' };
 /** A second project: exercises the board project switcher and cross-project Home rows. */
-const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'platform-relay', color: '#3fb950' };
+const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'checkout-api', color: '#3fb950' };
 const MOCK_SESSION_ID = 'mock-session-1';
 const MOCK_TASK_ID = 'mock-task-1';
 /** A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat reading-view fallback. */
@@ -113,7 +127,10 @@ const MOCK_STREAM_TOKENS_PER_TICK = 300;
 /** 60% of the 200k window: comfortably clear of the warning and danger thresholds. */
 const MOCK_STREAM_TOKEN_CEILING = 120_000;
 
-function streamingUsedTokens(tick: number): number {
+export const MOCK_STREAM_CEILING_FOR_TEST = MOCK_STREAM_TOKEN_CEILING;
+export const MOCK_CONTEXT_WINDOW_FOR_TEST = MOCK_CONTEXT_WINDOW_SIZE;
+
+export function streamingUsedTokens(tick: number): number {
   return Math.min(
     MOCK_STREAM_TOKENS_AT_START + tick * MOCK_STREAM_TOKENS_PER_TICK,
     MOCK_STREAM_TOKEN_CEILING,
@@ -140,7 +157,7 @@ function mockUsage(usedTokens: number, model: SessionUsageWire['model']): Sessio
   };
 }
 
-interface MockExtraThinkingSessionSpec {
+export interface MockExtraThinkingSessionSpec {
   sessionId: string;
   taskId: string;
   displayId: number;
@@ -159,20 +176,20 @@ interface MockExtraThinkingSessionSpec {
  * to feel real scrolling and justify a collapsible-section UI, for
  * display/testing purposes.
  */
-const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
+export const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
   {
     sessionId: 'mock-session-thinking-2',
     taskId: 'mock-task-thinking-2',
     displayId: 6,
     swimlaneId: 'lane-executing',
-    title: "Refactor the diff viewer's syntax highlighter for large files",
-    userText: 'The diff view chokes on files over 2000 lines - can you speed up the highlighter?',
+    title: "Refactor the catalog importer's CSV parser for large feeds",
+    userText: 'The importer chokes on feeds over 2000 rows - can you speed up the parser?',
     // Deliberately long - a design-review stress test for how the Agents
     // feed's snippet line truncates once the last message runs well past
     // its two-line cap (bodyNumberOfLines on TaskCard).
     assistantText:
-      'Swapped the line-by-line tokenizer for a streaming one that processes files in fixed-size chunks instead of loading everything into memory at once; benchmarking against the 10k-line fixture next to confirm the P95 render time actually drops below our 200ms target.',
-    scrollback: '$ claude\r\n> Refactoring src/diff/syntaxHighlight.ts...\r\n',
+      'Swapped the row-by-row parser for a streaming one that processes feeds in fixed-size chunks instead of loading everything into memory at once; benchmarking against the 10k-row fixture next to confirm the P95 import time actually drops below our 200ms target.',
+    scrollback: '$ claude\r\n> Refactoring src/catalog/parseFeed.ts...\r\n',
     model: MOCK_MODEL_SONNET,
     usedTokens: 55_000,
   },
@@ -181,10 +198,10 @@ const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
     taskId: 'mock-task-thinking-3',
     displayId: 7,
     swimlaneId: 'lane-code-review',
-    title: 'Investigate the flaky Maestro pairing flow on CI',
-    userText: 'paired/pairing-ceremony.yaml fails about 1 in 5 runs on CI - can you dig in?',
-    assistantText: 'Reproduced it locally - the QR-scan step races the relay handshake. Adding a settle wait before the scan.',
-    scrollback: '$ claude\r\n> Reproducing the flaky pairing-ceremony flow...\r\n',
+    title: 'Investigate the flaky guest-checkout test on CI',
+    userText: 'checkout/guest-checkout.spec.ts fails about 1 in 5 runs on CI - can you dig in?',
+    assistantText: 'Reproduced it locally - the payment iframe loads after the assert. Adding a settle wait before the submit.',
+    scrollback: '$ claude\r\n> Reproducing the flaky guest-checkout spec...\r\n',
     model: MOCK_MODEL_OPUS,
     usedTokens: 88_000,
   },
@@ -193,10 +210,10 @@ const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
     taskId: 'mock-task-thinking-4',
     displayId: 8,
     swimlaneId: 'lane-testing',
-    title: 'Write the relay self-host deployment guide',
-    userText: 'Draft a guide for someone standing up their own relay - Docker, env vars, the works.',
+    title: 'Write the storefront self-host deployment guide',
+    userText: 'Draft a guide for someone standing up their own storefront - Docker, env vars, the works.',
     assistantText: 'First draft covers Docker Compose and bare-metal; adding the reverse-proxy/TLS section now.',
-    scrollback: '$ claude\r\n> Drafting docs/self-host-relay.md...\r\n',
+    scrollback: '$ claude\r\n> Drafting docs/self-host-storefront.md...\r\n',
     model: MOCK_MODEL_FABLE,
     usedTokens: 33_000,
   },
@@ -205,10 +222,10 @@ const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
     taskId: 'mock-task-thinking-5',
     displayId: 9,
     swimlaneId: 'lane-executing',
-    title: 'Tune the terminal font-fit heuristic for tablet-sized screens',
-    userText: 'On a tablet the terminal font ends up tiny - can you adjust the fit heuristic?',
-    assistantText: 'Adding a width-aware floor so the font never drops below 10px regardless of the PTY grid width.',
-    scrollback: 'Codex CLI · tuning the font-fit heuristic...\r\n',
+    title: 'Tune the product-grid density heuristic for tablet screens',
+    userText: 'On a tablet the product grid ends up cramped - can you adjust the density heuristic?',
+    assistantText: 'Adding a width-aware floor so a card never drops below 180px regardless of the column count.',
+    scrollback: 'Codex CLI · tuning the grid-density heuristic...\r\n',
     model: MOCK_MODEL_CODEX,
     usedTokens: 12_000,
   },
@@ -279,7 +296,7 @@ function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): Transcript
  * rejected: 120 columns across a phone is a 6px font, and it would defeat the
  * deliberate mirror-1:1-and-pan behaviour of the Desktop view.
  */
-const MOCK_TERMINAL_LINES = [
+export const MOCK_TERMINAL_LINES = [
   '> Reading src/auth/login.ts',
   '  loginRedirect() drops the path',
   '> Searching for its callers',
@@ -289,9 +306,18 @@ const MOCK_TERMINAL_LINES = [
   // These four mirror the second hunk of the diff the Changes lens shows, so
   // the terminal and the diff describe the same edit rather than two unrelated
   // pieces of work sitting one swipe apart.
-  '> Reading src/router/index.ts',
+  //
+  // They name login.ts, NOT a second file. An earlier version had the agent
+  // read and edit `src/router/index.ts` here, which appears in no diff the
+  // Changes lens lists - while the file it does list showed resolveNext()
+  // added to login.ts. So the terminal frame and the changes frame described
+  // different work, in the same listing, one swipe apart. The two edits also
+  // have to SUM to what diffFileList reports for login.ts (+12 -2), because a
+  // reviewer comparing 02-session-terminal against 04-session-changes is
+  // exactly the kind of thing a listing screenshot invites.
+  '> Checking the router callers',
   '  resolveNext() needs a default',
-  '> Editing src/router/index.ts',
+  '> Editing src/auth/login.ts',
   '  1 edit applied (+4 -0)',
   '$ npm run typecheck',
   '  tsc --noEmit: no errors',
@@ -332,7 +358,7 @@ const MOCK_PERMISSION_OPTIONS = [
   'No, and tell Claude what to do differently',
 ];
 
-function initialTasks(): BoardTaskWire[] {
+export function initialTasks(): BoardTaskWire[] {
   const nowIso = new Date().toISOString();
   return [
     boardTaskFixture({
@@ -403,9 +429,9 @@ function initialTasks(): BoardTaskWire[] {
       // the 3-visible cap (exercises the "+N" overflow pill), attachments,
       // and a priority (inert on the card today, ready for the future
       // detail-view addition). The single comprehensive stress-test card.
-      title: 'Migrate the legacy push-notification registration pipeline to the new capability-scoped token flow',
+      title: 'Migrate the legacy card-on-file payment pipeline to the new vault-scoped token flow',
       description:
-        'Replaces the old device-token registration path with the new register-push capability grant, keeping backward compatibility for phones still running the previous protocol version while the rollout completes across both platforms.',
+        'Replaces the old stored-card charge path with the new vault-scoped payment token, keeping backward compatibility for subscriptions still billing on the previous API version while the rollout completes across both regions.',
       swimlane_id: 'lane-executing',
       position: 2,
       // A session, not a bodiless board card: Executing implies an agent is
@@ -413,8 +439,8 @@ function initialTasks(): BoardTaskWire[] {
       // model, rounding out Sonnet/Opus/Codex already in use.
       agent: 'claude',
       session_id: MOCK_PAUSED_SESSION_ID,
-      branch_name: 'feature/push-token-migration',
-      labels: ['backend', 'notifications', 'migration', 'breaking-change', 'p0'],
+      branch_name: 'feature/vault-token-migration',
+      labels: ['backend', 'payments', 'migration', 'breaking-change', 'p0'],
       pr_number: 103,
       pr_state: 'merged',
       attachment_count: 3,
@@ -488,15 +514,15 @@ function mockColumns2() {
   ];
 }
 
-function initialTasks2(): BoardTaskWire[] {
+export function initialTasks2(): BoardTaskWire[] {
   const nowIso = new Date().toISOString();
   return [
     boardTaskFixture({
       id: MOCK_IDLE_TASK_ID,
       display_id: 1,
       // An idle agent session: exercises the Home feed's Idle section.
-      title: 'Relay load-test follow-ups',
-      description: 'Latency held under a millisecond across fifty pairs. Write up the headroom numbers and open issues for the two slowest cases.',
+      title: 'Checkout load-test follow-ups',
+      description: 'Latency held under a millisecond across fifty concurrent carts. Write up the headroom numbers and open issues for the two slowest cases.',
       swimlane_id: 'lane2-progress',
       session_id: MOCK_IDLE_SESSION_ID,
       branch_name: 'perf/load-test',
@@ -508,7 +534,7 @@ function initialTasks2(): BoardTaskWire[] {
       display_id: 2,
       // A quiet, session-less second-project card.
       title: 'Document the metrics endpoint',
-      description: 'Describe every counter the relay exposes, and which ones are safe to scrape from outside the cluster.',
+      description: 'Describe every counter the checkout service exposes, and which ones are safe to scrape from outside the cluster.',
       swimlane_id: 'lane2-backlog',
       created_at: nowIso,
       updated_at: nowIso,
@@ -561,7 +587,11 @@ function baseTranscript(): TranscriptEntryWire[] {
           input: {
             replace_all: false,
             file_path: 'C:\\Users\\dev\\Documents\\GitHub\\storefront-web\\src\\auth\\login.ts',
-            old_string: 'export function loginRedirect(path) {\n  redirect("/login");\n}',
+            // Includes `return null;` because diffFileContent's `original` does,
+            // and the file-diff frame shows BOTH lines being removed (its -2).
+            // Without it the chat frame and the diff frame show two different
+            // "before" states of one function, one swipe apart.
+            old_string: 'export function loginRedirect(path) {\n  redirect("/login");\n  return null;\n}',
             new_string:
               'export function loginRedirect(path) {\n  const next = encodeURIComponent(path);\n  redirect(`/login?next=${next}`);\n}',
           },
@@ -630,7 +660,7 @@ function baseTranscript(): TranscriptEntryWire[] {
  * touches the helper, its callers, a test and the changelog, so the extra
  * entries are more honest than the original pair, not less.
  */
-function diffFileList(): DiffFileListWire {
+export function diffFileList(): DiffFileListWire {
   return {
     files: [
       { path: 'src/auth/login.ts', status: 'M', insertions: 12, deletions: 2, binary: false },
@@ -969,7 +999,7 @@ export function createMockDesktop(): MockDesktop {
                 options: [
                   {
                     label: 'Unit (vitest) (recommended)',
-                    description: 'Fast, pure redirect-builder coverage; no RN runtime.',
+                    description: 'Fast, pure redirect-builder coverage; no browser needed.',
                     preview: 'tests/unit/loginRedirect.test.ts\nexpect(buildRedirect(path)).toContain("next=")',
                   },
                   { label: 'Component (RTL)', description: 'Covers the login form wiring too.' },
@@ -977,7 +1007,7 @@ export function createMockDesktop(): MockDesktop {
                     label: 'Both tiers',
                     description: 'Unit for the builder plus a component test for the form wiring.',
                   },
-                  { label: 'E2E only', description: 'One Maestro flow through the real login screen.' },
+                  { label: 'E2E only', description: 'One Playwright run through the real login screen.' },
                 ],
               },
             ],
@@ -1250,7 +1280,7 @@ export function createMockDesktop(): MockDesktop {
             } as unknown as JsonValue);
           }
           const pausedSnapshot: ReadStreamResponsePayload = {
-            scrollback: 'push-token migration worktree\r\n$ claude\r\n> Paused - resume from the terminal when ready.\r\n',
+            scrollback: 'vault-token migration worktree\r\n$ claude\r\n> Paused - resume from the terminal when ready.\r\n',
             activity: { state: 'idle', reason: { kind: 'idle' } },
             usage: mockUsage(61_000, MOCK_MODEL_FABLE),
             awaitedPromptId: null,
@@ -1263,12 +1293,12 @@ export function createMockDesktop(): MockDesktop {
           // small settled transcript. Nothing ever streams from it.
           if (payload.action === 'transcript-window') {
             const idleTranscript: TranscriptEntryWire[] = [
-              { kind: 'user', uuid: 'mock-idle-user-1', ts: Date.now() - 3_600_000, text: 'Summarize the relay load-test results.' },
+              { kind: 'user', uuid: 'mock-idle-user-1', ts: Date.now() - 3_600_000, text: 'Summarize the checkout load-test results.' },
               {
                 kind: 'assistant',
                 uuid: 'mock-idle-assistant-1',
                 ts: Date.now() - 3_540_000,
-                blocks: [{ type: 'text', text: 'Done. p50 relay-added latency held at 0.79ms across 50 pairs; summary written to the task notes.' }],
+                blocks: [{ type: 'text', text: 'Done. p50 checkout latency held at 0.79ms across 50 concurrent carts; summary written to the task notes.' }],
               },
             ];
             return ok(request, {
@@ -1279,7 +1309,7 @@ export function createMockDesktop(): MockDesktop {
             } as unknown as JsonValue);
           }
           const idleSnapshot: ReadStreamResponsePayload = {
-            scrollback: 'relay perf worktree\r\n$ claude\r\n> Load-test summary written. Session is idle.\r\n',
+            scrollback: 'checkout perf worktree\r\n$ claude\r\n> Load-test summary written. Session is idle.\r\n',
             activity: { state: 'idle', reason: { kind: 'idle' } },
             usage: mockUsage(28_000, MOCK_MODEL_OPUS),
             awaitedPromptId: null,

@@ -103,7 +103,7 @@ gh workflow run build-ios.yml -f screenshots=true
 gh run download <run-id> -n ios-store-screenshots-<sha>
 ```
 
-Budget roughly **40 minutes** per attempt, almost all of it the Xcode build, so batch changes
+Budget roughly **45 minutes** per attempt, almost all of it the Xcode build, so batch changes
 rather than testing them one at a time. Validate any flow edit against the Android emulator
 first (about 6 minutes, no CI) - the flow is shared, and every navigation bug found so far
 reproduced there.

@@ -94,10 +94,12 @@ store/screenshots/            # Committed Play + App Store listing images, one s
 
 - `npm install` - Install dependencies
 - `npx expo start --dev-client` (`npm start`) - Start the dev server against a dev-client build
-- `npm run dev:mock` / `dev:live` / `dev:pair` / `dev:stub` / `dev:doctor` - The local dev rig
+- `npm run dev:mock` / `dev:shots` / `dev:live` / `dev:pair` / `dev:stub` / `dev:doctor` - The local dev rig
   (`scripts/dev.mjs`): emulator + adb reverse + relay + Metro in one command, in mock
   (in-app fake desktop), live (real desktop dev instance), pair (pairing-ceremony testing),
-  or stub (Maestro E2E rig) mode; doctor is a read-only preflight. See
+  or stub (Maestro E2E rig) mode; doctor is a read-only preflight. `dev:shots` is mock plus
+  the store-capture flag, which silences LogBox so a warning cannot land in a listing image -
+  capture only, never UI iteration. See
   [docs/developer-guide.md](docs/developer-guide.md)'s Local Dev Rig section.
 - `npx expo run:android` (`npm run android`) - Build, install, and launch the dev client on the
   Android emulator (rebuilds native code; use this after a native dependency or config plugin

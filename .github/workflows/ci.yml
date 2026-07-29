@@ -162,6 +162,15 @@ jobs:
       # header once claiming this ran inside /pull-request. This is that check.
       - name: Brand assets in sync
         run: npm run sync:branding:check
+      # Same shape as the brand check above, and for the same reason. The unit
+      # tier pins the tab icons' DIMENSIONS and their lucide path data, but
+      # nothing there re-renders the SVG - so a change to the rasterising
+      # options (stroke width, viewBox math) leaves the committed PNGs at the
+      # right size, with the right geometry constants, and the wrong pixels.
+      # `--check` re-renders and hash-compares, which is the only thing that
+      # catches that. It was written "for CI" and then wired to nothing.
+      - name: Tab icons in sync
+        run: npm run check:tab-icons
 
   typecheck:
     name: Type check (tsc)

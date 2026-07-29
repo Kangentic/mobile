@@ -145,6 +145,29 @@ export function describeDimensionMismatch(shotName, actualSize, shelf) {
   return `${shotName}.png is ${actualSize.width}x${actualSize.height}, expected ${shelf.width}x${shelf.height}`;
 }
 
+/**
+ * The character set a real adb serial uses: `emulator-5554`, `192.168.1.5:5555`,
+ * `R58M12345AB`.
+ *
+ * Worth a guard because the serial is the ONE value here that reaches a shell.
+ * `runMaestro` and `assertNoDevToolsBubble` spawn with `shell: true` on Windows
+ * (the Maestro launcher is a `.cmd`), and Node does not escape an args array
+ * when a shell is involved - so on Windows the value is pasted into a cmd.exe
+ * command line, where `&`, `|` or `^` stop being part of the serial and start
+ * being command separators. `adb` is not affected (no shell), which is exactly
+ * what makes this easy to miss: the same value is safe on one path and not the
+ * other.
+ */
+export function isValidDeviceSerial(serial) {
+  return typeof serial === 'string' && serial.length > 0 && /^[A-Za-z0-9._:-]+$/.test(serial);
+}
+
+function assertValidDeviceSerial(serial) {
+  if (serial !== undefined && !isValidDeviceSerial(serial)) {
+    fail(`device serial "${serial}" is not a plain adb serial (letters, digits, dot, colon, dash, underscore)`);
+  }
+}
+
 const ADB_TIMEOUT_MS = 20_000;
 
 /**
@@ -252,7 +275,24 @@ function enterDemoMode() {
   // (a kill, a crash, a disconnected device), so "already on" is the normal
   // state after any interrupted run, not an exotic one. Starting from a known
   // clean bar costs one broadcast.
+  //
+  // THE SETTLE IS LOAD-BEARING, and the exit alone was not enough.
+  //
+  // `am broadcast` returns once the broadcast is DISPATCHED; SystemUI handles it
+  // later on its own thread. Back-to-back exit/enter therefore races, and losing
+  // that race leaves demo mode on - the exact state the exit exists to clear.
+  // The artifact record shows both outcomes from the same shelf at the same
+  // geometry: the 7-inch frames captured in f44227d (which added the exit) have
+  // one wifi glyph, and the ones captured later in 9ce5396 have two. Same code,
+  // same density, different outcome, which is what a race looks like and what
+  // rules out the non-standard 280 bucket as the cause.
+  //
+  // Sleeping on the device rather than in Node keeps this a single synchronous
+  // adb call. One second is a guess informed by the failure, not a measured
+  // floor - so it reduces the odds rather than proving them zero, and every
+  // capture still has to be looked at.
   demo(['-e', 'command', 'exit']);
+  adb(['shell', 'sleep', '1'], { allowFailure: true });
   demo(['-e', 'command', 'enter']);
   demo(['-e', 'command', 'clock', '-e', 'hhmm', '0930']);
   demo(['-e', 'command', 'battery', '-e', 'level', '100', '-e', 'plugged', 'false']);
@@ -388,11 +428,22 @@ function captureShelf(shelfName, options) {
   const maestroRunDirectory = join(tmpdir(), `kangentic-store-shots-${shelfName}`);
   rmSync(maestroRunDirectory, { recursive: true, force: true });
 
-  applyGeometry(shelf);
-  relaunchApp();
-  assertNoDevToolsBubble();
-  enterDemoMode();
+  // The try opens at the FIRST call that changes the device, not at the capture.
+  //
+  // applyGeometry has already overridden resolution and density by the time
+  // relaunchApp, assertNoDevToolsBubble or enterDemoMode can throw - and
+  // assertNoDevToolsBubble throwing is a documented, expected outcome, not an
+  // edge case. With those calls outside the try, that ordinary failure exited
+  // the script leaving the emulator pinned at the shelf's geometry, which is
+  // exactly the inherited state the `fail()` docstring above says throwing
+  // rather than process.exit was chosen to prevent. Both cleanup calls tolerate
+  // a device that never got as far as being changed (every adb call they make
+  // is allowFailure), so covering the setup costs nothing.
   try {
+    applyGeometry(shelf);
+    relaunchApp();
+    assertNoDevToolsBubble();
+    enterDemoMode();
     runMaestro(maestroRunDirectory);
     collectCaptures(maestroRunDirectory, absoluteOutputDirectory);
     verifyCaptures(absoluteOutputDirectory, shelf);
@@ -408,9 +459,13 @@ function main() {
   if (serialIndex >= 0) {
     const serial = args[serialIndex + 1];
     if (!serial) fail('--serial needs a value');
+    assertValidDeviceSerial(serial);
     process.env.ANDROID_SERIAL = serial;
     args.splice(serialIndex, 2);
   }
+  // Also covers a serial that arrived as a pre-existing environment variable
+  // rather than through the flag: both end up on the same shelled-out path.
+  assertValidDeviceSerial(process.env.ANDROID_SERIAL);
   const options = {
     keepGeometry: args.includes('--keep-geometry'),
     dryRun: args.includes('--dry-run'),

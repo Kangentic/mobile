@@ -30,7 +30,7 @@ decision rather than a blocker. `ios.supportsTablet` is `false`, so App Store Co
 single 6.9-inch shelf, minimum three - and six are tracked.
 
 The Android shelves are captured locally against an emulator. The iOS shelf cannot be captured
-from Windows and runs on a free macOS runner instead, at roughly 40 minutes per attempt.
+from Windows and runs on a free macOS runner instead, at roughly 45 minutes per attempt.
 
 Read `store/screenshots/README.md` before regenerating: Play demands exactly 16:9 or 9:16 on
 every shelf including tablets, which is why the capture sets resolution and density

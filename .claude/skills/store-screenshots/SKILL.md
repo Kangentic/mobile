@@ -67,8 +67,19 @@ automatically. Changing your mind costs nothing.
 ## Step 2 - Bring up the mock rig
 
 ```
-npm run dev:mock
+npm run dev:shots
 ```
+
+`dev:shots` is `dev:mock` plus `EXPO_PUBLIC_KANGENTIC_SHOTS=1`, which silences
+LogBox in the served bundle so a warning banner cannot land in a listing image.
+The iOS job has always set that flag; Android went without it until it was
+added here, which left the Play captures one warning away from shipping a
+yellow banner nothing downstream would have caught.
+
+Use plain `npm run dev:mock` for ordinary UI work: warnings are HIDDEN under
+`dev:shots`, which is right for a capture and wrong for iterating. Both flip a
+bundle-time constant, so the rig forces a clean Metro cache when you switch
+between them.
 
 Wait for BOTH the emulator to appear in `adb devices` AND Metro to log
 `Android Bundled`. A capture started before the bundle lands photographs a

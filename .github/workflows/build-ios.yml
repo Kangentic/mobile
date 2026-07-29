@@ -478,7 +478,13 @@ jobs:
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
       - name: Run the Maestro smoke flow
-        if: inputs.maestro != 'none'
+        # Both halves of this condition are required. `device-id` is written only
+        # by the `smoke` step, which a screenshot run skips - so dispatching
+        # `-f screenshots=true -f maestro=smoke` (nothing validates the pair)
+        # would leave this reading an empty output and running
+        # `maestro --device "" ...`, failing the job after the captures already
+        # succeeded, for a reason that reads as iOS-driver flakiness.
+        if: inputs.maestro != 'none' && inputs.screenshots != 'true'
         env:
           MAESTRO_DEVICE: ${{ steps.smoke.outputs.device-id }}
         run: |

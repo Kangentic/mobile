@@ -224,6 +224,8 @@ function parseRigArgs(argv) {
       headless: { type: 'boolean', default: false },
       shard: { type: 'string' },
       wifi: { type: 'boolean', default: false },
+      // mock mode only: build the bundle the store capture runs against.
+      shots: { type: 'boolean', default: false },
     },
   });
   const mode = positionals[0] ?? 'live';
@@ -1576,7 +1578,28 @@ async function main() {
   } else if (mode === 'mock') {
     log('mock mode: in-app fake desktop, no relay or pairing involved');
     log('(switching mock on/off later needs a Metro restart with --clear: the flag is inlined at bundle time)');
-    startMetro({ ...flags, clear: flags.clear || protocolRelinked || inheritsQuickPairBundle }, { EXPO_PUBLIC_KANGENTIC_MOCK: '1' });
+    // --shots: the bundle the Play capture runs against.
+    //
+    // It sets EXPO_PUBLIC_KANGENTIC_SHOTS, which silences LogBox (see
+    // app/_layout.tsx) so a warning banner cannot land in a listing image. The
+    // iOS capture job set that flag from the start and the Android path never
+    // did, so the protection was one-sided: a warning firing during an Android
+    // capture would have shipped to Play inside an otherwise correct frame,
+    // and nothing downstream checks pixels.
+    //
+    // Like every EXPO_PUBLIC_ value this is inlined at BUNDLE time, so flipping
+    // it either way needs a clean Metro cache - same hazard, same fix, as the
+    // quick-pair bundle above. Without the second half of that comparison,
+    // going back to a plain `dev:mock` would silently keep serving a bundle
+    // with warnings still suppressed, which is the worse direction to be wrong.
+    const wantsShots = Boolean(flags.shots);
+    const shotsModeChanged = Boolean(loadState().lastShotsMode) !== wantsShots;
+    if (shotsModeChanged) saveState({ lastShotsMode: wantsShots });
+    if (wantsShots) log('shots mode: LogBox is SILENCED - capture only, do not iterate on UI against this bundle');
+    startMetro(
+      { ...flags, clear: flags.clear || protocolRelinked || inheritsQuickPairBundle || shotsModeChanged },
+      { EXPO_PUBLIC_KANGENTIC_MOCK: '1', ...(wantsShots ? { EXPO_PUBLIC_KANGENTIC_SHOTS: '1' } : {}) },
+    );
   } else {
     startMetro({ ...flags, clear: flags.clear || protocolRelinked || inheritsQuickPairBundle });
   }

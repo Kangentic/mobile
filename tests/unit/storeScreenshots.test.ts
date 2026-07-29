@@ -22,6 +22,7 @@ import {
   SHELVES,
   SHOT_NAMES,
   describeDimensionMismatch,
+  isValidDeviceSerial,
   readPngSize,
 } from '../../scripts/storeScreenshots.mjs';
 
@@ -58,6 +59,29 @@ describe('readPngSize', () => {
     const wrongChunk = fakePngHeader(1080, 1920);
     wrongChunk.write('IDAT', 12, 'ascii');
     expect(() => readPngSize(wrongChunk)).toThrow(/IHDR/);
+  });
+});
+
+describe('isValidDeviceSerial', () => {
+  it('accepts the serial shapes adb actually reports', () => {
+    expect(isValidDeviceSerial('emulator-5554')).toBe(true);
+    expect(isValidDeviceSerial('192.168.1.5:5555')).toBe(true);
+    expect(isValidDeviceSerial('R58M12345AB')).toBe(true);
+  });
+
+  it('rejects a serial carrying cmd.exe command separators', () => {
+    // The serial is the one value in this script that reaches a shell:
+    // runMaestro and assertNoDevToolsBubble spawn with `shell: true` on
+    // Windows, and Node does not escape an args array once a shell is in play.
+    expect(isValidDeviceSerial('emulator-5554 & calc')).toBe(false);
+    expect(isValidDeviceSerial('emulator-5554|whoami')).toBe(false);
+    expect(isValidDeviceSerial('emulator-5554^x')).toBe(false);
+    expect(isValidDeviceSerial('"emulator-5554"')).toBe(false);
+  });
+
+  it('rejects an empty or absent serial rather than treating it as valid', () => {
+    expect(isValidDeviceSerial('')).toBe(false);
+    expect(isValidDeviceSerial(undefined)).toBe(false);
   });
 });
 
