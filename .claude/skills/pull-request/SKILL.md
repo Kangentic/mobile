@@ -21,7 +21,7 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
 
 - **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
   parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`,
-  `Component Tests (Jest)`, `Native config (CNG)`, and `Release counters (store preflight)`
+  `Component Tests (Jest)`, `Native config (prebuild)`, and `Release counters (stores)`
   (pull requests only). `.github/workflows/e2e.yml` adds
   `E2E Tests (Maestro)`. Plus `cla`. Never treat `CLA Assistant` alone as all-green: confirm the
   registered check names with `gh pr checks <branch>` and wait for every one of them. A real check
@@ -163,12 +163,12 @@ whole poll on a red check that blocks nothing. Measured on PR #28: the required 
 **14 check runs report** on a PR to `main` (8 from `ci.yml`, 5 from `e2e.yml`, 1 from
 `cla.yml`). **Eight** of them are required as of this writing and are the only ones this watch
 sees: `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`, `Component Tests (Jest)`,
-`Native config (CNG)`, `Release counters (store preflight)`, `E2E Tests (Maestro)`, and `cla`.
+`Native config (prebuild)`, `Release counters (stores)`, `E2E Tests (Maestro)`, and `cla`.
 The rest are shard jobs and intermediate jobs that the thin gate checks already aggregate.
 
 **Do not trust that list.** It is a sanity check for a human reading this file, nothing more. It
 has been wrong three times in a single day: twice from renames, and once when
-`Release counters (store preflight)` was promoted from advisory to required while an unrelated PR
+`Release counters (stores)` was promoted from advisory to required while an unrelated PR
 was mid-flight - so a list written that morning was already wrong by the afternoon, through no
 edit of its own. The step below reads branch protection over the API for exactly this reason, and
 that comparison is what decides whether a PR is green.

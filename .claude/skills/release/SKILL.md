@@ -128,7 +128,7 @@ exactly what sent the 2026-07-28 release at an iOS build number Apple had alread
 
 **Three places now catch a spent counter, in increasing cost:**
 
-1. `Release counters (store preflight)` in `ci.yml`, on any PR that changes a counter's value.
+1. `Release counters (stores)` in `ci.yml`, on any PR that changes a counter's value.
    Seconds, and it is where a bad bump should die.
 2. The `plan` job in `build-android.yml` and the pre-archive check in `build-ios.yml`. Both run
    before anything expensive.

@@ -144,7 +144,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - Your PR must be green on every check that registers. From
   `.github/workflows/ci.yml`, each runs as its own parallel job: **`Lint (ESLint)`**,
   **`Type check (tsc)`**, **`Unit Tests (Vitest)`**, **`Component Tests (Jest)`**,
-  **`Native config (CNG)`**, and **`Release counters (store preflight)`**. From
+  **`Native config (prebuild)`**, and **`Release counters (stores)`**. From
   `.github/workflows/e2e.yml`: **`E2E Tests (Maestro)`**, which builds a real APK and runs the
   smoke flow on an Android emulator, so it takes appreciably longer than the rest. Plus **`cla`**
   (CLA Assistant).
@@ -152,7 +152,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
   (`Component Tests (1/2)` and `(2/2)`) but are not themselves required: the `Component Tests (Jest)`
   gate is. The unit tier is unsharded, so `Unit Tests (Vitest)` both runs the tests and is the
   required check.
-- `Release counters (store preflight)` guards the hand-managed `versionCode` and `buildNumber`
+- `Release counters (stores)` guards the hand-managed `versionCode` and `buildNumber`
   against reuse. It runs on pull requests only, and it **is** required, so a red run there blocks
   the merge.
 - `E2E Tests (Paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required

@@ -112,8 +112,8 @@ const ALL_REQUIRED = [
   'Type check (tsc)',
   'Unit Tests (Vitest)',
   'Component Tests (Jest)',
-  'Native config (CNG)',
-  'Release counters (store preflight)',
+  'Native config (prebuild)',
+  'Release counters (stores)',
   'E2E Tests (Maestro)',
   'cla',
 ];

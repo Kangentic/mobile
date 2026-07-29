@@ -296,7 +296,7 @@ const config: ExpoConfig = {
     // Source-map + debug-symbol upload only, gated on SENTRY_AUTH_TOKEN. The
     // plugin entry is omitted entirely rather than passed empty options: an
     // absent auth token must not make the plugin run and fail (or silently
-    // no-op) inside ci.yml's Native config (CNG) job, which
+    // no-op) inside ci.yml's Native config (prebuild) job, which
     // prebuilds both platforms with zero secrets. Crash reporting itself is
     // gated separately (EXPO_PUBLIC_SENTRY_DSN, read at runtime in
     // src/observability/crashReporting.ts) - this only controls whether a
