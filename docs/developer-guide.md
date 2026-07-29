@@ -1516,10 +1516,19 @@ testing does not count toward production access.**
 
 | Track | Testers | Review | Status | Unlocks production? |
 |---|---|---|---|---|
-| Internal | up to 100, by email list | none, live in minutes | created, no release yet | **No** |
+| Internal | up to 100, by email list | none, live in minutes | **v0.2.0 (vc2) released 2026-07-28**, one tester list | **No** |
 | Closed (`alpha`) | 12+ required, opted in 14 continuous days | yes | not created | **Yes**, this is the gate |
 | Open (`beta`) | unlimited, publicly discoverable | yes | not created | optional |
 | Production | everyone | yes | locked until the closed test passes | n/a |
+
+**"None, live in minutes" is the steady state, not the first time.** The first internal release on
+a new app record is served under a temporary app name (`com.kangentic.mobile (unreviewed)`) while
+the app is still `Draft`, and it can take hours to a couple of days before an opted-in tester can
+actually install it. Verified 2026-07-29: the release read `Available to internal testers` in the
+Console with the tester list saved and the correct account signed in on the device, and the Play
+Store app still answered `Item not found`. Nothing in the Console fixes that window. Sideload a
+`preview` APK if you need the build on a phone the same day, and note it is signed with a
+different key than Play distributes, so the Play install needs the sideload uninstalled first.
 
 The ladder, in order:
 
@@ -1529,15 +1538,23 @@ The ladder, in order:
    known devices.
 3. **Closed track.** Requires every app-content declaration that internal testing lets you skip:
    store listing, content rating, data safety, target audience, ads, and a public privacy policy
-   URL. Build in CI, not locally on Windows, so the bundle carries every ABI.
-   Then recruit 12+ testers and keep them opted in for 14 **continuous** days. Testers who opt out
+   URL. **All of these were entered by 2026-07-29** (the en-US listing carries a 66-character short
+   description, an 870-character full description, 4 phone plus 4 seven-inch plus 4 ten-inch
+   screenshots, the icon, and the feature graphic; verified against `edits.listings` and
+   `edits.images` rather than from memory). Entered is not submitted: they sit under
+   **Changes not yet submitted for review** until `Send app for review` is pressed in Publishing
+   overview, and that button stays disabled until the app dashboard reads 11 of 11.
+   Build in CI, not locally on Windows, so the bundle carries every ABI.
+   Then set the closed track's countries and regions and its tester list (neither is reachable
+   through the Play API: `edits.testers` only exposes Google Groups, and Console email lists are
+   invisible to it), promote the existing version code rather than cutting a new one, and recruit
+   12+ testers and keep them opted in for 14 **continuous** days. Testers who opt out
    and back in reset the clock; the 14 days do not accumulate across gaps.
 4. **Apply for production access.** Only after step 3 has genuinely held for 14 days. Play asks
    about the testing process and production readiness as part of the application.
 
 Treat steps 3 and 4 as their own piece of work. The 14-day clock means production is at minimum
-three weeks out from the day a closed test starts, and none of the content declarations are
-filled in yet.
+three weeks out from the day a closed test starts.
 
 ### iOS (App Store Connect)
 
