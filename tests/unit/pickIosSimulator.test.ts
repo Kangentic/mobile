@@ -8,9 +8,13 @@
  * app crashing. It parses Apple's JSON, whose shape moves with Xcode, so it is
  * exactly the sort of thing that should not be trusted un-tested.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { pickIphoneSimulator } from '../../scripts/pickIosSimulator.mjs';
+
+const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 const IPHONE_16 = { udid: 'AAAA-1111', name: 'iPhone 16', isAvailable: true };
 const IPHONE_15 = { udid: 'BBBB-2222', name: 'iPhone 15', isAvailable: true };
@@ -78,5 +82,40 @@ describe('pickIphoneSimulator', () => {
   it('returns null on an empty or malformed catalog', () => {
     expect(pickIphoneSimulator({ devices: {} })).toBeNull();
     expect(pickIphoneSimulator({})).toBeNull();
+  });
+});
+
+/**
+ * The same failure shape as the picker bug in this file's header, one step later:
+ * a script defect that reports the launch step as a crash the app never had.
+ *
+ * The liveness check used to pipe `launchctl list` straight into `grep -q`.
+ * `grep -q` exits at its FIRST match and closes the pipe, so `launchctl list`
+ * dies of SIGPIPE with status 141, and because the script runs under
+ * `set -o pipefail` that 141 becomes the pipeline's status. The check therefore
+ * reported "no longer running" precisely BECAUSE it found the app. It is a race
+ * on how much output is still unwritten when grep exits, so it passed seven
+ * consecutive runs before failing on run 30461104088, with an empty crash-report
+ * group and a screenshot of a fully rendered app as the giveaway.
+ */
+describe('smoke-ios-simulator.sh liveness check', () => {
+  const scriptSource = readFileSync(
+    `${repositoryRoot}.github/scripts/smoke-ios-simulator.sh`,
+    'utf8'
+  );
+
+  it('never pipes a simctl listing into a short-circuiting grep', () => {
+    expect(scriptSource).not.toMatch(/simctl spawn[^\n]*\|\s*grep/);
+  });
+
+  it('captures the process listing before matching it', () => {
+    expect(scriptSource).toMatch(/process_list="\$\(xcrun simctl spawn[^\n]*launchctl list\)"/);
+  });
+
+  // The guard above only matters while pipefail is on. If pipefail were ever
+  // dropped, a genuinely failing simctl would start passing silently, so the two
+  // belong in one assertion rather than drifting apart.
+  it('keeps pipefail on, which is what made the broken pipe fatal', () => {
+    expect(scriptSource).toContain('set -euo pipefail');
   });
 });
