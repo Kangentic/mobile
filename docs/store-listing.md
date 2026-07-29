@@ -13,22 +13,24 @@ into the app - upload them by hand from `node_modules/@kangentic/branding/resour
 
 ## Screenshots
 
-**Produced and tracked**, in [`store/screenshots/`](../store/screenshots/README.md). Six raw
-device captures per Android shelf, regenerated with `node scripts/storeScreenshots.mjs all`
-against the mock rig:
+**Produced and tracked**, in [`store/screenshots/`](../store/screenshots/README.md). Every shelf
+below carries the same six raw device captures, so both listings tell one story:
 
-| Shelf | Size | Directory |
-|---|---|---|
-| Play phone | 1080x1920 | `store/screenshots/android/phone/` |
-| Play 7-inch tablet | 1080x1920 | `store/screenshots/android/seven-inch/` |
-| Play 10-inch tablet | 1440x2560 | `store/screenshots/android/ten-inch/` |
+| Shelf | Size | Directory | Captured by |
+|---|---|---|---|
+| Play phone | 1080x1920 | `store/screenshots/android/phone/` | `node scripts/storeScreenshots.mjs all` |
+| Play 7-inch tablet | 1080x1920 | `store/screenshots/android/seven-inch/` | the same command |
+| Play 10-inch tablet | 1440x2560 | `store/screenshots/android/ten-inch/` | the same command |
+| App Store 6.9-inch iPhone | 1320x2868 | `store/screenshots/ios/iphone-6.9/` | `gh workflow run build-ios.yml -f screenshots=true` |
 
-All three shelves are required in the Play Console listing form as long as the app is
-distributed to tablets. Restricting **Test and release -> Advanced settings -> Form factors** to
-phone should drop the two tablet requirements; the tablet captures exist either way, so that is
-a reach decision rather than a blocker. `ios.supportsTablet` is `false`, so App Store Connect
-wants a single shelf - **6.9-inch iPhone, 1320x2868, minimum three** - which is not yet
-produced, because it cannot be captured from Windows.
+All three Play shelves are required in the listing form as long as the app is distributed to
+tablets. Restricting **Test and release -> Advanced settings -> Form factors** to phone should
+drop the two tablet requirements; the tablet captures exist either way, so that is a reach
+decision rather than a blocker. `ios.supportsTablet` is `false`, so App Store Connect wants the
+single 6.9-inch shelf, minimum three - and six are tracked.
+
+The Android shelves are captured locally against an emulator. The iOS shelf cannot be captured
+from Windows and runs on a free macOS runner instead, at roughly 40 minutes per attempt.
 
 Read `store/screenshots/README.md` before regenerating: Play demands exactly 16:9 or 9:16 on
 every shelf including tablets, which is why the capture sets resolution and density

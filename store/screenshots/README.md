@@ -33,7 +33,10 @@ The app icon and feature graphic are still NOT here. Upload those from
 android/phone/        1080x1920   Play phone shelf
 android/seven-inch/   1080x1920   Play 7-inch tablet shelf
 android/ten-inch/     1440x2560   Play 10-inch tablet shelf
+ios/iphone-6.9/       1320x2868   App Store 6.9-inch iPhone shelf
 ```
+
+All four shelves carry the same six shots, so the two listings tell one story.
 
 Filenames are numbered because both stores display screenshots in upload order and the upload
 tools (fastlane `supply` / `deliver`) sort by filename. The numbering is the display order, not
@@ -81,7 +84,42 @@ eligible for Play's promotional surfaces.
 
 ## iOS
 
-Not produced yet. `ios.supportsTablet` is `false` in `app.config.ts`, so App Store Connect wants
-one shelf only: **6.9-inch iPhone at 1320x2868, minimum three**. It cannot be captured from
-Windows; see the iOS section of [docs/developer-guide.md](../../docs/developer-guide.md) for the
-macOS-runner route and the `__DEV__` constraint that makes it awkward.
+All six shots, at Apple's exact 1320x2868. `ios.supportsTablet` is `false` in `app.config.ts`,
+so App Store Connect wants one shelf only: **6.9-inch iPhone at 1320x2868, minimum three**.
+
+```
+ios/iphone-6.9/       1320x2868   App Store 6.9-inch iPhone shelf
+```
+
+It cannot be captured from Windows. The same flow runs on a free macOS runner:
+
+```
+gh workflow run build-ios.yml -f screenshots=true
+gh run download <run-id> -n ios-store-screenshots-<sha>
+```
+
+Budget roughly **40 minutes** per attempt, almost all of it the Xcode build, so batch changes
+rather than testing them one at a time. Validate any flow edit against the Android emulator
+first (about 6 minutes, no CI) - the flow is shared, and every navigation bug found so far
+reproduced there.
+
+### What iOS gets wrong that Android does not
+
+Three things bit here, and all three were invisible on Android:
+
+- **The terminal shows FEWER columns on a bigger phone.** The mirror renders the desktop's real
+  120-column grid and pans the overflow, and the font is auto-fitted to the screen HEIGHT, so a
+  taller viewport picks a bigger font and fits less across. The 6.9-inch iPhone hits the 20px
+  ceiling at 36-37 columns; a 1080x1920 Android phone lands near 11px and shows about 53. Mock
+  terminal copy is therefore budgeted to 34 columns including indentation, enforced by
+  `tests/unit/storeScreenshots.test.ts`.
+- **`- back` is not one gesture.** Android has a real back button; iOS gets a left-edge swipe,
+  which is ambiguous over the session screen's three-page pager. The flow taps the native bar
+  button (`resource-id: BackButton`) where it exists instead.
+- **A segment tap can dispatch and do nothing.** Maestro reports it COMPLETED and the pager
+  never turns, with no retry (`retryIfNoChange` is false). Both segment taps are guarded and
+  re-tapped.
+
+The run reports any expected shot it did NOT capture, by name. A page the flow cannot reach is
+skipped rather than aborting the run, so one bad navigation no longer costs every frame after
+it - which it did, twice.
