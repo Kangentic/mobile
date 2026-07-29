@@ -19,6 +19,13 @@ Use `AskUserQuestion` for both axes. Do NOT guess.
    `TestFlight internal` / `TestFlight external` / `App Store`. Either: `artifact only, no submit`.
 
 Then check the answer against the table below and **stop with an explanation if it is blocked.**
+
+**Every row is a claim about external state, so treat it as evidence with an age, not as fact.**
+The table is accurate **as of 2026-07-28**. This matters because it has already been wrong twice
+in ways that cost real time: it asserted the Play API path was proven when nothing had ever
+exercised it, and it listed data safety as unfilled after it had been submitted. When a row
+decides whether you refuse a release, say when it was last verified and against what. If a row
+can be checked in seconds with a script, check it rather than quoting it.
 Refusing precisely is the job here. Half-executing a blocked release and failing at the upload
 wastes a 20 minute build and can leave a dangling Play edit.
 
@@ -26,7 +33,7 @@ wastes a 20 minute build and can leave a dangling Play edit.
 |---|---|---|
 | either + artifact only | **Works** | - |
 | android + internal | **Works** | - |
-| android + closed (alpha) | **Blocked** | Play Console app-content declarations: store listing, content rating, data safety, target audience, ads, privacy policy URL. None are filled in. Text is drafted in `docs/privacy-policy.md` and `docs/store-listing.md`. The listing IMAGES are no longer part of this gap: all three Play shelves are captured in `store/screenshots/`, and the icon plus feature graphic ship in `@kangentic/branding`. |
+| android + closed (alpha) | **Blocked** | Play Console app-content declarations: store listing, content rating, target audience, ads, privacy policy URL. **Data safety is DONE** (submitted 2026-07-28, App functionality + Analytics; see `docs/store-listing.md`), the rest are not. Text is drafted in `docs/privacy-policy.md` and `docs/store-listing.md`. The listing IMAGES are no longer part of this gap either: all three Play shelves are captured in `store/screenshots/`, and the icon plus feature graphic ship in `@kangentic/branding`. |
 | android + open (beta) | **Blocked** | Same declarations as closed. |
 | android + production | **Blocked** | Personal Play account created 2026-07-20, so production access needs a closed test with **12+ testers opted in for 14 continuous days** first. Opt-outs reset the clock. See the deployment-track ladder in `docs/developer-guide.md`. |
 | ios + TestFlight internal | **Works** | Needs `ASC_API_KEY_BASE64` + `ASC_KEY_ID` + `ASC_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, as GitHub secrets. Check with `gh secret list` before promising it. |
@@ -113,6 +120,27 @@ the number in advance, not about enforcement.
 
 Report both the local and the store-side numbers before changing anything.
 
+**Read the tags, not the comments.** Every successful submit now records what it spent:
+`git tag --list 'android-vc*'` and `git tag --list 'ios-b*'`. Those are written by the submit jobs
+after the upload lands (for iOS, after Apple *accepts*), so they cannot drift. The comments in
+`app.config.ts` are maintained by hand and are a courtesy, not a source of truth. A stale one is
+exactly what sent the 2026-07-28 release at an iOS build number Apple had already taken.
+
+**Three places now catch a spent counter, in increasing cost:**
+
+1. `Release counters (stores)` in `ci.yml`, on any PR that changes a counter's value.
+   Seconds, and it is where a bad bump should die.
+2. The `plan` job in `build-android.yml` and the pre-archive check in `build-ios.yml`. Both run
+   before anything expensive.
+3. The submit jobs themselves, which re-check to close the window where another machine took the
+   number mid-build.
+
+(1) **is** a required status check on `main` as of 2026-07-28, so a spent counter blocks the merge
+rather than merely reporting. Confirm rather than assume when it matters:
+`gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`.
+Note it runs on `pull_request` only, so a counter bumped by a direct push to `main` never passes
+under it.
+
 ## Step 3 - Land the bump through the PR gate
 
 **`main` is protected, so the bump cannot be pushed directly.** This is the step people try to skip.
@@ -122,7 +150,7 @@ Report both the local and the store-side numbers before changing anything.
    `ios.buildNumber` for iOS. Bumping both when releasing one spends a number for nothing, and the
    two are independent.
 3. `/pull-request` to open it and drive the checks green. `tests/unit/appConfigBrand.test.ts` guards
-   the field's shape, and the full gate including `Tests (Maestro)` still applies.
+   the field's shape, and the full gate including `E2E Tests (Maestro)` still applies.
 4. `/merge-pull-request` to land it.
 
 **Never `--admin` past a red check to get a release out.** The gate exists precisely for the build
@@ -144,6 +172,10 @@ gh workflow run build-android.yml --ref main -f profile=production -f artifact=a
   `completed` release cannot be pulled back, only superseded by a higher versionCode.
   Internal testing is small and known enough not to need it; closed, open, and
   production are not. See step 8.
+  **This is now enforced, not advisory:** the `plan` job refuses `alpha` or `beta` with an empty
+  `rollout` and names the reason. `internal` is deliberately exempt. It was moved out of prose
+  because a rule that only exists in a skill file holds right up until somebody is in a hurry,
+  and the action it guards is irreversible.
 - **Use dispatch, not a `v*` tag.** A tag build produces the AAB but can never submit: the
   `submit-play` job requires `github.event_name == 'workflow_dispatch'`. Tags are for cutting a
   release candidate artifact, not for releasing.
@@ -182,9 +214,16 @@ downloaded. On top of that:
 now **fail** with "already released on the <track> track". If it still reports the code as free, the
 upload did not land.
 
-**iOS:** `node scripts/checkAppStoreBuild.mjs ... --build-number <the number just released>` must now
-**fail** saying the build already exists. Apple's processing takes 5 to 30 minutes, so a first check
-can legitimately still report it free; re-check rather than concluding the upload failed.
+**iOS:** usually nothing to do by hand. `build-ios.yml`'s submit job already runs
+`checkAppStoreBuild.mjs --await-processing`, which blocks until Apple reaches a terminal state and
+fails the job if the build was rejected, and it skips its "verdict was not checked" warning only
+when that ran. A green `Submit (TestFlight)` with that warning skipped means Apple **accepted** the
+build, which is stronger evidence than any counter re-check. Proven on v0.2.0 build 4, 2026-07-28.
+
+If you do re-check by hand, `node scripts/checkAppStoreBuild.mjs ... --build-number <the number just
+released>` must now **fail** saying the build already exists. Apple's processing takes 5 to 30
+minutes, so a first check can legitimately still report it free; re-check rather than concluding the
+upload failed.
 
 Then report the artifact name, version, build counter, and track to the user.
 
@@ -240,8 +279,19 @@ Kept because each cost real time:
   AAB *and* **zero on a completely unsigned jar**, and `jarsigner` calls a valid APK "unsigned"
   because modern AGP uses v2/v3 schemes with no v1 signature. Never judge signing by an exit code.
 - **The first upload for a new package had to be manual**, through the Play Console UI. That is now
-  done (versionCode 1, 2026-07-26), and the API path is proven, so this no longer applies. Left here
-  because it will apply again for any new package name.
+  done (versionCode 1, 2026-07-26). Left here because it will apply again for any new package name.
+- **The Play API path was NOT proven by that manual upload, and this file used to claim it was.**
+  versionCode 1 went up through the Console UI, so nothing had ever exercised the service account's
+  write path. The first real API release (v0.2.0, 2026-07-28) uploaded the AAB fine and then failed
+  on `Committing the Edit` with `The caller does not have permission`. Uploading a bundle and
+  committing a release are different permissions, and `play-publisher@kangentic-mobile` had the
+  first but not the second. Fix in Play Console under Users and permissions: give the service
+  account app-level access to `com.kangentic.mobile` including **Releases -> Release to testing
+  tracks**. Read-only "View app information" is not enough.
+- **A failed commit does not spend the versionCode.** After that failure
+  `scripts/checkPlayVersionCode.mjs` still reported code 2 free, because an edit that never
+  commits never registers the bundle. So the retry is the same versionCode, and re-running the
+  `submit-play` job alone is correct: do not rebuild and do not bump.
 - **Play App Signing is chosen at first upload and is effectively permanent.** Already enrolled:
   Play holds the app signing key, `kangentic-upload.jks` is the upload key.
 - **Only the upload keystore is unrecoverable.** GitHub secrets are write-only, so they are not a

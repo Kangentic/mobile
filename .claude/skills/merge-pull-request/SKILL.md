@@ -20,9 +20,10 @@ quick-push that skips the whole PR gate, use `/merge-back` instead.
 ## Mobile differences from the desktop repo's flow
 
 - **CI is live, and `main` is protected.** `.github/workflows/ci.yml` runs each check as its own
-  parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit tests (Vitest)`,
-  `Component tests (Jest)`, `Native config (expo prebuild)`. `.github/workflows/e2e.yml` adds
-  `Tests (Maestro)`, which is the long pole because it builds an APK and boots an
+  parallel job: `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`,
+  `Component Tests (Jest)`, `Native config (prebuild)`, and `Release counters (stores)`
+  (pull requests only). `.github/workflows/e2e.yml` adds
+  `E2E Tests (Maestro)`, which is the long pole because it builds an APK and boots an
   emulator. Plus `cla`. Step 2's green-check
   requirement means every registered check in the rollup, never `CLA Assistant` alone. Confirm
   the names with `gh pr checks <pr>` before merging; this matters because the merge here uses
@@ -91,9 +92,34 @@ commit and skipped its check:
    will usually read `BLOCKED` because the maintainer's own PR has no approving review; that
    block is expected and waived by `--admin` in Step 3. If a required CHECK is failing or still
    pending, stop or wait; never `--admin` past a red or pending check.
+3b. **Check the SET, not just the states.** A check that has not registered yet is absent from the
+   rollup, and absent reads exactly like green when you are only scanning states. `E2E Tests
+   (Maestro)` registers late by design: its job `needs` the APK build and the smoke suite, so it
+   does not appear for roughly ten minutes after a push. Compare explicitly, as ONE `jq`
+   expression over two JSON documents:
+
+   ```
+   req=$(gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts')
+   rep=$(gh pr checks <pr> --repo Kangentic/mobile --required --json name,state)
+   jq -n --argjson req "$req" --argjson rep "$rep" \
+     '{required: ($req|length), green: ([$rep[]|select(.state=="SUCCESS")]|length), missing: ($req - [$rep[]|select(.state=="SUCCESS")|.name])}'
+   ```
+
+   `missing: []` is the only green. A non-empty `missing` means "not reported yet", so wait; it
+   does **not** mean the check does not apply. `--admin` waives the review requirement only, so it
+   will happily merge past a required check that never ran.
+
+   **Never implement this with `comm`, `diff`, or sort-and-compare over text lines.** `gh api --jq`
+   emits `\n` and `gh pr checks --json | jq` emits `\r\n` on Windows, so the two sides never
+   compare equal. Observed: `comm -23` called seven of eight required checks missing on a fully
+   green PR. `comm` on input not sorted in its own collation is unspecified, so treat the answer as
+   garbage rather than as wrong-but-predictable: every measured case over-reported, and nothing
+   establishes it cannot under-report, which here would be a false all-green merged by `--admin`.
+   `tests/unit/requiredChecksComparison.test.ts` pins the jq form and reproduces the failure.
 4. If the rebase re-triggered checks and they are pending, wait with
-   `gh pr checks <pr> --watch --fail-fast --interval 30` (Bash `timeout` up to its max,
-   600000ms). If they go red, stop and report.
+   `gh pr checks <pr> --required --watch --fail-fast --interval 30` (Bash `timeout` up to its max,
+   600000ms), then re-run the 3b comparison, because the watch returns as soon as the checks
+   registered SO FAR are done. If they go red, stop and report.
 
 ## Step 3 - Merge the PR
 

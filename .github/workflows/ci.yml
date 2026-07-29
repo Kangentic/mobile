@@ -12,7 +12,12 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, never a run on main. Same reasoning as e2e.yml's:
+  # a cache is only shared with every branch once it has been written from the
+  # DEFAULT branch, so the push-to-main run is what fills the node_modules cache
+  # that .github/actions/setup-node-deps restores. Cancelling it mid-flight
+  # leaves the next PR to run a cold `npm ci` in all six parallel jobs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI architecture, following the pattern in Kangentic/kangentic's ci.yml:
 #
@@ -25,35 +30,119 @@ concurrency:
 # - A job `name:` IS the branch-protection context. Renaming one renames the
 #   required check, so main's protection must be updated in the same change or
 #   every PR blocks on a check that will never report.
+#
+# NAMING. Every job is `<Subject> (<qualifier>)`, and the qualifier is written
+# the way the thing it names is normally written:
+#
+#   a TOOL keeps its own casing   `Lint (ESLint)`, `Type check (tsc)`,
+#                                 `Unit Tests (Vitest)`, `Native config (prebuild)`,
+#                                 `E2E Tests (Maestro)`
+#   a SHARD is `n/m`              `Component Tests (1/2)`
+#   anything else is prose        `Release counters (stores)`,
+#                                 `E2E Tests (Smoke)`, `E2E Tests (Paired)`
+#
+# `tsc` is lowercase because that is the binary's name, not because it is a
+# lesser kind of job. A slug is never a qualifier: `E2E Tests (smoke)` was the
+# matrix key leaking into the checks list, and it read as a typo sitting beside
+# the capitalised gate it belongs to.
+#
+# AND IT HAS TO FIT ON ONE LINE. The Actions sidebar is a narrow column, so a
+# name that wraps is the row your eye skips. Check a candidate against that
+# sidebar, never against a wide editor. Two names were retired on these grounds:
+#
+#   `Native config (CNG)`                 CNG is Continuous Native Generation, a
+#                                         methodology rather than a tool. Every
+#                                         other qualifier names something you
+#                                         could go run, so this one taught the
+#                                         reader that the parentheses mean
+#                                         nothing. `prebuild` is what the job
+#                                         actually runs, four times over.
+#   `Release counters (store preflight)`  33 characters, and the only row in the
+#                                         sidebar that wrapped onto two lines.
+#                                         `(stores)` keeps the half that carried
+#                                         information, which is what the counters
+#                                         are checked against, and drops the half
+#                                         the subject already implies.
+#
+# Both land at 24 to 25 characters, in line with `Component Tests (Jest)` at 22.
+#
+# WHAT THE NAME DOES NOT ENCODE: whether a row is a worker or the gate that
+# aggregates it. That was tried, as the desktop repo's case trick (`Unit Test
+# (1/3)` against `Unit tests (Vitest)`) and then as lowercase suite names here,
+# and both spend a casing distinction on saying something GitHub's own
+# "Required" badge already says, in a column too narrow for one capital letter
+# to survive a skim. `1/2` is self-evidently a piece of something; the badge
+# says the rest. Same argument e2e.yml uses for not writing "advisory" into the
+# paired job's name.
+#
+# The cost is that desktop's list reads slightly differently. Accepted
+# deliberately, in favour of legibility here.
+#
 # - node_modules is cached under one shared lockfile-keyed key
 #   (.github/actions/setup-node-deps), so npm ci runs only when dependencies
 #   change. The install was a larger share of each tier than the tier itself.
 #
-# Concurrency budget (GitHub Free caps concurrent jobs around 20): the shard
-# phase is lint 1 + typecheck 1 + native-config 1 + unit 2 + components 4 = 9,
-# plus the CLA workflow and e2e.yml's build job = 11. The thin gates run after
-# their shards via `needs`, so they do not consume a shard-phase slot. Queueing
-# was observed at 12 concurrent jobs, so the practical cap is lower than the
-# documented one and the headroom here is deliberate.
+# Concurrency budget (GitHub Free caps concurrent jobs around 20): the parallel
+# phase is lint 1 + typecheck 1 + native-config 1 + unit 1 + components 2 = 6,
+# plus release-counters 1 on pull_request only = 7, plus the CLA workflow and
+# e2e.yml's `changes` classifier = 9. `changes`, NOT e2e.yml's build job: the
+# build `needs: changes`, so it cannot be running while this phase is, and the
+# emulator jobs need the build in turn. The component gate runs after its shards
+# via `needs`, so it does not consume a slot either. Queueing was observed at 12
+# concurrent jobs, so the practical cap is lower than the documented one.
 #
-# Shard counts are sized against MEASURED timings, not file counts. With the
-# node_modules cache warm, a run looked like: unit shards 14s/15s/21s, component
-# shards 35s/40s/42s/51s, lint 23s, typecheck 17s, native-config 16s.
+# That headroom was thin at 12 and is comfortable again at 9, because the shard
+# cut below removed four jobs at the same time release-counters added one. Adding
+# another always-on job should still come with a measurement rather than a guess.
 #
-# Those component numbers predate jest.config.js running every component test on
-# BOTH platforms (jest-expo's default preset only ever resolved iOS), which roughly
-# doubles that tier's test count. Measured locally: 82 suites / 526 tests in 88s
-# unsharded, and 21 suites / 101 tests in 20s for shard 1 of 4. Expect the shards
-# nearer 60 to 90s, so the non-E2E gate is now closer to 90s than 60s. Still far
-# below the E2E path, which is what actually sets PR latency.
+# Shard counts are sized against MEASURED timings, not file counts.
 #
-# Two things follow. First, these tiers sit close to the job spin-up and
-# cache-restore floor (~10-15s), so extra shards buy almost nothing: the unit
-# tier is 2 shards rather than 3 because a third runner spent more time starting
-# up than testing. Components keep 4 because they are genuinely the slower tier.
-# Second, and more important: the whole non-E2E gate now finishes in under a
-# minute of wall clock, so PR latency is entirely E2E-bound. Do not re-shard
-# these tiers looking for a speedup that is not there - look at e2e.yml instead.
+# MEASURED 2026-07-28 (runs 30330724138, 30331755550, 30374734572; node_modules
+# cache warm, 66 unit files / 43 component files). Re-measure with:
+#   gh api repos/Kangentic/mobile/actions/runs/<run-id>/jobs \
+#     --jq '.jobs[] | [.name, .started_at, .completed_at] | @tsv'
+#
+#   unit, when it was 2 shards    16-25s each
+#   component, when it was 4      43-71s each   (each runs BOTH platforms)
+#   lint                          25-36s
+#   typecheck                     19-28s
+#   native-config                 25-35s
+#   whole gate                    73-90s wall clock
+#
+# SHARD COUNTS WERE CUT on those numbers, from unit 2 and components 4 to unit
+# UNSHARDED and components 2. Both tiers were far under the re-shard threshold
+# below, so the extra runners were buying wall-clock nothing while costing four
+# rows in a checks list that had grown to 17.
+#
+# MEASURED AFTER the cut (run 30375728595), and it cost less than predicted:
+#
+#   unit, unsharded    30s        (was 2 shards at 16-25s, plus a 3s gate)
+#   component shards   52s, 63s   (was 4 shards at 43-71s)
+#   whole gate         ~80s       (was 73-90s)
+#
+# So halving the component shards did NOT double their runtime, because ~25s of
+# each job is checkout plus cache restore before a single test runs. Sharding
+# only ever divided the part of the job that was already the smaller half. Worth
+# knowing before anyone reaches for more shards to make this faster.
+#
+# Two things follow, and the second is the one that matters as the suite grows.
+#
+# First, these tiers sit close to the job spin-up and cache-restore floor
+# (~10-15s), so shards buy little until a tier is genuinely slow. Components keep
+# a split because they are the slower tier (jest.config.js runs every component
+# test on BOTH platforms, which roughly doubles its count).
+#
+# Second, the RE-SHARD RULE, so this does not need re-deriving. Add a shard to a
+# tier when its slowest shard passes ~3 minutes, and only then. Below that the
+# gate is dominated by e2e.yml and a faster tier changes nothing a human notices;
+# above it the tier starts to matter and the spin-up floor is amortised. Mind the
+# concurrency budget above when you do: the parallel phase is currently 6 jobs
+# against an observed practical cap near 12.
+#
+# Deliberately NOT enforced by a tight `timeout-minutes`. A timeout that fires on
+# healthy growth turns a "should re-shard someday" into a broken gate, which is
+# the opposite of stable. The timeouts below are hang guards, sized generously on
+# purpose.
 #
 # The E2E tier lives in e2e.yml: it needs an Android emulator and a real APK, so
 # it has a different shape and a much longer runtime.
@@ -64,7 +153,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       - name: Lint (ESLint)
         run: npm run lint
@@ -79,61 +168,50 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       - name: Type check (tsc)
         run: npm run typecheck
 
-  unit-shards:
-    name: Unit test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+  # UNSHARDED, and therefore no thin gate either: this one job both runs the
+  # tier and is the required status check.
+  #
+  # It was 2 shards at 16-24s each, which is well under the re-shard threshold
+  # below, so the split was buying nothing but two extra rows in the checks list.
+  # Collapsing it also removes the ugliest name in the list, since a single
+  # shard would have rendered as `Unit Tests (1/1)`.
+  #
+  # Re-sharding later does NOT touch branch protection, because the required
+  # context is this name: rename this job to `Unit Tests (n/m)`, give it a
+  # matrix, and add a thin gate that keeps the name `Unit Tests (Vitest)`, the
+  # same shape the component tier has below.
+  unit:
+    name: Unit Tests (Vitest)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-deps
+      - name: Unit Tests (Vitest)
+        run: npx vitest run tests/unit
+
+  component-shards:
+    name: Component Tests (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         shardIndex: [1, 2]
         shardTotal: [2]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
-      - name: Unit tests (shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
-        run: npx vitest run tests/unit --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
-
-  # Thin required gate: this single check is what branch protection requires, so
-  # the shards stay an implementation detail. No checkout or install, so it adds
-  # only job spin-up. Per-shard detail is in each shard's own log.
-  unit:
-    name: Unit tests (Vitest)
-    needs: [unit-shards]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Gate on shard results
-        run: |
-          if [ "${{ needs.unit-shards.result }}" != "success" ]; then
-            echo "One or more unit shards did not succeed (result: ${{ needs.unit-shards.result }})"
-            exit 1
-          fi
-          echo "All unit shards passed."
-
-  component-shards:
-    name: Component test (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        shardIndex: [1, 2, 3, 4]
-        shardTotal: [4]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-node-deps
-      - name: Component tests (shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
+      - name: Component Tests (shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
         run: npx jest tests/components --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
 
   components:
-    name: Component tests (Jest)
+    name: Component Tests (Jest)
     needs: [component-shards]
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -151,11 +229,11 @@ jobs:
   # Prebuild takes about 4 seconds, so catching a broken config plugin here
   # rather than partway into a native build is nearly free.
   native-config:
-    name: Native config (expo prebuild)
+    name: Native config (prebuild)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       # Closes the other half of the gate pre-registered in
       # .claude/rules/expo-cng.md. This was deliberately left out once, on the
@@ -237,12 +315,55 @@ jobs:
       # Windows at all. Without this, confirming what the app actually
       # declares needs a full signed build. This job already generated it.
       - name: Upload the generated iOS privacy manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-privacy-manifest
           path: ios/*/PrivacyInfo.xcprivacy
           retention-days: 14
           if-no-files-found: error
+
+      # Runs AFTER the privacy-manifest upload above, deliberately: that step
+      # reads ios/ as produced by the Sentry-enabled `prebuild --platform all`,
+      # and this one regenerates the ANDROID project with a different flag set.
+      #
+      # Same shape, and same reasoning, as the Sentry steps above: every prebuild
+      # so far ran with EXPO_PUBLIC_KANGENTIC_E2E unset, so the ENABLED half of
+      # the two e2e-only native carve-outs was exercised by nothing short of an
+      # actual e2e APK build. Both are load-bearing for the paired Maestro suite
+      # and both are one silent plugin no-op away from costing a whole CI run to
+      # rediscover:
+      #
+      #   usesCleartextTraffic - without it Android refuses the dev relay's ws://
+      #     socket before any of our code runs, and pairing reports a bare
+      #     "connection closed (1006)".
+      #   gwpAsanMode=never    - without it the sampling allocator can take the
+      #     app down ~800ms after launchApp inside its own backtrace bookkeeping
+      #     (run 30308333829). It presents as an ordinary assertVisible failure
+      #     on whichever flow drew the sample, which reads as a product bug.
+      #
+      # No secret involved, so this works on fork PRs too.
+      - name: Generate the native project with the E2E carve-outs ENABLED
+        env:
+          EXPO_PUBLIC_KANGENTIC_E2E: '1'
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Confirm the E2E-only manifest carve-outs actually landed
+        # Only the ENABLED direction is checked here, because only it needs a
+        # prebuild. The inert direction is a plain `if` inside each plugin, which
+        # tests/unit/androidE2ePlugins.test.ts covers far more cheaply than a
+        # second prebuild and a second grep would.
+        run: |
+          set -euo pipefail
+          manifest=android/app/src/main/AndroidManifest.xml
+          if ! grep -q 'android:usesCleartextTraffic="true"' "$manifest"; then
+            echo "::error::The e2e build lost usesCleartextTraffic, so the app cannot reach the dev relay over ws:// and every paired Maestro flow would fail at pairing."
+            exit 1
+          fi
+          if ! grep -q 'android:gwpAsanMode="never"' "$manifest"; then
+            echo "::error::The e2e build lost gwpAsanMode=never, so GWP-ASan can crash the app moments after launch and redden an arbitrary paired flow."
+            exit 1
+          fi
+          echo "Both E2E-only manifest carve-outs are present."
 
       - name: Confirm the generated project is not committed
         # CNG: android/ must exist only as a build artifact. If prebuild output
@@ -255,3 +376,142 @@ jobs:
             exit 1
           fi
           echo "Native project generated cleanly and stayed untracked."
+
+  # Catches a release counter that is already spent on a store, at PR time
+  # instead of at release time. This is precisely the check that was missing on
+  # 2026-07-28: app.config.ts declared ios.buildNumber 3, Apple had already
+  # taken 3, and nothing noticed until the release dispatch failed.
+  #
+  # It runs ONLY when the PR actually changes a counter's value, and that
+  # condition is load bearing. Between releases the declared counter is the one
+  # just shipped, so asserting "the declared counter is free" unconditionally
+  # would leave main permanently red until somebody bumped it. A release PR is
+  # the one moment the assertion is both meaningful and free.
+  #
+  # Change detection compares the RESOLVED VALUE at the base against the value
+  # at HEAD, rather than looking for the field in the diff text. Those are not
+  # the same test: editing a comment next to `versionCode:` shows up in the
+  # diff without changing anything that ships, and this job must not fail for
+  # that. The commit that recorded which counters v0.2.0 spent did exactly that.
+  #
+  # THIS IS NOW A REQUIRED STATUS CHECK on main (promoted 2026-07-28), so its
+  # `name:` below is a protection context and cannot be renamed without updating
+  # protection in the same change. See the job-name note at the top of this file.
+  #
+  # It runs on `pull_request` only, which is deliberate and worth understanding
+  # before anyone widens the trigger: a required context that never reports on a
+  # given event would block every merge that arrives by that path.
+  release-counters:
+    name: Release counters (stores)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The base commit has to exist locally for the comparison below.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-node-deps
+
+      - name: Detect which counters this PR changes
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Anchored at line start so the many comments mentioning versionCode
+          # and buildNumber by name cannot match: comments begin with //.
+          extract_version_code() { grep -oE "^[[:space:]]*versionCode:[[:space:]]*[0-9]+" | grep -oE "[0-9]+" | head -n 1; }
+          extract_build_number() { grep -oE "^[[:space:]]*buildNumber:[[:space:]]*'[0-9]+'" | grep -oE "[0-9]+" | head -n 1; }
+
+          git show "$BASE_SHA:app.config.ts" > "$RUNNER_TEMP/base-app.config.ts"
+          base_version_code="$(extract_version_code < "$RUNNER_TEMP/base-app.config.ts" || true)"
+          base_build_number="$(extract_build_number < "$RUNNER_TEMP/base-app.config.ts" || true)"
+          head_version_code="$(extract_version_code < app.config.ts || true)"
+          head_build_number="$(extract_build_number < app.config.ts || true)"
+
+          echo "versionCode: base=${base_version_code:-none} head=${head_version_code:-none}"
+          echo "buildNumber: base=${base_build_number:-none} head=${head_build_number:-none}"
+
+          # FAIL CLOSED when the detector cannot read the HEAD config, and check
+          # it BEFORE the comparison below. Same fail-open family as the e2e gate
+          # in e2e.yml, and easy to miss for the same reason: both extractions
+          # carry `|| true`, because `grep` exits 1 on no match and `set -e` is
+          # on. So a regex that stops matching (a reformat, a counter moved into
+          # a nested or computed expression, `buildNumber` requoted) yields empty
+          # on BOTH sides, empty equals empty, no counter looks changed, and this
+          # REQUIRED check reports green having preflighted nothing. The next
+          # release then fails at the store, which is the exact incident this job
+          # exists to prevent.
+          #
+          # Only HEAD is guarded. An empty BASE is legitimate: it is what a
+          # brand-new counter field looks like on the base commit.
+          if [ -z "$head_version_code" ] || [ -z "$head_build_number" ]; then
+            echo "::error::Could not read versionCode and/or buildNumber out of app.config.ts (versionCode='${head_version_code:-}', buildNumber='${head_build_number:-}'). The detector cannot tell whether this PR bumps a counter, so it fails closed rather than reporting green. Fix the extraction regexes in this step to match app.config.ts's current shape."
+            exit 1
+          fi
+
+          android=false
+          ios=false
+          if [ "$base_version_code" != "$head_version_code" ]; then android=true; fi
+          if [ "$base_build_number" != "$head_build_number" ]; then ios=true; fi
+          echo "android=$android" >> "$GITHUB_OUTPUT"
+          echo "ios=$ios" >> "$GITHUB_OUTPUT"
+
+      - name: Read the declared counters
+        id: declared
+        if: steps.changed.outputs.android == 'true' || steps.changed.outputs.ios == 'true'
+        run: |
+          set -euo pipefail
+          # The regex above is only a change DETECTOR. The value actually
+          # checked against the store comes from the resolved Expo config, the
+          # same source the build and submit jobs read.
+          npx expo config --json > "$RUNNER_TEMP/expo-config.json"
+          read_config_field() {
+            node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String($1))" "$RUNNER_TEMP/expo-config.json"
+          }
+          echo "version-name=$(read_config_field 'c.version')" >> "$GITHUB_OUTPUT"
+          echo "version-code=$(read_config_field 'c.android.versionCode')" >> "$GITHUB_OUTPUT"
+          echo "build-number=$(read_config_field 'c.ios.buildNumber')" >> "$GITHUB_OUTPUT"
+
+      - name: Check the Play version code is free
+        if: steps.changed.outputs.android == 'true'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          VERSION_CODE: ${{ steps.declared.outputs.version-code }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "::warning::No PLAY_SERVICE_ACCOUNT_JSON, which is expected on a fork PR, so versionCode $VERSION_CODE was NOT checked against Play. The submit job still checks it."
+            exit 0
+          fi
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$VERSION_CODE"
+
+      - name: Check the App Store build number is free
+        if: steps.changed.outputs.ios == 'true'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUILD_NUMBER: ${{ steps.declared.outputs.build-number }}
+          VERSION_NAME: ${{ steps.declared.outputs.version-name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ASC_API_KEY_BASE64:-}" ]; then
+            echo "::warning::No ASC_API_KEY_BASE64, which is expected on a fork PR, so buildNumber $BUILD_NUMBER was NOT checked against App Store Connect. The device build still checks it."
+            exit 0
+          fi
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/checkAppStoreBuild.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id com.kangentic.mobile \
+            --version "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER"
+
+      - name: Note when no counter changed
+        if: steps.changed.outputs.android != 'true' && steps.changed.outputs.ios != 'true'
+        run: echo "No release counter changed in app.config.ts, so there is nothing to preflight."

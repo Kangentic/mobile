@@ -100,8 +100,21 @@ Use descriptive branch names: `fix/pairing-timeout`, `feature/board-swipe`, `doc
 
 - **Unit** (`tests/unit/`, vitest): `npx vitest run tests/unit`
 - **Component** (`tests/components/`, Jest + React Native Testing Library): `npx jest tests/components`
-- **E2E** (`.maestro/`, Maestro): `maestro test .maestro/`, locally against the Android emulator, and
-  on an emulator in CI. There is no iOS E2E yet by any route
+- **E2E** (`.maestro/`, Maestro), two suites run separately, never the bare `.maestro/` root
+  (which would sweep in the `setup/` rig fixture and fail confusingly):
+  - smoke: `maestro --device <serial> test .maestro/smoke.yaml`, against a fresh unpaired install
+  - paired: `maestro --device <serial> test .maestro/paired`, which needs a relay plus
+    `scripts/stubDesktopPeer.mjs` and a completed pairing first
+
+  Both run locally against the Android emulator and on an emulator in CI. No iOS E2E gates a PR.
+  `build-ios.yml` can run the smoke flow on a macOS simulator when dispatched with
+  `-f maestro=smoke`, but that path is experimental, off by default, and blocks nothing.
+
+  **CI pins the Maestro CLI to a specific version**, so match it locally or a flow can pass on your
+  machine and fail the gate. The pin is written in three places that
+  `tests/unit/ciSafeMaestroFlows.test.ts` asserts agree: `.github/workflows/e2e.yml`,
+  `.github/workflows/build-ios.yml`, and `.claude/rules/e2e-maestro-runs.md`, which is the one to
+  read. `maestro --version` tells you what you have.
 
 Quick local pass before opening a PR:
 
@@ -130,13 +143,19 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 - Your PR must be green on every check that registers. From
   `.github/workflows/ci.yml`, each runs as its own parallel job: **`Lint (ESLint)`**,
-  **`Type check (tsc)`**, **`Unit tests (Vitest)`**, **`Component tests (Jest)`**, and
-  **`Native config (expo prebuild)`**. From `.github/workflows/e2e.yml`:
-  **`Tests (Maestro)`**, which builds a real APK and runs the smoke flow on an Android
-  emulator, so it takes appreciably longer than the rest. Plus **`cla`** (CLA Assistant).
-- The unit and component tiers are sharded across runners. The shards show up as their own jobs
-  (`Unit test (1/2)` and so on) but are not themselves required: the single gate check per tier is.
-- `Maestro (paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required
+  **`Type check (tsc)`**, **`Unit Tests (Vitest)`**, **`Component Tests (Jest)`**,
+  **`Native config (prebuild)`**, and **`Release counters (stores)`**. From
+  `.github/workflows/e2e.yml`: **`E2E Tests (Maestro)`**, which builds a real APK and runs the
+  smoke flow on an Android emulator, so it takes appreciably longer than the rest. Plus **`cla`**
+  (CLA Assistant).
+- The component tier is split across two runners. Those shards show up as their own jobs
+  (`Component Tests (1/2)` and `(2/2)`) but are not themselves required: the `Component Tests (Jest)`
+  gate is. The unit tier is unsharded, so `Unit Tests (Vitest)` both runs the tests and is the
+  required check.
+- `Release counters (stores)` guards the hand-managed `versionCode` and `buildNumber`
+  against reuse. It runs on pull requests only, and it **is** required, so a red run there blocks
+  the merge.
+- `E2E Tests (Paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required
   and cannot block a merge. GitHub prints a "Required" badge on the checks that are, so the
   absence of one is how the list tells you. Do not silence a red run there: it is real coverage
   of the pairing ceremony and the secure channel.

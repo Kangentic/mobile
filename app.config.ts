@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.1.0',
+  version: '0.2.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -46,11 +46,30 @@ const config: ExpoConfig = {
     // section of docs/developer-guide.md. Required because
     // cli.appVersionSource is "local", which is CLI-wide and not Android-only.
     //
-    // Builds 1 and 2 are both spent (2026-07-26). Both uploaded successfully and
-    // were then REJECTED in processing for ITMS-90683, and a rejected build number
-    // is consumed just as a released one is: Apple requires the next upload to use
-    // a higher number. Hence 3.
-    buildNumber: '3',
+    // Builds 1 and 2 were uploaded on 2026-07-26 and REJECTED in processing for
+    // ITMS-90683. Build 3 was uploaded on 2026-07-27 and is VALID. The previous
+    // comment here claimed only 1 and 2 were spent, "hence 3", and was already
+    // stale: the 2026-07-28 release run was refused before the archive with
+    // "Build number 3 already exists on App Store Connect (state: VALID)".
+    //
+    // THE GATE IS GLOBAL PER APP, NOT PER VERSION STRING. Apple's own rule
+    // scopes CFBundleVersion uniqueness to the marketing version, and the
+    // comment in scripts/checkAppStoreBuild.mjs repeats that, but the conflict
+    // filter it actually fails on queries every build for the app and never
+    // looks at the version. The script is what stops the build, so its rule is
+    // the one that governs: bumping `version` does NOT free a used build number.
+    // Do not reason from Apple's documented rule here and expect a lower number
+    // to pass.
+    //
+    // Rejected builds never become Build resources, so they are invisible to
+    // that check: the 2026-07-27 run logged "Registered builds visible: 0"
+    // moments before uploading 3.
+    //
+    // SPENT: 3 (uploaded 2026-07-27) and 4 (uploaded 2026-07-28 under 0.2.0,
+    // and ACCEPTED by Apple, confirmed by the submit job's --await-processing
+    // step rather than inferred from a green check). 1 and 2 were rejected in
+    // processing and never registered. The next release takes 5.
+    buildNumber: '4',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -107,25 +126,45 @@ const config: ExpoConfig = {
     // rather than assumed absent. This list and the App Store Connect / Play
     // declarations in docs/store-listing.md are one consistency requirement;
     // they were updated together.
+    //
+    // Every type declares Analytics alongside AppFunctionality. That is not
+    // belt-and-braces, it is what the Play Data safety form actually accepted
+    // (2026-07-28): Play offers no "Diagnostics" PURPOSE at all - Diagnostics is
+    // a data TYPE there, next to Crash logs - so crash reporting has to be
+    // declared under App functionality plus Analytics. docs/store-listing.md
+    // previously prescribed "App functionality / Diagnostics only, not
+    // analytics", which named a purpose the form does not offer. Apple
+    // cross-checks the App Privacy answers against this generated manifest, so
+    // the ASC questionnaire declares the same two purposes and all three
+    // surfaces now agree.
     privacyManifests: {
       NSPrivacyCollectedDataTypes: [
         {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeCrashData',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
         {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePerformanceData',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
         {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeOtherDiagnosticData',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
         {
           // The per-install identifier confirmed above (contexts.device.id,
@@ -134,7 +173,10 @@ const config: ExpoConfig = {
           NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeDeviceID',
           NSPrivacyCollectedDataTypeLinked: false,
           NSPrivacyCollectedDataTypeTracking: false,
-          NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
         },
       ],
       // Required-reason APIs the Sentry SDK calls with no opt-out. Reason
@@ -161,10 +203,16 @@ const config: ExpoConfig = {
     // in eas.json, so EAS does not track it server-side). Read the Android
     // release section of docs/developer-guide.md before bumping.
     //
-    // Version code 1 was released to the Play internal track on 2026-07-26 and
-    // is spent. scripts/checkPlayVersionCode.mjs would catch a duplicate before
-    // the upload, but leaving a spent value here means every build produces an
-    // artifact that cannot be submitted.
+    // SPENT: 1 (internal, 2026-07-26, uploaded by hand through the Console) and
+    // 2 (internal, 2026-07-28, the first release the API ever committed).
+    // The next release takes 3.
+    //
+    // Keep this list current on the way OUT of a release, not the way in. The
+    // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
+    // into 2026-07-28 and cost a failed release run, because build 3 had in
+    // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
+    // duplicate, but only in the submit job, which is after the ~25 minute
+    // build AND after the approval gate.
     versionCode: 2,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
@@ -236,6 +284,11 @@ const config: ExpoConfig = {
       },
     ],
     './plugins/withAndroidPushService.ts',
+    // Inert unless EXPO_PUBLIC_KANGENTIC_E2E=1, which only the `e2e` build
+    // profile sets. Disables GWP-ASan for the E2E APK: the sampling allocator
+    // crashed the app 838ms after launch on a CI emulator, inside its own
+    // backtrace bookkeeping on a Hermes fcontext stack. See the plugin.
+    './plugins/withAndroidE2eGwpAsanOff.ts',
     // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
     // .github/workflows/build-ios.yml does. See the plugin for why signing has
     // to be scoped to the app target instead of passed to xcodebuild.
@@ -243,7 +296,7 @@ const config: ExpoConfig = {
     // Source-map + debug-symbol upload only, gated on SENTRY_AUTH_TOKEN. The
     // plugin entry is omitted entirely rather than passed empty options: an
     // absent auth token must not make the plugin run and fail (or silently
-    // no-op) inside ci.yml's Native config (expo prebuild) job, which
+    // no-op) inside ci.yml's Native config (prebuild) job, which
     // prebuilds both platforms with zero secrets. Crash reporting itself is
     // gated separately (EXPO_PUBLIC_SENTRY_DSN, read at runtime in
     // src/observability/crashReporting.ts) - this only controls whether a

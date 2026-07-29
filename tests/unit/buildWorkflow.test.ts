@@ -268,6 +268,39 @@ describe('build-android release safety gates', () => {
     expect(workflowSource).toContain('scripts/checkPlayVersionCode.mjs');
   });
 
+  it('preflights the version code in the plan job, before anything is built', () => {
+    // The submit job checks too, but it carries `environment: google-play` and
+    // its check is a step INSIDE that job, so it runs after a ~25 minute build
+    // AND after a human approval. On 2026-07-28 that ordering meant a spent
+    // counter was only discovered once both had already been spent. iOS always
+    // checked before its archive; this closes the asymmetry.
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<
+        string,
+        { needs?: string | string[]; steps?: { name?: string; if?: string; run?: string }[] }
+      >;
+    };
+
+    const preflight = workflow.jobs.plan.steps?.find(
+      (step) => step.name === 'Check the version code is free on every track'
+    );
+    expect(preflight?.run).toContain('scripts/checkPlayVersionCode.mjs');
+    expect(preflight?.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none'"
+    );
+
+    // The preflight only helps if nothing can build past a failing plan job.
+    expect(workflow.jobs['build-android'].needs).toBe('plan');
+  });
+
+  it('still re-checks the version code in the submit job', () => {
+    // Not redundant with the plan-job preflight. This one closes the window
+    // between planning and submitting, in which a release cut from another
+    // machine could take the number.
+    const occurrences = workflowSource.split('scripts/checkPlayVersionCode.mjs').length - 1;
+    expect(occurrences).toBeGreaterThanOrEqual(2);
+  });
+
   it('caps artifact retention so storage does not accrue', () => {
     expect(workflowSource).toMatch(/retention-days: \d+/);
   });
@@ -333,7 +366,13 @@ describe('build-ios workflow', () => {
     // So an Apple-side failure leaves a verified .ipa that can be retried by
     // re-running the submit job alone. Not hypothetical: the first attempt to
     // submit this app hit an App Store Connect outage.
-    const artifactIndex = iosWorkflowSource.indexOf('actions/upload-artifact@v4');
+    //
+    // Matched WITHOUT the version pin. This assertion used to search for
+    // `actions/upload-artifact@v4` and broke the moment the action was bumped,
+    // reporting "expected -1 to be greater than -1" - which reads like the
+    // upload step vanished rather than like a version changed. The ordering is
+    // what this test is about; the version is somebody else's business.
+    const artifactIndex = iosWorkflowSource.search(/actions\/upload-artifact@v\d+/);
     const uploadIndex = iosWorkflowSource.indexOf('upload-ios-testflight.sh');
     expect(artifactIndex).toBeGreaterThan(-1);
     expect(artifactIndex).toBeLessThan(uploadIndex);
@@ -573,6 +612,100 @@ describe('build-android staged rollout', () => {
     // A staged rollout has to be asked for, because an unfinished rollout that
     // nobody completes is its own failure mode.
     expect(workflowSource).toMatch(/rollout:[\s\S]{0,200}default: ''/);
+  });
+
+  it('refuses an unstaged release to a track with real users', () => {
+    // A `completed` Play release can never be pulled back, only superseded by a
+    // higher version code, so releasing to alpha or beta without a staged
+    // rollout is irreversible the moment it lands. That used to be a prose rule
+    // in .claude/skills/release/SKILL.md telling the operator to pass
+    // `-f rollout=0.1`, which is the kind of rule that holds right up until
+    // somebody is in a hurry.
+    //
+    // `internal` is deliberately NOT covered: the track is small and known, and
+    // the documented recovery there is simply shipping a higher version code.
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<string, { steps?: { name?: string; if?: string }[] }>;
+    };
+    const refusal = workflow.jobs.plan.steps?.find(
+      (step) => step.name === 'Refuse an unstaged release to a track with real users'
+    );
+    expect(refusal?.if).toBe(
+      "(inputs.submit_track == 'alpha' || inputs.submit_track == 'beta') && inputs.rollout == ''"
+    );
+  });
+});
+
+describe('spent release counters are recorded mechanically', () => {
+  // Before this, the only record of which counters were spent was a hand-edited
+  // comment in app.config.ts. That comment is true when written and rots in
+  // silence: a stale "builds 1 and 2 are spent, hence 3" sent the 2026-07-28
+  // iOS release at a build number Apple had already taken. A tag cannot drift.
+  it('tags the spent version code after the Play upload, and never fails the release for it', () => {
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<
+        string,
+        {
+          permissions?: Record<string, string>;
+          steps?: { name?: string; 'continue-on-error'?: boolean }[];
+        }
+      >;
+    };
+    const steps = workflow.jobs['submit-play'].steps ?? [];
+    const uploadIndex = steps.findIndex(
+      (step) => step.name === 'Upload to Google Play (full release)'
+    );
+    const tagIndex = steps.findIndex(
+      (step) => step.name === 'Record the spent version code as a tag'
+    );
+    expect(uploadIndex).toBeGreaterThanOrEqual(0);
+    expect(tagIndex).toBeGreaterThan(uploadIndex);
+
+    // The upload cannot be undone, so a bookkeeping failure must not redden a
+    // release that already reached Play.
+    expect(steps[tagIndex]?.['continue-on-error']).toBe(true);
+
+    // Creating a ref needs more than the workflow's top-level `contents: read`.
+    expect(workflow.jobs['submit-play'].permissions?.contents).toBe('write');
+  });
+
+  it('tags the spent build number only after Apple accepts, not merely after upload', () => {
+    const workflow = parseYaml(iosWorkflowSource) as {
+      jobs: Record<
+        string,
+        {
+          permissions?: Record<string, string>;
+          steps?: { name?: string; 'continue-on-error'?: boolean }[];
+        }
+      >;
+    };
+    const steps = workflow.jobs['submit-testflight'].steps ?? [];
+    const acceptIndex = steps.findIndex((step) => step.name === 'Wait for Apple to accept the build');
+    const tagIndex = steps.findIndex(
+      (step) => step.name === 'Record the spent build number as a tag'
+    );
+    expect(acceptIndex).toBeGreaterThanOrEqual(0);
+
+    // Ordering is the whole point. Builds 1 and 2 both reported UPLOAD
+    // SUCCEEDED and were then refused by Apple, so a tag written at upload time
+    // would record a build that never reached a tester.
+    expect(tagIndex).toBeGreaterThan(acceptIndex);
+    expect(steps[tagIndex]?.['continue-on-error']).toBe(true);
+    expect(workflow.jobs['submit-testflight'].permissions?.contents).toBe('write');
+  });
+
+  it('preflights a changed counter on every pull request', () => {
+    const ciSource = readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8');
+    const ci = parseYaml(ciSource) as {
+      jobs: Record<string, { if?: string; steps?: { name?: string; run?: string }[] }>;
+    };
+    const job = ci.jobs['release-counters'];
+    expect(job).toBeDefined();
+    expect(job.if).toBe("github.event_name == 'pull_request'");
+
+    const runs = (job.steps ?? []).map((step) => step.run ?? '').join('\n');
+    expect(runs).toContain('scripts/checkPlayVersionCode.mjs');
+    expect(runs).toContain('scripts/checkAppStoreBuild.mjs');
   });
 });
 

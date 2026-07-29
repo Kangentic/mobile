@@ -41,7 +41,7 @@ unreproducible for any other contributor or CI machine.
   `package.json` diff, so review cannot tell which command was run. It can only flag a version
   that looks unresolved against the pinned SDK. The install discipline above is enforced in
   practice by the `--check` gate below, not by review.
-- **Check (live now, every PR):** the `Native config (expo prebuild)` job in
+- **Check (live now, every PR):** the `Native config (prebuild)` job in
   `.github/workflows/ci.yml` runs `npx expo prebuild` for **both** platforms on a clean
   checkout, so a config-plugin or native-config change that cannot prebuild fails the PR. It
   covered only Android at first, which is precisely how a broken `expo/config-plugins` import

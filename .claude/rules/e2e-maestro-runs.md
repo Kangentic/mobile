@@ -18,6 +18,16 @@ second rig mode silently kills the first one's bundler. Both failures look like 
 - **Run flows with the Maestro CLI**, never the MCP `run` tool:
   `maestro --device <serial> test <flow-or-dir>`. The MCP server is for authoring only
   (`inspect_screen` against an otherwise idle device), and even then not while a suite is running.
+- **Run the version CI runs: Maestro 2.7.0.** `.github/workflows/e2e.yml` pins it in a
+  workflow-level `MAESTRO_VERSION`, because `curl -Ls https://get.maestro.mobile.dev` otherwise
+  installs whatever shipped that morning and a Maestro release could redden the required
+  `E2E Tests (Maestro)` check with no commit in this repository. Check yours with
+  `maestro --version`; install a specific one with
+  `MAESTRO_VERSION=2.7.0 bash <(curl -Ls https://get.maestro.mobile.dev)`. A local CLI ahead of
+  CI is how a flow passes on a laptop and fails the gate, with nothing in either place saying
+  why. `tests/unit/ciSafeMaestroFlows.test.ts` asserts this line and the workflow agree, so
+  bumping means editing both in one commit, after reading Maestro's release notes and running
+  both suites.
 - **One rig mode per session.** `dev:live` and `dev:stub` both own Metro on port 8081; starting
   one tears the other's bundler out from under the device. Pick the mode for the job.
 - **Against a dev client, never `launchApp: clearState: true`.** Clearing state also wipes the
@@ -97,7 +107,29 @@ alike, and succeeds the instant it is backgrounded. Maestro therefore falls back
 hierarchy" aiming before every tap. This is the single largest drag on suite runtime and it
 caused at least one real failure (the delete confirmation expiring between two taps). The cause
 is NOT an obvious animation loop - there is no `Animated.loop` or infinite `withRepeat(..., -1)`
-in `src/`. Treat a mysteriously slow flow as a symptom of this before assuming the flow is wrong.
+in `src/`. Treat a DIFFUSELY slow flow as a symptom of this before assuming the flow is wrong.
+
+**But a single flow at ~6.5 minutes is a DIFFERENT bug, and reading it as the tap tax wastes the
+afternoon.** Check which one you have before theorising, because
+`maestro-debug/<flow>/commands.json` records a per-command `duration` and settles it in seconds:
+
+- **UI-idle tax:** the cost is spread across every tap in the flow. Many commands at 6-8s.
+- **The launchApp stall:** ONE command is enormous and everything else is normal. Measured twice,
+  on two different flows: `launchApp` at 362.2s and 370.5s while every other command in the same
+  flow was 17-40s, and while every other flow's `launchApp` in the same run was 1.1-2.9s.
+
+The stall is host-side, not the app: it hangs inside `launchApp`'s first `adb shell pm grant`
+(649ms healthy, 369.6s stalled), and `device-logcat.txt` runs continuously through the whole
+window with no ANR, no crash, and no mention of our package until the launch finally proceeds. The
+emulator is alive and idle the entire time. It self-resolves and the flow then passes, so it costs
+duration rather than correctness.
+
+An earlier version of this rule attributed one of those spikes to "tap-settling across ~8
+interaction points". That was arithmetic on a flow total, never a measurement, and it was wrong:
+the taps in that flow took 31s. Do not re-derive it - open `commands.json`.
+
+`.github/scripts/run-maestro-paired.sh` prints a per-flow duration table into the run summary, so
+a recurrence is visible without downloading an artifact.
 
 **Leading suspect is the emulator image, not the app.** The local AVD runs `google_apis`, and
 that image is already on record starving this app in CI - where it failed 3 of 4 runs and looked
@@ -130,7 +162,18 @@ exactly like an app bug. Test a `default`-image AVD before hunting in `src/`.
 - **CI (live now, advisory):** `e2e.yml`'s `maestro-paired` job runs `.maestro/paired/` on every
   PR, following the same sequence as `/e2e` (checked-out relay instead of a sibling clone, `--yes`
   instead of an interactive SAS confirm) via `.github/scripts/run-maestro-paired.sh`. It is not a
-  required check yet - see `docs/developer-guide.md`'s "Two E2E suites, two jobs, one required".
+  required check yet, and it is promoted only on **10 consecutive green runs across at least 5
+  distinct PRs, with no re-runs among them and no open `e2e-flow-doctor` verdict**. A re-run
+  resets the count, because a flow that passes on the second attempt is flaky and promoting a
+  flaky suite to required is the "cannot go green" hazard the advisory status exists to avoid.
+  The full promotion checklist is in `docs/developer-guide.md`'s "Two E2E suites, two jobs, one
+  required".
+- **Test (live now):** `tests/unit/e2eGate.test.ts` extracts the `E2E Tests (Maestro)` gate script out
+  of `e2e.yml` and EXECUTES it against every job state the workflow can produce, asserting exit
+  codes. It exists because that required check used to **fail open**: `run-e2e` is a job output, so
+  it is empty whenever the `changes` job did not succeed, and the skip branch's `!= "true"` test
+  accepted an empty string, exiting 0 green having built and run nothing. No source grep would have
+  caught it.
 
 **Prefer the `e2e` build profile over the dev client.** `eas.json`'s `e2e` profile builds a
 release-shaped binary carrying `EXPO_PUBLIC_KANGENTIC_E2E=1`, the second build-time gate on the

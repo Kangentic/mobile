@@ -121,7 +121,15 @@ describe('app.config.ts iOS privacy manifest', () => {
     for (const entry of collectedTypes ?? []) {
       expect(entry.NSPrivacyCollectedDataTypeLinked).toBe(false);
       expect(entry.NSPrivacyCollectedDataTypeTracking).toBe(false);
-      expect(entry.NSPrivacyCollectedDataTypePurposes).toEqual(['NSPrivacyCollectedDataTypePurposeAppFunctionality']);
+      // Both purposes, in this order. Analytics is here because it is what the
+      // Play Data safety form accepted for crash reporting (Play has no
+      // "Diagnostics" purpose, only a Diagnostics data type), and Apple
+      // cross-checks the App Privacy answers against this manifest, so the two
+      // stores have to be answered the same way.
+      expect(entry.NSPrivacyCollectedDataTypePurposes).toEqual([
+        'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+        'NSPrivacyCollectedDataTypePurposeAnalytics',
+      ]);
     }
   });
 

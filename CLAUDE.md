@@ -39,7 +39,9 @@ app/                           # expo-router route wrappers (thin - render the s
 assets/brand/                 # Synced identity rasters (icon/splash/adaptive) - scripts/syncBranding.mjs owns them
 plugins/                      # Local Expo config plugins (withAndroidPushService: notification
                               #   permissions + FGS type; withIosManualSigning: App Store signing on
-                              #   the app target only, inert outside CI)
+                              #   the app target only, inert outside CI;
+                              #   withAndroidE2eGwpAsanOff: disables GWP-ASan for the e2e APK only,
+                              #   inert unless EXPO_PUBLIC_KANGENTIC_E2E=1)
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
@@ -126,9 +128,15 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
   the wrong answer, because both runs resolve the same stale package. Fix: `npm install`.
   Run it alone with `npm run check:install`.
 - `npm run lint` - `eslint . --max-warnings 0`
-- `npm run test:unit` - Unit tests (`vitest run tests/unit`)
-- `npm run test:components` - Component tests (`jest tests/components`)
-- `maestro test .maestro/` - E2E flows against the Android emulator
+- `npm run test:unit` - Unit Tests (`vitest run tests/unit`)
+- `npm run test:components` - Component Tests (`jest tests/components`)
+- `maestro --device <serial> test .maestro/smoke.yaml` - the unpaired smoke flow against the
+  Android emulator. The paired suite is a separate command with setup:
+  `maestro --device <serial> test .maestro/paired` needs a relay plus
+  `scripts/stubDesktopPeer.mjs` and a completed pairing first, which `/e2e` sequences for you.
+  **Never `maestro test .maestro/`**: the bare root sweeps in the `setup/` rig fixture, which
+  fails for lacking a `PAIRING_URI` and reads as a broken pairing screen rather than a
+  misconfigured command.
 - `eas update` - Push a JS-only OTA update
 
 ## Cloud-spend and public-write MCP tools
@@ -246,8 +254,8 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
 - Running tests you just added or modified, scoped to those files.
 
 **Never run unless the user explicitly asks, or `/test` is executing:**
-- An unscoped full-tier run - `npx vitest run` with no path, `maestro test .maestro/` for the
-  full suite.
+- An unscoped full-tier run - `npx vitest run` with no path, or either Maestro suite in full
+  (`.maestro/smoke.yaml`, `.maestro/paired`).
 
 If a run would execute tests you did not add or modify, it is a full-tier run regardless of
 mechanism: stop and let `/test` handle it.
@@ -354,7 +362,8 @@ ones:
 
 **Linting:** live. `.github/workflows/ci.yml` runs each check as its own parallel job, and each
 job name is a required status check on the protected `main`: `Lint (ESLint)`, `Type check (tsc)`,
-`Unit tests (Vitest)`, `Component tests (Jest)`, `Native config (expo prebuild)`. Renaming a job
+`Unit Tests (Vitest)`, `Component Tests (Jest)`, `Native config (prebuild)`, and
+`Release counters (stores)` (pull requests only). Renaming a job
 renames the required check, so main's branch protection must be updated in the same change.
 Conventions with no mechanical check of their own (shorthand names, em-dashes, personal info, UI
 copy brevity) remain enforced by review (`/code-review`, `crypto-pairing-auditor`,
