@@ -328,8 +328,10 @@ const config: ExpoConfig = {
           // `bundletool build-apks` against a real production bundle.
           //
           // A THIRD string-named resource exists and is deliberately not in the
-          // list above: assets/tab-icons/board-kanban.png, require()d for the
-          // Board tab icon. It is unanchored in exactly the same way, but
+          // list above: assets/brand/kanban-tab.png, require()d for the Board
+          // tab icon (synced from @kangentic/branding; it was
+          // assets/tab-icons/board-kanban.png until this repo stopped
+          // rasterising its own). It is unanchored in exactly the same way, but
           // Android resolves `drawable > md > src` and the trigger sets
           // md="view_kanban", so Android never reads the PNG at all. It is
           // protected by inaction rather than by anchoring. Dropping that `md`
