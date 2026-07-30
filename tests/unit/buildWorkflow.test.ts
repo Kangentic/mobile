@@ -775,7 +775,16 @@ describe('e2e APK build cost and the shrink guard', () => {
   ) as { jobs: Record<string, { steps?: { name?: string; run?: string }[] }> };
 
   const buildApkSteps = e2eWorkflow.jobs['build-apk'].steps ?? [];
-  const gradleStep = buildApkSteps.find((step) => step.name === 'Build the release APK');
+
+  function readGradleStep(): string {
+    const gradleStep = buildApkSteps.find((step) => step.name === 'Build the release APK');
+    // ASSERTED, not defaulted. This lookup used to feed `gradleStep?.run ?? ''`
+    // into a `not.toContain`, so renaming the step turned the guard below into a
+    // check against the empty string - green, and no longer guarding anything.
+    // Verified by mutating the name: the lintVitalRelease test still passed.
+    expect(gradleStep, 'e2e.yml no longer has a "Build the release APK" step').toBeDefined();
+    return withoutComments(gradleStep?.run ?? '');
+  }
 
   it('does not exclude lintVitalRelease, which was measured and bought nothing', () => {
     // The premise is TRUE and the exclusion WORKS: `-x lint` does not cover
@@ -793,7 +802,7 @@ describe('e2e APK build cost and the shrink guard', () => {
     // This test exists so the idea is not silently re-landed on the strength of
     // the premise alone, which is exactly how it got landed the first time. The
     // full write-up, including what misled the first pass, is in e2e.yml.
-    expect(withoutComments(gradleStep?.run ?? '')).not.toContain('lintVitalRelease');
+    expect(readGradleStep()).not.toContain('lintVitalRelease');
   });
 
   it('verifies the terminal page survived shrinking, in both Android workflows', () => {
@@ -811,14 +820,13 @@ describe('e2e APK build cost and the shrink guard', () => {
     // artifact carried it as `res/JU.html`, not `res/raw/xterm.html`. A path
     // check would therefore go red on a correct build, which is worse than no
     // check at all.
-    const guard = readFileSync(`${repositoryRoot}.github/scripts/verify-android-assets.sh`, 'utf8');
-    // CODE ONLY. The script explains this exact reasoning in its header, so a
-    // whole-file match reads the justification as the violation. (That is not a
-    // guess about how it could go wrong: it is how this assertion first failed.)
-    const guardCode = guard
-      .split('\n')
-      .filter((line) => !line.trimStart().startsWith('#'))
-      .join('\n');
+    // CODE ONLY, via the shared helper. The script explains this exact reasoning
+    // in its header, so a whole-file match reads the justification as the
+    // violation. (That is not a guess about how it could go wrong: it is how
+    // this assertion first failed.)
+    const guardCode = withoutComments(
+      readFileSync(`${repositoryRoot}.github/scripts/verify-android-assets.sh`, 'utf8')
+    );
 
     // Candidate entries are selected by EXTENSION, so an obfuscated name still
     // matches...
@@ -828,7 +836,20 @@ describe('e2e APK build cost and the shrink guard', () => {
     // it is also what keeps this tracking scripts/buildXtermHtml.mjs.
     expect(guardCode).toContain('src/terminal/xterm.html');
     expect(guardCode).toContain('wc -c');
-    expect(guardCode).toContain('grep -qx "$expected_bytes"');
+    expect(guardCode).toContain('"$entry_bytes" = "$expected_bytes"');
+  });
+
+  it('decides the size match without piping into grep', () => {
+    // verify-android-signature.sh's header records `printf | grep -q` failing a
+    // correctly signed production AAB TWICE: grep -q exits on first match, the
+    // writer takes SIGPIPE, and `set -o pipefail` reports 141 on a real match.
+    // Reproduced here before the rewrite - the shape returns 141, so a correct
+    // artifact would have been failed. The whole point of this guard is that it
+    // cannot go red on a good build, so it must not reintroduce that shape.
+    const guardCode = withoutComments(
+      readFileSync(`${repositoryRoot}.github/scripts/verify-android-assets.sh`, 'utf8')
+    );
+    expect(guardCode).not.toMatch(/\|\s*grep\s+-[a-zA-Z]*q/);
   });
 });
 
@@ -862,6 +883,29 @@ describe('Actions cache budget', () => {
     'utf8'
   );
 
+  interface CleanupStep {
+    name?: string;
+    if?: string;
+    env?: Record<string, string>;
+    run?: string;
+  }
+  // Parsed ONCE, and the step lookup shared. Four tests below each re-parsed
+  // this same file with a slightly different inline type, which is three extra
+  // chances for those shapes to drift apart while describing one document.
+  const cacheCleanupWorkflow = parseYaml(cacheCleanupSource) as {
+    on: Record<string, unknown>;
+    permissions?: Record<string, string>;
+    concurrency?: { group?: string };
+    jobs: Record<string, { steps?: CleanupStep[] }>;
+  };
+  const cacheCleanupSteps = cacheCleanupWorkflow.jobs.cleanup.steps ?? [];
+
+  function cleanupStepNamed(namePrefix: string): CleanupStep {
+    const step = cacheCleanupSteps.find((candidate) => candidate.name?.startsWith(namePrefix));
+    expect(step, `cache-cleanup.yml no longer has a "${namePrefix}" step`).toBeDefined();
+    return step as CleanupStep;
+  }
+
   function compositeStepUsing(actionPrefix: string): CompositeStep {
     const step = setupNodeDeps.runs.steps.find((candidate) => candidate.uses?.startsWith(actionPrefix));
     expect(step, `setup-node-deps no longer uses ${actionPrefix}`).toBeDefined();
@@ -894,8 +938,15 @@ describe('Actions cache budget', () => {
 
     expect(steps.some((step) => step.uses === './.github/actions/setup-node-deps')).toBe(true);
     for (const step of steps) {
-      expect(step.uses?.startsWith('actions/setup-node')).not.toBe(true);
-      expect(step.run?.trim()).not.toBe('npm ci');
+      // `expect(step.uses?.startsWith(...)).not.toBe(true)` passes on undefined
+      // for the same reason it passes on false, so it read as a check while
+      // asserting almost nothing. Coerce first, then match.
+      expect(step.uses ?? '').not.toMatch(/^actions\/setup-node/);
+      // Matched as a WORD anywhere in the block rather than compared to the
+      // whole trimmed string: `npm ci --prefer-offline`, or an `npm ci` on any
+      // line of a multi-line run, slipped straight past the equality check.
+      // Comments stripped, since a shell comment may legitimately name it.
+      expect(withoutComments(step.run ?? '')).not.toMatch(/\bnpm (ci|install)\b/);
     }
   });
 
@@ -904,14 +955,9 @@ describe('Actions cache budget', () => {
     // ref expression expands to `refs/pull//merge`, matches nothing, and reports
     // success having deleted nothing. build-ios.yml:96-99 records the same trap
     // firing a signed device build every Monday.
-    const cleanupWorkflow = parseYaml(cacheCleanupSource) as {
-      jobs: Record<string, { steps?: { name?: string; if?: string; env?: Record<string, string> }[] }>;
-    };
-    const steps = cleanupWorkflow.jobs.cleanup.steps ?? [];
-
     // Every step that interpolates a pull-request ref must be gated on the
     // pull_request event, whatever it is called.
-    const pullRequestSteps = steps.filter((step) =>
+    const pullRequestSteps = cacheCleanupSteps.filter((step) =>
       Object.values(step.env ?? {}).some((value) => value.includes('github.event.pull_request'))
     );
     expect(pullRequestSteps.length).toBeGreaterThan(0);
@@ -919,8 +965,33 @@ describe('Actions cache budget', () => {
       expect(step.if).toBe("github.event_name == 'pull_request'");
     }
 
-    const sweep = steps.find((step) => step.name?.startsWith('Sweep caches'));
-    expect(sweep?.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(cleanupStepNamed('Sweep caches').if).toContain("github.event_name == 'workflow_dispatch'");
+  });
+
+  it('grants the pull-requests scope the sweep depends on', () => {
+    // Naming a `permissions:` block sets every UNLISTED scope to `none`. The
+    // sweep calls `gh pr list` to build the set of refs it must SPARE, so
+    // omitting pull-requests: read does not merely skip the sweep - it returns
+    // an empty spare-list and deletes the caches of every open pull request,
+    // which is the exact opposite of the step's stated guarantee.
+    expect(cacheCleanupWorkflow.permissions?.['pull-requests']).toBe('read');
+    expect(cacheCleanupWorkflow.permissions?.actions).toBe('write');
+  });
+
+  it('refuses to sweep when the open-pull-request list cannot be read', () => {
+    // Belt to the permission's braces. Any failure of that call (rate limit,
+    // outage, a future scope change) yields an empty spare-list, which reads as
+    // "nothing to protect" rather than as an error, so it must abort instead of
+    // falling through into the delete loop.
+    const sweepRun = cleanupStepNamed('Sweep caches').run ?? '';
+    expect(sweepRun).toMatch(/if\s+!\s+open_refs=/);
+    expect(sweepRun).toContain('exit 1');
+  });
+
+  it('serialises overlapping runs so a dispatch cannot race the schedule', () => {
+    // Every other workflow in the directory declares one; this is the only one
+    // that can be triggered two ways at once.
+    expect(cacheCleanupWorkflow.concurrency?.group).toContain('cache-cleanup');
   });
 
   it('sweeps stranded refs weekly, not only on demand', () => {
@@ -929,29 +1000,20 @@ describe('Actions cache budget', () => {
     // `permissions:` says. This repository is public, so that is a recurring
     // leak rather than a corner case, and the sweep is its only backstop.
     // The prune step is NOT that backstop - it is scoped to the default branch.
-    const sweep = (
-      parseYaml(cacheCleanupSource) as {
-        jobs: Record<string, { steps?: { name?: string; if?: string }[] }>;
-      }
-    ).jobs.cleanup.steps?.find((step) => step.name?.startsWith('Sweep caches'));
-    expect(sweep?.if).toContain("github.event_name == 'schedule'");
+    expect(cleanupStepNamed('Sweep caches').if).toContain("github.event_name == 'schedule'");
   });
 
   it('spares the default branch and open pull requests when sweeping', () => {
     // The sweep deletes by ref. Without these two guards it would delete main's
     // Gradle User Home entry, which is the ONLY cache every other ref can read -
     // turning a cleanup into precisely the starvation it exists to prevent.
-    const sweep = (
-      parseYaml(cacheCleanupSource) as {
-        jobs: Record<string, { steps?: { name?: string; run?: string; env?: Record<string, string> }[] }>;
-      }
-    ).jobs.cleanup.steps?.find((step) => step.name?.startsWith('Sweep caches'));
+    const sweep = cleanupStepNamed('Sweep caches');
 
-    expect(sweep?.env?.DEFAULT_BRANCH).toContain('default_branch');
-    expect(sweep?.run).toContain('"$ref" = "$DEFAULT_BRANCH"');
-    expect(sweep?.run).toContain('--state open');
+    expect(sweep.env?.DEFAULT_BRANCH).toContain('default_branch');
+    expect(sweep.run).toContain('"$ref" = "$DEFAULT_BRANCH"');
+    expect(sweep.run).toContain('--state open');
     // -x -F, so refs/heads/main cannot spare refs/heads/mainline by substring.
-    expect(sweep?.run).toContain('grep -qxF');
+    expect(sweep.run).toContain('grep -qxF');
   });
 
   it('prunes superseded generations on a schedule, not only by hand', () => {
@@ -962,21 +1024,46 @@ describe('Actions cache budget', () => {
     // is 6.3 GB of a 7.32 GB total. Manual-only cleanup would mean nobody runs
     // it until Build (APK) is already slow, which is the state this whole change
     // started from.
-    const cleanupWorkflow = parseYaml(cacheCleanupSource) as {
-      on: Record<string, unknown>;
-      jobs: Record<string, { steps?: { name?: string; if?: string; env?: Record<string, string>; run?: string }[] }>;
-    };
-    expect(cleanupWorkflow.on.schedule).toBeDefined();
+    expect(cacheCleanupWorkflow.on.schedule).toBeDefined();
 
-    const prune = (cleanupWorkflow.jobs.cleanup.steps ?? []).find((step) =>
-      step.name?.startsWith('Prune superseded')
-    );
-    expect(prune?.if).toContain("github.event_name == 'schedule'");
+    const prune = cleanupStepNamed('Prune superseded');
+    expect(prune.if).toContain("github.event_name == 'schedule'");
     // `inputs` is empty on a schedule, so the count must not depend on it.
-    expect(prune?.env?.KEEP).toContain("|| '2'");
-    // Scoped to the default branch, and keeps the NEWEST by creation date.
-    expect(prune?.run).toContain('select(.ref == \\"$DEFAULT_BRANCH\\")');
-    expect(prune?.run).toContain('sort_by(.createdAt) | reverse');
+    expect(prune.env?.KEEP).toContain("|| '2'");
+    // Scoped to the default branch, and keeps the NEWEST by creation date. Both
+    // values are BOUND as jq arguments rather than spliced into the program
+    // text, so a stray character in either is data, not a syntax error.
+    expect(prune.run).toContain('--arg default_branch "$DEFAULT_BRANCH"');
+    expect(prune.run).toContain('--argjson keep "$KEEP"');
+    expect(prune.run).toContain('select(.ref == $default_branch)');
+    expect(prune.run).toContain('sort_by(.createdAt) | reverse');
+  });
+
+  it('advertises the same keep default that a scheduled run falls back to', () => {
+    // Two copies of `2`: the workflow_dispatch input default, and the `|| '2'`
+    // the schedule path needs because `inputs` is empty there. Nothing keeps
+    // them equal, so changing the advertised default alone would leave every
+    // scheduled run quietly using the old number.
+    const dispatch = (cacheCleanupWorkflow.on as {
+      workflow_dispatch?: { inputs?: Record<string, { default?: string }> };
+    }).workflow_dispatch;
+    const advertisedDefault = dispatch?.inputs?.keep?.default;
+
+    expect(advertisedDefault).toBeDefined();
+    expect(cleanupStepNamed('Prune superseded').env?.KEEP).toContain(`|| '${advertisedDefault}'`);
+  });
+
+  it('reports a prune count even when it deletes nothing', () => {
+    // Without it, a run that pruned nothing prints nothing at all, which reads
+    // as a step that never ran. This is a legibility guarantee, NOT a validation
+    // one: a jq filter that compiles but selects nothing still reports
+    // "Pruned 0". Catching that is the usage report's job, not this count's.
+    const pruneRun = cleanupStepNamed('Prune superseded').run ?? '';
+    expect(pruneRun).toContain('pruned_count=0');
+    expect(pruneRun).toMatch(/echo "Pruned \$pruned_count/);
+    // Counted in THIS shell. `... | while read` puts the body in a subshell and
+    // the increment is discarded, which would report 0 after a real prune.
+    expect(pruneRun).toContain('done <<< "$superseded"');
   });
 });
 

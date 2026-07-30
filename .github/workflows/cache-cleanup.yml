@@ -57,11 +57,32 @@ on:
         type: string
         default: '2'
 
-# Repository-wide default is `contents: read`; `actions: write` is what the
-# cache delete API requires and is granted for this one job only.
+# Declaring a `permissions:` block at all sets every scope NOT listed to `none`,
+# so each entry here has to be present for a reason:
+#
+#   actions: write        what the cache delete API requires.
+#   contents: read        the repository-wide default, kept explicit.
+#   pull-requests: read   what `gh pr list` in the sweep requires. Easy to leave
+#                         off, and the consequence is the opposite of harmless:
+#                         that call builds the list of refs the sweep SPARES, so
+#                         a permission failure returns nothing to spare and the
+#                         sweep deletes the caches of every open pull request.
+#                         cla.yml is the other workflow here that touches pull
+#                         requests, and it names the scope for the same reason.
 permissions:
   actions: write
   contents: read
+  pull-requests: read
+
+# Every other workflow in this directory declares one. The race worth naming is
+# a manual dispatch landing on top of the Monday schedule: both would list the
+# same caches and race to delete the same ids. Individual deletes already
+# tolerate a 404, so this is about not wasting the calls, not about safety.
+# `cancel-in-progress: false` because a half-finished sweep is worse than a slow
+# one - it leaves the budget argument half-applied with the job reporting green.
+concurrency:
+  group: cache-cleanup-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   cleanup:
@@ -94,6 +115,12 @@ jobs:
           # and a 404 on one id must not abandon the rest of the list - that
           # would leave the majority of the leak in place while reporting a
           # failure that nobody can act on.
+          # `--limit 100` is fine HERE, unlike the repository-wide lists further
+          # down which use 1000. This one is filtered to a single `--ref`, and one
+          # pull request writes a handful of entries, not hundreds - so the
+          # truncation hazard that matters there (gh sorts by last access, so a
+          # cut list drops the stalest entries, which is exactly what a cleanup
+          # is hunting) cannot bite a list this small.
           echo "Caches scoped to $BRANCH:"
           gh cache list --ref "$BRANCH" --limit 100 || true
           for cache_id in $(gh cache list --ref "$BRANCH" --limit 100 --json id --jq '.[].id'); do
@@ -117,10 +144,20 @@ jobs:
           DEFAULT_BRANCH: refs/heads/${{ github.event.repository.default_branch }}
         run: |
           set -uo pipefail
-          open_refs="$(gh pr list --state open --limit 100 --json number,headRefName \
-            --jq '.[] | "refs/pull/\(.number)/merge", "refs/heads/\(.headRefName)"')"
+          # HARD FAIL if this call does not succeed - the one place in this file
+          # where stopping beats carrying on. Every other failure here costs one
+          # undeleted cache; this list is the ONLY thing standing between the
+          # sweep and the caches of every OPEN pull request. An empty result is
+          # indistinguishable from "nothing to spare", so a permission or rate
+          # limit error would not skip the sweep, it would widen it to exactly
+          # the refs the step promises to protect.
+          if ! open_refs="$(gh pr list --state open --limit 1000 --json number,headRefName \
+            --jq '.[] | "refs/pull/\(.number)/merge", "refs/heads/\(.headRefName)"')"; then
+            echo "::error::Could not list open pull requests, so the set of refs to spare is unknown. Refusing to sweep."
+            exit 1
+          fi
           echo "Sparing $DEFAULT_BRANCH and the refs of every open pull request."
-          gh cache list --limit 100 --json id,ref,key,sizeInBytes \
+          gh cache list --limit 1000 --json id,ref,key,sizeInBytes \
             --jq '.[] | [.id, .ref, .key, .sizeInBytes] | @tsv' \
           | while IFS="$(printf '\t')" read -r cache_id ref key size; do
               if [ "$ref" = "$DEFAULT_BRANCH" ]; then
@@ -173,22 +210,72 @@ jobs:
           KEEP: ${{ inputs.keep || '2' }}
         run: |
           set -uo pipefail
+          # Validated before it reaches jq. KEEP is a free-text workflow_dispatch
+          # input, and splicing a non-numeric value into a jq program produces a
+          # compile error rather than anything a reader can act on.
+          case "$KEEP" in
+            ''|*[!0-9]*)
+              echo "::error::keep must be a non-negative integer, got '$KEEP'."
+              exit 1
+              ;;
+          esac
           echo "Keeping the $KEEP newest generation(s) of each cache family on $DEFAULT_BRANCH."
-          gh cache list --limit 100 --json id,ref,key,sizeInBytes,createdAt \
-            --jq "
-              [ .[] | select(.ref == \"$DEFAULT_BRANCH\") ]
-              | map(. + { family: (.key | sub(\"-[0-9a-f]{16,}$\"; \"-<hash>\")) })
-              | group_by(.family)
-              | map(sort_by(.createdAt) | reverse | to_entries
-                    | map(select(.key >= $KEEP) | [.value.id, .value.sizeInBytes, .value.family]))
-              | flatten(1)[]
-              | @tsv
-            " \
-          | while IFS="$(printf '\t')" read -r cache_id size family; do
-              gh cache delete "$cache_id" > /dev/null 2>&1 \
-                && echo "  pruned $family ($size bytes)" \
-                || echo "  could not prune $cache_id (already evicted?)"
-            done
+          # `--limit 1000`, and do not lower it. `gh cache list` defaults to
+          # `--sort last_accessed_at --order desc`, so a window that truncates
+          # drops the LEAST recently accessed entries - which is the exact
+          # profile of a superseded generation, the thing this step exists to
+          # delete. The repository measured 27 to 39 entries, but the
+          # gradle-home family mints a generation per commit on main, so the
+          # count climbs faster than the size does.
+          #
+          # Piped into real `jq` rather than gh's `--jq`, so the two values can be
+          # BOUND (--arg / --argjson) instead of interpolated into the program
+          # text. That is what makes the branch name and the keep count data
+          # rather than syntax, and it drops a layer of backslash escaping that
+          # made the filter hard to read and easy to break.
+          #
+          # Failure is checked, because an unchecked assignment here leaves
+          # `superseded` empty, and empty is indistinguishable from "nothing to
+          # prune" - the step would print the reassuring "Pruned 0" below having
+          # never listed anything.
+          if ! superseded="$(gh cache list --limit 1000 --json id,ref,key,sizeInBytes,createdAt \
+            | jq -r --arg default_branch "$DEFAULT_BRANCH" --argjson keep "$KEEP" '
+                [ .[] | select(.ref == $default_branch) ]
+                | map(. + { family: (.key | sub("-[0-9a-f]{16,}$"; "-<hash>")) })
+                | group_by(.family)
+                | map(sort_by(.createdAt) | reverse | to_entries
+                      | map(select(.key >= $keep) | [.value.id, .value.sizeInBytes, .value.family]))
+                | flatten(1)[]
+                | @tsv
+              ')"; then
+            echo "::error::Could not list the caches on $DEFAULT_BRANCH, so nothing was pruned."
+            exit 1
+          fi
+
+          # A here-string, NOT a pipe, so the loop runs in this shell and the
+          # counter below survives it. Piping into `while` puts the body in a
+          # subshell, where pruned_count would reset to 0 on every read.
+          pruned_count=0
+          while IFS="$(printf '\t')" read -r cache_id size family; do
+            [ -n "$cache_id" ] || continue
+            if gh cache delete "$cache_id"; then
+              echo "  pruned $family ($size bytes)"
+              pruned_count=$((pruned_count + 1))
+            else
+              echo "  could not prune $cache_id (already evicted?)"
+            fi
+          done <<< "$superseded"
+
+          # Printed even when it is zero, so the step always states an outcome.
+          # Without it the only output is one line per deletion, and a run that
+          # pruned nothing is completely silent - which reads as a step that
+          # never ran.
+          #
+          # Know the limit: this REPORTS, it does not VALIDATE. A jq filter that
+          # compiles but selects nothing still prints "Pruned 0", exactly like a
+          # genuinely clean branch. Catching that is the usage report below,
+          # where the total keeps climbing while this keeps saying zero.
+          echo "Pruned $pruned_count superseded generation(s) on $DEFAULT_BRANCH."
 
       - name: Report the remaining cache usage
         if: always()

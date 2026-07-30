@@ -320,6 +320,21 @@ const config: ExpoConfig = {
           // base/res/raw/src_terminal_xterm.html (both verified against real
           // artifacts, runs 30506459459 and 30466715863).
           //
+          // KNOW WHAT THAT DOES NOT COVER. On the production path the guard
+          // proves the AAB CI produced, not the split APK a device installs:
+          // Play re-runs its own resource optimization at split time, which is
+          // the same reason the AAB still carries the un-renamed name above. No
+          // check in this repository runs after that. Closing it would mean
+          // `bundletool build-apks` against a real production bundle.
+          //
+          // A THIRD string-named resource exists and is deliberately not in the
+          // list above: assets/tab-icons/board-kanban.png, require()d for the
+          // Board tab icon. It is unanchored in exactly the same way, but
+          // Android resolves `drawable > md > src` and the trigger sets
+          // md="view_kanban", so Android never reads the PNG at all. It is
+          // protected by inaction rather than by anchoring. Dropping that `md`
+          // would quietly move it into the same hazard class as xterm.html.
+          //
           // AND IT COSTS NOTHING TO KEEP. Turning it off was measured on
           // 2026-07-30, one run per arm, normalising each build against
           // buildCMakeRelWithDebInfo + minifyReleaseWithR8 because those are

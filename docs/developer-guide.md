@@ -385,7 +385,7 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
      | Resource | Named by | Anchored? |
      |---|---|---|
      | `notification_icon` drawable | `src/notifications/channels.ts` (Notifee ignores the manifest meta-data, so every `displayNotification` sets it explicitly) | **Yes.** The `expo-notifications` plugin block also emits a manifest `meta-data` entry pointing at it, and manifest-referenced resources are never shrunk |
-     | `xterm.html` | `src/components/terminal/TerminalPane.tsx`'s `require('../../terminal/xterm.html')`, resolved through `Asset.fromModule` | **Not in the resource graph**, but its survival is now asserted on every build. Metro files every non-drawable asset under `res/raw` (`.html` is not in `@react-native/assets-registry`'s `drawableFileTypes`), and the name is resolved from the JS bundle at runtime, which the shrinker never scans |
+     | `xterm.html` | `src/components/terminal/TerminalPane.tsx`'s `require('../../terminal/xterm.html')`, resolved through `Asset.fromModule` | **Not in the resource graph**, but its survival is now asserted on every build that runs the shrinker. Metro files every non-drawable asset under `res/raw` (`.html` is not in `@react-native/assets-registry`'s `drawableFileTypes`), and the name is resolved from the JS bundle at runtime, which the shrinker never scans |
 
      **Neither risk is caught by the Maestro flows.** No flow displays a notification, and none
      asserts WebView *content* - `.maestro/paired/session-mode-toggle.yaml`'s header says so
@@ -395,9 +395,15 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
      every check stayed green.
 
      So the artifact is checked directly instead.
-     **`.github/scripts/verify-android-assets.sh`** runs in both `e2e.yml` and `build-android.yml`
-     and fails the build unless the artifact still carries an html resource the size of
-     `src/terminal/xterm.html`. It matches on **size, not path**, and that is load bearing:
+     **`.github/scripts/verify-android-assets.sh`** fails the build unless the artifact still
+     carries an html resource the size of `src/terminal/xterm.html`. It runs unconditionally in
+     `e2e.yml` (that job always builds a signed release APK, and fails outright without a
+     keystore) and on **release variants only** in `build-android.yml`, which falls back to
+     `assembleDebug` for any profile when no keystore is configured - a debug build runs no
+     shrinker, so there is nothing there to guard. Note the limit at the far end too: on the
+     `production` path this proves the **AAB CI produced**, not the split APK a device installs,
+     because Play re-runs its own resource optimization at split time, after every check here.
+     It matches on **size, not path**, and that is load bearing:
      `optimizeReleaseResources` renames resource files, so the shipped entry is
      `res/JU.html` rather than `res/raw/xterm.html` (measured on run 30506459459, byte for byte
      the 956707 of the source). A path check would go red on a *correct* build. It reads the

@@ -70,8 +70,26 @@ echo "Expecting an html resource of $expected_bytes bytes (src/terminal/xterm.ht
 echo "html resources in the artifact:"
 printf '%s\n' "$html_entries" | sed 's/^/  /'
 
-if printf '%s\n' "$html_entries" | cut -f1 | grep -qx "$expected_bytes"; then
-  echo "xterm.html survived minification and resource shrinking."
+# NO PIPE INTO `grep -q` HERE, and that is not a style preference.
+# verify-android-signature.sh's header records the identical shape failing a
+# correctly signed production AAB TWICE: `grep -q` exits the instant it matches,
+# the writer upstream takes SIGPIPE while still pushing, and `set -o pipefail`
+# turns a genuine match into exit 141. It survives a small local test because the
+# write finishes before grep exits, which is exactly how it reached production.
+# A while-read over a here-string has no writer to kill and no subshell, so
+# `matched_entry_name` is still set when the loop ends.
+#
+# (The `unzip -l | awk` above is a different case and is fine: awk consumes its
+# input to EOF, so there is no early close and nothing to receive SIGPIPE.)
+matched_entry_name=""
+while IFS="$(printf '\t')" read -r entry_bytes entry_name; do
+  if [ "$entry_bytes" = "$expected_bytes" ]; then
+    matched_entry_name="$entry_name"
+  fi
+done <<< "$html_entries"
+
+if [ -n "$matched_entry_name" ]; then
+  echo "xterm.html survived minification and resource shrinking (as $matched_entry_name)."
   exit 0
 fi
 

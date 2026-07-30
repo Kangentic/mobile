@@ -395,7 +395,7 @@ jobs:
       # rule out one of a few seconds. Either way it is inside the noise.
       #
       # WHAT MISLED THE FIRST PASS, worth knowing because the trap is general: on
-      # a cache-starved run (30506459459, 146 of 1029 tasks from cache) 52 of 54
+      # a cache-starved run (30506459459, 147 of 1029 tasks from cache) 52 of 54
       # lintVital tasks executed and `generateReleaseLintVitalModel` occupied a
       # 121.3s window with nothing else printing, which reads as a serial stall on
       # the critical path. It is not - it is what parallel work looks like when
