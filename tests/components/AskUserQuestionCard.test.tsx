@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { ThemeProvider } from '@/components';
 import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCard';
@@ -51,6 +52,25 @@ function renderCard(prompt: PendingPromptDescriptor = questionPrompt): void {
   );
 }
 
+/**
+ * The header Badge carries no testID (see Badge.tsx's `align` prop doc,
+ * which names this card as the reason the default shrink-wraps), so it is
+ * reached through its label text, walking up to the nearest ancestor that
+ * sets `alignSelf` - Badge's own root View is the only node in this subtree
+ * that does.
+ */
+function headerBadgeAlignSelf(labelText: string): string | undefined {
+  let ancestor = screen.getByText(labelText).parent;
+  while (ancestor !== null) {
+    const flattenedStyle = StyleSheet.flatten(ancestor.props.style);
+    if (flattenedStyle?.alignSelf !== undefined) {
+      return flattenedStyle.alignSelf;
+    }
+    ancestor = ancestor.parent;
+  }
+  return undefined;
+}
+
 describe('AskUserQuestionCard', () => {
   beforeEach(() => {
     mockAnswerPermissionPrompt.mockReset();
@@ -66,6 +86,19 @@ describe('AskUserQuestionCard', () => {
     expect(screen.getByText('Refactor in place')).toBeTruthy();
     expect(screen.getByText('Smaller diff')).toBeTruthy();
     expect(screen.getByText('Rewrite the module')).toBeTruthy();
+  });
+
+  // THE REGRESSION GUARD: this card is the motivating case named in Badge's
+  // `align` prop doc for keeping the default at `start`. The header Badge
+  // sits directly in a Stack, whose cross axis is horizontal and whose
+  // default `alignItems` is `stretch`, so the pill only hugs its own label
+  // because Badge sets `alignSelf` itself. Drop that (the tempting way to
+  // "fix" the Changes tab's top-pinned badge) and this header stretches to
+  // the full card width. A default of `center` would not stretch it, but it
+  // would still be wrong here, so the assertion pins the exact value.
+  it('keeps the question header badge shrink-wrapped in its Stack', () => {
+    renderCard();
+    expect(headerBadgeAlignSelf('Approach')).toBe('flex-start');
   });
 
   it('sends the digit keystroke for the tapped option', () => {
