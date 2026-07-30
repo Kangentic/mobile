@@ -54,7 +54,10 @@ second rig mode silently kills the first one's bundler. Both failures look like 
   derive a target from a command line, a process name, or who holds a port: the scan that did
   matched `--expose-gc ... start` via `expo(-cli)?.*start` and killed a running Kangentic desktop
   with every agent session under it. A process the rig did not start gets **reported**, not
-  taken. `npm run dev:stop -- --dry-run` prints the targets and kills nothing.
+  taken. `npm run dev:stop -- --dry-run` prints the targets and kills nothing. The EMULATOR
+  survives a plain `dev:stop` (slow to boot, usually wanted next run) but is named in the output
+  when it does; `-- --emulator` shuts down the ones the rig booted, verified by serial AND the
+  AVD name read live off the console, since a serial is a slot the next emulator inherits.
 - **A flow that calls itself self-contained must be.** The stub peer restores its canned board on
   every session establish, which is one flow; do not add state that outlives that boundary.
 - **Never edit `src/` while a suite is running against Metro.** Fast Refresh pushes every save
