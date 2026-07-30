@@ -1121,13 +1121,21 @@ jobs, one required" above) until it has been green across several PRs. A green r
 smoke coverage; read the `E2E Tests (Paired)` check separately for the paired suite's result. It
 carries no "Required" badge, which is how the checks list says it cannot block a merge.
 
-**iOS E2E does not exist yet, by any route.** An earlier version of this section claimed EAS
-Workflows on cloud iOS simulators was "the only supported path to iOS E2E without a Mac". That was
-never true in practice: there is no `.eas/workflows/` directory in this repo on any branch, so
-nothing was ever wired. It is also no longer the only option. `build-ios.yml` already compiles the
-app on a free `macos-latest` runner, so booting a simulator there with `xcrun simctl` and running a
-Maestro flow is a working path that needs no Apple Developer account and no EAS spend. That is the
-cheapest way to finally execute the WKWebView terminal on iOS, which has never run.
+**Maestro now runs on iOS in CI, but there is no iOS E2E *suite*.** An earlier version of this
+section claimed EAS Workflows on cloud iOS simulators was "the only supported path to iOS E2E
+without a Mac". That was never true in practice: there is no `.eas/workflows/` directory in this
+repo on any branch, so nothing was ever wired. The route it dismissed is the one that works:
+`build-ios.yml -f screenshots=true` boots a simulator on a free `macos-latest` runner with
+`xcrun simctl` and drives `.maestro/screenshots/store-capture.yaml` through six screens by testID,
+with no Apple Developer account and no EAS spend. That is how the WKWebView terminal was finally
+executed on iOS, and it renders.
+
+Be precise about what that does and does not buy. It is a **capture** flow: it navigates and
+photographs, and the job fails when an expected shot is missing, so it catches a screen that will
+not open at all. It asserts almost nothing about behaviour, and it cannot see anything drawn
+inside the terminal's canvas (see the blank-terminal note in
+`.claude/skills/store-screenshots/SKILL.md`). Treat it as proof the app runs on iOS and as the
+existing harness to grow a real suite from, not as coverage.
 
 ### Running the E2E suite (the path that actually works)
 

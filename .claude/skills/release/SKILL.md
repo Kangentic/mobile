@@ -43,11 +43,14 @@ wastes a 20 minute build and can leave a dangling Play edit.
 If the user insists on a blocked path after being told, say plainly that it cannot be done and stop.
 Do not attempt a workaround.
 
-**One thing to say out loud for any iOS release: the iOS app has never been run.** It compiles and
-it signs, but no build has ever launched on a device or simulator. The WKWebView terminal and the
-notification stack are untested on the platform, and the Notification Service Extension that iOS
-push decryption needs is a later phase. A TestFlight build is worth cutting to find that out, but
-do not describe it to the user as a working app.
+**One thing to say out loud for any iOS release: the iOS app has never run on real hardware.** It
+compiles, it signs, and it now launches and renders correctly on a **simulator** - the store
+capture run drives it through six screens on every dispatch, and the WKWebView terminal paints
+its full grid, so that specific risk is retired. What remains untested is everything a simulator
+cannot exercise: the notification stack, push delivery, and the Notification Service Extension
+that iOS push decryption needs, which is a later phase. No build has ever launched on a physical
+device. A TestFlight build is worth cutting to find that out, but do not describe it to the user
+as a fully proven app.
 
 ## Step 1 - Preflight
 

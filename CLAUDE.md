@@ -16,7 +16,7 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
 - **Build:** GitHub Actions on free runners for both platforms (Gradle for Android, `xcodebuild` on
   a macOS runner for iOS). EAS is the credential source and the fallback, not the build path.
   Continuous Native Generation (no checked-in native projects)
-- **Testing:** vitest (unit), Jest + React Native Testing Library (components), Maestro (E2E, Windows + Android emulator locally and on a CI emulator; **no iOS E2E exists yet by any route**), Playwright via react-native-web (later)
+- **Testing:** vitest (unit), Jest + React Native Testing Library (components), Maestro (E2E, Windows + Android emulator locally and on a CI emulator; on iOS it runs only the store-capture flow on a CI simulator, which navigates but barely asserts, so **there is no iOS E2E suite**), Playwright via react-native-web (later)
 
 ## Project Structure
 
