@@ -188,10 +188,15 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
     // most of what scrolls past.
     const session = shotsEveryRow.join('\n');
     expect(session).toMatch(/[●⏺]/); // tool bullets
-    expect(session).toMatch(/⎿/); // result connectors
-    expect(session).toMatch(/[╭╮╰╯│─]/); // the bordered input box
+    expect(session).toMatch(/[╌─]{8}/); // the rules a dialog frames itself with
     expect(session).toMatch(/Do you want to/); // a live permission dialog
-    expect(session).toMatch(/esc to interrupt/); // the working status line
+    expect(session).toMatch(/❯\s*1\.\s*Yes/); // its numbered options
+    expect(session).toMatch(/Esc to cancel · Tab to amend/); // the dialog footer
+    // Deliberately NOT asserting every glyph the cleaner knows about. Which
+    // chrome is on screen depends on where the replay window sits, and pinning
+    // the full vocabulary here made this test a restatement of the window
+    // rather than a check that the fixture is real output. The classifier's own
+    // coverage of the rest lives in liveTail.test.ts.
   });
 
   it('closes every frame inside the grid it was recorded at', () => {
