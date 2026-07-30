@@ -249,6 +249,33 @@ describe('the recorded terminal fits the narrowest capture device', () => {
     }
   });
 
+  it('keeps the terminal font legible on the shelf that renders it smallest', () => {
+    // Column count is bound by iOS (tallest pane, biggest font, fewest columns);
+    // LEGIBILITY is bound by the Android phone shelf (shortest pane, smallest
+    // font). Optimising only for width silently halves the Android text: at 48
+    // rows it drops to 7px against the 12px that ships today. This is the other
+    // half of the constraint, and it has no other guard.
+    const androidShelf = CAPTURE_TARGETS[1];
+    const fitted = Math.floor(androidShelf.paneHeight / (CLAUDE_CAPTURE_SHOTS.rows * CELL_HEIGHT_RATIO));
+    const fontPx = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
+    expect(fontPx).toBeGreaterThanOrEqual(9);
+  });
+
+  it('fits every row of the grid vertically, not just its columns', () => {
+    // A grid whose rows do not fit is cropped from the bottom, which hides the
+    // status line and the input box - the two things that make it read as a
+    // live terminal rather than a code listing.
+    for (const target of CAPTURE_TARGETS) {
+      const fitted = Math.floor(target.paneHeight / (CLAUDE_CAPTURE_SHOTS.rows * CELL_HEIGHT_RATIO));
+      const fontPx = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
+      const usedHeight = CLAUDE_CAPTURE_SHOTS.rows * fontPx * CELL_HEIGHT_RATIO;
+      expect({ target: target.name, fits: usedHeight <= target.paneHeight }).toEqual({
+        target: target.name,
+        fits: true,
+      });
+    }
+  });
+
   it('renders no row wider than the grid it reports', async () => {
     // The grid fitting the screen is only half of it: a capture replayed at a
     // grid it was not recorded at overflows its own columns, and the phone

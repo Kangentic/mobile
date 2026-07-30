@@ -21,7 +21,6 @@ import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
-import { CLAUDE_CAPTURE_WIDE } from '@/devsupport/claudeCaptureWide';
 import {
   playRecordedTerminal,
   type RecordedTerminalCapture,
@@ -282,50 +281,47 @@ function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): Transcript
  * iOS binds at every candidate because its pane is the tallest, so it takes the
  * biggest font and shows the FEWEST columns:
  *
- *   rows | iOS font | iOS cols | Android cols
- *     30 |    20    |    36    |     50
- *     40 |    15    |    48    |     66
- *     44 |    13    |    56    |     75
- *     48 |    12    |    61    |     85
+ *   rows | iOS font / cols | Android phone font / cols
+ *     30 |   20px  /  36   |      12px  /  50
+ *     38 |   15px  /  48   |       9px  /  66
+ *     44 |   13px  /  56   |       8px  /  75
+ *     48 |   12px  /  61   |       7px  /  85
  *
- * 56x48 therefore fits iOS with five columns spare. Anything wider clips, and
- * clipping is silent and single-platform: the first iOS capture cut a branch
+ * The grid is 44x38: iOS shows 48 columns, so it fits with four spare, and BOTH
+ * shelves keep about three quarters of the text size they ship at today. Going
+ * wider is tempting and costs exactly that - at 48 rows the Android phone shelf
+ * drops to a 7px font, roughly half of what it renders now, because that shelf
+ * has the SHORTEST pane and therefore always takes the smallest font. Column
+ * count is bound by iOS; legibility is bound by Android; a grid has to answer
+ * to both.
+ *
+ * Overflowing is silent and single-platform: the first iOS capture cut a branch
  * name mid-word to "fix/sign-in-return-" and nothing caught it until a human
- * looked at the image.
+ * looked at the image. tests/unit/storeScreenshots.test.ts re-derives this
+ * table and fails if the grid stops fitting.
  */
 /**
- * Which recording this run replays, and therefore which grid it reports.
+ * ONE recording, replayed by every mode.
  *
- * Two recordings, because two modes want different things:
- *
- * - `dev:mock`, the mode this app is debugged in, replays the 120x30 capture -
- *   an ordinary desktop terminal. A grid that wide overflows a phone and pans,
- *   which is exactly what a real connected session does, so the rig behaves
- *   like the real thing including the parts that are awkward.
- * - `dev:shots` replays the 56x48 one (measurement above). Still real Claude
- *   Code output, just recorded against a narrower desktop window, because a
- *   listing image cannot pan and a clipped one shows the left third of every
- *   frame.
- *
- * EXPO_PUBLIC_KANGENTIC_SHOTS is set by `dev:shots` and by the iOS capture job,
- * and is inlined at bundle time like every EXPO_PUBLIC_ value - so flipping it
- * needs a Metro restart with --clear, same as the mock flag itself.
+ * An earlier revision carried two - a 120x30 capture for `dev:mock` and a
+ * narrow one for `dev:shots` - on the argument that the debugging rig should
+ * behave like a real wide desktop, pan and all. On a device that reads as a
+ * frame clipped down its right edge, which is not what anybody wants to look at
+ * while working, and it doubled the ways the reported grid could disagree with
+ * the bytes. One grid that renders whole everywhere is worth more than
+ * reproducing the awkwardness of a wide desktop.
  */
-export function isStoreCaptureBuild(): boolean {
-  return process.env.EXPO_PUBLIC_KANGENTIC_SHOTS === '1';
-}
-
 export function activeCapture(): RecordedTerminalCapture {
-  return isStoreCaptureBuild() ? CLAUDE_CAPTURE_SHOTS : CLAUDE_CAPTURE_WIDE;
+  return CLAUDE_CAPTURE_SHOTS;
 }
 
 /**
  * The grid EVERY mock session reports.
  *
- * Derived from the active capture rather than a constant, and shared by the
+ * Derived from the capture rather than written down twice, and shared by the
  * static sessions too: they carry plain-text scrollback with no grid of their
- * own, and having them announce 120x30 while the streaming session announced
- * 56x48 would mean one mock desktop claiming two different pane sizes.
+ * own, and letting them announce a different one would mean a single mock
+ * desktop claiming two pane sizes.
  */
 export function activeGrid(): { cols: number; rows: number } {
   const capture = activeCapture();
@@ -874,13 +870,13 @@ function baseTranscript(): TranscriptEntryWire[] {
 export function diffFileList(): DiffFileListWire {
   return {
     files: [
-      { path: 'src/auth/login.ts', status: 'M', insertions: 3, deletions: 3, binary: false },
-      { path: 'src/auth/session.ts', status: 'M', insertions: 15, deletions: 2, binary: false },
-      { path: 'src/components/SignInForm.tsx', status: 'M', insertions: 1, deletions: 1, binary: false },
-      { path: 'src/routes/checkout.tsx', status: 'M', insertions: 1, deletions: 1, binary: false },
+      { path: 'src/auth/login.ts', status: 'M', insertions: 2, deletions: 2, binary: false },
+      { path: 'src/auth/session.ts', status: 'M', insertions: 10, deletions: 2, binary: false },
+      { path: 'src/components/SignInForm.tsx', status: 'M', insertions: 3, deletions: 3, binary: false },
+      { path: 'src/routes/checkout.tsx', status: 'M', insertions: 3, deletions: 1, binary: false },
     ],
-    totalInsertions: 20,
-    totalDeletions: 7,
+    totalInsertions: 18,
+    totalDeletions: 8,
   };
 }
 
@@ -914,12 +910,12 @@ function diffFileContent(filePath: string): DiffFileContentWire {
       modified: [
         'import { redirect } from "../router";',
         '',
-        'export function loginRedirect(path?: string) {',
+        'export function loginRedirect(path: string) {',
         '  redirect(path ? `/login?next=${encodeURIComponent(path)}` : "/login");',
         '  return null;',
         '}',
         '',
-        'export function isProtected(path: string) {',
+        'export function isProtected(path) {',
         '  return path.startsWith("/account");',
         '}',
         '',
@@ -931,21 +927,16 @@ function diffFileContent(filePath: string): DiffFileContentWire {
     return {
       original: ['export function afterSignIn() {', '  return "/dashboard";', '}', ''].join('\n'),
       modified: [
-        'const DEFAULT_DESTINATION = "/dashboard";',
+        'const DEFAULT_AFTER_SIGN_IN = "/dashboard";',
         '',
-        'export function afterSignIn(next?: string | null) {',
-        '  return isSafeReturnPath(next) ? next : DEFAULT_DESTINATION;',
+        '// Only path-absolute, same-origin targets are safe to navigate to. Rejects',
+        '// "//evil.com" and "/\\evil.com", which browsers resolve as protocol-relative URLs.',
+        'function isInternalPath(path: string | null | undefined): path is string {',
+        '  return !!path && path.startsWith("/") && path[1] !== "/" && path[1] !== "\\\\";',
         '}',
         '',
-        '// Only same-site absolute paths may be used as a post-sign-in destination.',
-        '// Anything else (absolute URLs, protocol-relative "//evil.com", backslash',
-        '// variants some browsers normalize to "//") falls back to the default.',
-        'function isSafeReturnPath(path?: string | null): path is string {',
-        '  if (!path) return false;',
-        '  if (!path.startsWith("/")) return false;',
-        '  if (path.startsWith("//")) return false;',
-        '  if (path.includes("\\\\")) return false;',
-        '  return true;',
+        'export function afterSignIn(next?: string | null) {',
+        '  return isInternalPath(next) ? next : DEFAULT_AFTER_SIGN_IN;',
         '}',
         '',
       ].join('\n'),
@@ -954,16 +945,46 @@ function diffFileContent(filePath: string): DiffFileContentWire {
   }
   if (filePath === 'src/components/SignInForm.tsx') {
     return {
-      original: 'const onSubmit = async () => {\n  await signIn(email, password);\n  navigate(afterSignIn());\n};\n',
-      modified:
-        'const onSubmit = async () => {\n  await signIn(email, password);\n  navigate(afterSignIn(params.get("next")));\n};\n',
+      original: [
+        'import { useNavigate, useSearchParams } from "../router";',
+        '',
+        'export function SignInForm() {',
+        '  const navigate = useNavigate();',
+        '  const params = useSearchParams();',
+        '',
+        '  const onSubmit = async () => {',
+        '    await signIn(email, password);',
+        '    navigate(afterSignIn());',
+        '  };',
+        '',
+      ].join('\n'),
+      modified: [
+        'import { useNavigate } from "../router";',
+        '',
+        'export function SignInForm() {',
+        '  const navigate = useNavigate();',
+        '',
+        '  const onSubmit = async () => {',
+        '    await signIn(email, password);',
+        '    const next = new URLSearchParams(window.location.search).get("next");',
+        '    navigate(afterSignIn(next));',
+        '  };',
+        '',
+      ].join('\n'),
       language: 'typescript',
     };
   }
   if (filePath === 'src/routes/checkout.tsx') {
     return {
       original: 'if (!user) {\n  return loginRedirect();\n}\n',
-      modified: 'if (!user) {\n  return loginRedirect(window.location.pathname + window.location.search);\n}\n',
+      modified: [
+        'if (!user) {',
+        '  // Empty on the server; loginRedirect falls back to a plain /login in that case.',
+        '  const { pathname, search, hash } = typeof window === "undefined" ? EMPTY_LOCATION : window.location;',
+        '  return loginRedirect(pathname + search + hash);',
+        '}',
+        '',
+      ].join('\n'),
       language: 'typescript',
     };
   }

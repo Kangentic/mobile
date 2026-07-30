@@ -150,6 +150,7 @@ function parseOptions() {
       'idle-ms': { type: 'string', default: String(DEFAULT_IDLE_MS) },
       'max-ms': { type: 'string', default: String(DEFAULT_MAX_MS) },
       'approve-count': { type: 'string', default: '0' },
+      'per-prompt-ms': { type: 'string' },
     },
   });
 
@@ -175,6 +176,11 @@ function parseOptions() {
     prompts: values.prompt,
     idleMs: Number.parseInt(values['idle-ms'], 10),
     maxMs: Number.parseInt(values['max-ms'], 10),
+    // Per-prompt budget. Without one, `--max-ms` is a single global deadline,
+    // so a long first turn consumes it and every later prompt is TYPED and then
+    // abandoned in the same instant - the capture ends holding a half-answered
+    // session, and the files those prompts would have changed never exist.
+    perPromptMs: values['per-prompt-ms'] ? Number.parseInt(values['per-prompt-ms'], 10) : null,
     // `all` approves without limit up to the final prompt. See the loop below:
     // approvals are cut off once the LAST prompt is submitted, so the dialog it
     // raises is left on screen as the capture's closing frame.
@@ -273,10 +279,14 @@ async function main() {
    * dialog is deliberately the final frame - it is the one the chat lens shows
    * as a permission card at the same moment.
    */
-  async function waitForIdle(label) {
+  async function waitForIdle(label, deadlineAt) {
     while (!exited) {
       if (Date.now() - startedAt > options.maxMs) {
         console.log(`captureClaudeFrames: hit --max-ms while waiting for ${label}`);
+        return;
+      }
+      if (deadlineAt !== undefined && Date.now() > deadlineAt) {
+        console.log(`captureClaudeFrames: hit --per-prompt-ms while waiting for ${label}`);
         return;
       }
       if (Date.now() - lastChunkAt >= options.idleMs) {
@@ -321,7 +331,10 @@ async function main() {
     await sleep(SUBMIT_GAP_MS);
     session.write('\r');
     await sleep(1000);
-    await waitForIdle(`prompt ${index + 1} to settle`);
+    await waitForIdle(
+      `prompt ${index + 1} to settle`,
+      options.perPromptMs === null ? undefined : Date.now() + options.perPromptMs,
+    );
   }
 
   if (!exited) session.kill();
