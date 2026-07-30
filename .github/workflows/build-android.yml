@@ -209,10 +209,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
+      # The composite, like the plan job above, rather than a raw setup-node plus
+      # an unconditional `npm ci`. This job used to pay a full install on every
+      # run while the rest of the repository restored node_modules from a cache
+      # keyed on the same lockfile - the composite's own description says every
+      # CI job shares that key, and this was the job that did not.
+      - uses: ./.github/actions/setup-node-deps
 
       - uses: actions/setup-java@v5
         with:
@@ -222,9 +224,6 @@ jobs:
       # v4's bump also moves the default cmdline-tools to 20.0; see the same
       # `uses:` in e2e.yml for what to suspect first if this job breaks.
       - uses: android-actions/setup-android@v4
-
-      - name: Install dependencies
-        run: npm ci
 
       # eas.json stays the source of truth for per-profile env even though the
       # build itself runs on Gradle. EXPO_PUBLIC_* values are read by
@@ -470,6 +469,26 @@ jobs:
           BUILD_ABIS: ${{ steps.plan.outputs.abis }}
         run: bash .github/scripts/verify-android-abis.sh "$OUTPUT_PATH" "$EXTENSION" "$BUILD_ABIS"
 
+      # The SHIPPING half of the same guard e2e.yml runs. Resource shrinking can
+      # drop xterm.html - it is named from the JS bundle, which the shrinker
+      # never scans - and the result is a blank Terminal pane, the default view
+      # of the session screen, in a build that passed every check and went to
+      # Play. Path-agnostic on purpose: optimizeReleaseResources renames the
+      # entry, so this matches the bytes rather than a path.
+      #
+      # RELEASE ONLY, matching the mapping upload below. Not a formality: this
+      # job falls back to `assembleDebug` for ANY profile when there is no
+      # keystore, and a debug build runs no shrinker at all, so there is nothing
+      # to guard and the artifact shape is one this check has never been run
+      # against. Verified against a real release APK (run 30506459459) and a real
+      # release AAB (run 30466715863); a debug artifact was deliberately left out
+      # of scope rather than assumed equivalent.
+      - name: Verify the artifact still carries the terminal page
+        if: steps.plan.outputs.variant == 'release'
+        env:
+          OUTPUT_PATH: ${{ steps.plan.outputs.output-path }}
+        run: bash .github/scripts/verify-android-assets.sh "$OUTPUT_PATH"
+
       - name: Name the artifact
         id: name
         env:
@@ -583,10 +602,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
+      # Same composite as the build job. This one needs node_modules for the
+      # `npx expo config` below, not merely a Node binary.
+      - uses: ./.github/actions/setup-node-deps
 
       - name: Download the built artifact
         uses: actions/download-artifact@v8
@@ -601,9 +619,6 @@ jobs:
           file="$(ls artifact/* | head -n 1)"
           echo "Submitting $file"
           bash .github/scripts/verify-android-signature.sh "$file" "${file##*.}"
-
-      - name: Install dependencies
-        run: npm ci
 
       # Re-checked here even though the plan job already preflighted it. Not
       # redundant: this closes the window between the plan job and now, in which
