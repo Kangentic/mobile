@@ -667,7 +667,14 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    width:max-content keeps the terminal its natural grid width so the overflow is
    real and scrollable rather than wrapped. */
 #scroll-container { width: 100%; height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
-#terminal { width: max-content; }
+/* Auto side margins CENTRE a grid narrower than the screen and do nothing to a
+   wider one, which is exactly the split we want. The font is fitted to the
+   pane's HEIGHT, so a grid whose aspect is taller than the pane's cannot fill
+   the width at any font size - the leftover is inherent, not a bug. Pinned
+   left it all piles up on the right and reads as a terminal cut short; split
+   evenly it reads as a margin. When the grid IS wider, auto margins compute to
+   zero, the overflow stays real, and the pan logic is untouched. */
+#terminal { width: max-content; margin: 0 auto; }
 </style>
 </head>
 <body>

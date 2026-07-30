@@ -470,13 +470,23 @@ function codexTuiFrame(paintTick: number): string {
   // bar is the frame's last readable line, so it becomes the card snippet.
   const statusLine = paintTick % 2 === 0 ? 'Refactoring src/http/retryPolicy.ts' : 'Running the affected tests';
   const upTokens = (8.2 + paintTick * 0.1).toFixed(1);
+  // Every row is padded to the SAME width as the reported grid. The previous
+  // frame hardcoded a 38-glyph border while its two status strings were 35 and
+  // 26 columns, so the box was ragged on one paint and over-wide on both - and
+  // nothing caught it, because the column checks only ever looked at the
+  // streaming session's fixture.
+  const width = activeGrid().cols;
+  const inner = width - 2;
+  const boxed = (text: string): string => `│${text.slice(0, inner).padEnd(inner, ' ')}│`;
   return (
     '\x1b[H\x1b[2J' +
-    `${spinner} Working (${paintTick}s · esc to interrupt)\r\n` +
-    '╭──────────────────────────────────────╮\r\n' +
-    `│ ${statusLine} │\r\n` +
-    '╰──────────────────────────────────────╯\r\n' +
-    `Codex CLI · GPT-5 Codex · high · ↑${upTokens}k ↓${420 + paintTick}\r\n`
+    `${spinner} Working (${paintTick}s · esc to interrupt)`.slice(0, width) +
+    '\r\n' +
+    `╭${'─'.repeat(inner)}╮\r\n` +
+    `${boxed(` ${statusLine}`)}\r\n` +
+    `╰${'─'.repeat(inner)}╯\r\n` +
+    `Codex CLI · GPT-5 Codex · ↑${upTokens}k ↓${420 + paintTick}`.slice(0, width) +
+    '\r\n'
   );
 }
 
