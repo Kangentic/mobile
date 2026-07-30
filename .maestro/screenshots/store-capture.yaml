@@ -1,0 +1,291 @@
+appId: com.kangentic.mobile
+env:
+  # A bare subdirectory name, NOT a path to where the files should end up.
+  #
+  # Maestro does not honour an absolute takeScreenshot path: it strips the
+  # drive and re-roots whatever remains under its own run directory, at
+  # <run>/<flow>/takeScreenshot/<path>. Passing the real destination therefore
+  # buried the captures inside ~/.maestro/tests/<timestamp>/ instead. The
+  # script pins that run directory with --debug-output and moves the PNGs into
+  # place afterwards, so this only has to name a folder.
+  OUTPUT_DIR: shots
+---
+# STORE-LISTING CAPTURE. Not a test, and not part of either E2E suite.
+#
+# Driven only by `node scripts/storeScreenshots.mjs <shelf>`, which sets the
+# device geometry, cleans the status bar, runs this flow, and then asserts every
+# PNG came out at the shelf's exact required dimensions. CI never runs it:
+# e2e.yml names `.maestro/smoke.yaml` and `.maestro/paired` explicitly, and
+# tests/unit/ciSafeMaestroFlows.test.ts asserts this directory stays out of both.
+#
+# Precondition: the MOCK rig, not the stub rig - `npm run dev:mock`. Mock mode
+# is an in-app fake desktop over a loopback transport, so there is no relay, no
+# stub peer and no pairing to arrange. It is also far richer than the stub (two
+# projects, seven columns, nine tasks, labels, PR pills, context bars, a real
+# recorded transcript), which is why it is the source for store imagery.
+#
+# It requires a DEV build: isMockDesktopEnabled() is `__DEV__ && ...`, so a
+# release APK silently shows an unpaired "Connecting to your desktop..." screen
+# instead. Check for the DEBUGGABLE flag before trusting what is on screen:
+#   adb shell "dumpsys package com.kangentic.mobile | grep flags="
+#
+# TIMING IS LOAD-BEARING. The mock's agent-life simulator only ticks once a
+# read-stream subscription attaches, and the permission prompt is raised at tick
+# 20. Every wait below is on a real selector rather than a fixed sleep, but the
+# generous budgets exist because that prompt genuinely takes ~20s to appear and
+# the app never reports UI-idle (see .claude/rules/e2e-maestro-runs.md), so
+# Maestro pays 6-8s per tap on settled-hierarchy aiming.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 60000
+# THE SESSION IS CAPTURED FIRST, AND THE FEED LAST. That ordering is the fix
+# for a genuinely subtle failure, so it is worth stating plainly.
+#
+# The Agents shot wants the session sitting in Needs You with a pending prompt.
+# But that row does not exist until the mock raises the prompt at tick 20, and
+# it is inserted ABOVE whatever is on screen. FlashList maintains visible
+# content position, so the insert pushes the viewport DOWN by exactly the height
+# of the new section - scrolling to the top beforehand does not help, and two
+# earlier revisions timed out here with the row they wanted one card above the
+# fold and absent from the hierarchy (FlashList virtualises).
+#
+# Opening the session first sidesteps all of it: the permission card is found by
+# id, not position, and the prompt is left UNANSWERED, so by the time we come
+# back the Needs You row exists and a single scroll to the top reaches it.
+# Start from the top, because the row moves. Before the prompt is raised the
+# session sits in Thinking, below the fold; once raised it jumps to Needs You at
+# the very top. Searching DOWN from wherever the launch happened to leave the
+# viewport therefore scrolls AWAY from it half the time - which is exactly what
+# happened, running to the end of the feed while the row sat above.
+#
+# Swiping DOWN moves content toward the beginning.
+- swipe:
+    direction: DOWN
+    duration: 400
+- swipe:
+    direction: DOWN
+    duration: 400
+- swipe:
+    direction: DOWN
+    duration: 400
+# visibilityPercentage is deliberately low: an activity card is tall enough that
+# it is rarely 100% inside the viewport, and the default 100 rejected a row that
+# was plainly on screen. waitToSettleTimeoutMs matters because this feed mutates
+# between scrolls (usage bars tick, sections re-sort), which is exactly the case
+# Maestro's own tip names. Unlike a one-shot assert, this retries across its
+# whole window, so it tolerates the prompt arriving mid-search.
+- scrollUntilVisible:
+    element:
+      id: "activity-row-mock-session-1"
+    direction: DOWN
+    visibilityPercentage: 20
+    centerElement: true
+    waitToSettleTimeoutMs: 800
+    timeout: 60000
+- tapOn:
+    id: "activity-row-mock-session-1"
+# 45s: this screen mounts all three panes at once, terminal WebView included.
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 45000
+# CHAT IS WHERE WE LAND, not Terminal. Opening a prompt-pending row goes
+# straight to the lens that can answer the prompt, so the permission card is
+# already on screen - capture it before anything is tapped, because approving or
+# navigating away dismisses it and the mock raises it only once per session.
+- extendedWaitUntil:
+    visible:
+      id: "permission-approve"
+    timeout: 45000
+# The first-run "One session, two views" coach-mark covers most of a phone
+# screen. It is correct product behaviour and wrong for a listing image, so
+# dismiss it (it is tap-to-dismiss) and only then capture.
+- runFlow:
+    when:
+      visible:
+        id: "session-mode-hint"
+    commands:
+      - tapOn:
+          id: "session-mode-hint"
+      - extendedWaitUntil:
+          notVisible:
+            id: "session-mode-hint"
+          timeout: 10000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/03-session-chat
+    label: Readable transcript with a permission card
+# The xterm mirror: the most distinctive frame in the listing.
+#
+# Wait on the WebView's own testID, never on the text inside it. xterm.js paints
+# into a canvas inside a WebView, so NOTHING it renders reaches the native view
+# hierarchy - a wait on the PTY text can only ever time out, however plainly the
+# line is on screen. That is why the settle below is a duration rather than a
+# selector: there is no native signal for "the PTY has painted some rows", and
+# the mock emits one line per second.
+- tapOn:
+    id: "session-mode-terminal"
+# Retried for the same reason the Changes tap below is: same switcher, same
+# dispatched-but-ignored failure mode. Guarded, so a tap that worked is free.
+- runFlow:
+    when:
+      notVisible:
+        id: "terminal-webview"
+    commands:
+      - tapOn:
+          id: "session-mode-terminal"
+- extendedWaitUntil:
+    visible:
+      id: "terminal-webview"
+    timeout: 45000
+- waitForAnimationToEnd:
+    timeout: 15000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/02-session-terminal
+    label: Live terminal mirror of the desktop PTY
+# PAGING TO CHANGES IS RETRIED, because a tap here has been observed to
+# DISPATCH AND DO NOTHING.
+#
+# On one iOS run Maestro reported this tap COMPLETED after 3.6s and the pager
+# never turned - the failure screenshot showed the Terminal page still
+# selected. `retryIfNoChange` is false, so nothing tried again and the flow
+# died holding two frames. The likely mechanism is the quick-key bar: it
+# appears with the Terminal page and shifts this switcher, so a tap aimed from
+# a hierarchy read a moment earlier lands beside the segment rather than on it.
+# A second tap re-reads the hierarchy and hits.
+#
+# Each retry is guarded on the destination, so a tap that worked costs one
+# hierarchy read and nothing else.
+- tapOn:
+    id: "session-mode-changes"
+- runFlow:
+    when:
+      notVisible:
+        id: "changes-file-list"
+    commands:
+      - tapOn:
+          id: "session-mode-changes"
+- runFlow:
+    when:
+      notVisible:
+        id: "changes-file-list"
+    commands:
+      - tapOn:
+          id: "session-mode-changes"
+# CONDITIONAL, NOT ASSERTED, so that losing this page cannot also cost the feed
+# and board frames that come after it.
+#
+# Twice now a single mid-flow navigation failure has thrown away every
+# remaining shot: once at the file diff (losing the feed and the board), once
+# here (losing four). An assert is the right tool when the run exists to prove
+# the screen works - this run exists to COLLECT, and a partial set is worth
+# having. What is missing is reported by name afterwards rather than inferred
+# from a count, so a skipped page is still loud.
+- runFlow:
+    when:
+      visible:
+        id: "changes-file-list"
+    commands:
+      - takeScreenshot:
+          path: ${OUTPUT_DIR}/04-session-changes
+          label: Changed files in the agent's worktree
+      # The unified diff itself. The file LIST alone left most of a phone screen
+      # empty and sells the review story weakly; the coloured +/- lines are the
+      # frame that actually says "read your agent's changes before they land".
+      - tapOn:
+          id: "changes-file-0"
+      - extendedWaitUntil:
+          visible:
+            id: "file-diff-lines"
+          timeout: 30000
+      - takeScreenshot:
+          path: ${OUTPUT_DIR}/06-file-diff
+          label: Unified diff for a changed file
+# RETURNING TO THE FEED IS PLATFORM-SPLIT, and getting it wrong cost a whole
+# iOS run: `back` did nothing on the file-diff screen, the flow stopped there,
+# and the two frames that come after it were never taken.
+#
+# `- back` is not one gesture. Android has a real back button; iOS has no
+# equivalent, so Maestro swipes from the left edge - and an edge swipe is
+# ambiguous here, because the screen underneath is a THREE-PAGE HORIZONTAL
+# PAGER (Terminal / Chat / Changes). A swipe can page the segments instead of
+# popping the route, so on iOS it is not merely useless, it is unsafe.
+#
+# Use the native bar button where it exists instead. iOS exposes it with
+# resource-id "BackButton" (confirmed in a captured hierarchy dump, not
+# assumed); Android's header has no such element, so the condition is simply
+# false there and the real back button is used.
+#
+# Each step is guarded on what is actually on screen, so no platform fires the
+# other's gesture:
+#   iOS     - taps BackButton (-> session), skips `back`, taps task-back-button.
+#   Android - skips BackButton, `back` (-> session), taps task-back-button.
+- runFlow:
+    when:
+      visible:
+        id: "BackButton"
+    commands:
+      - tapOn:
+          id: "BackButton"
+- runFlow:
+    when:
+      notVisible:
+        id: "session-screen"
+    commands:
+      - back
+- runFlow:
+    when:
+      visible:
+        id: "session-screen"
+    commands:
+      - tapOn:
+          id: "task-back-button"
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 30000
+# Now the Needs You row exists (the prompt was never answered), so scrolling to
+# the top actually reaches it. Swiping DOWN moves content toward the beginning;
+# there is no scroll-to-top primitive.
+- swipe:
+    direction: DOWN
+    duration: 400
+- swipe:
+    direction: DOWN
+    duration: 400
+- swipe:
+    direction: DOWN
+    duration: 400
+- extendedWaitUntil:
+    visible:
+      text: "Approve:.*"
+    timeout: 60000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/01-agents
+    label: Agents feed with a session waiting on approval
+# The bottom tab bar is expo-router NativeTabs - platform views we do not
+# render, so they carry no testID of ours. Selecting by label is the documented
+# carve-out in .claude/rules/e2e-maestro-runs.md, not a lapse.
+- tapOn:
+    text: "Board"
+- extendedWaitUntil:
+    visible:
+      id: "board-screen"
+    timeout: 30000
+# Page to Executing before capturing. The board opens on To Do, which holds a
+# single card and leaves three quarters of the frame empty. Executing is where
+# the live sessions are, with agent status, model badges, context bars, labels
+# and PR pills - the column that actually shows what the product does.
+#
+# `lane-executing` is the MOCK's column id (src/connection/mockDesktop.ts), not
+# a product constant: a real desktop's columns are user-defined and carry
+# generated ids. This flow only ever runs against the mock, so pinning it is
+# safe, but do not copy the selector into a paired flow.
+- tapOn:
+    id: "board-column-chip-lane-executing"
+- waitForAnimationToEnd:
+    timeout: 10000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/05-board
+    label: Kanban board with live agent sessions

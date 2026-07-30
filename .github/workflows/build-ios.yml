@@ -46,6 +46,13 @@ on:
         options:
           - none
           - smoke
+      screenshots:
+        description: 'Capture App Store screenshots on a 6.9-inch simulator. EXPERIMENTAL, see capture-ios-screenshots.sh.'
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
   # Weekly drift detection. Nothing here is PR-triggered, so without a schedule the
   # only way to learn that a runner Xcode bump, a dependency update, or an Apple
   # toolchain change broke the iOS build is to want a release and discover it then.
@@ -120,17 +127,61 @@ jobs:
         env:
           WORKSPACE: ${{ steps.xcode.outputs.workspace }}
           SCHEME: ${{ steps.xcode.outputs.scheme }}
+          # Store-screenshot mode only. The mock desktop is gated on
+          # `__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'`, so a Release build
+          # shows an unpaired empty state with nothing worth capturing.
+          #
+          # DEBUG CONFIGURATION IS THE LOAD-BEARING PART, and it was learned the
+          # hard way. Passing DEV=true to a Release build does nothing: React
+          # Native's bundling script derives --dev from $CONFIGURATION and
+          # OVERWRITES any inherited DEV, so the first probe bundled with
+          # `--dev false` and captured a "No desktop paired" screen at exactly
+          # the right resolution.
+          #
+          # FORCE_BUNDLING is what keeps a Debug build self-contained: without
+          # it a Debug app expects a Metro server the runner is not running, and
+          # with it the dev bundle is embedded in the .app. So: Debug for
+          # __DEV__, FORCE_BUNDLING for no-Metro, and the guard in source is
+          # left alone.
+          FORCE_BUNDLING: ${{ inputs.screenshots == 'true' && '1' || '' }}
+          EXPO_PUBLIC_KANGENTIC_MOCK: ${{ inputs.screenshots == 'true' && '1' || '' }}
+          BUILD_CONFIGURATION: ${{ inputs.screenshots == 'true' && 'Debug' || 'Release' }}
+          SIGN_AD_HOC: ${{ inputs.screenshots == 'true' && '1' || '' }}
         run: |
           set -euo pipefail
+
+          # AD-HOC SIGN THE SCREENSHOT BUILD, and only that one.
+          #
+          # An unsigned app has no entitlements at all, including
+          # `application-identifier` - and without it every keychain call fails
+          # with errSecMissingEntitlement. That is not hypothetical here:
+          # expo-secure-store threw "A required entitlement isn't present" on
+          # boot, expo-notifications followed with ERR_NOTIFICATIONS_KEYCHAIN_ACCESS,
+          # and LogBox put a red banner across the capture.
+          #
+          # Ad-hoc signing (identity "-") needs no Apple account, no certificate
+          # and no provisioning profile, so it costs the runner nothing. It also
+          # turns the capture into the first real exercise of iOS keychain
+          # access, which matters well beyond screenshots: the pairing trust
+          # anchor lives in expo-secure-store.
+          #
+          # The plain compile check stays UNSIGNED. It exists to be runnable by
+          # anyone with no Apple setup whatsoever, and nothing about it needs the
+          # keychain.
+          if [ "${SIGN_AD_HOC:-}" = "1" ]; then
+            signing_args=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=-)
+          else
+            signing_args=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
+          fi
+
           xcodebuild build \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
-            -configuration Release \
+            -configuration "$BUILD_CONFIGURATION" \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            "${signing_args[@]}"
 
       # xcodebuild exits 0 for a build that compiled nothing we care about, so
       # the exit code is not proof. The app bundle existing is. This is not
@@ -140,9 +191,12 @@ jobs:
         id: verify
         env:
           SCHEME: ${{ steps.xcode.outputs.scheme }}
+          # Must track the build step's configuration, or the screenshot run
+          # looks for a Release product that was never built.
+          BUILD_CONFIGURATION: ${{ inputs.screenshots == 'true' && 'Debug' || 'Release' }}
         run: |
           set -euo pipefail
-          app_path="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphonesimulator/$SCHEME.app"
+          app_path="$RUNNER_TEMP/DerivedData/Build/Products/$BUILD_CONFIGURATION-iphonesimulator/$SCHEME.app"
           if [ ! -d "$app_path" ]; then
             echo "::error::No $SCHEME.app was produced. The build compiled something, but not the app."
             ls -R "$RUNNER_TEMP/DerivedData/Build/Products" || true
@@ -161,12 +215,237 @@ jobs:
       # all have passed the build unnoticed.
       - name: Launch the app on a simulator
         id: smoke
+        # Skipped for a screenshot run, and that is worth 12 minutes.
+        #
+        # This step boots its OWN simulator, and `pickIosSimulator` without a
+        # preference returns whatever iPhone simctl lists first - while the
+        # capture step below insists on a 6.9-inch Pro Max for the App Store
+        # shelf. So a screenshot run was booting two different simulators back
+        # to back, at roughly six minutes each, to prove the same thing twice.
+        # The capture asserts the process survives and produces a screenshot of
+        # a rendered app, which is strictly more than this step checks.
+        if: inputs.screenshots != 'true'
         env:
           APP_PATH: ${{ steps.verify.outputs.app-path }}
           # Keeps the simulator up for the Maestro step below, which drives the
           # same one. Booting a simulator takes over a minute.
           KEEP_SIMULATOR_BOOTED: ${{ inputs.maestro != 'none' && '1' || '' }}
         run: bash .github/scripts/smoke-ios-simulator.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/launch.png"
+
+      # App Store listing screenshots. EXPERIMENTAL and opt-in: see the header of
+      # capture-ios-screenshots.sh for the __DEV__/bundling question this run
+      # exists to answer. Android's shelves are captured locally by
+      # scripts/storeScreenshots.mjs, but iOS needs a booted simulator, so it can
+      # only happen here.
+      # Metro has to run for the screenshot capture, and it has to carry the mock
+      # flag ITSELF: EXPO_PUBLIC_* variables are inlined into the bundle at
+      # bundle time, so setting it only on xcodebuild leaves the served bundle
+      # without it. A Debug build asks the dev client where to load from, and
+      # this is the answer.
+      - name: Start Metro for the screenshot capture
+        if: inputs.screenshots == 'true'
+        env:
+          EXPO_PUBLIC_KANGENTIC_MOCK: '1'
+          # Silences LogBox for this bundle only. An unsigned simulator build
+          # has no keychain entitlement, so expo-secure-store throws on boot and
+          # LogBox puts a red banner across the bottom of every frame.
+          EXPO_PUBLIC_KANGENTIC_SHOTS: '1'
+        run: |
+          set -euo pipefail
+          nohup npx expo start --dev-client --port 8081 > "$RUNNER_TEMP/metro.log" 2>&1 &
+          # Poll Metro's own status endpoint rather than sleeping a guessed
+          # duration: a cold bundler start is minutes on a fresh runner, and a
+          # capture that races it screenshots a loading screen.
+          for attempt in $(seq 1 60); do
+            if curl -sf http://localhost:8081/status | grep -q 'packager-status:running'; then
+              echo "Metro is up after ${attempt} attempts."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Metro never reported packager-status:running."
+          cat "$RUNNER_TEMP/metro.log" || true
+          exit 1
+
+      - name: Capture App Store screenshots
+        if: inputs.screenshots == 'true'
+        env:
+          APP_PATH: ${{ steps.verify.outputs.app-path }}
+          METRO_URL: http://localhost:8081
+          # Read, not just uploaded: the capture waits for Metro to actually
+          # serve a bundle before screenshotting.
+          METRO_LOG: ${{ runner.temp }}/metro.log
+          # The Maestro step below drives this same simulator, and the
+          # status-bar override would be lost with a shutdown.
+          KEEP_SIMULATOR_BOOTED: '1'
+        # Its own directory, deliberately NOT the one the store set is collected
+        # into: this step produces a diagnostic launch frame, and mixing it in
+        # with the listing images is how an un-navigated screenshot shipped as
+        # the feed shot. See the comment on capture_path in that script.
+        run: bash .github/scripts/capture-ios-screenshots.sh "$APP_PATH" com.kangentic.mobile "$RUNNER_TEMP/ios-launch-check"
+
+      # The App Store wants a MINIMUM OF THREE screenshots per shelf, and the
+      # step above deliberately produces exactly one: it needs no UI driver, so
+      # it always works and is the floor.
+      #
+      # The rest need navigation, which needs a driver. Maestro's iOS driver
+      # depends on Facebook's idb_companion and has an open upstream break on
+      # recent macOS/Xcode pairings (mobile-dev-inc/Maestro#2906), so this is
+      # attempted rather than relied on - `continue-on-error` keeps a driver
+      # failure from throwing away the frame we already have.
+      #
+      # It runs the SAME flow as Android. Every selector in it is a testID,
+      # which maps to accessibilityIdentifier on iOS, so if the driver works the
+      # whole six-shot set comes for free rather than needing an iOS-specific
+      # flow to maintain alongside it.
+      - name: Install Maestro for the screenshot flow
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          brew tap facebook/fb
+          # Homebrew refuses to load a formula from a third-party tap until the
+          # tap is explicitly trusted, and says so rather than installing:
+          # "Refusing to load formula facebook/fb/idb-companion from untrusted
+          # tap". Without this the install dies, Maestro has no iOS driver, and
+          # the failure looks like the known upstream driver breakage rather
+          # than a missing opt-in.
+          brew trust facebook/fb
+          brew install idb-companion
+          curl -Ls https://get.maestro.mobile.dev > "$RUNNER_TEMP/install-maestro.sh"
+          bash "$RUNNER_TEMP/install-maestro.sh"
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Capture the remaining screenshots with Maestro
+        id: ios-maestro
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          maestro --device "$(xcrun simctl list devices booted -j | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);for(const runtime of Object.values(j.devices))for(const device of runtime)if(device.state==="Booted")return process.stdout.write(device.udid)})')" \
+            test \
+            --debug-output "$RUNNER_TEMP/maestro-ios" \
+            -e OUTPUT_DIR=shots \
+            .maestro/screenshots/store-capture.yaml \
+            || echo "::warning::The capture flow did not run to completion. Collecting whatever it captured before stopping."
+          # ALWAYS collect, even from a failed run.
+          #
+          # `set -e` plus a non-zero maestro exit skipped these lines entirely,
+          # which is how a run that captured four good frames handed back none:
+          # the flow died at the end and took the collection with it. A partial
+          # set is worth having - the App Store needs three, and a late failure
+          # can still have produced them.
+          #
+          # Maestro re-roots takeScreenshot paths under its own run directory,
+          # exactly as it does on Android.
+          #
+          # MATCH THE takeScreenshot DIRECTORY EXACTLY. The earlier `-path
+          # '*shots*'` also matched Maestro's own `screenshots/` folder, which
+          # holds a frame per failed step, so a debug capture named
+          # `step-029-assertCondition-...png` was collected as though it were a
+          # listing image. Substring globs are too loose for a directory that
+          # sits beside one with a superset name.
+          mkdir -p "$RUNNER_TEMP/ios-screenshots"
+          find "$RUNNER_TEMP/maestro-ios" -name '*.png' -path '*/takeScreenshot/shots/*' \
+            -exec cp {} "$RUNNER_TEMP/ios-screenshots/" \; || true
+          ls -la "$RUNNER_TEMP/ios-screenshots"
+
+      # SAY SO WHEN THE DRIVER PRODUCED NOTHING.
+      #
+      # The step above is continue-on-error so a broken iOS driver cannot throw
+      # away the frame the scripted capture already took. That protection cost
+      # two runs: it reported success while doing nothing at all - once because
+      # Homebrew refused an untrusted tap, once for another reason entirely -
+      # and the green tick hid both. A step that can silently no-op is worse
+      # than one that fails, so the count is checked and surfaced explicitly.
+      #
+      # A warning rather than a failure, because one verified frame is still a
+      # real result and worth keeping.
+      - name: Report how many screenshots were captured
+        if: inputs.screenshots == 'true'
+        run: |
+          set -euo pipefail
+          count="$(find "$RUNNER_TEMP/ios-screenshots" -name '*.png' | wc -l | tr -d ' ')"
+          echo "Captured $count screenshot(s)."
+
+          # CHECK THE NAMES, NOT JUST THE COUNT.
+          #
+          # A count alone called a run successful when one of its "screenshots"
+          # was a Maestro failure frame and another was an un-navigated launch
+          # capture. Both were real PNGs at the right size, so every check in
+          # place at the time passed. Android gets this for free from
+          # verifyCaptures(); this is the same guard for the shelf that has no
+          # local rig. SHOT_NAMES is read from the script so there is one list.
+          expected="$(node -e 'import("./scripts/storeScreenshots.mjs").then(m=>console.log(m.SHOT_NAMES.join("\n")))')"
+          for png in "$RUNNER_TEMP/ios-screenshots"/*.png; do
+            [ -e "$png" ] || continue
+            name="$(basename "$png" .png)"
+            if ! echo "$expected" | grep -qx "$name"; then
+              echo "::warning::$name.png is not one of the expected store shots. Something other than the capture flow wrote into the output directory."
+            fi
+          done
+
+          # NAME WHAT IS MISSING. The capture flow now SKIPS a page it cannot
+          # reach rather than aborting the run, so that one bad navigation
+          # cannot also cost every frame after it. That is the right trade only
+          # if a skip is loud: otherwise a short set reads as "the flow ran"
+          # and nobody learns which screen stopped working.
+          while read -r name; do
+            [ -n "$name" ] || continue
+            if [ ! -f "$RUNNER_TEMP/ios-screenshots/$name.png" ]; then
+              echo "::warning::$name.png was never captured. That page was not reached - read the ios-screenshot-maestro artifact's failure screenshot."
+              echo "- Missing: \`$name.png\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done <<< "$expected"
+          {
+            echo "### iOS store screenshots"
+            echo ""
+            echo "Captured **$count** at 1320x2868 (App Store 6.9-inch shelf)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -lt 3 ]; then
+            echo "::warning::Only $count screenshot(s). The App Store needs at least 3 per shelf, so the Maestro pass did not add its frames - check the ios-screenshot-maestro artifact."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Below the App Store minimum of 3. The Maestro pass added nothing." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the Maestro iOS output
+        if: ${{ inputs.screenshots == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshot-maestro-${{ github.sha }}
+          path: ${{ runner.temp }}/maestro-ios
+          retention-days: 14
+          if-no-files-found: warn
+          # Maestro writes its run under a DOT directory (.maestro/tests/...),
+          # and upload-artifact skips hidden files by default - so this artifact
+          # uploaded empty and the failure screenshot, which is the first thing
+          # worth reading when a flow stops, was unreachable.
+          include-hidden-files: true
+
+      # Metro's log is the first thing worth reading when the capture shows a
+      # loading screen or a red box: it names the failing module directly, which
+      # a screenshot cannot. The launch-check frame rides along: it is not a
+      # listing image (see capture-ios-screenshots.sh), but when the flow fails
+      # on its first assertion it answers "did the app even render?" outright.
+      - name: Upload the Metro log
+        if: ${{ inputs.screenshots == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshot-metro-log-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/metro.log
+            ${{ runner.temp }}/ios-launch-check
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload the App Store screenshots
+        if: ${{ inputs.screenshots == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-store-screenshots-${{ github.sha }}
+          path: ${{ runner.temp }}/ios-screenshots
+          retention-days: 14
+          if-no-files-found: warn
 
       # EXPERIMENTAL, and opt-in for a reason. Maestro's iOS driver needs Facebook's
       # idb_companion, and there is an open upstream issue where a recent
@@ -189,13 +468,23 @@ jobs:
         run: |
           set -euo pipefail
           brew tap facebook/fb
+          # See the screenshot job's copy of this: Homebrew will not load a
+          # third-party tap's formula until the tap is trusted, so without this
+          # the driver silently never installs.
+          brew trust facebook/fb
           brew install facebook/fb/idb-companion
           # Installs the pinned MAESTRO_VERSION from the workflow-level `env:`.
           curl -Ls 'https://get.maestro.mobile.dev' | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
       - name: Run the Maestro smoke flow
-        if: inputs.maestro != 'none'
+        # Both halves of this condition are required. `device-id` is written only
+        # by the `smoke` step, which a screenshot run skips - so dispatching
+        # `-f screenshots=true -f maestro=smoke` (nothing validates the pair)
+        # would leave this reading an empty output and running
+        # `maestro --device "" ...`, failing the job after the captures already
+        # succeeded, for a reason that reads as iOS-driver flakiness.
+        if: inputs.maestro != 'none' && inputs.screenshots != 'true'
         env:
           MAESTRO_DEVICE: ${{ steps.smoke.outputs.device-id }}
         run: |

@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+#
+# Captures App Store listing screenshots on a 6.9-inch iPhone simulator.
+#
+# Usage: capture-ios-screenshots.sh <path to .app> <bundle id> <output directory>
+#
+# THIS IS A PROBE, not a finished pipeline. It captures at the right size, but
+# it does NOT yet capture the right CONTENT. Two runs have narrowed why, and
+# both findings are recorded here so nobody pays for them twice.
+#
+# The problem: `isMockDesktopEnabled()` is `__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK
+# === '1'` (src/connection/mockDesktop.ts). Without mock content the app has an
+# empty feed and there is nothing worth screenshotting.
+#
+#   Attempt 1 - Release build with FORCE_BUNDLING=1 and DEV=true.
+#   FAILED. React Native's bundling script derives --dev from $CONFIGURATION and
+#   OVERWRITES any inherited DEV, so it bundled `--dev false` (visible in the
+#   build log's export:embed line) and __DEV__ stayed false. Captured a
+#   correctly-sized "No desktop paired" screen.
+#
+#   Attempt 2 - Debug build, keeping FORCE_BUNDLING=1.
+#   The bundle is now a dev bundle, but expo-dev-client's LAUNCHER takes over
+#   startup and shows "Searching for development servers...", so the embedded
+#   bundle is never loaded and the app never renders. Captured the launcher.
+#
+#   Attempt 3 - Debug build, Metro on the runner, launcher pointed at it by
+#   `simctl openurl`. BLOCKED ON A SYSTEM DIALOG. iOS asks
+#   "Open in "Kangentic"?" (Cancel / Open) for a scheme opened from outside the
+#   app, and nothing on the runner taps it. The capture is that dialog, and
+#   Metro's log confirms it: the server came up and was never asked for a
+#   bundle. `simctl` has no tap primitive, so this needs a UI driver.
+#
+# What is left to try, in order:
+#   1. Maestro's iOS driver, to tap "Open" and then walk the same waypoints the
+#      Android flow does. The workflow already has an opt-in `maestro` input
+#      that installs idb-companion, and whether it works on this runner is
+#      itself unverified - see the EXPERIMENTAL note on that job step and
+#      upstream mobile-dev-inc/Maestro#2906. If it works, the whole
+#      .maestro/screenshots flow becomes reusable for iOS.
+#   2. Pre-seeding the dev launcher's saved server URL so no deep link, and so
+#      no dialog, is needed at all.
+#   3. Widening the mock gate in source so a release-shaped build can show mock
+#      content. This weakens a deliberate guard and needs an explicit decision,
+#      not a convenience - do not reach for it to save a CI cycle.
+#
+# Note this is NOT on the critical path for an App Store submission: that shelf
+# is also blocked on the privacy questionnaire, the age rating and export
+# compliance (see .claude/skills/release/SKILL.md).
+#
+# Apple requires 1320x2868 for the 6.9-inch shelf and rejects anything else at
+# upload, so the size is ASSERTED here rather than assumed from the device name.
+
+set -euo pipefail
+
+app_path="${1:?usage: capture-ios-screenshots.sh <path to .app> <bundle id> <output dir>}"
+bundle_id="${2:?missing bundle id}"
+output_directory="${3:?missing output directory}"
+
+# The 6.9-inch shelf. Both models render 440x956pt at @3x = 1320x2868.
+REQUIRED_WIDTH=1320
+REQUIRED_HEIGHT=2868
+
+[ -d "$app_path" ] || {
+  echo "::error::No app bundle at $app_path."
+  exit 1
+}
+mkdir -p "$output_directory"
+
+devices_json="${RUNNER_TEMP:-/tmp}/simulator-devices.json"
+xcrun simctl list devices available --json > "$devices_json"
+
+device_id="$(node scripts/pickIosSimulator.mjs "$devices_json" \
+  --prefer 'iPhone 17 Pro Max' \
+  --prefer 'iPhone 16 Pro Max' || true)"
+
+if [ -z "$device_id" ]; then
+  echo "::error::No available iPhone simulator on this runner."
+  cat "$devices_json"
+  exit 1
+fi
+
+echo "Booting simulator $device_id"
+xcrun simctl boot "$device_id" || true
+xcrun simctl bootstatus "$device_id" -b
+
+echo "Installing $(basename "$app_path")"
+xcrun simctl install "$device_id" "$app_path"
+
+# Apple's own marketing status bar. 9:41 is the time Apple has used in iPhone
+# imagery since the original keynote, and a full battery with no carrier text is
+# what every App Store listing shows - a real clock and a half-empty battery is
+# the iOS equivalent of the emulator clock that spoiled the Android captures.
+# This is simctl's own override, so it needs no UI interaction.
+xcrun simctl status_bar "$device_id" override \
+  --time "9:41" \
+  --dataNetwork wifi \
+  --wifiMode active \
+  --wifiBars 3 \
+  --cellularMode notSupported \
+  --batteryState charged \
+  --batteryLevel 100
+
+# Hand the dev client its server as a LAUNCH ARGUMENT, not a deep link.
+#
+# expo-dev-launcher checks `--initialUrl` out of its own process arguments
+# (EXDevLauncherController's initialUrlFromProcessInfo) BEFORE it shows any
+# launcher UI, so the app goes straight to the bundle. The simulator reaches the
+# runner's loopback directly, so no tunnel or LAN address is involved.
+#
+# The obvious alternative - `simctl openurl` with the
+# exp+mobile://expo-development-client/?url=... link - does reach the device, and
+# then iOS puts up an "Open in "Kangentic"?" confirmation that nothing on a
+# runner can tap. simctl has no tap primitive, so that route needs a UI driver
+# and this one does not. Metro's log was the tell: server up, never asked for a
+# bundle.
+# Silence expo-dev-menu through the ARGUMENT DOMAIN.
+#
+# All three of these are UserDefaults, and every one of them defaults AGAINST a
+# clean capture on iOS: EXDevMenuShowsAtLaunch is true, so the menu opens by
+# itself; EXDevMenuIsOnboardingFinished is false, so the "This is the developer
+# menu" explainer covers the app; and EXDevMenuShowFloatingActionButton is true,
+# so the dev-tools FAB sits over the UI - the same overlay that spoiled every
+# Android capture until it was turned off there.
+#
+# Passing them as `-Key Value` launch arguments puts them in NSArgumentDomain,
+# which outranks the registration defaults the module sets. That beats writing
+# them with `defaults write`: nothing is left behind on the simulator, and there
+# is no question about which container the write landed in.
+DEV_MENU_ARGS=(
+  -EXDevMenuShowsAtLaunch NO
+  -EXDevMenuIsOnboardingFinished YES
+  -EXDevMenuShowFloatingActionButton NO
+)
+
+# PERSIST the same settings, because the argument domain only lasts one launch.
+#
+# Maestro's `launchApp` starts the app itself and carries none of our launch
+# arguments, so a flow-driven relaunch landed back on the dev-client launcher
+# and the first assertion failed on a screen that was not the app. Writing the
+# defaults makes them survive any relaunch, whoever performs it.
+#
+# EXDevLauncherTryToLaunchLastBundle is the one that matters most: it tells the
+# launcher to reopen the last bundle it loaded instead of showing its server
+# list. Our scripted launch below records localhost:8081 as that bundle, so
+# every subsequent launch goes straight into the app.
+for pref_write in \
+  "EXDevLauncherTryToLaunchLastBundle YES" \
+  "EXDevMenuShowsAtLaunch NO" \
+  "EXDevMenuIsOnboardingFinished YES" \
+  "EXDevMenuShowFloatingActionButton NO"; do
+  set -- $pref_write
+  xcrun simctl spawn "$device_id" defaults write "$bundle_id" "$1" -bool "$2" || true
+done
+echo "Persisted the dev-launcher and dev-menu preferences for relaunches."
+
+echo "Launching $bundle_id"
+if [ -n "${METRO_URL:-}" ]; then
+  echo "  pointing the dev client at $METRO_URL"
+  xcrun simctl launch "$device_id" "$bundle_id" --initialUrl "$METRO_URL" "${DEV_MENU_ARGS[@]}"
+
+  # Wait for Metro to actually SERVE the bundle rather than sleeping a guess.
+  # A cold bundle is slow enough that a fixed wait either races it (capturing a
+  # loading screen) or wastes minutes, and "the server was never asked" is
+  # precisely the failure the previous attempt hit - so it is worth detecting
+  # rather than hoping. The line looks like "iOS Bundled 41441ms index.js".
+  if [ -n "${METRO_LOG:-}" ]; then
+    echo "Waiting for Metro to serve the bundle..."
+    served=0
+    for _attempt in $(seq 1 60); do
+      if grep -q "Bundled" "$METRO_LOG" 2>/dev/null; then
+        served=1
+        echo "  Metro served the bundle."
+        break
+      fi
+      sleep 5
+    done
+    if [ "$served" -ne 1 ]; then
+      echo "::error::Metro never served a bundle, so the app never loaded. The dev client was not reached."
+      tail -n 40 "$METRO_LOG" || true
+      exit 1
+    fi
+  fi
+
+  echo "Letting the first render settle..."
+  sleep 20
+else
+  xcrun simctl launch "$device_id" "$bundle_id" "${DEV_MENU_ARGS[@]}"
+fi
+
+# The mock's agent-life simulator raises its permission prompt at tick 20, and
+# the ticker only starts once a read-stream subscription attaches. Waiting past
+# that means the landing feed has something in it rather than being mid-connect.
+echo "Letting the mock desktop stream for 45s..."
+sleep 45
+
+# ASSERT THE KEYCHAIN WORKS, rather than trusting that LogBox is hiding it.
+#
+# The capture suppresses LogBox so a warning cannot land in a listing image, and
+# that suppression would equally hide a real fault - so the fault is checked for
+# directly instead. Metro records console errors whatever LogBox does on screen.
+#
+# This specific error is why the build is ad-hoc signed: an unsigned app has no
+# `application-identifier` entitlement, so every keychain call fails with
+# errSecMissingEntitlement. It matters far beyond screenshots, because the
+# pairing trust anchor lives in expo-secure-store (.claude/rules/secure-storage.md),
+# and iOS keychain access had never been exercised anywhere before this job.
+if [ -n "${METRO_LOG:-}" ]; then
+  if grep -qE "KeyChainException|ERR_NOTIFICATIONS_KEYCHAIN_ACCESS" "$METRO_LOG"; then
+    echo "::error::iOS keychain access failed, so expo-secure-store is unusable in this build. Pairing depends on it, so this is not a screenshot problem. Relevant Metro output:"
+    grep -nE "KeyChainException|ERR_NOTIFICATIONS_KEYCHAIN_ACCESS" "$METRO_LOG" || true
+    exit 1
+  fi
+  echo "Keychain access is clean: expo-secure-store raised no entitlement error."
+fi
+
+if ! xcrun simctl spawn "$device_id" launchctl list | grep -q "$bundle_id"; then
+  echo "::error::$bundle_id is no longer running. It launched and then died."
+  exit 1
+fi
+
+# A DIAGNOSTIC FRAME, NOT A LISTING IMAGE. The name matters.
+#
+# This used to be written as `01-agents.png` - the same name the Maestro flow
+# gives its feed capture - into the same directory Maestro collects into. When
+# the flow stopped early, this frame survived under that name and shipped as
+# part of the store set. It looked plausible and was not: nothing had navigated
+# or scrolled, so it caught the feed mid-list with a sliver of a card at the
+# top edge.
+#
+# Two names that can occupy one slot is a collision waiting for a bad day, so
+# the scripted capture no longer claims a shot name at all. What it is actually
+# for is proving three things cheaply, before the driver is even installed:
+# the app renders, the keychain works, and this runner's simulator really is
+# the 6.9-inch shelf.
+capture_path="$output_directory/00-launch-check.png"
+xcrun simctl io "$device_id" screenshot "$capture_path"
+
+# Assert the size rather than trusting the device name. A wrong-sized upload is
+# rejected by App Store Connect long after this runner is gone, and the file
+# looks perfectly fine until then.
+dimensions="$(sips -g pixelWidth -g pixelHeight "$capture_path")"
+width="$(echo "$dimensions" | awk '/pixelWidth/ {print $2}')"
+height="$(echo "$dimensions" | awk '/pixelHeight/ {print $2}')"
+echo "Captured ${width}x${height}"
+
+if [ "$width" != "$REQUIRED_WIDTH" ] || [ "$height" != "$REQUIRED_HEIGHT" ]; then
+  echo "::error::Capture is ${width}x${height}, but the App Store 6.9-inch shelf requires ${REQUIRED_WIDTH}x${REQUIRED_HEIGHT}. The runner image may not carry a Pro Max simulator."
+  exit 1
+fi
+
+echo "Wrote $capture_path at the required 6.9-inch size."
+
+# Left booted for the Maestro step, which drives this same simulator to collect
+# the remaining shots. Booting one takes over a minute, so shutting it down here
+# only to boot another would be pure waste - and the status-bar override would
+# be lost with it.
+if [ -n "${KEEP_SIMULATOR_BOOTED:-}" ]; then
+  echo "Leaving the simulator booted for the screenshot flow."
+else
+  xcrun simctl shutdown "$device_id" || true
+fi

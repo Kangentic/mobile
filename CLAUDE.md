@@ -16,7 +16,7 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
 - **Build:** GitHub Actions on free runners for both platforms (Gradle for Android, `xcodebuild` on
   a macOS runner for iOS). EAS is the credential source and the fallback, not the build path.
   Continuous Native Generation (no checked-in native projects)
-- **Testing:** vitest (unit), Jest + React Native Testing Library (components), Maestro (E2E, Windows + Android emulator locally and on a CI emulator; **no iOS E2E exists yet by any route**), Playwright via react-native-web (later)
+- **Testing:** vitest (unit), Jest + React Native Testing Library (components), Maestro (E2E, Windows + Android emulator locally and on a CI emulator; on iOS it runs only the store-capture flow on a CI simulator, which navigates but barely asserts, so **there is no iOS E2E suite**), Playwright via react-native-web (later)
 
 ## Project Structure
 
@@ -83,18 +83,23 @@ tests/
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
-                  #   pretypecheck stale-node_modules guard), and the store preflights
-                  #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs + repo scripts
+                  #   pretypecheck stale-node_modules guard), the store preflights
+                  #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs, storeScreenshots.mjs
+                  #   (listing captures, driven by /store-screenshots), buildTabIcons.mjs
+                  #   + repo scripts
+store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 ```
 
 ## Commands
 
 - `npm install` - Install dependencies
 - `npx expo start --dev-client` (`npm start`) - Start the dev server against a dev-client build
-- `npm run dev:mock` / `dev:live` / `dev:pair` / `dev:stub` / `dev:doctor` - The local dev rig
+- `npm run dev:mock` / `dev:shots` / `dev:live` / `dev:pair` / `dev:stub` / `dev:doctor` - The local dev rig
   (`scripts/dev.mjs`): emulator + adb reverse + relay + Metro in one command, in mock
   (in-app fake desktop), live (real desktop dev instance), pair (pairing-ceremony testing),
-  or stub (Maestro E2E rig) mode; doctor is a read-only preflight. See
+  or stub (Maestro E2E rig) mode; doctor is a read-only preflight. `dev:shots` is mock plus
+  the store-capture flag, which silences LogBox so a warning cannot land in a listing image -
+  capture only, never UI iteration. See
   [docs/developer-guide.md](docs/developer-guide.md)'s Local Dev Rig section.
 - `npx expo run:android` (`npm run android`) - Build, install, and launch the dev client on the
   Android emulator (rebuilds native code; use this after a native dependency or config plugin
@@ -330,6 +335,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   messages.
 - `/sync-docs` keeps `docs/` aligned with source; the doc-anchor check runs inside `/pull-request`
   (commit time) and `/merge-pull-request` (merge time), and `/merge-back` for direct pushes.
+- `/store-screenshots` re-captures the Play and App Store listing images across all four shelves.
+  Run it whenever the captured screens, the mock content, or the tab bar change - the copy is IN
+  the frames, so all four shelves drift together. It sequences the platforms deliberately: iOS
+  costs ~45 minutes on a macOS runner per attempt, Android ~6 minutes each locally.
 
 ### Authoring a rule
 

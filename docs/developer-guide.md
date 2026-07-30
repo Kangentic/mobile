@@ -41,6 +41,7 @@ For anything beyond a bare Metro session, use the dev rig below.
 | Command | What you get |
 |---|---|
 | `npm run dev:mock` | The app against an **in-app fake desktop** (real channel stack over an in-process loopback). No relay, no pairing, nothing touches a real board. UI/UX iteration and full-feature demos. |
+| `npm run dev:shots` | `dev:mock` plus `EXPO_PUBLIC_KANGENTIC_SHOTS=1`, the bundle the **Play store capture** runs against. That flag silences LogBox so a warning banner cannot land in a listing image, which the iOS capture job has always done and the Android path did not. Capture only: warnings are hidden, so do not iterate on UI against this bundle. The flag is inlined at bundle time, so the rig forces a clean Metro cache when you switch either way. |
 | `npm run dev:live` | The app connected to **your real running Kangentic desktop dev instance** through a local relay. The rig prints the one-time desktop checklist (enable the mobile bridge, relay URL `ws://127.0.0.1:8080`, pair once, grant verbs). |
 | `npm run dev:pair` | Resets the app to unpaired (`pm clear`) so you can exercise the QR/paste + SAS **pairing ceremony**. Add `-- --stub` to pair against the stub peer instead of the live desktop. |
 | `npm run dev:stub` | Relay + `scripts/stubDesktopPeer.mjs` - the Maestro E2E rig. Reuses the saved phone key for a session-only reconnect when it can (`-- --fresh` forces a re-pair). |
@@ -142,6 +143,38 @@ WebView itself over the Chrome DevTools Protocol (the dev build exposes a
 `.xterm-screen` geometry against the on-screen pixels this way is how the GPU
 `MAX_TEXTURE_SIZE` canvas clamp was diagnosed - the layout was correct and only the painted
 scale was wrong, which no RN-side probe could see.
+
+## Store listing screenshots
+
+`scripts/storeScreenshots.mjs` captures the Play listing images. It needs the MOCK rig
+(`npm run dev:mock`) against a **dev build**, because `isMockDesktopEnabled()` is
+`__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'` - a release APK shows an unpaired
+"Connecting to your desktop..." screen instead, and does so silently. Check the install before
+trusting the screen:
+
+```
+adb shell "dumpsys package com.kangentic.mobile | grep flags="   # wants DEBUGGABLE
+node scripts/storeScreenshots.mjs all                            # phone, seven-inch, ten-inch
+```
+
+Two things about this are worth knowing before changing it.
+
+**The geometry is not the emulator's.** Play requires exactly 16:9 or 9:16 on all three Android
+shelves, tablets included, and a real tablet is not 9:16 (nor is a modern phone - the AVD is
+1080x2400). Setting `wm size` and `wm density` INDEPENDENTLY satisfies both constraints at once:
+1080x1920@480 is 360dp (phone), 1080x1920@280 is ~617dp (7-inch), 1440x2560@320 is 720dp
+(10-inch). Because crossing 600dp is what triggers large-screen layout, reviewing the tablet
+captures IS the tablet-layout verification - this app has no tablet-specific code and had never
+been run at tablet width before these were produced.
+
+**Turn expo-dev-menu's floating "Tools" button off** (dev menu -> bottom -> "Tools button"). It
+is a dev-build overlay pinned over the app's top-right corner, so it lands in every frame as a
+doubled settings icon. The script refuses to run while it is enabled, because the resulting
+captures are still correctly sized and still pass verification - nothing else would catch it.
+
+Output and per-shelf detail: [`store/screenshots/README.md`](../store/screenshots/README.md).
+iOS is not covered: App Store Connect wants a 6.9-inch iPhone shelf (1320x2868, minimum three),
+which needs a booted simulator and so cannot be captured from Windows.
 
 ## Agent tooling (MCP servers)
 
@@ -280,7 +313,10 @@ tests/components/ # Jest + RNTL
 tests/helpers/    # Shared cross-tier test utilities (async waitUntil / flushMicrotasks)
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
+scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
+                  #   storeScreenshots.mjs, buildTabIcons.mjs (npm run build:tab-icons
+                  #   regenerates the Board tab icon rasters; --check gates drift in CI)
+                  #   + repo scripts
 ```
 
 See `CLAUDE.md`'s Project Structure section; the tree there and this one move together.
@@ -384,10 +420,10 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
-| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus a `sync:branding:check` step for brand-asset drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
+| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus `sync:branding:check` for brand-asset drift and `check:tab-icons` for tab-icon drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
 | `e2e.yml` (workflow name: `Emulator`) | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
-| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload |
+| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
 
 ### What each check on a PR means
 
@@ -404,7 +440,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 
 | Check | Workflow | What a green result proves | Typical |
 |---|---|---|---|
-| `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift | 29s |
+| `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift and `check:tab-icons` for tab-icon drift | 29s |
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
@@ -1088,13 +1124,21 @@ jobs, one required" above) until it has been green across several PRs. A green r
 smoke coverage; read the `E2E Tests (Paired)` check separately for the paired suite's result. It
 carries no "Required" badge, which is how the checks list says it cannot block a merge.
 
-**iOS E2E does not exist yet, by any route.** An earlier version of this section claimed EAS
-Workflows on cloud iOS simulators was "the only supported path to iOS E2E without a Mac". That was
-never true in practice: there is no `.eas/workflows/` directory in this repo on any branch, so
-nothing was ever wired. It is also no longer the only option. `build-ios.yml` already compiles the
-app on a free `macos-latest` runner, so booting a simulator there with `xcrun simctl` and running a
-Maestro flow is a working path that needs no Apple Developer account and no EAS spend. That is the
-cheapest way to finally execute the WKWebView terminal on iOS, which has never run.
+**Maestro now runs on iOS in CI, but there is no iOS E2E *suite*.** An earlier version of this
+section claimed EAS Workflows on cloud iOS simulators was "the only supported path to iOS E2E
+without a Mac". That was never true in practice: there is no `.eas/workflows/` directory in this
+repo on any branch, so nothing was ever wired. The route it dismissed is the one that works:
+`build-ios.yml -f screenshots=true` boots a simulator on a free `macos-latest` runner with
+`xcrun simctl` and drives `.maestro/screenshots/store-capture.yaml` through six screens by testID,
+with no Apple Developer account and no EAS spend. That is how the WKWebView terminal was finally
+executed on iOS, and it renders.
+
+Be precise about what that does and does not buy. It is a **capture** flow: it navigates and
+photographs, and the job fails when an expected shot is missing, so it catches a screen that will
+not open at all. It asserts almost nothing about behaviour, and it cannot see anything drawn
+inside the terminal's canvas (see the blank-terminal note in
+`.claude/skills/store-screenshots/SKILL.md`). Treat it as proof the app runs on iOS and as the
+existing harness to grow a real suite from, not as coverage.
 
 ### Running the E2E suite (the path that actually works)
 

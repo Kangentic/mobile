@@ -138,6 +138,20 @@ describe('CI runs only the Maestro entries this guard knows about', () => {
     }
   });
 
+  it('never runs the store-screenshot capture as a CI suite entry', () => {
+    // `.maestro/screenshots/` is not a test. It drives the MOCK rig against a
+    // DEV build to produce the Play and App Store listing images, so on a CI
+    // runner - which builds the release-shaped e2e APK and pairs to the stub
+    // peer - it would find no mock content and hang to a full timeout, reading
+    // as a product regression rather than a misconfigured workflow.
+    //
+    // It is also SLOW by design: it holds for the mock's tick-20 permission
+    // prompt on every shelf.
+    for (const entry of readWorkflowFlowEntries()) {
+      expect(entry).not.toContain('screenshots');
+    }
+  });
+
   it('finds the required gate\'s needs at all', () => {
     // Non-vacuity guard for the assertion below, which is otherwise vacuously
     // true the moment the gate job is reformatted out of this regex's reach.

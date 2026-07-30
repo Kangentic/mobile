@@ -183,8 +183,8 @@ jobs:
           echo "Changed files:"
           printf '%s\n' "$changed"
 
-          # Anything that cannot change the APK is skippable. Two notes on the
-          # list below, both learned the expensive way:
+          # Anything that cannot change the APK is skippable. Three notes on the
+          # list below, all learned the expensive way:
           #
           #   ^tests/  is safe because NOTHING under tests/ ships in the binary.
           #            A tests-only diff produces a byte-identical APK, so the
@@ -194,15 +194,28 @@ jobs:
           #            path filter at all - so a broken test is still caught,
           #            just not by an emulator.
           #
+          #   ^store/screenshots/ holds the PNGs uploaded to the Play and App
+          #            Store listings: product imagery, not code. Without it
+          #            every re-capture would build an APK and boot two
+          #            emulators for half an hour to validate image files, and
+          #            one re-capture rewrites 18 of them at once. Deliberately
+          #            NARROW - the output directory only. The capture script
+          #            (scripts/storeScreenshots.mjs) and the flow that drives
+          #            it (.maestro/screenshots/) are code and still force a run.
+          #
           #   .github/ is deliberately NOT here. A workflow change must be
           #            exercised by the thing it changes.
-          if printf '%s\n' "$changed" | grep -qvE '(^|/)[^/]*\.(md|mdx)$|^docs/|^\.claude/|^tests/|^LICENSE$|^CLA\.md$'; then
+          #
+          # This classifier fails safe by RUNNING, so widening it further is a
+          # decision to take on its own merits, not a convenience.
+          if printf '%s\n' "$changed" | grep -qvE '(^|/)[^/]*\.(md|mdx)$|^docs/|^\.claude/|^tests/|^LICENSE$|^CLA\.md$|^store/screenshots/'; then
             echo "Non-documentation changes present: running E2E."
             echo "run-e2e=true" >> "$GITHUB_OUTPUT"
           else
-            # `no-app-change`, not `docs`: this branch now covers tests/ too, and
-            # a check reading "skipped (docs)" on a tests-only PR would be a lie
-            # of exactly the kind naming the reason was supposed to prevent.
+            # `no-app-change`, not `docs`: this branch now covers tests/ and
+            # store imagery too, and a check reading "skipped (docs)" on a
+            # tests-only or screenshots-only PR would be a lie of exactly the
+            # kind naming the reason was supposed to prevent.
             echo "Nothing in this diff can change the APK: skipping the E2E build and emulators."
             echo "run-e2e=false" >> "$GITHUB_OUTPUT"
             echo "skip-reason=no-app-change" >> "$GITHUB_OUTPUT"

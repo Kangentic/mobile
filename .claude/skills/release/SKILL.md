@@ -33,21 +33,24 @@ wastes a 20 minute build and can leave a dangling Play edit.
 |---|---|---|
 | either + artifact only | **Works** | - |
 | android + internal | **Works** | - |
-| android + closed (alpha) | **Blocked** | Every app-content declaration is **entered** as of 2026-07-29 (store listing with all screenshots, content rating, target audience, ads, privacy policy URL, data safety, health apps, app category) and **none is submitted**: they sit under `Changes not yet submitted for review` in Publishing overview, and `Send app for review` is disabled until the app dashboard reads 11 of 11. Also still missing: the closed track's countries/regions and its tester list, neither of which the Play API can read or write (`edits.testers` is Google Groups only). Verify in the Console, not from this row. |
+| android + closed (alpha) | **Blocked** | Every app-content declaration is **entered** as of 2026-07-29 (store listing with all screenshots, content rating, target audience, ads, privacy policy URL, data safety, health apps, app category) and **none is submitted**: they sit under `Changes not yet submitted for review` in Publishing overview, and `Send app for review` is disabled until the app dashboard reads 11 of 11. Also still missing: the closed track's countries/regions and its tester list, neither of which the Play API can read or write (`edits.testers` is Google Groups only). Verify in the Console, not from this row. The uploaded screenshots are additionally **stale**: they predate the mock-fixture rewrite that stopped the listing images naming Kangentic's own roadmap, so re-upload from `store/screenshots/` before submitting. |
 | android + open (beta) | **Blocked** | Same declarations as closed. |
 | android + production | **Blocked** | Personal Play account created 2026-07-20, so production access needs a closed test with **12+ testers opted in for 14 continuous days** first. Opt-outs reset the clock. See the deployment-track ladder in `docs/developer-guide.md`. |
 | ios + TestFlight internal | **Works** | Needs `ASC_API_KEY_BASE64` + `ASC_KEY_ID` + `ASC_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, as GitHub secrets. Check with `gh secret list` before promising it. |
 | ios + TestFlight external | **Blocked** | Needs a Beta App Review plus a beta description, feedback email, and test information. None entered. |
-| ios + App Store | **Blocked** | Needs screenshots, the privacy questionnaire, an age rating, and a resolved export-compliance answer. `ITSAppUsesNonExemptEncryption` is currently `false` as a reasoned default, not a verified conclusion; see the comment in `app.config.ts`. |
+| ios + App Store | **Blocked** | Needs the privacy questionnaire, an age rating, and a resolved export-compliance answer. Screenshots are NO LONGER part of this gap: six 6.9-inch frames at 1320x2868 are tracked in `store/screenshots/ios/iphone-6.9/`, against an Apple minimum of **one** (10 is the cap, and only the first 3 reach install sheets - "minimum three" was this row's earlier error). Upload via Media Manager targeting 6.9", which is the source slot every smaller iPhone size is derived from. They are captured on a free macOS runner (`gh workflow run build-ios.yml -f screenshots=true`) because a booted simulator cannot run from Windows, at roughly 45 minutes per attempt. `ITSAppUsesNonExemptEncryption` is currently `false` as a reasoned default, not a verified conclusion; see the comment in `app.config.ts`. |
 
 If the user insists on a blocked path after being told, say plainly that it cannot be done and stop.
 Do not attempt a workaround.
 
-**One thing to say out loud for any iOS release: the iOS app has never been run.** It compiles and
-it signs, but no build has ever launched on a device or simulator. The WKWebView terminal and the
-notification stack are untested on the platform, and the Notification Service Extension that iOS
-push decryption needs is a later phase. A TestFlight build is worth cutting to find that out, but
-do not describe it to the user as a working app.
+**One thing to say out loud for any iOS release: the iOS app has never run on real hardware.** It
+compiles, it signs, and it now launches and renders correctly on a **simulator** - the store
+capture run drives it through six screens on every dispatch, and the WKWebView terminal paints
+its full grid, so that specific risk is retired. What remains untested is everything a simulator
+cannot exercise: the notification stack, push delivery, and the Notification Service Extension
+that iOS push decryption needs, which is a later phase. No build has ever launched on a physical
+device. A TestFlight build is worth cutting to find that out, but do not describe it to the user
+as a fully proven app.
 
 ## Step 1 - Preflight
 

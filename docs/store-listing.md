@@ -1,20 +1,60 @@
 # Store listing copy
 
 Draft copy for the Play Console (and later App Store) listing. Placeholder-grade but real text,
-ready to paste. This file is text only; the screenshots live in the Play Console, not here.
+ready to paste.
 
 **The en-US listing was completed on 2026-07-29** and no longer blocks the closed track: title,
 short description, full description, 4 phone screenshots, 4 seven-inch, 4 ten-inch, the icon, and
 the feature graphic are all uploaded (read back from `edits.listings` and `edits.images`). It is
 still unsubmitted, like every other declaration - see the Data safety section below.
 
-The two Play Console image uploads are produced by `@kangentic/branding` and are
-not bundled into the app - upload them by hand from
-`node_modules/@kangentic/branding/resources/mobile/`:
+**Those uploaded screenshots are STALE and must be replaced before submitting.** They were
+captured before the mock fixtures were rewritten (`src/connection/mockDesktop.ts`), and the
+earlier fixtures were written about Kangentic's own backlog - so the frames currently sitting in
+the Console advertise our engineering status as if it were a customer's: a relay self-host guide,
+a capability-scoped push token migration, a flaky pairing flow. Re-upload from
+`store/screenshots/`, which is the current set and now carries six per shelf rather than four.
+
+The two Play Console image uploads are produced by `@kangentic/branding` and are not bundled
+into the app - upload them by hand from `node_modules/@kangentic/branding/resources/mobile/`
+(run `npm install` first; both are absent from an out-of-date install):
 
 - `android-playstore-512.png` - the store listing icon.
 - `android-feature-graphic-1024x500.png` - the feature graphic, required by Google Play for
   every track beyond internal testing.
+
+## Screenshots
+
+**Produced and tracked**, in [`store/screenshots/`](../store/screenshots/README.md). Every shelf
+below carries the same six raw device captures, so both listings tell one story:
+
+| Shelf | Size | Directory | Captured by |
+|---|---|---|---|
+| Play phone | 1080x1920 | `store/screenshots/android/phone/` | `node scripts/storeScreenshots.mjs all` |
+| Play 7-inch tablet | 1080x1920 | `store/screenshots/android/seven-inch/` | the same command |
+| Play 10-inch tablet | 1440x2560 | `store/screenshots/android/ten-inch/` | the same command |
+| App Store 6.9-inch iPhone | 1320x2868 | `store/screenshots/ios/iphone-6.9/` | `gh workflow run build-ios.yml -f screenshots=true` |
+
+All three Play shelves are required in the listing form as long as the app is distributed to
+tablets. Restricting **Test and release -> Advanced settings -> Form factors** to phone should
+drop the two tablet requirements; the tablet captures exist either way, so that is a reach
+decision rather than a blocker. `ios.supportsTablet` is `false`, so App Store Connect wants the
+single 6.9-inch shelf. Apple's minimum there is **one** (its upload help: "you're only required to
+provide a single screenshot"), the cap is 10, and only the first 3 appear on install sheets - so
+the "minimum three" an earlier version of this file claimed was the number Apple DISPLAYS, not the
+number it requires. Six are tracked.
+
+Upload the iPhone set through **Media Manager**, targeting **6.9"**. That is the source slot, and
+App Store Connect derives 6.5", 6.3" and smaller from it - their controls are greyed out. The
+version page happens to list the derived 6.5" slot first, which misleadingly reads as though 6.5"
+is what it wants.
+
+The Android shelves are captured locally against an emulator. The iOS shelf cannot be captured
+from Windows and runs on a free macOS runner instead, at roughly 45 minutes per attempt.
+
+Read `store/screenshots/README.md` before regenerating: Play demands exactly 16:9 or 9:16 on
+every shelf including tablets, which is why the capture sets resolution and density
+independently rather than using the emulator's own geometry.
 
 ## App title
 
