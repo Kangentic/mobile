@@ -583,6 +583,14 @@ function readActivityManifest() {
     if (manifest[requiredKey] === undefined) {
       throw new Error(`syncBranding: ${manifestPath} is missing the required top-level "${requiredKey}" key`);
     }
+    // A non-null object, not merely present. Every check below indexes into
+    // these, so a null or a scalar would surface as a bare TypeError from deep
+    // inside the parse instead of a named error pointing at the bad key.
+    if (manifest[requiredKey] === null || typeof manifest[requiredKey] !== 'object') {
+      throw new Error(
+        `syncBranding: ${manifestPath} top-level "${requiredKey}" is ${JSON.stringify(manifest[requiredKey])}, expected an object`,
+      );
+    }
   }
   // grid.pathLength is the denominator the ratio dash is expressed over, and
   // the whole user-unit derivation below rests on it, so it is checked here
@@ -592,6 +600,20 @@ function readActivityManifest() {
   }
   if (typeof manifest.grid.viewBox !== 'string') {
     throw new Error(`syncBranding: activity.json grid.viewBox is ${manifest.grid.viewBox}, expected a string`);
+  }
+  // Four single-space-separated numbers, because the consumer parses this
+  // string POSITIONALLY: AgentStatusIcon derives the below-floor dot's centre
+  // with `ACTIVITY_VIEW_BOX.split(' ').map(Number)`. Comma separators and
+  // repeated spaces are both legal SVG and would pass the bare string check
+  // above, then reach the component as NaN coordinates - an invisible dot,
+  // with nothing failing anywhere between here and the screen.
+  const viewBoxParts = manifest.grid.viewBox.split(' ').map(Number);
+  if (viewBoxParts.length !== 4 || viewBoxParts.some((part) => !Number.isFinite(part))) {
+    throw new Error(
+      `syncBranding: activity.json grid.viewBox "${manifest.grid.viewBox}" is not four space-separated numbers. ` +
+        'AgentStatusIcon splits this string on single spaces to derive the mark grid, so any other form silently ' +
+        'becomes NaN coordinates rather than failing.',
+    );
   }
   if (!(manifest.grid.strokeWidth > 0)) {
     throw new Error(`syncBranding: activity.json grid.strokeWidth is ${manifest.grid.strokeWidth}, expected a positive number`);
@@ -660,6 +682,17 @@ function parseActivityMark(markName, manifest) {
   }
   if (rootAttributes.stroke !== 'currentColor') {
     throw new Error(`syncBranding: ${file} root stroke is "${rootAttributes.stroke}", expected "currentColor"`);
+  }
+  // Presence-checked here rather than left to the point of use. These two are
+  // read off the root because AgentStatusIcon applies one stroke style to the
+  // whole mark set, and buildActivityModule hands them straight to
+  // quoteString, which on undefined throws a bare TypeError naming neither the
+  // file nor the attribute. The run fails either way, so this buys a legible
+  // error during exactly the upstream bump this module exists to make readable.
+  for (const strokeStyleAttribute of ['stroke-linecap', 'stroke-linejoin']) {
+    if (rootAttributes[strokeStyleAttribute] === undefined) {
+      throw new Error(`syncBranding: ${file} root is missing the required attribute "${strokeStyleAttribute}"`);
+    }
   }
   if (!KNOWN_ACTIVITY_REST_RENDERINGS.has(mark.reducedMotion)) {
     throw new Error(

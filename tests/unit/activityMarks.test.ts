@@ -17,6 +17,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIVITY_STROKE_LINECAP,
+  ACTIVITY_STROKE_LINEJOIN,
   ACTIVITY_STROKE_WIDTH,
   ACTIVITY_VIEW_BOX,
   activityMarks,
@@ -46,6 +48,25 @@ const manifest = JSON.parse(
     'utf8',
   ),
 ) as ActivityManifest;
+
+// activity.json does not carry stroke-linecap/stroke-linejoin: the generator
+// reads those off the SVG root, not the manifest. So the cross-check for them
+// has to read the SVG source directly, the same way the manifest is read above.
+const workingMarkSvgSource = readFileSync(
+  fileURLToPath(new URL('../../node_modules/@kangentic/branding/assets/activity/agent-working.svg', import.meta.url)),
+  'utf8',
+);
+const idleMarkSvgSource = readFileSync(
+  fileURLToPath(new URL('../../node_modules/@kangentic/branding/assets/activity/agent-idle.svg', import.meta.url)),
+  'utf8',
+);
+
+/** Reads a `name="value"` attribute off the raw <svg> root markup. */
+function svgRootAttribute(svgSource: string, attributeName: string): string {
+  const match = svgSource.match(new RegExp(`${attributeName}="([^"]+)"`));
+  if (match === null) throw new Error(`${attributeName} is missing from the svg source; cannot cross-check it`);
+  return match[1];
+}
 
 const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
@@ -78,6 +99,16 @@ describe('activityMarks', () => {
   it('carries the manifest grid, not a restated one', () => {
     expect(ACTIVITY_VIEW_BOX).toBe(manifest.grid.viewBox);
     expect(ACTIVITY_STROKE_WIDTH).toBe(manifest.grid.strokeWidth);
+    // stroke-linecap/stroke-linejoin have no manifest field, so cross-check
+    // both source SVGs agree with each other AND with the generated constant.
+    // Dropping either ships butt-capped, mitred strokes on marks drawn for
+    // round ones, and nothing about that shows up in a typecheck or a diff.
+    const workingMarkStrokeLinecap = svgRootAttribute(workingMarkSvgSource, 'stroke-linecap');
+    const workingMarkStrokeLinejoin = svgRootAttribute(workingMarkSvgSource, 'stroke-linejoin');
+    expect(workingMarkStrokeLinecap).toBe(svgRootAttribute(idleMarkSvgSource, 'stroke-linecap'));
+    expect(workingMarkStrokeLinejoin).toBe(svgRootAttribute(idleMarkSvgSource, 'stroke-linejoin'));
+    expect(ACTIVITY_STROKE_LINECAP).toBe(workingMarkStrokeLinecap);
+    expect(ACTIVITY_STROKE_LINEJOIN).toBe(workingMarkStrokeLinejoin);
   });
 
   it('gives every mark drawable shapes and a known rest rendering', () => {

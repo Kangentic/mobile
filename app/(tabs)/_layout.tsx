@@ -27,8 +27,11 @@ import { useTheme } from '@/components';
  * The nearest shapes are generic split rectangles (`rectangle.split.3x1` and
  * friends) which read as "split view", not "a board of tasks in lanes", and
  * next to Android's Material `view_kanban` they look like a different product.
- * So iOS gets a rasterised lucide `SquareKanban` instead, which is the same
- * icon family as the board's own column chips and the desktop app.
+ * So iOS gets Kangentic's own kanban mark instead, out of @kangentic/branding.
+ * Its proportions follow lucide's `SquareKanban` - declared upstream as named
+ * constants rather than vendored path data, see that package's
+ * THIRD-PARTY-NOTICES.md - so it still reads as the same icon family as the
+ * board's own lucide column chips and the desktop app.
  *
  * Getting that to actually reach iOS depends on two precedence rules in
  * expo-router's icon converters, both of which are easy to trip:

@@ -1253,8 +1253,12 @@ this repo** - reuse them, and never create a new drive-root directory without as
 | `C:\kw` | dev-client / debug builds, including everything `/preview` needs |
 | `C:\kme2e` | the release `e2e` APK the Maestro suite runs against |
 
+Develop in the normal worktree and commit first: the short-path worktree builds a sha, not your
+working tree. Then point it at that sha and build. Both worktrees already exist, so the recipe
+starts at `checkout`, not `worktree add`:
+
 ```
-git -C <your worktree> worktree add --detach C:\kw HEAD   # once; they already exist
+git -C C:\kw checkout --detach <sha>
 cd C:\kw
 npm install
 npx expo prebuild --platform android --no-install
@@ -1262,8 +1266,7 @@ cd C:\kw\android
 .\gradlew.bat app:assembleDebug -x lint -x test -PreactNativeArchitectures=arm64-v8a
 ```
 
-Develop in the normal worktree, commit, then `git -C C:\kw checkout --detach <sha>` and build
-there. Swap `assembleDebug` for `assembleRelease` (with `EXPO_PUBLIC_KANGENTIC_E2E=1`) to
+Swap `assembleDebug` for `assembleRelease` (with `EXPO_PUBLIC_KANGENTIC_E2E=1`) to
 produce the `e2e` APK. For a dev client specifically, `npx expo run:android --no-bundler` from
 `C:\kw` builds, installs and stops - leaving Metro in your real worktree to serve the bundle.
 
