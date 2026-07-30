@@ -139,8 +139,9 @@ export function TaskCard({
           ) : null}
           {/* The testID goes on a wrapping View, not the lucide glyph: lucide
               forwards `testID` as the web-only `data-testid` prop, which is
-              inert in React Native, so neither RNTL nor Maestro can select it
-              (AgentStatusIcon wraps for the same reason). */}
+              inert in React Native, so neither RNTL nor Maestro can select it.
+              AgentStatusIcon needs no wrapper - it draws react-native-svg,
+              which forwards testID properly. */}
           {hasPr ? (
             <View testID={`${testID}-pr`}>
               <GitPullRequest size={14} color={prStateColor(theme, task.pr_state)} />

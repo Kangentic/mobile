@@ -314,9 +314,9 @@ tests/helpers/    # Shared cross-tier test utilities (async waitUntil / flushMic
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
-                  #   storeScreenshots.mjs, buildTabIcons.mjs (npm run build:tab-icons
-                  #   regenerates the Board tab icon rasters; --check gates drift in CI)
-                  #   + repo scripts
+                  #   storeScreenshots.mjs, syncBranding.mjs (npm run sync:branding pulls the
+                  #   brand rasters, the Board tab glyph and the activity marks out of
+                  #   @kangentic/branding; --check gates drift in CI) + repo scripts
 ```
 
 See `CLAUDE.md`'s Project Structure section; the tree there and this one move together.
@@ -420,7 +420,7 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
-| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus `sync:branding:check` for brand-asset drift and `check:tab-icons` for tab-icon drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
+| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus `sync:branding:check` for brand-asset drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
 | `e2e.yml` (workflow name: `Emulator`) | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
 | `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
@@ -440,7 +440,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 
 | Check | Workflow | What a green result proves | Typical |
 |---|---|---|---|
-| `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift and `check:tab-icons` for tab-icon drift | 29s |
+| `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift | 29s |
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
