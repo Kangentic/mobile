@@ -1245,10 +1245,16 @@ then fails outright with `manifest 'build.ninja' still dirty after 100 tries`. `
 the long path.
 
 **A git worktree whose REAL path is short does.** It has no long path to resolve back to, and
-object paths drop to roughly 108 characters:
+object paths drop to roughly 108 characters. **Two already exist and are registered worktrees of
+this repo** - reuse them, and never create a new drive-root directory without asking first:
+
+| Path | Use |
+| --- | --- |
+| `C:\kw` | dev-client / debug builds, including everything `/preview` needs |
+| `C:\kme2e` | the release `e2e` APK the Maestro suite runs against |
 
 ```
-git -C <your worktree> worktree add --detach C:\kw HEAD
+git -C <your worktree> worktree add --detach C:\kw HEAD   # once; they already exist
 cd C:\kw
 npm install
 npx expo prebuild --platform android --no-install
@@ -1258,7 +1264,30 @@ cd C:\kw\android
 
 Develop in the normal worktree, commit, then `git -C C:\kw checkout --detach <sha>` and build
 there. Swap `assembleDebug` for `assembleRelease` (with `EXPO_PUBLIC_KANGENTIC_E2E=1`) to
-produce the `e2e` APK.
+produce the `e2e` APK. For a dev client specifically, `npx expo run:android --no-bundler` from
+`C:\kw` builds, installs and stops - leaving Metro in your real worktree to serve the bundle.
+
+**Run `npm install` in the short-path worktree, and treat a dev client as bound to the tree that
+built it.** The APK's compiled native libs must match the JS Metro serves, and different
+worktrees of this repo routinely resolve different `react-native` / `react-native-worklets` /
+`react-native-reanimated` versions. The mismatch does NOT announce itself: the app launches, runs
+a few seconds, and dies with a native `SIGABRT` inside `libworklets.so` on a JSI assertion
+(`String facebook::jsi::Value::getString(...): assertion "isString()" failed`) with no JS error,
+no red box, and nothing in `ReactNativeJS` logcat. It reads exactly like an app bug in whatever
+you last edited.
+
+The tell is in the abort message, which names the react-native the APK was compiled against:
+
+```
+adb logcat -d -t 800 -s DEBUG:* libc:* AndroidRuntime:*
+# Abort message: '.../react-android-0.86.0-debug/prefab/modules/jsi/include/jsi/jsi.h:1987: ...'
+```
+
+Compare that against `node_modules/react-native/package.json` in the worktree serving Metro. This
+bites hardest right after an `npm install` in a worktree whose `node_modules` was previously a
+junction to the main checkout's: the install materialises a real tree at the versions
+`package.json` actually pins, and a dev client built elsewhere is instantly stale. Rebuild rather
+than trying to reconcile it from the JS side.
 
 **Always pass `-PreactNativeArchitectures`, and pick the ABIs deliberately.** A raw `gradlew`
 builds all four, and `react-native-reanimated` fails compiling for 32-bit `armeabi-v7a`.

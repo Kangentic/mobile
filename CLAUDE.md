@@ -276,9 +276,16 @@ non-obvious constraints and each one fails as a full-timeout hang rather than an
 **Which stage owns which verification.** CI is the enforced gate, not the local machine:
 `.github/workflows/ci.yml` and `e2e.yml` run on every PR and are required on `main`. So do NOT run
 the Maestro suite locally before opening a pull request. Three reasons: E2E is single-tenant (one
-emulator, one relay port, one paired identity), so it serialises every task on the board; a release
-APK cannot even be built inside a `.kangentic/worktrees/<branch>` path (Windows path length, hence
-the `C:\kw` recipe); and it duplicates the gate that actually cannot be bypassed.
+emulator, one relay port, one paired identity), so it serialises every task on the board; **no
+Android APK can be built inside a `.kangentic/worktrees/<branch>` path at all** (Windows path
+length, at every variant including debug, hence the short-path worktrees `C:\kw` for dev-client
+builds and `C:\kme2e` for the `e2e` APK - reuse them, and never create a new drive-root directory
+without asking); and it duplicates the gate that actually cannot be bypassed.
+
+An APK is also bound to the dependency tree that built it: run `npm install` in the short-path
+worktree, because a dev client whose native libs came from a different checkout dies as a native
+`SIGABRT` in `libworklets.so` with no JS error. See `docs/developer-guide.md`'s "Local Android
+builds need a SHORT-PATH worktree", which `/preview` now routes through.
 
 What IS in scope while implementing: `npm run typecheck`, the tests you touched, and - if the
 change touches a screen a flow already covers - that **single flow**, which takes well under a

@@ -74,16 +74,81 @@ not a live-reload loop, and it costs one runner and about eight minutes.
    - Do this unconditionally before step 4 rather than waiting for `npx expo` to fail first - in
      non-interactive mode it does not prompt to pick a different port, it just prints "Skipping
      dev server" and exits looking successful.
-4. **Check whether the dev client is installed.** Run
+4. **Check whether the dev client is installed, AND that it matches this checkout.** Run
    `adb shell pm list packages` and look for `com.kangentic.mobile` (the app's package id, from
    `app.config.ts`).
-   - **Installed:** run `npx expo start --android` (add `--clear` if the user passed it). This
-     reuses the existing native build and just starts Metro.
-   - **Not installed** (e.g. a freshly created AVD, or first run on this machine): run
-     `npx expo run:android` (add `--variant release` only if the user explicitly asks for a
-     release build). This builds the native project via Gradle, installs the APK, and starts
-     Metro - the first run can take several minutes (Gradle downloads + native compilation); say
-     so before running it.
+   - **Installed:** before trusting it, run step 4a below. If it matches, run
+     `npx expo start --android` (add `--clear` if the user passed it). This reuses the existing
+     native build and just starts Metro.
+   - **Not installed** (e.g. a freshly created AVD, or first run on this machine), **or step 4a
+     reports a mismatch:** you need a new dev client. **Do NOT run `npx expo run:android` from a
+     `.kangentic/worktrees/<branch>` path** - it cannot work there, at any variant. Use the
+     short-path recipe in step 4b.
+
+4a. **Verify the installed dev client's native libs match this worktree's JS.** Skipping this
+   costs a full build plus a confusing debugging detour, because the failure does not look like a
+   version problem: the app launches, runs for a few seconds, and dies with a **native `SIGABRT`
+   inside `libworklets.so`** on a JSI assertion (`String facebook::jsi::Value::getString(...):
+   assertion "isString()" failed`) - no JS error, no red box, no `ReactNativeJS` logcat line, just
+   the app vanishing back to the launcher.
+
+   The cause is that the APK's compiled native libs and the JS Metro serves come from **different
+   dependency trees**. Every worktree of this repo can resolve a different `react-native` /
+   `react-native-worklets` / `react-native-reanimated`, and a dev client built from one checkout
+   is not interchangeable with another's bundle. This bites hardest right after an `npm install`
+   in a worktree whose `node_modules` was previously a junction to the main checkout's: the
+   install materialises a real tree at the versions `package.json` actually pins, and the APK on
+   the emulator is suddenly stale.
+
+   Compare the two before launching:
+   - The APK's react-native, from the crash path or from
+     `adb shell dumpsys package com.kangentic.mobile` plus the build you recorded making it.
+   - This worktree's, from `node_modules/react-native/package.json`,
+     `node_modules/react-native-worklets/package.json`, and
+     `node_modules/react-native-reanimated/package.json`.
+
+   If they differ at all, rebuild via step 4b. Do not try to "fix" it from the JS side.
+
+   Reading a crash: `adb logcat -d -t 800 -s DEBUG:* libc:* AndroidRuntime:*` prints the abort
+   message, and it names the react-native version the APK was compiled against, e.g.
+   `.../react-android-0.86.0-debug/prefab/modules/jsi/include/jsi/jsi.h`. That string is the
+   fastest way to identify a skewed dev client.
+
+4b. **Build the dev client from a SHORT-PATH worktree.** Two already exist and are registered git
+   worktrees of this repo - reuse them rather than creating more, and never create a new drive-root
+   directory without asking the user first:
+
+   | Path | Use |
+   | --- | --- |
+   | `C:\kw` | dev-client / debug builds, this step |
+   | `C:\kme2e` | the release `e2e` APK the Maestro suite runs against |
+
+   A build from `.kangentic/worktrees/<branch>/` fails on Windows at **every** variant, debug
+   included. `react-native-screens` and `react-native-worklets` put CMake object files under
+   `node_modules/<pkg>/android/.cxx/`, which overruns `CMAKE_OBJECT_PATH_MAX`. CMake reports it
+   only as a warning and ninja then fails the task, so the real error is buried hundreds of lines
+   above the `FAILURE:` line. A directory junction does NOT help: Node realpaths `node_modules`,
+   so CMake still receives the long path.
+
+   Commit first (the short-path worktree builds a sha, not your working tree), then:
+
+   ```
+   git -C C:\kw checkout --detach <sha>
+   cd C:\kw
+   npm install
+   npx expo run:android --no-bundler
+   ```
+
+   `--no-bundler` matters: Metro is already running from your real worktree on 8081 and is the one
+   that must serve the bundle. Without it `expo` notices the port is taken and prints
+   `Skipping dev server`, which is harmless but reads like a failure.
+
+   `npm install` in `C:\kw` is what makes its native libs match - it resolves the same
+   `package.json` you just committed, so the APK it produces is compatible with the JS your real
+   worktree's Metro serves.
+
+   Full background, the ABI flags a direct `gradlew` call needs, and the release/e2e variant:
+   `docs/developer-guide.md`'s "Local Android builds need a SHORT-PATH worktree".
 5. **Verify the app actually came to the foreground**, don't just trust Metro's log. On a
    cold-booted emulator (just launched in step 2), the `Opening exp+mobile://...` intent
    Metro fires can race ahead of the OS being ready to route it, so the emulator silently sits on
