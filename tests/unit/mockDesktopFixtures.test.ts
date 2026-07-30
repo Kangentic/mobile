@@ -21,13 +21,16 @@
  *     Changes lens lists, and reported line counts that did not add up to what
  *     the file list claimed for the file it did edit.
  */
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   MOCK_CONTEXT_WINDOW_FOR_TEST,
   MOCK_EXTRA_THINKING_SESSIONS,
   MOCK_STREAM_CEILING_FOR_TEST,
+  activeCapture,
+  activeGrid,
   diffFileList,
+  isStoreCaptureBuild,
   initialTasks,
   initialTasks2,
   streamingUsedTokens,
@@ -201,6 +204,57 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
   it('ends on the approval request the chat lens shows as a permission card', () => {
     const lastMeaningfulRows = shotsRows.filter((row) => row.trim().length > 0).slice(-12).join('\n');
     expect(lastMeaningfulRows).toMatch(/Do you want to/);
+  });
+
+  it('has the dialog on screen the instant the store-capture lens mounts', async () => {
+    // TIMING, not decoration. The store flow captures the chat frame first and
+    // reaches the terminal shot an unknown 15-30s later, while the replay
+    // restarts on every terminal-bearing subscribe. A dialog that only arrives
+    // at the END of the replay window is therefore a coin flip, and losing it
+    // ships a mid-diff frame captioned as a permission request. Putting it in
+    // the SEED removes the race rather than widening a wait.
+    const seedOnly = await renderCaptureRows({ ...CLAUDE_CAPTURE_SHOTS, chunks: [] });
+    expect(seedOnly.join('\n')).toMatch(/Do you want to/);
+  });
+});
+
+describe('the store-capture build selects the narrow recording', () => {
+  // The one code path that produces published images, and the only one nothing
+  // else here exercises: every other assertion reads CLAUDE_CAPTURE_SHOTS as a
+  // data object rather than going through the flag that selects it.
+  const originalFlag = process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
+
+  afterEach(() => {
+    if (originalFlag === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
+    else process.env.EXPO_PUBLIC_KANGENTIC_SHOTS = originalFlag;
+  });
+
+  it('replays the wide recording by default', () => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
+    expect(isStoreCaptureBuild()).toBe(false);
+    expect(activeCapture().cols).toBe(CLAUDE_CAPTURE_WIDE.cols);
+    expect(activeGrid()).toEqual({ cols: CLAUDE_CAPTURE_WIDE.cols, rows: CLAUDE_CAPTURE_WIDE.rows });
+  });
+
+  it('replays the narrow recording under the shots flag', () => {
+    process.env.EXPO_PUBLIC_KANGENTIC_SHOTS = '1';
+    expect(isStoreCaptureBuild()).toBe(true);
+    expect(activeCapture().cols).toBe(CLAUDE_CAPTURE_SHOTS.cols);
+    expect(activeGrid()).toEqual({ cols: CLAUDE_CAPTURE_SHOTS.cols, rows: CLAUDE_CAPTURE_SHOTS.rows });
+  });
+
+  it('reports a grid that matches the bytes it replays', () => {
+    // The failure this guards is silent and single-mode: announcing one grid
+    // while streaming another renders every box border sliced mid-glyph.
+    for (const flag of [undefined, '1']) {
+      if (flag === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
+      else process.env.EXPO_PUBLIC_KANGENTIC_SHOTS = flag;
+      expect(activeGrid()).toEqual({ cols: activeCapture().cols, rows: activeCapture().rows });
+    }
+  });
+
+  it('uses two genuinely different grids, so the flag is not a no-op', () => {
+    expect(CLAUDE_CAPTURE_SHOTS.cols).not.toBe(CLAUDE_CAPTURE_WIDE.cols);
   });
 });
 

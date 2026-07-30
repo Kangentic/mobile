@@ -103,25 +103,6 @@ const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
 const QUESTION_PROMPT_ID = `${MOCK_SESSION_ID}:${QUESTION_TOOL_ID}`;
-/**
- * The mock desktop pane's grid, and the capture replayed at it.
- *
- * Both are RECORDED, so the grid is not a free choice: Claude Code reflows to
- * whatever PTY it is given, and replaying a 120-column recording at any other
- * width renders it shredded. Grid and bytes travel together.
- *
- * Two recordings, because two modes want different things:
- *
- * - `dev:mock`, the mode this app is debugged in, reports 120x30 - an ordinary
- *   desktop terminal. A grid that wide overflows a phone and pans, which is
- *   exactly what a real connected session does, so the rig behaves like the
- *   real thing including the parts that are awkward.
- * - `dev:shots` reports 56x48. See MOCK_SHOTS_PTY_DIMENSIONS for the
- *   measurement behind those numbers. It is still real Claude Code output, just
- *   recorded against a narrower desktop window, because a listing image cannot
- *   pan and a clipped one shows the left third of every frame.
- */
-const MOCK_DESKTOP_PTY_DIMENSIONS = { cols: CLAUDE_CAPTURE_WIDE.cols, rows: CLAUDE_CAPTURE_WIDE.rows };
 const MOCK_CONTEXT_WINDOW_SIZE = 200_000;
 // Model variety across the mock's sessions - both the Agents feed and the
 // board read the SAME activityStore usage data per session, so varying it
@@ -262,7 +243,7 @@ function extraThinkingSnapshot(spec: MockExtraThinkingSessionSpec): ReadStreamRe
     activity: { state: 'thinking', reason: { kind: 'turn-active' } },
     usage: mockUsage(spec.usedTokens, spec.model),
     awaitedPromptId: null,
-    ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+    ptyDimensions: activeGrid(),
   };
 }
 
@@ -312,21 +293,43 @@ function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): Transcript
  * name mid-word to "fix/sign-in-return-" and nothing caught it until a human
  * looked at the image.
  */
-export const MOCK_SHOTS_PTY_DIMENSIONS = { cols: CLAUDE_CAPTURE_SHOTS.cols, rows: CLAUDE_CAPTURE_SHOTS.rows };
-
 /**
- * Which recording this run replays.
+ * Which recording this run replays, and therefore which grid it reports.
+ *
+ * Two recordings, because two modes want different things:
+ *
+ * - `dev:mock`, the mode this app is debugged in, replays the 120x30 capture -
+ *   an ordinary desktop terminal. A grid that wide overflows a phone and pans,
+ *   which is exactly what a real connected session does, so the rig behaves
+ *   like the real thing including the parts that are awkward.
+ * - `dev:shots` replays the 56x48 one (measurement above). Still real Claude
+ *   Code output, just recorded against a narrower desktop window, because a
+ *   listing image cannot pan and a clipped one shows the left third of every
+ *   frame.
  *
  * EXPO_PUBLIC_KANGENTIC_SHOTS is set by `dev:shots` and by the iOS capture job,
  * and is inlined at bundle time like every EXPO_PUBLIC_ value - so flipping it
  * needs a Metro restart with --clear, same as the mock flag itself.
  */
-function isStoreCaptureBuild(): boolean {
+export function isStoreCaptureBuild(): boolean {
   return process.env.EXPO_PUBLIC_KANGENTIC_SHOTS === '1';
 }
 
-function activeCapture(): RecordedTerminalCapture {
+export function activeCapture(): RecordedTerminalCapture {
   return isStoreCaptureBuild() ? CLAUDE_CAPTURE_SHOTS : CLAUDE_CAPTURE_WIDE;
+}
+
+/**
+ * The grid EVERY mock session reports.
+ *
+ * Derived from the active capture rather than a constant, and shared by the
+ * static sessions too: they carry plain-text scrollback with no grid of their
+ * own, and having them announce 120x30 while the streaming session announced
+ * 56x48 would mean one mock desktop claiming two different pane sizes.
+ */
+export function activeGrid(): { cols: number; rows: number } {
+  const capture = activeCapture();
+  return { cols: capture.cols, rows: capture.rows };
 }
 
 /**
@@ -957,11 +960,18 @@ function diffFileContent(filePath: string): DiffFileContentWire {
       language: 'typescript',
     };
   }
-  return {
-    original: 'if (!user) {\n  return loginRedirect();\n}\n',
-    modified: 'if (!user) {\n  return loginRedirect(window.location.pathname + window.location.search);\n}\n',
-    language: 'typescript',
-  };
+  if (filePath === 'src/routes/checkout.tsx') {
+    return {
+      original: 'if (!user) {\n  return loginRedirect();\n}\n',
+      modified: 'if (!user) {\n  return loginRedirect(window.location.pathname + window.location.search);\n}\n',
+      language: 'typescript',
+    };
+  }
+  // Every path diffFileList advertises is handled above. A request for anything
+  // else is a bug somewhere, and answering it with the last file's diff - which
+  // a fallthrough default would do - shows the wrong file's changes under the
+  // right filename. An empty diff is wrong in a way a reader can see.
+  return { original: '', modified: '', language: 'typescript' };
 }
 
 export function createMockDesktop(): MockDesktop {
@@ -1510,7 +1520,7 @@ export function createMockDesktop(): MockDesktop {
             activity: { state: 'idle', reason: { kind: 'idle' } },
             usage: mockUsage(61_000, MOCK_MODEL_FABLE),
             awaitedPromptId: null,
-            ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+            ptyDimensions: activeGrid(),
           };
           return ok(request, pausedSnapshot as unknown as JsonValue);
         }
@@ -1541,7 +1551,7 @@ export function createMockDesktop(): MockDesktop {
             activity: { state: 'idle', reason: { kind: 'idle' } },
             usage: mockUsage(28_000, MOCK_MODEL_OPUS),
             awaitedPromptId: null,
-            ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+            ptyDimensions: activeGrid(),
           };
           return ok(request, idleSnapshot as unknown as JsonValue);
         }
@@ -1558,7 +1568,7 @@ export function createMockDesktop(): MockDesktop {
             activity: { state: 'thinking', reason: { kind: 'turn-active' } },
             usage: mockUsage(15_000, MOCK_MODEL_CODEX),
             awaitedPromptId: null,
-            ptyDimensions: { ...MOCK_DESKTOP_PTY_DIMENSIONS },
+            ptyDimensions: activeGrid(),
           };
           return ok(request, codexSnapshot as unknown as JsonValue);
         }
@@ -1698,7 +1708,7 @@ export function createMockDesktop(): MockDesktop {
           return ok(request, { resized: true, colsChanged });
         }
         if (payload.action === 'release-size') {
-          ptyDimensions = { ...MOCK_DESKTOP_PTY_DIMENSIONS };
+          ptyDimensions = activeGrid();
           emitPtyResize();
           return ok(request, { released: true });
         }
