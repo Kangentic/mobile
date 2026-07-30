@@ -151,8 +151,24 @@ right PICTURE, and this is where every real defect has been found:
 - an un-navigated feed shot that a filename collision let through
 - a Maestro *failure* frame collected as a listing image
 - two wifi icons, from a status bar left in demo mode by an earlier run
+- status badges floating 12pt above the row they label
+- **a completely BLANK terminal**, on one run out of two
 
 None of those failed anything. **These are product claims, not test output.**
+
+**The blank terminal is the one to know about, because it is intermittent and
+invisible to every check.** xterm paints into a canvas inside the WebView, so
+nothing it draws reaches the native hierarchy: `terminal-webview is visible`
+passes whether the pane is full or empty, and Metro logged
+`[terminal] renderer for mock-session-1: webgl` with no error on the run that
+came out blank. The next run of the identical commit rendered perfectly.
+
+File size is the cheap tell, and worth checking before you even open the
+frames. A full 6.9-inch terminal frame is ~317KB; the blank one was 104KB,
+while every other frame in the same run was within noise. If
+`02-session-terminal` comes back dramatically smaller than its neighbours,
+look at it before doing anything else, and just re-run - it is a WebGL context
+loss on the simulator, which is why buildXtermHtml.mjs carries retry logic.
 
 ## Step 6 - Commit all four shelves together
 
