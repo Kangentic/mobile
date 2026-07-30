@@ -3,7 +3,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { decideRecordAction, parseRecordFileName, recordFileName } from '../../scripts/rigProcessRegistry.mjs';
+import {
+  decideEmulatorAction,
+  decideRecordAction,
+  emulatorRecordFileName,
+  parseEmulatorRecordFileName,
+  parseRecordFileName,
+  recordFileName,
+} from '../../scripts/rigProcessRegistry.mjs';
 
 const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
 
@@ -73,6 +80,77 @@ describe('decideRecordAction', () => {
     const posix: RigRecord = { label: 'metro', pid: 4242, platform: 'linux', identity: null };
     expect(decideRecordAction(posix, { creationDate: '', commandLine: '' }).action).toBe('kill');
     expect(decideRecordAction(posix, null).action).toBe('prune');
+  });
+});
+
+describe('decideEmulatorAction', () => {
+  const booted = { serial: 'emulator-5554', avdName: 'kangentic_pixel' };
+
+  it('kills a serial still running the AVD the rig booted', () => {
+    const decision = decideEmulatorAction(booted, { attached: true, avdName: 'kangentic_pixel' });
+    expect(decision.action).toBe('kill');
+  });
+
+  it('leaves a serial now running a DIFFERENT AVD', () => {
+    // A serial is a slot, not an identity: emulator-5554 is simply the first
+    // one, so the next emulator to boot inherits it. Killing on serial alone
+    // would shut down whatever happened to take the slot.
+    const decision = decideEmulatorAction(booted, { attached: true, avdName: 'some_other_avd' });
+    expect(decision.action).toBe('prune');
+    expect(decision.reason).toContain('some_other_avd');
+  });
+
+  it('prunes a serial that is no longer attached', () => {
+    expect(decideEmulatorAction(booted, { attached: false, avdName: null }).action).toBe('prune');
+  });
+
+  it('leaves an emulator whose console will not name its AVD', () => {
+    // Unverifiable is not a kill target, matching the process rule. A wedged
+    // emulator is exactly when the console stops answering, and that is also
+    // exactly when we are least sure whose it is.
+    expect(decideEmulatorAction(booted, { attached: true, avdName: null }).action).toBe('prune');
+  });
+
+  it('prunes a record that never captured an AVD name', () => {
+    expect(decideEmulatorAction({ serial: 'emulator-5554' }, { attached: true, avdName: 'kangentic_pixel' }).action).toBe(
+      'prune',
+    );
+  });
+
+  it('prunes an unreadable record', () => {
+    expect(decideEmulatorAction(null, { attached: true, avdName: 'kangentic_pixel' }).action).toBe('prune');
+    expect(decideEmulatorAction({ serial: '' }, { attached: true, avdName: 'x' }).action).toBe('prune');
+  });
+
+  it('never kills on a missing live reading', () => {
+    expect(decideEmulatorAction(booted, null).action).toBe('prune');
+    expect(decideEmulatorAction(booted, undefined).action).toBe('prune');
+  });
+});
+
+describe('emulator record file names', () => {
+  it('round-trips a serial', () => {
+    const parsed = parseEmulatorRecordFileName(emulatorRecordFileName('emulator-5554'));
+    expect(parsed).toEqual({ serial: 'emulator-5554' });
+  });
+
+  it('ignores a process record', () => {
+    expect(parseEmulatorRecordFileName(recordFileName('metro', 1234))).toBeNull();
+  });
+
+  it('is NOT readable as a process record', () => {
+    // The two registries share one directory, and this is not hypothetical:
+    // `devrig-emulator-emulator-5554.json` parses as label "emulator-emulator",
+    // pid 5554. Since the process stop runs first and prunes records it cannot
+    // verify, an unguarded parser DELETES the emulator record every run and the
+    // tracking silently evaporates - which is exactly the bug the emulator stop
+    // was written to fix.
+    //
+    // Asserting the label is not "emulator" (an earlier version of this test)
+    // passes against that bug, because the label came out "emulator-emulator".
+    // The property that matters is that it does not parse at all.
+    expect(parseRecordFileName(emulatorRecordFileName('emulator-5554'))).toBeNull();
+    expect(parseRecordFileName(emulatorRecordFileName('emulator-5556'))).toBeNull();
   });
 });
 

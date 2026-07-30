@@ -19,11 +19,21 @@
  *   node scripts/dev.mjs doctor   Preflight checks only.
  *   node scripts/dev.mjs stop     Stop the processes THIS RIG started (this
  *                                    run's and any left by an interrupted
- *                                    earlier one), leaving the relay and
- *                                    emulator up. Starting any mode does this
- *                                    first, so `stop` is only needed to hand
- *                                    the machine back clean. Add --dry-run to
- *                                    print the targets and kill nothing.
+ *                                    earlier one), leaving the relay up.
+ *                                    Starting any mode does this first, so
+ *                                    `stop` is only needed to hand the machine
+ *                                    back clean. Add --dry-run to print the
+ *                                    targets and kill nothing.
+ *                                    The EMULATOR is left running by default
+ *                                    (slow to boot, usually wanted next run)
+ *                                    but is now NAMED in the output when it
+ *                                    survives - a bare "stopped 1 rig process"
+ *                                    while a phone window sits on screen is the
+ *                                    most common surprise this command causes.
+ *                                    --emulator (or --all) shuts down the ones
+ *                                    the rig booted, by serial and verified
+ *                                    AVD name; one it merely adopted is never
+ *                                    recorded and never touched.
  *
  * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
  *        --relay <wss://host> (use a HOSTED relay instead of the local one:
@@ -94,7 +104,14 @@ import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { decideRecordAction, parseRecordFileName, recordFileName } from './rigProcessRegistry.mjs';
+import {
+  decideEmulatorAction,
+  decideRecordAction,
+  emulatorRecordFileName,
+  parseEmulatorRecordFileName,
+  parseRecordFileName,
+  recordFileName,
+} from './rigProcessRegistry.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -224,6 +241,9 @@ function parseRigArgs(argv) {
       headless: { type: 'boolean', default: false },
       shard: { type: 'string' },
       wifi: { type: 'boolean', default: false },
+      // stop mode only: also shut down emulators the rig booted.
+      emulator: { type: 'boolean', default: false },
+      all: { type: 'boolean', default: false },
       // mock mode only: build the bundle the store capture runs against.
       shots: { type: 'boolean', default: false },
     },
@@ -434,6 +454,94 @@ function forgetSpawnedChild(label, pid) {
 }
 
 /** Every record on disk, newest last, with its file path for pruning. */
+/**
+ * Record an emulator the rig BOOTED, so `stop` can offer to shut it down.
+ *
+ * Only ever called on the boot path. An emulator the rig adopted (already
+ * running when the rig started) is deliberately not recorded: it is someone
+ * else's, exactly like a relay the rig adopted.
+ */
+function recordBootedEmulator(serial, avdName) {
+  try {
+    mkdirSync(PROCESS_REGISTRY_DIR, { recursive: true });
+    writeFileSync(
+      join(PROCESS_REGISTRY_DIR, emulatorRecordFileName(serial)),
+      JSON.stringify({ serial, avdName, bootedAt: new Date().toISOString() }, null, 2),
+    );
+  } catch (recordError) {
+    log(`could not record the emulator (stop will not be able to shut it down): ${recordError.message}`);
+  }
+}
+
+/** The AVD a live emulator reports on its console, or null if it does not answer. */
+function liveEmulatorAvdName(serial) {
+  const result = run('adb', ['-s', serial, 'emu', 'avd', 'name']);
+  if (result.status !== 0) return null;
+  // `emu avd name` answers with the name then OK, one per line.
+  const firstLine = (result.stdout ?? '').split('\n').map((line) => line.trim()).filter(Boolean)[0];
+  return firstLine && firstLine !== 'OK' ? firstLine : null;
+}
+
+function readEmulatorRegistry() {
+  let fileNames = [];
+  try {
+    fileNames = readdirSync(PROCESS_REGISTRY_DIR);
+  } catch {
+    return [];
+  }
+  const records = [];
+  for (const fileName of fileNames) {
+    const parsed = parseEmulatorRecordFileName(fileName);
+    if (!parsed) continue;
+    const path = join(PROCESS_REGISTRY_DIR, fileName);
+    let record = null;
+    try {
+      record = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      // Unreadable record: not a kill target, same as for a process.
+    }
+    records.push({ path, record: record ?? { ...parsed, avdName: null } });
+  }
+  return records;
+}
+
+/**
+ * Shut down emulators THIS RIG BOOTED, verified by serial and AVD name.
+ *
+ * Uses `adb -s <serial> emu kill` rather than a pid: `emulator.exe` hands off
+ * to a qemu child, so the pid the rig spawned is not reliably the process that
+ * owns the window, while the console command addresses exactly one instance
+ * and shuts it down cleanly.
+ */
+function stopRecordedEmulators({ dryRun = false } = {}) {
+  const attached = new Set(listAdbDevices().map((device) => device.serial));
+  let stopped = 0;
+  let pruned = 0;
+  for (const { path, record } of readEmulatorRegistry()) {
+    const isAttached = attached.has(record.serial);
+    const live = { attached: isAttached, avdName: isAttached ? liveEmulatorAvdName(record.serial) : null };
+    const { action, reason } = decideEmulatorAction(record, live);
+    if (action === 'prune') {
+      if (!dryRun) rmSync(path, { force: true });
+      // Worth saying out loud when the thing is still on screen: silence here
+      // reads as "it was cleaned up" when it was actually left alone.
+      if (isAttached) log(`leaving emulator ${record.serial} running - ${reason}`);
+      pruned += 1;
+      continue;
+    }
+    if (dryRun) {
+      log(`would stop emulator ${record.serial} (${record.avdName}) - ${reason}`);
+      stopped += 1;
+      continue;
+    }
+    log(`stopping emulator ${record.serial} (${record.avdName}) - ${reason}`);
+    run('adb', ['-s', record.serial, 'emu', 'kill']);
+    rmSync(path, { force: true });
+    stopped += 1;
+  }
+  return { stopped, pruned };
+}
+
 function readProcessRegistry() {
   let fileNames = [];
   try {
@@ -751,6 +859,7 @@ async function bootEmulator(avdName, { headless = false, readOnly = false } = {}
       const boot = run('adb', ['-s', device.serial, 'shell', 'getprop', 'sys.boot_completed']);
       if (boot.stdout?.trim() === '1') {
         log(`emulator booted (${device.serial})`);
+        recordBootedEmulator(device.serial, avdName);
         return device.serial;
       }
     }
@@ -1400,15 +1509,32 @@ async function main() {
   const needsRelay = !relayIsRemote && (mode === 'live' || mode === 'pair' || mode === 'stub');
 
   if (mode === 'stop') {
-    // Back to a known-good machine in one command. Deliberately leaves the
-    // relay (spawned detached, shared with the desktop) and the emulator up:
-    // both are expensive to restart and neither is what goes wrong.
+    // Back to a known-good machine in one command. Metro and the stub always
+    // stop; the emulator does NOT by default, because it is slow to boot and is
+    // usually wanted for the next run. `--emulator` (or `--all`) shuts down the
+    // ones this rig booted.
     const dryRun = Boolean(flags['dry-run']);
+    const alsoEmulator = Boolean(flags.emulator) || Boolean(flags.all);
     const { stopped, pruned } = stopRecordedProcesses({ dryRun });
     if (stopped === 0) log('no rig processes running');
     else log(dryRun ? `${stopped} rig process(es) would be stopped (--dry-run: nothing was killed)` : `stopped ${stopped} rig process(es)`);
     if (pruned > 0) log(`${dryRun ? 'would prune' : 'pruned'} ${pruned} stale record(s) (already exited, or the pid is now someone else's)`);
-    log('relay and emulator left running (npm run dev:adb recovers a wedged adb server)');
+
+    if (alsoEmulator) {
+      const emulators = stopRecordedEmulators({ dryRun });
+      if (emulators.stopped === 0 && emulators.pruned === 0) log('no rig-booted emulator recorded');
+    } else {
+      // Name what is STILL UP rather than reporting a clean stop. "stopped 1
+      // rig process" while an emulator window sits on screen reads as a lie,
+      // and it is the single most common surprise this command produces.
+      const rigBooted = readEmulatorRegistry()
+        .map(({ record }) => record.serial)
+        .filter((serial) => listAdbDevices().some((device) => device.serial === serial));
+      if (rigBooted.length > 0) {
+        log(`STILL RUNNING: emulator ${rigBooted.join(', ')} (booted by the rig) - stop it with: npm run dev:stop -- --emulator`);
+      }
+    }
+    log('relay left running (npm run dev:adb recovers a wedged adb server)');
     process.exit(0);
   }
 

@@ -27,6 +27,8 @@
 
 const RECORD_PREFIX = 'devrig-';
 const RECORD_SUFFIX = '.json';
+/** Declared here because parseRecordFileName has to exclude it - see below. */
+const EMULATOR_PREFIX = 'devrig-emulator-';
 
 /** A record filename encodes label and pid so stop needs no index file. */
 export function recordFileName(label, pid) {
@@ -40,6 +42,12 @@ export function recordFileName(label, pid) {
  */
 export function parseRecordFileName(fileName) {
   if (!fileName.startsWith(RECORD_PREFIX) || !fileName.endsWith(RECORD_SUFFIX)) return null;
+  // Both registries share one directory, and an emulator record's name parses
+  // cleanly as a process record: `devrig-emulator-emulator-5554.json` reads as
+  // label "emulator-emulator", pid 5554. Left unguarded the process stop - which
+  // runs first - treats it as a stale record and DELETES it, so the emulator
+  // stop that follows finds nothing and the tracking silently evaporates.
+  if (fileName.startsWith(EMULATOR_PREFIX)) return null;
   const middle = fileName.slice(RECORD_PREFIX.length, -RECORD_SUFFIX.length);
   const separator = middle.lastIndexOf('-');
   if (separator <= 0) return null;
@@ -95,4 +103,64 @@ export function decideRecordAction(record, liveIdentity) {
   }
 
   return { action: 'prune', reason: 'identity could not be compared' };
+}
+
+// ---------------------------------------------------------------------------
+// Emulators
+// ---------------------------------------------------------------------------
+
+/**
+ * An emulator is tracked by SERIAL, not pid.
+ *
+ * `emulator.exe` is a launcher: it hands off to a qemu child and the pid the
+ * rig spawned is not reliably the process that owns the window, so the pid
+ * identity check the rest of this file relies on cannot be applied. The serial
+ * can, and it has a graceful, targeted shutdown that needs no pid at all:
+ * `adb -s <serial> emu kill` speaks to that one instance's console.
+ *
+ * The ownership question still has to be answered, because a serial is a SLOT
+ * (emulator-5554 is simply the first one) and the next emulator to boot inherits
+ * it. So the record carries the AVD name, and stop re-reads the live AVD name
+ * off the console before killing anything. An emulator the rig ADOPTED - one
+ * already running when the rig started - is never recorded, so it is never a
+ * target.
+ */
+export function emulatorRecordFileName(serial) {
+  return `${EMULATOR_PREFIX}${serial}${RECORD_SUFFIX}`;
+}
+
+export function parseEmulatorRecordFileName(fileName) {
+  if (!fileName.startsWith(EMULATOR_PREFIX) || !fileName.endsWith(RECORD_SUFFIX)) return null;
+  const serial = fileName.slice(EMULATOR_PREFIX.length, -RECORD_SUFFIX.length);
+  return serial.length > 0 ? { serial } : null;
+}
+
+/**
+ * Decide what to do with one emulator record.
+ *
+ * `live` is what adb reports for that serial RIGHT NOW:
+ * `{ attached: boolean, avdName: string | null }`, where a null avdName means
+ * the console did not answer.
+ *
+ * Returns 'kill' only when the serial is still attached AND still running the
+ * AVD the rig booted. Anything unverifiable prunes, same as for processes:
+ * shutting down a stranger's emulator is a smaller harm than killing their
+ * editor, but it is the same mistake and the same rule applies.
+ */
+export function decideEmulatorAction(record, live) {
+  if (!record || typeof record.serial !== 'string' || record.serial.length === 0) {
+    return { action: 'prune', reason: 'unreadable record' };
+  }
+  if (!live || live.attached !== true) {
+    return { action: 'prune', reason: 'already gone' };
+  }
+  if (typeof record.avdName !== 'string' || record.avdName.length === 0) {
+    return { action: 'prune', reason: 'no AVD name was recorded, so this serial cannot be verified' };
+  }
+  if (typeof live.avdName !== 'string' || live.avdName.length === 0) {
+    return { action: 'prune', reason: 'the emulator console did not report an AVD name, so it cannot be verified' };
+  }
+  return live.avdName === record.avdName
+    ? { action: 'kill', reason: 'serial still runs the AVD the rig booted' }
+    : { action: 'prune', reason: `serial now runs a different AVD (${live.avdName})` };
 }
