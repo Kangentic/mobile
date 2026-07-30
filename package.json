@@ -26,8 +26,6 @@
     "test:unit": "vitest run tests/unit",
     "test:components": "jest tests/components",
     "sync:branding": "node scripts/syncBranding.mjs",
-    "build:tab-icons": "node scripts/buildTabIcons.mjs",
-    "check:tab-icons": "node scripts/buildTabIcons.mjs --check",
     "sync:branding:check": "node scripts/syncBranding.mjs --check",
     "build:dev": "eas build --profile development --platform android",
     "build:preview": "eas build --profile preview --platform android",
@@ -78,9 +76,8 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@kangentic/branding": "^2.4.0",
+    "@kangentic/branding": "^2.7.0",
     "@react-native/jest-preset": "^0.86.0",
-    "@resvg/resvg-js": "^2.6.2",
     "@testing-library/react-native": "^13.3.3",
     "@types/diff": "^7.0.2",
     "@types/jest": "^29.5.14",

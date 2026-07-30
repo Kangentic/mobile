@@ -36,7 +36,8 @@ app/                           # expo-router route wrappers (thin - render the s
                                 #   native form-sheet routes (they replaced the custom board sheets)
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen (OS deep-link routing of kangentic-pair:// is a later phase)
   settings.tsx, devices.tsx
-assets/brand/                 # Synced identity rasters (icon/splash/adaptive) - scripts/syncBranding.mjs owns them
+assets/brand/                 # Synced identity rasters (icon/splash/adaptive, the iOS Board tab
+                              #   glyph) - scripts/syncBranding.mjs owns them
 plugins/                      # Local Expo config plugins (withAndroidPushService: notification
                               #   permissions + FGS type; withIosManualSigning: App Store signing on
                               #   the app target only, inert outside CI;
@@ -52,8 +53,8 @@ src/
                   #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
                   #   column chips, composer/, diff/ cells
-  brand/          # Generated brand data (brandmark XML, Overseer frames + motion sequences) -
-                  #   syncBranding.mjs owns them
+  brand/          # Generated brand data (brandmark XML, Overseer frames + motion sequences,
+                  #   activity mark shapes + march timing) - syncBranding.mjs owns them
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
@@ -85,7 +86,7 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
                   #   pretypecheck stale-node_modules guard), the store preflights
                   #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs, storeScreenshots.mjs
-                  #   (listing captures, driven by /store-screenshots), buildTabIcons.mjs
+                  #   (listing captures, driven by /store-screenshots)
                   #   + repo scripts
 store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 ```
