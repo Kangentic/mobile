@@ -8,11 +8,48 @@ description: >
 runs:
   using: composite
   steps:
+    # NO `cache: npm` HERE, deliberately. setup-node's npm cache keys on the
+    # SAME package-lock.json hash as the node_modules cache below it, so the two
+    # can only ever hit or miss together - and on a hit, `npm ci` is skipped
+    # entirely and the npm download cache is never read. It could only help in
+    # the one case where it is guaranteed to have missed too.
+    #
+    # It was not free. MEASURED 2026-07-30 via `gh api
+    # repos/Kangentic/mobile/actions/cache/usage`: the repository held 9.86 GB
+    # of a 10 GB cap across 39 entries, and a second read minutes later showed
+    # 9.25 GB across 37 - eviction happening live. The npm entries were
+    # ~192 MB each across ~10 refs, so roughly 1.9 GB, or 19% of the cap, spent
+    # on a cache that cannot be read.
+    #
+    # That matters because actions/cache evicts by LAST ACCESS across the whole
+    # repository, so this was competing for budget with the Gradle User Home
+    # entry that `Build (APK)` depends on - and cache health is worth minutes
+    # there: two runs of IDENTICAL configuration on the same commit measured
+    # 5m 38s apart on task reuse alone (30514455368 at 146 of 1029 cached,
+    # 30517929707 at 391).
+    #
+    # No claim that removing this cache produced any particular speedup. The
+    # argument is capacity, not a stopwatch: ~1.9 GB of a 10 GB cap, spent on
+    # entries that cannot be read.
+    #
+    # The cost of removing it: on a genuine lockfile change, the jobs that start
+    # before the new node_modules entry is saved pay a registry download instead
+    # of a local unpack. That is not one job - actions/cache saves in a post-job
+    # step, so ci.yml's six parallel jobs all miss and all install, which is what
+    # ci.yml's own concurrency comment means by "a cold `npm ci` in all six
+    # parallel jobs". Jobs that start later, and every dependent job in
+    # build-android.yml, still restore. It costs nothing extra either way,
+    # because `cache: npm` keyed on the same hash and would have missed for all
+    # six too. Reversible in a line.
     - uses: actions/setup-node@v7
       with:
         node-version-file: .nvmrc
-        cache: npm
 
+    # NO `restore-keys` on this one, also deliberately. A partial-key restore
+    # would hand a job a node_modules built from a DIFFERENT lockfile, which is
+    # exactly the drift scripts/checkInstallDrift.mjs exists to catch and which
+    # presents as a wall of "has no exported member" errors in untouched files.
+    # An exact-match-or-install cache is the correct shape here.
     - name: Cache node_modules
       id: cache-node-modules
       uses: actions/cache@v6

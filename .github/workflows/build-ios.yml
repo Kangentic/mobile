@@ -113,6 +113,30 @@ jobs:
         # already installed; it also skips CocoaPods, which the next step runs.
         run: npx expo prebuild --platform ios --no-install
 
+      # DO NOT ADD A CocoaPods CACHE HERE, even though the `device` job has one
+      # and the asymmetry looks like an oversight. It was measured on 2026-07-30
+      # and it is the wrong trade.
+      #
+      # The ceiling is the whole step, and the whole step is 60 SECONDS
+      # (run 30464295817, 15:08:01 to 15:09:01). The device job's comment calls
+      # pod install "minutes of downloads", which is what makes this look
+      # worthwhile - it is not minutes here.
+      #
+      # Against that, an ios/Pods entry is hundreds of MB to GB, and the Actions
+      # cache is 10 GB PER REPOSITORY with eviction by last access across every
+      # ref. It measured 9.86 GB the day this was written. So the entry would be
+      # paid for by evicting the Gradle cache that `Build (APK)` in e2e.yml
+      # depends on - a job that IS on the merge path, where a cache miss costs
+      # minutes (147 of 1029 tasks from cache, 14m 53s, against 415 of 1055 and
+      # ~8m healthy). Trading minutes off the Android gate to save under a
+      # minute on a dispatch-only iOS job is backwards.
+      #
+      # Worth knowing before reversing this: the device job's Pods cache was NOT
+      # in `gh cache list` at all when this was measured. It had already been
+      # evicted, so it was costing budget and returning nothing.
+      #
+      # Revisit only if the cache budget has real headroom AND pod install has
+      # grown well past a minute. See .github/workflows/cache-cleanup.yml.
       - name: Install pods
         # The .xcworkspace is a CocoaPods artifact, so it does not exist until
         # this step completes. Everything that reads the workspace comes after.
@@ -174,6 +198,53 @@ jobs:
             signing_args=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
           fi
 
+          # EXCLUDED_ARCHS=x86_64 is the difference between compiling this app
+          # once and compiling it twice.
+          #
+          # `generic/platform=iOS Simulator` resolves ARCHS to ARCHS_STANDARD,
+          # which for the simulator SDK is `arm64 x86_64`. macos-latest runners
+          # are arm64 (see the node-cache-macOS-arm64-npm cache key), and the
+          # simulator the steps below boot is therefore arm64 too, so every
+          # x86_64 object compiled here is thrown away. MEASURED on run
+          # 30464295817: 4664 `Objects-normal/x86_64/` outputs against 5335
+          # arm64, all of them under Pods.build, in a step that took 21m 07s of
+          # a 31m 11s job.
+          #
+          # The APP target already carries exactly this setting, inherited from
+          # the generated project - 6 build-phase environment dumps show
+          # `EXCLUDED_ARCHS= x86_64`. It is the ~100 POD targets that did not,
+          # and a command-line build setting is what reaches them.
+          #
+          # EXCLUDED_ARCHS rather than ARCHS=arm64, for two reasons. It is the
+          # setting the app target already builds with. And Apple documents that
+          # if the resulting architecture list is empty "the target will not
+          # produce a binary" - so on a hypothetical x86_64 runner this fails at
+          # the `Verify an app bundle was produced` step below, which exists for
+          # precisely this class of silent failure, instead of quietly building
+          # an arm64 slice that no simulator on that runner can launch.
+          #
+          # ONLY_ACTIVE_ARCH is NOT the knob here: Apple documents it as ignored
+          # when the destination does not name a specific architecture, which a
+          # generic destination does not. The generic destination stays, because
+          # a concrete `-destination ...,name=iPhone 16` couples this job to a
+          # device name that the runner image is free to change.
+          #
+          # RESULT, one run per arm (30464295817 before, 30517573207 after):
+          #
+          #   Build for the simulator   21m 07s -> 14m 03s   (-7m 28s)
+          #   whole job                 31m 11s -> 24m 40s   (-6m 31s)
+          #   Objects-normal/x86_64        4664 -> 1
+          #   Objects-normal/arm64         5335 -> 5247
+          #
+          # n=1 each, which is normally not enough to claim anything on this
+          # workflow - but the mechanism is verified directly rather than
+          # inferred from the clock: the x86_64 object files are simply gone
+          # while the arm64 ones are not, and `Launch the app on a simulator`
+          # still passed, so the thinner binary really does run.
+          #
+          # Compare that with the Android gate, where a control run measured
+          # 5m 38s faster than a CONFIGURATION-IDENTICAL baseline purely on cache
+          # health. A clock difference on its own proves very little here.
           xcodebuild build \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -181,6 +252,7 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            EXCLUDED_ARCHS=x86_64 \
             "${signing_args[@]}"
 
       # xcodebuild exits 0 for a build that compiled nothing we care about, so

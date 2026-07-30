@@ -385,18 +385,36 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
      | Resource | Named by | Anchored? |
      |---|---|---|
      | `notification_icon` drawable | `src/notifications/channels.ts` (Notifee ignores the manifest meta-data, so every `displayNotification` sets it explicitly) | **Yes.** The `expo-notifications` plugin block also emits a manifest `meta-data` entry pointing at it, and manifest-referenced resources are never shrunk |
-     | `xterm.html` | `src/components/terminal/TerminalPane.tsx`'s `require('../../terminal/xterm.html')`, resolved through `Asset.fromModule` | **No.** Metro files every non-drawable asset under `res/raw` (`.html` is not in `@react-native/assets-registry`'s `drawableFileTypes`), and the name is resolved from the JS bundle at runtime, which the shrinker never scans |
+     | `xterm.html` | `src/components/terminal/TerminalPane.tsx`'s `require('../../terminal/xterm.html')`, resolved through `Asset.fromModule` | **Not in the resource graph**, but its survival is now asserted on every build that runs the shrinker. Metro files every non-drawable asset under `res/raw` (`.html` is not in `@react-native/assets-registry`'s `drawableFileTypes`), and the name is resolved from the JS bundle at runtime, which the shrinker never scans |
 
-     **Neither risk is covered by the E2E gate.** No Maestro flow displays a notification, and
-     none asserts WebView *content* - `.maestro/paired/session-mode-toggle.yaml`'s header says so
+     **Neither risk is caught by the Maestro flows.** No flow displays a notification, and none
+     asserts WebView *content* - `.maestro/paired/session-mode-toggle.yaml`'s header says so
      outright ("WebView content is never asserted - only RN-side testIDs"). The RN-side chrome
      around the WebView stays visible whether or not the HTML loaded, so a dropped `xterm.html`
      would render the Terminal pane - the **default** view of the session screen - blank while
      every check stayed green.
 
-     Resource shrinking is therefore the half of R8 whose first real proof is a hand check on a
-     `preview` build: open a task's Terminal pane and display a notification. If either breaks,
-     the fix is a config plugin writing `res/raw/keep.xml`
+     So the artifact is checked directly instead.
+     **`.github/scripts/verify-android-assets.sh`** fails the build unless the artifact still
+     carries an html resource the size of `src/terminal/xterm.html`. It runs unconditionally in
+     `e2e.yml` (that job always builds a signed release APK, and fails outright without a
+     keystore) and on **release variants only** in `build-android.yml`, which falls back to
+     `assembleDebug` for any profile when no keystore is configured - a debug build runs no
+     shrinker, so there is nothing there to guard. Note the limit at the far end too: on the
+     `production` path this proves the **AAB CI produced**, not the split APK a device installs,
+     because Play re-runs its own resource optimization at split time, after every check here.
+     It matches on **size, not path**, and that is load bearing:
+     `optimizeReleaseResources` renames resource files, so the shipped entry is
+     `res/JU.html` rather than `res/raw/xterm.html` (measured on run 30506459459, byte for byte
+     the 956707 of the source). A path check would go red on a *correct* build. It reads the
+     expected size from the source file, so regenerating the page with
+     `node scripts/buildXtermHtml.mjs` needs no change here.
+
+     That covers the resource being PRESENT, which is the silent half. It does not prove the
+     WebView renders, so a hand check on a `preview` build is still what proves the pane works
+     end to end - and `notification_icon` has no equivalent artifact check, since a drawable that
+     survives shrinking can still be the wrong one. If either breaks, the fix is a config plugin
+     writing `res/raw/keep.xml`
      (`<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@raw/*"/>`), or
      turning `enableShrinkResourcesInReleaseBuilds` back off - minification, which is what Play's
      optimization rating mostly reads and what the `mapping.txt` work exists for, is independent
@@ -680,6 +698,40 @@ modules and `:app:` are counted together. That matters because it changes where 
 have to come from: not from Metro, and not from anything Gradle's own build cache can reach, since
 external native build tasks are not cacheable. ccache is the only lever, and see below for why it
 has not been pulled.
+
+**That table predates R8, and two later measurements matter more than any single phase in it.**
+
+*R8 is real and it stays.* `:app:minifyReleaseWithR8` measured 137.3s to 169.2s across runs and is
+absent entirely from every pre-R8 log, which matches the +167s step-level delta arrived at
+independently (pre-R8 mean 405s over 3 runs against 572s over 2). AGP 8 fuses code and resource
+shrinking into that one task, so no log can split them; the experiment that can was run, and
+resource shrinking turned out to cost nothing measurable (see the R8 section above).
+
+*CACHE HEALTH DOMINATES EVERYTHING ELSE, and it is measured, not inferred.* Two `Build (APK)` runs
+of **identical configuration** on the same commit:
+
+| Run | Gradle | Task reuse |
+|---|---|---|
+| 30514455368 | **12m 39s** | `1029 actionable tasks: 883 executed, 146 from cache` |
+| 30517929707 | **7m 01s** | `1029 actionable tasks: 638 executed, 391 from cache` |
+
+**5m 38s apart with nothing changed but how much of the cache survived.** So the first thing to
+check when this job looks slow is the `from cache` count, not the diff. A run at 146 was read as an
+R8 regression before anyone looked at that number.
+
+Read that pair as cache WARMING, not as a scoreboard for any cleanup: 30514455368 is the run that
+*wrote* main's cache, and 30517929707 restored what it wrote. Nothing in
+`.github/workflows/cache-cleanup.yml` is claimed to have produced those 5m 38s. What that workflow
+buys is **headroom**, and the case for it is a capacity argument rather than a stopwatch one: the
+cap is 10 GB, usage measured 9.86 GB, eviction is by last access across every ref, 1.92 GB sat on
+refs `main` can never read, and eviction was observed happening live (39 entries to 37 between two
+reads minutes apart). Whether any given slow run was caused by that specific 1.92 GB is not
+something these numbers can say.
+
+It also means **any A/B on this job needs the `from cache` line quoted on both sides**, and ideally
+a normalisation against `buildCMakeRelWithDebInfo` plus `minifyReleaseWithR8`: those are identical
+work in every run and still spanned 174.5s to 252.3s across four builds of the same code, which is
+the runner-to-runner noise floor a claimed saving has to clear.
 
 **Where the emulator job's time goes**, measured on run 30397988677's `E2E Tests (Smoke)`. The job
 is 1m 45s and the emulator step is 1m 30s of it:

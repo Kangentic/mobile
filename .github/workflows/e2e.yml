@@ -368,6 +368,43 @@ jobs:
       # removed. Full write-up in docs/developer-guide.md.
       - uses: gradle/actions/setup-gradle@v5
 
+      # DO NOT ADD `-x :app:lintVitalRelease` HERE. It was tried on 2026-07-30,
+      # measured across five runs, and it buys nothing. Recorded so nobody
+      # rediscovers the premise and spends the afternoon again.
+      #
+      # The premise was sound and is still TRUE: `-x lint` does NOT cover
+      # `lintVitalRelease`. They are different tasks - `lint` is the standalone
+      # check, `lintVitalRelease` is the fatal-issues pass AGP wires into
+      # assembleRelease - so this invocation really has been paying for release
+      # lint the whole time. Excluding it works exactly as intended and prunes
+      # the entire model-generation chain: 1029 actionable tasks fall to 672, and
+      # all 54 lintVital tasks disappear rather than merely thinning out.
+      #
+      # It just does not make the job faster, because those tasks were never on
+      # the critical path. Each run below is normalised against
+      # buildCMakeRelWithDebInfo + minifyReleaseWithR8, which are identical work
+      # in both arms, because the raw clock is useless here - see the note above
+      # setup-gradle and the cache-health table in docs/developer-guide.md.
+      #
+      #   lint ON   n=2   421s, 522s          ratios 2.41, 2.13   mean 2.27
+      #   lint OFF  n=3   536s, 405s, 514s    ratios 2.12, 2.60, 2.21   mean 2.31
+      #
+      # Excluding it came out marginally WORSE on both raw total and ratio, with
+      # the two arms overlapping completely. The detection floor at these sample
+      # sizes is about +-60s, so this rules out a saving of minutes and does not
+      # rule out one of a few seconds. Either way it is inside the noise.
+      #
+      # WHAT MISLED THE FIRST PASS, worth knowing because the trap is general: on
+      # a cache-starved run (30506459459, 147 of 1029 tasks from cache) 52 of 54
+      # lintVital tasks executed and `generateReleaseLintVitalModel` occupied a
+      # 121.3s window with nothing else printing, which reads as a serial stall on
+      # the critical path. It is not - it is what parallel work looks like when
+      # the whole graph is executing at once. On a warm run the same tasks
+      # overlap the native compile and cost nothing.
+      #
+      # NOT TESTED: whether the exclusion helps on a COLD cache, where everything
+      # executes and the runner is saturated. Plausible, unmeasured, and not
+      # worth optimising for once cache-cleanup.yml keeps the cache healthy.
       - name: Build the release APK
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -389,7 +426,7 @@ jobs:
             "-Pandroid.injected.signing.key.alias=$ANDROID_KEY_ALIAS" \
             "-Pandroid.injected.signing.key.password=$ANDROID_KEY_PASSWORD"
 
-      - name: Verify the APK is signed and carries the expected ABIs
+      - name: Verify the APK is signed and carries the expected ABIs and assets
         env:
           BUILD_ABIS: ${{ steps.abis.outputs.abis }}
         run: |
@@ -397,6 +434,12 @@ jobs:
           apk=android/app/build/outputs/apk/release/app-release.apk
           bash .github/scripts/verify-android-signature.sh "$apk" apk
           bash .github/scripts/verify-android-abis.sh "$apk" apk "$BUILD_ABIS"
+          # Resource shrinking is the half of R8 with no escape hatch in
+          # expo-build-properties, and xterm.html is named from the JS bundle,
+          # which the shrinker never scans. This is the only thing standing
+          # between a shrunk-away Terminal pane and a fully green run. See the
+          # script's header for why it matches on size rather than on path.
+          bash .github/scripts/verify-android-assets.sh "$apk"
 
       - name: Stage the APK
         id: name

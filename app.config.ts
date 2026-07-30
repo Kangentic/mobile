@@ -309,9 +309,46 @@ const config: ExpoConfig = {
           //
           // The second one is the Terminal pane, which is the DEFAULT view of the
           // session screen, and no Maestro flow asserts WebView content
-          // (.maestro/paired/session-mode-toggle.yaml says so in its header), so
-          // the e2e gate cannot catch it. See the R8 section of
-          // docs/developer-guide.md before changing this flag.
+          // (.maestro/paired/session-mode-toggle.yaml says so in its header).
+          //
+          // GUARDED NOW, which is what makes this flag defensible rather than a
+          // bet. .github/scripts/verify-android-assets.sh runs in e2e.yml and
+          // build-android.yml and fails the build unless the artifact still
+          // carries an html resource the size of src/terminal/xterm.html. It
+          // matches on SIZE because the path is not stable: the APK renames it
+          // to res/JU.html while the AAB keeps
+          // base/res/raw/src_terminal_xterm.html (both verified against real
+          // artifacts, runs 30506459459 and 30466715863).
+          //
+          // KNOW WHAT THAT DOES NOT COVER. On the production path the guard
+          // proves the AAB CI produced, not the split APK a device installs:
+          // Play re-runs its own resource optimization at split time, which is
+          // the same reason the AAB still carries the un-renamed name above. No
+          // check in this repository runs after that. Closing it would mean
+          // `bundletool build-apks` against a real production bundle.
+          //
+          // A THIRD string-named resource exists and is deliberately not in the
+          // list above: assets/tab-icons/board-kanban.png, require()d for the
+          // Board tab icon. It is unanchored in exactly the same way, but
+          // Android resolves `drawable > md > src` and the trigger sets
+          // md="view_kanban", so Android never reads the PNG at all. It is
+          // protected by inaction rather than by anchoring. Dropping that `md`
+          // would quietly move it into the same hazard class as xterm.html.
+          //
+          // AND IT COSTS NOTHING TO KEEP. Turning it off was measured on
+          // 2026-07-30, one run per arm, normalising each build against
+          // buildCMakeRelWithDebInfo + minifyReleaseWithR8 because those are
+          // identical work in both arms and the runner-to-runner spread on them
+          // is enormous (174.5s to 252.3s across four runs of the same code):
+          //
+          //   shrink ON  (run 30517281178)  536s total, 252.3s anchor, ratio 2.12
+          //   shrink OFF (run 30517932999)  534s total, 244.1s anchor, ratio 2.19
+          //
+          // Shrinking off was very slightly WORSE, so its cost is below the
+          // noise floor. The ~166s that `minifyReleaseWithR8` adds to a release
+          // build is CODE shrinking, not resource shrinking, and AGP 8 fuses
+          // both into that one task - which is why no log can split them and the
+          // experiment had to be run. Do not repeat it expecting minutes.
           enableShrinkResourcesInReleaseBuilds: true,
           // E2E BUILDS ONLY. Android blocks cleartext traffic in a
           // release-shaped build, so the dev relay's ws:// socket is refused

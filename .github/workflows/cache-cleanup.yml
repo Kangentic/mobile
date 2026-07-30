@@ -1,0 +1,289 @@
+# Deletes a pull request's Actions caches when the pull request closes.
+#
+# WHY THIS EXISTS, and it is not housekeeping for its own sake. The Actions
+# cache is 10 GB PER REPOSITORY with eviction by last access across the whole
+# repository, and a cache written from a PR branch is scoped to that branch:
+# `main` can never read it. So every PR permanently donates its node_modules and
+# npm entries to a shared budget that only the default branch's caches can
+# actually spend. actions/cache documents the consequence outright - "caches
+# from branches other than the default can consume significant storage quota
+# without being usable in the default branch. This can lead to the eviction of
+# frequently used caches from the default branch."
+#
+# MEASURED 2026-07-30, via `gh api repos/Kangentic/mobile/actions/cache/usage`
+# and `gh cache list --json key,sizeInBytes,ref`:
+#
+#   9.86 GB across 39 entries, then 9.25 GB across 37 minutes later
+#     (the cap is 10 GB, so that second read is eviction happening live)
+#   1.92 GB across 10 entries on refs/pull/35/merge and
+#     feat/produce-store-screenshots - both already MERGED, so unusable forever
+#
+# What gets evicted is the point. `Build (APK)` in e2e.yml reported
+# `147 from cache` of 1029 tasks on run 30506459459 and took 14m 53s, against
+# `415 of 1055` and roughly 8m on runs 30411660909, 30401393044 and 30418244949.
+# Two runs of IDENTICAL configuration on the same commit later came in 5m 38s
+# apart on nothing but task reuse (30514455368 at 146 cached, 30517929707 at
+# 391). That job is ~88% of the merge gate, so cache health is worth minutes on
+# every pull request, and the 14m 53s run was read as an R8 regression before
+# anyone looked at its reuse count.
+#
+# THIS WORKFLOW IS A HEADROOM ARGUMENT, NOT A MEASURED SPEEDUP. No run above is
+# claimed to have been caused by the 1.92 GB this deletes, and the pair that
+# differs by 5m 38s is ordinary cache warming - the slower run is the one that
+# WROTE the cache the faster one restored. What is measured is the capacity
+# problem: a 10 GB cap, 9.86 GB in use, eviction by last access across every
+# ref, and 1.92 GB of it sitting where the default branch can never read it.
+#
+# NOT A SUBSTITUTE for the `cache: npm` removal in
+# .github/actions/setup-node-deps/action.yml, which is the other half. This
+# stops the recurring per-PR leak; that one stopped a cache being written that
+# could never be read. Both were needed.
+#
+# Lifted from the `cleanup caches by a branch` recipe in actions/cache's
+# tips-and-workarounds.md rather than invented here.
+name: Cache cleanup
+
+on:
+  pull_request:
+    types: [closed]
+  # Weekly, because the default branch's own caches grow without any pull
+  # request being involved. See the prune step for the measured growth rate.
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: 'Generations of each cache family to keep on the default branch'
+        type: string
+        default: '2'
+
+# Declaring a `permissions:` block at all sets every scope NOT listed to `none`,
+# so each entry here has to be present for a reason:
+#
+#   actions: write        what the cache delete API requires.
+#   contents: read        the repository-wide default, kept explicit.
+#   pull-requests: read   what `gh pr list` in the sweep requires. Easy to leave
+#                         off, and the consequence is the opposite of harmless:
+#                         that call builds the list of refs the sweep SPARES, so
+#                         a permission failure returns nothing to spare and the
+#                         sweep deletes the caches of every open pull request.
+#                         cla.yml is the other workflow here that touches pull
+#                         requests, and it names the scope for the same reason.
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+# Every other workflow in this directory declares one. The race worth naming is
+# a manual dispatch landing on top of the Monday schedule: both would list the
+# same caches and race to delete the same ids. Individual deletes already
+# tolerate a 404, so this is about not wasting the calls, not about safety.
+# `cancel-in-progress: false` because a half-finished sweep is worse than a slow
+# one - it leaves the budget argument half-applied with the job reporting green.
+concurrency:
+  group: cache-cleanup-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete the closed PR's caches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Scoped by EVENT, not by an input default. On a workflow_dispatch there is
+      # no github.event.pull_request, so a single ref expression would expand to
+      # `refs/pull//merge` and silently match nothing while reporting success.
+      # build-ios.yml:96-99 documents the same trap costing a real mistake.
+      #
+      # THIS PATH DOES NOT COVER FORK PULL REQUESTS, and this repository is
+      # public, so it will see them. GitHub downgrades GITHUB_TOKEN to read-only
+      # for a `pull_request` event from a fork no matter what `permissions:`
+      # says, so the delete is refused. It degrades quietly rather than failing
+      # the job, and the weekly prune below is the backstop: it deletes anything
+      # off the default branch that is not an open pull request, fork or not.
+      - name: Delete caches scoped to this pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # The merge ref, not the head branch. A PR's caches are written under
+          # refs/pull/<n>/merge because that is the ref the workflow ran on.
+          BRANCH: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          set -uo pipefail
+          # NOT `set -e`. A cache can be evicted between the list and the delete,
+          # and a 404 on one id must not abandon the rest of the list - that
+          # would leave the majority of the leak in place while reporting a
+          # failure that nobody can act on.
+          # `--limit 100` is fine HERE, unlike the repository-wide lists further
+          # down which use 1000. This one is filtered to a single `--ref`, and one
+          # pull request writes a handful of entries, not hundreds - so the
+          # truncation hazard that matters there (gh sorts by last access, so a
+          # cut list drops the stalest entries, which is exactly what a cleanup
+          # is hunting) cannot bite a list this small.
+          echo "Caches scoped to $BRANCH:"
+          gh cache list --ref "$BRANCH" --limit 100 || true
+          for cache_id in $(gh cache list --ref "$BRANCH" --limit 100 --json id --jq '.[].id'); do
+            gh cache delete "$cache_id" && echo "Deleted $cache_id" || echo "Could not delete $cache_id (already evicted?)"
+          done
+
+      # The sweep, for entries stranded on refs the step above could not clean:
+      # everything from before this workflow existed (1.92 GB of it when this was
+      # written), plus every fork pull request, whose close event cannot be
+      # granted the permission to delete. Deliberately spares the default branch
+      # (whose caches are the ones every other ref can actually read) and any ref
+      # belonging to an OPEN pull request, so it never slows down work in flight.
+      #
+      # Weekly as well as on demand, because the fork case is not a one-off
+      # backlog - it recurs with every external contribution.
+      - name: Sweep caches stranded on merged or deleted refs
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          set -uo pipefail
+          # HARD FAIL if this call does not succeed - the one place in this file
+          # where stopping beats carrying on. Every other failure here costs one
+          # undeleted cache; this list is the ONLY thing standing between the
+          # sweep and the caches of every OPEN pull request. An empty result is
+          # indistinguishable from "nothing to spare", so a permission or rate
+          # limit error would not skip the sweep, it would widen it to exactly
+          # the refs the step promises to protect.
+          if ! open_refs="$(gh pr list --state open --limit 1000 --json number,headRefName \
+            --jq '.[] | "refs/pull/\(.number)/merge", "refs/heads/\(.headRefName)"')"; then
+            echo "::error::Could not list open pull requests, so the set of refs to spare is unknown. Refusing to sweep."
+            exit 1
+          fi
+          echo "Sparing $DEFAULT_BRANCH and the refs of every open pull request."
+          gh cache list --limit 1000 --json id,ref,key,sizeInBytes \
+            --jq '.[] | [.id, .ref, .key, .sizeInBytes] | @tsv' \
+          | while IFS="$(printf '\t')" read -r cache_id ref key size; do
+              if [ "$ref" = "$DEFAULT_BRANCH" ]; then
+                continue
+              fi
+              # Whole-line match: a substring test would spare refs/heads/mainline
+              # because refs/heads/main is inside it.
+              if printf '%s\n' "$open_refs" | grep -qxF "$ref"; then
+                echo "Sparing $ref (open pull request): $key"
+                continue
+              fi
+              gh cache delete "$cache_id" \
+                && echo "Deleted $key on $ref ($size bytes)" \
+                || echo "Could not delete $cache_id (already evicted?)"
+            done
+
+      # The default branch's own growth, which neither step above touches and
+      # which is the larger half of the problem.
+      #
+      # A cache key ends in a content hash, so every dependency change writes a
+      # NEW GENERATION of the same family and the old one stays until LRU evicts
+      # it. That is not a rounding error here. MEASURED 2026-07-30, main only:
+      #
+      #   gradle-transforms-v1-<hash>     3 generations   4.36 GB
+      #   gradle-dependencies-v1-<hash>   2 generations   1.96 GB
+      #   everything else combined                       ~1.00 GB
+      #
+      # Two families, 6.3 GB of a 7.32 GB total, growing by roughly 1.5 GB per
+      # dependency change - and the newest transforms generation measured 1726 MB
+      # against the previous 1314 MB, so the per-generation cost is rising too.
+      # Left alone this reaches the 10 GB cap in about two Expo or React Native
+      # upgrades, at which point Build (APK) silently loses its cache and slows
+      # by minutes with every check still green.
+      #
+      # Keeping 2 rather than 1 is deliberate: setup-gradle falls back to a
+      # RESTORE KEY when the exact key misses, so the previous generation still
+      # spares a full re-download after a dependency bump. Steady state is then
+      # ~6.5 GB. Dispatch with keep=1 for ~3.3 GB if that stops being enough.
+      #
+      # Nothing here can strand a build. A pruned generation costs one cold
+      # download on the next run that would have matched it.
+      - name: Prune superseded cache generations on the default branch
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: refs/heads/${{ github.event.repository.default_branch }}
+          # `inputs` is empty on a schedule, so the default lives here too rather
+          # than being inherited from the input declaration.
+          KEEP: ${{ inputs.keep || '2' }}
+        run: |
+          set -uo pipefail
+          # Validated before it reaches jq. KEEP is a free-text workflow_dispatch
+          # input, and splicing a non-numeric value into a jq program produces a
+          # compile error rather than anything a reader can act on.
+          case "$KEEP" in
+            ''|*[!0-9]*)
+              echo "::error::keep must be a non-negative integer, got '$KEEP'."
+              exit 1
+              ;;
+          esac
+          echo "Keeping the $KEEP newest generation(s) of each cache family on $DEFAULT_BRANCH."
+          # `--limit 1000`, and do not lower it. `gh cache list` defaults to
+          # `--sort last_accessed_at --order desc`, so a window that truncates
+          # drops the LEAST recently accessed entries - which is the exact
+          # profile of a superseded generation, the thing this step exists to
+          # delete. The repository measured 27 to 39 entries, but the
+          # gradle-home family mints a generation per commit on main, so the
+          # count climbs faster than the size does.
+          #
+          # Piped into real `jq` rather than gh's `--jq`, so the two values can be
+          # BOUND (--arg / --argjson) instead of interpolated into the program
+          # text. That is what makes the branch name and the keep count data
+          # rather than syntax, and it drops a layer of backslash escaping that
+          # made the filter hard to read and easy to break.
+          #
+          # Failure is checked, because an unchecked assignment here leaves
+          # `superseded` empty, and empty is indistinguishable from "nothing to
+          # prune" - the step would print the reassuring "Pruned 0" below having
+          # never listed anything.
+          if ! superseded="$(gh cache list --limit 1000 --json id,ref,key,sizeInBytes,createdAt \
+            | jq -r --arg default_branch "$DEFAULT_BRANCH" --argjson keep "$KEEP" '
+                [ .[] | select(.ref == $default_branch) ]
+                | map(. + { family: (.key | sub("-[0-9a-f]{16,}$"; "-<hash>")) })
+                | group_by(.family)
+                | map(sort_by(.createdAt) | reverse | to_entries
+                      | map(select(.key >= $keep) | [.value.id, .value.sizeInBytes, .value.family]))
+                | flatten(1)[]
+                | @tsv
+              ')"; then
+            echo "::error::Could not list the caches on $DEFAULT_BRANCH, so nothing was pruned."
+            exit 1
+          fi
+
+          # A here-string, NOT a pipe, so the loop runs in this shell and the
+          # counter below survives it. Piping into `while` puts the body in a
+          # subshell, where pruned_count would reset to 0 on every read.
+          pruned_count=0
+          while IFS="$(printf '\t')" read -r cache_id size family; do
+            [ -n "$cache_id" ] || continue
+            if gh cache delete "$cache_id"; then
+              echo "  pruned $family ($size bytes)"
+              pruned_count=$((pruned_count + 1))
+            else
+              echo "  could not prune $cache_id (already evicted?)"
+            fi
+          done <<< "$superseded"
+
+          # Printed even when it is zero, so the step always states an outcome.
+          # Without it the only output is one line per deletion, and a run that
+          # pruned nothing is completely silent - which reads as a step that
+          # never ran.
+          #
+          # Know the limit: this REPORTS, it does not VALIDATE. A jq filter that
+          # compiles but selects nothing still prints "Pruned 0", exactly like a
+          # genuinely clean branch. Catching that is the usage report below,
+          # where the total keeps climbing while this keeps saying zero.
+          echo "Pruned $pruned_count superseded generation(s) on $DEFAULT_BRANCH."
+
+      - name: Report the remaining cache usage
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          gh api "repos/$GH_REPO/actions/cache/usage" \
+            --jq '"\(.active_caches_count) entries, \(.active_caches_size_in_bytes / 1073741824 * 100 | round / 100) GB of the 10 GB cap"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
