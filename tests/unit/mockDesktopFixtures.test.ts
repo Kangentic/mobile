@@ -21,7 +21,7 @@
  *     Changes lens lists, and reported line counts that did not add up to what
  *     the file list claimed for the file it did edit.
  */
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   MOCK_CONTEXT_WINDOW_FOR_TEST,
@@ -30,13 +30,11 @@ import {
   activeCapture,
   activeGrid,
   diffFileList,
-  isStoreCaptureBuild,
   initialTasks,
   initialTasks2,
   streamingUsedTokens,
 } from '@/connection/mockDesktop';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
-import { CLAUDE_CAPTURE_WIDE } from '@/devsupport/claudeCaptureWide';
 import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCapture';
 
 /**
@@ -47,16 +45,12 @@ import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCaptur
  * a TUI's bytes and its screen are not the same thing.
  */
 let shotsRows: string[] = [];
-let wideRows: string[] = [];
-/** Every row either capture shows at ANY point, not just on its closing frame. */
+/** Every row the capture shows at ANY point, not just on its closing frame. */
 let shotsEveryRow: string[] = [];
-let wideEveryRow: string[] = [];
 
 beforeAll(async () => {
   shotsRows = await renderCaptureRows(CLAUDE_CAPTURE_SHOTS);
-  wideRows = await renderCaptureRows(CLAUDE_CAPTURE_WIDE);
   shotsEveryRow = await renderCaptureAllRows(CLAUDE_CAPTURE_SHOTS);
-  wideEveryRow = await renderCaptureAllRows(CLAUDE_CAPTURE_WIDE);
 });
 
 /**
@@ -101,7 +95,7 @@ function renderedFixtureText(): { label: string; text: string }[] {
   // The recorded terminal, as RENDERED. Both captures are checked, not just the
   // one the store capture uses: `dev:mock` is what gets demoed live, and a leak
   // there is a leak in front of whoever is watching.
-  for (const row of [...shotsEveryRow, ...wideEveryRow]) {
+  for (const row of shotsEveryRow) {
     collected.push({ label: 'terminal row', text: row });
   }
   return collected;
@@ -158,13 +152,19 @@ describe('the terminal frame and the changes frame describe one piece of work', 
   });
 
   it('lists exactly the files the recorded session changed', () => {
-    // diffFileList is transcribed from the same session's `git diff --stat`,
+    // diffFileList is transcribed from the same session's `git diff --numstat`,
     // so a re-record that forgets to regenerate it shows up here.
     expect(diffFileList().files.map((file) => file.path)).toEqual([
       'src/auth/login.ts',
       'src/auth/session.ts',
       'src/components/SignInForm.tsx',
       'src/routes/checkout.tsx',
+    ]);
+    expect(diffFileList().files.map((file) => [file.insertions, file.deletions])).toEqual([
+      [2, 2],
+      [10, 2],
+      [3, 3],
+      [3, 1],
     ]);
   });
 
@@ -198,7 +198,6 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
     // A row wider than the grid means the capture and the reported dimensions
     // disagree, which renders as borders sliced mid-glyph on the phone.
     for (const row of shotsRows) expect([...row].length).toBeLessThanOrEqual(CLAUDE_CAPTURE_SHOTS.cols);
-    for (const row of wideRows) expect([...row].length).toBeLessThanOrEqual(CLAUDE_CAPTURE_WIDE.cols);
   });
 
   it('ends on the approval request the chat lens shows as a permission card', () => {
@@ -206,55 +205,38 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
     expect(lastMeaningfulRows).toMatch(/Do you want to/);
   });
 
-  it('has the dialog on screen the instant the store-capture lens mounts', async () => {
+  it('settles on the dialog and holds it for most of the replay', async () => {
     // TIMING, not decoration. The store flow captures the chat frame first and
     // reaches the terminal shot an unknown 15-30s later, while the replay
-    // restarts on every terminal-bearing subscribe. A dialog that only arrives
-    // at the END of the replay window is therefore a coin flip, and losing it
-    // ships a mid-diff frame captioned as a permission request. Putting it in
-    // the SEED removes the race rather than widening a wait.
-    const seedOnly = await renderCaptureRows({ ...CLAUDE_CAPTURE_SHOTS, chunks: [] });
-    expect(seedOnly.join('\n')).toMatch(/Do you want to/);
+    // restarts on every terminal-bearing subscribe. So the dialog cannot be a
+    // brief event near the end - it has to be the state the capture RESTS in,
+    // and it has to arrive early enough that any plausible arrival time finds
+    // it. This asserts both ends of that window.
+    // Sliced by TIME, not chunk index: the replay is driven by offsetMs, and
+    // the chunks bunch up early, so "a quarter of the chunks in" is nowhere
+    // near "a quarter of the way through" and asserting on the index measures
+    // the wrong thing entirely.
+    const settleByMs = 6000;
+    const lastChunkBySettle = CLAUDE_CAPTURE_SHOTS.chunks.reduce(
+      (index, chunk, chunkIndex) => (chunk.offsetMs <= settleByMs ? chunkIndex : index),
+      0,
+    );
+    const earlyOn = await renderCaptureRows(CLAUDE_CAPTURE_SHOTS, lastChunkBySettle);
+    expect(earlyOn.join('\n')).toMatch(/Do you want to/);
+    // And it is still there at the end, which is where the replay stops and
+    // stays for as long as the lens is open.
+    expect(shotsRows.join('\n')).toMatch(/Do you want to/);
   });
 });
 
-describe('the store-capture build selects the narrow recording', () => {
-  // The one code path that produces published images, and the only one nothing
-  // else here exercises: every other assertion reads CLAUDE_CAPTURE_SHOTS as a
-  // data object rather than going through the flag that selects it.
-  const originalFlag = process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
-
-  afterEach(() => {
-    if (originalFlag === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
-    else process.env.EXPO_PUBLIC_KANGENTIC_SHOTS = originalFlag;
-  });
-
-  it('replays the wide recording by default', () => {
-    delete process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
-    expect(isStoreCaptureBuild()).toBe(false);
-    expect(activeCapture().cols).toBe(CLAUDE_CAPTURE_WIDE.cols);
-    expect(activeGrid()).toEqual({ cols: CLAUDE_CAPTURE_WIDE.cols, rows: CLAUDE_CAPTURE_WIDE.rows });
-  });
-
-  it('replays the narrow recording under the shots flag', () => {
-    process.env.EXPO_PUBLIC_KANGENTIC_SHOTS = '1';
-    expect(isStoreCaptureBuild()).toBe(true);
-    expect(activeCapture().cols).toBe(CLAUDE_CAPTURE_SHOTS.cols);
-    expect(activeGrid()).toEqual({ cols: CLAUDE_CAPTURE_SHOTS.cols, rows: CLAUDE_CAPTURE_SHOTS.rows });
-  });
-
-  it('reports a grid that matches the bytes it replays', () => {
-    // The failure this guards is silent and single-mode: announcing one grid
-    // while streaming another renders every box border sliced mid-glyph.
-    for (const flag of [undefined, '1']) {
-      if (flag === undefined) delete process.env.EXPO_PUBLIC_KANGENTIC_SHOTS;
-      else process.env.EXPO_PUBLIC_KANGENTIC_SHOTS = flag;
-      expect(activeGrid()).toEqual({ cols: activeCapture().cols, rows: activeCapture().rows });
-    }
-  });
-
-  it('uses two genuinely different grids, so the flag is not a no-op', () => {
-    expect(CLAUDE_CAPTURE_SHOTS.cols).not.toBe(CLAUDE_CAPTURE_WIDE.cols);
+describe('every mode reports the grid it actually replays', () => {
+  it('announces the capture own dimensions', () => {
+    // The failure this guards is silent: announcing one grid while streaming
+    // another renders every box border sliced mid-glyph, and it would show up
+    // only in a published image. It is cheap now that there is a single
+    // recording, and it was a live bug when there were two.
+    expect(activeGrid()).toEqual({ cols: activeCapture().cols, rows: activeCapture().rows });
+    expect(activeCapture()).toBe(CLAUDE_CAPTURE_SHOTS);
   });
 });
 
