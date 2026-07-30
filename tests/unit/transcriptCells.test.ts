@@ -277,7 +277,7 @@ describe('buildConversationCells', () => {
         toolName: 'Bash',
         input: { command: 'npx jest' },
         result: { content: '3 passed', isError: false },
-        turn: { role: 'assistant', position: 'solo', header: { agentName: null, model: null, ts: 1 } },
+        turn: { role: 'assistant', position: 'solo', header: { agentName: null, model: null, ts: 1, outputTokens: null } },
       },
     ]);
   });
@@ -295,7 +295,7 @@ describe('buildConversationCells', () => {
     expect(markdownCell.turn).toEqual({
       role: 'assistant',
       position: 'first',
-      header: { agentName: null, model: 'claude-fable-5', ts: 2 },
+      header: { agentName: null, model: 'claude-fable-5', ts: 2, outputTokens: null },
     });
     expect(thinkingCell.turn).toEqual({ role: 'assistant', position: 'middle' });
     expect(toolCallCell.turn).toEqual({ role: 'assistant', position: 'last' });
@@ -319,7 +319,7 @@ describe('buildConversationCells', () => {
     expect(cells[0].turn).toEqual({
       role: 'assistant',
       position: 'solo',
-      header: { agentName: 'Claude Code', model: null, ts: 1 },
+      header: { agentName: 'Claude Code', model: null, ts: 1, outputTokens: null },
     });
   });
 
@@ -333,7 +333,7 @@ describe('buildConversationCells', () => {
         kind: 'user-message',
         key: 'u1',
         entry: entries[0],
-        turn: { role: 'user', position: 'solo', header: { agentName: null, model: null, ts: 1 } },
+        turn: { role: 'user', position: 'solo', header: { agentName: null, model: null, ts: 1, outputTokens: null } },
       },
     ]);
   });

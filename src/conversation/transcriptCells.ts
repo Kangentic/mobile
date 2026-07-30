@@ -52,6 +52,15 @@ export interface TurnHeaderInfo {
   agentName: string | null;
   model: string | null;
   ts: number;
+  /**
+   * Output tokens this turn produced, or null when the entry carried no usage.
+   *
+   * Only the output count: it is the one number that describes THIS turn rather
+   * than the whole context behind it, and the header has room for one figure.
+   * The input counts are dominated by cache reads and would read as a context
+   * total, which the board's own context bar already shows.
+   */
+  outputTokens: number | null;
 }
 
 export interface TurnMeta {
@@ -148,7 +157,11 @@ export function buildConversationCells(
           kind: 'user-message',
           key: entry.uuid,
           entry,
-          turn: { role: 'user', position: 'solo', header: { agentName: null, model: null, ts: entry.ts } },
+          turn: {
+            role: 'user',
+            position: 'solo',
+            header: { agentName: null, model: null, ts: entry.ts, outputTokens: null },
+          },
         });
         break;
       }
@@ -214,7 +227,12 @@ export function buildConversationCells(
               ? {
                   role: 'assistant',
                   position,
-                  header: { agentName: entry.agentName ?? null, model: entry.model ?? null, ts: entry.ts },
+                  header: {
+                    agentName: entry.agentName ?? null,
+                    model: entry.model ?? null,
+                    ts: entry.ts,
+                    outputTokens: entry.usage?.outputTokens ?? null,
+                  },
                 }
               : { role: 'assistant', position };
           cells.push({ ...drafts[draftIndex], turn });

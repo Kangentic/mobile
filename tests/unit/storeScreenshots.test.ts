@@ -25,6 +25,8 @@ import {
   isValidDeviceSerial,
   readPngSize,
 } from '../../scripts/storeScreenshots.mjs';
+import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
+import { renderCaptureRows } from '../helpers/renderCapture';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -183,58 +185,78 @@ describe('the shot list matches the capture flow', () => {
 });
 
 /**
- * The terminal mirror renders the desktop's real 120-column grid and pans the
- * overflow, so how much is VISIBLE depends on the auto-fitted font - and that
- * font is fitted to the screen HEIGHT. A taller phone picks a bigger font and
- * therefore shows FEWER columns, which makes the 6.9-inch iPhone (tall enough
- * to hit the 20px auto-fit ceiling, leaving 36-37 columns) the binding case,
- * not the widest device.
+ * The terminal mirror renders the desktop's real grid and pans the overflow, so
+ * how much is VISIBLE depends on the auto-fitted font - and that font is fitted
+ * to the terminal pane's HEIGHT, never its width. A taller pane picks a bigger
+ * font and therefore shows FEWER columns, which makes the 6.9-inch iPhone the
+ * binding case rather than the widest device.
  *
  * The first iOS store capture clipped its header mid-word. Nothing failed: the
  * PNG was the right size and the flow was green, so this is the repo's
  * green-but-worthless-artifact shape again, and it is worth a mechanical check
  * rather than an eye on every future capture.
+ *
+ * This used to scrape string literals out of mockDesktop.ts and measure their
+ * `.length`. That only ever worked because the fixture was an array of plain
+ * strings; it is now a RECORDED capture, where bytes and columns are unrelated
+ * (escape sequences have no width, and words are split by cursor moves). So the
+ * budget is re-derived from the fit math and checked against the real grid.
  */
-describe('the mock terminal script fits the narrowest device', () => {
-  const VISIBLE_COLUMN_BUDGET = 34;
-  const mockSource = readFileSync(
-    fileURLToPath(new URL('../../src/connection/mockDesktop.ts', import.meta.url)),
-    'utf8',
-  );
+describe('the recorded terminal fits the narrowest capture device', () => {
+  // From scripts/buildXtermHtml.mjs. Duplicated deliberately: that file is a
+  // generated-asset builder with no importable export, so the alternative is
+  // no check at all.
+  const MAX_AUTO_FIT_FONT_PX = 20;
+  const MIN_AUTO_FONT_PX = 6;
+  const CELL_WIDTH_RATIO = 0.6;
+  const CELL_HEIGHT_RATIO = 1.2;
 
-  /** Pulls the string literals out of a named array declaration in the source. */
-  function arrayLiterals(declaration: string): string[] {
-    const block = new RegExp(`${declaration}[^[]*\\[([^\\]]*)\\]`).exec(mockSource);
-    if (block === null) return [];
-    return [...block[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((match) => match[1]);
+  /**
+   * Terminal-pane sizes MEASURED off the committed store captures, not guessed.
+   *
+   * On store/screenshots/ios/iphone-6.9/02-session-terminal.png the cell is
+   * 11.8pt wide and 23.9pt tall at the 30-row grid that shipped it. A 11.8pt
+   * cell means font 20 (11.8 / 0.6), which needs a pane at least 720pt tall;
+   * a 23.9pt row means the line-height stretch is 1.0, which caps the pane at
+   * 720pt. The two bracket it exactly. The Android phone shelf works out the
+   * same way from its own capture.
+   */
+  const CAPTURE_TARGETS = [
+    { name: 'iPhone 6.9-inch', paneWidth: 440, paneHeight: 720 },
+    { name: 'Android phone shelf', paneWidth: 360, paneHeight: 440 },
+  ];
+
+  function visibleColumns(target: { paneWidth: number; paneHeight: number }, rows: number): number {
+    const fitted = Math.floor(target.paneHeight / (rows * CELL_HEIGHT_RATIO));
+    const fontPx = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
+    return Math.floor(target.paneWidth / (fontPx * CELL_WIDTH_RATIO));
   }
 
-  const scriptLines = arrayLiterals('MOCK_TERMINAL_LINES');
-  const headerLines = arrayLiterals('const header =');
-
-  it('finds the script and header lines at all', () => {
-    // Non-vacuity guard: every assertion below passes trivially against an
-    // empty array, so a regex that stops matching would read as success.
-    expect(scriptLines.length).toBeGreaterThan(10);
-    expect(headerLines.length).toBeGreaterThan(0);
+  it('reproduces the 36 columns the shipped iOS capture actually shows', () => {
+    // Anchors the model to an artifact in the repo. If this drifts, the pane
+    // measurements above are wrong and every budget below is wrong with them.
+    expect(visibleColumns(CAPTURE_TARGETS[0], 30)).toBe(36);
   });
 
-  it('keeps every line inside the visible column budget', () => {
-    const tooWide = [...scriptLines, ...headerLines]
-      .filter((line) => line.length > VISIBLE_COLUMN_BUDGET)
-      .map((line) => `${line.length} cols: ${line}`);
-    // Named individually: a bare count tells whoever broke it nothing, and the
-    // failure is invisible on the Android emulator they are probably using.
-    expect(tooWide).toEqual([]);
-  });
-
-  it('counts the indent, because a wrapped line is cut and not re-flowed', () => {
-    // The indented continuation lines are the ones that actually overflowed:
-    // they read as short in source and are two columns longer than they look.
-    const indented = scriptLines.filter((line) => line.startsWith('  '));
-    expect(indented.length).toBeGreaterThan(0);
-    for (const line of indented) {
-      expect(line.length).toBeLessThanOrEqual(VISIBLE_COLUMN_BUDGET);
+  it('keeps the store-capture grid inside every target device', () => {
+    for (const target of CAPTURE_TARGETS) {
+      const budget = visibleColumns(target, CLAUDE_CAPTURE_SHOTS.rows);
+      expect({
+        target: target.name,
+        gridCols: CLAUDE_CAPTURE_SHOTS.cols,
+        fitsWithin: CLAUDE_CAPTURE_SHOTS.cols <= budget,
+      }).toEqual({ target: target.name, gridCols: CLAUDE_CAPTURE_SHOTS.cols, fitsWithin: true });
     }
+  });
+
+  it('renders no row wider than the grid it reports', async () => {
+    // The grid fitting the screen is only half of it: a capture replayed at a
+    // grid it was not recorded at overflows its own columns, and the phone
+    // shows borders sliced mid-glyph rather than a wide frame.
+    const rows = await renderCaptureRows(CLAUDE_CAPTURE_SHOTS);
+    const tooWide = rows
+      .filter((row) => [...row].length > CLAUDE_CAPTURE_SHOTS.cols)
+      .map((row) => `${[...row].length} cols: ${row}`);
+    expect(tooWide).toEqual([]);
   });
 });

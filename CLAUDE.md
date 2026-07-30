@@ -62,8 +62,10 @@ src/
                   #   the actions API screens call (accountless-core scoped), dev-only
                   #   mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
-  devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures, and the
-                  #   dev-only inspect bridge (EXPO_PUBLIC_KANGENTIC_INSPECT) - shared by tests + rigs
+  devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures, the
+                  #   dev-only inspect bridge (EXPO_PUBLIC_KANGENTIC_INSPECT) - shared by tests +
+                  #   rigs - plus claudeCapture*.ts: RECORDED real Claude Code PTY output the mock
+                  #   terminal replays (generated, never hand-edited; see scripts/ below)
   terminal/       # Pure liveTail PTY cleaner, clean-feed differ, key sequences, WebView bridge,
                   #   generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
@@ -82,6 +84,9 @@ tests/
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
+                  #   captureClaudeFrames.mjs + buildTerminalFixture.mjs (record real Claude
+                  #   Code PTY output and pack it into src/devsupport/claudeCapture*.ts; dev
+                  #   utilities, not run in CI),
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
                   #   pretypecheck stale-node_modules guard), the store preflights
@@ -238,9 +243,11 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   cards; the in-progress turn streams token-by-token as a cleaned tail of the raw PTY feed
   (`src/terminal/liveTail.ts`), replaced when the next transcript revision lands. The raw
   interactive terminal (xterm.js in a WebView, quick-key bar, `interactive-terminal` writes)
-  renders at the desktop's reported PTY grid; its default Mobile view resizes that PTY to the
-  phone via the `interactive-terminal` grant (restored on tab close / disconnect / revoke), and
-  its Desktop view mirrors the grid 1:1 with pan and zoom.
+  renders at the desktop's reported PTY grid and is a **faithful read-only mirror**: it mirrors
+  that grid 1:1 with pan and pinch-zoom, sizing the font so the grid's rows fill the screen
+  height, and it **never resizes the desktop PTY** - a shared session must not be reshaped by the
+  phone. Typed input is the only thing the phone sends. The protocol's `resize` / `release-size`
+  actions exist for the desktop, not this client (`src/channel/verbClient.ts`).
 - **E2E push:** payloads are ciphertext plus a generic placeholder only; decryption happens
   on-device (iOS Notification Service Extension / Android Notifee). Every failure degrades to
   the placeholder, never to plaintext.

@@ -59,6 +59,11 @@ export function TurnFrame({ turn, children }: TurnFrameProps): React.JSX.Element
   );
 }
 
+/** "↓ 1.2k" / "↓ 640": the tokens this turn wrote, compact enough for the header row. */
+function formatOutputTokens(outputTokens: number): string {
+  return outputTokens >= 1000 ? `↓ ${(outputTokens / 1000).toFixed(1)}k` : `↓ ${outputTokens}`;
+}
+
 /**
  * A role badge (icon + "You" / the agent's name) makes who-said-this an
  * explicit label rather than a color-only cue - the desktop Conversations
@@ -90,6 +95,11 @@ function TurnHeader({
       {header.model !== null ? (
         <Text variant="caption" color="muted" numberOfLines={1} style={styles.headerModel}>
           {header.model}
+        </Text>
+      ) : null}
+      {header.outputTokens !== null ? (
+        <Text variant="caption" color="muted" numberOfLines={1} testID="turn-output-tokens">
+          {formatOutputTokens(header.outputTokens)}
         </Text>
       ) : null}
       <View style={styles.flex} />

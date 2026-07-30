@@ -194,12 +194,14 @@ The raw interactive terminal is the full-fidelity view: xterm.js bundled offline
 inline-only), fed the scrollback snapshot plus live PTY chunks over a small postMessage bridge
 (`src/terminal/terminalBridge.ts`). The desktop reports its PTY grid (`ptyDimensions` on the
 snapshot, `terminal-resize` events on change), so the phone renders at the exact grid the bytes
-were laid out for instead of inferring a width. Two views: **Mobile** (fit-to-phone, the
-default) resizes the desktop PTY to the phone's grid via the `interactive-terminal` grant so the
-agent's full-screen TUI redraws phone-shaped, and the desktop's own dimensions are restored when
-the tab closes, the device disconnects, or the grant is revoked; **Desktop** mirrors the desktop
-grid 1:1 with horizontal pan, follow-the-cursor, and pinch-zoom. A read-only device (or a
-pre-0.4.0 desktop that reports no grid) falls back to Desktop view. Arrow keys track the
+were laid out for instead of inferring a width. It is a **faithful read-only mirror**: it renders
+that grid 1:1 with horizontal pan, follow-the-cursor and pinch-zoom, and sizes the font so the
+grid's ROWS fill the phone's height (a wider-than-screen grid then overflows and pans). It
+**never resizes the desktop PTY** - a shared session must not be reshaped by the phone, so the
+only thing sent upstream is typed input. The protocol carries `resize` and `release-size` actions
+on the `interactive-terminal` verb, but they exist for the desktop: `src/channel/verbClient.ts`
+exposes `write` alone, and nothing in `src/` sends the other two. A pre-0.4.0 desktop that reports
+no grid falls back to inferring the column count from the scrollback. Arrow keys track the
 terminal's DECCKM mode (CSI vs SS3); the quick-key bar (Esc / Tab / arrows / Enter / Ctrl-C /
 slash) plus a text input row write through `interactive-terminal`.
 
