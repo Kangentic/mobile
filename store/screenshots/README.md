@@ -89,8 +89,23 @@ eligible for Play's promotional surfaces.
 
 ## iOS
 
-All six shots, at Apple's exact 1320x2868. `ios.supportsTablet` is `false` in `app.config.ts`,
-so App Store Connect wants one shelf only: **6.9-inch iPhone at 1320x2868, minimum three**.
+All six shots at 1320x2868, an accepted **6.9-inch** size (Apple also lists 1260x2736 and
+1290x2796 for that display). `ios.supportsTablet` is `false` in `app.config.ts`, so App Store
+Connect wants one shelf only.
+
+**6.9-inch is the SOURCE slot, and every smaller iPhone size is derived from it.** In App Store
+Connect's Media Manager, 6.9" is the one with active `Choose File` / `Delete All`; the 6.5", 6.3"
+and smaller entries read "Using 6.9" Display" with their controls greyed out. Two consequences
+worth knowing before you go hunting:
+
+- The **version page lists the derived 6.5" slot first**, which reads as though 6.5" is what it
+  wants. It is not. Upload through **Media Manager** and target 6.9" explicitly.
+- One set covers the whole iPhone listing. There is no second size to produce.
+
+**Apple's minimum is ONE, not three.** Its upload help says "you're only required to provide a
+single screenshot (6.5" or 6.9") for iPhone", and Media Manager says "only the first 3 will be
+used on the app installation sheets" - that is the number Apple DISPLAYS, not the number it
+requires, and an earlier version of this file conflated them. The cap is 10.
 
 ```
 ios/iphone-6.9/       1320x2868   App Store 6.9-inch iPhone shelf

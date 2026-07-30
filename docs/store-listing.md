@@ -39,7 +39,15 @@ All three Play shelves are required in the listing form as long as the app is di
 tablets. Restricting **Test and release -> Advanced settings -> Form factors** to phone should
 drop the two tablet requirements; the tablet captures exist either way, so that is a reach
 decision rather than a blocker. `ios.supportsTablet` is `false`, so App Store Connect wants the
-single 6.9-inch shelf, minimum three - and six are tracked.
+single 6.9-inch shelf. Apple's minimum there is **one** (its upload help: "you're only required to
+provide a single screenshot"), the cap is 10, and only the first 3 appear on install sheets - so
+the "minimum three" an earlier version of this file claimed was the number Apple DISPLAYS, not the
+number it requires. Six are tracked.
+
+Upload the iPhone set through **Media Manager**, targeting **6.9"**. That is the source slot, and
+App Store Connect derives 6.5", 6.3" and smaller from it - their controls are greyed out. The
+version page happens to list the derived 6.5" slot first, which misleadingly reads as though 6.5"
+is what it wants.
 
 The Android shelves are captured locally against an emulator. The iOS shelf cannot be captured
 from Windows and runs on a free macOS runner instead, at roughly 45 minutes per attempt.
