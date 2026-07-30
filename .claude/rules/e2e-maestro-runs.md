@@ -185,8 +185,13 @@ the dev client only when authoring a flow and wanting Fast Refresh.
 started from the normal worktree dies on CMake's 250-character object-path cap inside
 `node_modules/<pkg>/android/.cxx/` (208 characters before the filename), at every variant, and a
 directory junction does not dodge it because Node realpaths `node_modules`. A git worktree whose
-real path is short does: `git worktree add --detach C:\kw HEAD`, `npm install`, prebuild, then
-gradle with `-PreactNativeArchitectures=arm64-v8a`. Full recipe in `docs/developer-guide.md`.
+real path is short does. Two already exist and are registered worktrees of this repo: **`C:\kme2e`
+for the release `e2e` APK, `C:\kw` for dev-client/debug builds.** Reuse them (`git -C C:\kme2e
+checkout --detach <sha>`, `npm install`, prebuild, then gradle with
+`-PreactNativeArchitectures=arm64-v8a`) rather than creating another, and never create a new
+drive-root directory without asking the user first. Run `npm install` there every time: an APK is
+bound to the dependency tree that built it, and a skew crashes as a native `SIGABRT` in
+`libworklets.so` with no JS error. Full recipe in `docs/developer-guide.md`.
 A cloud build is therefore no longer required for an `e2e` APK - and remains a **cloud-spend
 decision the user makes**, never something to fire off to unblock a flow.
 
