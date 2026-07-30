@@ -35,6 +35,34 @@ function isBoxDrawingCharacter(character: string): boolean {
 
 const BOX_DRAWING_LINE_RATIO = 0.6;
 
+/**
+ * A run of this many box-drawing glyphs is a horizontal RULE, whatever else
+ * shares the line.
+ *
+ * The ratio test above asks "is this line mostly border?", which is the right
+ * question for a line that holds one thing. It is the wrong question here,
+ * because this buffer's virtual lines can MERGE several screen rows: a real
+ * capture produced `src\routes\checkout.tsx` + a 44-glyph rule + two rows of
+ * code as a single line, where the border is only 49% of the non-space
+ * characters and the whole thing sailed through as content. Nothing an agent
+ * writes contains eight consecutive box-drawing characters, so treating the run
+ * itself as the signal catches the merged case without a threshold to tune.
+ *
+ * The merged text is dropped with it. That is the right trade: it is already
+ * scrambled by the merge, and showing scrambled content is worse than showing
+ * none.
+ */
+const BOX_DRAWING_RULE_RUN = 8;
+
+function containsBoxDrawingRule(characters: readonly string[]): boolean {
+  let run = 0;
+  for (const character of characters) {
+    run = isBoxDrawingCharacter(character) ? run + 1 : 0;
+    if (run >= BOX_DRAWING_RULE_RUN) return true;
+  }
+  return false;
+}
+
 /** Leading glyphs that mark a spinner/status chrome line outright. */
 const CHROME_LEADING_GLYPHS = new Set(['✳', '·']);
 
@@ -85,6 +113,9 @@ function isChromeLine(line: string): boolean {
     }
   }
   if (significantCount === 0 || boxDrawingCount / significantCount >= BOX_DRAWING_LINE_RATIO) {
+    return true;
+  }
+  if (containsBoxDrawingRule(characters)) {
     return true;
   }
   const leadingGlyph = characters[0];
