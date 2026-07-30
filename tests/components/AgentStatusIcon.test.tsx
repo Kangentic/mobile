@@ -31,7 +31,13 @@ import React from 'react';
 import { render, screen } from '@testing-library/react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { AgentStatusIcon, ThemeProvider, darkTerminalTheme } from '@/components';
-import { ACTIVITY_STROKE_WIDTH, ACTIVITY_VIEW_BOX, activityMarks } from '@/brand/activityMarks.generated';
+import {
+  ACTIVITY_STROKE_LINECAP,
+  ACTIVITY_STROKE_LINEJOIN,
+  ACTIVITY_STROKE_WIDTH,
+  ACTIVITY_VIEW_BOX,
+  activityMarks,
+} from '@/brand/activityMarks.generated';
 
 // Each SVG primitive renders a View tagged with its element kind, so the marks'
 // shapes can be read as props. Same approach as Brandmark.test.tsx, which mocks
@@ -120,6 +126,12 @@ describe('AgentStatusIcon', () => {
     expect(props.strokeWidth).toBe(ACTIVITY_STROKE_WIDTH);
     expect(props.stroke).toBe('currentColor');
     expect(props.fill).toBe('none');
+    // Forwarded onto the Svg root so every shape's stroke gets round caps and
+    // joins. Read from the generated constants, not typed as 'round' here,
+    // because pinning a literal would pass even if the component forwarded the
+    // wrong generated value.
+    expect(props.strokeLinecap).toBe(ACTIVITY_STROKE_LINECAP);
+    expect(props.strokeLinejoin).toBe(ACTIVITY_STROKE_LINEJOIN);
     // The marks are currentColor, so the theme token arrives as `color`. Green
     // is the terminal-native positive hue per tokens.ts's two-hue rule.
     expect(props.color).toBe(darkTerminalTheme.colors.statusWorking);
@@ -157,12 +169,30 @@ describe('the working ring', () => {
     // this asserts the timing call itself. Both numbers come from the generated
     // data: a hardcoded duration or dash in the component would fail here.
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+    // withRepeat is the OTHER half of "does the march actually run forever":
+    // its second argument (-1) means loop forever, its third (false) means do
+    // not reverse, so the dash walks one full cycle and restarts from zero
+    // rather than ping-ponging backwards. jest.setup.ts's mock is
+    // `(animation) => animation`, discarding both arguments, so a -1 silently
+    // swapped for a 1 (marches exactly one 1400ms cycle and then freezes on a
+    // real device) would leave every other assertion in this file green. This
+    // spy is the only thing that would catch it.
+    const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
     renderIcon({ kind: 'working' });
 
     expect(withTimingSpy).toHaveBeenCalledWith(
       -workingMarch.periodUserUnits,
-      expect.objectContaining({ duration: workingMarch.durationMs }),
+      expect.objectContaining({
+        duration: workingMarch.durationMs,
+        // scripts/syncBranding.mjs hard-fails the sync unless the manifest's
+        // motion.march.timing is "linear", so linear easing is a real contract,
+        // not a style choice. Asserted against the mocked export (what
+        // jest.setup.ts defines Easing.linear as here), not a string literal.
+        easing: Reanimated.Easing.linear,
+        reduceMotion: Reanimated.ReduceMotion.System,
+      }),
     );
+    expect(withRepeatSpy).toHaveBeenCalledWith(-workingMarch.periodUserUnits, -1, false);
   });
 
   it('hands the animated offset to the circle', () => {
