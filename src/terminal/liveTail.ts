@@ -12,7 +12,27 @@
 const DEFAULT_MAX_LINES = 12;
 const VIRTUAL_LINE_CAP_MULTIPLIER = 4;
 
-const BOX_DRAWING_CHARACTERS = new Set('╭╮╰╯│─┌┐└┘├┤┬┴┼═║╔╗╚╝');
+/**
+ * The whole Unicode Box Drawing block (U+2500-U+257F) plus Block Elements
+ * (U+2580-U+259F), not a hand-listed subset.
+ *
+ * It WAS a hand-listed subset, and the omission it left was found the moment
+ * the mock started replaying recorded Claude Code output: the permission dialog
+ * rules itself off with `╌` (U+254C, light double dash), which was not in the
+ * list, so the whole rule scored as ordinary text and a line of dashes landed
+ * in the chat reading view as if the agent had said it. Any hand-listed set has
+ * that failure mode for the next glyph an agent picks. Note
+ * `lastContentLineFromScrollback` further down this file already matched the
+ * full range, so the two classifiers in this one file disagreed.
+ */
+const BOX_DRAWING_RANGE_START = 0x2500;
+const BLOCK_ELEMENTS_RANGE_END = 0x259f;
+
+function isBoxDrawingCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && codePoint >= BOX_DRAWING_RANGE_START && codePoint <= BLOCK_ELEMENTS_RANGE_END;
+}
+
 const BOX_DRAWING_LINE_RATIO = 0.6;
 
 /** Leading glyphs that mark a spinner/status chrome line outright. */
@@ -47,13 +67,24 @@ function isChromeLine(line: string): boolean {
     return true;
   }
   const characters = Array.from(trimmed);
+  // Whitespace is LAYOUT, not content, so it is excluded from the denominator.
+  //
+  // A full-screen TUI pads with spaces to position things, and this buffer's
+  // virtual lines can merge several screen rows into one. Counting the padding
+  // diluted a real case below the threshold: a permission dialog's row carrying
+  // a filename, a 56-glyph rule and a diff line number scored 0.48 with the
+  // padding and 0.64 without, so the rule shipped into the chat reading view as
+  // if the agent had typed a line of dashes.
   let boxDrawingCount = 0;
+  let significantCount = 0;
   for (const character of characters) {
-    if (BOX_DRAWING_CHARACTERS.has(character)) {
+    if (/\s/.test(character)) continue;
+    significantCount++;
+    if (isBoxDrawingCharacter(character)) {
       boxDrawingCount++;
     }
   }
-  if (boxDrawingCount / characters.length >= BOX_DRAWING_LINE_RATIO) {
+  if (significantCount === 0 || boxDrawingCount / significantCount >= BOX_DRAWING_LINE_RATIO) {
     return true;
   }
   const leadingGlyph = characters[0];

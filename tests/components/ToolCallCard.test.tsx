@@ -97,4 +97,55 @@ describe('ToolCallCard', () => {
     fireEvent.press(screen.getByTestId('tool-result-tool-1'));
     expect(screen.getByText('line one\nline two\nline three')).toBeTruthy();
   });
+
+  // The tools below dominate a real Claude Code session and all previously fell
+  // through to a bare glyph with an EMPTY summary column, because the mock only
+  // ever produced Edit and Bash so nothing exercised them.
+  it('summarizes TodoWrite with its progress and the active item', () => {
+    renderCard(
+      makeCell({
+        toolUseId: 'tool-todo',
+        toolName: 'TodoWrite',
+        input: {
+          todos: [
+            { content: 'Thread the path through', status: 'completed', activeForm: 'Threading the path through' },
+            { content: 'Reject off-site paths', status: 'in_progress', activeForm: 'Rejecting off-site paths' },
+            { content: 'Update the call sites', status: 'pending', activeForm: 'Updating the call sites' },
+          ],
+        },
+      }),
+    );
+    expect(screen.getByText('TodoWrite')).toBeTruthy();
+    expect(screen.getByText('1 of 3 done - Reject off-site paths')).toBeTruthy();
+  });
+
+  it('reads an MCP tool as its server plus the tool it called', () => {
+    renderCard(
+      makeCell({
+        toolUseId: 'tool-mcp',
+        toolName: 'mcp__github__list_pull_requests',
+        input: { owner: 'storefront', repo: 'storefront-web' },
+      }),
+    );
+    // The raw `mcp__github__list_pull_requests` reads as a symbol, not an action.
+    expect(screen.getByText('github')).toBeTruthy();
+    expect(screen.getByText('list_pull_requests')).toBeTruthy();
+  });
+
+  it('bounds the JSON fallback so a large input cannot run off the row', () => {
+    renderCard(
+      makeCell({
+        toolUseId: 'tool-todo-expand',
+        toolName: 'TodoWrite',
+        input: { todos: Array.from({ length: 40 }, (_, index) => ({ content: `item ${index}`, status: 'pending' })) },
+      }),
+    );
+    fireEvent.press(screen.getByTestId('tool-call-tool-todo-expand'));
+    // A MonoBlock given a maxHeight renders a nested-scrollable ScrollView
+    // capped at that height; without one it is a plain View that grows without
+    // limit inside a FlashList row.
+    const scrollables = screen.UNSAFE_getAllByProps({ nestedScrollEnabled: true });
+    expect(scrollables.length).toBeGreaterThan(0);
+    expect(StyleSheet.flatten(scrollables[0].props.style).maxHeight).toBe(300);
+  });
 });

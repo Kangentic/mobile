@@ -357,9 +357,9 @@ return exports; })();
   // control over the moment the user actually touches or types.
   var pinnedToStart = true;
   var MIN_AUTO_FONT_PX = 6;
-  // Cap the fill-to-height font so a very short grid does not produce absurd
-  // glyphs; pinch zoom goes higher or lower on demand.
-  var MAX_FILL_FONT_PX = 48;
+  // Cap the auto-fit font so a very short grid does not produce absurd glyphs;
+  // pinch zoom goes higher or lower on demand, bounded by the host's own
+  // MAX_TERMINAL_FONT_SIZE_PX rather than anything in this file.
   var MAX_AUTO_FIT_FONT_PX = 20;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
@@ -416,7 +416,7 @@ return exports; })();
     // AUTO-fit gets a far lower ceiling than pinch: a SHORT desktop grid
     // (a fresh session with ten rows) would otherwise blow up to poster
     // print - a giant prompt glyph filling the phone. Pinch can still go
-    // to MAX_FILL_FONT_PX for detail work.
+    // higher for detail work.
     var next = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
     // The texture cap outranks the fill floor: a very wide desktop grid (the
     // desktop's bottom terminal panel parks sessions around 300 cols) must
@@ -695,7 +695,8 @@ return exports; })();
     // Pinch obeys the texture cap too: past it the GPU clamps the canvas and
     // the right side of the grid becomes undrawable, so the zoom ceiling is
     // the honest limit. (On real devices the limit is 8k-16k and the ceiling
-    // is far above MAX_FILL_FONT_PX; a 4096 limit is an emulator trait.)
+    // is far above any font size a pinch can reach; a 4096 limit is an
+    // emulator trait.)
     var capped = textureCappedFontPx(fontSizePx, knownCols, knownRows !== null ? knownRows : terminal.rows);
     currentFontSizePx = capped;
     terminal.options.fontSize = capped;

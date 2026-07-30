@@ -16,7 +16,7 @@ function renderTurn(turn: TurnMeta): void {
 
 describe('TurnFrame', () => {
   it('renders the "You" badge for a user turn\'s header', () => {
-    renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now() } });
+    renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now() , outputTokens: null} });
 
     const badge = screen.getByTestId('turn-role-user');
     expect(within(badge).getByText('You')).toBeTruthy();
@@ -27,7 +27,7 @@ describe('TurnFrame', () => {
     renderTurn({
       role: 'assistant',
       position: 'solo',
-      header: { agentName: 'Claude Code', model: 'claude-fable-5', ts: Date.now() },
+      header: { agentName: 'Claude Code', model: 'claude-fable-5', ts: Date.now() , outputTokens: null},
     });
 
     const badge = screen.getByTestId('turn-role-assistant');
@@ -39,7 +39,7 @@ describe('TurnFrame', () => {
     renderTurn({
       role: 'assistant',
       position: 'solo',
-      header: { agentName: null, model: null, ts: Date.now() },
+      header: { agentName: null, model: null, ts: Date.now() , outputTokens: null},
     });
 
     const badge = screen.getByTestId('turn-role-assistant');
@@ -59,7 +59,7 @@ describe('TurnFrame', () => {
   });
 
   it('labels a just-landed message "just now"', () => {
-    renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now() } });
+    renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now() , outputTokens: null} });
 
     expect(screen.getByText('just now')).toBeTruthy();
   });
@@ -68,7 +68,7 @@ describe('TurnFrame', () => {
     renderTurn({
       role: 'user',
       position: 'solo',
-      header: { agentName: null, model: null, ts: Date.now() - 90_000 },
+      header: { agentName: null, model: null, ts: Date.now() - 90_000 , outputTokens: null},
     });
 
     expect(screen.getByText('1 min ago')).toBeTruthy();

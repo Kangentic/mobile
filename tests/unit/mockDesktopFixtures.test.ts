@@ -21,18 +21,40 @@
  *     Changes lens lists, and reported line counts that did not add up to what
  *     the file list claimed for the file it did edit.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   MOCK_CONTEXT_WINDOW_FOR_TEST,
   MOCK_EXTRA_THINKING_SESSIONS,
   MOCK_STREAM_CEILING_FOR_TEST,
-  MOCK_TERMINAL_LINES,
   diffFileList,
   initialTasks,
   initialTasks2,
   streamingUsedTokens,
 } from '@/connection/mockDesktop';
+import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
+import { CLAUDE_CAPTURE_WIDE } from '@/devsupport/claudeCaptureWide';
+import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCapture';
+
+/**
+ * The terminal fixture is now a RECORDED capture of real Claude Code output,
+ * so nothing about it can be read off a source array any more. Everything below
+ * renders it through a headless xterm at its own grid and asserts on the cells
+ * the user would actually see - which is also the only way to be sure, because
+ * a TUI's bytes and its screen are not the same thing.
+ */
+let shotsRows: string[] = [];
+let wideRows: string[] = [];
+/** Every row either capture shows at ANY point, not just on its closing frame. */
+let shotsEveryRow: string[] = [];
+let wideEveryRow: string[] = [];
+
+beforeAll(async () => {
+  shotsRows = await renderCaptureRows(CLAUDE_CAPTURE_SHOTS);
+  wideRows = await renderCaptureRows(CLAUDE_CAPTURE_WIDE);
+  shotsEveryRow = await renderCaptureAllRows(CLAUDE_CAPTURE_SHOTS);
+  wideEveryRow = await renderCaptureAllRows(CLAUDE_CAPTURE_WIDE);
+});
 
 /**
  * Vocabulary that only Kangentic's own engineering would use.
@@ -73,7 +95,12 @@ function renderedFixtureText(): { label: string; text: string }[] {
     collected.push({ label: `${spec.sessionId} user`, text: spec.userText });
     collected.push({ label: `${spec.sessionId} assistant`, text: spec.assistantText });
   }
-  for (const line of MOCK_TERMINAL_LINES) collected.push({ label: 'terminal line', text: line });
+  // The recorded terminal, as RENDERED. Both captures are checked, not just the
+  // one the store capture uses: `dev:mock` is what gets demoed live, and a leak
+  // there is a leak in front of whoever is watching.
+  for (const row of [...shotsEveryRow, ...wideEveryRow]) {
+    collected.push({ label: 'terminal row', text: row });
+  }
   return collected;
 }
 
@@ -98,44 +125,82 @@ describe('the mock fixtures stay inside the customer fiction', () => {
 });
 
 describe('the terminal frame and the changes frame describe one piece of work', () => {
-  /** Every `(+N -M)` the terminal script reports, in order. */
-  function terminalEditCounts(): { insertions: number; deletions: number }[] {
-    return MOCK_TERMINAL_LINES.flatMap((line) => {
-      const match = /\(\+(\d+) -(\d+)\)/.exec(line);
-      return match ? [{ insertions: Number(match[1]), deletions: Number(match[2]) }] : [];
+  /**
+   * Files the recorded session is seen touching, from its `● Edit(path)` /
+   * `● Update(path)` / `● Write(path)` tool bullets.
+   *
+   * Real Claude Code prints the path with the platform separator, so this
+   * normalizes backslashes; the wire paths in diffFileList are POSIX.
+   */
+  function editedPathsIn(rows: string[]): string[] {
+    return rows.flatMap((row) => {
+      const match = /[●⏺]\s*(?:Edit|Update|Write)\(([^)]+)\)/.exec(row);
+      return match ? [match[1].replace(/\\/g, '/')] : [];
     });
   }
 
-  it('reports at least one edit, so the sum below is not vacuous', () => {
-    expect(terminalEditCounts().length).toBeGreaterThan(0);
+  it('shows the agent editing files, so the check below is not vacuous', () => {
+    expect(editedPathsIn(shotsEveryRow).length).toBeGreaterThan(0);
   });
 
   it('only edits files the Changes lens actually lists', () => {
+    // Both frames ship in the same listing, one swipe apart, and a reviewer
+    // comparing them is exactly what a screenshot invites. This used to fail
+    // in the other direction: the terminal edited a file that appeared in no
+    // diff the Changes lens listed.
     const listedPaths = diffFileList().files.map((file) => file.path);
-    const editedPaths = MOCK_TERMINAL_LINES.flatMap((line) => {
-      const match = /^> Editing (\S+)/.exec(line);
-      return match ? [match[1]] : [];
-    });
-    expect(editedPaths.length).toBeGreaterThan(0);
-    for (const editedPath of editedPaths) {
+    for (const editedPath of editedPathsIn(shotsEveryRow)) {
       expect(listedPaths).toContain(editedPath);
     }
   });
 
-  it("sums the terminal's edits to what the file list claims for login.ts", () => {
-    // Both frames ship in the same listing, one swipe apart, and a reviewer
-    // comparing them is exactly what a screenshot invites.
-    const loginFile = diffFileList().files.find((file) => file.path === 'src/auth/login.ts');
-    expect(loginFile).toBeDefined();
-    const totals = terminalEditCounts().reduce(
-      (accumulated, edit) => ({
-        insertions: accumulated.insertions + edit.insertions,
-        deletions: accumulated.deletions + edit.deletions,
-      }),
-      { insertions: 0, deletions: 0 },
-    );
-    expect(totals.insertions).toBe(loginFile?.insertions);
-    expect(totals.deletions).toBe(loginFile?.deletions);
+  it('lists exactly the files the recorded session changed', () => {
+    // diffFileList is transcribed from the same session's `git diff --stat`,
+    // so a re-record that forgets to regenerate it shows up here.
+    expect(diffFileList().files.map((file) => file.path)).toEqual([
+      'src/auth/login.ts',
+      'src/auth/session.ts',
+      'src/components/SignInForm.tsx',
+      'src/routes/checkout.tsx',
+    ]);
+  });
+
+  it('totals its own per-file counts', () => {
+    const files = diffFileList().files;
+    const insertions = files.reduce((sum, file) => sum + file.insertions, 0);
+    const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
+    expect(insertions).toBe(diffFileList().totalInsertions);
+    expect(deletions).toBe(diffFileList().totalDeletions);
+  });
+});
+
+describe('the recorded terminal is real Claude Code, not an authored script', () => {
+  it('renders the chrome the app spends its effort handling', () => {
+    // The previous fixture was 20 hand-written "> Reading src/auth/login.ts"
+    // lines, which exercised none of this - so the terminal lens, the live-tail
+    // cleaner and the store screenshots all previewed against chrome that no
+    // agent has ever emitted. Each of these is a distinct thing the app parses.
+    // Across the whole replay, not just the closing frame: the permission
+    // dialog covers the tool results above it, so the end state alone misses
+    // most of what scrolls past.
+    const session = shotsEveryRow.join('\n');
+    expect(session).toMatch(/[●⏺]/); // tool bullets
+    expect(session).toMatch(/⎿/); // result connectors
+    expect(session).toMatch(/[╭╮╰╯│─]/); // the bordered input box
+    expect(session).toMatch(/Do you want to/); // a live permission dialog
+    expect(session).toMatch(/esc to interrupt/); // the working status line
+  });
+
+  it('closes every frame inside the grid it was recorded at', () => {
+    // A row wider than the grid means the capture and the reported dimensions
+    // disagree, which renders as borders sliced mid-glyph on the phone.
+    for (const row of shotsRows) expect([...row].length).toBeLessThanOrEqual(CLAUDE_CAPTURE_SHOTS.cols);
+    for (const row of wideRows) expect([...row].length).toBeLessThanOrEqual(CLAUDE_CAPTURE_WIDE.cols);
+  });
+
+  it('ends on the approval request the chat lens shows as a permission card', () => {
+    const lastMeaningfulRows = shotsRows.filter((row) => row.trim().length > 0).slice(-12).join('\n');
+    expect(lastMeaningfulRows).toMatch(/Do you want to/);
   });
 });
 

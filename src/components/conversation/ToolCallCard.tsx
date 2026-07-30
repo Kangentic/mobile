@@ -19,6 +19,8 @@ export interface ToolCallCardProps {
 /** Tools whose one-line summary shows the two-tone file path from `input.file_path`. */
 const FILE_PATH_SUMMARY_TOOL_NAMES = new Set(['Edit', 'Write', 'Read', 'NotebookEdit']);
 const WRITE_PREVIEW_LINE_COUNT = 20;
+/** Matches PermissionPromptCard's BODY_MAX_HEIGHT, which caps the same fallback. */
+const EXPANDED_INPUT_MAX_HEIGHT = 300;
 
 function stringInputField(input: JsonValue, fieldName: string): string | null {
   if (!isRecord(input)) {
@@ -79,7 +81,56 @@ function summaryForTool(toolName: string, input: JsonValue): React.JSX.Element |
       </MonoText>
     );
   }
+  if (toolName === 'TodoWrite') {
+    const progress = describeTodoProgress(input);
+    if (progress === null) return null;
+    return (
+      <MonoText size="caption" color="secondary" numberOfLines={1}>
+        {progress}
+      </MonoText>
+    );
+  }
+  const mcpToolName = mcpServerTool(toolName);
+  if (mcpToolName !== null) {
+    // The server prefix is already shown as the card's tool name, so the
+    // summary carries the part that says what was actually called.
+    return (
+      <MonoText size="caption" color="secondary" numberOfLines={1}>
+        {mcpToolName.tool}
+      </MonoText>
+    );
+  }
   return null;
+}
+
+/**
+ * `mcp__<server>__<tool>` split into its parts, or null for an ordinary tool.
+ *
+ * MCP-namespaced tools are everywhere in a real session, and rendering the raw
+ * `mcp__github__list_pull_requests` as a card title reads as a symbol rather
+ * than an action.
+ */
+export function mcpServerTool(toolName: string): { server: string; tool: string } | null {
+  const match = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(toolName);
+  if (match === null) return null;
+  return { server: match[1], tool: match[2] };
+}
+
+/** What the card's name column shows: an MCP tool reads as its server. */
+export function displayToolName(toolName: string): string {
+  return mcpServerTool(toolName)?.server ?? toolName;
+}
+
+/** "2 of 5 done" for a TodoWrite call, or null when the input is not a todo list. */
+function describeTodoProgress(input: JsonValue): string | null {
+  if (!isRecord(input) || !Array.isArray(input.todos)) return null;
+  const todos = input.todos;
+  if (todos.length === 0) return null;
+  const completed = todos.filter((todo) => isRecord(todo) && todo.status === 'completed').length;
+  const active = todos.find((todo) => isRecord(todo) && todo.status === 'in_progress');
+  const activeLabel =
+    isRecord(active) && typeof active.content === 'string' ? ` - ${firstLineOf(active.content)}` : '';
+  return `${completed} of ${todos.length} done${activeLabel}`;
 }
 
 function ExpandedToolInput({ toolName, input }: { toolName: string; input: JsonValue }): React.JSX.Element {
@@ -101,7 +152,12 @@ function ExpandedToolInput({ toolName, input }: { toolName: string; input: JsonV
     }
   }
   if (body === null) {
-    body = <MonoBlock text={JSON.stringify(input, null, 2)} color="secondary" />;
+    // BOUNDED. Without a maxHeight MonoBlock renders a plain View rather than a
+    // ScrollView, so an unbounded payload - a TodoWrite list, an MCP response -
+    // becomes a wall of JSON inside a FlashList row that pushes everything
+    // after it off screen. PermissionPromptCard already caps the identical
+    // fallback; this matches it.
+    body = <MonoBlock text={JSON.stringify(input, null, 2)} color="secondary" maxHeight={EXPANDED_INPUT_MAX_HEIGHT} />;
   }
 
   return <View style={{ marginTop: theme.spacing.xs }}>{body}</View>;
@@ -142,7 +198,7 @@ export function ToolCallCard({ cell }: ToolCallCardProps): React.JSX.Element {
             {statusGlyph}
           </MonoText>
           <MonoText size="caption" color="primary">
-            {cell.toolName}
+            {displayToolName(cell.toolName)}
           </MonoText>
           <View style={styles.flex}>{summaryForTool(cell.toolName, cell.input)}</View>
         </Pressable>

@@ -43,8 +43,9 @@ const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
  * small glyphs, and a pinch enlarges any part of it instantly.
  */
 const MIN_TERMINAL_FONT_SIZE_PX = 6;
-// Ceiling above the fill-to-height default (which can reach ~48px for a short
-// grid) so pinch-zoom has headroom and never clamp-jumps off the default.
+// Ceiling above the auto-fit default (capped at MAX_AUTO_FIT_FONT_PX = 20 in
+// scripts/buildXtermHtml.mjs) so pinch-zoom has headroom and never clamp-jumps
+// off the default.
 const MAX_TERMINAL_FONT_SIZE_PX = 56;
 // 32ms (~30fps) coalesces a token firehose into fewer, larger writes than 16ms
 // did, halving repaint frequency at a latency the eye cannot see. Keystroke
@@ -99,7 +100,8 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
  * It NEVER resizes the desktop PTY - a shared desktop session must not be
  * reshaped by the phone. Keyboard input typed inside the WebView flows back
  * out as 'input' and is written to the PTY (the one thing the phone sends);
- * pinch zoom adjusts the local font between 6 and 24 px.
+ * pinch zoom adjusts the local font between MIN_TERMINAL_FONT_SIZE_PX and
+ * MAX_TERMINAL_FONT_SIZE_PX (6 to 56).
  */
 export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
