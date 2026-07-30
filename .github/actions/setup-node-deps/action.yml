@@ -32,9 +32,15 @@ runs:
     # argument is capacity, not a stopwatch: ~1.9 GB of a 10 GB cap, spent on
     # entries that cannot be read.
     #
-    # The cost of removing it: on a genuine lockfile change, the ONE job that
-    # wins the race to install pays a registry download instead of a local
-    # unpack. Every other job still restores node_modules. Reversible in a line.
+    # The cost of removing it: on a genuine lockfile change, the jobs that start
+    # before the new node_modules entry is saved pay a registry download instead
+    # of a local unpack. That is not one job - actions/cache saves in a post-job
+    # step, so ci.yml's six parallel jobs all miss and all install, which is what
+    # ci.yml's own concurrency comment means by "a cold `npm ci` in all six
+    # parallel jobs". Jobs that start later, and every dependent job in
+    # build-android.yml, still restore. It costs nothing extra either way,
+    # because `cache: npm` keyed on the same hash and would have missed for all
+    # six too. Reversible in a line.
     - uses: actions/setup-node@v7
       with:
         node-version-file: .nvmrc
