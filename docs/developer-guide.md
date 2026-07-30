@@ -313,7 +313,10 @@ tests/components/ # Jest + RNTL
 tests/helpers/    # Shared cross-tier test utilities (async waitUntil / flushMicrotasks)
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs + repo scripts
+scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
+                  #   storeScreenshots.mjs, buildTabIcons.mjs (npm run build:tab-icons
+                  #   regenerates the Board tab icon rasters; --check gates drift in CI)
+                  #   + repo scripts
 ```
 
 See `CLAUDE.md`'s Project Structure section; the tree there and this one move together.
@@ -437,7 +440,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 
 | Check | Workflow | What a green result proves | Typical |
 |---|---|---|---|
-| `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift | 29s |
+| `Lint (ESLint)` | `ci.yml` | `eslint . --max-warnings 0`, plus `sync:branding:check` for brand-asset drift and `check:tab-icons` for tab-icon drift | 29s |
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
