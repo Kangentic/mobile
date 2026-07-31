@@ -27,7 +27,7 @@
  *   node scripts/cmakeStaging.mjs --prune --dry-run
  */
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /** AGP writes one of these per module, per variant, per ABI, once CMake configures. */
@@ -99,7 +99,21 @@ export function readCheckoutPath(metadataContents) {
   if (!match) {
     return null;
   }
-  return dirname(match[1].trim());
+
+  // Strip the trailing `android` segment WITHOUT node:path's dirname, and
+  // without normalising the separators away.
+  //
+  // The value this parses is written by AGP on Windows, so it uses backslashes.
+  // `dirname` resolves against the HOST platform: on the Linux CI runner the
+  // posix implementation does not treat "\" as a separator at all, so
+  // `dirname('/tmp/x/checkout\\android')` returns `/tmp/x`, one level too high
+  // and pointing at a directory that is not a checkout. Every path then
+  // classifies as orphaned, which is the dangerous direction for a command that
+  // deletes. Preserving the original separators also keeps the returned value
+  // comparable to a `join()`-built path on Windows.
+  const recorded = match[1].trim().replace(/[\\/]+$/, '');
+  const lastSeparator = Math.max(recorded.lastIndexOf('/'), recorded.lastIndexOf('\\'));
+  return lastSeparator <= 0 ? recorded : recorded.slice(0, lastSeparator);
 }
 
 /**
