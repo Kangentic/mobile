@@ -543,6 +543,23 @@ export function initialTasks2(): BoardTaskWire[] {
   ];
 }
 
+/** Per-turn token counts, shaped like the desktop parser's extractTurnUsage output. */
+function mockTurnUsage(inputTokens: number, outputTokens: number): TranscriptTurnUsageWire {
+  return {
+    inputTokens,
+    outputTokens,
+    // A real turn reads almost all of its context from cache and writes a
+    // little; a turn reporting only fresh input tokens does not look real.
+    cacheCreationInputTokens: Math.round(inputTokens * 0.12),
+    cacheReadInputTokens: Math.round(inputTokens * 7.4),
+  };
+}
+
+/** The transcript below, for the fixture-coverage tests. */
+export function baseTranscriptForTest(): TranscriptEntryWire[] {
+  return baseTranscript();
+}
+
 /**
  * SHAPED from a real Claude Code session's transcript (the App Phase 1
  * overnight run) so mock parity matches genuine session shapes: an Edit with
@@ -558,22 +575,6 @@ export function initialTasks2(): BoardTaskWire[] {
  * single frame. The recorded command outputs (typecheck, vitest) are real and
  * unchanged.
  */
-/** Per-turn token counts, shaped like the desktop parser's extractTurnUsage output. */
-function mockTurnUsage(inputTokens: number, outputTokens: number): TranscriptTurnUsageWire {
-  return {
-    inputTokens,
-    outputTokens,
-    // A real turn reads almost all of its context from cache and writes a
-    // little; a turn reporting only fresh input tokens does not look real.
-    cacheCreationInputTokens: Math.round(inputTokens * 0.12),
-    cacheReadInputTokens: Math.round(inputTokens * 7.4),
-  };
-}
-
-export function baseTranscriptForTest(): TranscriptEntryWire[] {
-  return baseTranscript();
-}
-
 function baseTranscript(): TranscriptEntryWire[] {
   const now = Date.now();
   return [
@@ -645,8 +646,11 @@ function baseTranscript(): TranscriptEntryWire[] {
       uuid: 'mock-result-grep',
       ts: now - 291000,
       toolUseId: 'mock-tool-grep',
+      // Only checkout.tsx is missing the path, and only checkout.tsx appears in
+      // diffFileList. A call site shown here as broken but absent from the
+      // Changes lens reads as work the agent claimed and never did.
       content:
-        'src/routes/checkout.tsx:8:    return loginRedirect();\nsrc/routes/account.tsx:12:  return loginRedirect();\nsrc/auth/guard.ts:21:  return loginRedirect(to.path);',
+        'src/routes/checkout.tsx:8:    return loginRedirect();\nsrc/routes/account.tsx:12:  return loginRedirect(route.path);\nsrc/auth/guard.ts:21:  return loginRedirect(to.path);',
     },
     {
       kind: 'assistant',
@@ -704,7 +708,7 @@ function baseTranscript(): TranscriptEntryWire[] {
             // "before" states of the same function, one swipe apart.
             old_string: 'export function loginRedirect(path) {\n  redirect("/login");',
             new_string:
-              'export function loginRedirect(path?: string) {\n  redirect(path ? `/login?next=${encodeURIComponent(path)}` : "/login");',
+              'export function loginRedirect(path: string) {\n  redirect(path ? `/login?next=${encodeURIComponent(path)}` : "/login");',
           },
         },
       ],
@@ -756,8 +760,14 @@ function baseTranscript(): TranscriptEntryWire[] {
           name: 'Write',
           input: {
             file_path: 'C:\\Users\\dev\\Documents\\GitHub\\storefront-web\\src\\auth\\session.ts',
-            content:
-              'const DEFAULT_DESTINATION = "/dashboard";\n\nexport function afterSignIn(next?: string | null) {\n  return isSafeReturnPath(next) ? next : DEFAULT_DESTINATION;\n}\n',
+            // TAKEN from the Changes lens rather than transcribed alongside it.
+            // ToolCallCard renders the first 20 lines of a Write verbatim, so
+            // this file appears IN FULL in the chat frame, one swipe from the
+            // Changes frame showing the same file - and a hand-copied version
+            // drifted: it named `DEFAULT_DESTINATION` and called an
+            // `isSafeReturnPath` the diff frame never defined. Reading the
+            // anchor is the only version that cannot drift again.
+            content: diffFileContent('src/auth/session.ts').modified,
           },
         },
       ],
@@ -901,7 +911,7 @@ export function diffFileList(): DiffFileListWire {
  * re-authoring the agent's work, and a review surface that only ever shows
  * short lines misrepresents what reviewing a real diff on a phone is like.
  */
-function diffFileContent(filePath: string): DiffFileContentWire {
+export function diffFileContent(filePath: string): DiffFileContentWire {
   if (filePath === 'src/auth/login.ts') {
     return {
       original: [
@@ -1064,10 +1074,12 @@ export function createMockDesktop(): MockDesktop {
   let pendingTickResult: { toolUseId: string; content: string; dueTick: number } | null = null;
   let feedTimer: ReturnType<typeof setInterval> | null = null;
   // The reported grid must be the grid the REPLAYED CAPTURE was recorded at,
-  // not a fixed constant: in store-capture mode the bytes are the 56x48
-  // recording, and announcing 120x30 would have the phone render them into the
-  // wrong grid - every box border sliced, on the one build that ships images.
-  let ptyDimensions = { cols: activeCapture().cols, rows: activeCapture().rows };
+  // never a constant written down separately: the bytes are whatever
+  // claudeCapture.ts was recorded at, and announcing anything else has the
+  // phone render them into the wrong grid - every box border sliced, on the
+  // one build that ships images. Read from the capture so a re-record at a new
+  // grid cannot leave this behind.
+  let ptyDimensions = activeGrid();
   const oneShotTimers = new Set<ReturnType<typeof setTimeout>>();
   // Session-lifecycle simulation (the /respawn and /end-session magic
   // composer commands): the streaming task's CURRENT session id, mirroring
@@ -1197,6 +1209,10 @@ export function createMockDesktop(): MockDesktop {
     }
     activeSessionId = null;
     streamSubscribed = false;
+    // The replay outlives the session unless it is stopped here. Harmless while
+    // the capture is a single settled frame, but a streaming re-record would
+    // leave a live timer writing the ended session's bytes.
+    stopTerminalPlayback();
     setTaskSession(null);
   }
 
@@ -1212,6 +1228,10 @@ export function createMockDesktop(): MockDesktop {
     pendingTickResult = null;
     activeSessionId = successorSessionId;
     streamSubscribed = false;
+    // Worse than the end-session case: activeSessionId is NOT null here, so a
+    // playback left running would emit the dead session's recorded bytes into
+    // the successor's terminal. The next subscribe restarts it from the top.
+    stopTerminalPlayback();
     transcript = [
       {
         kind: 'assistant',
@@ -1273,6 +1293,12 @@ export function createMockDesktop(): MockDesktop {
     raisePrompt(QUESTION_PROMPT_ID);
   }
 
+  /** Cancel any running replay. Safe to call when none is running. */
+  function stopTerminalPlayback(): void {
+    terminalPlayback?.stop();
+    terminalPlayback = null;
+  }
+
   /**
    * Start (or restart) the recorded terminal replay for the streaming session.
    *
@@ -1283,8 +1309,7 @@ export function createMockDesktop(): MockDesktop {
    * and the two would drift apart cell by cell.
    */
   function startTerminalPlayback(wantsTerminal: boolean): void {
-    terminalPlayback?.stop();
-    terminalPlayback = null;
+    stopTerminalPlayback();
     if (!wantsTerminal) return;
     const capture = activeCapture();
     terminalPlayback = playRecordedTerminal(capture, (data) => {
@@ -1509,8 +1534,7 @@ export function createMockDesktop(): MockDesktop {
             !MOCK_EXTRA_THINKING_SESSIONS.some((spec) => spec.sessionId === payload.sessionId)
           ) {
             streamSubscribed = false;
-            terminalPlayback?.stop();
-            terminalPlayback = null;
+            stopTerminalPlayback();
           }
           return ok(request);
         }
@@ -1731,7 +1755,9 @@ export function createMockDesktop(): MockDesktop {
       case 'interactive-terminal': {
         const payload = parseCapabilityRequestPayload('interactive-terminal', request.payload);
         // Mirrors the desktop's action union: resize holds the grid until
-        // release-size restores the mock's desktop-default 120x30.
+        // release-size restores the grid the active capture was recorded at
+        // (activeGrid()). There is no fixed desktop-default any more - the
+        // capture is the only source of a grid this mock reports.
         if (payload.action === 'resize') {
           const colsChanged = payload.dimensions.cols !== ptyDimensions.cols;
           ptyDimensions = { cols: payload.dimensions.cols, rows: payload.dimensions.rows };
@@ -1819,8 +1845,7 @@ export function createMockDesktop(): MockDesktop {
     dispose(): void {
       if (feedTimer) clearInterval(feedTimer);
       feedTimer = null;
-      terminalPlayback?.stop();
-      terminalPlayback = null;
+      stopTerminalPlayback();
       for (const timer of oneShotTimers) clearTimeout(timer);
       oneShotTimers.clear();
       peer.dispose();

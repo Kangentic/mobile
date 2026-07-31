@@ -52,9 +52,12 @@ export async function renderCaptureRows(
 /**
  * Every distinct row the capture puts on screen at any point during the replay.
  *
- * The final frame is not the whole session: a permission dialog covers the tool
- * results above it, so asserting only on the end state misses most of the
- * chrome a viewer actually sees scroll past.
+ * For a STREAMING capture the final frame is not the whole session: a
+ * permission dialog covers the tool results above it, so asserting only on the
+ * end state misses most of the chrome a viewer sees scroll past. The committed
+ * capture is currently a single settled frame, which makes this the deduped
+ * rows of that frame - equivalent, not redundant, and it keeps the assertions
+ * that use it correct if a re-record streams again.
  */
 export async function renderCaptureAllRows(capture: RecordedTerminalCapture): Promise<string[]> {
   const terminal = new Terminal({

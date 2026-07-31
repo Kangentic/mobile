@@ -213,6 +213,109 @@ describe('createLiveTailBuffer - chrome filtering and capping', () => {
     expect(buffer.snapshotLines()).toEqual(['│ actual reply text here │', 'plain output']);
   });
 
+  // The four tests below pin isChromeLine's box-drawing boundary from BOTH
+  // sides. Whitespace was pulled out of the box-drawing ratio's denominator,
+  // the box-drawing character set widened from a hand-listed subset to the
+  // whole U+2500-U+259F range (Box Drawing plus Block Elements), and an
+  // absolute "8 box-drawing glyphs in a row drops the whole line" rule was
+  // added on top - all three changes only ever make MORE lines count as
+  // chrome. Every existing test that exercises them asserts chrome IS
+  // stripped; nothing pinned the opposite direction, so a future tightening
+  // of any of the three could start eating real agent content and every test
+  // would stay green. These close that hole.
+
+  it('keeps a content line with a few inline block glyphs despite heavy interior padding', () => {
+    // A git-diff-stat-style summary line: two shaded meter ticks among real
+    // stats, padded with runs of spaces for column alignment (the exact shape
+    // that used to dilute the ratio when whitespace counted toward the
+    // denominator). Excluding whitespace still leaves the ratio at roughly
+    // 0.05 (2 box glyphs out of 42 significant characters) - nowhere near the
+    // 0.6 cutoff, so heavy padding alone must not tip a real content line into
+    // chrome.
+    const buffer = createLiveTailBuffer();
+    buffer.append('coverage ▓▓ 82%      1204 lines checked      3 files flagged');
+    expect(buffer.snapshotLines()).toEqual([
+      'coverage ▓▓ 82%      1204 lines checked      3 files flagged',
+    ]);
+  });
+
+  it('keeps a line whose box-glyph ratio sits just under the 0.6 cutoff once whitespace is excluded', () => {
+    // "12/40" contributes 5 significant characters against a 7-glyph meter,
+    // for a ratio of 7/12 = 0.5833 - just under BOX_DRAWING_LINE_RATIO. Block
+    // Elements are exempt from the run rule (a long run of them is a progress
+    // bar, not a rule), so the ratio test is the only instrument that can
+    // classify this line either way, which is exactly what this pins.
+    const buffer = createLiveTailBuffer();
+    buffer.append('12/40 ▓▓▓▓▓▓▓');
+    expect(buffer.snapshotLines()).toEqual(['12/40 ▓▓▓▓▓▓▓']);
+  });
+
+  it('keeps a 7-glyph box-drawing run beside real words, one short of the run-rule threshold', () => {
+    // Mirrors the merged-line shape the containsBoxDrawingRule comment
+    // describes (a filename, a rule, and more text folded into one virtual
+    // line), but with a run of 7, not 8. The ratio (7 box glyphs out of 39
+    // significant characters, 0.18) is nowhere near 0.6 either, so this line
+    // must survive on both counts.
+    const buffer = createLiveTailBuffer();
+    buffer.append('checkout.tsx ─────── validate the input path');
+    expect(buffer.snapshotLines()).toEqual(['checkout.tsx ─────── validate the input path']);
+  });
+
+  it('drops a line the instant a box-drawing run reaches 8, even carrying real words', () => {
+    // Same line as the one above with a single extra rule glyph: the ratio is
+    // still only 0.2 (comfortably under 0.6), but containsBoxDrawingRule
+    // fires at exactly 8 and discards the whole line, filename and all - the
+    // trade-off BOX_DRAWING_RULE_RUN's comment documents (a real capture
+    // merged a filename, a 44-glyph rule, and two rows of code into one line
+    // this way).
+    const buffer = createLiveTailBuffer();
+    buffer.append('real output\n');
+    buffer.append('checkout.tsx ──────── validate the input path\n');
+    buffer.append('more output');
+    expect(buffer.snapshotLines()).toEqual(['real output', 'more output']);
+  });
+
+  it('keeps a progress bar that has real text around it, however long the bar', () => {
+    // THE REGRESSION CASE. The run rule was originally written against the
+    // whole U+2500-U+259F range, so a 20-glyph progress bar tripped it and the
+    // entire line was discarded - "Downloading model" and "62%" with it - even
+    // though the ratio test correctly scored it 0.51 and kept it. Nothing had
+    // ever dropped this line before, because the hand-listed set it replaced
+    // contained no Block Elements at all.
+    //
+    // The fix is that the RUN rule reads Box Drawing only: a long run of `─`
+    // is a rule, a long run of `█` is a bar, and a bar with words around it is
+    // content. A progress line is also the single most useful thing the live
+    // tail can show during a long Bash call, which is when a reader is most
+    // likely to be watching it.
+    const buffer = createLiveTailBuffer();
+    buffer.append('Downloading model ████████████░░░░░░░░ 62%');
+    expect(buffer.snapshotLines()).toEqual(['Downloading model ████████████░░░░░░░░ 62%']);
+  });
+
+  it('still drops a long RULE that has real text around it', () => {
+    // The other side of that split, and the case the run rule exists for: the
+    // same shape built from Box Drawing rather than Block Elements is a merged
+    // dialog border and must still go, text and all.
+    const buffer = createLiveTailBuffer();
+    buffer.append('kept line\n');
+    buffer.append('Downloading model ──────────── 62%\n');
+    buffer.append('another kept line');
+    expect(buffer.snapshotLines()).toEqual(['kept line', 'another kept line']);
+  });
+
+  it('drops a standalone block-element bar, now that Block Elements count as box-drawing', () => {
+    // Solid block glyphs (█, U+2588) sat outside the old hand-listed
+    // box-drawing subset, so a fully-filled progress bar used to score as
+    // ordinary text. The widened U+2500-U+259F range now recognizes them,
+    // so a bar of eight scores a ratio of 1.0 and is dropped.
+    const buffer = createLiveTailBuffer();
+    buffer.append('progress\n');
+    buffer.append('████████\n');
+    buffer.append('done');
+    expect(buffer.snapshotLines()).toEqual(['progress', 'done']);
+  });
+
   it('drops blank lines, braille spinner lines, and star/dot status lines', () => {
     const buffer = createLiveTailBuffer();
     buffer.append('real line one\n');

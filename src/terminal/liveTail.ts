@@ -24,13 +24,32 @@ const VIRTUAL_LINE_CAP_MULTIPLIER = 4;
  * that failure mode for the next glyph an agent picks. Note
  * `lastContentLineFromScrollback` further down this file already matched the
  * full range, so the two classifiers in this one file disagreed.
+ *
+ * The two blocks carry SEPARATE end constants on purpose, and should not be
+ * collapsed back into one: the ratio test wants both blocks, the run rule wants
+ * Box Drawing alone. See isBoxDrawingCharacter just below for why.
  */
 const BOX_DRAWING_RANGE_START = 0x2500;
+const BOX_DRAWING_RANGE_END = 0x257f;
 const BLOCK_ELEMENTS_RANGE_END = 0x259f;
 
-function isBoxDrawingCharacter(character: string): boolean {
+/** Box Drawing plus Block Elements: everything a TUI draws furniture out of. */
+function isBoxOrBlockCharacter(character: string): boolean {
   const codePoint = character.codePointAt(0);
   return codePoint !== undefined && codePoint >= BOX_DRAWING_RANGE_START && codePoint <= BLOCK_ELEMENTS_RANGE_END;
+}
+
+/**
+ * Box Drawing ONLY (U+2500-U+257F), deliberately excluding Block Elements.
+ *
+ * Only the run rule below uses this narrower test, and the split is the whole
+ * point: a long run of BOX DRAWING is a horizontal rule, but a long run of
+ * BLOCK ELEMENTS (`█ ░ ▒ ▓`) is a progress bar, which is content with a bar in
+ * it rather than furniture. See BOX_DRAWING_RULE_RUN.
+ */
+function isBoxDrawingCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && codePoint >= BOX_DRAWING_RANGE_START && codePoint <= BOX_DRAWING_RANGE_END;
 }
 
 const BOX_DRAWING_LINE_RATIO = 0.6;
@@ -51,6 +70,16 @@ const BOX_DRAWING_LINE_RATIO = 0.6;
  * The merged text is dropped with it. That is the right trade: it is already
  * scrambled by the merge, and showing scrambled content is worse than showing
  * none.
+ *
+ * BLOCK ELEMENTS ARE EXCLUDED from this rule (isBoxDrawingCharacter, not
+ * isBoxOrBlockCharacter), and that exclusion is load-bearing. "Nothing an agent
+ * writes contains eight consecutive" holds for rules and borders; it is simply
+ * false for `█` and `░`, which is what a progress bar is made of. Counting them
+ * here dropped `Downloading model ████████████░░░░░░░░ 62%` in full - a line
+ * the ratio test correctly keeps at 0.51, and one the live tail exists to show,
+ * because a long Bash command's progress is exactly what a reader wants from a
+ * running turn. A bar with no text around it is still chrome: it scores 1.0 on
+ * the ratio test above, which is the right instrument for it.
  */
 const BOX_DRAWING_RULE_RUN = 8;
 
@@ -103,12 +132,15 @@ function isChromeLine(line: string): boolean {
   // a filename, a 56-glyph rule and a diff line number scored 0.48 with the
   // padding and 0.64 without, so the rule shipped into the chat reading view as
   // if the agent had typed a line of dashes.
+  // The RATIO counts blocks as well as borders (isBoxOrBlockCharacter): a line
+  // that is mostly `█` is a bar with nothing else on it, which is furniture.
+  // Only the run rule below narrows to Box Drawing proper.
   let boxDrawingCount = 0;
   let significantCount = 0;
   for (const character of characters) {
     if (/\s/.test(character)) continue;
     significantCount++;
-    if (isBoxDrawingCharacter(character)) {
+    if (isBoxOrBlockCharacter(character)) {
       boxDrawingCount++;
     }
   }

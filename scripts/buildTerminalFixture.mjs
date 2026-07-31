@@ -6,8 +6,13 @@
  * committed fixture module the mock desktop replays.
  *
  *   node scripts/buildTerminalFixture.mjs \
- *     --capture capture-56x48.jsonl --cols 56 --rows 48 \
+ *     --capture capture-44x38.jsonl --cols 44 --rows 38 \
  *     --seed-end 2500 --end 2677 --export CLAUDE_CAPTURE_SHOTS
+ *
+ * The grid in that example is the one actually committed. Copy-pasting an
+ * older one regenerates the fixture at a grid the app does not report, which
+ * renders as borders sliced mid-glyph and is caught only by a human looking at
+ * a store image.
  *
  * WHY A SEED FRAME AND NOT JUST THE CHUNKS
  *
