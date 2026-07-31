@@ -69,6 +69,27 @@ function svgRootAttribute(svgSource: string, attributeName: string): string {
   return match[1];
 }
 
+/**
+ * The raw <rect .../> markup from an activity SVG source, isolated from the
+ * rest of the document. Attribute lookups MUST be scoped to this substring
+ * rather than run against the whole svgSource the way svgRootAttribute does:
+ * the <svg> root's own viewBox="0 0 24 24" embeds "0 0 24 24", so an
+ * unanchored `x="..."` or `width="..."` search on the full source matches
+ * inside the root tag first and silently cross-checks the wrong element.
+ */
+function svgRectMarkup(svgSource: string): string {
+  const match = svgSource.match(/<rect\s+[^>]*\/>/);
+  if (match === null) throw new Error('no <rect> element in the svg source; cannot cross-check it');
+  return match[0];
+}
+
+/** Reads a numeric `name="value"` attribute off a single element's isolated markup. */
+function elementNumberAttribute(elementMarkup: string, attributeName: string): number {
+  const match = elementMarkup.match(new RegExp(`${attributeName}="([^"]+)"`));
+  if (match === null) throw new Error(`${attributeName} is missing from "${elementMarkup}"; cannot cross-check it`);
+  return Number(match[1]);
+}
+
 const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
@@ -167,6 +188,28 @@ describe('the needs-you envelope (agent-idle)', () => {
     // The 2.7.1 pixel-hinting fix: both y edges land on the integer lattice.
     expect(Number.isInteger(envelopeBody.y)).toBe(true);
     expect(Number.isInteger(envelopeBody.y + envelopeBody.height)).toBe(true);
+  });
+
+  /**
+   * The rect is the shape 2.7.1 actually re-hinted, so it is the one most
+   * exposed to literal drift: the assertions above pin x/width/height/the
+   * integer lattice as hand-typed numbers, the exact pattern this file's own
+   * header warns against ("compare the generated output against the source
+   * of truth rather than typed literals"). rx in particular is asserted
+   * nowhere else; a generator that dropped it ships square corners and
+   * every other assertion in this describe block stays green.
+   */
+  it('takes the rect verbatim from the upstream asset: x, y, width, height and rx', () => {
+    const [envelopeBody] = activityMarks['agent-idle'].shapes.filter(
+      (shape): shape is ActivityRectShape => shape.kind === 'rect',
+    );
+    const upstreamRect = svgRectMarkup(idleMarkSvgSource);
+
+    expect(envelopeBody.x).toBe(elementNumberAttribute(upstreamRect, 'x'));
+    expect(envelopeBody.y).toBe(elementNumberAttribute(upstreamRect, 'y'));
+    expect(envelopeBody.width).toBe(elementNumberAttribute(upstreamRect, 'width'));
+    expect(envelopeBody.height).toBe(elementNumberAttribute(upstreamRect, 'height'));
+    expect(envelopeBody.rx).toBe(elementNumberAttribute(upstreamRect, 'rx'));
   });
 
   it('draws the flap as a path over the envelope body', () => {

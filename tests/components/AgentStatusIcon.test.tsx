@@ -88,6 +88,11 @@ if (idleEnvelope === undefined || idleEnvelope.kind !== 'rect') {
 }
 const idleEnvelopeHeight = idleEnvelope.height;
 
+const [idleFlap] = idleMark.shapes.filter((shape) => shape.kind === 'path');
+if (idleFlap === undefined || idleFlap.kind !== 'path') {
+  throw new Error('agent-idle must ship a flap path; @kangentic/branding changed its activity marks');
+}
+
 function renderIcon(props: React.ComponentProps<typeof AgentStatusIcon>): ReturnType<typeof render> {
   return render(
     <ThemeProvider>
@@ -214,9 +219,14 @@ describe('the idle envelope', () => {
     renderIcon({ kind: 'idle' });
 
     const rect = screen.getByTestId('svg-rect');
+    expect(rect.props.x).toBe(idleEnvelope.x);
+    expect(rect.props.y).toBe(idleEnvelope.y);
     expect(rect.props.width).toBe(idleEnvelope.width);
     expect(rect.props.height).toBe(idleEnvelopeHeight);
-    expect(screen.getByTestId('svg-path')).toBeTruthy();
+    expect(rect.props.rx).toBe(idleEnvelope.rx);
+    // Proves WHICH path is drawn, not just that a path exists: a stale or
+    // hardcoded `d` would still satisfy a bare toBeTruthy() here.
+    expect(screen.getByTestId('svg-path').props.d).toBe(idleFlap.d);
     expect(screen.queryByTestId('svg-circle')).toBeNull();
   });
 
