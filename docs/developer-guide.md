@@ -484,7 +484,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
-| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, and `android/`/`ios/` staying untracked | 25-33s |
+| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, the CMake staging block reaching `settings.gradle` and not stacking on a repeat prebuild, and `android`/`ios` staying untracked | 25-33s |
 | `Release counters (stores)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (Smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
