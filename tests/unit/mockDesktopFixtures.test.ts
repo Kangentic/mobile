@@ -29,6 +29,8 @@ import {
   MOCK_STREAM_CEILING_FOR_TEST,
   activeCapture,
   activeGrid,
+  baseTranscriptForTest,
+  diffFileContent,
   diffFileList,
   initialTasks,
   initialTasks2,
@@ -76,6 +78,12 @@ const KANGENTIC_DOMAIN_TERMS = [
   'scrollback',
   'sas',
   'qr',
+  // The product's own NAME. scripts/buildTerminalFixture.mjs bans it at
+  // capture-build time and its comment says that list is "kept in step" with
+  // this one, but this list never carried it - so the single most obvious
+  // giveaway in a fixture published to the App Store was the one word the
+  // review-time half of the guard did not look for.
+  'kangentic',
 ];
 
 /** Every string these fixtures put on screen. */
@@ -177,15 +185,126 @@ describe('the terminal frame and the changes frame describe one piece of work', 
   });
 });
 
+/**
+ * The THIRD pairing, and the one nothing pinned until now.
+ *
+ * The terminal-versus-changes checks above exist because those two frames
+ * disagreed once. The chat lens is the same hazard with a wider blast radius:
+ * `ToolCallCard` renders an Edit's `new_string` and the first 20 lines of a
+ * Write's `content` verbatim, so the chat frame puts the edited file on screen
+ * in full, one swipe from the Changes frame showing the same file. Both ship in
+ * the same store listing.
+ *
+ * Both directions of this were broken when the check was written: the Edit
+ * declared `loginRedirect(path?: string)` where the diff had `path: string`,
+ * and the Write named `DEFAULT_DESTINATION` / `isSafeReturnPath` where the diff
+ * named `DEFAULT_AFTER_SIGN_IN` / `isInternalPath` - a helper the chat frame
+ * called and the diff frame never defined.
+ *
+ * `diffFileContent` is the anchor, not the transcript: it is transcribed from
+ * the recorded session's own `git diff`, and its per-file line counts are
+ * checked against `diffFileList` above.
+ */
+describe('the chat frame and the changes frame describe one edit', () => {
+  /** The fictional workspace every tool input is rooted at. */
+  const WORKSPACE_ROOT = 'C:\\Users\\dev\\Documents\\GitHub\\storefront-web\\';
+
+  interface FileWritingToolCall {
+    readonly uuid: string;
+    readonly toolName: string;
+    readonly wirePath: string;
+    readonly input: Record<string, unknown>;
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  /** Every Edit/Write in the transcript, with its absolute path reduced to the wire path. */
+  function fileWritingToolCalls(): FileWritingToolCall[] {
+    const collected: FileWritingToolCall[] = [];
+    for (const entry of baseTranscriptForTest()) {
+      if (entry.kind !== 'assistant') continue;
+      for (const block of entry.blocks) {
+        if (block.type !== 'tool_use') continue;
+        if (block.name !== 'Edit' && block.name !== 'Write') continue;
+        if (!isRecord(block.input) || typeof block.input.file_path !== 'string') continue;
+        collected.push({
+          uuid: entry.uuid,
+          toolName: block.name,
+          wirePath: block.input.file_path.replace(WORKSPACE_ROOT, '').replace(/\\/g, '/'),
+          input: block.input,
+        });
+      }
+    }
+    return collected;
+  }
+
+  it('finds the transcript file-writing calls at all', () => {
+    // Non-vacuity guard: every assertion below passes trivially against an
+    // empty list, so a transcript that stopped editing files would read as
+    // success. Pinned to the exact paths, because a new Edit that no diff
+    // backs should fail HERE with a readable message.
+    expect(fileWritingToolCalls().map((call) => `${call.toolName} ${call.wirePath}`)).toEqual([
+      'Edit src/auth/login.ts',
+      'Write src/auth/session.ts',
+    ]);
+  });
+
+  it('only writes files the Changes lens lists', () => {
+    const listedPaths = diffFileList().files.map((file) => file.path);
+    for (const call of fileWritingToolCalls()) {
+      expect(listedPaths).toContain(call.wirePath);
+    }
+  });
+
+  it('shows the same AFTER text as the diff frame shows for that file', () => {
+    // ASYMMETRIC on purpose, and worth stating so nobody reads more into a
+    // green run than it earns. The Edit's `new_string` is a hand-authored
+    // literal, so this genuinely cross-checks it. The Write's `content` READS
+    // `diffFileContent`, so for that entry the comparison is X.includes(X) and
+    // cannot fail - the guarantee there is the derivation in the source, which
+    // is stronger than any assertion here. What this still catches is someone
+    // re-inlining that literal later, which is exactly how it drifted before.
+    const mismatched = fileWritingToolCalls().flatMap((call) => {
+      const afterText = call.toolName === 'Write' ? call.input.content : call.input.new_string;
+      if (typeof afterText !== 'string') {
+        return [`${call.uuid}: ${call.toolName} carries no after text`];
+      }
+      // `includes` rather than equality: an Edit's new_string is one hunk of
+      // the file, a Write's content is the whole of it, and both have to be
+      // findable verbatim in what the Changes lens renders.
+      return diffFileContent(call.wirePath).modified.includes(afterText)
+        ? []
+        : [`${call.uuid} (${call.toolName} ${call.wirePath}) is not in the diff's modified text:\n${afterText}`];
+    });
+    // Named individually: a bare count tells whoever broke it nothing, and the
+    // disagreement is invisible in every other check.
+    expect(mismatched).toEqual([]);
+  });
+
+  it('shows the same BEFORE text as the diff frame shows for that file', () => {
+    const mismatched = fileWritingToolCalls().flatMap((call) => {
+      if (call.toolName !== 'Edit') return [];
+      const beforeText = call.input.old_string;
+      if (typeof beforeText !== 'string') return [`${call.uuid}: Edit carries no old_string`];
+      return diffFileContent(call.wirePath).original.includes(beforeText)
+        ? []
+        : [`${call.uuid} (${call.wirePath}) is not in the diff's original text:\n${beforeText}`];
+    });
+    expect(mismatched).toEqual([]);
+  });
+});
+
 describe('the recorded terminal is real Claude Code, not an authored script', () => {
   it('renders the chrome the app spends its effort handling', () => {
     // The previous fixture was 20 hand-written "> Reading src/auth/login.ts"
     // lines, which exercised none of this - so the terminal lens, the live-tail
     // cleaner and the store screenshots all previewed against chrome that no
     // agent has ever emitted. Each of these is a distinct thing the app parses.
-    // Across the whole replay, not just the closing frame: the permission
-    // dialog covers the tool results above it, so the end state alone misses
-    // most of what scrolls past.
+    // Read across every frame of the replay rather than the closing one, so a
+    // future re-record that streams (today's capture is a single settled frame)
+    // is still measured on everything that scrolls past.
     const session = shotsEveryRow.join('\n');
     expect(session).toMatch(/[●⏺]/); // tool bullets
     expect(session).toMatch(/[╌─]{8}/); // the rules a dialog frames itself with
@@ -210,27 +329,30 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
     expect(lastMeaningfulRows).toMatch(/Do you want to/);
   });
 
-  it('settles on the dialog and holds it for most of the replay', async () => {
+  it('is a SETTLED frame, so no arrival time can catch it mid-paint', () => {
     // TIMING, not decoration. The store flow captures the chat frame first and
     // reaches the terminal shot an unknown 15-30s later, while the replay
-    // restarts on every terminal-bearing subscribe. So the dialog cannot be a
-    // brief event near the end - it has to be the state the capture RESTS in,
-    // and it has to arrive early enough that any plausible arrival time finds
-    // it. This asserts both ends of that window.
-    // Sliced by TIME, not chunk index: the replay is driven by offsetMs, and
-    // the chunks bunch up early, so "a quarter of the chunks in" is nowhere
-    // near "a quarter of the way through" and asserting on the index measures
-    // the wrong thing entirely.
-    const settleByMs = 6000;
-    const lastChunkBySettle = CLAUDE_CAPTURE_SHOTS.chunks.reduce(
-      (index, chunk, chunkIndex) => (chunk.offsetMs <= settleByMs ? chunkIndex : index),
-      0,
-    );
-    const earlyOn = await renderCaptureRows(CLAUDE_CAPTURE_SHOTS, lastChunkBySettle);
-    expect(earlyOn.join('\n')).toMatch(/Do you want to/);
-    // And it is still there at the end, which is where the replay stops and
-    // stays for as long as the lens is open.
-    expect(shotsRows.join('\n')).toMatch(/Do you want to/);
+    // restarts on every terminal-bearing subscribe - so a capture that animates
+    // is a capture whose screenshot depends on when the shutter happens to fall.
+    //
+    // The fixture answers that by holding still: the seed frame IS the settled
+    // dialog and there is nothing after it that repaints. Assert exactly that,
+    // because it is the property the store flow depends on. An earlier version
+    // of this test compared "the frame by 6s" against "the final frame" without
+    // noticing they are the same frame here, so it asserted one thing twice and
+    // could not fail.
+    expect(CLAUDE_CAPTURE_SHOTS.chunks.length).toBe(1);
+    expect(CLAUDE_CAPTURE_SHOTS.chunks[0].offsetMs).toBe(0);
+
+    // Every distinct row seen across the whole replay is a row of the seed
+    // frame: nothing new is ever painted. Both directions, so a chunk that
+    // added rows AND one that blanked them would both fail.
+    const settledRows = shotsRows.filter((row) => row.trim().length > 0);
+    expect([...shotsEveryRow].sort()).toEqual([...new Set(settledRows)].sort());
+
+    // And the state it rests in is the dialog, which is what the chat lens
+    // shows as a permission card at the same moment.
+    expect(settledRows.join('\n')).toMatch(/Do you want to/);
   });
 });
 

@@ -1527,9 +1527,11 @@ async function main() {
       // Name what is STILL UP rather than reporting a clean stop. "stopped 1
       // rig process" while an emulator window sits on screen reads as a lie,
       // and it is the single most common surprise this command produces.
+      // One adb call, not one per record: listAdbDevices() spawns a process.
+      const attachedSerials = new Set(listAdbDevices().map((device) => device.serial));
       const rigBooted = readEmulatorRegistry()
         .map(({ record }) => record.serial)
-        .filter((serial) => listAdbDevices().some((device) => device.serial === serial));
+        .filter((serial) => attachedSerials.has(serial));
       if (rigBooted.length > 0) {
         log(`STILL RUNNING: emulator ${rigBooted.join(', ')} (booted by the rig) - stop it with: npm run dev:stop -- --emulator`);
       }

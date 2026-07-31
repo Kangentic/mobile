@@ -14,8 +14,12 @@
  * compile it from source):
  *
  *   npm exec --package=node-pty -- node scripts/captureClaudeFrames.mjs \
- *     --cwd <fixture-repo> --cols 120 --rows 30 --out capture-120.jsonl \
+ *     --cwd <fixture-repo> --cols 44 --rows 38 --out capture-44x38.jsonl \
  *     --prompt "Sign-in always lands on the dashboard. Fix the redirect."
+ *
+ * 44x38 is the grid the committed fixture uses, and the one the mock reports.
+ * The --cols/--rows DEFAULTS below are a plain wide terminal, not that grid, so
+ * pass them explicitly when re-recording the shipped capture.
  *
  * Or point at an existing install:
  *   KANGENTIC_NODE_PTY=<path-to-node-pty> node scripts/captureClaudeFrames.mjs ...
