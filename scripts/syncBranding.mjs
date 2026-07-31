@@ -228,11 +228,12 @@ function parseIntegerAttribute(attributes, name, fallback, context) {
 
 /**
  * The activity sibling of parseIntegerAttribute. These are stroked vector
- * glyphs, not pixel grids, and their coordinates are deliberately fractional:
- * the needs-you envelope is an 18 x 14.4 box (a 0.9 scale of the reference mail
- * glyph, corrected upstream in 2.6.0 because the square version read as a photo
- * placeholder on a task card). parseIntegerAttribute rejects exactly that with
- * "pixel grids are integral", which is right for the mascot and wrong here.
+ * glyphs, not pixel grids, so their coordinates are not held to the integer
+ * rule parseIntegerAttribute enforces for the mascot. The needs-you envelope
+ * (18 x 16 as of 2.7.1, pixel-hinted so its outline extrema land on integers)
+ * happens to be all-integer today, but that is a fact about this asset, not a
+ * contract this parser enforces: flaps, prompts and control interiors are
+ * still deliberately fractional, and a future candidate box may be too.
  */
 function parseFloatAttribute(attributes, name, fallback, context) {
   const rawValue = attributes[name];

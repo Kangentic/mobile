@@ -73,8 +73,8 @@ export const ACTIVITY_STROKE_LINEJOIN = 'round';
 export const activityMarks: Record<ActivityMarkName, ActivityMark> = {
   'agent-idle': {
     shapes: [
-      { kind: 'rect', x: 3, y: 4.8, width: 18, height: 14.4, rx: 2 },
-      { kind: 'path', d: 'M3 7.5 L12 12.6566 L21 7.5' },
+      { kind: 'rect', x: 3, y: 4, width: 18, height: 16, rx: 2 },
+      { kind: 'path', d: 'M3 7 L12 12.1566 L21 7' },
     ],
     restRendering: 'static',
     minPx: 12,
