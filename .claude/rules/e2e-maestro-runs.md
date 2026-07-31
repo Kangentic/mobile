@@ -184,17 +184,24 @@ release-shaped binary carrying `EXPO_PUBLIC_KANGENTIC_E2E=1`, the second build-t
 `__DEV__`. Against that binary none of the three dev-client constraints above exist. Reach for
 the dev client only when authoring a flow and wanting Fast Refresh.
 
-**Build that binary from a SHORT-PATH worktree, never from `.kangentic/worktrees/`.** Any build
-started from the normal worktree dies on CMake's 250-character object-path cap inside
-`node_modules/<pkg>/android/.cxx/` (208 characters before the filename), at every variant, and a
-directory junction does not dodge it because Node realpaths `node_modules`. A git worktree whose
-real path is short does. Two already exist and are registered worktrees of this repo: **`C:\kme2e`
-for the release `e2e` APK, `C:\kw` for dev-client/debug builds.** Reuse them (`git -C C:\kme2e
-checkout --detach <sha>`, `npm install`, prebuild, then gradle with
-`-PreactNativeArchitectures=arm64-v8a`) rather than creating another, and never create a new
-drive-root directory without asking the user first. Run `npm install` there every time: an APK is
-bound to the dependency tree that built it, and a skew crashes as a native `SIGABRT` in
-`libworklets.so` with no JS error. Full recipe in `docs/developer-guide.md`.
+**Build that binary in place, from the normal worktree.** `npm install`, prebuild, then gradle
+with `-PreactNativeArchitectures=x86_64` for the emulator. This used to be impossible: any build
+from `.kangentic/worktrees/` died on MAX_PATH at every variant.
+`plugins/withAndroidCmakeBuildStaging.ts` relocates each module's CMake staging directory out of
+the checkout and removes checkout depth from the equation, so the build no longer cares how deep
+the worktree is.
+
+**`npm install` in the worktree is still mandatory, every time.** A worktree starts with
+`node_modules` as a junction to the main checkout, Node realpaths it, and an APK is bound to the
+dependency tree that built it: a skew crashes as a native `SIGABRT` in `libworklets.so` with no
+JS error. That failure is unchanged by the staging fix.
+
+If a build dies with `manifest 'build.ninja' still dirty after 100 tries` (naming no file) or
+`Filename longer than 260 characters`, the plugin is not applying. Check `npm run verify:staging`
+before reaching for anything else, and fix the plugin rather than working around it. **Never
+create a drive-root build directory to work around a path problem**, and never create one at all
+without asking the user first.
+Full recipe in `docs/developer-guide.md`'s "Local Android builds work from any path".
 A cloud build is therefore no longer required for an `e2e` APK - and remains a **cloud-spend
 decision the user makes**, never something to fire off to unblock a flow.
 

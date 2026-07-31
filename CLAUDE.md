@@ -42,7 +42,10 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   permissions + FGS type; withIosManualSigning: App Store signing on
                               #   the app target only, inert outside CI;
                               #   withAndroidE2eGwpAsanOff: disables GWP-ASan for the e2e APK only,
-                              #   inert unless EXPO_PUBLIC_KANGENTIC_E2E=1)
+                              #   inert unless EXPO_PUBLIC_KANGENTIC_E2E=1;
+                              #   withAndroidCmakeBuildStaging: relocates CMake's .cxx staging to a
+                              #   short absolute root so Android builds from any path depth,
+                              #   Windows-gated inside the generated Gradle)
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
@@ -87,6 +90,7 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   captureClaudeFrames.mjs + buildTerminalFixture.mjs (record real Claude
                   #   Code PTY output and pack it into src/devsupport/claudeCapture*.ts; dev
                   #   utilities, not run in CI),
+                  #   cmakeStaging.mjs (prune/verify the relocated CMake staging root),
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
                   #   pretypecheck stale-node_modules guard), the store preflights
@@ -138,6 +142,11 @@ store/screenshots/            # Committed Play + App Store listing images, one s
   obvious way to check them - stash, re-run, "same before and after, so pre-existing" - confirms
   the wrong answer, because both runs resolve the same stale package. Fix: `npm install`.
   Run it alone with `npm run check:install`.
+- `npm run clean:staging` / `verify:staging` - prune and check the relocated CMake staging root
+  (`%SystemDrive%\kangentic\android`). `withAndroidCmakeBuildStaging` moves each module's `.cxx`
+  out of the checkout so a build works from any path depth, at the cost of output that survives
+  `gradlew clean` and accumulates one tree per branch. `verify:staging` is the only check that
+  proves the object-path flag reached CMake rather than merely reaching `settings.gradle`.
 - `npm run lint` - `eslint . --max-warnings 0`
 - `npm run test:unit` - Unit Tests (`vitest run tests/unit`)
 - `npm run test:components` - Component Tests (`jest tests/components`)
@@ -282,17 +291,21 @@ non-obvious constraints and each one fails as a full-timeout hang rather than an
 
 **Which stage owns which verification.** CI is the enforced gate, not the local machine:
 `.github/workflows/ci.yml` and `e2e.yml` run on every PR and are required on `main`. So do NOT run
-the Maestro suite locally before opening a pull request. Three reasons: E2E is single-tenant (one
-emulator, one relay port, one paired identity), so it serialises every task on the board; **no
-Android APK can be built inside a `.kangentic/worktrees/<branch>` path at all** (Windows path
-length, at every variant including debug, hence the short-path worktrees `C:\kw` for dev-client
-builds and `C:\kme2e` for the `e2e` APK - reuse them, and never create a new drive-root directory
-without asking); and it duplicates the gate that actually cannot be bypassed.
+the Maestro suite locally before opening a pull request. Two reasons: E2E is single-tenant (one
+emulator, one relay port, one paired identity), so it serialises every task on the board; and it
+duplicates the gate that actually cannot be bypassed.
 
-An APK is also bound to the dependency tree that built it: run `npm install` in the short-path
-worktree, because a dev client whose native libs came from a different checkout dies as a native
-`SIGABRT` in `libworklets.so` with no JS error. See `docs/developer-guide.md`'s "Local Android
-builds need a SHORT-PATH worktree", which `/preview` now routes through.
+**Local Android builds work from any path**, including a task worktree.
+`plugins/withAndroidCmakeBuildStaging.ts` relocates each module's CMake staging directory to a
+short absolute root (`%SystemDrive%\kangentic\android`), which removes checkout depth from the
+equation. **Never create a drive-root build directory to work around a path problem**, and never
+create one at all without asking: if a build hits MAX_PATH, fix the plugin.
+
+An APK is bound to the dependency tree that built it, and that has not changed: **run `npm
+install` in the worktree before building.** A worktree starts with `node_modules` as a junction to
+the main checkout, and a dev client whose native libs came from a different checkout dies as a
+native `SIGABRT` in `libworklets.so` with no JS error. See `docs/developer-guide.md`'s "Local
+Android builds work from any path", which `/preview` routes through.
 
 What IS in scope while implementing: `npm run typecheck`, the tests you touched, and - if the
 change touches a screen a flow already covers - that **single flow**, which takes well under a

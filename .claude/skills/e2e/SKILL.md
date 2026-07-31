@@ -44,22 +44,26 @@ two you changed BEFORE spending fifteen minutes proving nothing.
 
 ## Step 1 - Rebuild if needed (~3 min)
 
-Never from `.kangentic/worktrees/` - CMake's 250-char object-path cap kills it
-at every variant, and a directory junction does not help because Node
-realpaths `node_modules`.
+Build in place, from the current worktree. This used to be impossible (MAX_PATH
+killed it at every variant); `plugins/withAndroidCmakeBuildStaging.ts` moves
+CMake's staging directory out of the checkout and removes depth from the
+equation.
 
-```
-git -C C:\kw fetch --all
-git -C C:\kw checkout --detach <sha>
-```
-then from `C:\kw`: `npm install`, `npx expo prebuild --platform android --no-install`,
-and from `C:\kw\android`:
+`npm install`, then `npx expo prebuild --platform android --no-install`, then
+from `android/`:
 ```
 .\gradlew.bat app:assembleRelease -x lint -x test -PreactNativeArchitectures=x86_64 --console=plain
 ```
 with `EXPO_PUBLIC_KANGENTIC_E2E=1` set for BOTH prebuild and gradle - it is
 inlined at bundle time, not read at runtime. `x86_64` alone for the emulator;
 add `arm64-v8a` only when the target is a physical device.
+
+**`npm install` first is mandatory**, not a formality: a worktree starts with
+`node_modules` as a junction to the main checkout, and an APK built through it
+carries another branch's native libs. If the build instead dies with
+`still dirty after 100 tries` or `Filename longer than 260 characters`, the
+staging plugin is not applying - run `npm run verify:staging` and fix the
+plugin. Never create a drive-root build directory to work around it.
 
 Install with `adb -s <serial> install -r <apk>`.
 

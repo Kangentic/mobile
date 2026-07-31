@@ -345,6 +345,37 @@ jobs:
           done
           echo "R8 minification and resource shrinking are enabled for release builds."
 
+      # The CMake staging relocation, which is what lets a local Android build
+      # succeed from a Kangentic task worktree at any path depth. Checked HERE,
+      # on Linux, and that is the whole
+      # design: the Windows gate lives inside the generated Groovy rather than in
+      # the config plugin, so prebuild output is identical on every platform and
+      # this runner can prove the block landed. Had the plugin gated on
+      # process.platform instead, this job could only ever have confirmed the
+      # no-op.
+      #
+      # The failure this catches is the flag not ARRIVING, which is the failure
+      # mode an anchor-guarded append actually has, and it is silent: the build
+      # simply goes back to dying with `manifest 'build.ninja' still dirty after
+      # 100 tries`, which names nothing.
+      - name: Confirm the CMake staging block reached settings.gradle
+        run: |
+          set -euo pipefail
+          settings=android/settings.gradle
+          if ! grep -q '// kangentic:cmake-build-staging' "$settings"; then
+            echo "::error::The CMake staging block is missing from the generated $settings. Local Android builds would go back to failing from any deep checkout path, with an error that names no file."
+            exit 1
+          fi
+          if ! grep -q 'DCMAKE_OBJECT_PATH_MAX=259' "$settings"; then
+            echo "::error::The staging block landed without -DCMAKE_OBJECT_PATH_MAX=259, so CMake would emit unshortened object paths and ninja would fail with 'Filename longer than 260 characters'."
+            exit 1
+          fi
+          if ! grep -q 'gradle.beforeProject' "$settings"; then
+            echo "::error::The staging block is not using gradle.beforeProject. AGP reads buildStagingDirectory during each module's own evaluation, so a root subprojects block throws 'It is too late to set buildStagingDirectory' and never reaches :app."
+            exit 1
+          fi
+          echo "CMake staging block present in $settings."
+
       # PrivacyInfo.xcprivacy is a build artifact (app.config.ts's
       # ios.privacyManifests merges into the template's file at prebuild
       # time via @expo/config-plugins' withPrivacyInfo), so it never exists
@@ -402,6 +433,28 @@ jobs:
             exit 1
           fi
           echo "Both E2E-only manifest carve-outs are present."
+
+      - name: Confirm the CMake staging block did not stack on a repeat prebuild
+        # Several prebuilds have now run over an existing android/, and prebuild
+        # is the only place the append's idempotency guard is exercised for real.
+        # tests/unit/androidCmakeBuildStaging.test.ts calls the transform twice,
+        # but only prebuild decides whether settings.gradle is regenerated from
+        # the template or merged into, and a stacked block means two conflicting
+        # gradle.beforeProject hooks racing to set the same staging directory.
+        run: |
+          set -euo pipefail
+          settings=android/settings.gradle
+          # `|| true` is load-bearing: grep -c exits 1 when the count is zero, so
+          # under `set -e` a MISSING block would abort the assignment and kill the
+          # step before the error below could name what went wrong. Zero is the
+          # more important failure here (prebuild regenerated settings.gradle from
+          # the template without the block), so it must reach the message.
+          anchors=$(grep -c '// kangentic:cmake-build-staging' "$settings" || true)
+          if [ "$anchors" -ne 1 ]; then
+            echo "::error::Expected exactly 1 CMake staging block in $settings after repeated prebuilds, found $anchors. Zero means prebuild regenerated the file without it; more than one means the anchor guard in withAndroidCmakeBuildStaging.ts is not holding."
+            exit 1
+          fi
+          echo "CMake staging block present exactly once after repeated prebuilds."
 
       - name: Confirm the generated project is not committed
         # CNG: android/ must exist only as a build artifact. If prebuild output

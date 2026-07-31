@@ -207,13 +207,18 @@ QR dialog is closed once) and **#432** (pairing UX and capability model).
 
 ## Tooling unblocked
 
-**Local Android builds now work**, which they did not for most of this task. Any build from
-`.kangentic/worktrees/<branch>/` dies on CMake's 250-character object-path cap inside
-`node_modules/<pkg>/android/.cxx/` - at every variant, and a directory junction does not help
-because Node realpaths `node_modules`. A git worktree whose REAL path is short does:
-`git worktree add --detach C:\kw HEAD`. Full recipe, including the ABI flag the emulator needs,
-is in `docs/developer-guide.md`.
+**Local Android builds now work**, which they did not for most of this task. At the time, any
+build from `.kangentic/worktrees/<branch>/` died on a Windows path-length limit at every variant,
+and the workaround was to build from a separate checkout at a very short path.
 
 This is what made the e2e APK - and therefore this document's Maestro results - possible at all.
-Board task #5 (build execution on GitHub Actions) is still worth doing for CI, but is no longer
-the only path.
+
+> **Superseded 2026-07-31, and the recipe deliberately removed.** The separate short-path
+> checkout is gone and must not be recreated: `plugins/withAndroidCmakeBuildStaging.ts` relocates
+> CMake's staging directory out of the checkout, so a build runs from a normal task worktree at
+> any depth. The diagnosis recorded at the time was also wrong in two ways. It named
+> `react-native-screens` and `react-native-worklets`, which both build fine at 73 characters; the
+> binding modules are `react-native-reanimated` and `expo-modules-core`. And it described one
+> failure where there are two, the first being ninja stat-ing the prefab config through a `..`,
+> which fails with `still dirty after 100 tries` and names nothing. Current account:
+> `docs/developer-guide.md`'s "Local Android builds work from any path".
