@@ -311,7 +311,9 @@ src/
                   #   dev-only mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
   devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures -
-                  #   shared by tests/unit and the mock desktop
+                  #   shared by tests/unit and the mock desktop - plus claudeCapture*.ts
+                  #   (RECORDED Claude Code PTY output, generated) and recordedTerminal.ts
+                  #   (its replay player)
   terminal/       # Pure liveTail cleaner, key sequences, WebView bridge, generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
@@ -326,6 +328,9 @@ tests/helpers/    # Shared cross-tier test utilities (async waitUntil / flushMic
 tests/web/        # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ needs scripts/stubDesktopPeer.mjs)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
+                  #   captureClaudeFrames.mjs + buildTerminalFixture.mjs (record real Claude
+                  #   Code PTY output and pack it into src/devsupport/claudeCapture*.ts; dev
+                  #   utilities, not run in CI),
                   #   storeScreenshots.mjs, syncBranding.mjs (npm run sync:branding pulls the
                   #   brand rasters, the Board tab glyph and the activity marks out of
                   #   @kangentic/branding; --check gates drift in CI) + repo scripts
