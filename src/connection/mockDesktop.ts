@@ -490,6 +490,11 @@ function codexTuiFrame(paintTick: number): string {
   );
 }
 
+/** The frame above, for the fixture-coverage tests. */
+export function codexTuiFrameForTest(paintTick: number): string {
+  return codexTuiFrame(paintTick);
+}
+
 // Mirrors the real Kangentic default board so mock mode exercises the
 // chip bar and sectioned scroll at true column scale.
 function mockColumns() {
