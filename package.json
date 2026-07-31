@@ -20,6 +20,8 @@
     "dev:stub": "node scripts/dev.mjs stub",
     "dev:doctor": "node scripts/dev.mjs doctor",
     "check:install": "node scripts/checkInstallDrift.mjs",
+    "clean:staging": "node scripts/cmakeStaging.mjs --prune",
+    "verify:staging": "node scripts/cmakeStaging.mjs --verify",
     "pretypecheck": "node scripts/checkInstallDrift.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",

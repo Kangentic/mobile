@@ -374,6 +374,13 @@ const config: ExpoConfig = {
     // crashed the app 838ms after launch on a CI emulator, inside its own
     // backtrace bookkeeping on a Hermes fcontext stack. See the plugin.
     './plugins/withAndroidE2eGwpAsanOff.ts',
+    // Always writes its block into android/settings.gradle; the block itself
+    // no-ops on anything but Windows. Relocates each module's CMake staging
+    // directory to a short absolute root so a local Android build works from
+    // any checkout depth. Gating in Groovy rather than here keeps prebuild output
+    // identical on every platform, so ci.yml can verify the block landed. See
+    // the plugin for both MAX_PATH mechanisms.
+    './plugins/withAndroidCmakeBuildStaging.ts',
     // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
     // .github/workflows/build-ios.yml does. See the plugin for why signing has
     // to be scoped to the app target instead of passed to xcodebuild.

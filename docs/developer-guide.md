@@ -295,7 +295,9 @@ app.config.ts                # Expo config; CNG - config plugins only, no checke
 eas.json                     # EAS Build/Submit/Workflows profiles
 plugins/                     # Local Expo config plugins: withAndroidPushService (notification
                              #   permissions + FGS type), withIosManualSigning (App Store signing,
-                             #   inert outside CI), withAndroidE2eGwpAsanOff (e2e APK only)
+                             #   inert outside CI), withAndroidE2eGwpAsanOff (e2e APK only),
+                             #   withAndroidCmakeBuildStaging (relocates CMake's .cxx staging to a
+                             #   short absolute root so Android builds from any path depth)
 targets/nse/                 # iOS Notification Service Extension source, injected via plugin - later phase
 app/                          # expo-router route wrappers (thin - render the src/screens/ implementation)
   task/[taskId].tsx           # full-screen task view; file-diff.tsx hosts the per-file diff
@@ -333,7 +335,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   utilities, not run in CI),
                   #   storeScreenshots.mjs, syncBranding.mjs (npm run sync:branding pulls the
                   #   brand rasters, the Board tab glyph and the activity marks out of
-                  #   @kangentic/branding; --check gates drift in CI) + repo scripts
+                  #   @kangentic/branding; --check gates drift in CI),
+                  #   cmakeStaging.mjs (npm run clean:staging prunes CMake staging trees whose
+                  #   checkout is gone; --verify proves the object-path flag reached CMake)
+                  #   + repo scripts
 ```
 
 See `CLAUDE.md`'s Project Structure section; the tree there and this one move together.
@@ -800,7 +805,10 @@ The **JS bundle is not cacheable** in any case: its input is the app's own sourc
 changed on every PR by definition.
 
 And **caching `android/app/.cxx` does not work.** This was tried and measured on 2026-07-28 rather
-than argued about, so the numbers are the answer:
+than argued about, so the numbers are the answer. (The path is still right for CI, which builds on
+Linux. On a Windows machine that directory no longer exists: `withAndroidCmakeBuildStaging`
+relocates it out of the checkout. Different problem, and the caching verdict below is about ninja
+mtimes, not path length.)
 
 | | CMake task |
 |---|---|
@@ -892,7 +900,8 @@ the whole reason the gate is a thin job rather than the suite itself.
 **Why this is free.** The repository is public, so standard GitHub-hosted runners are unmetered
 on Linux and macOS alike. The build runs `npx expo prebuild` then Gradle on the runner, so it
 never touches EAS servers and spends no EAS cloud build credit. Linux also has no Windows
-path-length limit, which is the thing that makes local release builds awkward.
+path-length limit, though that is no longer a reason to prefer CI: see "Local Android builds work
+from any path".
 
 **Triggering an Android build.** Actions -> Build Android -> Run workflow, or
 `gh workflow run build-android.yml -f profile=preview`. Inputs:
@@ -1248,47 +1257,149 @@ maestro --device <serial> test .maestro/paired
 
 Use the dev client only when you need Fast Refresh while writing a flow.
 
-### Local Android builds need a SHORT-PATH worktree
+### Local Android builds work from any path
 
-A build started from `.kangentic/worktrees/<branch>/` fails on Windows, at every variant -
-`npx expo run:android`, `--variant release`, and `eas build --local` alike.
-`react-native-screens` and `react-native-worklets` put their CMake object files under
-`node_modules/<pkg>/android/.cxx/`, where the object directory alone measures **208 characters**
-against CMake's 250-character `CMAKE_OBJECT_PATH_MAX`. CMake reports it only as a warning; ninja
-then fails outright with `manifest 'build.ninja' still dirty after 100 tries`. `Debug` is a mere
-9 characters shorter than `RelWithDebInfo`, so the debug variant is no escape.
-
-**A directory junction does not help** - Node realpaths `node_modules`, so CMake still receives
-the long path.
-
-**A git worktree whose REAL path is short does.** It has no long path to resolve back to, and
-object paths drop to roughly 108 characters. **Two already exist and are registered worktrees of
-this repo** - reuse them, and never create a new drive-root directory without asking first:
-
-| Path | Use |
-| --- | --- |
-| `C:\kw` | dev-client / debug builds, including everything `/preview` needs |
-| `C:\kme2e` | the release `e2e` APK the Maestro suite runs against |
-
-Develop in the normal worktree and commit first: the short-path worktree builds a sha, not your
-working tree. Then point it at that sha and build. Both worktrees already exist, so the recipe
-starts at `checkout`, not `worktree add`:
+A local Android build runs from a normal `.kangentic/worktrees/<branch>/` checkout. It did not
+until `plugins/withAndroidCmakeBuildStaging.ts` landed, and every recipe in this repo used to
+route around it via a separate short-path checkout at the drive root. That workaround is gone.
+**Do not recreate it:** if a build hits MAX_PATH, the plugin is not applying, and the fix is the
+plugin.
 
 ```
-git -C C:\kw checkout --detach <sha>
-cd C:\kw
 npm install
 npx expo prebuild --platform android --no-install
-cd C:\kw\android
-.\gradlew.bat app:assembleDebug -x lint -x test -PreactNativeArchitectures=arm64-v8a
+cd android
+.\gradlew.bat app:assembleDebug -x lint -x test "-PreactNativeArchitectures=arm64-v8a,x86_64"
 ```
 
-Swap `assembleDebug` for `assembleRelease` (with `EXPO_PUBLIC_KANGENTIC_E2E=1`) to
-produce the `e2e` APK. For a dev client specifically, `npx expo run:android --no-bundler` from
-`C:\kw` builds, installs and stops - leaving Metro in your real worktree to serve the bundle.
+Swap `assembleDebug` for `assembleRelease` (with `EXPO_PUBLIC_KANGENTIC_E2E=1`) to produce the
+`e2e` APK. For a dev client, `npx expo run:android` does the whole thing.
 
-**Run `npm install` in the short-path worktree, and treat a dev client as bound to the tree that
-built it.** The APK's compiled native libs must match the JS Metro serves, and different
+**Both ABIs, and the quotes, are deliberate.** The `kangentic_pixel` AVD is x86_64, so an
+arm64-only APK installs with `Success` and then fails to render with nothing in logcat - drop
+`x86_64` and the `e2e` APK you just built cannot run the Maestro suite. Trim the list only when
+you know the target. See "Pass `-PreactNativeArchitectures`" below.
+
+**If you already have an `android/` directory from before this landed, prebuild once.** The fix
+is written into `android/settings.gradle` at prebuild time, and **`expo run:android` only
+prebuilds when `android/` is missing** (it returns early otherwise, see `ensureNativeProject.js`).
+So a stale native directory silently keeps the old behaviour and the build fails exactly as it
+used to, with an error that names no file. One plain prebuild fixes it, no `--clean` required:
+
+```
+npx expo prebuild --platform android --no-install
+```
+
+Deleting `android/` works too. This is a one-time step per checkout, not something to repeat.
+
+#### What was actually wrong
+
+Worth reading before touching the plugin, because the cause was misdiagnosed for months and the
+docs you may remember named the wrong modules. There are **two** failures, both MAX_PATH, and the
+second is invisible until the first is cleared.
+
+**1. Ninja stats the prefab config through a `..`.** The file exists, but ninja resolves it
+relative to the build directory and Windows applies MAX_PATH to the composed string *before*
+collapsing the `..`:
+
+```
+ninja explain: output ../prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/
+               react-native-worklets/react-native-workletsConfigVersion.cmake
+               of phony edge with no inputs doesn't exist
+```
+
+The stat fails, ninja re-runs CMake, CMake regenerates identically, and it ends at
+`ninja: error: manifest 'build.ninja' still dirty after 100 tries`, **naming nothing**. The
+binding module is `react-native-reanimated`, through the `react-native-worklets` prefab package
+(a 121-character relative path, against 96 for `ReactAndroid`).
+
+**2. CMake abandons hashing and emits the full mangled name.** CMake hashes leading path
+components when an object path exceeds `CMAKE_OBJECT_PATH_MAX` (default 250), but when even its
+fully hashed floor exceeds that, it gives up and emits the unshortened name:
+
+```
+ninja: error: Stat(EnrichedMarkdownTextSpec_autolinked_build/CMakeFiles/
+react_codegen_EnrichedMarkdownTextSpec.dir/C_/Users/.../ComponentDescriptors.cpp.o):
+Filename longer than 260 characters
+```
+
+Setting the limit to **259** (the real ceiling: MAX_PATH counts the terminating NUL) lets the
+floor through. **Raising it to 1000 is exactly backwards** and was tested: that tells CMake never
+to shorten, warnings went 402 to 0, and the build failed identically.
+
+**Two corrections to what this section used to say.** It blamed `react-native-screens` and
+`react-native-worklets`; both build fine at 73 characters, and the binding modules are
+`react-native-reanimated` and `expo-modules-core`. It also claimed object paths "drop to roughly
+108 characters" at a short root; the measured longest at a 5-character root was **248**.
+
+**Enabling Windows long paths does not help and is not worth trying.** `ninja.exe` carries no
+embedded manifest at all, and neither it nor `cmake.exe` declares `longPathAware`, so
+`LongPathsEnabled` is inert for this toolchain.
+
+#### How the fix works
+
+`withAndroidCmakeBuildStaging.ts` appends a block to `android/settings.gradle` that, on Windows
+only, points every module's CMake staging directory (AGP's `.cxx`) at
+`%SystemDrive%\kangentic\android\<checkout-hash>\<module>` and passes
+`-DCMAKE_OBJECT_PATH_MAX=259`. Relocating the output removes checkout depth from the equation
+entirely, which is why it works at **any** path length rather than buying a fixed number of
+characters.
+
+Three things about the shape of it that are easy to get wrong:
+
+- **It has to be `gradle.beforeProject`, not a root `subprojects {}` block.** AGP reads
+  `buildStagingDirectory` during each module's own evaluation, so a root block throws
+  `It is too late to set buildStagingDirectory`, and it never reaches `:app` at all.
+- **The Windows gate lives in the Groovy, not in the TypeScript.** That keeps prebuild output
+  identical on every platform, which is what lets `ci.yml`'s Native config job prove the block
+  landed by prebuilding on Linux. A `process.platform` gate would leave CI able to verify only
+  the no-op.
+- **The hash keys the directory per checkout**, so parallel Kangentic worktrees never write the
+  same object files.
+
+Override the root with `KANGENTIC_CMAKE_STAGING_ROOT` if the default will not do.
+
+**The measured budget, because it is spendable.** CMake's hash floor is what binds, not the
+emitted path: measured across the 646 object files of a proven build, the worst floor at a
+15-character prefix is **214** against the 259 cap, and it grows one-for-one with the staging
+prefix. The shipped 21-character prefix leaves roughly 30 characters of headroom for a debug
+build and **21 for a release one** (`RelWithDebInfo` is 9 longer than `Debug`).
+`tests/unit/androidCmakeBuildStaging.test.ts` pins that budget so a later rename cannot quietly
+spend it. `%LOCALAPPDATA%` was rejected on this measurement: it costs 37 more characters, putting
+a release floor at 260, and its length varies with the user's name.
+
+#### The cost: staging outlives the project directory
+
+Output now escapes both `gradlew clean` and the checkout, and Kangentic mints a new hash per
+branch, so the root grows one large tree per branch:
+
+```
+npm run clean:staging      # prune trees whose checkout is gone
+npm run verify:staging     # prove the flag reached CMake on the last build
+```
+
+`verify:staging` is the only check that proves the flag reached **CMake** rather than merely
+reaching `settings.gradle`, and it fails loudly rather than passing when it finds no files at
+all. It checks only the trees belonging to the checkout you run it from, because the root is
+shared: a sibling branch last built before the flag existed would otherwise fail your correct
+build and name a file you have never seen.
+
+Both commands identify a tree's checkout from the `-DPROJECT_ROOT_DIR` that AGP already records.
+Two details there are load-bearing. They scan **every** module's
+`metadata_generation_command.txt` rather than the first, because only the `app` module records
+that flag at all - library modules configure through their own CMakeLists and record nothing, so
+reading just the first file worked only as long as `app` sorted first in directory order. And
+they check `<checkout>/package.json` rather than the recorded `<checkout>/android` path, because
+`android/` is a gitignored artifact that `expo prebuild --clean` removes from a perfectly live
+checkout. A tree whose checkout cannot be identified is kept, never deleted.
+
+#### Give the worktree its own node_modules
+
+**Treat a dev client as bound to the tree that built it**, and note that a worktree here starts
+with `node_modules` as a **junction to the main checkout**. Node realpaths it, so a build through
+the junction compiles against the main checkout's dependency tree, at the main checkout's path,
+whatever branch it happens to be on. Run `npm install` in the worktree to materialise a real tree
+before building. The APK's compiled native libs must match the JS Metro serves, and different
 worktrees of this repo routinely resolve different `react-native` / `react-native-worklets` /
 `react-native-reanimated` versions. The mismatch does NOT announce itself: the app launches, runs
 a few seconds, and dies with a native `SIGABRT` inside `libworklets.so` on a JSI assertion
@@ -1309,8 +1420,8 @@ junction to the main checkout's: the install materialises a real tree at the ver
 `package.json` actually pins, and a dev client built elsewhere is instantly stale. Rebuild rather
 than trying to reconcile it from the JS side.
 
-**Always pass `-PreactNativeArchitectures`, and pick the ABIs deliberately.** A raw `gradlew`
-builds all four, and `react-native-reanimated` fails compiling for 32-bit `armeabi-v7a`.
+**Pass `-PreactNativeArchitectures`, and pick the ABIs deliberately.** A raw `gradlew` builds all
+four, which is slow and was previously recorded as failing outright for 32-bit `armeabi-v7a`.
 `expo run:android` passes this flag for you; a direct gradle call does not.
 
 Use `"-PreactNativeArchitectures=arm64-v8a,x86_64"` (quote it in PowerShell, or the comma splits
@@ -1319,8 +1430,13 @@ arm64-only APK still reports `Success` when installed on the emulator and then f
 with no crash in logcat - Maestro just reports the first `testID` missing. Confirm with
 `adb -s <serial> shell dumpsys package com.kangentic.mobile`, which prints `primaryCpuAbi`.
 
-Board task #5 (moving build execution to GitHub Actions runners, which have no such path limit)
-is still worth doing for CI, but it is no longer the only way to get a build.
+> **Unverified since the staging fix:** the `armeabi-v7a` failure was attributed to the Windows
+> path-length problem, on the evidence that the first unrestricted CI run on Linux built all four
+> ABIs cleanly. If that attribution was right, the failure should be gone now, and the two
+> consequences drawn from it below (keep the flag locally; never ship a locally built Windows AAB
+> past the internal track) may no longer hold. Nobody has re-tested it, because every build since
+> has passed the flag. Settling it costs one unrestricted four-ABI build. Until someone does,
+> keep the flag and keep the shipping restriction.
 
 **Why a run takes minutes:** every flow begins with `launchApp`, which force-stops and cold
 boots, and then waits up to 60s for the channel to re-establish - roughly 70s of the runtime of
@@ -1414,10 +1530,9 @@ manual procedure below is the fallback for when you need a bundle without a runn
   install it. A CI-built bundle has no such limitation, which is the supported path for any track
   beyond internal.
 
-  Build from a short checkout path (something like `C:\kw`), not a deep worktree path, or the
-  Windows path-length limit breaks the native build. Passing passwords inline leaks them to shell
-  history; prefer a user-level `gradle.properties` outside the repo, or `ORG_GRADLE_PROJECT_*`
-  environment variables, for anything beyond a one-off build.
+  Checkout path no longer matters (see "Local Android builds work from any path"). Passing
+  passwords inline leaks them to shell history; prefer a user-level `gradle.properties` outside
+  the repo, or `ORG_GRADLE_PROJECT_*` environment variables, for anything beyond a one-off build.
 - **Submitting.** The normal path is the `build-android.yml` workflow's `submit_track` input,
   which uploads through the Play Developer API and holds behind the `google-play` environment's
   approval gate. For a manual submit from a dev box, `eas.json`'s `submit.production.android` sets

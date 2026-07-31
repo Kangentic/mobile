@@ -81,9 +81,7 @@ not a live-reload loop, and it costs one runner and about eight minutes.
      `npx expo start --android` (add `--clear` if the user passed it). This reuses the existing
      native build and just starts Metro.
    - **Not installed** (e.g. a freshly created AVD, or first run on this machine), **or step 4a
-     reports a mismatch:** you need a new dev client. **Do NOT run `npx expo run:android` from a
-     `.kangentic/worktrees/<branch>` path** - it cannot work there, at any variant. Use the
-     short-path recipe in step 4b.
+     reports a mismatch:** you need a new dev client. Build it in place with step 4b.
 
 4a. **Verify the installed dev client's native libs match this worktree's JS.** Skipping this
    costs a full build plus a confusing debugging detour, because the failure does not look like a
@@ -114,41 +112,41 @@ not a live-reload loop, and it costs one runner and about eight minutes.
    `.../react-android-0.86.0-debug/prefab/modules/jsi/include/jsi/jsi.h`. That string is the
    fastest way to identify a skewed dev client.
 
-4b. **Build the dev client from a SHORT-PATH worktree.** Two already exist and are registered git
-   worktrees of this repo - reuse them rather than creating more, and never create a new drive-root
-   directory without asking the user first:
-
-   | Path | Use |
-   | --- | --- |
-   | `C:\kw` | dev-client / debug builds, this step |
-   | `C:\kme2e` | the release `e2e` APK the Maestro suite runs against |
-
-   A build from `.kangentic/worktrees/<branch>/` fails on Windows at **every** variant, debug
-   included. `react-native-screens` and `react-native-worklets` put CMake object files under
-   `node_modules/<pkg>/android/.cxx/`, which overruns `CMAKE_OBJECT_PATH_MAX`. CMake reports it
-   only as a warning and ninja then fails the task, so the real error is buried hundreds of lines
-   above the `FAILURE:` line. A directory junction does NOT help: Node realpaths `node_modules`,
-   so CMake still receives the long path.
-
-   Commit first (the short-path worktree builds a sha, not your working tree), then:
+4b. **Build the dev client in place, from this worktree.** No separate build checkout, no commit
+   first, no detached checkout:
 
    ```
-   git -C C:\kw checkout --detach <sha>
-   cd C:\kw
    npm install
    npx expo run:android --no-bundler
    ```
 
-   `--no-bundler` matters: Metro is already running from your real worktree on 8081 and is the one
-   that must serve the bundle. Without it `expo` notices the port is taken and prints
+   `--no-bundler` matters: Metro is already running from this worktree on 8081 and is the one that
+   must serve the bundle. Without it `expo` notices the port is taken and prints
    `Skipping dev server`, which is harmless but reads like a failure.
 
-   `npm install` in `C:\kw` is what makes its native libs match - it resolves the same
-   `package.json` you just committed, so the APK it produces is compatible with the JS your real
-   worktree's Metro serves.
+   **`npm install` first is not optional**, and it is the step people skip. A Kangentic worktree
+   starts with `node_modules` as a **junction to the main checkout**, which Node realpaths, so
+   without a local install the APK compiles against whatever branch the main checkout is on. That
+   is exactly the skew step 4a diagnoses.
+
+   **If `android/` already exists from before the staging fix landed, prebuild once first**
+   (`npx expo prebuild --platform android --no-install`). `expo run:android` only prebuilds when
+   `android/` is MISSING, so a stale native directory keeps the old broken behaviour and the
+   build fails with an error naming no file.
+
+   This works because `plugins/withAndroidCmakeBuildStaging.ts` relocates each module's CMake
+   staging directory to `%SystemDrive%\kangentic\android\<checkout-hash>\`, which takes checkout
+   depth out of the equation. It used to fail here at every variant. If a build ever dies with
+   `manifest 'build.ninja' still dirty after 100 tries` (which names no file) or
+   `Filename longer than 260 characters`, that plugin is not applying: check
+   `npm run verify:staging` and see `docs/developer-guide.md`'s "Local Android builds work from
+   any path".
+
+   Never create a drive-root build directory to work around a path problem, and never without
+   asking the user first. The plugin is the supported fix; if it is broken, fix the plugin.
 
    Full background, the ABI flags a direct `gradlew` call needs, and the release/e2e variant:
-   `docs/developer-guide.md`'s "Local Android builds need a SHORT-PATH worktree".
+   `docs/developer-guide.md`'s "Local Android builds work from any path".
 5. **Verify the app actually came to the foreground**, don't just trust Metro's log. On a
    cold-booted emulator (just launched in step 2), the `Opening exp+mobile://...` intent
    Metro fires can race ahead of the OS being ready to route it, so the emulator silently sits on
