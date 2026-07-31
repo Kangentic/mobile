@@ -21,6 +21,8 @@
  *     Changes lens lists, and reported line counts that did not add up to what
  *     the file list claimed for the file it did edit.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -30,6 +32,7 @@ import {
   activeCapture,
   activeGrid,
   baseTranscriptForTest,
+  codexTuiFrameForTest,
   diffFileContent,
   diffFileList,
   initialTasks,
@@ -126,6 +129,51 @@ describe('the mock fixtures stay inside the customer fiction', () => {
       .filter((entry) => wordPattern.test(entry.text))
       .map((entry) => `${entry.label}: ${entry.text}`);
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * scripts/buildTerminalFixture.mjs runs its OWN copy of this guard at
+ * capture-build time (BANNED_TERMS), on the raw capture bytes rather than the
+ * rendered fixture text this file checks. Its header says the two lists are
+ * "kept in step" - but that was only ever a promise: nothing compared them,
+ * and 'kangentic' itself was the one term that drifted, present in the
+ * build-time list and missing from KANGENTIC_DOMAIN_TERMS above until it was
+ * added a few lines up. Only re-adding it here closed THAT gap; nothing stops
+ * the next one opening the same way, in either direction.
+ *
+ * This does not import buildTerminalFixture.mjs - its top level unconditionally
+ * calls parseArgs (which exits the process without --capture) and, once past
+ * that, writeFileSync, so importing it as a module is unsafe. Structural
+ * source-text extraction instead, same approach as syncBranding.test.ts uses
+ * for the same reason.
+ */
+describe('the two banned-vocabulary lists stay in step', () => {
+  const buildScriptSource = readFileSync(
+    join(__dirname, '..', '..', 'scripts', 'buildTerminalFixture.mjs'),
+    'utf8',
+  );
+
+  function buildScriptBannedTerms(): string[] {
+    const block = /const BANNED_TERMS = \[([^\]]*)\]/.exec(buildScriptSource);
+    if (block === null) return [];
+    return [...block[1].matchAll(/'([^']*)'/g)].map((match) => match[1]);
+  }
+
+  it('finds a non-trivial BANNED_TERMS list at all', () => {
+    // Non-vacuity guard: an empty extraction would make the equality check
+    // below pass only when KANGENTIC_DOMAIN_TERMS is ALSO empty, which it
+    // never is - but a regex that stopped matching for an unrelated reason
+    // (the const renamed, the array reformatted) should fail loudly here
+    // rather than silently validating nothing.
+    expect(buildScriptBannedTerms().length).toBeGreaterThan(10);
+  });
+
+  it('bans exactly the same words the rendered-fixture check does', () => {
+    // Set equality, both directions: a term added to one list and not the
+    // other is exactly the drift that shipped 'kangentic' to a store listing
+    // once already.
+    expect([...buildScriptBannedTerms()].sort()).toEqual([...KANGENTIC_DOMAIN_TERMS].sort());
   });
 });
 
@@ -364,6 +412,82 @@ describe('every mode reports the grid it actually replays', () => {
     // recording, and it was a live bug when there were two.
     expect(activeGrid()).toEqual({ cols: activeCapture().cols, rows: activeCapture().rows });
     expect(activeCapture()).toBe(CLAUDE_CAPTURE_SHOTS);
+  });
+});
+
+describe('the codex TUI frame stays inside the reported grid', () => {
+  // Regression for b5fcd86: codexTuiFrame used to hard-code a 38-glyph border
+  // while its two alternating status strings were 35 and 26 columns, so the
+  // box was ragged on one paint and over-wide on both against a grid the
+  // border never actually measured itself against. Nothing caught it because
+  // the column checks only ever looked at the streaming session's fixture,
+  // never the codex session's. Every row is padded to activeGrid().cols, not
+  // a literal, so a future re-record at a different grid cannot leave this
+  // fixture behind.
+  const width = activeGrid().cols;
+
+  function boxRows(paintTick: number): string[] {
+    return codexTuiFrameForTest(paintTick).split('\r\n').filter((row) => row.length > 0);
+  }
+
+  it.each([0, 1])('pads the box border to exactly the grid width on paint tick %i', (paintTick) => {
+    const rows = boxRows(paintTick);
+    const topBorder = rows.find((row) => row.startsWith('╭'));
+    const bottomBorder = rows.find((row) => row.startsWith('╰'));
+    const statusRow = rows.find((row) => row.startsWith('│'));
+    expect(topBorder).toBeDefined();
+    expect(bottomBorder).toBeDefined();
+    expect(statusRow).toBeDefined();
+    expect([...(topBorder ?? '')].length).toBe(width);
+    expect([...(bottomBorder ?? '')].length).toBe(width);
+    expect([...(statusRow ?? '')].length).toBe(width);
+  });
+
+  it('keeps both alternating status strings inside the same border width', () => {
+    // The two ticks alternate BETWEEN two different status strings
+    // ('Refactoring src/http/retryPolicy.ts' vs 'Running the affected tests').
+    // A fix that only pads one of them would still show ragged on the other.
+    const evenBorderWidth = [...(boxRows(0).find((row) => row.startsWith('│')) ?? '')].length;
+    const oddBorderWidth = [...(boxRows(1).find((row) => row.startsWith('│')) ?? '')].length;
+    expect(evenBorderWidth).toBe(width);
+    expect(oddBorderWidth).toBe(width);
+  });
+});
+
+/**
+ * Regression for b4c89f0 ("TWO PLAYBACK LEAKS"): the recorded-terminal replay
+ * used to outlive both the /end-session and /respawn magic commands. The
+ * respawn case is the worse one - activeSessionId is NOT null there, so a
+ * playback left running would emit the dead session's recorded bytes into the
+ * SUCCESSOR's terminal.
+ *
+ * There is no exported seam onto createMockDesktop()'s internal
+ * terminalPlayback state (driving it for real needs a full loopback KK
+ * handshake, which nothing in this repo does yet for this module - see the
+ * fixture-content-only tests elsewhere in this file), so this checks the
+ * WIRING structurally instead: both lifecycle functions must call
+ * stopTerminalPlayback(). Cheap insurance against reintroduction, same
+ * technique tests/unit/xtermPageScripts.test.ts uses to pin refit()'s body.
+ */
+describe('ending or respawning the streaming session stops its terminal replay', () => {
+  const mockDesktopSource = readFileSync(join(__dirname, '..', '..', 'src', 'connection', 'mockDesktop.ts'), 'utf8');
+
+  function functionBody(startMarker: string, endMarker: string): string {
+    const start = mockDesktopSource.indexOf(startMarker);
+    const end = mockDesktopSource.indexOf(endMarker, start);
+    expect(start, `could not find "${startMarker}"`).toBeGreaterThanOrEqual(0);
+    expect(end, `could not find "${endMarker}" after "${startMarker}"`).toBeGreaterThan(start);
+    return mockDesktopSource.slice(start, end);
+  }
+
+  it('stops the replay in endActiveSession (the /end-session command)', () => {
+    const body = functionBody('function endActiveSession(): void {', 'function respawnActiveSession(');
+    expect(body).toContain('stopTerminalPlayback();');
+  });
+
+  it('stops the replay in respawnActiveSession (the /respawn command)', () => {
+    const body = functionBody('function respawnActiveSession(): void {', 'function raiseQuestionPrompt(');
+    expect(body).toContain('stopTerminalPlayback();');
   });
 });
 

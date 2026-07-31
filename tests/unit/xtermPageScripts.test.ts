@@ -35,6 +35,38 @@ describe('generated xterm.html', () => {
   });
 
   /**
+   * A grid narrower than the pane used to pin left and pile the whole
+   * leftover on the right, which reads as a terminal cut short rather than one
+   * with a margin (the font is fitted to the pane's HEIGHT, so a grid taller
+   * in aspect than the pane cannot fill the width at any font size, and that
+   * leftover is inherent - only WHERE it goes was the bug). `margin: 0 auto`
+   * centres a narrow grid and computes to zero for a wide one, so the
+   * overflow-and-pan path stays untouched either way.
+   *
+   * Checked against BOTH the committed HTML and its generator
+   * (scripts/buildXtermHtml.mjs, where the CSS is actually authored), because
+   * nothing in this repo regenerates xterm.html and diffs it - see the
+   * "PARSE" guard above for why importing the generator as a module is not an
+   * option either. An edit to the generator alone would sit green until the
+   * next regeneration without this second check.
+   *
+   * Matches loosely (width + margin/auto present, not the whole rule
+   * byte-for-byte) so a harmless reflow of the CSS does not redden this.
+   */
+  it('centres a grid narrower than the screen instead of pinning it left', () => {
+    const builderSource = readFileSync(join(__dirname, '..', '..', 'scripts', 'buildXtermHtml.mjs'), 'utf8');
+    for (const [label, source] of [
+      ['the generated page', generatedHtml],
+      ['its generator', builderSource],
+    ] as const) {
+      const rule = /#terminal\s*\{([^}]*)\}/.exec(source)?.[1] ?? '';
+      expect(rule, `${label}: no #terminal rule found`).not.toBe('');
+      expect(rule, `${label}: #terminal rule`).toContain('width: max-content');
+      expect(rule, `${label}: #terminal rule`).toMatch(/margin:\s*0\s+auto/);
+    }
+  });
+
+  /**
    * A refit can SHRINK the grid (the soft keyboard halves the viewport, so
    * the height-fitted font drops and the frame narrows). Live on a Pixel 10
    * this left scrollLeft at 706 against a 723-wide grid in a 411-wide

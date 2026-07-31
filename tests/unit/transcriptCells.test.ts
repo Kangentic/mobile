@@ -323,6 +323,36 @@ describe('buildConversationCells', () => {
     });
   });
 
+  it('reads the header output-token count from usage.outputTokens, not any other usage field', () => {
+    // Every OTHER fixture in this file carries no usage at all, so every other
+    // assertion here passes with `outputTokens: null` regardless of which
+    // field buildConversationCells actually reads - it would pass just as
+    // happily reading usage.inputTokens, or nothing at all. inputTokens and
+    // cacheReadInputTokens are deliberately set to DIFFERENT values than
+    // outputTokens, so pulling the wrong field is a visible mismatch rather
+    // than a coincidental pass.
+    const entries: TranscriptEntryWire[] = [
+      {
+        kind: 'assistant',
+        uuid: 'a1',
+        ts: 1,
+        agentName: 'Claude Code',
+        usage: { inputTokens: 9000, outputTokens: 640, cacheCreationInputTokens: 12, cacheReadInputTokens: 30000 },
+        blocks: [{ type: 'text', text: 'Done.' }],
+      },
+    ];
+
+    const cells = buildConversationCells(entries, NO_EXTRAS);
+
+    expect(cells).toHaveLength(1);
+    if (cells[0].kind !== 'markdown') throw new Error('unreachable');
+    expect(cells[0].turn).toEqual({
+      role: 'assistant',
+      position: 'solo',
+      header: { agentName: 'Claude Code', model: null, ts: 1, outputTokens: 640 },
+    });
+  });
+
   it('marks every user turn solo with a header (null agentName/model - the badge renders a fixed "You")', () => {
     const entries: TranscriptEntryWire[] = [{ kind: 'user', uuid: 'u1', ts: 1, text: 'hi' }];
 
