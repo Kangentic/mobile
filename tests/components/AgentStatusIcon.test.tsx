@@ -82,6 +82,12 @@ if (workingRing === undefined || workingRing.kind !== 'circle' || workingRing.da
 // narrowing a property does not survive into the test closures below.
 const workingDash: readonly [number, number] = workingRing.dash;
 
+const [idleEnvelope] = idleMark.shapes.filter((shape) => shape.kind === 'rect');
+if (idleEnvelope === undefined || idleEnvelope.kind !== 'rect') {
+  throw new Error('agent-idle must ship a rect body; @kangentic/branding changed its activity marks');
+}
+const idleEnvelopeHeight = idleEnvelope.height;
+
 function renderIcon(props: React.ComponentProps<typeof AgentStatusIcon>): ReturnType<typeof render> {
   return render(
     <ThemeProvider>
@@ -204,21 +210,19 @@ describe('the working ring', () => {
 });
 
 describe('the idle envelope', () => {
-  it('draws the corrected 18 x 14.4 body with its flap, and no ring', () => {
+  it('draws the corrected 18 x 16 body with its flap, and no ring', () => {
     renderIcon({ kind: 'idle' });
-    const [envelopeBody] = idleMark.shapes.filter((shape) => shape.kind === 'rect');
-    if (envelopeBody === undefined || envelopeBody.kind !== 'rect') throw new Error('agent-idle must ship a rect body');
 
     const rect = screen.getByTestId('svg-rect');
-    expect(rect.props.width).toBe(envelopeBody.width);
-    expect(rect.props.height).toBe(envelopeBody.height);
+    expect(rect.props.width).toBe(idleEnvelope.width);
+    expect(rect.props.height).toBe(idleEnvelopeHeight);
     expect(screen.getByTestId('svg-path')).toBeTruthy();
     expect(screen.queryByTestId('svg-circle')).toBeNull();
   });
 
   it('renders identically for idle-unread, which is a semantic kind only', () => {
     renderIcon({ kind: 'idle-unread' });
-    expect(screen.getByTestId('svg-rect').props.height).toBe(14.4);
+    expect(screen.getByTestId('svg-rect').props.height).toBe(idleEnvelopeHeight);
     expect(screen.getByTestId('agent-status-idle-unread').props.color).toBe(darkTerminalTheme.colors.warning);
   });
 
@@ -251,7 +255,7 @@ describe('reduced motion', () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
     renderIcon({ kind: 'idle' });
 
-    expect(screen.getByTestId('svg-rect').props.height).toBe(14.4);
+    expect(screen.getByTestId('svg-rect').props.height).toBe(idleEnvelopeHeight);
     expect(screen.getByTestId('svg-rect').props.animatedProps).toBeUndefined();
   });
 });

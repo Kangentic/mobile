@@ -24,6 +24,7 @@ import {
   activityMarks,
   type ActivityCircleShape,
   type ActivityMarkName,
+  type ActivityPathShape,
   type ActivityRectShape,
 } from '@/brand/activityMarks.generated';
 
@@ -141,26 +142,76 @@ describe('the needs-you envelope (agent-idle)', () => {
   });
 
   /**
-   * The 18 x 14.4 box is the 2.6.0 correction (kangentic-branding PR #10): the
+   * The NON-SQUARE box is the 2.6.0 correction (kangentic-branding PR #10): the
    * square 18x18 envelope read as a photo placeholder rather than an envelope on
    * a real task card. An envelope's aspect is its identity, so this is geometry
-   * with a reason, not an arbitrary number.
+   * with a reason, not an arbitrary number. 2.6.0 landed it at 18 x 14.4; 2.7.1
+   * (PR #16) moved it to 18 x 16, because at devicePixelRatio 1 the body's y
+   * edges sat at 4.8 / 19.2, the only axis-aligned edges in the set off the
+   * integer lattice, so the body rendered softer than its neighbours in the
+   * 14-16px band AgentStatusIcon actually renders at. That is a pixel-lattice
+   * fix, not a reversal of the 2.6.0 aspect correction: the aspect stayed
+   * non-square throughout, and the flap's diagonal apex is still deliberately
+   * fractional (see parseFloatAttribute in scripts/syncBranding.mjs).
    */
-  it('keeps the corrected 18 x 14.4 aspect rather than a square', () => {
+  it('keeps the corrected 18 x 16 aspect rather than a square', () => {
     const [envelopeBody] = activityMarks['agent-idle'].shapes.filter(
       (shape): shape is ActivityRectShape => shape.kind === 'rect',
     );
     expect(envelopeBody.width).toBe(18);
-    expect(envelopeBody.height).toBe(14.4);
+    expect(envelopeBody.height).toBe(16);
     expect(envelopeBody.height).not.toBe(envelopeBody.width);
     // Centred in the 24 grid: 3 to 21 across, and vertically centred on 12.
     expect(envelopeBody.x).toBe(3);
     expect(envelopeBody.y + envelopeBody.height / 2).toBeCloseTo(12, 5);
+    // The 2.7.1 pixel-hinting fix: both y edges land on the integer lattice.
+    expect(Number.isInteger(envelopeBody.y)).toBe(true);
+    expect(Number.isInteger(envelopeBody.y + envelopeBody.height)).toBe(true);
   });
 
   it('draws the flap as a path over the envelope body', () => {
     const kinds = activityMarks['agent-idle'].shapes.map((shape) => shape.kind);
     expect(kinds).toEqual(['rect', 'path']);
+  });
+
+  /**
+   * The flap is the one shape whose whole geometry is a string, so a generator
+   * that rewrote, rounded or truncated it would still typecheck, still emit a
+   * path, and still satisfy the kind check above. It moved in 2.7.1 alongside
+   * the body (7.5 to 7) and nothing pinned it, so pin it against the asset the
+   * same way the dashes are pinned against the manifest.
+   */
+  it('takes the flap path verbatim from the upstream asset', () => {
+    const upstreamFlap = idleMarkSvgSource.match(/<path\s+d="([^"]+)"/);
+    if (upstreamFlap === null) throw new Error('agent-idle.svg has no flap path; cannot cross-check it');
+
+    const flaps = activityMarks['agent-idle'].shapes.filter(
+      (shape): shape is ActivityPathShape => shape.kind === 'path',
+    );
+    expect(flaps.length, 'agent-idle must have exactly one flap path').toBe(1);
+    expect(flaps[0].d).toBe(upstreamFlap[1]);
+  });
+
+  it('lands the flap ends on the body lattice, meeting its left and right edges', () => {
+    const [flap] = activityMarks['agent-idle'].shapes.filter(
+      (shape): shape is ActivityPathShape => shape.kind === 'path',
+    );
+    const [envelopeBody] = activityMarks['agent-idle'].shapes.filter(
+      (shape): shape is ActivityRectShape => shape.kind === 'rect',
+    );
+    const flapPoints = [...flap.d.matchAll(/(-?[\d.]+)\s+(-?[\d.]+)/g)].map(([, xValue, yValue]) => ({
+      x: Number(xValue),
+      y: Number(yValue),
+    }));
+    expect(flapPoints.length, 'the flap is a three-point polyline').toBe(3);
+
+    const [flapStart, , flapEnd] = flapPoints;
+    // Same pixel-lattice fix as the body: 2.7.1 moved these off 7.5 onto 7.
+    expect(Number.isInteger(flapStart.y)).toBe(true);
+    expect(flapEnd.y).toBe(flapStart.y);
+    // ...and they still span the body, so the flap reads as part of the envelope.
+    expect(flapStart.x).toBe(envelopeBody.x);
+    expect(flapEnd.x).toBe(envelopeBody.x + envelopeBody.width);
   });
 });
 
