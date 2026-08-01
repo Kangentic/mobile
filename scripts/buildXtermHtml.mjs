@@ -69,6 +69,18 @@ const bridgeGlue = `
   // pinch zoom goes higher or lower on demand, bounded by the host's own
   // MAX_TERMINAL_FONT_SIZE_PX rather than anything in this file.
   var MAX_AUTO_FIT_FONT_PX = 20;
+  // Ceiling on the row-stretch (see fitGridHeightToViewport): past this the
+  // rows read as double-spaced rather than as a terminal.
+  var MAX_LINE_HEIGHT = 1.3;
+  // Frames the measured height fit may spend converging, and the slop that
+  // counts as "fits". The last pass never adjusts, so this is 3 corrections
+  // plus a settling measure.
+  var HEIGHT_FIT_PASSES = 4;
+  var HEIGHT_FIT_TOLERANCE_PX = 0.5;
+  // Bumps on every refit so a fit still converging cannot keep adjusting the
+  // grid underneath the one that replaced it (a keyboard open fires several
+  // viewport changes in a row, and two live loops would each step the font).
+  var heightFitGeneration = 0;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -350,6 +362,11 @@ const bridgeGlue = `
       document.documentElement.style.background = initMessage.theme.background;
       document.body.style.background = initMessage.theme.background;
     }
+    // Start every init from zero vertical padding: the centring below is
+    // measured per grid, and a short session's leftover must not survive into
+    // the grid that replaced it.
+    var gridHost = document.getElementById('terminal');
+    if (gridHost) gridHost.style.paddingTop = '0px';
     setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
     autoFitFontToScreen();
     terminal = new window.Terminal({
@@ -412,27 +429,98 @@ const bridgeGlue = `
     if (capped !== fontSizePx) postToHost({ type: 'font-size', fontSizePx: capped });
     // Pinch changed the cell size; the grid (cols/rows) is unchanged.
     applyGeometry();
+    // Zoom deliberately does NOT re-fit (the user owns the size now), so it
+    // also CANCELS a fit still converging - otherwise that fit keeps stepping
+    // the font under the pinching finger and posts sizes that overwrite the
+    // host's pinch baseline mid-gesture. The centring is measured, though, so
+    // it has to follow the new cell height: without it, zooming into a short
+    // grid pushes the frame down by a stale padding.
+    heightFitGeneration += 1;
+    requestAnimationFrame(centerGridFromMeasurement);
   }
 
-  // After the integer font fit, rows * cellHeight usually ends a strip short
-  // of the viewport (font sizes are whole pixels). Stretch the LINE HEIGHT by
-  // the remainder ratio so the grid consumes the full height - no dead band
-  // under the last row. One-shot per refit, measured off the renderer's
-  // actual cell height; clamped so a pathological measure cannot balloon rows.
-  function stretchRowsToViewport() {
-    if (!terminal) return;
+  // Fit the grid's HEIGHT to the viewport by MEASUREMENT, correcting the
+  // guess autoFitFontToScreen had to make. Two roundings work against that
+  // guess: CELL_HEIGHT_RATIO is an estimate of the font's real metrics, and
+  // xterm then CEILS the cell height, per row. So the painted grid lands
+  // either a strip SHORT of the screen (dead band under the last row) or - the
+  // damaging case - a row TALLER than it, with the bottom row clipped. Live on
+  // a Pixel 10 against the desktop's 48-row grid that clipped row 48, the
+  // TUI's status line ("plan mode on ..."), sliced in half at the screen edge.
+  //
+  // So: stretch the LINE HEIGHT into any slack, give that stretch back when
+  // the ceil overshoots, and drop the font a step when even line height 1
+  // overflows. One adjustment per frame (xterm has to repaint before the next
+  // measure means anything) on a fixed budget, and the final pass only
+  // measures - so it can never spin, and the centring below always runs
+  // against the settled grid.
+  function fitGridHeightToViewport(passesLeft, stretchLocked, generation) {
+    if (!terminal || generation !== heightFitGeneration) return;
     var screen = document.querySelector('.xterm-screen');
     if (!screen) return;
     var screenHeight = screen.getBoundingClientRect().height;
     if (!(screenHeight > 0) || terminal.rows < 1) return;
+    if (passesLeft <= 1) {
+      centerGridVertically(screenHeight);
+      return;
+    }
+    var viewportHeight = window.innerHeight;
     var currentLineHeight = terminal.options.lineHeight || 1;
     var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
     if (!(baseCellHeight > 0)) return;
-    var desiredLineHeight = window.innerHeight / (terminal.rows * baseCellHeight);
-    var next = Math.max(1, Math.min(1.3, desiredLineHeight));
-    if (Math.abs(next - currentLineHeight) > 0.005) {
-      terminal.options.lineHeight = next;
+    var adjusted = false;
+    if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX) {
+      if (currentLineHeight > 1.005) {
+        // The stretch overshot: hand back exactly the excess, and stop
+        // stretching for the rest of this fit - a stretch that re-runs after
+        // its own correction just trades the overflow back and forth.
+        terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+        stretchLocked = true;
+        adjusted = true;
+      } else if (currentFontSizePx > MIN_AUTO_FONT_PX) {
+        // Overflowing at line height 1 means the FONT is a step too big for
+        // this row count, not that the stretch was. Stretching stays legal
+        // after this step, and is how the leftover row gets reclaimed.
+        currentFontSizePx -= 1;
+        terminal.options.fontSize = currentFontSizePx;
+        postToHost({ type: 'font-size', fontSizePx: currentFontSizePx });
+        adjusted = true;
+      }
+    } else if (!stretchLocked) {
+      var desiredLineHeight = viewportHeight / (terminal.rows * baseCellHeight);
+      var next = Math.max(1, Math.min(MAX_LINE_HEIGHT, desiredLineHeight));
+      if (Math.abs(next - currentLineHeight) > 0.005) {
+        terminal.options.lineHeight = next;
+        adjusted = true;
+      }
     }
+    if (!adjusted) {
+      centerGridVertically(screenHeight);
+      return;
+    }
+    requestAnimationFrame(function () {
+      fitGridHeightToViewport(passesLeft - 1, stretchLocked, generation);
+    });
+  }
+
+  // Height the fit cannot reach: a SHORT desktop grid (the desktop parks a
+  // session at whatever surface last showed it, and its bottom panel is a
+  // 14-row strip) cannot fill a phone at any font size the texture cap and the
+  // line-height ceiling allow. Pinned to the top, the whole leftover piles up
+  // underneath and reads as a terminal cut in half; split evenly it reads as a
+  // margin. Same argument as the horizontal auto margins, one axis over.
+  function centerGridVertically(screenHeight) {
+    var gridHost = document.getElementById('terminal');
+    if (!gridHost) return;
+    var slack = window.innerHeight - screenHeight;
+    var paddingTop = slack > 1 ? Math.floor(slack / 2) + 'px' : '0px';
+    if (gridHost.style.paddingTop !== paddingTop) gridHost.style.paddingTop = paddingTop;
+  }
+
+  function centerGridFromMeasurement() {
+    var screen = document.querySelector('.xterm-screen');
+    if (!screen) return;
+    centerGridVertically(screen.getBoundingClientRect().height);
   }
 
   // The GPU's max texture edge, probed once. A canvas wider (or taller) than
@@ -509,9 +597,11 @@ const bridgeGlue = `
     if (!terminal) return;
     autoFitFontToScreen();
     applyGeometry();
+    heightFitGeneration += 1;
+    var generation = heightFitGeneration;
     // Measure AFTER the font/geometry pass paints, then true up the height.
     requestAnimationFrame(function () {
-      stretchRowsToViewport();
+      fitGridHeightToViewport(HEIGHT_FIT_PASSES, false, generation);
       // A viewport change is not a user pan: clear the manual-pan pause so
       // the cursor is guaranteed back on screen after the relayout.
       manualPanUntil = 0;
@@ -673,7 +763,9 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    the width at any font size - the leftover is inherent, not a bug. Pinned
    left it all piles up on the right and reads as a terminal cut short; split
    evenly it reads as a margin. When the grid IS wider, auto margins compute to
-   zero, the overflow stays real, and the pan logic is untouched. */
+   zero, the overflow stays real, and the pan logic is untouched. The VERTICAL
+   half of that split is padding-top, set from the measured grid by
+   centerGridVertically (it needs the painted height, which no CSS rule has). */
 #terminal { width: max-content; margin: 0 auto; }
 </style>
 </head>
