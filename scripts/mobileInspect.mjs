@@ -9,7 +9,8 @@
  *   node scripts/mobileInspect.mjs text "<string>"
  *   node scripts/mobileInspect.mjs key <ANDROID_KEYCODE>
  *   node scripts/mobileInspect.mjs logcat [--lines <n>] [--tag <tag>]
- *   node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route|pairing>
+ *   node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route|pairing|terminal>
+ *   node scripts/mobileInspect.mjs term <state|eval|font|refit|scroll|dragunits|swipe> [...]
  *   node scripts/mobileInspect.mjs serve
  *   node scripts/mobileInspect.mjs relaunch
  *
@@ -38,7 +39,16 @@ import { spawnSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 
 const INSPECT_PORT = 8791;
-const STATE_KINDS = ['connection', 'stores', 'subscriptions', 'feed-stats', 'route', 'pairing'];
+const STATE_KINDS = [
+  'connection',
+  'stores',
+  'subscriptions',
+  'feed-stats',
+  'route',
+  'pairing',
+  'terminal',
+  'terminal-eval',
+];
 
 function fail(message) {
   console.error(`[inspect] ${message}`);
@@ -203,53 +213,189 @@ function startServer() {
   return new WebSocketServer({ host: '127.0.0.1', port: INSPECT_PORT });
 }
 
-function commandState(args) {
+/**
+ * One request/response round trip with the app, resolved as a value.
+ *
+ * The server binds a fixed port, so two of these cannot overlap - callers that
+ * need several (the terminal commands, which probe for staleness before acting)
+ * must await each in turn.
+ */
+function requestState(kind, argument, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let server;
+    try {
+      server = startServer();
+    } catch (serverError) {
+      reject(
+        new Error(`could not bind 127.0.0.1:${INSPECT_PORT} (another inspect command running?): ${serverError.message}`),
+      );
+      return;
+    }
+    const requestId = randomUUID();
+    const overallTimer = setTimeout(() => {
+      server.close();
+      reject(
+        new Error(
+          `timed out after ${timeoutMs}ms waiting for the app. Checklist: dev rig running (it sets ` +
+            `EXPO_PUBLIC_KANGENTIC_INSPECT=1 and adb reverse tcp:${INSPECT_PORT})? App foregrounded on a dev build?`,
+        ),
+      );
+    }, timeoutMs);
+    server.on('error', (serverError) => {
+      clearTimeout(overallTimer);
+      reject(new Error(`inspect server error: ${serverError.message}`));
+    });
+    server.on('connection', (socket) => {
+      socket.on('message', (raw) => {
+        let message;
+        try {
+          message = JSON.parse(raw.toString());
+        } catch {
+          return;
+        }
+        if (message.type === 'hello') {
+          const request = { type: 'request', id: requestId, kind };
+          if (argument !== undefined) request.argument = argument;
+          socket.send(JSON.stringify(request));
+          return;
+        }
+        if (message.type === 'response' && message.id === requestId) {
+          clearTimeout(overallTimer);
+          socket.close();
+          server.close(() => {
+            if (message.ok) resolve(message.payload);
+            else reject(new Error(`app answered with an error: ${message.error}`));
+          });
+        }
+      });
+    });
+  });
+}
+
+async function commandState(args) {
   const kind = args[0];
   if (!STATE_KINDS.includes(kind)) fail(`usage: state <${STATE_KINDS.join('|')}>`);
   const timeoutMs = Number(flagValue(args, '--timeout') ?? '20000');
-  const requestId = randomUUID();
+  const argument = kind === 'terminal-eval' ? args[1] : undefined;
+  const payload = await requestState(kind, argument, timeoutMs);
+  console.log(JSON.stringify(payload, null, 2));
+}
 
-  let server;
-  try {
-    server = startServer();
-  } catch (serverError) {
-    fail(`could not bind 127.0.0.1:${INSPECT_PORT} (another inspect command running?): ${serverError.message}`);
+/**
+ * The terminal harness: read the WebView's real geometry, and reproduce the
+ * user's gestures without the user.
+ *
+ *   term state                  the full probe, prefixed with a freshness verdict
+ *   term eval "<expression>"    anything, evaluated inside the page
+ *   term font <px>              exactly what a pinch does
+ *   term refit                  exactly what the reset button does
+ *   term scroll <units>         a raw history burst, skipping the gesture layer
+ *   term dragunits <px>         what a drag of that many pixels WOULD compute
+ *   term swipe <dy> [ms]        a real one-finger drag via adb (real MotionEvents)
+ *
+ * Every command except `state` refuses to run against a STALE page unless
+ * --force. xterm.html is a Metro asset cached by content hash and skipped by
+ * Fast Refresh, so the device happily keeps serving the previous build; acting
+ * on that and believing the result is how three fixes were "confirmed broken"
+ * while already working.
+ */
+const TERMINAL_ACTIONS = ['state', 'eval', 'font', 'refit', 'scroll', 'dragunits', 'swipe'];
+
+function reportFreshness(probe) {
+  if (probe.buildIdMatches) {
+    console.error(`[inspect] terminal asset fresh (build ${probe.loadedBuildId})`);
+    return true;
+  }
+  console.error(
+    `[inspect] STALE TERMINAL ASSET: the page is running build ${probe.loadedBuildId} but the bundle expects ` +
+      `${probe.expectedBuildId}. Anything you measure now describes the OLD page. Fix: fully reload the app ` +
+      `(node scripts/mobileInspect.mjs relaunch), and if that does not clear it, reinstall - Metro caches ` +
+      `xterm.html by content hash and Fast Refresh never touches it.`,
+  );
+  return false;
+}
+
+async function terminalEval(expression, timeoutMs) {
+  const value = await requestState('terminal-eval', expression, timeoutMs);
+  console.log(JSON.stringify(value, null, 2));
+}
+
+/**
+ * A real one-finger vertical drag. adb produces genuine MotionEvents, so this
+ * exercises the same touchstart/touchmove/touchend path a finger does, unlike
+ * anything synthesized inside the page.
+ *
+ * The duration matters: a fast swipe delivers too few interpolated move samples
+ * for the drag handler to fire more than once, which reads as "scrolling does
+ * not work" when it merely had nothing to consume. Default 800ms.
+ */
+function terminalSwipe(deltaY, durationMs) {
+  const sizeOutput = runAdb(['shell', 'wm', 'size']).stdout;
+  const sizeMatch = sizeOutput.match(/(\d+)x(\d+)\s*$/m);
+  if (!sizeMatch) fail(`could not parse screen size from: ${sizeOutput.trim()}`);
+  const [, widthText, heightText] = sizeMatch;
+  const width = Number(widthText);
+  const height = Number(heightText);
+  // Left of centre and clear of both the segmented switcher at the top and the
+  // refit button at the bottom right.
+  const x = Math.round(width * 0.4);
+  const startY = Math.round(height * (deltaY > 0 ? 0.35 : 0.7));
+  const endY = Math.max(1, Math.min(height - 1, startY + deltaY));
+  runAdb(['shell', 'input', 'swipe', String(x), String(startY), String(x), String(endY), String(durationMs)]);
+  console.log(`swiped x=${x} y=${startY} -> ${endY} over ${durationMs}ms`);
+}
+
+async function commandTerm(args) {
+  const action = args[0];
+  if (!TERMINAL_ACTIONS.includes(action)) fail(`usage: term <${TERMINAL_ACTIONS.join('|')}> [...]`);
+  const timeoutMs = Number(flagValue(args, '--timeout') ?? '20000');
+  const force = args.includes('--force');
+
+  const probe = await requestState('terminal', undefined, timeoutMs);
+  const fresh = reportFreshness(probe);
+
+  if (action === 'state') {
+    console.log(JSON.stringify(probe, null, 2));
+    process.exitCode = fresh ? 0 : 1;
+    return;
+  }
+  if (!fresh && !force) {
+    console.error('[inspect] refusing to act on a stale page; pass --force if you really mean to');
+    process.exitCode = 1;
+    return;
   }
 
-  const overallTimer = setTimeout(() => {
-    console.error(
-      `[inspect] timed out after ${timeoutMs}ms waiting for the app. Checklist: dev rig running (it sets ` +
-        `EXPO_PUBLIC_KANGENTIC_INSPECT=1 and adb reverse tcp:${INSPECT_PORT})? App foregrounded on a dev build?`,
-    );
-    server.close();
-    process.exit(1);
-  }, timeoutMs);
-
-  server.on('error', (serverError) => fail(`inspect server error: ${serverError.message}`));
-  server.on('connection', (socket) => {
-    socket.on('message', (raw) => {
-      let message;
-      try {
-        message = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
-      if (message.type === 'hello') {
-        socket.send(JSON.stringify({ type: 'request', id: requestId, kind }));
-        return;
-      }
-      if (message.type === 'response' && message.id === requestId) {
-        clearTimeout(overallTimer);
-        if (message.ok) {
-          console.log(JSON.stringify(message.payload, null, 2));
-        } else {
-          console.error(`[inspect] app answered with an error: ${message.error}`);
-        }
-        socket.close();
-        server.close(() => process.exit(message.ok ? 0 : 1));
-      }
-    });
-  });
+  if (action === 'eval') {
+    const expression = args[1];
+    if (!expression) fail('usage: term eval "<expression>"');
+    await terminalEval(expression, timeoutMs);
+    return;
+  }
+  if (action === 'font') {
+    const fontSizePx = Number(args[1]);
+    if (!Number.isFinite(fontSizePx)) fail('usage: term font <px>');
+    await terminalEval(`window.__kangenticTerminal.setFontSize(${fontSizePx})`, timeoutMs);
+    return;
+  }
+  if (action === 'refit') {
+    await terminalEval('window.__kangenticTerminal.refit()', timeoutMs);
+    return;
+  }
+  if (action === 'scroll') {
+    const units = Number(args[1]);
+    if (!Number.isFinite(units)) fail('usage: term scroll <units> (negative scrolls toward history)');
+    await terminalEval(`window.__kangenticTerminal.scroll(${units})`, timeoutMs);
+    return;
+  }
+  if (action === 'dragunits') {
+    const deltaPx = Number(args[1]);
+    if (!Number.isFinite(deltaPx)) fail('usage: term dragunits <px>');
+    await terminalEval(`window.__kangenticTerminal.dragUnits(${deltaPx})`, timeoutMs);
+    return;
+  }
+  const deltaY = Number(args[1]);
+  if (!Number.isFinite(deltaY)) fail('usage: term swipe <dy> [durationMs] (positive dy drags DOWN, toward history)');
+  terminalSwipe(Math.round(deltaY), Number(args[2] ?? '800'));
 }
 
 function commandServe() {
@@ -303,31 +449,40 @@ function commandRelaunch() {
 
 const [command, ...rest] = extractSerialFlag(process.argv.slice(2));
 ensureSingleAdbTarget();
-switch (command) {
-  case 'screenshot':
-    commandScreenshot(rest);
-    break;
-  case 'tap':
-    commandTap(rest);
-    break;
-  case 'text':
-    commandText(rest);
-    break;
-  case 'key':
-    commandKey(rest);
-    break;
-  case 'logcat':
-    commandLogcat(rest);
-    break;
-  case 'state':
-    commandState(rest);
-    break;
-  case 'serve':
-    commandServe();
-    break;
-  case 'relaunch':
-    commandRelaunch();
-    break;
-  default:
-    fail('usage: mobileInspect <screenshot|tap|text|key|logcat|state|serve|relaunch> [...]');
+// The async commands reject with a plain Error; route those through fail() so a
+// timeout reads as one diagnostic line rather than an unhandled-rejection dump.
+try {
+  switch (command) {
+    case 'screenshot':
+      commandScreenshot(rest);
+      break;
+    case 'tap':
+      commandTap(rest);
+      break;
+    case 'text':
+      commandText(rest);
+      break;
+    case 'key':
+      commandKey(rest);
+      break;
+    case 'logcat':
+      commandLogcat(rest);
+      break;
+    case 'state':
+      await commandState(rest);
+      break;
+    case 'term':
+      await commandTerm(rest);
+      break;
+    case 'serve':
+      commandServe();
+      break;
+    case 'relaunch':
+      commandRelaunch();
+      break;
+    default:
+      fail('usage: mobileInspect <screenshot|tap|text|key|logcat|state|term|serve|relaunch> [...]');
+  }
+} catch (commandError) {
+  fail(commandError.message);
 }

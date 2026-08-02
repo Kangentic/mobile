@@ -12,7 +12,15 @@
  * The bridge protocol (message shapes) is defined in
  * src/terminal/terminalBridge.ts; the glue here implements the same
  * contract by hand because this page cannot import TypeScript.
+ *
+ * EDITING THE GLUE: it lives in a TEMPLATE LITERAL, so a backtick or a ${'$'}{...}
+ * anywhere inside it - INCLUDING IN A COMMENT - terminates the string early and
+ * fails as a SyntaxError pointing at a random identifier, not at the character
+ * responsible. Never quote an identifier with backticks in these comments. A
+ * backslash escape does not survive either; build such a character with
+ * String.fromCharCode (see ESCAPE).
  */
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,10 +97,12 @@ const bridgeGlue = `
   // scripts/buildXtermHtml.mjs, where a backslash escape would be consumed by
   // the generator instead of reaching the page.
   var ESCAPE = String.fromCharCode(27);
-  // Non-null only while a synthetic wheel burst is in flight (see
-  // scrollHistoryByUnits): onData banks here instead of posting, so N notches
-  // cost ONE relay message rather than N.
-  var wheelBurstData = null;
+  // What consumeHistoryDrag last decided, and how many bursts it has posted.
+  // Read only by the dev probe below. A gesture that "did nothing" has several
+  // possible exits (no grid, axis locked horizontal, delta under one unit) and
+  // they are indistinguishable from outside; this names which one was taken.
+  var lastScrollDecision = null;
+  var scrollPostCount = 0;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -314,9 +324,15 @@ const bridgeGlue = `
    * smoothly instead of stalling.
    */
   function consumeHistoryDrag(touchEvent) {
-    if (historyDragAnchorY === null || touchEvent.touches.length !== 1) return;
+    if (historyDragAnchorY === null || touchEvent.touches.length !== 1) {
+      lastScrollDecision = { exit: 'not-single-finger' };
+      return;
+    }
     var screen = document.querySelector('.xterm-screen');
-    if (!screen || !terminal || terminal.rows < 1) return;
+    if (!screen || !terminal || terminal.rows < 1) {
+      lastScrollDecision = { exit: 'no-grid' };
+      return;
+    }
     var currentY = touchEvent.touches[0].clientY;
     // Axis lock, decided ONCE per gesture past the slop radius: a one-finger
     // drag is EITHER a horizontal pan across a wide grid OR a vertical walk
@@ -333,12 +349,21 @@ const bridgeGlue = `
     if (historyDragAxis === null) {
       var travelX = Math.abs(touchEvent.touches[0].clientX - historyDragStartX);
       var travelY = Math.abs(currentY - historyDragAnchorY);
-      if (Math.max(travelX, travelY) < DRAG_AXIS_SLOP_PX) return;
+      if (Math.max(travelX, travelY) < DRAG_AXIS_SLOP_PX) {
+        lastScrollDecision = { exit: 'under-slop', travelX: travelX, travelY: travelY };
+        return;
+      }
       historyDragAxis = travelY > travelX ? 'vertical' : 'horizontal';
     }
-    if (historyDragAxis !== 'vertical') return;
+    if (historyDragAxis !== 'vertical') {
+      lastScrollDecision = { exit: 'axis-horizontal' };
+      return;
+    }
     var dragged = currentY - historyDragAnchorY;
-    if (!dragged) return;
+    if (!dragged) {
+      lastScrollDecision = { exit: 'no-travel' };
+      return;
+    }
     var gridHeight = screen.getBoundingClientRect().height;
     var mechanism = scrollMechanism();
     // The unit follows the mechanism, so the content tracks the hand roughly
@@ -347,8 +372,20 @@ const bridgeGlue = `
     var unitHeight = mechanism === 'page' ? gridHeight : gridHeight / terminal.rows;
     // A finger moving DOWN reveals OLDER content, which is negative units.
     var units = dragToScrollUnits(-dragged, unitHeight);
-    if (!units) return;
+    if (!units) {
+      lastScrollDecision = { exit: 'sub-unit', dragged: dragged, unitHeight: unitHeight, mechanism: mechanism };
+      return;
+    }
     historyDragAnchorY -= units * unitHeight;
+    lastScrollDecision = {
+      exit: 'scrolled',
+      units: units,
+      dragged: dragged,
+      unitHeight: unitHeight,
+      gridHeight: gridHeight,
+      mechanism: mechanism,
+    };
+    scrollPostCount += 1;
     scrollHistoryByUnits(units, mechanism);
   }
 
@@ -559,11 +596,6 @@ const bridgeGlue = `
     // interactive-terminal verb). Typing also re-arms follow-the-cursor.
     terminal.onData(function (data) {
       manualPanUntil = 0;
-      // Mid-burst: bank it. scrollHistoryByUnits posts the whole burst once.
-      if (wheelBurstData !== null) {
-        wheelBurstData += data;
-        return;
-      }
       postToHost({ type: 'input', data: data });
     });
     if (initMessage.scrollback) {
@@ -799,12 +831,15 @@ const bridgeGlue = `
     } else if (message.type === 'set-font-size') {
       if (typeof message.fontSizePx === 'number') applyFontSize(message.fontSizePx);
     } else if (message.type === 'refit') {
-      // Snap back to the fitted view: drop any manual pan and recompute the
-      // fit-to-screen font (which reports the new size back to the host so
-      // the pinch baseline stays in sync).
-      manualPanUntil = 0;
-      autoFitFontToScreen();
-      applyGeometry();
+      // Snap back to the fitted view. This must be the WHOLE refit(), not the
+      // font-and-geometry half: applyFontSize cancels any in-flight height fit
+      // (heightFitGeneration) but leaves terminal.options.lineHeight wherever
+      // the last fit stretched it, while autoFitFontToScreen computes a font as
+      // if lineHeight were 1. Only fitGridHeightToViewport reconciles the two,
+      // so a refit that skipped it could not undo a zoom - the reset button
+      // ran, reported success, and left the grid exactly as wrong as before.
+      // clampHorizontalPan and panToCursor were missing for the same reason.
+      refit();
     } else if (message.type === 'resize') {
       // The desktop's authoritative grid (snapshot, or a desktop-side refit, or
       // the FIRST time dims arrive when they lost the race with init). Adopt it
@@ -854,6 +889,133 @@ const bridgeGlue = `
   // Travel before the axis is decided. Matches the tap slop, so the same small
   // movement that still counts as a tap also commits to no axis.
   var DRAG_AXIS_SLOP_PX = 12;
+
+  /**
+   * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
+   * and last gesture, plus the three levers that reproduce a user's actions
+   * without a user: zoom (what pinch does), refit (what the reset button does),
+   * and a raw scroll burst.
+   *
+   * Installed unconditionally rather than behind an init flag. The code ships in
+   * the generated asset either way - Metro cannot tree-shake an .html - so a
+   * flag would only decide whether the handle is reachable from inside a page
+   * that is already a local file under default-src 'none', with no remote
+   * origin and setSupportMultipleWindows off. There is no attacker in this page.
+   * The CALLER is what is gated: only TerminalPane's __DEV__ plus
+   * EXPO_PUBLIC_KANGENTIC_INSPECT path ever injects against it.
+   *
+   * Every field is read LAZILY. An 'init' disposes and recreates the terminal,
+   * so a captured reference would go stale on the first session swap and report
+   * the dead grid's numbers as if they were live.
+   */
+  /**
+   * Which mouse protocol and encoding xterm currently has active.
+   *
+   * Read through _core because the public API does not expose it, so it is
+   * wrapped: a private field that disappears in an xterm upgrade must degrade to
+   * "unknown" here rather than throw and take the whole probe with it.
+   */
+  function coreMouseEncoding() {
+    try {
+      var service = terminal._core._coreMouseService || terminal._core.coreMouseService;
+      return { protocol: service._activeProtocol, encoding: service._activeEncoding };
+    } catch (encodingError) {
+      return { protocol: 'unknown', encoding: 'unknown' };
+    }
+  }
+
+  function terminalProbeState() {
+    var screen = document.querySelector('.xterm-screen');
+    var screenRect = screen ? screen.getBoundingClientRect() : null;
+    var gridHost = document.getElementById('terminal');
+    var container = scrollContainer();
+    var buffer = terminal ? terminal.buffer.active : null;
+    var modes = terminal && terminal.modes ? terminal.modes : null;
+    var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
+    return {
+      buildId: '__XTERM_BUILD_ID__',
+      hasTerminal: terminal !== null,
+      cols: terminal ? terminal.cols : null,
+      rows: terminal ? terminal.rows : null,
+      knownCols: knownCols,
+      knownRows: knownRows,
+      fontSizePx: currentFontSizePx,
+      // The stale-stretch suspect: applyFontSize cancels the height fit but
+      // leaves lineHeight wherever the previous fit stretched it, and
+      // autoFitFontToScreen sizes as if it were 1. If a zoom looks like it did
+      // nothing, compare fontSizePx against fontCeilingPx before anything else.
+      lineHeight: terminal ? terminal.options.lineHeight : null,
+      maxGlTextureSize: maxGlTextureSize,
+      fontCeilingPx: terminal ? textureCappedFontPx(1000, knownCols, effectiveRows) : null,
+      gridWidthPx: screenRect ? screenRect.width : null,
+      gridHeightPx: screenRect ? screenRect.height : null,
+      paddingTopPx: gridHost ? gridHost.style.paddingTop : null,
+      viewportWidthPx: window.innerWidth,
+      viewportHeightPx: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio,
+      scrollLeft: container ? container.scrollLeft : null,
+      scrollWidth: container ? container.scrollWidth : null,
+      clientWidth: container ? container.clientWidth : null,
+      bufferType: buffer ? buffer.type : null,
+      bufferLength: buffer ? buffer.length : null,
+      bufferBaseY: buffer ? buffer.baseY : null,
+      bufferViewportY: buffer ? buffer.viewportY : null,
+      // mouseTrackingMode only says reporting is ON. The ENCODING says whether
+      // SGR (1006) was negotiated, and without it the ESC[<..M form we emit is
+      // the wrong format no matter what else is right. xterm's public IModes
+      // does not carry the encoding at all, so it comes from the core service;
+      // dumped whole because guessing at its shape cost a round trip once.
+      mouseTrackingMode: modes ? modes.mouseTrackingMode : null,
+      mouseEncoding: coreMouseEncoding(),
+      modes: modes ? JSON.parse(JSON.stringify(modes)) : null,
+      applicationCursorKeys: modes ? modes.applicationCursorKeysMode : lastAppCursorMode,
+      scrollMechanism: scrollMechanism(),
+      pinnedToStart: pinnedToStart,
+      manualPanActive: Date.now() < manualPanUntil,
+      historyDragAxis: historyDragAxis,
+      heightFitGeneration: heightFitGeneration,
+      lastScrollDecision: lastScrollDecision,
+      scrollPostCount: scrollPostCount,
+    };
+  }
+
+  window.__kangenticTerminal = {
+    probe: terminalProbeState,
+    // Exactly what a pinch does (TerminalPane posts 'set-font-size'), so a
+    // scripted zoom and a real one cannot diverge.
+    setFontSize: function (fontSizePx) {
+      applyFontSize(fontSizePx);
+      return terminalProbeState();
+    },
+    refit: function () {
+      refit();
+      return terminalProbeState();
+    },
+    scroll: function (units) {
+      scrollHistoryByUnits(units, scrollMechanism());
+      return terminalProbeState();
+    },
+    /**
+     * What consumeHistoryDrag WOULD compute for a vertical delta, with no side
+     * effects. Isolates the geometry half of the gesture from touch delivery:
+     * if a real drag does nothing, this says whether the arithmetic or the
+     * events are at fault. Deliberately mirrors the real code path rather than
+     * re-deriving it, so the two cannot drift.
+     */
+    dragUnits: function (deltaPx) {
+      var screen = document.querySelector('.xterm-screen');
+      if (!screen || !terminal || terminal.rows < 1) return null;
+      var gridHeight = screen.getBoundingClientRect().height;
+      var mechanism = scrollMechanism();
+      var unitHeight = mechanism === 'page' ? gridHeight : gridHeight / terminal.rows;
+      return {
+        mechanism: mechanism,
+        gridHeight: gridHeight,
+        unitHeight: unitHeight,
+        units: dragToScrollUnits(-deltaPx, unitHeight),
+      };
+    },
+  };
 
   window.addEventListener('load', function () {
     var container = scrollContainer();
@@ -925,8 +1087,37 @@ const bridgeGlue = `
 })();
 `;
 
+/**
+ * Build stamp, written into BOTH the page and a TypeScript constant.
+ *
+ * xterm.html is a Metro ASSET, cached on the device by content hash and not
+ * covered by Fast Refresh, so a reload can leave a stale page running against a
+ * fresh JS bundle. That failure is silent and looks exactly like a fix that did
+ * not work: three separate investigations here chased already-fixed bugs
+ * because of it. Comparing the id the page reports against the id the bundle
+ * expects turns it into a one-line verdict (see the `term` commands in
+ * scripts/mobileInspect.mjs).
+ *
+ * The hash covers the glue with its placeholder still in place, which keeps it
+ * a pure function of the authored source rather than of itself.
+ */
+const buildId = createHash('sha256').update(bridgeGlue).digest('hex').slice(0, 12);
+const stampedGlue = bridgeGlue.replace('__XTERM_BUILD_ID__', buildId);
+if (stampedGlue === bridgeGlue) {
+  throw new Error('build id placeholder __XTERM_BUILD_ID__ missing from the bridge glue');
+}
+
+// Compile the glue (never run it) so a syntax error fails HERE, naming the
+// line, instead of shipping a page that silently posts no 'ready' and presents
+// as a terminal stuck on "Terminal loading...".
+try {
+  new Function(stampedGlue);
+} catch (glueSyntaxError) {
+  throw new Error(`bridge glue does not parse: ${glueSyntaxError.message}`);
+}
+
 const html = `<!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm ${xtermVersion}) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm ${xtermVersion}, build ${buildId}) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -976,7 +1167,7 @@ var HeadlessXterm = (function () { var exports = {}; ${xtermHeadlessJs}
 return exports; })();
 </script>
 <script>
-${bridgeGlue}
+${stampedGlue}
 </script>
 </body>
 </html>
@@ -984,4 +1175,24 @@ ${bridgeGlue}
 
 const outputPath = join(repoRoot, 'src', 'terminal', 'xterm.html');
 writeFileSync(outputPath, html);
-process.stdout.write(`Wrote ${outputPath} (xterm ${xtermVersion}, ${(html.length / 1024).toFixed(0)} KiB)\n`);
+
+const buildIdPath = join(repoRoot, 'src', 'terminal', 'xtermBuildId.ts');
+writeFileSync(
+  buildIdPath,
+  `/**
+ * GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs
+ *
+ * The build id baked into src/terminal/xterm.html by the same run that wrote
+ * this file. The JS bundle carries this constant; the WebView reports the one
+ * in the page it actually loaded. A mismatch means the device is running a
+ * STALE terminal asset (Metro caches xterm.html by content hash and Fast
+ * Refresh does not cover assets), which otherwise presents as a fix that did
+ * not take.
+ */
+export const XTERM_BUILD_ID = '${buildId}';
+`,
+);
+
+process.stdout.write(
+  `Wrote ${outputPath} (xterm ${xtermVersion}, ${(html.length / 1024).toFixed(0)} KiB, build ${buildId})\n`,
+);
