@@ -1105,6 +1105,7 @@ const bridgeGlue = `
         terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
       }
       centerGridVertically(screenHeight);
+      followCursorVertically(true);
       return;
     }
     var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
@@ -1137,6 +1138,15 @@ const bridgeGlue = `
     }
     if (!adjusted) {
       centerGridVertically(screenHeight);
+      // The fit has SETTLED: only now is the vertical follow computed against
+      // real geometry. Forcing it from refit's first frame sampled the grid
+      // MID-CONVERGENCE - on a 48-row grid the stretch transiently overflows
+      // before the give-back, so the follow locked in a negative translate
+      // that nothing cleared once the grid settled smaller, shifting the
+      // whole frame up past the centring pad ("pushed up more"). A 30-row
+      // grid never overflows mid-fit, which is why the first verification
+      // pass missed it.
+      followCursorVertically(true);
       return;
     }
     requestAnimationFrame(function () {
@@ -1236,6 +1246,15 @@ const bridgeGlue = `
   // keyboard, and rotation - so the fit is never left stale.
   function refit() {
     if (!terminal) return;
+    // Every refit is a RE-ORIENTATION - a keyboard opening or closing, a
+    // rotation, the reset button - and the reader re-orients at the LEFT
+    // edge, where every line, prompt, and tree begins. Re-pinning reuses the
+    // opening-view rule wholesale: column 0 now, follow-the-cursor resumes
+    // the moment the user touches or types. The previous behavior panned to
+    // the CURSOR column after the relayout, which for a TUI can sit mid-line,
+    // dropping the reader into the middle of text after every keyboard
+    // open/close ("disorienting in resize events").
+    pinnedToStart = true;
     autoFitFontToScreen();
     applyGeometry();
     heightFitGeneration += 1;
@@ -1243,14 +1262,13 @@ const bridgeGlue = `
     // Measure AFTER the font/geometry pass paints, then true up the height.
     requestAnimationFrame(function () {
       fitGridHeightToViewport(HEIGHT_FIT_PASSES, false, generation);
-      // A viewport change is not a user pan: clear the manual-pan pause so
-      // the cursor is guaranteed back on screen after the relayout.
       manualPanUntil = 0;
+      // pinnedToStart makes this snap the pan to column 0. The VERTICAL
+      // follow deliberately does NOT run here: the fit above is still
+      // converging across frames, and following against mid-convergence
+      // geometry locked in a stale translate (see fitGridHeightToViewport's
+      // settled paths, which own it now).
       clampHorizontalPan();
-      panToCursor();
-      // A refit sizes the grid back to the screen, so the follow offset
-      // resolves to zero here - this is what clears a stale zoom translate.
-      followCursorVertically(true);
     });
   }
 
