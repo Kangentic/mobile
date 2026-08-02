@@ -162,12 +162,28 @@ node scripts/mobileInspect.mjs term refit          # exactly what the reset butt
 node scripts/mobileInspect.mjs term scroll <units> # a raw history burst, skipping the gesture
 node scripts/mobileInspect.mjs term dragunits <px> # what a drag of N px WOULD compute
 node scripts/mobileInspect.mjs term swipe <dy> [ms]  # a real one-finger drag via adb
+node scripts/mobileInspect.mjs term pinch <scale> [--drag <dy>]   # EMULATOR ONLY, see below
 ```
 
-`font` is the one that matters most: pinch needs multi-touch, `adb` cannot synthesize it, so
-before this every zoom test needed a person holding the phone. `swipe` drives real
-MotionEvents (use a long duration - a fast swipe delivers too few move samples for the drag
-handler to fire, which reads as "scrolling is broken" when it merely had nothing to consume).
+`font` posts the same message a pinch does, so a scripted zoom and a real one cannot diverge on
+the FONT. `swipe` drives real MotionEvents (use a long duration - a fast swipe delivers too few
+move samples for the drag handler to fire, which reads as "scrolling is broken" when it merely
+had nothing to consume).
+
+**Multi-touch is the one real gap.** `adb shell input` has no multi-touch at all, and
+`term pinch` writes raw protocol-B events to the touchscreen node, which needs root - so it
+works on an EMULATOR and fails cleanly on a production physical device. On a phone, dispatch
+the DOM sequence instead:
+
+```
+node scripts/mobileInspect.mjs term eval "(function(){var c=document.getElementById('scroll-container');...})()"
+```
+
+That covers everything inside the page but NOT the React Native gesture layer above it. It is
+enough for most gesture bugs, because the page's own touch counters
+(`probe().touchCounts`) tell you first whether the events reached the page at all - a handler
+that ran and bailed is a completely different fault from touches that never arrived, and
+guessing between the two is what made the pinch-then-scroll bug take several rounds.
 
 The probe reports geometry, `lineHeight`, buffer type, the mouse tracking mode AND encoding,
 which exit the last gesture took, and the PTY write attempt/failure counts. That last pair

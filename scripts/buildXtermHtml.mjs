@@ -385,8 +385,25 @@ const bridgeGlue = `
    * smoothly instead of stalling.
    */
   function consumeHistoryDrag(touchEvent) {
-    if (historyDragAnchorY === null || touchEvent.touches.length !== 1) {
+    if (touchEvent.touches.length !== 1) {
       lastScrollDecision = { exit: 'not-single-finger' };
+      return;
+    }
+    // ADOPT THE SURVIVING FINGER.
+    //
+    // A second finger (a pinch) nulls the anchor, and lifting back down to one
+    // finger fires TOUCHEND, not touchstart - and touchend early-returns while
+    // any finger is still down. So the drag that follows a zoom used to have no
+    // reference point, and since the anchor is only ever set in touchstart,
+    // every move bailed until the user lifted off completely and started again.
+    // Measured on device: 201 touchmoves, every one exiting 'not-single-finger'.
+    // That is the "after zooming, scrolling is lost" report, and no button could
+    // clear it because nothing else touches this state.
+    if (historyDragAnchorY === null) {
+      historyDragAnchorY = touchEvent.touches[0].clientY;
+      historyDragStartX = touchEvent.touches[0].clientX;
+      historyDragAxis = null;
+      lastScrollDecision = { exit: 'anchor-adopted' };
       return;
     }
     var screen = document.querySelector('.xterm-screen');
