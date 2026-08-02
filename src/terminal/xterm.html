@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 754b67c411a2) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build a7ed7f06ec18) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -396,6 +396,17 @@ return exports; })();
   // payload of a hard fling: every unit is one key sequence inside the batched
   // write, so an uncapped delta would post an arbitrarily long string.
   var MAX_SCROLL_UNITS_PER_STEP = 12;
+  // Momentum scrolling. A release faster than the start threshold (finger px
+  // per ms, measured over the last samples) keeps scrolling with exponential
+  // decay; slower releases stay 1:1 with the finger. The decay is per 16ms
+  // frame (0.94^(dt/16)), the keep threshold ends the glide, and the total
+  // unit cap bounds what one fling may cost over the relay - each unit is one
+  // key sequence, so an unbounded glide would be an unbounded payload.
+  var FLING_MIN_START_VELOCITY_PX_PER_MS = 0.4;
+  var FLING_MIN_KEEP_VELOCITY_PX_PER_MS = 0.05;
+  var FLING_DECAY_PER_FRAME = 0.94;
+  var FLING_MAX_UNITS_TOTAL = 150;
+  var FLING_SAMPLE_WINDOW_MS = 100;
   // Built rather than escaped: this glue lives inside a template literal in
   // scripts/buildXtermHtml.mjs, where a backslash escape would be consumed by
   // the generator instead of reaching the page.
@@ -521,6 +532,60 @@ return exports; })();
   }
 
   /**
+   * The vertical offset (a translateY, always <= 0) that keeps the cursor row
+   * visible inside the viewport when the ZOOMED grid is taller than the
+   * screen. Pure so the arithmetic is unit-testable.
+   *
+   * Vertical drags are history scrolling by design, and the container's
+   * overflow-y is hidden - so without this, zooming in clipped the bottom of
+   * the frame with NO way to reach it, and a fullscreen TUI keeps its input
+   * line and status bar exactly there. Following the cursor shows the part of
+   * the frame that is alive, which for a TUI is the part being typed into.
+   *
+   * The current offset is kept whenever the cursor is already visible, so the
+   * view does not drift on every repaint - it moves only when the cursor
+   * actually leaves the margin band, mirroring panToCursor's horizontal rule.
+   */
+  function verticalFollowOffset(cursorTopPx, cursorBottomPx, gridHeightPx, viewportHeightPx, currentOffsetPx, marginPx) {
+    if (!(gridHeightPx > viewportHeightPx)) return 0;
+    var minOffsetPx = viewportHeightPx - gridHeightPx;
+    var next = currentOffsetPx;
+    if (cursorTopPx + next < marginPx) {
+      next = marginPx - cursorTopPx;
+    } else if (cursorBottomPx + next > viewportHeightPx - marginPx) {
+      next = viewportHeightPx - marginPx - cursorBottomPx;
+    }
+    return Math.max(minOffsetPx, Math.min(0, next));
+  }
+
+  // Current translateY on the grid host; 0 whenever the grid fits the screen.
+  var verticalOffsetPx = 0;
+
+  function applyVerticalOffset(nextOffsetPx) {
+    if (nextOffsetPx === verticalOffsetPx) return;
+    verticalOffsetPx = nextOffsetPx;
+    var gridHost = document.getElementById('terminal');
+    if (gridHost) gridHost.style.transform = nextOffsetPx === 0 ? '' : 'translateY(' + nextOffsetPx + 'px)';
+  }
+
+  // force bypasses the manual-pan pause: a pinch just changed the geometry
+  // deliberately, and waiting out the pause would leave the newly-zoomed frame
+  // anchored to its top for four seconds with the live rows off screen.
+  function followCursorVertically(force) {
+    if (!terminal) return;
+    if (!force && (pinnedToStart || Date.now() < manualPanUntil)) return;
+    var screen = document.querySelector('.xterm-screen');
+    if (!screen || terminal.rows < 1) return;
+    var gridHeight = screen.getBoundingClientRect().height;
+    if (!(gridHeight > 0)) return;
+    var cellHeight = gridHeight / terminal.rows;
+    var cursorTop = terminal.buffer.active.cursorY * cellHeight;
+    applyVerticalOffset(
+      verticalFollowOffset(cursorTop, cursorTop + cellHeight, gridHeight, window.innerHeight, verticalOffsetPx, cellHeight * 2),
+    );
+  }
+
+  /**
    * Report the STICKY modes whenever any of them flips.
    *
    * DECCKM drives the quick keys' arrow encoding. The other three exist so the
@@ -566,6 +631,7 @@ return exports; })();
   function afterWriteFlushed() {
     reportModesIfFlipped();
     panToCursor();
+    followCursorVertically(false);
   }
 
   // HISTORY SCROLLING.
@@ -763,6 +829,10 @@ return exports; })();
       lastScrollDecision = { exit: 'axis-horizontal' };
       return;
     }
+    // Every vertical move feeds the velocity window, including sub-unit ones -
+    // a fast flick often ends before it crosses a single line boundary, and
+    // the fling is exactly what makes that flick do something.
+    recordDragSample(currentY);
     var dragged = currentY - historyDragAnchorY;
     if (!dragged) {
       lastScrollDecision = { exit: 'no-travel' };
@@ -791,6 +861,81 @@ return exports; })();
     };
     scrollPostCount += 1;
     scrollHistoryByUnits(units, mechanism);
+  }
+
+  // MOMENTUM. A drag scrolls 1:1 with the finger; releasing above the start
+  // velocity keeps the content gliding with exponential decay, which is what
+  // makes touch scrolling read as native rather than stepped. The glide runs
+  // through the SAME dragToScrollUnits/scrollHistoryByUnits pipeline as the
+  // finger, one write per frame at most, so nothing about payload shape or
+  // mechanism choice is new here - only the timing source.
+
+  function recordDragSample(clientY) {
+    dragSamples.push({ t: Date.now(), y: clientY });
+    if (dragSamples.length > 8) dragSamples.shift();
+  }
+
+  /** Finger velocity at release, from the samples inside the window. */
+  function releaseVelocityPxPerMs() {
+    if (dragSamples.length < 2) return 0;
+    var newest = dragSamples[dragSamples.length - 1];
+    var oldest = null;
+    for (var sampleIndex = 0; sampleIndex < dragSamples.length; sampleIndex += 1) {
+      if (newest.t - dragSamples[sampleIndex].t <= FLING_SAMPLE_WINDOW_MS) {
+        oldest = dragSamples[sampleIndex];
+        break;
+      }
+    }
+    if (oldest === null || newest.t === oldest.t) return 0;
+    return (newest.y - oldest.y) / (newest.t - oldest.t);
+  }
+
+  /** A new touch, a pinch, an init, or the reset button all catch the glide. */
+  function stopHistoryFling() {
+    flingGeneration += 1;
+  }
+
+  function maybeStartHistoryFling() {
+    var velocity = releaseVelocityPxPerMs();
+    dragSamples = [];
+    if (historyDragAxis !== 'vertical') return;
+    if (Math.abs(velocity) < FLING_MIN_START_VELOCITY_PX_PER_MS) return;
+    // Page granularity turns momentum into several surprise page jumps after
+    // the finger has left; the coarse mechanism stays strictly 1:1.
+    if (scrollMechanism() === 'page') return;
+    flingStats.started += 1;
+    flingGeneration += 1;
+    var generation = flingGeneration;
+    var velocityPxPerMs = velocity;
+    var bankPx = 0;
+    var unitsEmitted = 0;
+    var lastFrameAt = Date.now();
+    function glideFrame() {
+      if (generation !== flingGeneration || !terminal || terminal.rows < 1) return;
+      var screen = document.querySelector('.xterm-screen');
+      if (!screen) return;
+      var now = Date.now();
+      // Clamp a long gap (a janky frame) so the glide cannot teleport.
+      var deltaMs = Math.min(64, now - lastFrameAt);
+      lastFrameAt = now;
+      bankPx += velocityPxPerMs * deltaMs;
+      velocityPxPerMs *= Math.pow(FLING_DECAY_PER_FRAME, deltaMs / 16);
+      var mechanism = scrollMechanism();
+      if (mechanism === 'page') return;
+      var unitHeight = screen.getBoundingClientRect().height / terminal.rows;
+      var units = dragToScrollUnits(-bankPx, unitHeight);
+      if (units !== 0) {
+        // Consume exactly what was emitted; the fractional remainder glides on.
+        bankPx += units * unitHeight;
+        unitsEmitted += Math.abs(units);
+        flingStats.totalUnits += Math.abs(units);
+        scrollHistoryByUnits(units, mechanism);
+      }
+      if (Math.abs(velocityPxPerMs) >= FLING_MIN_KEEP_VELOCITY_PX_PER_MS && unitsEmitted < FLING_MAX_UNITS_TOTAL) {
+        requestAnimationFrame(glideFrame);
+      }
+    }
+    requestAnimationFrame(glideFrame);
   }
 
   // Ported from the desktop renderer's terminal-webgl.ts. xterm's WebGL renderer
@@ -952,6 +1097,12 @@ return exports; })();
     lastAppCursorMode = false;
     lastReportedModes = null;
     manualPanUntil = 0;
+    // The grid host SURVIVES a re-init (only its children are replaced), so a
+    // zoom-follow translate from the previous session would otherwise shift
+    // the new frame. Same for a glide still in flight.
+    stopHistoryFling();
+    dragSamples = [];
+    applyVerticalOffset(0);
     // Every (re-)init is a fresh open - including a session swap and the
     // re-seed when the pane becomes visible again - so the frame starts at
     // column 0 rather than inheriting the previous view's pan.
@@ -1044,7 +1195,14 @@ return exports; })();
     // it has to follow the new cell height: without it, zooming into a short
     // grid pushes the frame down by a stale padding.
     heightFitGeneration += 1;
-    requestAnimationFrame(centerGridFromMeasurement);
+    requestAnimationFrame(function () {
+      centerGridFromMeasurement();
+      // Forced: the pinch just changed the geometry deliberately, and the
+      // manual-pan pause would otherwise leave the zoomed frame top-anchored
+      // with the TUI's live rows (input line, status bar) off screen for
+      // seconds. This is what makes zooming land ON the action.
+      followCursorVertically(true);
+    });
   }
 
   // Fit the grid's HEIGHT to the viewport by MEASUREMENT, correcting the
@@ -1215,6 +1373,9 @@ return exports; })();
       manualPanUntil = 0;
       clampHorizontalPan();
       panToCursor();
+      // A refit sizes the grid back to the screen, so the follow offset
+      // resolves to zero here - this is what clears a stale zoom translate.
+      followCursorVertically(true);
     });
   }
 
@@ -1264,11 +1425,14 @@ return exports; })();
       historyDragAnchorY = null;
       historyDragAxis = null;
       tapDirty = true;
+      stopHistoryFling();
+      applyVerticalOffset(0);
       refit();
     } else if (message.type === 'pinch') {
       if (message.active === true) pinchMessageCounts.activeTrue += 1;
       else pinchMessageCounts.activeFalse += 1;
       pinchActive = message.active === true;
+      if (pinchActive) stopHistoryFling();
       // A finished pinch leaves this page's touch bookkeeping unreliable (it
       // may never have seen touchend for the second finger), so drop the drag
       // state outright. The next move re-anchors on whichever finger is still
@@ -1327,6 +1491,12 @@ return exports; })();
   // Travel before the axis is decided. Matches the tap slop, so the same small
   // movement that still counts as a tap also commits to no axis.
   var DRAG_AXIS_SLOP_PX = 12;
+  // Momentum state: the velocity window's samples, the generation that cancels
+  // an in-flight glide (same pattern as heightFitGeneration), and the stats
+  // the dev probe reports.
+  var dragSamples = [];
+  var flingGeneration = 0;
+  var flingStats = { started: 0, totalUnits: 0 };
 
   /**
    * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
@@ -1371,7 +1541,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: '754b67c411a2',
+      buildId: 'a7ed7f06ec18',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
@@ -1418,6 +1588,8 @@ return exports; })();
       lastScrollDecision: lastScrollDecision,
       scrollPostCount: scrollPostCount,
       lastScrollRoundTripMs: lastScrollRoundTripMs,
+      verticalOffsetPx: verticalOffsetPx,
+      flingStats: JSON.parse(JSON.stringify(flingStats)),
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }
@@ -1472,6 +1644,9 @@ return exports; })();
         touchCounts.start += 1;
         pinnedToStart = false;
         manualPanUntil = Date.now() + MANUAL_PAN_PAUSE_MS;
+        // A finger landing catches any glide, native-scroller style.
+        stopHistoryFling();
+        dragSamples = [];
         // A fresh gesture starting with ONE clean finger cannot be a pinch, so
         // it clears the pinch latch even if the host's active:false was lost
         // (self-heal). It cannot misfire against a real pinch: the second
@@ -1513,10 +1688,15 @@ return exports; })();
         historyDragAnchorY = null;
         historyDragAxis = null;
         tapDirty = true;
+        // A cancelled gesture is the browser or RN taking it - never a flick.
+        dragSamples = [];
       }, { passive: true });
       container.addEventListener('touchend', function (touchEvent) {
         touchCounts.end += 1;
         if (touchEvent.touches.length > 0) return;
+        // Before the anchor clears: the release velocity belongs to the drag
+        // that just ended, and the axis it reads is still latched.
+        maybeStartHistoryFling();
         historyDragAnchorY = null;
         if (!tapDirty && Date.now() - tapStartAt <= TAP_MAX_MS) {
           postToHost({ type: 'tapped' });

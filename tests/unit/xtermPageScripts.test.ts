@@ -365,6 +365,12 @@ describe('generated xterm.html', () => {
       touches: { clientX: number; clientY: number }[];
       changedTouches?: { clientX: number; clientY: number }[];
     }) => void;
+    maybeStartHistoryFling: () => void;
+    stopHistoryFling: () => void;
+    flingStats: () => { started: number; totalUnits: number };
+    advanceTime: (deltaMs: number) => void;
+    drainFrames: (maxFrames?: number) => number;
+    pendingFrames: () => number;
     posts: () => { type: string; data?: string }[];
     scrolled: () => number[];
     deltas: () => number[];
@@ -412,6 +418,8 @@ describe('generated xterm.html', () => {
       'ESCAPE',
       'WheelEvent',
       'window',
+      'Date',
+      'requestAnimationFrame',
       `var historyDragAnchorY = 0;
        var historyDragStartX = 0;
        var historyDragAxis = null;
@@ -419,9 +427,21 @@ describe('generated xterm.html', () => {
        var lastScrollDecision = null;
        var scrollPostCount = 0;
        var pinchActive = false;
+       var lastScrollInputAt = null;
+       var dragSamples = [];
+       var flingGeneration = 0;
+       var flingStats = { started: 0, totalUnits: 0 };
+       var FLING_MIN_START_VELOCITY_PX_PER_MS = 0.4;
+       var FLING_MIN_KEEP_VELOCITY_PX_PER_MS = 0.05;
+       var FLING_DECAY_PER_FRAME = 0.94;
+       var FLING_MAX_UNITS_TOTAL = 150;
+       var FLING_SAMPLE_WINDOW_MS = 100;
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
+         maybeStartHistoryFling: maybeStartHistoryFling,
+         stopHistoryFling: stopHistoryFling,
+         flingStats: function () { return flingStats; },
          anchorY: function () { return historyDragAnchorY; },
          clearAnchor: function () { historyDragAnchorY = null; historyDragAxis = null; },
          setPinchActive: function (value) { pinchActive = value; },
@@ -433,12 +453,19 @@ describe('generated xterm.html', () => {
         touches: { clientX: number; clientY: number }[];
         changedTouches?: { clientX: number; clientY: number }[];
       }) => void;
+      maybeStartHistoryFling: () => void;
+      stopHistoryFling: () => void;
+      flingStats: () => { started: number; totalUnits: number };
       anchorY: () => number | null;
       clearAnchor: () => void;
       setPinchActive: (value: boolean) => void;
       decision: () => { exit: string } | null;
       feed: (data: string) => void;
     };
+    // Deterministic time and frames: fling arithmetic runs entirely on
+    // Date.now() deltas and requestAnimationFrame, so the test owns both.
+    let fakeNowMs = 0;
+    const animationFrameQueue: (() => void)[] = [];
     const built = build(
       terminal,
       fakeDocument,
@@ -453,10 +480,30 @@ describe('generated xterm.html', () => {
       // DEVICE cell height, so a CSS-px delta silently under-scrolls by exactly
       // this factor. A dpr of 1 here would let that bug pass unnoticed.
       { devicePixelRatio: 2 },
+      { now: () => fakeNowMs },
+      (callback: () => void) => animationFrameQueue.push(callback),
     );
     feed = built.feed;
     return {
       consumeHistoryDrag: built.consumeHistoryDrag,
+      maybeStartHistoryFling: built.maybeStartHistoryFling,
+      stopHistoryFling: built.stopHistoryFling,
+      flingStats: built.flingStats,
+      advanceTime: (deltaMs: number) => {
+        fakeNowMs += deltaMs;
+      },
+      /** Run queued frames, 16ms apart, until the glide stops scheduling. */
+      drainFrames: (maxFrames = 400) => {
+        let framesRun = 0;
+        while (animationFrameQueue.length > 0 && framesRun < maxFrames) {
+          fakeNowMs += 16;
+          const frame = animationFrameQueue.shift();
+          frame?.();
+          framesRun += 1;
+        }
+        return framesRun;
+      },
+      pendingFrames: () => animationFrameQueue.length,
       posts: () => posts,
       scrolled: () => scrolled,
       deltas: () => deltas,
@@ -651,6 +698,128 @@ describe('generated xterm.html', () => {
       gridHeight: 600,
       mechanism: 'mouse',
     });
+  });
+
+  /**
+   * VERTICAL CURSOR-FOLLOW. Vertical drags are history by design and the
+   * container never scrolls vertically, so without this offset a zoomed grid
+   * simply clipped its bottom - where a fullscreen TUI keeps its input line
+   * and status bar - with no way to reach it.
+   */
+  describe('verticalFollowOffset', () => {
+    const followSource = generatedHtml.slice(
+      generatedHtml.indexOf('function verticalFollowOffset('),
+      generatedHtml.indexOf('// Current translateY'),
+    );
+    const verticalFollowOffset = new Function(`${followSource} return verticalFollowOffset;`)() as (
+      cursorTopPx: number,
+      cursorBottomPx: number,
+      gridHeightPx: number,
+      viewportHeightPx: number,
+      currentOffsetPx: number,
+      marginPx: number,
+    ) => number;
+
+    it('is zero whenever the grid fits the viewport', () => {
+      expect(verticalFollowOffset(500, 520, 600, 600, -100, 40)).toBe(0);
+      expect(verticalFollowOffset(10, 30, 400, 600, -50, 40)).toBe(0);
+    });
+
+    it('pulls a below-view cursor up into the margin band', () => {
+      // Grid 1400 in a 600 viewport, cursor row at the very bottom: the offset
+      // must land the cursor above the bottom margin without overshooting the
+      // grid's own end (clamp at viewport - grid = -800).
+      const offset = verticalFollowOffset(1370, 1400, 1400, 600, 0, 60);
+      expect(offset).toBe(-800);
+      // A cursor higher up is brought exactly to the margin line instead.
+      expect(verticalFollowOffset(900, 930, 1400, 600, 0, 60)).toBe(600 - 60 - 930);
+    });
+
+    it('drops a raised view back down when the cursor is above it', () => {
+      expect(verticalFollowOffset(100, 130, 1400, 600, -400, 60)).toBe(-40);
+    });
+
+    it('leaves the offset alone while the cursor stays visible', () => {
+      expect(verticalFollowOffset(500, 530, 1400, 600, -200, 60)).toBe(-200);
+    });
+
+    it('never scrolls above the top of the grid', () => {
+      expect(verticalFollowOffset(0, 30, 1400, 600, -200, 60)).toBe(0);
+    });
+  });
+
+  /** Drives a vertical drag at a chosen speed, then releases. */
+  function dragAndRelease(
+    harness: ReturnType<typeof buildHistoryScroll>,
+    stepPx: number,
+    stepMs: number,
+    steps: number,
+  ): void {
+    let fingerY = 0;
+    for (let stepIndex = 0; stepIndex < steps; stepIndex += 1) {
+      fingerY += stepPx;
+      harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: fingerY }] });
+      harness.advanceTime(stepMs);
+    }
+    harness.maybeStartHistoryFling();
+  }
+
+  /**
+   * MOMENTUM. A fast release keeps scrolling with decay through the same
+   * pipeline as the finger; the glide must actually stop on its own (the decay
+   * is real, not a loop until the cap), and its total cost stays bounded.
+   */
+  it('glides after a fast release, decays, and stops', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+
+    // 25px every 16ms is ~1.6px/ms, far above the 0.4 start threshold.
+    dragAndRelease(harness, 25, 16, 5);
+    const postsAtRelease = harness.posts().length;
+    expect(harness.flingStats().started).toBe(1);
+
+    const framesRun = harness.drainFrames();
+    expect(harness.pendingFrames()).toBe(0);
+    expect(harness.posts().length).toBeGreaterThan(postsAtRelease + 2);
+    expect(harness.flingStats().totalUnits).toBeGreaterThan(5);
+    // These two are what PROVE the decay is real rather than the unit cap
+    // ending the glide: at ~1.6px/ms and 0.94^frame, the glide covers ~430px
+    // (~21 units over ~56 frames). Without decay it runs flat into the
+    // 150-unit cap over ~100 frames - a first version of this test accepted
+    // exactly that and the no-decay mutation survived it.
+    expect(harness.flingStats().totalUnits).toBeLessThan(60);
+    expect(framesRun).toBeLessThan(100);
+  });
+
+  it('does not glide after a slow release', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+
+    // 3px every 16ms is ~0.19px/ms, below the start threshold.
+    dragAndRelease(harness, 3, 16, 8);
+
+    expect(harness.flingStats().started).toBe(0);
+    expect(harness.pendingFrames()).toBe(0);
+  });
+
+  /** Page granularity would turn momentum into surprise page jumps. */
+  it('never glides on the page-key mechanism', () => {
+    const harness = buildHistoryScroll({ mouseTracking: false, bufferType: 'alternate' });
+
+    dragAndRelease(harness, 700, 16, 3);
+
+    expect(harness.flingStats().started).toBe(0);
+  });
+
+  /** A finger landing mid-glide catches the scroll, native-scroller style. */
+  it('stops the glide the moment it is told to', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+
+    dragAndRelease(harness, 25, 16, 5);
+    harness.drainFrames(3);
+    const postsAtStop = harness.posts().length;
+    harness.stopHistoryFling();
+    harness.drainFrames();
+
+    expect(harness.posts().length).toBe(postsAtStop);
   });
 
   it('prefers line-granular wheel notches when mouse tracking is on', () => {
