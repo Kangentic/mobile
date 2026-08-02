@@ -36,10 +36,30 @@ the dev client instead; it pays for itself immediately.
 0a. **If `ios` was given, or the user asks how it looks on iOS / iPhone**, jump to the "iOS preview"
    section below and do nothing on Android. Do not try to boot a simulator locally; there isn't one.
 
-0. **If a mode was given (`mock`, `live`, or `pair`), or the user asks for a connected preview**
-   (mentions the relay, the stub peer, pairing, or their live desktop board), delegate to the
-   dev rig instead of the manual steps: run `node scripts/dev.mjs <mode>` (pass `--clear` /
-   `--avd <name>` through) with `run_in_background: true` and monitor its output. The rig
+0. **If a mode was given (`mock`, `live`, or `pair`), or the work is connected in any way**,
+   delegate to the dev rig instead of the manual steps: run `node scripts/dev.mjs <mode>` (pass
+   `--clear` / `--avd <name>` / `--serial <adb serial>` through) with `run_in_background: true`
+   and monitor its output.
+
+   **Infer the mode; do not wait to be told one.** The trigger is the GOAL, not the word. If the
+   preview has to talk to the user's real desktop, show real tasks, or exercise anything that
+   needs a pairing, that is `live` - even if nobody said "live". Following steps 1-6 by hand
+   instead is the most expensive mistake available here, because the rig also does the thing the
+   manual path cannot: **it pairs for you.**
+
+   Live mode quick-pairs by exchanging PUBLIC keys through
+   `.kangentic/mobile-dev-pairing/`, adopts the dev phone key into the desktop roster with every
+   verb granted, and hands the matching secret to the app via a dev-only env var. No QR, no SAS,
+   no human. Doing it manually instead blocks on the user scanning a code and comparing a string,
+   on their schedule rather than yours. Physical devices are supported: with one device attached
+   the rig picks it automatically and skips the emulator boot.
+
+   That path is a deliberate dev backdoor and is safe only because of how it is confined: gated
+   on `__KANGENTIC_DEV__` so esbuild strips it from packaged builds, only public keys crossing,
+   and only files inside the developer's own checkout trusted. It needs BOTH sides to be dev
+   builds on the same machine. Never widen it, never reimplement it somewhere less contained
+   (an MCP tool, a script that ships), and never reach for it to skip a real pairing test -
+   `dev:pair` exists for that. The rig
    performs steps 1-4 of this skill itself (emulator boot, port-8081 hygiene, Metro) plus
    everything connectivity needs (relay startup with the widened slot pattern, `adb reverse`,
    pm clear for pair mode, mock env for mock mode). When the rig reports Metro up, continue at
