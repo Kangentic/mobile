@@ -249,6 +249,19 @@ and consumes an `ios.buildNumber` if submitted.
 - An EAS cloud build (`eas build --profile development --platform android`) is the alternative to
   `npx expo run:android` when you'd rather not compile natively on this machine - download the
   resulting APK and `adb install` it instead of step 3's local build path.
+- **A reload is ASYNCHRONOUS: confirm it landed before judging a fix.** Triggering one (the
+  dev-client deep link, or `r` in Metro) returns immediately while the previous bundle keeps
+  serving for a second or more. Testing a gesture in that window exercises the OLD code and
+  produces a confident, wrong "still broken". This burned three separate diagnoses in one
+  session, twice sending the investigation after a bug that was already fixed.
+
+  Assets make it worse than plain JS: `src/terminal/xterm.html` is a Metro asset, cached by
+  content hash under `/data/user/0/<pkg>/cache/ExponentAsset-<hash>.html`, so a regenerated file
+  is a NEW hash the app has to fetch before anything changes. Fast Refresh does not cover it.
+
+  Cheapest confirmation: `adb logcat -d -t 200 -e <a marker string>` and check the asset hash in
+  the `source:` field actually changed, or watch for a fresh mount log. A screenshot alone will
+  not tell you which bundle is live.
 - **Physical devices.** A real phone is a first-class target here and usually the honest one, but
   three things differ from an emulator:
   - **Do not pass `--device <serial>`.** `npx expo run:android --device 57181FDCH00CZ5` fails with
