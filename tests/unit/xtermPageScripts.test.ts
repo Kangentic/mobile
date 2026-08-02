@@ -311,24 +311,39 @@ describe('generated xterm.html', () => {
    * vertical pan left, which is the common case once the grid is height-fitted.
    */
   function buildHistoryScroll(options: {
-    bufferType: 'normal' | 'alternate';
-    applicationCursorKeys?: boolean;
+    bufferType?: 'normal' | 'alternate';
+    /** Mouse tracking on means xterm can mouse-report a wheel, which is the
+     *  line-granular (smooth) path. Off forces the page-key fallback. */
+    mouseTracking?: boolean;
+    /** Bytes the fake xterm emits per wheel notch, standing in for the mouse
+     *  report its real handler would encode. */
+    emitPerNotch?: string;
     container?: { scrollTop: number; scrollHeight: number; clientHeight: number };
   }): {
     consumeHistoryDrag: (touchEvent: { touches: { clientY: number }[] }) => void;
     posts: () => { type: string; data?: string }[];
     scrolled: () => number[];
+    deltas: () => number[];
     anchorY: () => number | null;
   } {
     const source = generatedHtml.slice(
-      generatedHtml.indexOf('function dragToScrollLines('),
+      generatedHtml.indexOf('function dragToScrollUnits('),
       generatedHtml.indexOf("// Ported from the desktop renderer's"),
     );
     const scrolled: number[] = [];
+    const deltas: number[] = [];
     const posts: { type: string; data?: string }[] = [];
+    let feed: ((data: string) => void) | null = null;
     const terminal = {
       rows: 30,
-      buffer: { active: { type: options.bufferType } },
+      buffer: { active: { type: options.bufferType ?? 'alternate' } },
+      modes: { mouseTrackingMode: options.mouseTracking ? 'vt200' : 'none' },
+      element: {
+        dispatchEvent: (event: { deltaY: number }): void => {
+          deltas.push(event.deltaY);
+          if (options.emitPerNotch && feed) feed(options.emitPerNotch);
+        },
+      },
       scrollLines: (lines: number): void => {
         scrolled.push(lines);
       },
@@ -336,25 +351,33 @@ describe('generated xterm.html', () => {
     const container = options.container ?? { scrollTop: 0, scrollHeight: 600, clientHeight: 600 };
     const fakeDocument = {
       querySelector: (selector: string) =>
-        selector === '.xterm-screen' ? { getBoundingClientRect: () => ({ height: 600 }) } : null,
+        selector === '.xterm-screen'
+          ? { getBoundingClientRect: () => ({ height: 600, width: 400, left: 0, top: 0 }) }
+          : null,
     };
     const build = new Function(
       'terminal',
       'document',
       'postToHost',
       'scrollContainer',
-      'MAX_SCROLL_LINES_PER_STEP',
+      'MAX_SCROLL_UNITS_PER_STEP',
       'ESCAPE',
-      'lastAppCursorMode',
+      'WheelEvent',
       `var historyDragAnchorY = 0;
+       var wheelBurstData = null;
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
          anchorY: function () { return historyDragAnchorY; },
+         feed: function (data) {
+           if (wheelBurstData !== null) { wheelBurstData += data; return; }
+           postToHost({ type: 'input', data: data });
+         },
        };`,
     ) as (...dependencies: unknown[]) => {
       consumeHistoryDrag: (touchEvent: { touches: { clientY: number }[] }) => void;
       anchorY: () => number | null;
+      feed: (data: string) => void;
     };
     const built = build(
       terminal,
@@ -363,12 +386,16 @@ describe('generated xterm.html', () => {
       () => container,
       12,
       String.fromCharCode(27),
-      options.applicationCursorKeys ?? false,
+      function FakeWheelEvent(this: { deltaY: number }, _type: string, init: { deltaY: number }) {
+        this.deltaY = init.deltaY;
+      },
     );
+    feed = built.feed;
     return {
       consumeHistoryDrag: built.consumeHistoryDrag,
       posts: () => posts,
       scrolled: () => scrolled,
+      deltas: () => deltas,
       anchorY: built.anchorY,
     };
   }
@@ -380,53 +407,87 @@ describe('generated xterm.html', () => {
    * A phone on cellular must send ONE write per step, however many lines it
    * carries.
    */
-  it('sends one batched write of N arrows for an alt-buffer drag', () => {
-    const harness = buildHistoryScroll({ bufferType: 'alternate' });
+  /**
+   * The smooth path, and the one the desktop already proves: with mouse
+   * tracking on, a wheel is LINE granular and xterm encodes the mouse report.
+   * One notch per line, negative toward history.
+   */
+  it('prefers line-granular wheel notches when mouse tracking is on', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
 
-    // 100px down at a 20px cell = 5 lines toward history.
+    // A 20px cell (600px / 30 rows), so 100px is 5 lines.
     harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
 
-    expect(harness.posts()).toHaveLength(1);
-    const escape = String.fromCharCode(27);
-    expect(harness.posts()[0].data).toBe(`${escape}[A`.repeat(5));
-    // The agent owns the scroll in the alt buffer; nothing moves locally.
+    expect(harness.deltas()).toEqual([-20, -20, -20, -20, -20]);
     expect(harness.scrolled()).toEqual([]);
   });
 
-  /** A finger moving UP walks back toward the live tail, so down-arrows. */
-  it('sends down-arrows when the drag returns toward the live tail', () => {
-    const harness = buildHistoryScroll({
-      bufferType: 'alternate',
-      // Give the container no pan left in EITHER direction.
-      container: { scrollTop: 0, scrollHeight: 600, clientHeight: 600 },
-    });
+  /**
+   * The payload shape this design owns: xterm emits per wheel event, so five
+   * notches would otherwise be five relay messages. On a phone that is the
+   * wrong shape, so a burst must arrive as ONE write.
+   */
+  it('coalesces a wheel burst into a single write', () => {
+    const marker = `${String.fromCharCode(27)}[<64;10;10M`;
+    const harness = buildHistoryScroll({ mouseTracking: true, emitPerNotch: marker });
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: -60 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
 
-    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[B`.repeat(3));
+    expect(harness.posts()).toHaveLength(1);
+    expect(harness.posts()[0].data).toBe(marker.repeat(5));
   });
 
   /**
-   * Application-cursor mode changes the introducer. The page already tracks it
-   * for the quick-key arrows, so scrolling must read that same flag rather than
-   * assume one form - a TUI in DECCKM ignores the wrong one.
+   * Without mouse tracking a wheel would degrade to arrow keys, which the agent
+   * reads as input history. Fall back to the control it names on screen
+   * instead: PgUp/PgDn, page granular.
    */
-  it('follows application-cursor mode for the arrow introducer', () => {
-    const harness = buildHistoryScroll({ bufferType: 'alternate', applicationCursorKeys: true });
+  it('falls back to page keys when mouse tracking is off', () => {
+    const harness = buildHistoryScroll({ mouseTracking: false });
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: 40 }] });
+    // A page is the full 600px grid, so 1200px is two of them.
+    harness.consumeHistoryDrag({ touches: [{ clientY: 1200 }] });
 
-    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}OA`.repeat(2));
+    expect(harness.deltas()).toEqual([]);
+    expect(harness.posts()).toHaveLength(1);
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[5~`.repeat(2));
+  });
+
+  /** A finger moving UP walks back toward the live tail: PgDn. */
+  it('sends PgDn when the drag returns toward the live tail', () => {
+    const harness = buildHistoryScroll({ mouseTracking: false });
+
+    harness.consumeHistoryDrag({ touches: [{ clientY: -600 }] });
+
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[6~`);
   });
 
   /**
-   * The NORMAL buffer has real scrollback, so the same gesture must move the
-   * viewport locally: no round trip, and no keystrokes the agent could misread
-   * as input.
+   * Arrows are the thing that does NOT work here: Claude Code reads them as
+   * input-history navigation, so an early build recalled the previous message
+   * into the composer instead of scrolling. The app says so on screen ("Scroll
+   * wheel is sending arrow keys - use PgUp/PgDn to scroll"). Guard the bytes.
    */
-  it('scrolls locally and sends nothing in the normal buffer', () => {
+  it('never sends arrow keys, which the agent reads as input history', () => {
+    const escape = String.fromCharCode(27);
+    for (const mouseTracking of [true, false]) {
+      const harness = buildHistoryScroll({ mouseTracking, emitPerNotch: `${escape}[<64;10;10M` });
+      harness.consumeHistoryDrag({ touches: [{ clientY: 1200 }] });
+      const sent = harness.posts().map((post) => post.data ?? '').join('');
+      for (const arrow of [`${escape}[A`, `${escape}[B`, `${escape}OA`, `${escape}OB`]) {
+        expect(sent, `mouseTracking=${mouseTracking}`).not.toContain(arrow);
+      }
+    }
+  });
+
+  /**
+   * The NORMAL buffer has real scrollback, so the same gesture moves xterm's
+   * own viewport by LINE: smooth, and costing no relay traffic at all.
+   */
+  it('scrolls locally by line and sends nothing in the normal buffer', () => {
     const harness = buildHistoryScroll({ bufferType: 'normal' });
 
+    // A 20px cell (600 / 30 rows), so 100px is 5 lines.
     harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
 
     expect(harness.scrolled()).toEqual([-5]);
@@ -437,7 +498,7 @@ describe('generated xterm.html', () => {
    * A hard fling must not post an arbitrarily long string: every line is one
    * arrow sequence inside the batched write.
    */
-  it('caps the lines one drag step may scroll', () => {
+  it('caps the units one drag step may scroll', () => {
     const harness = buildHistoryScroll({ bufferType: 'normal' });
 
     // 2000px at a 20px cell would be 100 lines.
@@ -454,16 +515,15 @@ describe('generated xterm.html', () => {
    */
   it('pans instead of scrolling history while the container can still move', () => {
     const harness = buildHistoryScroll({
-      bufferType: 'alternate',
       container: { scrollTop: 120, scrollHeight: 1200, clientHeight: 600 },
     });
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientY: 1200 }] });
 
     expect(harness.posts()).toEqual([]);
     // The anchor follows the finger so the pan cannot bank travel that fires as
     // a jump the moment the edge is reached.
-    expect(harness.anchorY()).toBe(100);
+    expect(harness.anchorY()).toBe(1200);
   });
 
   /**
@@ -471,25 +531,25 @@ describe('generated xterm.html', () => {
    * the next event; resetting it would stall a slow drag forever.
    */
   it('banks a sub-line drag instead of discarding it', () => {
-    const harness = buildHistoryScroll({ bufferType: 'normal' });
+    const harness = buildHistoryScroll({ mouseTracking: true });
 
     harness.consumeHistoryDrag({ touches: [{ clientY: 12 }] });
-    expect(harness.scrolled()).toEqual([]);
+    expect(harness.deltas()).toEqual([]);
     expect(harness.anchorY()).toBe(0);
 
     // 12 + 12 = 24px, which clears the 20px cell.
     harness.consumeHistoryDrag({ touches: [{ clientY: 24 }] });
-    expect(harness.scrolled()).toEqual([-1]);
+    expect(harness.deltas()).toEqual([-20]);
     // Only the consumed 20px advanced the anchor; 4px remain banked.
     expect(harness.anchorY()).toBe(20);
   });
 
   /** A second finger is a pinch, never a scroll. */
   it('ignores a multi-touch gesture', () => {
-    const harness = buildHistoryScroll({ bufferType: 'alternate' });
+    const harness = buildHistoryScroll({});
 
     harness.consumeHistoryDrag({ touches: [{ clientY: 100 }, { clientY: 200 }] });
 
-    expect(harness.posts()).toEqual([]);
+    expect(harness.deltas()).toEqual([]);
   });
 });
