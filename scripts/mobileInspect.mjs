@@ -209,8 +209,21 @@ function commandLogcat(args) {
   process.stdout.write(result.stdout);
 }
 
+/**
+ * Which HOST port this command's inspect server binds. Defaults to the port
+ * the app dials (8791); --port picks another for multi-device work. The app
+ * side never changes - map the second device's fixed 8791 to the chosen host
+ * port instead: adb -s <serial> reverse tcp:8791 tcp:<port>. Without this,
+ * two attached devices race for one server and whichever bridge dials first
+ * answers, silently attributing one device's state to the other (a phone
+ * answered for an emulator during the pinch verification - the rig's
+ * reverse-tunnel watchdog restores the phone's mapping within seconds, so
+ * removing it is not a fix).
+ */
+let inspectServerPort = INSPECT_PORT;
+
 function startServer() {
-  return new WebSocketServer({ host: '127.0.0.1', port: INSPECT_PORT });
+  return new WebSocketServer({ host: '127.0.0.1', port: inspectServerPort });
 }
 
 /**
@@ -227,7 +240,7 @@ function requestState(kind, argument, timeoutMs) {
       server = startServer();
     } catch (serverError) {
       reject(
-        new Error(`could not bind 127.0.0.1:${INSPECT_PORT} (another inspect command running?): ${serverError.message}`),
+        new Error(`could not bind 127.0.0.1:${inspectServerPort} (another inspect command running?): ${serverError.message}`),
       );
       return;
     }
@@ -237,7 +250,8 @@ function requestState(kind, argument, timeoutMs) {
       reject(
         new Error(
           `timed out after ${timeoutMs}ms waiting for the app. Checklist: dev rig running (it sets ` +
-            `EXPO_PUBLIC_KANGENTIC_INSPECT=1 and adb reverse tcp:${INSPECT_PORT})? App foregrounded on a dev build?`,
+            `EXPO_PUBLIC_KANGENTIC_INSPECT=1 and adb reverse tcp:${INSPECT_PORT})? App foregrounded on a dev build? ` +
+            `If --port was used, is the device's reverse mapped to it (adb reverse tcp:${INSPECT_PORT} tcp:${inspectServerPort})?`,
         ),
       );
     }, timeoutMs);
@@ -413,6 +427,12 @@ function commandPinch(scale, dragY) {
   const lines = [];
   const emit = (type, code, value) => lines.push(`sendevent ${touchscreen.path} ${type} ${code} ${value}`);
   const syn = () => lines.push(`sendevent ${touchscreen.path} ${TOUCH_EVENT_CODES.synReport}`);
+  // Real gestures take real time, and the code under test depends on it: the
+  // pinch-ended message crosses the RN->WebView bridge asynchronously, so a
+  // drag replayed with no delays finishes before active:false can land and
+  // reads as "still pinching" - which is a fact about the replay speed, not
+  // the gesture code. Toybox sleep takes fractional seconds.
+  const pause = (seconds) => lines.push(`sleep ${seconds}`);
   const placeFinger = (slot, x, y, trackingId) => {
     emit(3, TOUCH_EVENT_CODES.absMtSlot, slot);
     if (trackingId !== undefined) emit(3, TOUCH_EVENT_CODES.absMtTrackingId, trackingId);
@@ -435,6 +455,7 @@ function commandPinch(scale, dragY) {
     placeFinger(0, centerX - separation / 2, centerY);
     placeFinger(1, centerX + separation / 2, centerY);
     syn();
+    pause(0.02);
   }
 
   if (dragY === null) {
@@ -444,14 +465,18 @@ function commandPinch(scale, dragY) {
     syn();
   } else {
     // The failing sequence: drop to ONE finger (touchend, never touchstart)
-    // and drag with what is left.
+    // and drag with what is left. The pause after the lift is the human gap
+    // between releasing the pinch and starting to drag - also the window the
+    // pinch-ended bridge message needs to reach the page.
     liftFinger(1);
     syn();
+    pause(0.25);
     const dragSteps = 20;
     const dragStartX = centerX - endSeparation / 2;
     for (let step = 1; step <= dragSteps; step += 1) {
       placeFinger(0, dragStartX, centerY + (dragY * step) / dragSteps);
       syn();
+      pause(0.03);
     }
     liftFinger(0);
     emit(1, TOUCH_EVENT_CODES.btnTouch, 0);
@@ -611,7 +636,17 @@ function commandRelaunch() {
   fail(`relaunch: ${APP_PACKAGE} never reached the foreground after 4 launch attempts`);
 }
 
-const [command, ...rest] = extractSerialFlag(process.argv.slice(2));
+const [command, ...rawRest] = extractSerialFlag(process.argv.slice(2));
+// Strip --port <n> the same way --serial is stripped, so every subcommand
+// accepts it without threading it through each parser.
+const portFlagIndex = rawRest.indexOf('--port');
+let rest = rawRest;
+if (portFlagIndex !== -1) {
+  const portValue = Number(rawRest[portFlagIndex + 1]);
+  if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) fail('--port needs a port number');
+  inspectServerPort = portValue;
+  rest = [...rawRest.slice(0, portFlagIndex), ...rawRest.slice(portFlagIndex + 2)];
+}
 ensureSingleAdbTarget();
 // The async commands reject with a plain Error; route those through fail() so a
 // timeout reads as one diagnostic line rather than an unhandled-rejection dump.

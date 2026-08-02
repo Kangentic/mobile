@@ -114,6 +114,10 @@ const bridgeGlue = `
   var touchCounts = { start: 0, move: 0, end: 0, cancel: 0 };
   // Set by the host while its pinch gesture is live; see the 'pinch' message.
   var pinchActive = false;
+  // How many pinch reports have ARRIVED, by direction. Separates "the RN layer
+  // never posted" from "the page mishandled what it got" - from outside, both
+  // look like a drag that would not scroll.
+  var pinchMessageCounts = { activeTrue: 0, activeFalse: 0 };
   // Input-to-repaint measurement: when a scroll burst was posted, and how long
   // until the FIRST write came back. That gap is what decides whether stepped
   // scrolling reads as responsive or sluggish, and it is the input to the
@@ -963,6 +967,8 @@ const bridgeGlue = `
       tapDirty = true;
       refit();
     } else if (message.type === 'pinch') {
+      if (message.active === true) pinchMessageCounts.activeTrue += 1;
+      else pinchMessageCounts.activeFalse += 1;
       pinchActive = message.active === true;
       // A finished pinch leaves this page's touch bookkeeping unreliable (it
       // may never have seen touchend for the second finger), so drop the drag
@@ -1108,6 +1114,7 @@ const bridgeGlue = `
       historyDragAxis: historyDragAxis,
       historyDragAnchorY: historyDragAnchorY,
       pinchActive: pinchActive,
+      pinchMessageCounts: JSON.parse(JSON.stringify(pinchMessageCounts)),
       heightFitGeneration: heightFitGeneration,
       lastScrollDecision: lastScrollDecision,
       scrollPostCount: scrollPostCount,

@@ -508,6 +508,15 @@ describe('generated xterm.html', () => {
     expect(touchesDownBody).toContain('numberOfTouches >= 2');
     // active:false must ride onFinalize, which fires on end AND fail/cancel.
     expect(paneSource).toContain('.onFinalize(');
+    // ...and ALSO on the finger count dropping below two: RNGH keeps the pinch
+    // handler alive until the LAST finger lifts (PinchGestureHandler.kt ends
+    // only on ACTION_UP), so onFinalize alone held the flag up through the
+    // whole pinch-keep-one-finger-drag motion.
+    const touchesUpBody = paneSource.slice(
+      paneSource.indexOf('.onTouchesUp('),
+      paneSource.indexOf('.onTouchesCancelled('),
+    );
+    expect(touchesUpBody).toContain('numberOfTouches <= 1');
   });
 
   /**

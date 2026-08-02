@@ -163,17 +163,45 @@ node scripts/mobileInspect.mjs term scroll <units> # a raw history burst, skippi
 node scripts/mobileInspect.mjs term dragunits <px> # what a drag of N px WOULD compute
 node scripts/mobileInspect.mjs term swipe <dy> [ms]  # a real one-finger drag via adb
 node scripts/mobileInspect.mjs term pinch <scale> [--drag <dy>]   # EMULATOR ONLY, see below
+node scripts/mobileInspect.mjs term hostmsg '<json>'  # inject a host->terminal bridge message
 ```
+
+Every command also accepts `--port <n>` alongside `--serial`: it binds the inspect server on a
+different HOST port for multi-device work. With two devices attached, both dial host 8791 and
+whichever bridge connects first answers - which silently attributes one device's state to the
+other (a phone answered for an emulator during the pinch verification, and the rig's
+reverse-tunnel watchdog restores the phone's mapping within seconds, so removing it is not a
+fix). Instead map the second device's fixed in-app 8791 to a spare host port and address it
+directly:
+
+```
+adb -s emulator-5554 reverse tcp:8791 tcp:8793
+node scripts/mobileInspect.mjs term state --serial emulator-5554 --port 8793
+```
+
+`hostmsg` closes the other reproduction gap: bridge messages that only the RN layer ever sends
+(the `pinch` lifecycle) are otherwise unreachable from any script. It dispatches a window
+MessageEvent, exactly how react-native-webview delivers real ones.
 
 `font` posts the same message a pinch does, so a scripted zoom and a real one cannot diverge on
 the FONT. `swipe` drives real MotionEvents (use a long duration - a fast swipe delivers too few
 move samples for the drag handler to fire, which reads as "scrolling is broken" when it merely
 had nothing to consume).
 
-**Multi-touch is the one real gap.** `adb shell input` has no multi-touch at all, and
+**Multi-touch works on the emulator only.** `adb shell input` has no multi-touch at all, and
 `term pinch` writes raw protocol-B events to the touchscreen node, which needs root - so it
-works on an EMULATOR and fails cleanly on a production physical device. On a phone, dispatch
-the DOM sequence instead:
+works on an EMULATOR (after `adb root`; reverses do not survive the adbd restart, re-apply
+them) and fails cleanly on a production physical device. The replay is human-timed on purpose:
+the pinch-lifecycle bridge messages cross to the WebView asynchronously, so a replay with no
+delays finishes before they land and "fails" in a way no finger can reproduce.
+
+One behavior is a PLATFORM FACT, not a bug: while RNGH's pinch is activated, Android delivers
+the WebView no further touch events at all (measured: a 600ms 20-step post-pinch drag reached
+the page as 4 touchmoves and 0 touchends). So a continuous pinch-keep-one-finger-drag cannot
+scroll - the page never sees the drag. Lifting all fingers and dragging fresh works, and is the
+gesture users actually make.
+
+On a phone, dispatch the DOM sequence instead:
 
 ```
 node scripts/mobileInspect.mjs term eval "(function(){var c=document.getElementById('scroll-container');...})()"
