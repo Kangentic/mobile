@@ -107,6 +107,11 @@ const bridgeGlue = `
   // they are indistinguishable from outside; this names which one was taken.
   var lastScrollDecision = null;
   var scrollPostCount = 0;
+  // Raw touch delivery counts. The gesture handler reporting nothing is
+  // ambiguous on its own: the events may never have reached the page at all
+  // (the browser claimed the gesture, or something above the WebView did),
+  // which is a completely different fault from a handler that ran and bailed.
+  var touchCounts = { start: 0, move: 0, end: 0, cancel: 0 };
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -1039,6 +1044,7 @@ const bridgeGlue = `
       heightFitGeneration: heightFitGeneration,
       lastScrollDecision: lastScrollDecision,
       scrollPostCount: scrollPostCount,
+      touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }
 
@@ -1086,6 +1092,7 @@ const bridgeGlue = `
       container.addEventListener('touchstart', function (touchEvent) {
         // The user has taken the wheel: stop holding column 0 and let
         // follow-the-cursor resume once their pan settles.
+        touchCounts.start += 1;
         pinnedToStart = false;
         manualPanUntil = Date.now() + MANUAL_PAN_PAUSE_MS;
         if (touchEvent.touches.length === 1) {
@@ -1102,6 +1109,7 @@ const bridgeGlue = `
         }
       }, { passive: true });
       container.addEventListener('touchmove', function (touchEvent) {
+        touchCounts.move += 1;
         // History scrolling runs BEFORE the tap bookkeeping's early return: a
         // drag is exactly the gesture that dirties the tap, so gating it behind
         // that check would mean it never ran at all.
@@ -1114,7 +1122,17 @@ const bridgeGlue = `
         var deltaY = touchEvent.touches[0].clientY - tapStartY;
         if (deltaX * deltaX + deltaY * deltaY > TAP_SLOP_PX * TAP_SLOP_PX) tapDirty = true;
       }, { passive: true });
+      // A cancel is the browser TAKING the gesture (it decided the drag is a
+      // native pan). Without a handler the anchor was left dangling, so the
+      // next drag resumed from a stale reference point.
+      container.addEventListener('touchcancel', function () {
+        touchCounts.cancel += 1;
+        historyDragAnchorY = null;
+        historyDragAxis = null;
+        tapDirty = true;
+      }, { passive: true });
       container.addEventListener('touchend', function (touchEvent) {
+        touchCounts.end += 1;
         if (touchEvent.touches.length > 0) return;
         historyDragAnchorY = null;
         if (!tapDirty && Date.now() - tapStartAt <= TAP_MAX_MS) {
