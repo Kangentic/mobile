@@ -61,6 +61,13 @@ export type TerminalToHostMessage =
       mouseTrackingMode: string;
       mouseEncoding: string;
       alternateBuffer: boolean;
+      /**
+       * True for the FIRST report after a (re-)init: a baseline describing
+       * whatever the replayed seed established, not a mode the desktop changed.
+       * A baseline must never overwrite stored modes, or a seed that lacked the
+       * DECSETs latches the degraded state in permanently.
+       */
+      initial: boolean;
     }
   /** The glue changed the font size autonomously (fit-to-screen zoom); keeps the host's pinch base in sync. */
   | { type: 'font-size'; fontSizePx: number }
@@ -134,6 +141,10 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
       mouseTrackingMode: typeof parsedObject.mouseTrackingMode === 'string' ? parsedObject.mouseTrackingMode : 'none',
       mouseEncoding: typeof parsedObject.mouseEncoding === 'string' ? parsedObject.mouseEncoding : 'DEFAULT',
       alternateBuffer: parsedObject.alternateBuffer === true,
+      // Defaults TRUE for an older page: treating an unknown report as a
+      // baseline is the safe direction, since the cost is a missed mode change
+      // rather than a permanently latched degraded state.
+      initial: parsedObject.initial !== false,
     };
   }
   if (parsedObject.type === 'font-size' && isFiniteNumber(parsedObject.fontSizePx)) {

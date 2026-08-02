@@ -430,12 +430,22 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         // Remembered so the NEXT init can replay them. The WebView's parser is
         // the only place these are known, and a terminal rebuilt from a ring
         // that has evicted the TUI's startup DECSETs cannot rediscover them.
-        terminalUi.setStickyModes(sessionId, {
-          applicationCursorKeys: message.applicationCursorKeys,
-          mouseTrackingMode: message.mouseTrackingMode,
-          mouseEncoding: message.mouseEncoding,
-          alternateBuffer: message.alternateBuffer,
-        });
+        //
+        // An INITIAL report is skipped once something is already stored: it
+        // only describes what the seed established, so letting it write would
+        // let a seed that lacked the DECSETs overwrite the very modes being
+        // held to restore them - and since every later init would report the
+        // same degraded baseline, the terminal could never climb back out.
+        // Observed exactly that way while testing this fix.
+        const alreadyStored = terminalUi.stickyModesBySessionId[sessionId] !== undefined;
+        if (!message.initial || !alreadyStored) {
+          terminalUi.setStickyModes(sessionId, {
+            applicationCursorKeys: message.applicationCursorKeys,
+            mouseTrackingMode: message.mouseTrackingMode,
+            mouseEncoding: message.mouseEncoding,
+            alternateBuffer: message.alternateBuffer,
+          });
+        }
         return;
       }
       if (message.type === 'font-size') {

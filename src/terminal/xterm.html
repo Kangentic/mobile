@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 17e15a58544d) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build e0b88470d397) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -523,6 +523,14 @@ return exports; })();
       mouseTrackingMode: terminal.modes.mouseTrackingMode || 'none',
       mouseEncoding: coreMouseEncoding().encoding,
       alternateBuffer: terminal.buffer.active.type === 'alternate',
+      // The FIRST report after a (re-)init is a baseline, not a transition: it
+      // describes whatever the replayed seed happened to establish. Only a
+      // later report reflects the desktop actually changing a mode. The host
+      // needs the difference - a baseline that says "no mouse reporting"
+      // because the seed lacked the DECSETs must not be allowed to overwrite
+      // the modes it is holding in order to restore them, which would latch the
+      // degraded state in permanently.
+      initial: lastReportedModes === null,
     };
     if (
       lastReportedModes !== null &&
@@ -954,6 +962,12 @@ return exports; })();
       cleanFeedWrite(initMessage.scrollback);
     } else {
       applyGeometry();
+      // An EMPTY seed still has modes worth reporting: the host writes the
+      // restore prefix into this same field, and a session whose ring has not
+      // filled yet (fresh subscribe, post-reconnect, a swap before any bytes
+      // land) would otherwise never report at all, leaving the host with no
+      // confirmation that the terminal came up in the right state.
+      reportModesIfFlipped();
     }
     // Cell metrics AND the viewport height can settle a frame after open();
     // re-fit the font (not just the geometry) once they have.
@@ -1281,7 +1295,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: '17e15a58544d',
+      buildId: 'e0b88470d397',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
