@@ -336,6 +336,7 @@ describe('generated xterm.html', () => {
     let feed: ((data: string) => void) | null = null;
     const terminal = {
       rows: 30,
+      cols: 80,
       buffer: { active: { type: options.bufferType ?? 'alternate' } },
       modes: { mouseTrackingMode: options.mouseTracking ? 'vt200' : 'none' },
       element: {
@@ -426,9 +427,11 @@ describe('generated xterm.html', () => {
     // A 20px cell (600px / 30 rows), so 100px is 5 lines.
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
-    // 20px CSS cell x dpr 2 = 40 DEVICE px per notch, which is what xterm's
-    // wheel handler measures against.
-    expect(harness.deltas()).toEqual([-40, -40, -40, -40, -40]);
+    // One SGR wheel-up report per line, written directly rather than routed
+    // through xterm's wheel handler (whose internal accumulator emitted on
+    // roughly one notch in three, or none at all, depending on the units used).
+    expect(harness.posts()).toHaveLength(1);
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[<64;40;15M`.repeat(5));
     expect(harness.scrolled()).toEqual([]);
   });
 
@@ -438,13 +441,13 @@ describe('generated xterm.html', () => {
    * wrong shape, so a burst must arrive as ONE write.
    */
   it('coalesces a wheel burst into a single write', () => {
-    const marker = `${String.fromCharCode(27)}[<64;10;10M`;
-    const harness = buildHistoryScroll({ mouseTracking: true, emitPerNotch: marker });
+    const harness = buildHistoryScroll({ mouseTracking: true });
 
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
+    // Five lines, ONE relay message.
     expect(harness.posts()).toHaveLength(1);
-    expect(harness.posts()[0].data).toBe(marker.repeat(5));
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[<64;40;15M`.repeat(5));
   });
 
   /**
@@ -533,9 +536,8 @@ describe('generated xterm.html', () => {
 
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
-    // 20px CSS cell x dpr 2 = 40 DEVICE px per notch, which is what xterm's
-    // wheel handler measures against.
-    expect(harness.deltas()).toEqual([-40, -40, -40, -40, -40]);
+    expect(harness.posts()).toHaveLength(1);
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[<64;40;15M`.repeat(5));
   });
 
   /**
@@ -566,7 +568,7 @@ describe('generated xterm.html', () => {
 
     // 12 + 12 = 24px, which clears the 20px cell.
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 24 }] });
-    expect(harness.deltas()).toEqual([-40]);
+    expect(harness.posts()).toHaveLength(1);
     // Only the consumed 20px advanced the anchor; 4px remain banked.
     expect(harness.anchorY()).toBe(20);
   });
