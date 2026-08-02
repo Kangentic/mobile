@@ -131,6 +131,7 @@ describe('generated xterm.html', () => {
       'heightFitGeneration',
       'MAX_LINE_HEIGHT',
       'HEIGHT_FIT_TOLERANCE_PX',
+      'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
       'MIN_AUTO_FONT_PX',
       'initialFontSizePx',
       `var currentFontSizePx = initialFontSizePx;
@@ -155,6 +156,7 @@ describe('generated xterm.html', () => {
       1,
       1.3,
       0.5,
+      2,
       6,
       options.fontSizePx,
     );
@@ -368,6 +370,7 @@ describe('generated xterm.html', () => {
     maybeStartHistoryFling: () => void;
     stopHistoryFling: () => void;
     scrollToLatest: () => void;
+    netHistoryUnits: () => number;
     flingStats: () => { started: number; totalUnits: number };
     scrolledToBottom: () => number;
     advanceTime: (deltaMs: number) => void;
@@ -445,12 +448,15 @@ describe('generated xterm.html', () => {
        var SCROLL_TO_LATEST_WHEEL_UNITS = 500;
        var SCROLL_TO_LATEST_PAGE_KEYS = 30;
        var initCounts = { hard: 0, soft: 0 };
+       var netHistoryUnits = 0;
+       var lastUserScrollAt = 0;
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
          maybeStartHistoryFling: maybeStartHistoryFling,
          stopHistoryFling: stopHistoryFling,
          scrollToLatest: scrollToLatest,
+         netHistoryUnits: function () { return netHistoryUnits; },
          flingStats: function () { return flingStats; },
          anchorY: function () { return historyDragAnchorY; },
          clearAnchor: function () { historyDragAnchorY = null; historyDragAxis = null; },
@@ -466,6 +472,7 @@ describe('generated xterm.html', () => {
       maybeStartHistoryFling: () => void;
       stopHistoryFling: () => void;
       scrollToLatest: () => void;
+      netHistoryUnits: () => number;
       flingStats: () => { started: number; totalUnits: number };
       anchorY: () => number | null;
       clearAnchor: () => void;
@@ -500,6 +507,7 @@ describe('generated xterm.html', () => {
       maybeStartHistoryFling: built.maybeStartHistoryFling,
       stopHistoryFling: built.stopHistoryFling,
       scrollToLatest: built.scrollToLatest,
+      netHistoryUnits: built.netHistoryUnits,
       flingStats: built.flingStats,
       scrolledToBottom: () => bottomJumps,
       advanceTime: (deltaMs: number) => {
@@ -828,14 +836,19 @@ describe('generated xterm.html', () => {
    * every mechanism, which makes the overshoot exact. With real scrollback it
    * stays local and free.
    */
-  it('jumps to the latest output on each mechanism', () => {
+  /**
+   * The jump is Ctrl+End ALONE: the TUI's own depth-independent binding. The
+   * first version rode a 500-wheel-report burst along as a fallback, and the
+   * agent's stdin parser mis-split it at a buffer boundary, leaking "5;24M"
+   * fragments into the composer as literal text. Seven bytes cannot mis-split,
+   * so NOTHING may ride along - the no-burst assertions are the regression
+   * guard for that incident.
+   */
+  it('jumps to the latest output with Ctrl+End and nothing else', () => {
     const viaMouse = buildHistoryScroll({ mouseTracking: true });
     viaMouse.scrollToLatest();
     expect(viaMouse.posts()).toHaveLength(1);
-    // 500 wheel-DOWN reports (button 65), one write.
-    const burst = viaMouse.posts()[0].data ?? '';
-    expect(burst.match(/\[<65;/g)).toHaveLength(500);
-    expect(burst).not.toContain('[<64;');
+    expect(viaMouse.posts()[0].data).toBe(`${String.fromCharCode(27)}[1;5F`);
 
     const viaViewport = buildHistoryScroll({ bufferType: 'normal' });
     viaViewport.scrollToLatest();
@@ -845,7 +858,28 @@ describe('generated xterm.html', () => {
     const viaPageKeys = buildHistoryScroll({ mouseTracking: false, bufferType: 'alternate' });
     viaPageKeys.scrollToLatest();
     expect(viaPageKeys.posts()).toHaveLength(1);
-    expect((viaPageKeys.posts()[0].data ?? '').match(/\[6~/g)).toHaveLength(30);
+    expect(viaPageKeys.posts()[0].data).toBe(`${String.fromCharCode(27)}[1;5F`);
+  });
+
+  /**
+   * The probe's "how far back has THIS PHONE scrolled the shared view"
+   * ledger. Follow semantics are the classic contract - at the bottom output
+   * follows natively, scrolled up the view STAYS (a timed auto-return was
+   * built and removed on the user's direction) - so this ledger is
+   * diagnostics, not behavior: it answers "who scrolled the desktop back".
+   */
+  it('keeps a net ledger of phone-caused scrollback', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+
+    // 100px at a 20px cell = 5 units into history.
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
+    expect(harness.netHistoryUnits()).toBe(5);
+    // Dragging 40px back toward the tail repays 2.
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 60 }] });
+    expect(harness.netHistoryUnits()).toBe(3);
+    // The jump anchors the tail; the ledger clamps at zero, never negative.
+    harness.scrollToLatest();
+    expect(harness.netHistoryUnits()).toBe(0);
   });
 
   /** A finger landing mid-glide catches the scroll, native-scroller style. */

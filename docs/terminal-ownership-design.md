@@ -277,6 +277,29 @@ this continuously (`lastScrollRoundTripMs` in the terminal probe).
 Note this also explains why the phone's `scrollback: 2000` setting has never helped: in the alt
 buffer there is nothing in it to reach.
 
+### Alignment with Claude Code's own fullscreen contract (checked 2026-08-02)
+
+Everything the phone sends maps 1:1 onto the OFFICIALLY DOCUMENTED fullscreen controls
+(code.claude.com/docs/en/fullscreen), checked deliberately so the mirror never builds an
+unconventional layer on top of supported behavior:
+
+| Phone surface | Wire bytes | Documented as |
+| --- | --- | --- |
+| Drag / fling | SGR wheel reports | "Mouse wheel scrolls a few lines at a time" |
+| Jump-to-latest button | Ctrl+End (CSI 1;5F) | "Ctrl+End jumps to the latest message and re-enables auto-follow" |
+| Page fallback | PgUp/PgDn | "PgUp/PgDn scroll by half a screen" |
+
+Follow semantics are therefore the AGENT'S own, not ours: scrolling up disengages its
+auto-follow, Ctrl+End re-enables it. A phone-side timed auto-return was built and removed the
+same morning - the agent already owns that state machine, and stacking a second one on top is
+exactly the kind of unconventional wrapper to avoid. Everything else the phone does (sticky-mode
+replay, gestures, zoom-follow, fit) is render-local and never reaches the wire.
+
+One hazard is recorded from the same session: a 500-report wheel burst sent as one write leaked
+mis-split fragments ("5;24M") into the composer as literal text - an agent's stdin parser is
+not guaranteed to reassemble escape sequences across its buffer boundaries. Scroll bursts stay
+small (the drag path caps at 12 reports per write); nothing may ever ride along with a key.
+
 ### What "scrolling broke after zoom" actually was (resolved 2026-08-02)
 
 Four stacked causes, each found by measurement and each with its own fix and regression test:

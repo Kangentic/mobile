@@ -89,6 +89,13 @@ const bridgeGlue = `
   // plus a settling measure.
   var HEIGHT_FIT_PASSES = 4;
   var HEIGHT_FIT_TOLERANCE_PX = 0.5;
+  // The fit aims this far SHORT of the viewport floor. The tolerance band
+  // accepts up to half a pixel of overflow and xterm ceils each row's height,
+  // so a fit that aims at the exact floor can legally shave the bottom row's
+  // descenders - live report: "auto mode on - 1 shell is just barely cut
+  // off". Two pixels of clearance costs nothing visible and makes the last
+  // row whole by construction.
+  var HEIGHT_FIT_BOTTOM_CLEARANCE_PX = 2;
   // Bumps on every refit so a fit still converging cannot keep adjusting the
   // grid underneath the one that replaced it (a keyboard open fires several
   // viewport changes in a row, and two live loops would each step the font).
@@ -119,8 +126,15 @@ const bridgeGlue = `
   // every mechanism, so overshooting reaches the tail from any depth without
   // knowing it; the constants just bound the one-shot payload (~11 bytes per
   // wheel report, 4 per page key).
-  var SCROLL_TO_LATEST_WHEEL_UNITS = 500;
-  var SCROLL_TO_LATEST_PAGE_KEYS = 30;
+  // FOLLOW SEMANTICS are the classic terminal contract: AT the bottom, new
+  // output follows (which the agent does natively - when its view is at the
+  // tail, that is where it draws); scrolled UP, the view STAYS where the user
+  // put it until they return - by the jump button, a downward flick, or
+  // typing (the TUI snaps to the tail on input). A timed auto-return was
+  // built and then removed here on the user's direction: yanking a reader
+  // back mid-history is the worse failure. The screen state is SHARED
+  // (scrolling the phone scrolls the desktop's view too), which is why the
+  // jump button exists at all.
   // Built rather than escaped: this glue lives inside a template literal in
   // scripts/buildXtermHtml.mjs, where a backslash escape would be consumed by
   // the generator instead of reaching the page.
@@ -431,6 +445,9 @@ const bridgeGlue = `
    */
   function scrollHistoryByUnits(units, mechanism) {
     if (!terminal || !units) return;
+    // The phone's own contribution to the shared scroll position. Negative
+    // units go toward history; overshooting back down clamps to "at the tail".
+    netHistoryUnits = Math.max(0, netHistoryUnits - units);
     if (mechanism === 'viewport') {
       terminal.scrollLines(units);
       return;
@@ -574,6 +591,7 @@ const bridgeGlue = `
       mechanism: mechanism,
     };
     scrollPostCount += 1;
+    lastUserScrollAt = Date.now();
     scrollHistoryByUnits(units, mechanism);
   }
 
@@ -643,6 +661,8 @@ const bridgeGlue = `
         bankPx += units * unitHeight;
         unitsEmitted += Math.abs(units);
         flingStats.totalUnits += Math.abs(units);
+        // The glide is the user's scroll still in motion.
+        lastUserScrollAt = Date.now();
         scrollHistoryByUnits(units, mechanism);
       }
       if (Math.abs(velocityPxPerMs) >= FLING_MIN_KEEP_VELOCITY_PX_PER_MS && unitsEmitted < FLING_MAX_UNITS_TOTAL) {
@@ -663,10 +683,21 @@ const bridgeGlue = `
     stopHistoryFling();
     var mechanism = scrollMechanism();
     if (mechanism === 'viewport') {
+      netHistoryUnits = 0;
       terminal.scrollToBottom();
       return;
     }
-    scrollHistoryByUnits(mechanism === 'mouse' ? SCROLL_TO_LATEST_WHEEL_UNITS : SCROLL_TO_LATEST_PAGE_KEYS, mechanism);
+    // Ctrl+End (CSI 1;5F), ALONE. It is the TUI's own jump-to-bottom binding
+    // and depth-independent, where any overshoot burst is a bet on depth -
+    // live use found the tail 500+ lines away, and worse, a 500-report burst
+    // leaked mis-split fragments ("5;24M") into the composer as literal text:
+    // an agent's stdin parser is not guaranteed to reassemble sequences across
+    // its own buffer boundaries, so BIG BURSTS ARE HAZARDOUS, not merely
+    // wasteful. Seven bytes cannot mis-split. A TUI that does not bind
+    // Ctrl+End simply ignores it, and drag/fling still work there.
+    lastScrollInputAt = Date.now();
+    postToHost({ type: 'input', data: ESCAPE + '[1;5F' });
+    netHistoryUnits = 0;
   }
 
   // Ported from the desktop renderer's terminal-webgl.ts. xterm's WebGL renderer
@@ -834,6 +865,7 @@ const bridgeGlue = `
     stopHistoryFling();
     dragSamples = [];
     applyVerticalOffset(0);
+    netHistoryUnits = 0;
     // Every (re-)init is a fresh open - including a session swap and the
     // re-seed when the pane becomes visible again - so the frame starts at
     // column 0 rather than inheriting the previous view's pan.
@@ -926,6 +958,7 @@ const bridgeGlue = `
     stopHistoryFling();
     dragSamples = [];
     applyVerticalOffset(0);
+    netHistoryUnits = 0;
     pinnedToStart = true;
     if (initMessage.theme && typeof initMessage.theme.background === 'string') {
       document.documentElement.style.background = initMessage.theme.background;
@@ -1007,12 +1040,21 @@ const bridgeGlue = `
     if (!screen) return;
     var screenHeight = screen.getBoundingClientRect().height;
     if (!(screenHeight > 0) || terminal.rows < 1) return;
+    var viewportHeight = window.innerHeight - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
+    var currentLineHeight = terminal.options.lineHeight || 1;
     if (passesLeft <= 1) {
+      // Out of passes. One correction is still safe without a re-measure: an
+      // overshooting stretch only ever SHRINKS when handed back, so paying it
+      // back blind cannot clip anything - while skipping it can, and did: a
+      // stretch that crossed xterm's per-row ceil on the fit's last
+      // adjustment pass used to be left overflowing, with the bottom row
+      // sliced off by exactly that extra pixel per row.
+      if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX && currentLineHeight > 1.005) {
+        terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+      }
       centerGridVertically(screenHeight);
       return;
     }
-    var viewportHeight = window.innerHeight;
-    var currentLineHeight = terminal.options.lineHeight || 1;
     var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
     if (!(baseCellHeight > 0)) return;
     var adjusted = false;
@@ -1290,6 +1332,12 @@ const bridgeGlue = `
   // How many re-seeds took the in-place reset vs a full DOM rebuild; the dev
   // probe's way to verify the reset button stopped hard-flashing.
   var initCounts = { hard: 0, soft: 0 };
+  // How far back THIS PHONE has scrolled the shared view (net units toward
+  // history since the last tail anchor) and when the user last scrolled.
+  // Diagnostics for the probe - "is the mirror scrolled back, and whose fault
+  // is it" was previously unanswerable from outside.
+  var netHistoryUnits = 0;
+  var lastUserScrollAt = 0;
 
   /**
    * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
@@ -1384,6 +1432,7 @@ const bridgeGlue = `
       verticalOffsetPx: verticalOffsetPx,
       flingStats: JSON.parse(JSON.stringify(flingStats)),
       initCounts: JSON.parse(JSON.stringify(initCounts)),
+      netHistoryUnits: netHistoryUnits,
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }
