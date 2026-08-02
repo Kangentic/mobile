@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 60a9885f48e7) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build ce4fe536011f) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -453,9 +453,9 @@ return exports; })();
   // back mid-history is the worse failure. The screen state is SHARED
   // (scrolling the phone scrolls the desktop's view too), which is why the
   // jump button exists at all.
-  // Built rather than escaped: this glue lives inside a template literal in
-  // scripts/buildXtermHtml.mjs, where a backslash escape would be consumed by
-  // the generator instead of reaching the page.
+  // Built rather than written as a string escape: a leftover from when this
+  // glue lived inside a template literal, kept because every escape-sequence
+  // constant in the page derives from it and one spelling beats two.
   var ESCAPE = String.fromCharCode(27);
   // What consumeHistoryDrag last decided, and how many bursts it has posted.
   // Read only by the dev probe below. A gesture that "did nothing" has several
@@ -494,6 +494,55 @@ return exports; })();
   var cleanLastLines = [];
   var CLEAN_FEED_DEBOUNCE_MS = 48;
   var CLEAN_FEED_SCROLLBACK = 200;
+
+  // Clean-tap detection (tap toggles the host-side keyboard; drags, pans,
+  // and pinches never do): a single touch that ends within the slop radius
+  // and time budget posts 'tapped' to the host. Any second finger or real
+  // movement marks the gesture dirty.
+  var TAP_SLOP_PX = 12;
+  var TAP_MAX_MS = 350;
+  var tapStartX = 0;
+  var tapStartY = 0;
+  var tapStartAt = 0;
+  var tapDirty = true;
+  // Moving reference point for history scrolling (see consumeHistoryDrag). Null
+  // whenever the gesture is not a single finger, so a pinch never scrolls.
+  var historyDragAnchorY = null;
+  // Fixed start of the gesture, used only to decide the axis (the anchor above
+  // moves as travel is consumed, so it cannot answer "how far overall").
+  var historyDragStartX = 0;
+  // 'vertical' | 'horizontal' | null, latched once per gesture.
+  var historyDragAxis = null;
+  // Travel before the axis is decided. Matches the tap slop, so the same small
+  // movement that still counts as a tap also commits to no axis.
+  var DRAG_AXIS_SLOP_PX = 12;
+  // Momentum state: the velocity window's samples, the generation that cancels
+  // an in-flight glide (same pattern as heightFitGeneration), and the stats
+  // the dev probe reports.
+  var dragSamples = [];
+  var flingGeneration = 0;
+  var flingStats = { started: 0, totalUnits: 0 };
+  // How many re-seeds took the in-place reset vs a full DOM rebuild; the dev
+  // probe's way to verify the reset button stopped hard-flashing.
+  var initCounts = { hard: 0, soft: 0 };
+  // How far back THIS PHONE has scrolled the shared view (net units toward
+  // history since the last tail anchor) and when the user last scrolled.
+  // Diagnostics for the probe - "is the mirror scrolled back, and whose fault
+  // is it" was previously unanswerable from outside.
+  var netHistoryUnits = 0;
+  var lastUserScrollAt = 0;
+  // Armed by a jump: the redraw it triggers is a full-frame burst, exactly
+  // the paint the Android WebView renderer sometimes drops (black terminal
+  // until a 1px scroll). The first write after a jump forces a whole-canvas
+  // repaint once flushed. Counted for the probe.
+  var pendingJumpRepaint = false;
+  var jumpRepaintCount = 0;
+  // Jump timeline for the probe: when the jump was sent, how long until its
+  // redraw came back (null = nothing arrived, the blank-frame case), and how
+  // many render nudges went out.
+  var lastJumpAt = null;
+  var lastJumpFirstWriteMs = null;
+  var jumpNudgeCount = 0;
 
   function postToHost(message) {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -1205,7 +1254,16 @@ return exports; })();
   }
   // --- end clean feed -----------------------------------------------------
 
-  function createTerminal(initMessage) {
+  /**
+   * The reset both init paths share, before their halves diverge into
+   * construction vs reset(): adopt the new grid and font, clear the
+   * per-session view state (modes, pan, zoom-follow translate, glide,
+   * scrollback ledger), repaint the page background, zero the vertical
+   * centring, and rebuild the clean-feed parser. The grid host SURVIVES a
+   * re-init (only its children are replaced), which is why the translate,
+   * the padding, and the pan must be reset by hand here.
+   */
+  function resetSessionViewState(initMessage) {
     knownCols = initMessage.cols;
     knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
     // Capped even on the legacy no-dims path (autoFitFontToScreen early-returns
@@ -1214,9 +1272,6 @@ return exports; })();
     lastAppCursorMode = false;
     lastReportedModes = null;
     manualPanUntil = 0;
-    // The grid host SURVIVES a re-init (only its children are replaced), so a
-    // zoom-follow translate from the previous session would otherwise shift
-    // the new frame. Same for a glide still in flight.
     stopHistoryFling();
     dragSamples = [];
     applyVerticalOffset(0);
@@ -1225,7 +1280,6 @@ return exports; })();
     // re-seed when the pane becomes visible again - so the frame starts at
     // column 0 rather than inheriting the previous view's pan.
     pinnedToStart = true;
-    cleanFeedEnabled = initMessage.cleanFeed === true;
     // The row-stretch fill can leave a sub-row remainder below the last row;
     // paint the page in the terminal's own background so it never reads as a
     // seam against the host screen.
@@ -1233,12 +1287,40 @@ return exports; })();
       document.documentElement.style.background = initMessage.theme.background;
       document.body.style.background = initMessage.theme.background;
     }
-    // Start every init from zero vertical padding: the centring below is
-    // measured per grid, and a short session's leftover must not survive into
-    // the grid that replaced it.
+    // Start every init from zero vertical padding: the centring is measured
+    // per grid, and a short session's leftover must not survive into the
+    // grid that replaced it.
     var gridHost = document.getElementById('terminal');
     if (gridHost) gridHost.style.paddingTop = '0px';
     setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
+  }
+
+  /** The seed both init paths share, after their halves prepared the grid. */
+  function seedAndSettle(initMessage) {
+    if (initMessage.scrollback) {
+      terminal.write(initMessage.scrollback, function () {
+        applyGeometry();
+        afterWriteFlushed();
+      });
+      cleanFeedWrite(initMessage.scrollback);
+    } else {
+      applyGeometry();
+      // An EMPTY seed still has modes worth reporting: the host writes the
+      // restore prefix into this same field, and a session whose ring has not
+      // filled yet (fresh subscribe, post-reconnect, a swap before any bytes
+      // land) would otherwise never report at all, leaving the host with no
+      // confirmation that the terminal came up in the right state.
+      reportModesIfFlipped();
+    }
+    // Cell metrics AND the viewport height can settle a frame after open();
+    // re-fit the font (not just the geometry) once they have.
+    requestAnimationFrame(refit);
+  }
+
+  function createTerminal(initMessage) {
+    // Set before resetSessionViewState so its setupCleanFeed sees the flag.
+    cleanFeedEnabled = initMessage.cleanFeed === true;
+    resetSessionViewState(initMessage);
     autoFitFontToScreen();
     terminal = new window.Terminal({
       cols: knownCols,
@@ -1272,24 +1354,7 @@ return exports; })();
       manualPanUntil = 0;
       postToHost({ type: 'input', data: data });
     });
-    if (initMessage.scrollback) {
-      terminal.write(initMessage.scrollback, function () {
-        applyGeometry();
-        afterWriteFlushed();
-      });
-      cleanFeedWrite(initMessage.scrollback);
-    } else {
-      applyGeometry();
-      // An EMPTY seed still has modes worth reporting: the host writes the
-      // restore prefix into this same field, and a session whose ring has not
-      // filled yet (fresh subscribe, post-reconnect, a swap before any bytes
-      // land) would otherwise never report at all, leaving the host with no
-      // confirmation that the terminal came up in the right state.
-      reportModesIfFlipped();
-    }
-    // Cell metrics AND the viewport height can settle a frame after open();
-    // re-fit the font (not just the geometry) once they have.
-    requestAnimationFrame(refit);
+    seedAndSettle(initMessage);
   }
 
   /**
@@ -1304,24 +1369,7 @@ return exports; })();
    */
   function softReinit(initMessage) {
     initCounts.soft += 1;
-    knownCols = initMessage.cols;
-    knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
-    currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
-    lastAppCursorMode = false;
-    lastReportedModes = null;
-    manualPanUntil = 0;
-    stopHistoryFling();
-    dragSamples = [];
-    applyVerticalOffset(0);
-    netHistoryUnits = 0;
-    pinnedToStart = true;
-    if (initMessage.theme && typeof initMessage.theme.background === 'string') {
-      document.documentElement.style.background = initMessage.theme.background;
-      document.body.style.background = initMessage.theme.background;
-    }
-    var gridHost = document.getElementById('terminal');
-    if (gridHost) gridHost.style.paddingTop = '0px';
-    setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
+    resetSessionViewState(initMessage);
     terminal.reset();
     terminal.options.theme = initMessage.theme;
     // A previous height fit may have stretched the line height; the fresh fit
@@ -1330,17 +1378,7 @@ return exports; })();
     terminal.options.fontSize = currentFontSizePx;
     autoFitFontToScreen();
     applyGeometry();
-    if (initMessage.scrollback) {
-      terminal.write(initMessage.scrollback, function () {
-        applyGeometry();
-        afterWriteFlushed();
-      });
-      cleanFeedWrite(initMessage.scrollback);
-    } else {
-      applyGeometry();
-      reportModesIfFlipped();
-    }
-    requestAnimationFrame(refit);
+    seedAndSettle(initMessage);
   }
 
   function applyFontSize(fontSizePx) {
@@ -1678,55 +1716,6 @@ return exports; })();
   // visible.
   window.addEventListener('resize', refit);
 
-  // Clean-tap detection (tap toggles the host-side keyboard; drags, pans,
-  // and pinches never do): a single touch that ends within the slop radius
-  // and time budget posts 'tapped' to the host. Any second finger or real
-  // movement marks the gesture dirty.
-  var TAP_SLOP_PX = 12;
-  var TAP_MAX_MS = 350;
-  var tapStartX = 0;
-  var tapStartY = 0;
-  var tapStartAt = 0;
-  var tapDirty = true;
-  // Moving reference point for history scrolling (see consumeHistoryDrag). Null
-  // whenever the gesture is not a single finger, so a pinch never scrolls.
-  var historyDragAnchorY = null;
-  // Fixed start of the gesture, used only to decide the axis (the anchor above
-  // moves as travel is consumed, so it cannot answer "how far overall").
-  var historyDragStartX = 0;
-  // 'vertical' | 'horizontal' | null, latched once per gesture.
-  var historyDragAxis = null;
-  // Travel before the axis is decided. Matches the tap slop, so the same small
-  // movement that still counts as a tap also commits to no axis.
-  var DRAG_AXIS_SLOP_PX = 12;
-  // Momentum state: the velocity window's samples, the generation that cancels
-  // an in-flight glide (same pattern as heightFitGeneration), and the stats
-  // the dev probe reports.
-  var dragSamples = [];
-  var flingGeneration = 0;
-  var flingStats = { started: 0, totalUnits: 0 };
-  // How many re-seeds took the in-place reset vs a full DOM rebuild; the dev
-  // probe's way to verify the reset button stopped hard-flashing.
-  var initCounts = { hard: 0, soft: 0 };
-  // How far back THIS PHONE has scrolled the shared view (net units toward
-  // history since the last tail anchor) and when the user last scrolled.
-  // Diagnostics for the probe - "is the mirror scrolled back, and whose fault
-  // is it" was previously unanswerable from outside.
-  var netHistoryUnits = 0;
-  var lastUserScrollAt = 0;
-  // Armed by a jump: the redraw it triggers is a full-frame burst, exactly
-  // the paint the Android WebView renderer sometimes drops (black terminal
-  // until a 1px scroll). The first write after a jump forces a whole-canvas
-  // repaint once flushed. Counted for the probe.
-  var pendingJumpRepaint = false;
-  var jumpRepaintCount = 0;
-  // Jump timeline for the probe: when the jump was sent, how long until its
-  // redraw came back (null = nothing arrived, the blank-frame case), and how
-  // many render nudges went out.
-  var lastJumpAt = null;
-  var lastJumpFirstWriteMs = null;
-  var jumpNudgeCount = 0;
-
   /**
    * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
    * and last gesture, plus the three levers that reproduce a user's actions
@@ -1770,7 +1759,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: '60a9885f48e7',
+      buildId: 'ce4fe536011f',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,

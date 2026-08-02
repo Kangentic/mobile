@@ -1,4 +1,13 @@
-  function createTerminal(initMessage) {
+  /**
+   * The reset both init paths share, before their halves diverge into
+   * construction vs reset(): adopt the new grid and font, clear the
+   * per-session view state (modes, pan, zoom-follow translate, glide,
+   * scrollback ledger), repaint the page background, zero the vertical
+   * centring, and rebuild the clean-feed parser. The grid host SURVIVES a
+   * re-init (only its children are replaced), which is why the translate,
+   * the padding, and the pan must be reset by hand here.
+   */
+  function resetSessionViewState(initMessage) {
     knownCols = initMessage.cols;
     knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
     // Capped even on the legacy no-dims path (autoFitFontToScreen early-returns
@@ -7,9 +16,6 @@
     lastAppCursorMode = false;
     lastReportedModes = null;
     manualPanUntil = 0;
-    // The grid host SURVIVES a re-init (only its children are replaced), so a
-    // zoom-follow translate from the previous session would otherwise shift
-    // the new frame. Same for a glide still in flight.
     stopHistoryFling();
     dragSamples = [];
     applyVerticalOffset(0);
@@ -18,7 +24,6 @@
     // re-seed when the pane becomes visible again - so the frame starts at
     // column 0 rather than inheriting the previous view's pan.
     pinnedToStart = true;
-    cleanFeedEnabled = initMessage.cleanFeed === true;
     // The row-stretch fill can leave a sub-row remainder below the last row;
     // paint the page in the terminal's own background so it never reads as a
     // seam against the host screen.
@@ -26,12 +31,40 @@
       document.documentElement.style.background = initMessage.theme.background;
       document.body.style.background = initMessage.theme.background;
     }
-    // Start every init from zero vertical padding: the centring below is
-    // measured per grid, and a short session's leftover must not survive into
-    // the grid that replaced it.
+    // Start every init from zero vertical padding: the centring is measured
+    // per grid, and a short session's leftover must not survive into the
+    // grid that replaced it.
     var gridHost = document.getElementById('terminal');
     if (gridHost) gridHost.style.paddingTop = '0px';
     setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
+  }
+
+  /** The seed both init paths share, after their halves prepared the grid. */
+  function seedAndSettle(initMessage) {
+    if (initMessage.scrollback) {
+      terminal.write(initMessage.scrollback, function () {
+        applyGeometry();
+        afterWriteFlushed();
+      });
+      cleanFeedWrite(initMessage.scrollback);
+    } else {
+      applyGeometry();
+      // An EMPTY seed still has modes worth reporting: the host writes the
+      // restore prefix into this same field, and a session whose ring has not
+      // filled yet (fresh subscribe, post-reconnect, a swap before any bytes
+      // land) would otherwise never report at all, leaving the host with no
+      // confirmation that the terminal came up in the right state.
+      reportModesIfFlipped();
+    }
+    // Cell metrics AND the viewport height can settle a frame after open();
+    // re-fit the font (not just the geometry) once they have.
+    requestAnimationFrame(refit);
+  }
+
+  function createTerminal(initMessage) {
+    // Set before resetSessionViewState so its setupCleanFeed sees the flag.
+    cleanFeedEnabled = initMessage.cleanFeed === true;
+    resetSessionViewState(initMessage);
     autoFitFontToScreen();
     terminal = new window.Terminal({
       cols: knownCols,
@@ -65,24 +98,7 @@
       manualPanUntil = 0;
       postToHost({ type: 'input', data: data });
     });
-    if (initMessage.scrollback) {
-      terminal.write(initMessage.scrollback, function () {
-        applyGeometry();
-        afterWriteFlushed();
-      });
-      cleanFeedWrite(initMessage.scrollback);
-    } else {
-      applyGeometry();
-      // An EMPTY seed still has modes worth reporting: the host writes the
-      // restore prefix into this same field, and a session whose ring has not
-      // filled yet (fresh subscribe, post-reconnect, a swap before any bytes
-      // land) would otherwise never report at all, leaving the host with no
-      // confirmation that the terminal came up in the right state.
-      reportModesIfFlipped();
-    }
-    // Cell metrics AND the viewport height can settle a frame after open();
-    // re-fit the font (not just the geometry) once they have.
-    requestAnimationFrame(refit);
+    seedAndSettle(initMessage);
   }
 
   /**
@@ -97,24 +113,7 @@
    */
   function softReinit(initMessage) {
     initCounts.soft += 1;
-    knownCols = initMessage.cols;
-    knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
-    currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
-    lastAppCursorMode = false;
-    lastReportedModes = null;
-    manualPanUntil = 0;
-    stopHistoryFling();
-    dragSamples = [];
-    applyVerticalOffset(0);
-    netHistoryUnits = 0;
-    pinnedToStart = true;
-    if (initMessage.theme && typeof initMessage.theme.background === 'string') {
-      document.documentElement.style.background = initMessage.theme.background;
-      document.body.style.background = initMessage.theme.background;
-    }
-    var gridHost = document.getElementById('terminal');
-    if (gridHost) gridHost.style.paddingTop = '0px';
-    setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
+    resetSessionViewState(initMessage);
     terminal.reset();
     terminal.options.theme = initMessage.theme;
     // A previous height fit may have stretched the line height; the fresh fit
@@ -123,17 +122,7 @@
     terminal.options.fontSize = currentFontSizePx;
     autoFitFontToScreen();
     applyGeometry();
-    if (initMessage.scrollback) {
-      terminal.write(initMessage.scrollback, function () {
-        applyGeometry();
-        afterWriteFlushed();
-      });
-      cleanFeedWrite(initMessage.scrollback);
-    } else {
-      applyGeometry();
-      reportModesIfFlipped();
-    }
-    requestAnimationFrame(refit);
+    seedAndSettle(initMessage);
   }
 
   function applyFontSize(fontSizePx) {
