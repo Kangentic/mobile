@@ -26,6 +26,7 @@ import {
   type RegisterPushResponsePayload,
   type SendUserMessageRequestPayload,
   type SendUserMessageResponsePayload,
+  type TerminalDimensionsWire,
   type TranscriptWindowResponsePayload,
   isRecord,
 } from '@kangentic/protocol';
@@ -232,10 +233,14 @@ export class VerbClient {
   }
 
   /**
-   * The one thing the phone writes to the terminal: raw keystrokes. The phone
-   * is a faithful mirror and deliberately never RESIZES the desktop PTY (the
-   * protocol's resize/release actions exist for the desktop, not this client) -
-   * a shared session must not be reshaped by the phone.
+   * Raw keystrokes into the shared session. While a desktop surface holds
+   * the terminal, this is the ONLY thing the phone sends - the mirror model
+   * renders the desktop's exact grid and never reshapes it underneath a
+   * desktop reader. The resize/release siblings below are the deliberate,
+   * narrow exception (decision change 2026-08-02, docs/terminal-ownership-design.md):
+   * they are used only when the desktop has PARKED the session (its resting
+   * 120x30 grid, meaning no desktop surface shows it), where a phone-fitted
+   * grid is the difference between a strip and a full portrait terminal.
    */
   async writeInteractiveTerminal(sessionId: string, data: string): Promise<{ written: boolean }> {
     const payload: InteractiveTerminalRequestPayload = { sessionId, action: 'write', data };
@@ -243,6 +248,35 @@ export class VerbClient {
     return this.parsePayload('interactive-terminal', response, (value) => {
       if (!isRecord(value) || typeof value.written !== 'boolean') throw new Error('interactive-terminal response is missing "written"');
       return { written: value.written };
+    });
+  }
+
+  /**
+   * Fit-to-phone: ask the desktop to resize the PTY to the phone-computed
+   * grid. The desktop arms a per-device guard that restores its own last
+   * dimensions on release, disconnect, revoke, or shutdown - the phone can
+   * never leave a session misshapen by vanishing. `colsChanged` reports
+   * whether a reflow actually happened (a rows-only change repaints without
+   * rewrapping).
+   */
+  async resizeInteractiveTerminal(sessionId: string, dimensions: TerminalDimensionsWire): Promise<{ resized: boolean; colsChanged: boolean }> {
+    const payload: InteractiveTerminalRequestPayload = { sessionId, action: 'resize', dimensions };
+    const response = await this.requireOk('interactive-terminal', asRequestJson(payload));
+    return this.parsePayload('interactive-terminal', response, (value) => {
+      if (!isRecord(value) || typeof value.resized !== 'boolean' || typeof value.colsChanged !== 'boolean') {
+        throw new Error('interactive-terminal resize response is missing "resized"/"colsChanged"');
+      }
+      return { resized: value.resized, colsChanged: value.colsChanged };
+    });
+  }
+
+  /** Give the grid back now; the desktop restores its own last dimensions and re-parks an unheld session. */
+  async releaseInteractiveTerminalSize(sessionId: string): Promise<{ released: boolean }> {
+    const payload: InteractiveTerminalRequestPayload = { sessionId, action: 'release-size' };
+    const response = await this.requireOk('interactive-terminal', asRequestJson(payload));
+    return this.parsePayload('interactive-terminal', response, (value) => {
+      if (!isRecord(value) || typeof value.released !== 'boolean') throw new Error('interactive-terminal release response is missing "released"');
+      return { released: value.released };
     });
   }
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, StyleSheet, View } from 'react-native';
+import { AppState, Keyboard, StyleSheet, View } from 'react-native';
 import { Asset } from 'expo-asset';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -11,11 +11,17 @@ import {
 } from '@/terminal/terminalBridge';
 import { parseColsFromScrollback } from '@/terminal/liveTail';
 import { buildModeRestoreSequence } from '@/terminal/modeRestore';
+import {
+  INITIAL_GRID_HOLD_STATE,
+  reduceGridHold,
+  type GridHoldEvent,
+  type GridHoldState,
+} from '@/terminal/gridHold';
 import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
 import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
-import { refreshTerminalStream, writeTerminal } from '@/connection/actions';
+import { refreshTerminalStream, releaseTerminalSize, resizeTerminal, writeTerminal } from '@/connection/actions';
 import { DirectKeyInput, type DirectKeyInputHandle } from './DirectKeyInput';
 
 export interface TerminalPaneProps {
@@ -153,10 +159,15 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
  * height. A grid wider than the screen then overflows and pans horizontally
  * (the cursor stays in view); pinch-zoom reads the detail.
  *
- * It NEVER resizes the desktop PTY - a shared desktop session must not be
- * reshaped by the phone. Keyboard input typed inside the WebView flows back
- * out as 'input' and is written to the PTY (the one thing the phone sends);
- * pinch zoom adjusts the local font between MIN_TERMINAL_FONT_SIZE_PX and
+ * While ANY desktop surface holds the terminal it never resizes the desktop
+ * PTY - a session a desktop reader is looking at must not be reshaped by
+ * the phone. The one exception is a session the desktop has PARKED at its
+ * resting grid (no desktop surface shows it): there the pane requests the
+ * page's measured full-portrait grid and releases it on unmount, app
+ * background, or the desktop taking the session back
+ * (src/terminal/gridHold.ts owns the decision). Keyboard input typed inside
+ * the WebView flows back out as 'input' and is written to the PTY; pinch
+ * zoom adjusts the local font between MIN_TERMINAL_FONT_SIZE_PX and
  * MAX_TERMINAL_FONT_SIZE_PX (6 to 56).
  */
 export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: TerminalPaneProps): React.JSX.Element {
@@ -177,6 +188,37 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingEvalsRef = useRef(new Map<string, PendingTerminalEval>());
   const evalSequenceRef = useRef(0);
+  // Fit-to-phone hold state (src/terminal/gridHold.ts): a ref, not state -
+  // nothing renders from it, and its events fire from feed listeners.
+  const gridHoldRef = useRef<GridHoldState>(INITIAL_GRID_HOLD_STATE);
+  // The soft keyboard closes the request gate: a request measured against a
+  // keyboard-squashed viewport would hold a half-height grid.
+  const keyboardVisibleRef = useRef(false);
+
+  /**
+   * Run the hold reducer and execute whatever command it returns. Both verb
+   * calls are fire-and-forget like every terminal write; a resize that never
+   * reached the desktop drops the phase back to mirror so the next park
+   * sighting or gate reopen can retry instead of stranding 'requested'.
+   */
+  const dispatchGridHold = useCallback(
+    (event: GridHoldEvent) => {
+      const transition = reduceGridHold(gridHoldRef.current, event);
+      gridHoldRef.current = transition.state;
+      const command = transition.command;
+      if (command === null) return;
+      if (command.type === 'send-resize') {
+        void resizeTerminal(sessionId, command.dims).catch(() => {
+          if (gridHoldRef.current.phase !== 'mirror') {
+            gridHoldRef.current = { ...gridHoldRef.current, phase: 'mirror', requestedGrid: null };
+          }
+        });
+        return;
+      }
+      void releaseTerminalSize(sessionId).catch(() => undefined);
+    },
+    [sessionId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +293,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         expectedBuildId: XTERM_BUILD_ID,
         evaluate: runTerminalEval,
         writeStats: () => ({ ...terminalWriteStats }),
+        gridHold: () => ({ ...gridHoldRef.current }),
       });
     });
     const pending = pendingEvalsRef.current;
@@ -281,6 +324,16 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     lastInitPostAtRef.current = Date.now();
     const scrollback = getBufferedData(sessionId);
     const ptyDimensions = getTerminalDimensions(sessionId);
+    // The dims a (re-)init renders at are a report too: the ring's dedupe
+    // means a re-subscribe at unchanged dims fires no 'dims' event, so this
+    // is where the hold machine learns the CURRENT grid on mount.
+    if (ptyDimensions) {
+      dispatchGridHold({
+        type: 'dims-reported',
+        dims: ptyDimensions,
+        canRequest: isActiveRef.current && !keyboardVisibleRef.current,
+      });
+    }
     // Put the terminal back into the modes the desktop's TUI set once at
     // startup BEFORE replaying the tail. The feed is a ring, so those DECSETs
     // are long evicted, and without this every re-init comes up in the normal
@@ -302,7 +355,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       theme: buildXtermTheme(theme.terminalPalette, theme.colors),
       cleanFeed: cleanFeedEnabled,
     });
-  }, [postToTerminal, sessionId, theme, cleanFeedEnabled]);
+  }, [postToTerminal, sessionId, theme, cleanFeedEnabled, dispatchGridHold]);
 
   const flushPendingChunks = useCallback(() => {
     const joinedData = pendingChunksRef.current.join('');
@@ -323,13 +376,24 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   useEffect(() => {
     if (!terminalReady) return;
     const unsubscribe = subscribeChunks(sessionId, (event) => {
+      // The hold machine sees EVERY dims report, visible or not: a desktop
+      // surface taking the session while the user reads the chat lens must
+      // still release the phone's hold, or the desktop's guard stays armed
+      // and the park never fires again.
+      if (event.kind === 'dims') {
+        dispatchGridHold({
+          type: 'dims-reported',
+          dims: { cols: event.cols, rows: event.rows },
+          canRequest: isActiveRef.current && !keyboardVisibleRef.current,
+        });
+      }
       // Paused (tab not visible): the ring keeps every byte; drop the render
       // work and re-seed from the ring when the tab becomes visible again.
       if (!isActiveRef.current) return;
       if (event.kind === 'dims') {
-        // The desktop's authoritative grid (snapshot or a desktop refit).
-        // Adopt it and re-fit the whole frame to screen - this is READ-ONLY;
-        // the phone never sends a resize back.
+        // The desktop's authoritative grid (snapshot or a desktop refit, or
+        // the echo of this pane's own fit-to-phone request). Adopt it and
+        // re-fit the whole frame to screen.
         postToTerminal({ type: 'resize', cols: event.cols, rows: event.rows });
         return;
       }
@@ -354,7 +418,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       clearFlushTimer();
       flushPendingChunks();
     };
-  }, [terminalReady, sessionId, postInit, flushPendingChunks, clearFlushTimer, postToTerminal]);
+  }, [terminalReady, sessionId, postInit, flushPendingChunks, clearFlushTimer, postToTerminal, dispatchGridHold]);
 
   // Pause/resume rendering with tab visibility. When the terminal becomes the
   // visible page again, drop any queued writes and re-seed from the ring so the
@@ -366,8 +430,35 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       pendingChunksRef.current = [];
       clearFlushTimer();
       postInit();
+      // The request gate reopened. Deliberately NOT mirrored on deactivation:
+      // the hold survives in-screen lens switches (all three panes stay
+      // mounted, and nobody is watching a parked desktop) - it releases on
+      // unmount, background, or desktop takeover.
+      if (!keyboardVisibleRef.current) {
+        dispatchGridHold({ type: 'request-gate-opened', dims: getTerminalDimensions(sessionId) });
+      }
     }
-  }, [isActive, terminalReady, postInit, clearFlushTimer]);
+  }, [isActive, terminalReady, postInit, clearFlushTimer, dispatchGridHold, sessionId]);
+
+  // Track the soft keyboard for the request gate, and re-evaluate when it
+  // hides: the page usually re-measures the SAME preferred grid after the
+  // keyboard closes (deduped into no report), so the hide edge itself must
+  // prompt the hold machine.
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      keyboardVisibleRef.current = true;
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardVisibleRef.current = false;
+      if (isActiveRef.current) {
+        dispatchGridHold({ type: 'request-gate-opened', dims: getTerminalDimensions(sessionId) });
+      }
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [sessionId, dispatchGridHold]);
 
   // Coming back from the background can leave the mirror with holes: the
   // WebView survives (no 'ready', so nothing re-inits) but its renderer has
@@ -380,11 +471,18 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   useEffect(() => {
     if (!terminalReady) return;
     const subscription = AppState.addEventListener('change', (status) => {
+      if (status === 'background') {
+        // Give a held grid back before the connection policy tears the
+        // transport down (best effort: the desktop also releases implicitly
+        // on transport drop, so a lost race still restores).
+        dispatchGridHold({ type: 'releasing' });
+        return;
+      }
       if (status !== 'active' || !isActiveRef.current) return;
       postToTerminal({ type: 'refit' });
     });
     return () => subscription.remove();
-  }, [terminalReady, postToTerminal]);
+  }, [terminalReady, postToTerminal, dispatchGridHold]);
 
   // Session swap under a mounted pane (the desktop respawned the task's
   // session): the WebView survives but its grid belongs to the dead session.
@@ -403,14 +501,20 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     postInit();
   }, [sessionId, cleanFeedEnabled, terminalReady, postInit, clearFlushTimer]);
 
-  // Drop this session's DECCKM + reading-view state on unmount. There is
-  // nothing to release - the mirror never resized the PTY.
+  // Drop this session's DECCKM + reading-view state on unmount (which is
+  // also the screen-close path - the PagerView keeps all three panes
+  // mounted, so leaving the SCREEN is what unmounts this pane), and give a
+  // held grid back: the desktop restores its own dims and re-parks an
+  // unheld session. Also runs on a session swap under the mounted pane,
+  // releasing the OLD session before the ref resets for the new one.
   useEffect(() => {
     return () => {
+      dispatchGridHold({ type: 'releasing' });
+      gridHoldRef.current = INITIAL_GRID_HOLD_STATE;
       useTerminalUiStore.getState().clearSession(sessionId);
       useReadingViewStore.getState().clearSession(sessionId);
     };
-  }, [sessionId]);
+  }, [sessionId, dispatchGridHold]);
 
   // The prompt cards' "Answer in terminal" escape hatch: consume the
   // one-shot keyboard-focus request only once this pane is actually the
@@ -488,6 +592,17 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         directKeyRef.current?.toggle();
         return;
       }
+      if (message.type === 'preferred-grid') {
+        // The page's measured full-portrait grid after a settled fit. The
+        // hold machine decides whether to act (parked sessions only).
+        dispatchGridHold({
+          type: 'preferred-grid-measured',
+          grid: { cols: message.cols, rows: message.rows },
+          dims: getTerminalDimensions(sessionId),
+          canRequest: isActiveRef.current && !keyboardVisibleRef.current,
+        });
+        return;
+      }
       // 'input': keys typed inside the xterm WebView go to the desktop PTY.
       // Failures (not connected, capability revoked) are dropped silently -
       // the connection banner is the surface for that state - but they are
@@ -500,7 +615,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         terminalWriteStats.lastError = writeError instanceof Error ? writeError.message : String(writeError);
       });
     },
-    [postInit, sessionId],
+    [postInit, sessionId, dispatchGridHold],
   );
 
   /* eslint-disable react-hooks/refs, react-hooks/purity -- the pinch callbacks run on touch

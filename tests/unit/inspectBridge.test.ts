@@ -88,6 +88,7 @@ describe('buildInspectPayload', () => {
   describe('terminal', () => {
     const probeState = { buildId: 'abc123', gridHeightPx: 640, rows: 48 };
     const writeStats = { attempts: 7, failures: 2, lastError: 'not connected', lastAttemptAt: 1000 };
+    const gridHold = { phase: 'mirror' as const, preferredGrid: { cols: 48, rows: 36 }, requestedGrid: null };
 
     function registerTerminal(expectedBuildId: string): string[] {
       const seenExpressions: string[] = [];
@@ -99,6 +100,7 @@ describe('buildInspectPayload', () => {
           return Promise.resolve(probeState);
         },
         writeStats: () => ({ ...writeStats }),
+        gridHold: () => ({ ...gridHold }),
       });
       return seenExpressions;
     }
@@ -118,6 +120,7 @@ describe('buildInspectPayload', () => {
         loadedBuildId: 'abc123',
         buildIdMatches: true,
         writes: writeStats,
+        gridHold,
         page: probeState,
       });
     });

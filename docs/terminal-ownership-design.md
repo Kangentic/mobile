@@ -50,6 +50,36 @@ jumps whenever a desktop window changes.
 >
 > The sections below are preserved as the design record, not as the plan.
 
+> **ADDENDUM (2026-08-02, later the same day): the PARKED case met the reopening bar - the
+> narrow resize path is BUILT; ownership stays shelved.**
+>
+> With the desktop's task detail closed, the resting park leaves a session at 120x30, and the
+> mirror of that grid fills a phone's portrait height at roughly a third of its width. The
+> user named the criterion directly: "the number one consideration here is that on mobile, it
+> utilizes the full portrait mode height of the terminal so the user can see history - we also
+> need to make sure this works for all phone types/sizes." Only a phone-computed grid
+> guarantees that by construction, so the parked case is exactly "a real reading task the
+> mirror + zoom demonstrably cannot serve" - for the PARKED grid only.
+>
+> What shipped is the narrow slice, not the ownership machinery this doc was about:
+>
+> - The phone requests its measured full-portrait grid ONLY when the desktop reports the park
+>   sentinel (120x30, coupled to the desktop's spawn defaults). Any desktop surface holding
+>   the terminal keeps the untouched mirror model.
+> - No arbiter is needed because the park sentinel IS the arbitration: park dims mean no
+>   desktop surface is showing the session, and any other dims arriving mean the desktop took
+>   it - the phone reverts to the mirror AND releases, which is load-bearing (an unreleased
+>   guard blocks the desktop's next park, and a blocked park would strand the phone mirroring
+>   forever with no cue to re-request).
+> - The decision is a pure reducer, `src/terminal/gridHold.ts`, driven from TerminalPane; the
+>   page reports `preferred-grid` from measured cell metrics after each settled fit; the
+>   desktop side gained the park-vs-restore fixes recorded in the kangentic repo
+>   (`docs/session-lifecycle.md`, the resting-grid section) - including the rule that an
+>   unpaired desktop never parks at all.
+>
+> Everything the first direction change dropped (DetailHost 'mobile', mirrored view + Resume
+> Control, the column setting, portrait lock) stays dropped.
+
 The phone **takes ownership of the terminal** and requests its own grid, rather than mirroring
 whatever the desktop left behind. Ownership is mutually exclusive and arbitrated in main,
 reusing the existing task-detail ownership machinery.
