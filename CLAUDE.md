@@ -237,9 +237,10 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
 - **Capability allowlist:** the channel proves which device is connected; a desktop-enforced
   allowlist decides what it may do. Ten verbs (`read-stream`, `read-board`, `read-diff`,
   `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
-  `board-tool-read`, `board-tool-write`, `register-push`); the default pairing grant is the
-  read-only four plus `register-push` (which only lets the desktop send the device encrypted
-  notifications), and every write/control verb needs an explicit per-verb grant on the desktop.
+  `board-tool-read`, `board-tool-write`, `register-push`); **the default pairing grant is all
+  ten** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts` - pairing proves
+  possession of both devices, so pairing is the approval). The per-verb allowlist exists to
+  NARROW a device from the desktop's devices panel, not as a default-deny gate.
   **There is no shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**
 - **Session view (three surfaces):** a task's screen is one SESSION with a full-width segmented
   switcher as its primary navigation - Terminal (the raw mirror, the default), Chat (the
