@@ -382,6 +382,14 @@ return exports; })();
   // grid underneath the one that replaced it (a keyboard open fires several
   // viewport changes in a row, and two live loops would each step the font).
   var heightFitGeneration = 0;
+  // Lines one drag STEP (a single touchmove) may scroll. Bounds the payload of
+  // a hard fling: in the alt buffer every line is one arrow sequence inside the
+  // batched write, so an uncapped delta would post an arbitrarily long string.
+  var MAX_SCROLL_LINES_PER_STEP = 12;
+  // Built rather than escaped: this glue lives inside a template literal in
+  // scripts/buildXtermHtml.mjs, where a backslash escape would be consumed by
+  // the generator instead of reaching the page.
+  var ESCAPE = String.fromCharCode(27);
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -491,6 +499,96 @@ return exports; })();
   function afterWriteFlushed() {
     reportModesIfFlipped();
     panToCursor();
+  }
+
+  // HISTORY SCROLLING.
+  //
+  // A fullscreen TUI (Claude Code under /tui fullscreen) lives in the ALTERNATE
+  // buffer, which by spec has no scrollback at all - on the phone or on the
+  // desktop. The desktop still scrolls because xterm turns a mouse WHEEL into
+  // arrow keys the AGENT acts on, redrawing itself. A touch drag fires no wheel
+  // event, so the phone sent nothing and history was simply unreachable.
+  //
+  // Deliberately NOT fixed by synthesizing WheelEvents: xterm's alt-buffer
+  // handler emits exactly ONE arrow per wheel event with no loop, so N lines
+  // would become N separate data events and therefore N relay messages. For a
+  // phone on cellular that is the wrong shape. One batched write per step.
+
+  /**
+   * Finger travel converted to whole lines, capped per step. Negative scrolls
+   * toward history. Sub-line remainders return 0 so the caller can leave the
+   * anchor alone and let a slow drag accumulate.
+   */
+  function dragToScrollLines(deltaPx, cellHeightPx) {
+    if (!(cellHeightPx > 0)) return 0;
+    var lines = Math.trunc(deltaPx / cellHeightPx);
+    return Math.max(-MAX_SCROLL_LINES_PER_STEP, Math.min(MAX_SCROLL_LINES_PER_STEP, lines));
+  }
+
+  /**
+   * The batched arrow sequence for a line count (negative = toward history),
+   * the same bytes xterm's own alt-buffer wheel handler emits one notch at a
+   * time. The O vs [ introducer follows the application-cursor mode the page
+   * already tracks, so the two can never disagree.
+   */
+  function arrowScrollSequence(lines) {
+    if (!lines) return '';
+    var one = ESCAPE + (lastAppCursorMode ? 'O' : '[') + (lines < 0 ? 'A' : 'B');
+    var sequence = '';
+    for (var index = 0; index < Math.abs(lines); index += 1) sequence += one;
+    return sequence;
+  }
+
+  /**
+   * Move through history by that many lines, choosing whichever mechanism the
+   * active buffer actually allows.
+   * The alt buffer holds exactly one screen, so the only way back is to ask the
+   * agent to redraw; the normal buffer has real scrollback, so move the
+   * viewport locally and send NOTHING (no round trip, and no keystrokes the
+   * agent could misread as input).
+   */
+  function scrollHistoryByLines(lines) {
+    if (!terminal || !lines) return;
+    if (terminal.buffer.active.type === 'alternate') {
+      var sequence = arrowScrollSequence(lines);
+      if (sequence) postToHost({ type: 'input', data: sequence });
+      return;
+    }
+    terminal.scrollLines(lines);
+  }
+
+  /**
+   * Convert a one-finger vertical drag into history scrolling, but only once
+   * the container has no pan left to give in the direction being pushed. That
+   * is standard overscroll chaining: a zoomed-in grid pans first and reaches
+   * history only at the edge, so the existing pan behaviour is untouched.
+   *
+   * The anchor advances by exactly what was CONSUMED, never by the raw drag, so
+   * the sub-line remainder carries into the next event and a slow drag scrolls
+   * smoothly instead of stalling.
+   */
+  function consumeHistoryDrag(touchEvent) {
+    if (historyDragAnchorY === null || touchEvent.touches.length !== 1) return;
+    var container = scrollContainer();
+    var screen = document.querySelector('.xterm-screen');
+    if (!container || !screen || !terminal || terminal.rows < 1) return;
+    var currentY = touchEvent.touches[0].clientY;
+    var dragged = currentY - historyDragAnchorY;
+    if (!dragged) return;
+    var atTop = container.scrollTop <= 0;
+    var atBottom = container.scrollTop >= container.scrollHeight - container.clientHeight - 1;
+    if (dragged > 0 ? !atTop : !atBottom) {
+      // Still panning: reset the anchor so the pan does not bank travel that
+      // would fire as a jump the moment the edge is reached.
+      historyDragAnchorY = currentY;
+      return;
+    }
+    var cellHeight = screen.getBoundingClientRect().height / terminal.rows;
+    // A finger moving DOWN reveals OLDER content, which is negative lines.
+    var lines = dragToScrollLines(-dragged, cellHeight);
+    if (!lines) return;
+    historyDragAnchorY -= lines * cellHeight;
+    scrollHistoryByLines(lines);
   }
 
   // Ported from the desktop renderer's terminal-webgl.ts. xterm's WebGL renderer
@@ -979,6 +1077,9 @@ return exports; })();
   var tapStartY = 0;
   var tapStartAt = 0;
   var tapDirty = true;
+  // Moving reference point for history scrolling (see consumeHistoryDrag). Null
+  // whenever the gesture is not a single finger, so a pinch never scrolls.
+  var historyDragAnchorY = null;
 
   window.addEventListener('load', function () {
     var container = scrollContainer();
@@ -993,11 +1094,17 @@ return exports; })();
           tapStartX = touchEvent.touches[0].clientX;
           tapStartY = touchEvent.touches[0].clientY;
           tapStartAt = Date.now();
+          historyDragAnchorY = touchEvent.touches[0].clientY;
         } else {
           tapDirty = true;
+          historyDragAnchorY = null;
         }
       }, { passive: true });
       container.addEventListener('touchmove', function (touchEvent) {
+        // History scrolling runs BEFORE the tap bookkeeping's early return: a
+        // drag is exactly the gesture that dirties the tap, so gating it behind
+        // that check would mean it never ran at all.
+        consumeHistoryDrag(touchEvent);
         if (tapDirty || touchEvent.touches.length !== 1) {
           tapDirty = true;
           return;
@@ -1008,6 +1115,7 @@ return exports; })();
       }, { passive: true });
       container.addEventListener('touchend', function (touchEvent) {
         if (touchEvent.touches.length > 0) return;
+        historyDragAnchorY = null;
         if (!tapDirty && Date.now() - tapStartAt <= TAP_MAX_MS) {
           postToHost({ type: 'tapped' });
         }
