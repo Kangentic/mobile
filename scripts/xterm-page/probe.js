@@ -97,6 +97,7 @@
       lastJumpFirstWriteMs: lastJumpFirstWriteMs,
       jumpNudgeCount: jumpNudgeCount,
       viewportSettleRefits: viewportSettleRefits,
+      heightFitTrace: JSON.parse(JSON.stringify(heightFitTrace)),
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }

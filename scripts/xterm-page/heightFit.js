@@ -10,15 +10,25 @@
   // So: stretch the LINE HEIGHT into any slack, give that stretch back when
   // the ceil overshoots, and drop the font a step when even line height 1
   // overflows. One adjustment per frame (xterm has to repaint before the next
-  // measure means anything) on a fixed budget, and the final pass only
-  // measures - so it can never spin, and the centring below always runs
-  // against the settled grid.
+  // measure means anything) on a fixed budget - which FONT STEPS are exempt
+  // from: how many the opening guess needs varies run to run (cell metrics
+  // shift while fonts load), and letting them consume the budget starved the
+  // stretch, settling fresh opens at line height 1 with a short centred grid
+  // ("~80% of the TUI"). Steps are monotonic and floored at MIN_AUTO_FONT_PX,
+  // so the exemption cannot spin. The final pass only measures, so the
+  // centring below always runs against the settled grid.
   function fitGridHeightToViewport(passesLeft, stretchLocked, generation) {
     if (!terminal || generation !== heightFitGeneration) return;
     var screen = document.querySelector('.xterm-screen');
-    if (!screen) return;
+    if (!screen) {
+      traceHeightFit('bail-no-screen', generation, passesLeft, 0);
+      return;
+    }
     var screenHeight = screen.getBoundingClientRect().height;
-    if (!(screenHeight > 0) || terminal.rows < 1) return;
+    if (!(screenHeight > 0) || terminal.rows < 1) {
+      traceHeightFit('bail-zero-measure', generation, passesLeft, screenHeight);
+      return;
+    }
     var viewportHeight = window.innerHeight - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
     var currentLineHeight = terminal.options.lineHeight || 1;
     if (passesLeft <= 1) {
@@ -31,6 +41,7 @@
       if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX && currentLineHeight > 1.005) {
         terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
       }
+      traceHeightFit('final', generation, passesLeft, screenHeight);
       centerGridVertically(screenHeight);
       followCursorVertically(true);
       return;
@@ -38,6 +49,7 @@
     var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
     if (!(baseCellHeight > 0)) return;
     var adjusted = false;
+    var fontStepped = false;
     if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX) {
       if (currentLineHeight > 1.005) {
         // The stretch overshot: hand back exactly the excess, and stop
@@ -54,6 +66,7 @@
         terminal.options.fontSize = currentFontSizePx;
         postToHost({ type: 'font-size', fontSizePx: currentFontSizePx });
         adjusted = true;
+        fontStepped = true;
       }
     } else if (!stretchLocked) {
       var desiredLineHeight = viewportHeight / (terminal.rows * baseCellHeight);
@@ -64,6 +77,7 @@
       }
     }
     if (!adjusted) {
+      traceHeightFit('settled', generation, passesLeft, screenHeight);
       centerGridVertically(screenHeight);
       // The fit has SETTLED: only now is the vertical follow computed against
       // real geometry. Forcing it from refit's first frame sampled the grid
@@ -76,8 +90,9 @@
       followCursorVertically(true);
       return;
     }
+    traceHeightFit(fontStepped ? 'adjust-font' : stretchLocked ? 'giveback' : 'adjust-stretch', generation, passesLeft, screenHeight);
     requestAnimationFrame(function () {
-      fitGridHeightToViewport(passesLeft - 1, stretchLocked, generation);
+      fitGridHeightToViewport(fontStepped ? passesLeft : passesLeft - 1, stretchLocked, generation);
     });
   }
 
