@@ -86,7 +86,10 @@ tests/
   helpers/        # Shared cross-tier test utilities (async waitUntil / flushMicrotasks)
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs)
-scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs,
+scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs
+                  #   (assembles xterm.html from the page fragments in xterm-page/),
+                  #   xterm-page/ (the WebView glue as plain browser .js modules,
+                  #   concatenated into one IIFE - shared top-level state, no imports),
                   #   captureClaudeFrames.mjs + buildTerminalFixture.mjs (record real Claude
                   #   Code PTY output and pack it into src/devsupport/claudeCapture*.ts; dev
                   #   utilities, not run in CI),
