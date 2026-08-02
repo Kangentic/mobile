@@ -64,6 +64,7 @@ describe('terminal -> host round-trip', () => {
       mouseTrackingMode: 'any',
       mouseEncoding: 'SGR',
       alternateBuffer: true,
+      initial: false,
     };
     expect(decodeTerminalMessage(encodeTerminalMessage(modes))).toEqual(modes);
     const fontSize: TerminalToHostMessage = { type: 'font-size', fontSizePx: 7 };
@@ -82,6 +83,9 @@ describe('terminal -> host round-trip', () => {
       mouseTrackingMode: 'none',
       mouseEncoding: 'DEFAULT',
       alternateBuffer: false,
+      // Unknown reports count as a baseline: the cost is a missed mode change,
+      // versus permanently latching a degraded state the other way.
+      initial: true,
     });
   });
 

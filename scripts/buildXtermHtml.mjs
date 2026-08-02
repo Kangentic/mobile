@@ -224,6 +224,14 @@ const bridgeGlue = `
       mouseTrackingMode: terminal.modes.mouseTrackingMode || 'none',
       mouseEncoding: coreMouseEncoding().encoding,
       alternateBuffer: terminal.buffer.active.type === 'alternate',
+      // The FIRST report after a (re-)init is a baseline, not a transition: it
+      // describes whatever the replayed seed happened to establish. Only a
+      // later report reflects the desktop actually changing a mode. The host
+      // needs the difference - a baseline that says "no mouse reporting"
+      // because the seed lacked the DECSETs must not be allowed to overwrite
+      // the modes it is holding in order to restore them, which would latch the
+      // degraded state in permanently.
+      initial: lastReportedModes === null,
     };
     if (
       lastReportedModes !== null &&
@@ -655,6 +663,12 @@ const bridgeGlue = `
       cleanFeedWrite(initMessage.scrollback);
     } else {
       applyGeometry();
+      // An EMPTY seed still has modes worth reporting: the host writes the
+      // restore prefix into this same field, and a session whose ring has not
+      // filled yet (fresh subscribe, post-reconnect, a swap before any bytes
+      // land) would otherwise never report at all, leaving the host with no
+      // confirmation that the terminal came up in the right state.
+      reportModesIfFlipped();
     }
     // Cell metrics AND the viewport height can settle a frame after open();
     // re-fit the font (not just the geometry) once they have.
