@@ -66,7 +66,6 @@ const PAGE_MODULE_ORDER = [
   'panClamp.js',
   'refit.js',
   'dispatch.js',
-  'gestureState.js',
   'probe.js',
   'bootstrap.js',
 ];
