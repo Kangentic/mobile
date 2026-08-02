@@ -53,6 +53,12 @@ const MAX_TERMINAL_FONT_SIZE_PX = 56;
 // did, halving repaint frequency at a latency the eye cannot see. Keystroke
 // echo is unaffected - keys go phone->desktop directly, not through this batch.
 const CHUNK_BATCH_INTERVAL_MS = 32;
+// While the user just SENT input (a scroll burst, a typed key), the bytes
+// coming back are its ECHO, and batching an echo is pure added lag on top of
+// the ~210ms hosted-relay round trip (measured 2026-08-02 against an idle
+// session). Inside this window chunks paint immediately; the firehose
+// batching resumes the moment the user stops interacting.
+const INPUT_ECHO_WINDOW_MS = 250;
 const FONT_SIZE_POST_THROTTLE_MS = 50;
 // How long the reset button waits for its stream refresh to produce a re-seed
 // before falling back to a local refit (the offline path). A live channel
@@ -175,6 +181,9 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const lastFontSizePostAtRef = useRef(0);
   const pendingChunksRef = useRef<string[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When this pane last SENT input (a scroll burst, a WebView-typed key);
+  // incoming chunks inside INPUT_ECHO_WINDOW_MS of it skip the batch timer.
+  const lastInputSentAtRef = useRef(0);
   const pendingEvalsRef = useRef(new Map<string, PendingTerminalEval>());
   const evalSequenceRef = useRef(0);
 
@@ -342,6 +351,14 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         return;
       }
       pendingChunksRef.current.push(event.data);
+      // Echo fast path: see INPUT_ECHO_WINDOW_MS. The scroll repaint (or the
+      // typed key's echo) paints the moment it arrives instead of waiting out
+      // the firehose batch.
+      if (Date.now() - lastInputSentAtRef.current < INPUT_ECHO_WINDOW_MS) {
+        clearFlushTimer();
+        flushPendingChunks();
+        return;
+      }
       if (flushTimerRef.current === null) {
         flushTimerRef.current = setTimeout(() => {
           flushTimerRef.current = null;
@@ -495,6 +512,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       // from a gesture that never fired.
       terminalWriteStats.attempts += 1;
       terminalWriteStats.lastAttemptAt = Date.now();
+      lastInputSentAtRef.current = Date.now();
       void writeTerminal(sessionId, message.data).catch((writeError: unknown) => {
         terminalWriteStats.failures += 1;
         terminalWriteStats.lastError = writeError instanceof Error ? writeError.message : String(writeError);
