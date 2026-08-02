@@ -366,6 +366,7 @@ describe('generated xterm.html', () => {
     scrolled: () => number[];
     deltas: () => number[];
     anchorY: () => number | null;
+    clearAnchor: () => void;
     decision: () => { exit: string } | null;
   } {
     const source = generatedHtml.slice(
@@ -417,12 +418,14 @@ describe('generated xterm.html', () => {
        return {
          consumeHistoryDrag: consumeHistoryDrag,
          anchorY: function () { return historyDragAnchorY; },
+         clearAnchor: function () { historyDragAnchorY = null; historyDragAxis = null; },
          decision: function () { return lastScrollDecision; },
          feed: function (data) { postToHost({ type: 'input', data: data }); },
        };`,
     ) as (...dependencies: unknown[]) => {
       consumeHistoryDrag: (touchEvent: { touches: { clientX: number; clientY: number }[] }) => void;
       anchorY: () => number | null;
+      clearAnchor: () => void;
       decision: () => { exit: string } | null;
       feed: (data: string) => void;
     };
@@ -448,9 +451,40 @@ describe('generated xterm.html', () => {
       scrolled: () => scrolled,
       deltas: () => deltas,
       anchorY: built.anchorY,
+      clearAnchor: built.clearAnchor,
       decision: built.decision,
     };
   }
+
+  /**
+   * THE ZOOM-THEN-SCROLL BUG, in one test.
+   *
+   * A second finger nulls the drag anchor. Lifting back down to one finger
+   * fires TOUCHEND, not touchstart, and touchend early-returns while any finger
+   * is still down - so the drag that follows a pinch had no reference point,
+   * and since the anchor is only ever set in touchstart, every single move
+   * bailed. Measured live on a Pixel after a real pinch: 201 touchmoves
+   * delivered to the page, every one exiting 'not-single-finger', zero scroll.
+   * No button could clear it because nothing else touches this state, which is
+   * why it read as scrolling being permanently lost after a zoom.
+   *
+   * The surviving finger is adopted instead: one move to re-anchor, then normal
+   * scrolling.
+   */
+  it('adopts the surviving finger after a pinch instead of bailing forever', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+    // A pinch left the anchor null while one finger is still on the glass.
+    harness.clearAnchor();
+
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 300 }] });
+    expect(harness.decision()).toEqual({ exit: 'anchor-adopted' });
+    expect(harness.anchorY()).toBe(300);
+
+    // The very next move scrolls: 100px at a 20px line is 5 lines of history.
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 400 }] });
+    expect(harness.decision()).toMatchObject({ exit: 'scrolled', units: -5 });
+    expect(harness.posts()).toHaveLength(1);
+  });
 
   /**
    * The batching decision, and the reason wheel synthesis was rejected: xterm's

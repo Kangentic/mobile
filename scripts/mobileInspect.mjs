@@ -32,7 +32,7 @@
  * hand (scripts cannot import TS) - keep the two in sync.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -299,7 +299,7 @@ async function commandState(args) {
  * on that and believing the result is how three fixes were "confirmed broken"
  * while already working.
  */
-const TERMINAL_ACTIONS = ['state', 'eval', 'font', 'refit', 'scroll', 'dragunits', 'swipe'];
+const TERMINAL_ACTIONS = ['state', 'eval', 'font', 'refit', 'scroll', 'dragunits', 'swipe', 'pinch'];
 
 function reportFreshness(probe) {
   if (probe.buildIdMatches) {
@@ -343,6 +343,143 @@ function terminalSwipe(deltaY, durationMs) {
   const endY = Math.max(1, Math.min(height - 1, startY + deltaY));
   runAdb(['shell', 'input', 'swipe', String(x), String(startY), String(x), String(endY), String(durationMs)]);
   console.log(`swiped x=${x} y=${startY} -> ${endY} over ${durationMs}ms`);
+}
+
+/**
+ * A REAL two-finger pinch, and optionally the one-finger drag that follows it.
+ *
+ * `adb shell input` cannot do multi-touch at all, which left pinch as the one
+ * gesture no script could reproduce - so every zoom regression needed a person
+ * holding the phone, and the bug that hid there (a drag after a pinch finding
+ * no anchor) survived several rounds of fixes because of it.
+ *
+ * This writes raw multi-touch protocol B events instead. `--drag <dy>` lifts
+ * ONE finger and drags with the other, which is the sequence that actually
+ * breaks: lifting from two fingers to one fires touchend, never touchstart.
+ *
+ * The events go through a script pushed to the device: each sendevent is a
+ * process, and a pinch is hundreds of them, so one shell beats one adb call
+ * apiece by orders of magnitude.
+ */
+const TOUCH_EVENT_CODES = {
+  synReport: '0 0 0',
+  btnTouch: 330,
+  absMtSlot: 47,
+  absMtTrackingId: 57,
+  absMtPositionX: 53,
+  absMtPositionY: 54,
+  absMtPressure: 58,
+};
+
+function findTouchscreen() {
+  const devices = runAdb(['shell', 'getevent', '-pl']).stdout;
+  // The touchscreen is the one reporting multi-touch positions; every other
+  // node here (buttons, haptics) lacks ABS_MT_POSITION_X.
+  const blocks = devices.split('add device ');
+  for (const block of blocks) {
+    if (!block.includes('ABS_MT_POSITION_X')) continue;
+    const pathMatch = block.match(/(\/dev\/input\/event\d+)/);
+    const xMatch = block.match(/ABS_MT_POSITION_X\s+: value \d+, min \d+, max (\d+)/);
+    const yMatch = block.match(/ABS_MT_POSITION_Y\s+: value \d+, min \d+, max (\d+)/);
+    if (pathMatch && xMatch && yMatch) {
+      return { path: pathMatch[1], maxX: Number(xMatch[1]), maxY: Number(yMatch[1]) };
+    }
+  }
+  fail('no multi-touch input device found (getevent -pl reported no ABS_MT_POSITION_X)');
+}
+
+function screenSize() {
+  const sizeOutput = runAdb(['shell', 'wm', 'size']).stdout;
+  const sizeMatch = sizeOutput.match(/(\d+)x(\d+)\s*$/m);
+  if (!sizeMatch) fail(`could not parse screen size from: ${sizeOutput.trim()}`);
+  return { width: Number(sizeMatch[1]), height: Number(sizeMatch[2]) };
+}
+
+function commandPinch(scale, dragY) {
+  const touchscreen = findTouchscreen();
+  const screen = screenSize();
+  // The panel's coordinate space is not the screen's; scale into it.
+  const toDeviceX = (x) => Math.round((x / screen.width) * touchscreen.maxX);
+  const toDeviceY = (y) => Math.round((y / screen.height) * touchscreen.maxY);
+
+  const centerX = Math.round(screen.width * 0.5);
+  // Well inside the terminal pane: clear of the header above and the quick-key
+  // bar below, either of which would take the gesture instead.
+  const centerY = Math.round(screen.height * 0.42);
+  const startSeparation = Math.round(screen.width * 0.2);
+  const endSeparation = Math.max(40, Math.round(startSeparation * scale));
+  const steps = 12;
+
+  const lines = [];
+  const emit = (type, code, value) => lines.push(`sendevent ${touchscreen.path} ${type} ${code} ${value}`);
+  const syn = () => lines.push(`sendevent ${touchscreen.path} ${TOUCH_EVENT_CODES.synReport}`);
+  const placeFinger = (slot, x, y, trackingId) => {
+    emit(3, TOUCH_EVENT_CODES.absMtSlot, slot);
+    if (trackingId !== undefined) emit(3, TOUCH_EVENT_CODES.absMtTrackingId, trackingId);
+    emit(3, TOUCH_EVENT_CODES.absMtPositionX, toDeviceX(x));
+    emit(3, TOUCH_EVENT_CODES.absMtPositionY, toDeviceY(y));
+    emit(3, TOUCH_EVENT_CODES.absMtPressure, 128);
+  };
+  const liftFinger = (slot) => {
+    emit(3, TOUCH_EVENT_CODES.absMtSlot, slot);
+    emit(3, TOUCH_EVENT_CODES.absMtTrackingId, -1);
+  };
+
+  placeFinger(0, centerX - startSeparation / 2, centerY, 100);
+  placeFinger(1, centerX + startSeparation / 2, centerY, 101);
+  emit(1, TOUCH_EVENT_CODES.btnTouch, 1);
+  syn();
+
+  for (let step = 1; step <= steps; step += 1) {
+    const separation = startSeparation + ((endSeparation - startSeparation) * step) / steps;
+    placeFinger(0, centerX - separation / 2, centerY);
+    placeFinger(1, centerX + separation / 2, centerY);
+    syn();
+  }
+
+  if (dragY === null) {
+    liftFinger(0);
+    liftFinger(1);
+    emit(1, TOUCH_EVENT_CODES.btnTouch, 0);
+    syn();
+  } else {
+    // The failing sequence: drop to ONE finger (touchend, never touchstart)
+    // and drag with what is left.
+    liftFinger(1);
+    syn();
+    const dragSteps = 20;
+    const dragStartX = centerX - endSeparation / 2;
+    for (let step = 1; step <= dragSteps; step += 1) {
+      placeFinger(0, dragStartX, centerY + (dragY * step) / dragSteps);
+      syn();
+    }
+    liftFinger(0);
+    emit(1, TOUCH_EVENT_CODES.btnTouch, 0);
+    syn();
+  }
+
+  const localScriptPath = join(tmpdir(), 'kangentic-inspect-pinch.sh');
+  writeFileSync(localScriptPath, `${lines.join('\n')}\n`, 'utf8');
+  const devicePath = '/data/local/tmp/kangentic-inspect-pinch.sh';
+  runAdb(['push', localScriptPath, devicePath]);
+  const played = spawnAdb(['shell', 'sh', devicePath], { timeoutMs: 60_000 });
+  spawnAdb(['shell', 'rm', '-f', devicePath]);
+  if (played.status !== 0) {
+    const reason = (played.stdout ?? '') + (played.stderr ?? '');
+    if (reason.includes('Permission denied')) {
+      fail(
+        `writing raw touch events to ${touchscreen.path} needs root, which a production Android build ` +
+          'does not grant. Use an EMULATOR for this command. On a physical device, dispatch the DOM ' +
+          'sequence instead: term eval can fire TouchEvents at #scroll-container, which covers anything ' +
+          'inside the page (but NOT the React Native gesture layer above it).',
+      );
+    }
+    fail(`replaying the pinch failed: ${reason.trim().split('\n')[0]}`);
+  }
+  console.log(
+    `pinched x${scale} at ${centerX},${centerY} (${startSeparation} -> ${endSeparation}px)` +
+      `${dragY === null ? '' : `, then dragged one finger ${dragY}px`}`,
+  );
 }
 
 async function commandTerm(args) {
@@ -391,6 +528,13 @@ async function commandTerm(args) {
     const deltaPx = Number(args[1]);
     if (!Number.isFinite(deltaPx)) fail('usage: term dragunits <px>');
     await terminalEval(`window.__kangenticTerminal.dragUnits(${deltaPx})`, timeoutMs);
+    return;
+  }
+  if (action === 'pinch') {
+    const scale = Number(args[1]);
+    if (!Number.isFinite(scale) || scale <= 0) fail('usage: term pinch <scale> [--drag <dy>]');
+    const dragFlag = flagValue(args, '--drag');
+    commandPinch(scale, dragFlag === undefined ? null : Math.round(Number(dragFlag)));
     return;
   }
   const deltaY = Number(args[1]);
