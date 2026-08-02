@@ -25,6 +25,31 @@ jumps whenever a desktop window changes.
 
 ## Core decision
 
+> **DIRECTION CHANGE (2026-08-02): ownership is SHELVED, the mirror is the model.**
+>
+> After Stage 1 landed and scrolling worked, live use answered the question this whole design
+> was hedging against: the desktop-sized mirror with height-fit, centring, pinch-zoom, pan,
+> and drag-to-scroll is *usable as-is* ("it looks quite nice and works well - confirmed").
+> Ownership existed to make a phone-requested grid safe; with no phone-requested grid there is
+> nothing to arbitrate, and everything below the line ships never or later:
+>
+> - **Dropped with it:** `DetailHost 'mobile'`, the registry-meaning change, the desktop
+>   mirrored view + Resume Control, the grace-period question, the column setting, portrait
+>   lock (a mirror actually *benefits* from landscape), and every desktop-side risk this doc
+>   spent its second half containing.
+> - **Kept:** the resting-grid park (desktop-only, independently motivated - it fixes the
+>   agent's own 14-row letterbox, not a mobile problem), and all of Stage 1.
+> - **What decided it:** the user's own criteria. Desktop-protectiveness (the mirror sends
+>   nothing but keystrokes, so the desktop cannot be reshaped by a phone bug); KISS ("honestly
+>   the simpler the better"); and the measured 4-131ms input-to-repaint round trip, which makes
+>   the mirror feel live rather than remote.
+> - **Nothing is foreclosed.** The `resize`/`release-size` actions stay in the protocol,
+>   granted and unused; this entire design remains correct if the mirror ever stops being
+>   enough. The bar for reopening it: a real reading task the mirror + zoom demonstrably
+>   cannot serve.
+>
+> The sections below are preserved as the design record, not as the plan.
+
 The phone **takes ownership of the terminal** and requests its own grid, rather than mirroring
 whatever the desktop left behind. Ownership is mutually exclusive and arbitrated in main,
 reusing the existing task-detail ownership machinery.
@@ -304,13 +329,24 @@ so grid ownership and the arbiter ship together.
 
 ## Suggested phasing
 
-1. **Mobile fallback hardening** (written, uncommitted): measured height fit plus short-grid
-   centring. Zero desktop impact. Ships the floor.
-2. **Resting-grid park** (written, uncommitted): fixes the nobody-holds-it case. Desktop-only,
-   needs the Board -> Backlog -> Board regression check before landing.
-3. **Column setting on mobile**: the user-facing control, useful before ownership lands.
-4. **Terminal ownership**: widen `DetailHost` / `DetailOwner`, phone acquires and releases,
-   desktop mirrored view plus Resume Control.
+**Superseded by the 2026-08-02 direction change above.** The live phasing is now:
+
+1. **Mobile fallback hardening** - SHIPPED and verified live (height fit, centring, scroll,
+   pinch recovery, sticky-mode replay).
+2. **Mirror feel polish** - momentum fling for history scrolling, vertical cursor-follow while
+   zoomed (without it, zooming in leaves the TUI's input line and status bar unreachable - the
+   bottom of a zoomed frame is clipped and vertical drags are history by design).
+3. **Resting-grid park** (desktop, written, uncommitted): Board -> Backlog -> Board check run
+   2026-08-02, read-only: ZERO pty-resize events, grid held 210x48; one 524KB reload replay
+   fired on return with skipResize true (never reached the PTY). Landing is the user's call.
+4. ~~Column setting~~ / ~~Terminal ownership~~ - shelved, see the direction change.
+
+The original list, for the record:
+
+1. Mobile fallback hardening: measured height fit plus short-grid centring.
+2. Resting-grid park: fixes the nobody-holds-it case.
+3. Column setting on mobile.
+4. Terminal ownership: `DetailHost` / `DetailOwner`, mirrored view plus Resume Control.
 
 ## Still open
 
