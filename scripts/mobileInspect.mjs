@@ -299,7 +299,7 @@ async function commandState(args) {
  * on that and believing the result is how three fixes were "confirmed broken"
  * while already working.
  */
-const TERMINAL_ACTIONS = ['state', 'eval', 'font', 'refit', 'scroll', 'dragunits', 'swipe', 'pinch'];
+const TERMINAL_ACTIONS = ['state', 'eval', 'font', 'refit', 'scroll', 'dragunits', 'swipe', 'pinch', 'hostmsg'];
 
 function reportFreshness(probe) {
   if (probe.buildIdMatches) {
@@ -528,6 +528,26 @@ async function commandTerm(args) {
     const deltaPx = Number(args[1]);
     if (!Number.isFinite(deltaPx)) fail('usage: term dragunits <px>');
     await terminalEval(`window.__kangenticTerminal.dragUnits(${deltaPx})`, timeoutMs);
+    return;
+  }
+  if (action === 'hostmsg') {
+    // Inject a HOST->terminal bridge message from outside, via a window
+    // MessageEvent (the page listens on window and document, exactly how
+    // react-native-webview delivers real ones). This is how the RN-side half of
+    // a gesture gets reproduced without fingers: the 'pinch' lifecycle messages
+    // only ever come from a real pinch, so without this the terminal's
+    // pinch-blocked state was unreachable from any script.
+    const rawMessage = args[1];
+    if (!rawMessage) fail('usage: term hostmsg \'{"type":"pinch","active":true}\'');
+    try {
+      JSON.parse(rawMessage);
+    } catch {
+      fail(`hostmsg payload is not valid JSON: ${rawMessage}`);
+    }
+    await terminalEval(
+      `(function(){window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(rawMessage)}}));return 'delivered';})()`,
+      timeoutMs,
+    );
     return;
   }
   if (action === 'pinch') {

@@ -370,6 +370,7 @@ describe('generated xterm.html', () => {
     deltas: () => number[];
     anchorY: () => number | null;
     clearAnchor: () => void;
+    setPinchActive: (value: boolean) => void;
     decision: () => { exit: string } | null;
   } {
     const source = generatedHtml.slice(
@@ -423,6 +424,7 @@ describe('generated xterm.html', () => {
          consumeHistoryDrag: consumeHistoryDrag,
          anchorY: function () { return historyDragAnchorY; },
          clearAnchor: function () { historyDragAnchorY = null; historyDragAxis = null; },
+         setPinchActive: function (value) { pinchActive = value; },
          decision: function () { return lastScrollDecision; },
          feed: function (data) { postToHost({ type: 'input', data: data }); },
        };`,
@@ -433,6 +435,7 @@ describe('generated xterm.html', () => {
       }) => void;
       anchorY: () => number | null;
       clearAnchor: () => void;
+      setPinchActive: (value: boolean) => void;
       decision: () => { exit: string } | null;
       feed: (data: string) => void;
     };
@@ -459,9 +462,83 @@ describe('generated xterm.html', () => {
       deltas: () => deltas,
       anchorY: built.anchorY,
       clearAnchor: built.clearAnchor,
+      setPinchActive: built.setPinchActive,
       decision: built.decision,
     };
   }
+
+  /**
+   * While the host says a pinch is live, no drag may scroll - during a real
+   * pinch, a touchmove where only ONE finger moved has changedTouches of
+   * length 1 and would otherwise read as a drag.
+   */
+  it('refuses to scroll while the host reports a live pinch', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+    harness.setPinchActive(true);
+
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
+
+    expect(harness.decision()).toEqual({ exit: 'pinch-active' });
+    expect(harness.posts()).toEqual([]);
+
+    harness.setPinchActive(false);
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
+    expect(harness.decision()).toMatchObject({ exit: 'scrolled' });
+  });
+
+  /**
+   * The pinch report must come from FINGER COUNT, never the gesture lifecycle:
+   * RNGH's PinchGestureHandler calls begin() on the FIRST touch of any kind
+   * (one finger included - PinchGestureHandler.kt, STATE_UNDETERMINED branch),
+   * so an onBegin-driven report marks every one-finger drag as a pinch and the
+   * page refuses the very drag the report is part of. Measured live: 524
+   * touchmoves, 3 scrolls (the message-latency window), everything else
+   * exiting 'pinch-active'.
+   */
+  it('reports a pinch on two fingers down, never on gesture begin', () => {
+    const paneSource = readFileSync(
+      join(__dirname, '..', '..', 'src', 'components', 'terminal', 'TerminalPane.tsx'),
+      'utf8',
+    );
+    expect(paneSource).not.toContain('.onBegin(');
+    const touchesDownBody = paneSource.slice(
+      paneSource.indexOf('.onTouchesDown('),
+      paneSource.indexOf('.onStart('),
+    );
+    expect(touchesDownBody).toContain('numberOfTouches >= 2');
+    // active:false must ride onFinalize, which fires on end AND fail/cancel.
+    expect(paneSource).toContain('.onFinalize(');
+  });
+
+  /**
+   * Self-heal and last-resort recovery for a LOST active:false: a fresh
+   * one-finger touchstart cannot be a pinch, and the reset button's whole
+   * promise is a working terminal, so both clear the latch. Without these a
+   * single dropped bridge message would relatch scrolling dead - the exact
+   * presentation this whole chain of fixes exists to end.
+   */
+  it('clears a latched pinch on a clean touchstart and on the reset button', () => {
+    const loadBody = generatedHtml.slice(
+      generatedHtml.indexOf("window.addEventListener('load'"),
+      generatedHtml.indexOf("postToHost({ type: 'ready' })"),
+    );
+    const touchStartBody = loadBody.slice(
+      loadBody.indexOf("addEventListener('touchstart'"),
+      loadBody.indexOf("addEventListener('touchmove'"),
+    );
+    expect(touchStartBody).toContain('pinchActive = false');
+
+    const handlerBody = generatedHtml.slice(
+      generatedHtml.indexOf('function onHostMessage('),
+      generatedHtml.indexOf('var handleMessageEvent'),
+    );
+    const refitBranch = handlerBody.slice(
+      handlerBody.indexOf("message.type === 'refit'"),
+      handlerBody.indexOf("message.type === 'pinch'"),
+    );
+    expect(refitBranch).toContain('pinchActive = false');
+    expect(refitBranch).toContain('historyDragAnchorY = null');
+  });
 
   /**
    * THE ZOOM-THEN-SCROLL BUG, in one test.

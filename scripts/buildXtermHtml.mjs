@@ -114,6 +114,12 @@ const bridgeGlue = `
   var touchCounts = { start: 0, move: 0, end: 0, cancel: 0 };
   // Set by the host while its pinch gesture is live; see the 'pinch' message.
   var pinchActive = false;
+  // Input-to-repaint measurement: when a scroll burst was posted, and how long
+  // until the FIRST write came back. That gap is what decides whether stepped
+  // scrolling reads as responsive or sluggish, and it is the input to the
+  // phone-owned-grid design (a grid request costs the same round trip).
+  var lastScrollInputAt = null;
+  var lastScrollRoundTripMs = null;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -367,12 +373,14 @@ const bridgeGlue = `
       var report = ESCAPE + '[<' + button + ';' + column + ';' + row + 'M';
       var burst = '';
       for (var reportIndex = 0; reportIndex < Math.abs(units); reportIndex += 1) burst += report;
+      lastScrollInputAt = Date.now();
       postToHost({ type: 'input', data: burst });
       return;
     }
     var key = ESCAPE + (units < 0 ? '[5~' : '[6~');
     var pages = '';
     for (var pageIndex = 0; pageIndex < Math.abs(units); pageIndex += 1) pages += key;
+    lastScrollInputAt = Date.now();
     postToHost({ type: 'input', data: pages });
   }
 
@@ -925,6 +933,11 @@ const bridgeGlue = `
       createTerminal(message);
     } else if (message.type === 'write') {
       if (terminal && typeof message.data === 'string') {
+        // First write after a scroll burst closes the input-to-repaint loop.
+        if (lastScrollInputAt !== null) {
+          lastScrollRoundTripMs = Date.now() - lastScrollInputAt;
+          lastScrollInputAt = null;
+        }
         terminal.write(message.data, afterWriteFlushed);
         cleanFeedWrite(message.data);
       }
@@ -939,6 +952,15 @@ const bridgeGlue = `
       // so a refit that skipped it could not undo a zoom - the reset button
       // ran, reported success, and left the grid exactly as wrong as before.
       // clampHorizontalPan and panToCursor were missing for the same reason.
+      //
+      // The reset button is also the user's LAST-RESORT recovery, so it drops
+      // every piece of gesture state as well: a latched pinch flag or a
+      // dangling drag anchor must not survive the one control whose whole
+      // promise is "put the terminal back into a working state".
+      pinchActive = false;
+      historyDragAnchorY = null;
+      historyDragAxis = null;
+      tapDirty = true;
       refit();
     } else if (message.type === 'pinch') {
       pinchActive = message.active === true;
@@ -1089,6 +1111,7 @@ const bridgeGlue = `
       heightFitGeneration: heightFitGeneration,
       lastScrollDecision: lastScrollDecision,
       scrollPostCount: scrollPostCount,
+      lastScrollRoundTripMs: lastScrollRoundTripMs,
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }
@@ -1102,7 +1125,10 @@ const bridgeGlue = `
       return terminalProbeState();
     },
     refit: function () {
-      refit();
+      // Through the MESSAGE branch, not refit() directly: the reset button
+      // posts {type:'refit'}, and that branch now also drops gesture state, so
+      // calling the inner function would test a path the button does not take.
+      onHostMessage(JSON.stringify({ type: 'refit' }));
       return terminalProbeState();
     },
     scroll: function (units) {
@@ -1140,6 +1166,12 @@ const bridgeGlue = `
         touchCounts.start += 1;
         pinnedToStart = false;
         manualPanUntil = Date.now() + MANUAL_PAN_PAUSE_MS;
+        // A fresh gesture starting with ONE clean finger cannot be a pinch, so
+        // it clears the pinch latch even if the host's active:false was lost
+        // (self-heal). It cannot misfire against a real pinch: the second
+        // finger's own touchstart re-reports 2 touches before any move, and
+        // the host re-posts active:true on the way to activation.
+        if (touchEvent.touches.length === 1) pinchActive = false;
         if (touchEvent.touches.length === 1) {
           tapDirty = false;
           tapStartX = touchEvent.touches[0].clientX;
