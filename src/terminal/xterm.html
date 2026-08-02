@@ -567,7 +567,7 @@ return exports; })();
     if (!terminal) return 'page';
     if (terminal.buffer.active.type !== 'alternate') return 'viewport';
     var mouseMode = terminal.modes ? terminal.modes.mouseTrackingMode : null;
-    return mouseMode && mouseMode !== 'none' ? 'wheel' : 'page';
+    return mouseMode && mouseMode !== 'none' ? 'mouse' : 'page';
   }
 
   /**
@@ -580,33 +580,28 @@ return exports; })();
       terminal.scrollLines(units);
       return;
     }
-    if (mechanism === 'wheel') {
-      var screen = document.querySelector('.xterm-screen');
-      if (!screen) return;
-      var bounds = screen.getBoundingClientRect();
-      // DEVICE pixels, not CSS. xterm measures a wheel delta against
-      // its renderer's DEVICE cell height, so a CSS-px delta is
-      // under-counted by the device pixel ratio and it banks fractions instead
-      // of scrolling: measured on a Pixel 10 (dpr 2.625) only every THIRD notch
-      // produced any output at all, which reads as "scrolling is broken".
-      var notch = (bounds.height / terminal.rows) * (window.devicePixelRatio || 1);
-      // Let xterm encode it: the mouse protocol has coordinates and modifier
-      // rules we have no business reimplementing, and it already knows the
-      // active mode. Bank what it emits so the burst is a single message.
-      wheelBurstData = '';
-      for (var wheelIndex = 0; wheelIndex < Math.abs(units); wheelIndex += 1) {
-        (terminal.element || screen).dispatchEvent(new WheelEvent('wheel', {
-          deltaY: units < 0 ? -notch : notch,
-          deltaMode: 0,
-          clientX: bounds.left + bounds.width / 2,
-          clientY: bounds.top + bounds.height / 2,
-          bubbles: true,
-          cancelable: true,
-        }));
-      }
-      var burst = wheelBurstData;
-      wheelBurstData = null;
-      if (burst) postToHost({ type: 'input', data: burst });
+    if (mechanism === 'mouse') {
+      // Emit the SGR wheel report OURSELVES rather than dispatching a
+      // WheelEvent at xterm and hoping it forwards one.
+      //
+      // Routing through xterm was tried twice and is not steerable from
+      // outside: its handler feeds coreMouseService, which ACCUMULATES the
+      // delta against the renderer's device cell height and emits only when
+      // some internal threshold trips. Measured on a Pixel 10, a CSS-pixel
+      // notch produced output on roughly one event in three, and "correcting"
+      // the notch to device pixels produced output on NONE. Both readings are
+      // the same lesson: that accumulator is not ours to drive.
+      //
+      // Button 64 is wheel-up (toward history), 65 wheel-down. Coordinates are
+      // 1-based cells; the grid centre is as good as anywhere, since a scroll
+      // report is not position-sensitive.
+      var button = units < 0 ? 64 : 65;
+      var column = Math.max(1, Math.ceil(terminal.cols / 2));
+      var row = Math.max(1, Math.ceil(terminal.rows / 2));
+      var report = ESCAPE + '[<' + button + ';' + column + ';' + row + 'M';
+      var burst = '';
+      for (var reportIndex = 0; reportIndex < Math.abs(units); reportIndex += 1) burst += report;
+      postToHost({ type: 'input', data: burst });
       return;
     }
     var key = ESCAPE + (units < 0 ? '[5~' : '[6~');
