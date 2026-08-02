@@ -112,6 +112,11 @@ describe('terminal -> host round-trip', () => {
     expect(decodeTerminalMessage(encodeTerminalMessage(tapped))).toEqual(tapped);
   });
 
+  it('round-trips the preferred-grid report (fit-to-phone input)', () => {
+    const preferred: TerminalToHostMessage = { type: 'preferred-grid', cols: 48, rows: 36 };
+    expect(decodeTerminalMessage(encodeTerminalMessage(preferred))).toEqual(preferred);
+  });
+
   it('round-trips the refit host message (snap back to the fitted view)', () => {
     expect(decodeHostMessage(encodeHostMessage({ type: 'refit' }))).toEqual({ type: 'refit' });
   });
@@ -140,6 +145,12 @@ describe('decodeTerminalMessage - malformed input', () => {
     expect(decodeTerminalMessage('{"type":"font-size","fontSizePx":"7"}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"renderer","renderer":"vulkan"}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"renderer"}')).toBeNull();
+  });
+
+  it('returns null for malformed preferred-grid messages', () => {
+    expect(decodeTerminalMessage('{"type":"preferred-grid","cols":48}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"preferred-grid","cols":"48","rows":36}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"preferred-grid","cols":null,"rows":36}')).toBeNull();
   });
 
   it('returns null for malformed clean-lines messages', () => {

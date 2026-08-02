@@ -5,12 +5,18 @@
  * both treat the boundary as untrusted-ish (anything malformed decodes to
  * null and is dropped).
  *
- * The pane is a FAITHFUL MIRROR: it renders the desktop's exact grid 1:1 and
- * NEVER resizes the desktop PTY (a shared session must not be reshaped by the
- * phone). It sizes the font so the whole frame fits the phone screen, and
- * pinch-zoom + pan read the detail. `rows: null` on init means the desktop
- * never reported its grid (pre-0.4.0) - the glue then infers cols from
- * content and fits rows to the viewport until the real dims arrive.
+ * The pane is a FAITHFUL MIRROR whenever a desktop surface holds the
+ * terminal: it renders the desktop's exact grid 1:1 and never reshapes a
+ * grid a desktop reader is looking at. It sizes the font so the whole frame
+ * fits the phone screen, and pinch-zoom + pan read the detail. The one
+ * deliberate exception (2026-08-02, docs/terminal-ownership-design.md) is a
+ * session the desktop has PARKED at its resting grid - no desktop surface
+ * shows it - where the host may request the page's measured
+ * 'preferred-grid' via the interactive-terminal verb (src/terminal/gridHold.ts
+ * owns that decision; the desktop always wins the grid back). `rows: null`
+ * on init means the desktop never reported its grid (pre-0.4.0) - the glue
+ * then infers cols from content and fits rows to the viewport until the
+ * real dims arrive.
  *
  * The theme record maps xterm ITheme keys (black, red, ..., brightWhite,
  * background, foreground, cursor) to hex color strings. It stays a plain
@@ -96,7 +102,15 @@ export type TerminalToHostMessage =
    */
   | { type: 'clean-lines'; lines: string[]; reset: boolean }
   /** A clean tap on the terminal (no drag, no pinch): the host toggles the soft keyboard for direct typing. */
-  | { type: 'tapped' };
+  | { type: 'tapped' }
+  /**
+   * The grid that would fill the phone's portrait viewport with readable
+   * glyphs, computed from MEASURED cell metrics after a settled height fit
+   * (never from the CELL_*_RATIO guesses). Posted after every settled fit;
+   * the host acts on it only when the desktop has parked the session (see
+   * src/terminal/gridHold.ts).
+   */
+  | { type: 'preferred-grid'; cols: number; rows: number };
 
 export function encodeHostMessage(message: HostToTerminalMessage): string {
   return JSON.stringify(message);
@@ -179,6 +193,9 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
   }
   if (parsedObject.type === 'tapped') {
     return { type: 'tapped' };
+  }
+  if (parsedObject.type === 'preferred-grid' && isFiniteNumber(parsedObject.cols) && isFiniteNumber(parsedObject.rows)) {
+    return { type: 'preferred-grid', cols: parsedObject.cols, rows: parsedObject.rows };
   }
   return null;
 }

@@ -52,6 +52,21 @@
   // off". Two pixels of clearance costs nothing visible and makes the last
   // row whole by construction.
   var HEIGHT_FIT_BOTTOM_CLEARANCE_PX = 2;
+  // FIT-TO-PHONE (the parked case only; src/terminal/gridHold.ts owns the
+  // decision). The target font a granted preferred grid renders at: 14px
+  // matches the app's body text - readable without zooming. The bounds cap
+  // what the phone may ask a desktop PTY to become: the floor keeps TUIs
+  // functional (Claude Code needs ~40 cols to lay out at all), the ceiling
+  // keeps a tablet request from rebuilding a desktop-wide grid.
+  var PREFERRED_GRID_FONT_PX = 14;
+  var PREFERRED_GRID_MIN_COLS = 40;
+  var PREFERRED_GRID_MAX_COLS = 100;
+  var PREFERRED_GRID_MIN_ROWS = 20;
+  var PREFERRED_GRID_MAX_ROWS = 60;
+  // Last preferred grid posted, so a settle landing on the same numbers
+  // costs no message. Null after every (re-)init: a fresh session reports
+  // afresh.
+  var lastReportedPreferredGrid = null;
   // How long the viewport must hold still before the guaranteed settle refit
   // runs (see the ResizeObserver). Long enough to sit past the keyboard
   // animation's resize burst, short enough to be invisible.

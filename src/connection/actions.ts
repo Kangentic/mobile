@@ -29,6 +29,20 @@ export async function writeTerminal(sessionId: string, data: string): Promise<vo
   await requireVerbClient().writeInteractiveTerminal(sessionId, data);
 }
 
+/**
+ * Fit-to-phone (the parked case only; src/terminal/gridHold.ts owns the
+ * decision): ask the desktop to resize the PTY to the phone's measured
+ * grid, and give it back. The desktop guards its own restore on release,
+ * disconnect, revoke, and shutdown.
+ */
+export async function resizeTerminal(sessionId: string, dimensions: { cols: number; rows: number }): Promise<void> {
+  await requireVerbClient().resizeInteractiveTerminal(sessionId, dimensions);
+}
+
+export async function releaseTerminalSize(sessionId: string): Promise<void> {
+  await requireVerbClient().releaseInteractiveTerminalSize(sessionId);
+}
+
 export async function moveTaskOptimistic(input: {
   projectId: string;
   taskId: string;

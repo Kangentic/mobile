@@ -256,11 +256,15 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   cards; the in-progress turn streams token-by-token as a cleaned tail of the raw PTY feed
   (`src/terminal/liveTail.ts`), replaced when the next transcript revision lands. The raw
   interactive terminal (xterm.js in a WebView, quick-key bar, `interactive-terminal` writes)
-  renders at the desktop's reported PTY grid and is a **faithful read-only mirror**: it mirrors
-  that grid 1:1 with pan and pinch-zoom, sizing the font so the grid's rows fill the screen
-  height, and it **never resizes the desktop PTY** - a shared session must not be reshaped by the
-  phone. Typed input is the only thing the phone sends. The protocol's `resize` / `release-size`
-  actions exist for the desktop, not this client (`src/channel/verbClient.ts`).
+  renders at the desktop's reported PTY grid and is a **faithful read-only mirror** whenever a
+  desktop surface holds the terminal: it mirrors that grid 1:1 with pan and pinch-zoom, sizing
+  the font so the grid's rows fill the screen height, and never reshapes a grid a desktop reader
+  is looking at. Typed input is the only thing the phone sends there. The one exception is a
+  session the desktop has PARKED at its resting grid (120x30, no desktop surface shows it):
+  the phone then requests its own measured full-portrait grid via the protocol's
+  `resize` / `release-size` actions and releases it on screen close, background, or the desktop
+  taking the session back - the desktop always wins (`src/terminal/gridHold.ts` owns the
+  decision; `src/channel/verbClient.ts` carries the verbs).
 - **E2E push:** payloads are ciphertext plus a generic placeholder only; decryption happens
   on-device (iOS Notification Service Extension / Android Notifee). Every failure degrades to
   the placeholder, never to plaintext.
