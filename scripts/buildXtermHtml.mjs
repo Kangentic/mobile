@@ -277,7 +277,12 @@ const bridgeGlue = `
       var screen = document.querySelector('.xterm-screen');
       if (!screen) return;
       var bounds = screen.getBoundingClientRect();
-      var notch = bounds.height / terminal.rows;
+      // DEVICE pixels, not CSS. xterm measures a wheel delta against
+      // its renderer's DEVICE cell height, so a CSS-px delta is
+      // under-counted by the device pixel ratio and it banks fractions instead
+      // of scrolling: measured on a Pixel 10 (dpr 2.625) only every THIRD notch
+      // produced any output at all, which reads as "scrolling is broken".
+      var notch = (bounds.height / terminal.rows) * (window.devicePixelRatio || 1);
       // Let xterm encode it: the mouse protocol has coordinates and modifier
       // rules we have no business reimplementing, and it already knows the
       // active mode. Bank what it emits so the burst is a single message.

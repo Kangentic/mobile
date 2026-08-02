@@ -363,6 +363,7 @@ describe('generated xterm.html', () => {
       'MAX_SCROLL_UNITS_PER_STEP',
       'ESCAPE',
       'WheelEvent',
+      'window',
       `var historyDragAnchorY = 0;
        var historyDragStartX = 0;
        var historyDragAxis = null;
@@ -392,6 +393,10 @@ describe('generated xterm.html', () => {
       function FakeWheelEvent(this: { deltaY: number }, _type: string, init: { deltaY: number }) {
         this.deltaY = init.deltaY;
       },
+      // A non-1 ratio on purpose: xterm measures a wheel delta against its
+      // DEVICE cell height, so a CSS-px delta silently under-scrolls by exactly
+      // this factor. A dpr of 1 here would let that bug pass unnoticed.
+      { devicePixelRatio: 2 },
     );
     feed = built.feed;
     return {
@@ -421,7 +426,9 @@ describe('generated xterm.html', () => {
     // A 20px cell (600px / 30 rows), so 100px is 5 lines.
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
-    expect(harness.deltas()).toEqual([-20, -20, -20, -20, -20]);
+    // 20px CSS cell x dpr 2 = 40 DEVICE px per notch, which is what xterm's
+    // wheel handler measures against.
+    expect(harness.deltas()).toEqual([-40, -40, -40, -40, -40]);
     expect(harness.scrolled()).toEqual([]);
   });
 
@@ -526,7 +533,9 @@ describe('generated xterm.html', () => {
 
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
-    expect(harness.deltas()).toEqual([-20, -20, -20, -20, -20]);
+    // 20px CSS cell x dpr 2 = 40 DEVICE px per notch, which is what xterm's
+    // wheel handler measures against.
+    expect(harness.deltas()).toEqual([-40, -40, -40, -40, -40]);
   });
 
   /**
@@ -557,7 +566,7 @@ describe('generated xterm.html', () => {
 
     // 12 + 12 = 24px, which clears the 20px cell.
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 24 }] });
-    expect(harness.deltas()).toEqual([-20]);
+    expect(harness.deltas()).toEqual([-40]);
     // Only the consumed 20px advanced the anchor; 4px remain banked.
     expect(harness.anchorY()).toBe(20);
   });
