@@ -112,6 +112,8 @@ const bridgeGlue = `
   // (the browser claimed the gesture, or something above the WebView did),
   // which is a completely different fault from a handler that ran and bailed.
   var touchCounts = { start: 0, move: 0, end: 0, cancel: 0 };
+  // Set by the host while its pinch gesture is live; see the 'pinch' message.
+  var pinchActive = false;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -385,10 +387,23 @@ const bridgeGlue = `
    * smoothly instead of stalling.
    */
   function consumeHistoryDrag(touchEvent) {
-    if (touchEvent.touches.length !== 1) {
+    // The RN gesture layer is the authority on whether a pinch is happening.
+    if (pinchActive) {
+      lastScrollDecision = { exit: 'pinch-active' };
+      return;
+    }
+    // Count the fingers that actually MOVED, not the ones the page believes are
+    // down. When the gesture handler above the WebView claims a pinch, the page
+    // can stop receiving touchend for a finger and counts it forever - measured
+    // live at 15 touchstarts against 13 touchends - so touches.length reported
+    // a phantom second finger and every later one-finger drag bailed as
+    // multi-touch. A phantom never moves, so it never reaches changedTouches.
+    var movingTouches = touchEvent.changedTouches || touchEvent.touches;
+    if (movingTouches.length !== 1) {
       lastScrollDecision = { exit: 'not-single-finger' };
       return;
     }
+    touchEvent = { touches: [movingTouches[0]], changedTouches: movingTouches };
     // ADOPT THE SURVIVING FINGER.
     //
     // A second finger (a pinch) nulls the anchor, and lifting back down to one
@@ -925,6 +940,17 @@ const bridgeGlue = `
       // ran, reported success, and left the grid exactly as wrong as before.
       // clampHorizontalPan and panToCursor were missing for the same reason.
       refit();
+    } else if (message.type === 'pinch') {
+      pinchActive = message.active === true;
+      // A finished pinch leaves this page's touch bookkeeping unreliable (it
+      // may never have seen touchend for the second finger), so drop the drag
+      // state outright. The next move re-anchors on whichever finger is still
+      // down, which is what makes zoom-then-scroll work in one gesture.
+      if (!pinchActive) {
+        historyDragAnchorY = null;
+        historyDragAxis = null;
+        tapDirty = true;
+      }
     } else if (message.type === 'resize') {
       // The desktop's authoritative grid (snapshot, or a desktop-side refit, or
       // the FIRST time dims arrive when they lost the race with init). Adopt it
@@ -1058,6 +1084,8 @@ const bridgeGlue = `
       pinnedToStart: pinnedToStart,
       manualPanActive: Date.now() < manualPanUntil,
       historyDragAxis: historyDragAxis,
+      historyDragAnchorY: historyDragAnchorY,
+      pinchActive: pinchActive,
       heightFitGeneration: heightFitGeneration,
       lastScrollDecision: lastScrollDecision,
       scrollPostCount: scrollPostCount,

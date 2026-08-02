@@ -40,7 +40,16 @@ export type HostToTerminalMessage =
   /** Snap back to the fitted view: recompute the fit-to-screen font and reset pan. */
   | { type: 'refit' }
   /** The authoritative PTY grid changed (desktop refit); adopt it and re-fit the frame to screen. */
-  | { type: 'resize'; cols: number; rows: number };
+  | { type: 'resize'; cols: number; rows: number }
+  /**
+   * A pinch is in progress (or just ended), reported by the RN gesture layer
+   * that actually owns it. The page cannot tell reliably on its own: when the
+   * gesture handler above the WebView claims a pinch, the page can stop
+   * receiving touchend for a finger and keeps counting it forever, so its own
+   * touch list reports a phantom second finger and every later one-finger drag
+   * looks like a pinch. Measured live: 15 touchstarts against 13 touchends.
+   */
+  | { type: 'pinch'; active: boolean };
 
 export type TerminalToHostMessage =
   | { type: 'ready' }
@@ -184,6 +193,9 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
   }
   if (parsedObject.type === 'refit') {
     return { type: 'refit' };
+  }
+  if (parsedObject.type === 'pinch' && typeof parsedObject.active === 'boolean') {
+    return { type: 'pinch', active: parsedObject.active };
   }
   if (parsedObject.type === 'resize' && isFiniteNumber(parsedObject.cols) && isFiniteNumber(parsedObject.rows)) {
     return { type: 'resize', cols: parsedObject.cols, rows: parsedObject.rows };

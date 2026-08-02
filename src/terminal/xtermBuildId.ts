@@ -8,4 +8,4 @@
  * Refresh does not cover assets), which otherwise presents as a fix that did
  * not take.
  */
-export const XTERM_BUILD_ID = '12781977b124';
+export const XTERM_BUILD_ID = '2d63ab3f8ba5';

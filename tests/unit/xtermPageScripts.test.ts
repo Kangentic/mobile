@@ -361,7 +361,10 @@ describe('generated xterm.html', () => {
     emitPerNotch?: string;
     container?: { scrollTop: number; scrollHeight: number; clientHeight: number };
   }): {
-    consumeHistoryDrag: (touchEvent: { touches: { clientX: number; clientY: number }[] }) => void;
+    consumeHistoryDrag: (touchEvent: {
+      touches: { clientX: number; clientY: number }[];
+      changedTouches?: { clientX: number; clientY: number }[];
+    }) => void;
     posts: () => { type: string; data?: string }[];
     scrolled: () => number[];
     deltas: () => number[];
@@ -414,6 +417,7 @@ describe('generated xterm.html', () => {
        var DRAG_AXIS_SLOP_PX = 12;
        var lastScrollDecision = null;
        var scrollPostCount = 0;
+       var pinchActive = false;
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
@@ -423,7 +427,10 @@ describe('generated xterm.html', () => {
          feed: function (data) { postToHost({ type: 'input', data: data }); },
        };`,
     ) as (...dependencies: unknown[]) => {
-      consumeHistoryDrag: (touchEvent: { touches: { clientX: number; clientY: number }[] }) => void;
+      consumeHistoryDrag: (touchEvent: {
+        touches: { clientX: number; clientY: number }[];
+        changedTouches?: { clientX: number; clientY: number }[];
+      }) => void;
       anchorY: () => number | null;
       clearAnchor: () => void;
       decision: () => { exit: string } | null;
@@ -471,6 +478,39 @@ describe('generated xterm.html', () => {
    * The surviving finger is adopted instead: one move to re-anchor, then normal
    * scrolling.
    */
+  /**
+   * The second half of the same bug: after the RN pinch gesture claims the
+   * touches, this page can stop receiving touchend for a finger and counts it
+   * as down forever. Measured live at 15 touchstarts against 13 touchends, with
+   * every later one-finger drag exiting 'not-single-finger' - scrolling dead
+   * with no way back.
+   *
+   * A phantom finger never MOVES, so counting the touches that changed rather
+   * than the ones the page believes are down steps around it entirely.
+   */
+  it('scrolls past a phantom finger the page never saw lift', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+    const phantom = { clientX: 300, clientY: 300 };
+    const dragging = { clientX: 0, clientY: 100 };
+
+    harness.consumeHistoryDrag({ touches: [dragging, phantom], changedTouches: [dragging] });
+
+    expect(harness.decision()).toMatchObject({ exit: 'scrolled', units: -5 });
+    expect(harness.posts()).toHaveLength(1);
+  });
+
+  /** A genuine two-finger pinch still must not scroll: both fingers move. */
+  it('ignores a drag while two fingers are actually moving', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+    const first = { clientX: 0, clientY: 100 };
+    const second = { clientX: 300, clientY: 400 };
+
+    harness.consumeHistoryDrag({ touches: [first, second], changedTouches: [first, second] });
+
+    expect(harness.decision()).toEqual({ exit: 'not-single-finger' });
+    expect(harness.posts()).toEqual([]);
+  });
+
   it('adopts the surviving finger after a pinch instead of bailing forever', () => {
     const harness = buildHistoryScroll({ mouseTracking: true });
     // A pinch left the anchor null while one finger is still on the glass.
