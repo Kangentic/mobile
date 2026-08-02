@@ -320,7 +320,7 @@ describe('generated xterm.html', () => {
     emitPerNotch?: string;
     container?: { scrollTop: number; scrollHeight: number; clientHeight: number };
   }): {
-    consumeHistoryDrag: (touchEvent: { touches: { clientY: number }[] }) => void;
+    consumeHistoryDrag: (touchEvent: { touches: { clientX: number; clientY: number }[] }) => void;
     posts: () => { type: string; data?: string }[];
     scrolled: () => number[];
     deltas: () => number[];
@@ -364,6 +364,9 @@ describe('generated xterm.html', () => {
       'ESCAPE',
       'WheelEvent',
       `var historyDragAnchorY = 0;
+       var historyDragStartX = 0;
+       var historyDragAxis = null;
+       var DRAG_AXIS_SLOP_PX = 12;
        var wheelBurstData = null;
        ${source}
        return {
@@ -375,7 +378,7 @@ describe('generated xterm.html', () => {
          },
        };`,
     ) as (...dependencies: unknown[]) => {
-      consumeHistoryDrag: (touchEvent: { touches: { clientY: number }[] }) => void;
+      consumeHistoryDrag: (touchEvent: { touches: { clientX: number; clientY: number }[] }) => void;
       anchorY: () => number | null;
       feed: (data: string) => void;
     };
@@ -416,7 +419,7 @@ describe('generated xterm.html', () => {
     const harness = buildHistoryScroll({ mouseTracking: true });
 
     // A 20px cell (600px / 30 rows), so 100px is 5 lines.
-    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
     expect(harness.deltas()).toEqual([-20, -20, -20, -20, -20]);
     expect(harness.scrolled()).toEqual([]);
@@ -431,7 +434,7 @@ describe('generated xterm.html', () => {
     const marker = `${String.fromCharCode(27)}[<64;10;10M`;
     const harness = buildHistoryScroll({ mouseTracking: true, emitPerNotch: marker });
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
     expect(harness.posts()).toHaveLength(1);
     expect(harness.posts()[0].data).toBe(marker.repeat(5));
@@ -446,7 +449,7 @@ describe('generated xterm.html', () => {
     const harness = buildHistoryScroll({ mouseTracking: false });
 
     // A page is the full 600px grid, so 1200px is two of them.
-    harness.consumeHistoryDrag({ touches: [{ clientY: 1200 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 1200 }] });
 
     expect(harness.deltas()).toEqual([]);
     expect(harness.posts()).toHaveLength(1);
@@ -457,7 +460,7 @@ describe('generated xterm.html', () => {
   it('sends PgDn when the drag returns toward the live tail', () => {
     const harness = buildHistoryScroll({ mouseTracking: false });
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: -600 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: -600 }] });
 
     expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[6~`);
   });
@@ -472,7 +475,7 @@ describe('generated xterm.html', () => {
     const escape = String.fromCharCode(27);
     for (const mouseTracking of [true, false]) {
       const harness = buildHistoryScroll({ mouseTracking, emitPerNotch: `${escape}[<64;10;10M` });
-      harness.consumeHistoryDrag({ touches: [{ clientY: 1200 }] });
+      harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 1200 }] });
       const sent = harness.posts().map((post) => post.data ?? '').join('');
       for (const arrow of [`${escape}[A`, `${escape}[B`, `${escape}OA`, `${escape}OB`]) {
         expect(sent, `mouseTracking=${mouseTracking}`).not.toContain(arrow);
@@ -488,7 +491,7 @@ describe('generated xterm.html', () => {
     const harness = buildHistoryScroll({ bufferType: 'normal' });
 
     // A 20px cell (600 / 30 rows), so 100px is 5 lines.
-    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
     expect(harness.scrolled()).toEqual([-5]);
     expect(harness.posts()).toEqual([]);
@@ -502,28 +505,43 @@ describe('generated xterm.html', () => {
     const harness = buildHistoryScroll({ bufferType: 'normal' });
 
     // 2000px at a 20px cell would be 100 lines.
-    harness.consumeHistoryDrag({ touches: [{ clientY: 2000 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 2000 }] });
 
     expect(harness.scrolled()).toEqual([-12]);
   });
 
   /**
-   * Overscroll chaining: while the container still has pan left in the pushed
-   * direction (the user zoomed in), the drag pans and must NOT reach history.
-   * Without this, zooming in would make every pan fire scroll input at the
-   * agent.
+   * Vertical is history UNCONDITIONALLY, even when the grid is taller than the
+   * screen. An earlier build chained instead (pan to the top edge first, then
+   * scroll), which is the standard nested-scroller rule and wrong here: zooming
+   * in made the grid taller, so history stopped responding until the user had
+   * dragged all the way up. Reported from the device as "when i zoom in, im no
+   * longer able to scroll".
    */
-  it('pans instead of scrolling history while the container can still move', () => {
+  it('scrolls history even when the grid is taller than the screen', () => {
     const harness = buildHistoryScroll({
+      mouseTracking: true,
       container: { scrollTop: 120, scrollHeight: 1200, clientHeight: 600 },
     });
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: 1200 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
 
-    expect(harness.posts()).toEqual([]);
-    // The anchor follows the finger so the pan cannot bank travel that fires as
-    // a jump the moment the edge is reached.
-    expect(harness.anchorY()).toBe(1200);
+    expect(harness.deltas()).toEqual([-20, -20, -20, -20, -20]);
+  });
+
+  /**
+   * Axis lock: a left/right pan across a wide grid carries Y jitter, and
+   * without a lock that jitter banks up and fires scrolls nobody asked for.
+   * The axis is latched once per gesture, so a pan stays a pan.
+   */
+  it('ignores the vertical component of a horizontal pan', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+
+    // Mostly sideways, with the kind of Y drift a real thumb produces.
+    harness.consumeHistoryDrag({ touches: [{ clientX: 90, clientY: 25 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 180, clientY: 60 }] });
+
+    expect(harness.deltas()).toEqual([]);
   });
 
   /**
@@ -533,12 +551,12 @@ describe('generated xterm.html', () => {
   it('banks a sub-line drag instead of discarding it', () => {
     const harness = buildHistoryScroll({ mouseTracking: true });
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: 12 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 12 }] });
     expect(harness.deltas()).toEqual([]);
     expect(harness.anchorY()).toBe(0);
 
     // 12 + 12 = 24px, which clears the 20px cell.
-    harness.consumeHistoryDrag({ touches: [{ clientY: 24 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 24 }] });
     expect(harness.deltas()).toEqual([-20]);
     // Only the consumed 20px advanced the anchor; 4px remain banked.
     expect(harness.anchorY()).toBe(20);
@@ -548,7 +566,7 @@ describe('generated xterm.html', () => {
   it('ignores a multi-touch gesture', () => {
     const harness = buildHistoryScroll({});
 
-    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }, { clientY: 200 }] });
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }, { clientX: 0, clientY: 200 }] });
 
     expect(harness.deltas()).toEqual([]);
   });

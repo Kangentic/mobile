@@ -315,20 +315,30 @@ const bridgeGlue = `
    */
   function consumeHistoryDrag(touchEvent) {
     if (historyDragAnchorY === null || touchEvent.touches.length !== 1) return;
-    var container = scrollContainer();
     var screen = document.querySelector('.xterm-screen');
-    if (!container || !screen || !terminal || terminal.rows < 1) return;
+    if (!screen || !terminal || terminal.rows < 1) return;
     var currentY = touchEvent.touches[0].clientY;
+    // Axis lock, decided ONCE per gesture past the slop radius: a one-finger
+    // drag is EITHER a horizontal pan across a wide grid OR a vertical walk
+    // through history, never both. Without it the Y jitter in a left/right pan
+    // banks up and fires a scroll nobody asked for.
+    //
+    // Vertical is UNCONDITIONALLY history. An earlier build chained instead,
+    // panning the grid until it hit the top edge and only then scrolling, which
+    // is the standard nested-scroller rule and the wrong one here: zooming in
+    // makes the grid taller than the screen, so history stopped responding
+    // until the user had dragged all the way to the top. The cost is that the
+    // bottom of a zoomed frame is no longer reachable by dragging, which is
+    // the deliberate trade for keeping this to one finger and no modes.
+    if (historyDragAxis === null) {
+      var travelX = Math.abs(touchEvent.touches[0].clientX - historyDragStartX);
+      var travelY = Math.abs(currentY - historyDragAnchorY);
+      if (Math.max(travelX, travelY) < DRAG_AXIS_SLOP_PX) return;
+      historyDragAxis = travelY > travelX ? 'vertical' : 'horizontal';
+    }
+    if (historyDragAxis !== 'vertical') return;
     var dragged = currentY - historyDragAnchorY;
     if (!dragged) return;
-    var atTop = container.scrollTop <= 0;
-    var atBottom = container.scrollTop >= container.scrollHeight - container.clientHeight - 1;
-    if (dragged > 0 ? !atTop : !atBottom) {
-      // Still panning: reset the anchor so the pan does not bank travel that
-      // would fire as a jump the moment the edge is reached.
-      historyDragAnchorY = currentY;
-      return;
-    }
     var gridHeight = screen.getBoundingClientRect().height;
     var mechanism = scrollMechanism();
     // The unit follows the mechanism, so the content tracks the hand roughly
@@ -836,6 +846,14 @@ const bridgeGlue = `
   // Moving reference point for history scrolling (see consumeHistoryDrag). Null
   // whenever the gesture is not a single finger, so a pinch never scrolls.
   var historyDragAnchorY = null;
+  // Fixed start of the gesture, used only to decide the axis (the anchor above
+  // moves as travel is consumed, so it cannot answer "how far overall").
+  var historyDragStartX = 0;
+  // 'vertical' | 'horizontal' | null, latched once per gesture.
+  var historyDragAxis = null;
+  // Travel before the axis is decided. Matches the tap slop, so the same small
+  // movement that still counts as a tap also commits to no axis.
+  var DRAG_AXIS_SLOP_PX = 12;
 
   window.addEventListener('load', function () {
     var container = scrollContainer();
@@ -851,6 +869,8 @@ const bridgeGlue = `
           tapStartY = touchEvent.touches[0].clientY;
           tapStartAt = Date.now();
           historyDragAnchorY = touchEvent.touches[0].clientY;
+          historyDragStartX = touchEvent.touches[0].clientX;
+          historyDragAxis = null;
         } else {
           tapDirty = true;
           historyDragAnchorY = null;
@@ -921,7 +941,13 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    the-cursor tracks the active column); a grid taller than the viewport pans down.
    width:max-content keeps the terminal its natural grid width so the overflow is
    real and scrollable rather than wrapped. */
-#scroll-container { width: 100%; height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
+/* Horizontal pans, vertical deliberately does NOT. A one-finger vertical drag
+   is history scrolling (consumeHistoryDrag), so the container must not consume
+   it as a pan first: with overflow-y auto the browser swallowed the gesture
+   whenever zoom had made the grid taller than the screen, and history stopped
+   responding. The cost is that the bottom of a zoomed-in frame cannot be
+   dragged to, which is the accepted trade for one finger and no modes. */
+#scroll-container { width: 100%; height: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
 /* Auto side margins CENTRE a grid narrower than the screen and do nothing to a
    wider one, which is exactly the split we want. The font is fitted to the
    pane's HEIGHT, so a grid whose aspect is taller than the pane's cannot fill
