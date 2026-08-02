@@ -569,6 +569,32 @@ describe('generated xterm.html', () => {
    * The NORMAL buffer has real scrollback, so the same gesture moves xterm's
    * own viewport by LINE: smooth, and costing no relay traffic at all.
    */
+  /**
+   * The silence bug, and why the buffer type cannot be the discriminator.
+   *
+   * This mirror's buffer type reports where the REPLAYED SEED happened to
+   * start, not what the remote app is doing. The phone's feed is a ring holding
+   * a tail (measured live at 124KB of a 626KB desktop scrollback), so the
+   * alt-screen enter emitted once at TUI startup is long evicted, and every
+   * re-init afterwards renders into the NORMAL buffer while the desktop PTY is
+   * still in the alternate one - confirmed on device: desktop inAltScreen true,
+   * phone bufferType 'normal', mouseTrackingMode 'any'.
+   *
+   * Choosing on the buffer then picked local viewport scrolling through a
+   * buffer with no scrollback: nothing moved, nothing was sent, and history
+   * scrolling went silent until something happened to re-enter the alt screen.
+   */
+  it('mouse-reports from the normal buffer when the remote app wants mouse reports', () => {
+    const harness = buildHistoryScroll({ bufferType: 'normal', mouseTracking: true });
+
+    harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
+
+    expect(harness.decision()).toMatchObject({ exit: 'scrolled', mechanism: 'mouse' });
+    expect(harness.scrolled(), 'must not scroll a zero-scrollback buffer locally').toEqual([]);
+    expect(harness.posts()).toHaveLength(1);
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[<64;40;15M`.repeat(5));
+  });
+
   it('scrolls locally by line and sends nothing in the normal buffer', () => {
     const harness = buildHistoryScroll({ bufferType: 'normal' });
 
