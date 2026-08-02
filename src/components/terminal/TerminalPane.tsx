@@ -515,6 +515,22 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     .onStart(() => {
       postToTerminal({ type: 'pinch', active: true });
     })
+    // Fingers dropping below two END the pinch for scrolling purposes, even
+    // though RNGH keeps the handler alive until the LAST finger lifts
+    // (PinchGestureHandler.kt ends only on ACTION_UP, and deliberately ignores
+    // onScaleEnd) - so waiting for onFinalize left the flag up through the
+    // whole "pinch, keep one finger, drag" motion and blocked the drag.
+    // Reproduced end to end on the emulator with raw multi-touch: the
+    // human-timed replay dragged for 600ms after the lift and every move
+    // exited 'pinch-active'. numberOfTouches here reports the count AFTER the
+    // lifted finger is removed (trackedPointersCount decrements before the
+    // touch event dispatches).
+    .onTouchesUp((touchesEvent) => {
+      if (touchesEvent.numberOfTouches <= 1) postToTerminal({ type: 'pinch', active: false });
+    })
+    .onTouchesCancelled((touchesEvent) => {
+      if (touchesEvent.numberOfTouches <= 1) postToTerminal({ type: 'pinch', active: false });
+    })
     .onFinalize(() => {
       postToTerminal({ type: 'pinch', active: false });
     })

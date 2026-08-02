@@ -42,9 +42,10 @@ QR scan plus SAS comparison already proves physical possession of both devices. 
 true regardless is the real guardrail: the protocol defines no shell, file, or
 arbitrary-command verb at all, so "full access" means those ten and never more.
 
-> **Doc bug to fix:** the mobile repo's `CLAUDE.md` states the default grant is "the read-only
-> four plus `register-push`, and every write/control verb needs an explicit per-verb grant".
-> That contradicts the desktop's actual code and misled this design discussion once already.
+> **Doc bug (fixed 2026-08-02):** the mobile repo's `CLAUDE.md`, `docs/security.md`, and
+> `docs/architecture.md` all stated the default grant was "the read-only four plus
+> `register-push`". All three now match the desktop's actual code (all ten verbs by default;
+> the allowlist narrows after the fact).
 
 ## Ownership model
 
@@ -244,8 +245,37 @@ for reading what happened.
 Measure the input-to-repaint round trip early, since it decides whether stepped scrolling reads
 as responsive or sluggish.
 
+**Measured (2026-08-02, Pixel 10 over the hosted relay): 4-131ms** from posting a scroll burst
+to the first write coming back. Stepped scrolling reads as responsive; the page now records
+this continuously (`lastScrollRoundTripMs` in the terminal probe).
+
 Note this also explains why the phone's `scrollback: 2000` setting has never helped: in the alt
 buffer there is nothing in it to reach.
+
+### What "scrolling broke after zoom" actually was (resolved 2026-08-02)
+
+Four stacked causes, each found by measurement and each with its own fix and regression test:
+
+1. **The ring loses the TUI's sticky VT modes.** Every re-init replayed a seed whose alt-screen
+   and mouse-tracking DECSETs were long evicted, so the mirror came up in the normal buffer with
+   tracking off while the desktop PTY was in the alternate screen with it on. Fixed by
+   remembering the modes RN-side and replaying them ahead of every seed (`modeRestore.ts`),
+   plus deriving the scroll mechanism from mouse reporting rather than buffer type.
+2. **Phantom fingers.** Once the RN pinch claims the touches, the page can stop receiving
+   touchend for a finger and counts it as down forever (measured 15 starts / 13 ends), so every
+   later drag read as multi-touch. Fixed by counting the fingers that MOVED (changedTouches).
+3. **The pinch gate fired on every drag.** RNGH's PinchGestureHandler begins on the FIRST touch
+   of any kind, so an onBegin-driven "pinch live" report blocked the very drags it rode in on
+   (measured 524 moves / 3 scrolls). Fixed by reporting from finger count: two fingers down
+   means pinch, one finger up means over - and the handler stays alive until the LAST finger
+   lifts, so gesture lifecycle alone can never say "over" in time.
+4. **A latched report had no way out.** A lost active:false froze scrolling permanently. A
+   fresh one-finger touchstart and the reset button both clear all gesture state now.
+
+One behavior is a platform fact, kept: while the pinch gesture is activated, Android delivers
+the WebView no further touches at all (measured: a 600ms post-pinch drag reached the page as 4
+touchmoves), so a continuous pinch-keep-one-finger-drag cannot scroll. Lifting and dragging
+fresh works and is verified end to end with raw multi-touch on the emulator.
 
 ## The one case ownership does not cover
 
