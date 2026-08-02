@@ -10,9 +10,9 @@ import {
   encodeInspectHello,
   encodeInspectResponse,
   INSPECT_PORT,
-  type InspectRequestKind,
+  type InspectRequest,
 } from './inspectProtocol';
-import { getInspectRoute, getInspectSubscriptions } from './inspectState';
+import { getInspectRoute, getInspectSubscriptions, getInspectTerminal } from './inspectState';
 
 /**
  * The dev-only in-app half of the mobile inspect loop: dials OUT to the
@@ -28,9 +28,43 @@ import { getInspectRoute, getInspectSubscriptions } from './inspectState';
 
 const RETRY_DELAY_MS = 5000;
 
+/**
+ * The terminal's own numbers, gathered from the two places they live: the
+ * WebView (geometry, buffer, mouse modes, last gesture) and RN (whether the
+ * writes those gestures produce actually reached the PTY).
+ *
+ * `buildIdMatches` is the one field to read first. xterm.html is a Metro asset
+ * cached by content hash and untouched by Fast Refresh, so the device can be
+ * running a stale page against a fresh bundle - which looks identical to a fix
+ * that did not work, and cost this investigation three false negatives.
+ */
+async function buildTerminalPayload(): Promise<unknown> {
+  const terminal = getInspectTerminal();
+  if (!terminal) throw new Error('No terminal pane mounted (open a task and select the Terminal tab)');
+  const page = await terminal.evaluate('window.__kangenticTerminal.probe()');
+  const loadedBuildId =
+    typeof page === 'object' && page !== null ? (page as Record<string, unknown>).buildId : undefined;
+  return {
+    sessionId: terminal.sessionId,
+    expectedBuildId: terminal.expectedBuildId,
+    loadedBuildId: loadedBuildId ?? null,
+    buildIdMatches: loadedBuildId === terminal.expectedBuildId,
+    writes: terminal.writeStats(),
+    page,
+  };
+}
+
 /** Exported for the unit tests; the bridge below is its only app consumer. */
-export function buildInspectPayload(kind: InspectRequestKind): unknown {
-  switch (kind) {
+export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' | 'argument'>): Promise<unknown> {
+  switch (request.kind) {
+    case 'terminal':
+      return buildTerminalPayload();
+    case 'terminal-eval': {
+      const terminal = getInspectTerminal();
+      if (!terminal) throw new Error('No terminal pane mounted (open a task and select the Terminal tab)');
+      if (!request.argument) throw new Error('terminal-eval needs an expression');
+      return terminal.evaluate(request.argument);
+    }
     case 'connection': {
       const channel = useChannelStore.getState();
       return {
@@ -137,13 +171,16 @@ export function startInspectBridge(): () => void {
     nextSocket.onmessage = (event: { data: unknown }) => {
       const request = decodeInspectRequest(event.data);
       if (request === null) return;
-      try {
-        const payload = buildInspectPayload(request.kind);
-        nextSocket.send(encodeInspectResponse({ type: 'response', id: request.id, ok: true, payload }));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'inspect request failed';
-        nextSocket.send(encodeInspectResponse({ type: 'response', id: request.id, ok: false, error: message }));
-      }
+      // Awaited: the terminal kinds round-trip through the WebView, so a payload
+      // is not always available synchronously.
+      buildInspectPayload(request)
+        .then((payload) => {
+          nextSocket.send(encodeInspectResponse({ type: 'response', id: request.id, ok: true, payload }));
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : 'inspect request failed';
+          nextSocket.send(encodeInspectResponse({ type: 'response', id: request.id, ok: false, error: message }));
+        });
     };
     nextSocket.onerror = () => {
       // onclose follows; the retry is scheduled there.

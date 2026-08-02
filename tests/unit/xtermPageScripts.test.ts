@@ -261,6 +261,47 @@ describe('generated xterm.html', () => {
     expect(refitBody).toContain('heightFitGeneration += 1');
   });
 
+  /**
+   * The reset button and the return-from-background repair BOTH post 'refit',
+   * and that branch used to inline a strict subset of refit(): the font and the
+   * geometry, but not fitGridHeightToViewport, clampHorizontalPan, or
+   * panToCursor. The height fit is the only thing that reconciles a lineHeight
+   * a previous fit stretched with a font autoFitFontToScreen computes as if
+   * lineHeight were 1 - so after a zoom the button ran, appeared to work, and
+   * left the grid exactly as wrong as it found it.
+   */
+  it('answers a refit message with the whole refit, not the font-and-geometry half', () => {
+    const handlerBody = generatedHtml.slice(
+      generatedHtml.indexOf('function onHostMessage('),
+      generatedHtml.indexOf('var handleMessageEvent'),
+    );
+    const refitBranch = handlerBody.slice(
+      handlerBody.indexOf("message.type === 'refit'"),
+      handlerBody.indexOf("message.type === 'resize'"),
+    );
+    expect(refitBranch).toContain('refit();');
+    expect(refitBranch).not.toContain('autoFitFontToScreen()');
+    expect(refitBranch).not.toContain('applyGeometry()');
+  });
+
+  /**
+   * The build stamp is the guardrail against measuring a stale page, so it has
+   * to be the one thing that cannot quietly rot: the page and the bundle
+   * constant come from a single generator run and must agree.
+   */
+  it('stamps the same build id into the page and the bundled constant', () => {
+    const constantSource = readFileSync(
+      join(__dirname, '..', '..', 'src', 'terminal', 'xtermBuildId.ts'),
+      'utf8',
+    );
+    const constantMatch = constantSource.match(/XTERM_BUILD_ID = '([0-9a-f]{12})'/);
+    expect(constantMatch, 'xtermBuildId.ts must export a 12-hex-digit id').not.toBeNull();
+    expect(generatedHtml).toContain(`buildId: '${constantMatch?.[1]}'`);
+    // A surviving placeholder would report a build id that never changes, which
+    // is worse than none at all: it reads as permanently fresh.
+    expect(generatedHtml).not.toContain('__XTERM_BUILD_ID__');
+  });
+
   it('clamps a stale scrollLeft to the rendered grid width, not the stale container scrollWidth', () => {
     // Extract the real function from the generated page and run it against
     // the EXACT geometry measured live on a Pixel 10 with the keyboard up:
@@ -325,6 +366,7 @@ describe('generated xterm.html', () => {
     scrolled: () => number[];
     deltas: () => number[];
     anchorY: () => number | null;
+    decision: () => { exit: string } | null;
   } {
     const source = generatedHtml.slice(
       generatedHtml.indexOf('function dragToScrollUnits('),
@@ -369,19 +411,19 @@ describe('generated xterm.html', () => {
        var historyDragStartX = 0;
        var historyDragAxis = null;
        var DRAG_AXIS_SLOP_PX = 12;
-       var wheelBurstData = null;
+       var lastScrollDecision = null;
+       var scrollPostCount = 0;
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
          anchorY: function () { return historyDragAnchorY; },
-         feed: function (data) {
-           if (wheelBurstData !== null) { wheelBurstData += data; return; }
-           postToHost({ type: 'input', data: data });
-         },
+         decision: function () { return lastScrollDecision; },
+         feed: function (data) { postToHost({ type: 'input', data: data }); },
        };`,
     ) as (...dependencies: unknown[]) => {
       consumeHistoryDrag: (touchEvent: { touches: { clientX: number; clientY: number }[] }) => void;
       anchorY: () => number | null;
+      decision: () => { exit: string } | null;
       feed: (data: string) => void;
     };
     const built = build(
@@ -406,6 +448,7 @@ describe('generated xterm.html', () => {
       scrolled: () => scrolled,
       deltas: () => deltas,
       anchorY: built.anchorY,
+      decision: built.decision,
     };
   }
 
@@ -421,6 +464,35 @@ describe('generated xterm.html', () => {
    * tracking on, a wheel is LINE granular and xterm encodes the mouse report.
    * One notch per line, negative toward history.
    */
+  /**
+   * A drag that does nothing has several possible exits and they look identical
+   * from outside the page, which is precisely what made this bug guesswork:
+   * "scrolling stopped" could equally have been the axis lock, a sub-unit
+   * remainder, or a grid that had not painted. Naming the exit turns the next
+   * report into a reading.
+   */
+  it('records which exit a drag took, for the dev probe', () => {
+    const underSlop = buildHistoryScroll({ mouseTracking: true });
+    underSlop.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 5 }] });
+    expect(underSlop.decision()).toEqual({ exit: 'under-slop', travelX: 0, travelY: 5 });
+
+    const horizontal = buildHistoryScroll({ mouseTracking: true });
+    horizontal.consumeHistoryDrag({ touches: [{ clientX: 100, clientY: 0 }] });
+    expect(horizontal.decision()).toEqual({ exit: 'axis-horizontal' });
+
+    // 600px grid over 30 rows is a 20px line, so 100px is 5 lines of history.
+    const scrolled = buildHistoryScroll({ mouseTracking: true });
+    scrolled.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }] });
+    expect(scrolled.decision()).toEqual({
+      exit: 'scrolled',
+      units: -5,
+      dragged: 100,
+      unitHeight: 20,
+      gridHeight: 600,
+      mechanism: 'mouse',
+    });
+  });
+
   it('prefers line-granular wheel notches when mouse tracking is on', () => {
     const harness = buildHistoryScroll({ mouseTracking: true });
 

@@ -10,6 +10,7 @@ import {
   type HostToTerminalMessage,
 } from '@/terminal/terminalBridge';
 import { parseColsFromScrollback } from '@/terminal/liveTail';
+import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
 import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
@@ -55,6 +56,56 @@ const FONT_SIZE_POST_THROTTLE_MS = 50;
 
 // Metro asset reference; ESM import syntax cannot load an html asset.
 const xtermHtmlModule = require('../../terminal/xterm.html') as number;
+
+/**
+ * Whether the dev inspect harness is live. Same gate the rest of the inspect
+ * loop uses, so the WebView eval path below is unreachable in any build a user
+ * could install.
+ */
+const inspectEnabled = __DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_INSPECT === '1';
+
+/** How long to wait for the WebView to answer an injected expression. */
+const TERMINAL_EVAL_TIMEOUT_MS = 5000;
+
+/**
+ * PTY write outcomes, for the inspect probe.
+ *
+ * Failures are deliberately swallowed at the call site (the connection banner
+ * is the user-facing surface for a dropped channel), which meant a write that
+ * silently stopped reaching the desktop produced NO signal anywhere - the gesture
+ * looked correct, the payload looked correct, and the terminal simply did not
+ * move. Counting three numbers costs nothing and turns that into a reading.
+ */
+const terminalWriteStats = { attempts: 0, failures: 0, lastError: null as string | null, lastAttemptAt: 0 };
+
+interface PendingTerminalEval {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Settle an injected expression's reply. Returns false for anything that is not
+ * an eval result, so the normal bridge decoder still sees every real message.
+ */
+function settleTerminalEval(rawMessage: string, pending: Map<string, PendingTerminalEval>): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawMessage);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  const record = parsed as Record<string, unknown>;
+  if (record.type !== 'eval-result' || typeof record.id !== 'string') return false;
+  const entry = pending.get(record.id);
+  if (!entry) return true;
+  pending.delete(record.id);
+  clearTimeout(entry.timer);
+  if (record.ok === true) entry.resolve(record.value);
+  else entry.reject(new Error(typeof record.error === 'string' ? record.error : 'terminal eval failed'));
+  return true;
+}
 
 function clampTerminalFontSize(fontSizePx: number): number {
   return Math.min(MAX_TERMINAL_FONT_SIZE_PX, Math.max(MIN_TERMINAL_FONT_SIZE_PX, fontSizePx));
@@ -119,6 +170,8 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const lastFontSizePostAtRef = useRef(0);
   const pendingChunksRef = useRef<string[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingEvalsRef = useRef(new Map<string, PendingTerminalEval>());
+  const evalSequenceRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,6 +193,74 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const postToTerminal = useCallback((message: HostToTerminalMessage) => {
     webViewRef.current?.postMessage(encodeHostMessage(message));
   }, []);
+
+  /**
+   * Run an expression inside the WebView and resolve its value.
+   *
+   * Everything that decides how the terminal behaves - measured grid height,
+   * line height, buffer type, mouse encoding, what the last gesture computed -
+   * lives in the page and is invisible from RN. This is the only way to read it
+   * without a person holding the phone, which is what made the scroll work
+   * guess-driven. Dev-gated at the registration site below.
+   */
+  const runTerminalEval = useCallback(
+    (expression: string) =>
+      new Promise<unknown>((resolve, reject) => {
+        const webView = webViewRef.current;
+        if (webView === null) {
+          reject(new Error('terminal WebView is not mounted'));
+          return;
+        }
+        evalSequenceRef.current += 1;
+        const evalId = `eval-${evalSequenceRef.current}`;
+        const pending = pendingEvalsRef.current;
+        const timer = setTimeout(() => {
+          pending.delete(evalId);
+          reject(new Error('terminal eval timed out (is the page still loading?)'));
+        }, TERMINAL_EVAL_TIMEOUT_MS);
+        pending.set(evalId, { resolve, reject, timer });
+        // The trailing `true;` is required by injectJavaScript on iOS: without a
+        // primitive result the WKWebView bridge logs a warning per call.
+        webView.injectJavaScript(
+          `(function(){var evalId=${JSON.stringify(evalId)};` +
+            `function reply(payload){window.ReactNativeWebView.postMessage(JSON.stringify(payload));}` +
+            `try{var value=(${expression});` +
+            `reply({type:'eval-result',id:evalId,ok:true,value:value===undefined?null:value});}` +
+            `catch(evalError){reply({type:'eval-result',id:evalId,ok:false,` +
+            `error:String(evalError&&evalError.message?evalError.message:evalError)});}})();true;`,
+        );
+      }),
+    [],
+  );
+
+  // Publish this pane to the inspect bridge while it is mounted. Unmounting
+  // clears it, so "no terminal pane mounted" is an honest answer rather than a
+  // stale handle answering for a screen nobody is looking at.
+  useEffect(() => {
+    if (!inspectEnabled) return;
+    let released = false;
+    void import('@/devsupport/inspectState').then((inspectStateModule) => {
+      if (released) return;
+      inspectStateModule.setInspectTerminal({
+        sessionId,
+        expectedBuildId: XTERM_BUILD_ID,
+        evaluate: runTerminalEval,
+        writeStats: () => ({ ...terminalWriteStats }),
+      });
+    });
+    const pending = pendingEvalsRef.current;
+    return () => {
+      released = true;
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error('terminal pane unmounted'));
+      }
+      pending.clear();
+      void import('@/devsupport/inspectState').then((inspectStateModule) => {
+        inspectStateModule.setInspectTerminal(null);
+      });
+    };
+  }, [sessionId, runTerminalEval]);
 
   const postInit = useCallback(() => {
     const scrollback = getBufferedData(sessionId);
@@ -283,6 +404,9 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
 
   const onWebViewMessage = useCallback(
     (event: WebViewMessageEvent) => {
+      // Eval replies are dev-harness traffic, not part of the terminal bridge
+      // protocol; consume them before the decoder so it never sees them.
+      if (inspectEnabled && settleTerminalEval(event.nativeEvent.data, pendingEvalsRef.current)) return;
       const message = decodeTerminalMessage(event.nativeEvent.data);
       if (message === null) return;
       if (message.type === 'ready') {
@@ -321,8 +445,15 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       }
       // 'input': keys typed inside the xterm WebView go to the desktop PTY.
       // Failures (not connected, capability revoked) are dropped silently -
-      // the connection banner is the surface for that state.
-      void writeTerminal(sessionId, message.data).catch(() => undefined);
+      // the connection banner is the surface for that state - but they are
+      // COUNTED, because a silent write failure is otherwise indistinguishable
+      // from a gesture that never fired.
+      terminalWriteStats.attempts += 1;
+      terminalWriteStats.lastAttemptAt = Date.now();
+      void writeTerminal(sessionId, message.data).catch((writeError: unknown) => {
+        terminalWriteStats.failures += 1;
+        terminalWriteStats.lastError = writeError instanceof Error ? writeError.message : String(writeError);
+      });
     },
     [postInit, sessionId],
   );

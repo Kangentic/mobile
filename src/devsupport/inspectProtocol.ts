@@ -10,13 +10,26 @@
 /** Loopback-only; reachable from the emulator solely via `adb reverse tcp:8791`. */
 export const INSPECT_PORT = 8791;
 
-export const INSPECT_REQUEST_KINDS = ['connection', 'stores', 'subscriptions', 'feed-stats', 'route', 'pairing'] as const;
+export const INSPECT_REQUEST_KINDS = [
+  'connection',
+  'stores',
+  'subscriptions',
+  'feed-stats',
+  'route',
+  'pairing',
+  /** Canned geometry/mode/gesture dump from the mounted terminal WebView. */
+  'terminal',
+  /** Arbitrary expression evaluated inside that WebView; `argument` carries it. */
+  'terminal-eval',
+] as const;
 export type InspectRequestKind = (typeof INSPECT_REQUEST_KINDS)[number];
 
 export interface InspectRequest {
   type: 'request';
   id: string;
   kind: InspectRequestKind;
+  /** Only 'terminal-eval' reads this; every other kind ignores it. */
+  argument?: string;
 }
 
 export interface InspectResponse {
@@ -50,7 +63,9 @@ export function decodeInspectRequest(raw: unknown): InspectRequest | null {
   if (candidate.type !== 'request') return null;
   if (typeof candidate.id !== 'string' || candidate.id.length === 0) return null;
   if (!isInspectRequestKind(candidate.kind)) return null;
-  return { type: 'request', id: candidate.id, kind: candidate.kind };
+  const request: InspectRequest = { type: 'request', id: candidate.id, kind: candidate.kind };
+  if (typeof candidate.argument === 'string') request.argument = candidate.argument;
+  return request;
 }
 
 export function encodeInspectResponse(response: InspectResponse): string {
