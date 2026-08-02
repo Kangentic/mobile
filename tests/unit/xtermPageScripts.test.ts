@@ -367,7 +367,9 @@ describe('generated xterm.html', () => {
     }) => void;
     maybeStartHistoryFling: () => void;
     stopHistoryFling: () => void;
+    scrollToLatest: () => void;
     flingStats: () => { started: number; totalUnits: number };
+    scrolledToBottom: () => number;
     advanceTime: (deltaMs: number) => void;
     drainFrames: (maxFrames?: number) => number;
     pendingFrames: () => number;
@@ -401,7 +403,11 @@ describe('generated xterm.html', () => {
       scrollLines: (lines: number): void => {
         scrolled.push(lines);
       },
+      scrollToBottom: (): void => {
+        bottomJumps += 1;
+      },
     };
+    let bottomJumps = 0;
     const container = options.container ?? { scrollTop: 0, scrollHeight: 600, clientHeight: 600 };
     const fakeDocument = {
       querySelector: (selector: string) =>
@@ -431,16 +437,20 @@ describe('generated xterm.html', () => {
        var dragSamples = [];
        var flingGeneration = 0;
        var flingStats = { started: 0, totalUnits: 0 };
-       var FLING_MIN_START_VELOCITY_PX_PER_MS = 0.4;
-       var FLING_MIN_KEEP_VELOCITY_PX_PER_MS = 0.05;
-       var FLING_DECAY_PER_FRAME = 0.94;
-       var FLING_MAX_UNITS_TOTAL = 150;
+       var FLING_MIN_START_VELOCITY_PX_PER_MS = 0.2;
+       var FLING_MIN_KEEP_VELOCITY_PX_PER_MS = 0.04;
+       var FLING_DECAY_PER_FRAME = 0.968;
+       var FLING_MAX_UNITS_TOTAL = 400;
        var FLING_SAMPLE_WINDOW_MS = 100;
+       var SCROLL_TO_LATEST_WHEEL_UNITS = 500;
+       var SCROLL_TO_LATEST_PAGE_KEYS = 30;
+       var initCounts = { hard: 0, soft: 0 };
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
          maybeStartHistoryFling: maybeStartHistoryFling,
          stopHistoryFling: stopHistoryFling,
+         scrollToLatest: scrollToLatest,
          flingStats: function () { return flingStats; },
          anchorY: function () { return historyDragAnchorY; },
          clearAnchor: function () { historyDragAnchorY = null; historyDragAxis = null; },
@@ -455,6 +465,7 @@ describe('generated xterm.html', () => {
       }) => void;
       maybeStartHistoryFling: () => void;
       stopHistoryFling: () => void;
+      scrollToLatest: () => void;
       flingStats: () => { started: number; totalUnits: number };
       anchorY: () => number | null;
       clearAnchor: () => void;
@@ -488,7 +499,9 @@ describe('generated xterm.html', () => {
       consumeHistoryDrag: built.consumeHistoryDrag,
       maybeStartHistoryFling: built.maybeStartHistoryFling,
       stopHistoryFling: built.stopHistoryFling,
+      scrollToLatest: built.scrollToLatest,
       flingStats: built.flingStats,
+      scrolledToBottom: () => bottomJumps,
       advanceTime: (deltaMs: number) => {
         fakeNowMs += deltaMs;
       },
@@ -780,14 +793,14 @@ describe('generated xterm.html', () => {
     const framesRun = harness.drainFrames();
     expect(harness.pendingFrames()).toBe(0);
     expect(harness.posts().length).toBeGreaterThan(postsAtRelease + 2);
-    expect(harness.flingStats().totalUnits).toBeGreaterThan(5);
+    expect(harness.flingStats().totalUnits).toBeGreaterThan(10);
     // These two are what PROVE the decay is real rather than the unit cap
-    // ending the glide: at ~1.6px/ms and 0.94^frame, the glide covers ~430px
-    // (~21 units over ~56 frames). Without decay it runs flat into the
-    // 150-unit cap over ~100 frames - a first version of this test accepted
-    // exactly that and the no-decay mutation survived it.
-    expect(harness.flingStats().totalUnits).toBeLessThan(60);
-    expect(framesRun).toBeLessThan(100);
+    // ending the glide: at ~1.6px/ms and 0.968^frame, the glide covers ~800px
+    // (~40 units over ~113 frames). Without decay it runs flat into the
+    // 400-unit cap over ~270 frames - a first version of this test accepted
+    // exactly that shape and the no-decay mutation survived it.
+    expect(harness.flingStats().totalUnits).toBeLessThan(100);
+    expect(framesRun).toBeLessThan(200);
   });
 
   it('does not glide after a slow release', () => {
@@ -807,6 +820,32 @@ describe('generated xterm.html', () => {
     dragAndRelease(harness, 700, 16, 3);
 
     expect(harness.flingStats().started).toBe(0);
+  });
+
+  /**
+   * JUMP TO LATEST. The depth of the agent's own history is unknowable from
+   * the mirror, so the jump OVERSHOOTS - past-the-end scrolling is a no-op on
+   * every mechanism, which makes the overshoot exact. With real scrollback it
+   * stays local and free.
+   */
+  it('jumps to the latest output on each mechanism', () => {
+    const viaMouse = buildHistoryScroll({ mouseTracking: true });
+    viaMouse.scrollToLatest();
+    expect(viaMouse.posts()).toHaveLength(1);
+    // 500 wheel-DOWN reports (button 65), one write.
+    const burst = viaMouse.posts()[0].data ?? '';
+    expect(burst.match(/\[<65;/g)).toHaveLength(500);
+    expect(burst).not.toContain('[<64;');
+
+    const viaViewport = buildHistoryScroll({ bufferType: 'normal' });
+    viaViewport.scrollToLatest();
+    expect(viaViewport.scrolledToBottom()).toBe(1);
+    expect(viaViewport.posts()).toEqual([]);
+
+    const viaPageKeys = buildHistoryScroll({ mouseTracking: false, bufferType: 'alternate' });
+    viaPageKeys.scrollToLatest();
+    expect(viaPageKeys.posts()).toHaveLength(1);
+    expect((viaPageKeys.posts()[0].data ?? '').match(/\[6~/g)).toHaveLength(30);
   });
 
   /** A finger landing mid-glide catches the scroll, native-scroller style. */
