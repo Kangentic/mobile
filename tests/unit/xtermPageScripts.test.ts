@@ -264,6 +264,23 @@ describe('generated xterm.html', () => {
   });
 
   /**
+   * The keyboard's close animation fires several resizes in a row; each refit
+   * cancels the previous fit chain, and the last chain can die mid-convergence
+   * with no successor - measured live as a 530px grid in a 635 viewport with a
+   * 52px top pad ("the bottom of the terminal is pushed up ~50px"). The
+   * observer must therefore always arm a TRAILING refit that runs against the
+   * settled viewport, where the fit chain completes uncancelled.
+   */
+  it('arms a trailing settle refit on every viewport resize', () => {
+    const observerBody = generatedHtml.slice(
+      generatedHtml.indexOf('new ResizeObserver('),
+      generatedHtml.indexOf('viewportObserver.observe('),
+    );
+    expect(observerBody).toContain('clearTimeout(settleRefitTimer)');
+    expect(observerBody).toContain('VIEWPORT_SETTLE_REFIT_MS');
+  });
+
+  /**
    * The reset button and the return-from-background repair BOTH post 'refit',
    * and that branch used to inline a strict subset of refit(): the font and the
    * geometry, but not fitGridHeightToViewport, clampHorizontalPan, or
