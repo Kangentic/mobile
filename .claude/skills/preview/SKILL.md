@@ -15,6 +15,22 @@ ios` does the only free thing that works: dispatches the simulator job on a GitH
 which builds, **launches** the app, and uploads a screenshot. See "iOS preview" below. It is a look,
 not a live-reload loop, and it costs one runner and about eight minutes.
 
+## When this, and not a CI build
+
+`gh workflow run build-android.yml` is the normal way to produce an ARTIFACT. It is the wrong way
+to ITERATE. Each dispatch is ~15 minutes, and a JS-only change (anything under `src/`, including
+the generated `src/terminal/xterm.html`) needs no native build at all: with a dev client already
+installed, the loop is edit, regenerate if needed, reload. Seconds.
+
+Reach for a CI build when you need a standalone APK someone can install and run without Metro (a
+device handoff, a store-adjacent check, a release). Reach for this skill whenever you expect more
+than one try, which is almost always true of anything you have to LOOK at to judge: gestures,
+animation, layout, timing.
+
+The failure mode to avoid is picking CI once for a good reason and then not re-examining it as
+the work changes shape. If you are on your second rebuild of a pure-JS change, stop and set up
+the dev client instead; it pays for itself immediately.
+
 ## Instructions
 
 0a. **If `ios` was given, or the user asks how it looks on iOS / iPhone**, jump to the "iOS preview"
@@ -32,7 +48,9 @@ not a live-reload loop, and it costs one runner and about eight minutes.
    running Kangentic desktop through a local relay; `pair` = reset to unpaired and exercise the
    pairing ceremony. For a plain UI preview with no mode, follow steps 1-6 as written.
 1. **Check for an attached device.** Run `adb devices`.
-   - If a device is already listed, skip to step 3.
+   - If a device is already listed, skip to step 3. A **physical phone** counts and is often the
+     better target (real GPU, real touch, real relay latency) - see "Physical devices" in the
+     Notes for the three things that differ from an emulator.
    - If none is listed, continue to step 2.
 2. **Boot an emulator.**
    - Run `emulator -list-avds` to see what AVDs exist.
@@ -211,6 +229,37 @@ and consumes an `ios.buildNumber` if submitted.
 - An EAS cloud build (`eas build --profile development --platform android`) is the alternative to
   `npx expo run:android` when you'd rather not compile natively on this machine - download the
   resulting APK and `adb install` it instead of step 3's local build path.
+- **Physical devices.** A real phone is a first-class target here and usually the honest one, but
+  three things differ from an emulator:
+  - **Do not pass `--device <serial>`.** `npx expo run:android --device 57181FDCH00CZ5` fails with
+    `CommandError: Could not find device with name: ...` - the flag wants a device NAME, not the
+    adb serial. With exactly one device attached, omit the flag entirely and it picks correctly.
+    Note this failure arrives AFTER prebuild has already run, so it looks later and more alarming
+    than it is; just re-run without the flag.
+  - **Metro needs `adb reverse tcp:8081 tcp:8081`** over USB. An emulator reaches the host loopback
+    on its own; a phone does not. This is separate from the `tcp:8080` relay mapping below, and
+    like it, it is wiped on reboot and on unplug. `adb reverse --list` to check.
+  - **It replaces the user's working app.** A dev client will not launch without Metro running, so
+    installing one on a daily-driver phone takes their app away until they reinstall a standalone
+    APK. Say so before doing it, and keep the last preview APK around as the way back.
+  - **A CI-installed APK blocks the local install, and clearing it costs the pairing.** If the
+    phone already carries a `preview`/`production` APK from `build-android.yml`, the local debug
+    build cannot go over it:
+
+    ```
+    INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.kangentic.mobile
+    signatures do not match newer version
+    ```
+
+    CI signs with its own keystore; `expo run:android` signs with the local debug key. The only
+    way through is `adb uninstall com.kangentic.mobile`, which **wipes app data, including the
+    pairing**. The device identity key lives in Android Keystore and is non-exportable, so there
+    is no backup or restore - the user re-pairs by QR plus SAS.
+
+    **Always ask before uninstalling.** This is the one step in this skill that destroys user
+    state, and it arrives late (after a full successful Gradle build), so it is easy to treat as
+    a mechanical retry. It is not. On an EMULATOR just uninstall; on the user's real phone, get
+    a decision first, and mention that re-pairing needs their hands on both devices.
 - **Any connected mode needs `adb reverse tcp:8080 tcp:8080`.** The app only accepts `ws://` for
   loopback hosts, so the emulator reaches a host relay exclusively through adb reverse - and the
   mapping is wiped on every emulator reboot. The dev rig re-applies it on every run; if you
