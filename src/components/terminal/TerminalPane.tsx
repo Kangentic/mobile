@@ -500,7 +500,19 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     // multi-touch. Measured live at 15 touchstarts against 13 touchends, with
     // history scrolling dead until the terminal was rebuilt. This layer owns the
     // gesture, so it is the one that can say.
-    .onBegin(() => {
+    //
+    // Two FINGERS, never the gesture lifecycle: RNGH's PinchGestureHandler
+    // begins on the FIRST touch of any kind (PinchGestureHandler.kt calls
+    // begin() from STATE_UNDETERMINED, one finger included), so an onBegin
+    // report marked every one-finger drag as a pinch and the page refused the
+    // very drag the report was part of. Measured live: 524 touchmoves, 3
+    // scrolls (the message-latency window), every other move exiting
+    // 'pinch-active'. onStart backs this up at activation in case the second
+    // finger lands mid-gesture in an order touches events miss.
+    .onTouchesDown((touchesEvent) => {
+      if (touchesEvent.numberOfTouches >= 2) postToTerminal({ type: 'pinch', active: true });
+    })
+    .onStart(() => {
       postToTerminal({ type: 'pinch', active: true });
     })
     .onFinalize(() => {
