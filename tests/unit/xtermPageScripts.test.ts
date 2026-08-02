@@ -75,16 +75,21 @@ describe('generated xterm.html', () => {
    */
   it('reconciles the horizontal pan on refit (blank-terminal-after-keyboard guard)', () => {
     expect(generatedHtml).toContain('function clampHorizontalPan(');
-    // The clamp and the cursor re-pan must both run from the refit's
-    // post-paint pass, and the manual-pan pause must be cleared first (a
-    // viewport change is not a user pan, and panToCursor no-ops during one).
+    // A refit is a RE-ORIENTATION: it re-pins to column 0 (readers re-orient
+    // at the left edge, where every line begins - panning to the CURSOR
+    // column dropped them mid-line after every keyboard open/close) and the
+    // pinned clamp is what snaps the pan there. The VERTICAL follow must NOT
+    // run here: the fit is still converging across frames, and following
+    // mid-convergence locked in a stale translate (the settled fit owns it).
     const refitBody = generatedHtml.slice(
       generatedHtml.indexOf('function refit('),
       generatedHtml.indexOf('function onHostMessage('),
     );
     expect(refitBody).toContain('manualPanUntil = 0');
+    expect(refitBody).toContain('pinnedToStart = true');
     expect(refitBody).toContain('clampHorizontalPan()');
-    expect(refitBody).toContain('panToCursor()');
+    expect(refitBody).not.toContain('panToCursor()');
+    expect(refitBody).not.toContain('followCursorVertically(');
   });
 
   /**
@@ -105,6 +110,7 @@ describe('generated xterm.html', () => {
     fit: (passesLeft: number, stretchLocked: boolean, generation: number) => void;
     screenHeight: () => number;
     fontSizePx: () => number;
+    followed: () => number;
     paddingTop: () => string;
     fontSizePosts: () => number[];
   } {
@@ -135,11 +141,15 @@ describe('generated xterm.html', () => {
       'MIN_AUTO_FONT_PX',
       'initialFontSizePx',
       `var currentFontSizePx = initialFontSizePx;
+       var followedAfterSettle = 0;
+       function followCursorVertically(force) { followedAfterSettle += 1; }
        ${source}
-       return { fit: fitGridHeightToViewport, fontSizePx: function () { return currentFontSizePx; } };`,
+       return { fit: fitGridHeightToViewport, fontSizePx: function () { return currentFontSizePx; },
+                followed: function () { return followedAfterSettle; } };`,
     ) as (...dependencies: unknown[]) => {
       fit: (passesLeft: number, stretchLocked: boolean, generation: number) => void;
       fontSizePx: () => number;
+      followed: () => number;
     };
     const built = build(
       terminal,
@@ -164,6 +174,7 @@ describe('generated xterm.html', () => {
       fit: built.fit,
       screenHeight,
       fontSizePx: built.fontSizePx,
+      followed: built.followed,
       paddingTop: () => gridHost.style.paddingTop,
       fontSizePosts: () => fontSizePosts,
     };
@@ -187,6 +198,11 @@ describe('generated xterm.html', () => {
     // Still fills: within one row of the pane, not shrunk into a letterbox.
     expect(harness.screenHeight()).toBeGreaterThan(624 - harness.screenHeight() / 48);
     expect(harness.paddingTop()).toBe('0px');
+    // The vertical follow runs exactly once, from the SETTLED fit - forcing
+    // it from refit's first frame sampled mid-convergence geometry (a 48-row
+    // stretch transiently overflows before its give-back) and locked in a
+    // stale upward translate that shifted the whole frame ("pushed up more").
+    expect(harness.followed()).toBe(1);
   });
 
   /**
