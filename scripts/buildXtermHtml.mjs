@@ -96,6 +96,12 @@ const bridgeGlue = `
   // off". Two pixels of clearance costs nothing visible and makes the last
   // row whole by construction.
   var HEIGHT_FIT_BOTTOM_CLEARANCE_PX = 2;
+  // How long the viewport must hold still before the guaranteed settle refit
+  // runs (see the ResizeObserver). Long enough to sit past the keyboard
+  // animation's resize burst, short enough to be invisible.
+  var VIEWPORT_SETTLE_REFIT_MS = 250;
+  // Probe counter for the settle refits.
+  var viewportSettleRefits = 0;
   // Bumps on every refit so a fit still converging cannot keep adjusting the
   // grid underneath the one that replaced it (a keyboard open fires several
   // viewport changes in a row, and two live loops would each step the font).
@@ -1498,6 +1504,7 @@ const bridgeGlue = `
       lastJumpAt: lastJumpAt,
       lastJumpFirstWriteMs: lastJumpFirstWriteMs,
       jumpNudgeCount: jumpNudgeCount,
+      viewportSettleRefits: viewportSettleRefits,
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }
@@ -1623,7 +1630,23 @@ const bridgeGlue = `
       // the terminal's CONTENT size, never the container box, so it never loops.
       if (typeof ResizeObserver !== 'undefined') {
         var refitScheduled = false;
+        var settleRefitTimer = null;
         var viewportObserver = new ResizeObserver(function () {
+          // TRAILING settle refit, re-armed on every event: the keyboard's
+          // close animation fires several resizes in a row, each refit CANCELS
+          // the previous fit chain (heightFitGeneration), and the last chain
+          // can die mid-convergence with no successor - measured live as a
+          // grid stuck at its first-guess height (530px in a 635 viewport)
+          // with the 105px of slack split into a 52px top pad, reported as
+          // "the bottom of the terminal is pushed up ~50px" after dismissing
+          // the keyboard. One refit against the SETTLED viewport always
+          // completes, so this guarantees exactly that.
+          if (settleRefitTimer !== null) clearTimeout(settleRefitTimer);
+          settleRefitTimer = setTimeout(function () {
+            settleRefitTimer = null;
+            viewportSettleRefits += 1;
+            refit();
+          }, VIEWPORT_SETTLE_REFIT_MS);
           if (refitScheduled) return;
           refitScheduled = true;
           requestAnimationFrame(function () {
