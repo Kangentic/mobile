@@ -46,7 +46,7 @@ const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
  */
 const MIN_TERMINAL_FONT_SIZE_PX = 6;
 // Ceiling above the auto-fit default (capped at MAX_AUTO_FIT_FONT_PX = 20 in
-// scripts/buildXtermHtml.mjs) so pinch-zoom has headroom and never clamp-jumps
+// scripts/xterm-page/state.js) so pinch-zoom has headroom and never clamp-jumps
 // off the default.
 const MAX_TERMINAL_FONT_SIZE_PX = 56;
 // 32ms (~30fps) coalesces a token firehose into fewer, larger writes than 16ms

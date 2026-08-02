@@ -168,7 +168,8 @@ frames. A full 6.9-inch terminal frame is ~317KB; the blank one was 104KB,
 while every other frame in the same run was within noise. If
 `02-session-terminal` comes back dramatically smaller than its neighbours,
 look at it before doing anything else, and just re-run - it is a WebGL context
-loss on the simulator, which is why buildXtermHtml.mjs carries retry logic.
+loss on the simulator, which is why the terminal page carries retry logic
+(scripts/xterm-page/webglRenderer.js).
 
 ## Step 6 - Commit all four shelves together
 

@@ -265,7 +265,7 @@ function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): Transcript
  *
  * The mirror renders the desktop's real grid and pans the overflow, so what is
  * VISIBLE is set by the auto-fitted font - and that font is fitted to the
- * terminal pane's HEIGHT, never its width (scripts/buildXtermHtml.mjs):
+ * terminal pane's HEIGHT, never its width (scripts/xterm-page/fontGeometry.js):
  *
  *   fontPx      = clamp(6, 20, floor(paneHeight / (rows * 1.2)))
  *   visibleCols = paneWidth / (fontPx * 0.6)

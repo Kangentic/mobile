@@ -5,7 +5,23 @@ export default defineConfig([
   {
     // .kangentic/ holds the desktop app's live session state for this project
     // (gitignored, and its in-use files EPERM on scandir under Windows).
-    ignores: ['dist/**', 'node_modules/**', '.expo/**', 'ios/**', 'android/**', '.kangentic/**', '.devrig.local.json'],
+    // scripts/xterm-page/ holds the WebView page's glue fragments: plain
+    // browser scripts that scripts/buildXtermHtml.mjs concatenates into ONE
+    // IIFE, so their top-level vars are shared page state that a per-file
+    // linter can only read as no-undef/no-var noise. They were unlintable
+    // before too (the glue lived inside a template literal); the build's
+    // per-module syntax compile and tests/unit/xtermPageScripts.test.ts are
+    // what cover them.
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      '.expo/**',
+      'ios/**',
+      'android/**',
+      '.kangentic/**',
+      '.devrig.local.json',
+      'scripts/xterm-page/**',
+    ],
   },
   ...expoConfig,
   {

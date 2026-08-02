@@ -203,9 +203,9 @@ describe('the shot list matches the capture flow', () => {
  * budget is re-derived from the fit math and checked against the real grid.
  */
 describe('the recorded terminal fits the narrowest capture device', () => {
-  // From scripts/buildXtermHtml.mjs. Duplicated deliberately: that file is a
-  // generated-asset builder with no importable export, so the alternative is
-  // no check at all.
+  // From scripts/xterm-page/state.js. Duplicated deliberately: the page
+  // fragments are browser scripts with no importable export, so the
+  // alternative is no check at all.
   const MAX_AUTO_FIT_FONT_PX = 20;
   const MIN_AUTO_FONT_PX = 6;
   const CELL_WIDTH_RATIO = 0.6;
