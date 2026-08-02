@@ -1,16 +1,61 @@
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
  * Every <script> block in the generated xterm.html must PARSE: the page's
- * blocks fail independently in the WebView, so a single bad template escape
- * in buildXtermHtml.mjs (a real newline inside an emitted string literal,
- * say) silently kills the whole bridge glue and the terminal goes black
- * with no error surfaced anywhere. This caught exactly that once; keep it.
+ * blocks fail independently in the WebView, so one bad byte in the assembly
+ * silently kills the whole bridge glue and the terminal goes black with no
+ * error surfaced anywhere. This caught exactly that once; keep it.
+ *
+ * The glue is authored as plain browser fragments under scripts/xterm-page/
+ * and concatenated by scripts/buildXtermHtml.mjs. The behavior tests below
+ * extract their functions from THE MODULE FILES (clean per-file boundaries);
+ * the assembly test then proves the generated page contains those exact
+ * bytes, stamped, in manifest order - so testing the files IS testing what
+ * ships. Earlier versions sliced functions out of the 1MB generated html by
+ * text markers, which silently drifted: a marker that moved changed what a
+ * slice captured and several slices would still parse, giving false greens.
  */
 describe('generated xterm.html', () => {
   const generatedHtml = readFileSync(join(__dirname, '..', '..', 'src', 'terminal', 'xterm.html'), 'utf8');
+  const pageModulesDir = join(__dirname, '..', '..', 'scripts', 'xterm-page');
+  const pageModule = (name: string): string => readFileSync(join(pageModulesDir, name), 'utf8');
+
+  /**
+   * A tuning constant, read out of the page fragments themselves. Injecting
+   * hand-copied values here would let a page retune (the fling decay, the fit
+   * clearance - both retuned live this task) leave these tests green against
+   * the OLD numbers, which is exactly the drift this file exists to prevent.
+   */
+  const pageVar = (name: string): number => {
+    for (const fileName of readdirSync(pageModulesDir)) {
+      const match = new RegExp(`var ${name} = ([^;]+);`).exec(pageModule(fileName));
+      if (match) {
+        const value = Number(match[1]);
+        if (!Number.isFinite(value)) throw new Error(`var ${name} in ${fileName} is not a number literal`);
+        return value;
+      }
+    }
+    throw new Error(`var ${name} not found in any scripts/xterm-page module`);
+  };
+
+  /**
+   * Guard for the harness preludes: every name a prelude injects must still
+   * be REFERENCED by the module it stubs. The old marker-sliced harness
+   * carried two injected constants for a jump mechanism the page had
+   * abandoned and nothing complained - injected-but-dead vars are silent
+   * drift, in the direction that makes tests lie.
+   */
+  const assertInjectionsAreAlive = (moduleName: string, source: string, injectedNames: string[]): void => {
+    const dead = injectedNames.filter((name) => !source.includes(name));
+    if (dead.length > 0) {
+      throw new Error(
+        `${moduleName} no longer references injected: ${dead.join(', ')} - update the harness prelude`,
+      );
+    }
+  };
 
   it('contains parseable script blocks only', () => {
     const scriptPattern = /<script>([\s\S]*?)<\/script>/g;
@@ -44,11 +89,10 @@ describe('generated xterm.html', () => {
    * overflow-and-pan path stays untouched either way.
    *
    * Checked against BOTH the committed HTML and its generator
-   * (scripts/buildXtermHtml.mjs, where the CSS is actually authored), because
-   * nothing in this repo regenerates xterm.html and diffs it - see the
-   * "PARSE" guard above for why importing the generator as a module is not an
-   * option either. An edit to the generator alone would sit green until the
-   * next regeneration without this second check.
+   * (scripts/buildXtermHtml.mjs, where the CSS is actually authored - the CSS
+   * is the one part of the page that does NOT live in scripts/xterm-page/),
+   * because nothing in CI regenerates xterm.html and diffs it, so an edit to
+   * the generator alone would sit green until the next regeneration.
    *
    * Matches loosely (width + margin/auto present, not the whole rule
    * byte-for-byte) so a harmless reflow of the CSS does not redden this.
@@ -81,10 +125,7 @@ describe('generated xterm.html', () => {
     // pinned clamp is what snaps the pan there. The VERTICAL follow must NOT
     // run here: the fit is still converging across frames, and following
     // mid-convergence locked in a stale translate (the settled fit owns it).
-    const refitBody = generatedHtml.slice(
-      generatedHtml.indexOf('function refit('),
-      generatedHtml.indexOf('function onHostMessage('),
-    );
+    const refitBody = pageModule('refit.js');
     expect(refitBody).toContain('manualPanUntil = 0');
     expect(refitBody).toContain('pinnedToStart = true');
     expect(refitBody).toContain('clampHorizontalPan()');
@@ -114,10 +155,10 @@ describe('generated xterm.html', () => {
     paddingTop: () => string;
     fontSizePosts: () => number[];
   } {
-    const source = generatedHtml.slice(
-      generatedHtml.indexOf('function fitGridHeightToViewport('),
-      generatedHtml.indexOf("// The GPU's max texture edge"),
-    );
+    // The whole module: the fit, the centring, and the texture-cap cluster.
+    // Its load-time GPU probe self-guards (its own try/catch keeps the
+    // conservative default when the fake document has no createElement).
+    const source = pageModule('heightFit.js');
     const terminal = { rows: options.rows, options: { fontSize: options.fontSizePx, lineHeight: 1 } };
     const screenHeight = (): number =>
       terminal.rows * Math.ceil(terminal.options.fontSize * options.cellHeightRatio * terminal.options.lineHeight);
@@ -128,6 +169,17 @@ describe('generated xterm.html', () => {
       getElementById: (id: string) => (id === 'terminal' ? gridHost : null),
     };
     const fontSizePosts: number[] = [];
+    assertInjectionsAreAlive('heightFit.js', source, [
+      'currentFontSizePx',
+      'followCursorVertically',
+      'heightFitGeneration',
+      'MAX_LINE_HEIGHT',
+      'HEIGHT_FIT_TOLERANCE_PX',
+      'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
+      'MIN_AUTO_FONT_PX',
+      'postToHost',
+      'requestAnimationFrame',
+    ]);
     const build = new Function(
       'terminal',
       'window',
@@ -164,10 +216,10 @@ describe('generated xterm.html', () => {
         }
       },
       1,
-      1.3,
-      0.5,
-      2,
-      6,
+      pageVar('MAX_LINE_HEIGHT'),
+      pageVar('HEIGHT_FIT_TOLERANCE_PX'),
+      pageVar('HEIGHT_FIT_BOTTOM_CLEARANCE_PX'),
+      pageVar('MIN_AUTO_FONT_PX'),
       options.fontSizePx,
     );
     return {
@@ -261,19 +313,16 @@ describe('generated xterm.html', () => {
    * padding that a short one earned.
    */
   it('cancels an in-flight height fit when a pinch takes the size', () => {
-    const applyFontSizeBody = generatedHtml.slice(
-      generatedHtml.indexOf('function applyFontSize('),
-      generatedHtml.indexOf('function fitGridHeightToViewport('),
-    );
+    // applyFontSize is the last function in lifecycle.js; slice from its head.
+    const lifecycleSource = pageModule('lifecycle.js');
+    const applyFontSizeBody = lifecycleSource.slice(lifecycleSource.indexOf('function applyFontSize('));
+    expect(applyFontSizeBody).toContain('function applyFontSize(');
     expect(applyFontSizeBody).toContain('heightFitGeneration += 1');
     expect(applyFontSizeBody).toContain('centerGridFromMeasurement');
   });
 
   it('runs the height fit from the refit pass, not the geometry pass', () => {
-    const refitBody = generatedHtml.slice(
-      generatedHtml.indexOf('function refit('),
-      generatedHtml.indexOf('function onHostMessage('),
-    );
+    const refitBody = pageModule('refit.js');
     expect(refitBody).toContain('fitGridHeightToViewport(HEIGHT_FIT_PASSES');
     // Each refit owns a generation, or two live fits step the font together.
     expect(refitBody).toContain('heightFitGeneration += 1');
@@ -288,9 +337,10 @@ describe('generated xterm.html', () => {
    * settled viewport, where the fit chain completes uncancelled.
    */
   it('arms a trailing settle refit on every viewport resize', () => {
-    const observerBody = generatedHtml.slice(
-      generatedHtml.indexOf('new ResizeObserver('),
-      generatedHtml.indexOf('viewportObserver.observe('),
+    const bootstrapSource = pageModule('bootstrap.js');
+    const observerBody = bootstrapSource.slice(
+      bootstrapSource.indexOf('new ResizeObserver('),
+      bootstrapSource.indexOf('viewportObserver.observe('),
     );
     expect(observerBody).toContain('clearTimeout(settleRefitTimer)');
     expect(observerBody).toContain('VIEWPORT_SETTLE_REFIT_MS');
@@ -306,10 +356,7 @@ describe('generated xterm.html', () => {
    * left the grid exactly as wrong as it found it.
    */
   it('answers a refit message with the whole refit, not the font-and-geometry half', () => {
-    const handlerBody = generatedHtml.slice(
-      generatedHtml.indexOf('function onHostMessage('),
-      generatedHtml.indexOf('var handleMessageEvent'),
-    );
+    const handlerBody = pageModule('dispatch.js');
     const refitBranch = handlerBody.slice(
       handlerBody.indexOf("message.type === 'refit'"),
       handlerBody.indexOf("message.type === 'resize'"),
@@ -337,16 +384,56 @@ describe('generated xterm.html', () => {
     expect(generatedHtml).not.toContain('__XTERM_BUILD_ID__');
   });
 
+  /**
+   * The bridge between the module files the tests above extract from and the
+   * page the phone actually loads. ONE containment assertion proves all of
+   * it: the modules ship VERBATIM, in manifest order, inside a single script
+   * block, with the build id stamped - so a committed page that lags an
+   * edited module (or a module edited without regenerating) fails here
+   * rather than shipping green.
+   */
+  it('assembles the page from the xterm-page modules verbatim, in manifest order', () => {
+    const builderSource = readFileSync(join(__dirname, '..', '..', 'scripts', 'buildXtermHtml.mjs'), 'utf8');
+    const manifestMatch = /const PAGE_MODULE_ORDER = \[([\s\S]*?)\];/.exec(builderSource);
+    expect(manifestMatch, 'builder must declare PAGE_MODULE_ORDER').not.toBeNull();
+    const manifest = [...(manifestMatch?.[1] ?? '').matchAll(/'([^']+)'/g)].map((entry) => entry[1]);
+    expect(manifest.length).toBeGreaterThan(0);
+
+    // Directory and manifest agree both ways. The builder throws on this at
+    // generation time; catching it here means a stray or missing module file
+    // fails CI without anyone running the builder.
+    const onDisk = readdirSync(pageModulesDir)
+      .filter((name) => name.endsWith('.js'))
+      .sort();
+    expect([...manifest].sort()).toEqual(onDisk);
+
+    // Reproduce the builder's assembly: prelude + modules + postlude, hash
+    // with the placeholder in place, then stamp. These framing strings are
+    // deliberately duplicated from the builder - if the builder's framing
+    // changes, this containment goes loudly red instead of silently testing
+    // different bytes than the page carries.
+    const gluePrelude = "\n(function () {\n  'use strict';\n";
+    const gluePostlude = '})();\n';
+    const bridgeGlue = gluePrelude + manifest.map((name) => pageModule(name)).join('') + gluePostlude;
+    const buildId = createHash('sha256').update(bridgeGlue).digest('hex').slice(0, 12);
+    expect(generatedHtml).toContain(bridgeGlue.replace('__XTERM_BUILD_ID__', buildId));
+
+    const constantSource = readFileSync(
+      join(__dirname, '..', '..', 'src', 'terminal', 'xtermBuildId.ts'),
+      'utf8',
+    );
+    expect(constantSource, 'xtermBuildId.ts must come from the same generator run').toContain(
+      `XTERM_BUILD_ID = '${buildId}'`,
+    );
+  });
+
   it('clamps a stale scrollLeft to the rendered grid width, not the stale container scrollWidth', () => {
     // Extract the real function from the generated page and run it against
     // the EXACT geometry measured live on a Pixel 10 with the keyboard up:
     // the grid had shrunk to 723 CSS px, but #scroll-container still
     // reported scrollWidth 1366 from stale oversized children, so a
     // scrollLeft of 706 looked "in bounds" while rendering an empty frame.
-    const clampSource = generatedHtml.slice(
-      generatedHtml.indexOf('function clampHorizontalPan('),
-      generatedHtml.indexOf('// Re-fit the font to the CURRENT viewport height'),
-    );
+    const clampSource = pageModule('panClamp.js');
     const container = { scrollLeft: 705.9, scrollWidth: 1366, clientWidth: 411 };
     const fakeDocument = {
       querySelector: (selector: string) =>
@@ -419,10 +506,7 @@ describe('generated xterm.html', () => {
     setPinchActive: (value: boolean) => void;
     decision: () => { exit: string } | null;
   } {
-    const source = generatedHtml.slice(
-      generatedHtml.indexOf('function dragToScrollUnits('),
-      generatedHtml.indexOf("// Ported from the desktop renderer's"),
-    );
+    const source = pageModule('historyScroll.js');
     const scrolled: number[] = [];
     const deltas: number[] = [];
     const posts: { type: string; data?: string }[] = [];
@@ -453,6 +537,44 @@ describe('generated xterm.html', () => {
           ? { getBoundingClientRect: () => ({ height: 600, width: 400, left: 0, top: 0 }) }
           : null,
     };
+    // State the module reads and writes but declares elsewhere (state.js and
+    // gestureState.js), re-declared with harness-chosen initial values - the
+    // anchor starts at 0 rather than the page's null so the first drag of a
+    // test already has a reference point. Tuning constants are read from the
+    // page itself via pageVar so a retune cannot leave these tests green
+    // against stale numbers, and the liveness guard fails the harness the
+    // moment the module stops referencing an injected name.
+    const injectedState: [string, string][] = [
+      ['historyDragAnchorY', '0'],
+      ['historyDragStartX', '0'],
+      ['historyDragAxis', 'null'],
+      ['DRAG_AXIS_SLOP_PX', String(pageVar('DRAG_AXIS_SLOP_PX'))],
+      ['lastScrollDecision', 'null'],
+      ['scrollPostCount', '0'],
+      ['pinchActive', 'false'],
+      ['lastScrollInputAt', 'null'],
+      ['dragSamples', '[]'],
+      ['flingGeneration', '0'],
+      ['flingStats', '{ started: 0, totalUnits: 0 }'],
+      ['FLING_MIN_START_VELOCITY_PX_PER_MS', String(pageVar('FLING_MIN_START_VELOCITY_PX_PER_MS'))],
+      ['FLING_MIN_KEEP_VELOCITY_PX_PER_MS', String(pageVar('FLING_MIN_KEEP_VELOCITY_PX_PER_MS'))],
+      ['FLING_DECAY_PER_FRAME', String(pageVar('FLING_DECAY_PER_FRAME'))],
+      ['FLING_MAX_UNITS_TOTAL', String(pageVar('FLING_MAX_UNITS_TOTAL'))],
+      ['FLING_SAMPLE_WINDOW_MS', String(pageVar('FLING_SAMPLE_WINDOW_MS'))],
+      ['netHistoryUnits', '0'],
+      ['lastUserScrollAt', '0'],
+      ['pendingJumpRepaint', 'false'],
+      ['lastJumpAt', 'null'],
+      ['lastJumpFirstWriteMs', 'null'],
+      ['jumpNudgeCount', '0'],
+      ['JUMP_RENDER_NUDGE_DELAY_MS', String(pageVar('JUMP_RENDER_NUDGE_DELAY_MS'))],
+    ];
+    assertInjectionsAreAlive(
+      'historyScroll.js',
+      source,
+      injectedState.map(([name]) => name),
+    );
+    const injectedPrelude = injectedState.map(([name, value]) => `var ${name} = ${value};`).join('\n');
     const build = new Function(
       'terminal',
       'document',
@@ -465,32 +587,7 @@ describe('generated xterm.html', () => {
       'Date',
       'requestAnimationFrame',
       'setTimeout',
-      `var historyDragAnchorY = 0;
-       var historyDragStartX = 0;
-       var historyDragAxis = null;
-       var DRAG_AXIS_SLOP_PX = 12;
-       var lastScrollDecision = null;
-       var scrollPostCount = 0;
-       var pinchActive = false;
-       var lastScrollInputAt = null;
-       var dragSamples = [];
-       var flingGeneration = 0;
-       var flingStats = { started: 0, totalUnits: 0 };
-       var FLING_MIN_START_VELOCITY_PX_PER_MS = 0.2;
-       var FLING_MIN_KEEP_VELOCITY_PX_PER_MS = 0.04;
-       var FLING_DECAY_PER_FRAME = 0.968;
-       var FLING_MAX_UNITS_TOTAL = 400;
-       var FLING_SAMPLE_WINDOW_MS = 100;
-       var SCROLL_TO_LATEST_WHEEL_UNITS = 500;
-       var SCROLL_TO_LATEST_PAGE_KEYS = 30;
-       var initCounts = { hard: 0, soft: 0 };
-       var netHistoryUnits = 0;
-       var lastUserScrollAt = 0;
-       var pendingJumpRepaint = false;
-       var lastJumpAt = null;
-       var lastJumpFirstWriteMs = null;
-       var jumpNudgeCount = 0;
-       var JUMP_RENDER_NUDGE_DELAY_MS = 250;
+      `${injectedPrelude}
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
@@ -531,7 +628,7 @@ describe('generated xterm.html', () => {
       fakeDocument,
       (message: { type: string; data?: string }) => posts.push(message),
       () => container,
-      12,
+      pageVar('MAX_SCROLL_UNITS_PER_STEP'),
       String.fromCharCode(27),
       function FakeWheelEvent(this: { deltaY: number }, _type: string, init: { deltaY: number }) {
         this.deltaY = init.deltaY;
@@ -649,20 +746,14 @@ describe('generated xterm.html', () => {
    * presentation this whole chain of fixes exists to end.
    */
   it('clears a latched pinch on a clean touchstart and on the reset button', () => {
-    const loadBody = generatedHtml.slice(
-      generatedHtml.indexOf("window.addEventListener('load'"),
-      generatedHtml.indexOf("postToHost({ type: 'ready' })"),
-    );
-    const touchStartBody = loadBody.slice(
-      loadBody.indexOf("addEventListener('touchstart'"),
-      loadBody.indexOf("addEventListener('touchmove'"),
+    const bootstrapSource = pageModule('bootstrap.js');
+    const touchStartBody = bootstrapSource.slice(
+      bootstrapSource.indexOf("addEventListener('touchstart'"),
+      bootstrapSource.indexOf("addEventListener('touchmove'"),
     );
     expect(touchStartBody).toContain('pinchActive = false');
 
-    const handlerBody = generatedHtml.slice(
-      generatedHtml.indexOf('function onHostMessage('),
-      generatedHtml.indexOf('var handleMessageEvent'),
-    );
+    const handlerBody = pageModule('dispatch.js');
     const refitBranch = handlerBody.slice(
       handlerBody.indexOf("message.type === 'refit'"),
       handlerBody.indexOf("message.type === 'pinch'"),
@@ -782,9 +873,13 @@ describe('generated xterm.html', () => {
    * and status bar - with no way to reach it.
    */
   describe('verticalFollowOffset', () => {
-    const followSource = generatedHtml.slice(
-      generatedHtml.indexOf('function verticalFollowOffset('),
-      generatedHtml.indexOf('// Current translateY'),
+    // The pure function, sliced out of followPan.js: the module's other
+    // functions touch document/scrollContainer at call time only, but its
+    // trailing state declaration would shadow nothing useful here.
+    const followPanSource = pageModule('followPan.js');
+    const followSource = followPanSource.slice(
+      followPanSource.indexOf('function verticalFollowOffset('),
+      followPanSource.indexOf('// Current translateY'),
     );
     const verticalFollowOffset = new Function(`${followSource} return verticalFollowOffset;`)() as (
       cursorTopPx: number,

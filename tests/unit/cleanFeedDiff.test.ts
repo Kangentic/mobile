@@ -64,18 +64,26 @@ describe('diffCleanLines', () => {
   });
 });
 
-describe('glue parity (generated xterm.html carries the same differ)', () => {
+describe('glue parity (the page glue carries the same differ)', () => {
   function extractGlueDiffFunction(): (previousLines: string[], serialized: string) => { lines: string[]; reset: boolean; nextLines: string[] } {
-    const generatedHtml = readFileSync(join(__dirname, '..', '..', 'src', 'terminal', 'xterm.html'), 'utf8');
+    // The page's hand-mirror of this differ lives in the cleanFeed fragment
+    // (the assembly test in xtermPageScripts proves the generated page ships
+    // these exact bytes, so testing the file IS testing the page). The
+    // fragment's other functions touch the terminal only at call time; the
+    // differ alone is sliced out to keep this a pure-function build.
+    const cleanFeedSource = readFileSync(
+      join(__dirname, '..', '..', 'scripts', 'xterm-page', 'cleanFeed.js'),
+      'utf8',
+    );
     const startMarker = 'function diffCleanLines(previousLines, serialized) {';
-    const startIndex = generatedHtml.indexOf(startMarker);
+    const startIndex = cleanFeedSource.indexOf(startMarker);
     expect(startIndex).toBeGreaterThan(-1);
     // The function body ends at the first `return { lines: emitted...` closer.
     const endMarker = 'return { lines: emitted, reset: reset, nextLines: newLines };';
-    const endIndex = generatedHtml.indexOf(endMarker, startIndex);
+    const endIndex = cleanFeedSource.indexOf(endMarker, startIndex);
     expect(endIndex).toBeGreaterThan(startIndex);
-    const functionSource = generatedHtml.slice(startIndex, endIndex + endMarker.length) + '\n}';
-    // Executing the generated page's own code is the point of the parity test.
+    const functionSource = cleanFeedSource.slice(startIndex, endIndex + endMarker.length) + '\n}';
+    // Executing the page's own code is the point of the parity test.
     return new Function(`${functionSource}; return diffCleanLines;`)() as (
       previousLines: string[],
       serialized: string,
