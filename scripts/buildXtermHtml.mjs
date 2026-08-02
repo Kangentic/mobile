@@ -293,7 +293,15 @@ const bridgeGlue = `
     if (nextOffsetPx === verticalOffsetPx) return;
     verticalOffsetPx = nextOffsetPx;
     var gridHost = document.getElementById('terminal');
-    if (gridHost) gridHost.style.transform = nextOffsetPx === 0 ? '' : 'translateY(' + nextOffsetPx + 'px)';
+    // translateZ(0) rides along ALWAYS (matching the #terminal CSS rule this
+    // style attribute overrides): it keeps the grid promoted to its own
+    // compositor layer, the standard defense against the Android WebView
+    // stall where a repainted canvas is not recomposited - observed live as a
+    // black terminal after a jump's full redraw that a 1px scroll "fixed".
+    if (gridHost) {
+      gridHost.style.transform =
+        nextOffsetPx === 0 ? 'translateZ(0)' : 'translateY(' + nextOffsetPx + 'px) translateZ(0)';
+    }
   }
 
   // force bypasses the manual-pan pause: a pinch just changed the geometry
@@ -360,6 +368,16 @@ const bridgeGlue = `
     reportModesIfFlipped();
     panToCursor();
     followCursorVertically(false);
+    if (pendingJumpRepaint) {
+      pendingJumpRepaint = false;
+      jumpRepaintCount += 1;
+      // The jump's redraw has flushed into the buffer; repaint the WHOLE
+      // canvas on the next frame. xterm's refresh is the blessed way to force
+      // it, and it is what turns "parsed but painted black" into pixels.
+      requestAnimationFrame(function () {
+        if (terminal) terminal.refresh(0, terminal.rows - 1);
+      });
+    }
   }
 
   // HISTORY SCROLLING.
@@ -696,6 +714,7 @@ const bridgeGlue = `
     // wasteful. Seven bytes cannot mis-split. A TUI that does not bind
     // Ctrl+End simply ignores it, and drag/fling still work there.
     lastScrollInputAt = Date.now();
+    pendingJumpRepaint = true;
     postToHost({ type: 'input', data: ESCAPE + '[1;5F' });
     netHistoryUnits = 0;
   }
@@ -1338,6 +1357,12 @@ const bridgeGlue = `
   // is it" was previously unanswerable from outside.
   var netHistoryUnits = 0;
   var lastUserScrollAt = 0;
+  // Armed by a jump: the redraw it triggers is a full-frame burst, exactly
+  // the paint the Android WebView renderer sometimes drops (black terminal
+  // until a 1px scroll). The first write after a jump forces a whole-canvas
+  // repaint once flushed. Counted for the probe.
+  var pendingJumpRepaint = false;
+  var jumpRepaintCount = 0;
 
   /**
    * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
@@ -1433,6 +1458,7 @@ const bridgeGlue = `
       flingStats: JSON.parse(JSON.stringify(flingStats)),
       initCounts: JSON.parse(JSON.stringify(initCounts)),
       netHistoryUnits: netHistoryUnits,
+      jumpRepaintCount: jumpRepaintCount,
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }
@@ -1635,7 +1661,11 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    zero, the overflow stays real, and the pan logic is untouched. The VERTICAL
    half of that split is padding-top, set from the measured grid by
    centerGridVertically (it needs the painted height, which no CSS rule has). */
-#terminal { width: max-content; margin: 0 auto; }
+/* translateZ(0) keeps the grid on its own compositor layer - see
+   applyVerticalOffset, whose inline transform preserves it. Without the
+   promotion, Android WebView sometimes skips recompositing a fully repainted
+   canvas (a black terminal until a 1px scroll invalidates the layer). */
+#terminal { width: max-content; margin: 0 auto; transform: translateZ(0); }
 </style>
 </head>
 <body>
