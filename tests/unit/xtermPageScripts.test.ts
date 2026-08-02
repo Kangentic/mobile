@@ -297,4 +297,199 @@ describe('generated xterm.html', () => {
     build(() => pinnedContainer, fakeDocument, true)();
     expect(pinnedContainer.scrollLeft).toBe(0);
   });
+
+  /**
+   * History scrolling, run against the real extracted functions.
+   *
+   * The bug these cover: with /tui fullscreen the agent lives in the ALTERNATE
+   * buffer, which has no scrollback anywhere, so the phone had no history to
+   * reach by moving a viewport. The desktop only appears to scroll because
+   * xterm turns a WHEEL into arrow keys the agent acts on, and a touch drag
+   * fires no wheel event - so the phone sent nothing at all.
+   *
+   * Defaults give a 20px cell (600px screen / 30 rows) and a container with no
+   * vertical pan left, which is the common case once the grid is height-fitted.
+   */
+  function buildHistoryScroll(options: {
+    bufferType: 'normal' | 'alternate';
+    applicationCursorKeys?: boolean;
+    container?: { scrollTop: number; scrollHeight: number; clientHeight: number };
+  }): {
+    consumeHistoryDrag: (touchEvent: { touches: { clientY: number }[] }) => void;
+    posts: () => { type: string; data?: string }[];
+    scrolled: () => number[];
+    anchorY: () => number | null;
+  } {
+    const source = generatedHtml.slice(
+      generatedHtml.indexOf('function dragToScrollLines('),
+      generatedHtml.indexOf("// Ported from the desktop renderer's"),
+    );
+    const scrolled: number[] = [];
+    const posts: { type: string; data?: string }[] = [];
+    const terminal = {
+      rows: 30,
+      buffer: { active: { type: options.bufferType } },
+      scrollLines: (lines: number): void => {
+        scrolled.push(lines);
+      },
+    };
+    const container = options.container ?? { scrollTop: 0, scrollHeight: 600, clientHeight: 600 };
+    const fakeDocument = {
+      querySelector: (selector: string) =>
+        selector === '.xterm-screen' ? { getBoundingClientRect: () => ({ height: 600 }) } : null,
+    };
+    const build = new Function(
+      'terminal',
+      'document',
+      'postToHost',
+      'scrollContainer',
+      'MAX_SCROLL_LINES_PER_STEP',
+      'ESCAPE',
+      'lastAppCursorMode',
+      `var historyDragAnchorY = 0;
+       ${source}
+       return {
+         consumeHistoryDrag: consumeHistoryDrag,
+         anchorY: function () { return historyDragAnchorY; },
+       };`,
+    ) as (...dependencies: unknown[]) => {
+      consumeHistoryDrag: (touchEvent: { touches: { clientY: number }[] }) => void;
+      anchorY: () => number | null;
+    };
+    const built = build(
+      terminal,
+      fakeDocument,
+      (message: { type: string; data?: string }) => posts.push(message),
+      () => container,
+      12,
+      String.fromCharCode(27),
+      options.applicationCursorKeys ?? false,
+    );
+    return {
+      consumeHistoryDrag: built.consumeHistoryDrag,
+      posts: () => posts,
+      scrolled: () => scrolled,
+      anchorY: built.anchorY,
+    };
+  }
+
+  /**
+   * The batching decision, and the reason wheel synthesis was rejected: xterm's
+   * alt-buffer handler emits ONE arrow per wheel event with no loop, so N lines
+   * via wheels would be N separate data events and therefore N relay messages.
+   * A phone on cellular must send ONE write per step, however many lines it
+   * carries.
+   */
+  it('sends one batched write of N arrows for an alt-buffer drag', () => {
+    const harness = buildHistoryScroll({ bufferType: 'alternate' });
+
+    // 100px down at a 20px cell = 5 lines toward history.
+    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
+
+    expect(harness.posts()).toHaveLength(1);
+    const escape = String.fromCharCode(27);
+    expect(harness.posts()[0].data).toBe(`${escape}[A`.repeat(5));
+    // The agent owns the scroll in the alt buffer; nothing moves locally.
+    expect(harness.scrolled()).toEqual([]);
+  });
+
+  /** A finger moving UP walks back toward the live tail, so down-arrows. */
+  it('sends down-arrows when the drag returns toward the live tail', () => {
+    const harness = buildHistoryScroll({
+      bufferType: 'alternate',
+      // Give the container no pan left in EITHER direction.
+      container: { scrollTop: 0, scrollHeight: 600, clientHeight: 600 },
+    });
+
+    harness.consumeHistoryDrag({ touches: [{ clientY: -60 }] });
+
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}[B`.repeat(3));
+  });
+
+  /**
+   * Application-cursor mode changes the introducer. The page already tracks it
+   * for the quick-key arrows, so scrolling must read that same flag rather than
+   * assume one form - a TUI in DECCKM ignores the wrong one.
+   */
+  it('follows application-cursor mode for the arrow introducer', () => {
+    const harness = buildHistoryScroll({ bufferType: 'alternate', applicationCursorKeys: true });
+
+    harness.consumeHistoryDrag({ touches: [{ clientY: 40 }] });
+
+    expect(harness.posts()[0].data).toBe(`${String.fromCharCode(27)}OA`.repeat(2));
+  });
+
+  /**
+   * The NORMAL buffer has real scrollback, so the same gesture must move the
+   * viewport locally: no round trip, and no keystrokes the agent could misread
+   * as input.
+   */
+  it('scrolls locally and sends nothing in the normal buffer', () => {
+    const harness = buildHistoryScroll({ bufferType: 'normal' });
+
+    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
+
+    expect(harness.scrolled()).toEqual([-5]);
+    expect(harness.posts()).toEqual([]);
+  });
+
+  /**
+   * A hard fling must not post an arbitrarily long string: every line is one
+   * arrow sequence inside the batched write.
+   */
+  it('caps the lines one drag step may scroll', () => {
+    const harness = buildHistoryScroll({ bufferType: 'normal' });
+
+    // 2000px at a 20px cell would be 100 lines.
+    harness.consumeHistoryDrag({ touches: [{ clientY: 2000 }] });
+
+    expect(harness.scrolled()).toEqual([-12]);
+  });
+
+  /**
+   * Overscroll chaining: while the container still has pan left in the pushed
+   * direction (the user zoomed in), the drag pans and must NOT reach history.
+   * Without this, zooming in would make every pan fire scroll input at the
+   * agent.
+   */
+  it('pans instead of scrolling history while the container can still move', () => {
+    const harness = buildHistoryScroll({
+      bufferType: 'alternate',
+      container: { scrollTop: 120, scrollHeight: 1200, clientHeight: 600 },
+    });
+
+    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }] });
+
+    expect(harness.posts()).toEqual([]);
+    // The anchor follows the finger so the pan cannot bank travel that fires as
+    // a jump the moment the edge is reached.
+    expect(harness.anchorY()).toBe(100);
+  });
+
+  /**
+   * A sub-line drag must leave the anchor alone so the remainder carries into
+   * the next event; resetting it would stall a slow drag forever.
+   */
+  it('banks a sub-line drag instead of discarding it', () => {
+    const harness = buildHistoryScroll({ bufferType: 'normal' });
+
+    harness.consumeHistoryDrag({ touches: [{ clientY: 12 }] });
+    expect(harness.scrolled()).toEqual([]);
+    expect(harness.anchorY()).toBe(0);
+
+    // 12 + 12 = 24px, which clears the 20px cell.
+    harness.consumeHistoryDrag({ touches: [{ clientY: 24 }] });
+    expect(harness.scrolled()).toEqual([-1]);
+    // Only the consumed 20px advanced the anchor; 4px remain banked.
+    expect(harness.anchorY()).toBe(20);
+  });
+
+  /** A second finger is a pinch, never a scroll. */
+  it('ignores a multi-touch gesture', () => {
+    const harness = buildHistoryScroll({ bufferType: 'alternate' });
+
+    harness.consumeHistoryDrag({ touches: [{ clientY: 100 }, { clientY: 200 }] });
+
+    expect(harness.posts()).toEqual([]);
+  });
 });
