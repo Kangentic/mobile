@@ -41,8 +41,10 @@
   // rows read as double-spaced rather than as a terminal.
   var MAX_LINE_HEIGHT = 1.3;
   // Frames the measured height fit may spend converging, and the slop that
-  // counts as "fits". The last pass never adjusts, so this is 3 corrections
-  // plus a settling measure.
+  // counts as "fits". The last pass never adjusts, so this is 3 STRETCH
+  // corrections plus a settling measure - font steps are exempt from the
+  // budget (see fitGridHeightToViewport), or a bad opening guess starves
+  // the stretch entirely.
   var HEIGHT_FIT_PASSES = 4;
   var HEIGHT_FIT_TOLERANCE_PX = 0.5;
   // The fit aims this far SHORT of the viewport floor. The tolerance band
@@ -58,6 +60,26 @@
   var VIEWPORT_SETTLE_REFIT_MS = 250;
   // Probe counter for the settle refits.
   var viewportSettleRefits = 0;
+  // Ring of the height fit's recent decisions, for the dev probe: every
+  // adjustment, settle, and bail with the geometry it saw. The 80%-height
+  // fresh-open bug was invisible from outside precisely because the chain's
+  // intermediate reads (a transitional innerHeight, a bailed measure) leave
+  // no trace in the settled state.
+  var heightFitTrace = [];
+  var HEIGHT_FIT_TRACE_MAX = 24;
+  function traceHeightFit(event, generation, passesLeft, screenHeight) {
+    heightFitTrace.push({
+      e: event,
+      g: generation,
+      p: passesLeft,
+      sh: Math.round(screenHeight),
+      ih: window.innerHeight,
+      f: currentFontSizePx,
+      lh: terminal && terminal.options ? Math.round((terminal.options.lineHeight || 1) * 1000) / 1000 : null,
+      t: Date.now() % 1000000,
+    });
+    if (heightFitTrace.length > HEIGHT_FIT_TRACE_MAX) heightFitTrace.shift();
+  }
   // Bumps on every refit so a fit still converging cannot keep adjusting the
   // grid underneath the one that replaced it (a keyboard open fires several
   // viewport changes in a row, and two live loops would each step the font).

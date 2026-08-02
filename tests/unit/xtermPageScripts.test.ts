@@ -173,6 +173,7 @@ describe('generated xterm.html', () => {
       'currentFontSizePx',
       'followCursorVertically',
       'heightFitGeneration',
+      'traceHeightFit',
       'MAX_LINE_HEIGHT',
       'HEIGHT_FIT_TOLERANCE_PX',
       'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
@@ -195,6 +196,7 @@ describe('generated xterm.html', () => {
       `var currentFontSizePx = initialFontSizePx;
        var followedAfterSettle = 0;
        function followCursorVertically(force) { followedAfterSettle += 1; }
+       function traceHeightFit() {}
        ${source}
        return { fit: fitGridHeightToViewport, fontSizePx: function () { return currentFontSizePx; },
                 followed: function () { return followedAfterSettle; } };`,
@@ -254,6 +256,31 @@ describe('generated xterm.html', () => {
     // it from refit's first frame sampled mid-convergence geometry (a 48-row
     // stretch transiently overflows before its give-back) and locked in a
     // stale upward translate that shifted the whole frame ("pushed up more").
+    expect(harness.followed()).toBe(1);
+  });
+
+  /**
+   * The pass budget must not be starved by FONT STEPS. How many steps the
+   * opening guess needs varies run to run (cell metrics shift while fonts
+   * load), and when several were needed they consumed every corrective pass:
+   * the chain ran out before the row stretch (or even before the font
+   * FITTED), settling at line height 1 with a short grid - live on a fresh
+   * open of a parked 210x48 session: a 530px grid centred in a 635px
+   * viewport ("mobile renders ~80% of the TUI"). Font steps are monotonic
+   * and floored at MIN_AUTO_FONT_PX, so exempting them cannot spin.
+   */
+  it('still stretches when the opening font guess costs several steps', () => {
+    const harness = buildHeightFit({ rows: 48, viewportHeight: 624, fontSizePx: 14, cellHeightRatio: 1.21 });
+    expect(harness.screenHeight(), 'precondition: the guess is far too big').toBeGreaterThan(700);
+
+    harness.fit(4, false, 1);
+
+    // The fit must land INSIDE the pane and still fill it to within one row -
+    // the same contract as the clipped-bottom-row guard, reached through five
+    // font steps first. Budget starvation left it overflowing at 672px.
+    expect(harness.screenHeight()).toBeLessThanOrEqual(624);
+    expect(harness.screenHeight()).toBeGreaterThan(624 - harness.screenHeight() / 48);
+    expect(harness.paddingTop()).toBe('0px');
     expect(harness.followed()).toBe(1);
   });
 
@@ -326,6 +353,12 @@ describe('generated xterm.html', () => {
     expect(refitBody).toContain('fitGridHeightToViewport(HEIGHT_FIT_PASSES');
     // Each refit owns a generation, or two live fits step the font together.
     expect(refitBody).toContain('heightFitGeneration += 1');
+    // And each chain starts from line height 1: an inherited stretch from the
+    // PREVIOUS chain overflows against the freshly-reset font, gets handed
+    // back as if it were this chain's own overshoot, and LOCKS stretching -
+    // the fit then settles short and centred ("~80% of the TUI" on a fresh
+    // open, caught live by the fit trace).
+    expect(refitBody).toContain('terminal.options.lineHeight = 1');
   });
 
   /**

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build ce4fe536011f) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build ad4cabdd9625) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -388,8 +388,10 @@ return exports; })();
   // rows read as double-spaced rather than as a terminal.
   var MAX_LINE_HEIGHT = 1.3;
   // Frames the measured height fit may spend converging, and the slop that
-  // counts as "fits". The last pass never adjusts, so this is 3 corrections
-  // plus a settling measure.
+  // counts as "fits". The last pass never adjusts, so this is 3 STRETCH
+  // corrections plus a settling measure - font steps are exempt from the
+  // budget (see fitGridHeightToViewport), or a bad opening guess starves
+  // the stretch entirely.
   var HEIGHT_FIT_PASSES = 4;
   var HEIGHT_FIT_TOLERANCE_PX = 0.5;
   // The fit aims this far SHORT of the viewport floor. The tolerance band
@@ -405,6 +407,26 @@ return exports; })();
   var VIEWPORT_SETTLE_REFIT_MS = 250;
   // Probe counter for the settle refits.
   var viewportSettleRefits = 0;
+  // Ring of the height fit's recent decisions, for the dev probe: every
+  // adjustment, settle, and bail with the geometry it saw. The 80%-height
+  // fresh-open bug was invisible from outside precisely because the chain's
+  // intermediate reads (a transitional innerHeight, a bailed measure) leave
+  // no trace in the settled state.
+  var heightFitTrace = [];
+  var HEIGHT_FIT_TRACE_MAX = 24;
+  function traceHeightFit(event, generation, passesLeft, screenHeight) {
+    heightFitTrace.push({
+      e: event,
+      g: generation,
+      p: passesLeft,
+      sh: Math.round(screenHeight),
+      ih: window.innerHeight,
+      f: currentFontSizePx,
+      lh: terminal && terminal.options ? Math.round((terminal.options.lineHeight || 1) * 1000) / 1000 : null,
+      t: Date.now() % 1000000,
+    });
+    if (heightFitTrace.length > HEIGHT_FIT_TRACE_MAX) heightFitTrace.shift();
+  }
   // Bumps on every refit so a fit still converging cannot keep adjusting the
   // grid underneath the one that replaced it (a keyboard open fires several
   // viewport changes in a row, and two live loops would each step the font).
@@ -1424,15 +1446,25 @@ return exports; })();
   // So: stretch the LINE HEIGHT into any slack, give that stretch back when
   // the ceil overshoots, and drop the font a step when even line height 1
   // overflows. One adjustment per frame (xterm has to repaint before the next
-  // measure means anything) on a fixed budget, and the final pass only
-  // measures - so it can never spin, and the centring below always runs
-  // against the settled grid.
+  // measure means anything) on a fixed budget - which FONT STEPS are exempt
+  // from: how many the opening guess needs varies run to run (cell metrics
+  // shift while fonts load), and letting them consume the budget starved the
+  // stretch, settling fresh opens at line height 1 with a short centred grid
+  // ("~80% of the TUI"). Steps are monotonic and floored at MIN_AUTO_FONT_PX,
+  // so the exemption cannot spin. The final pass only measures, so the
+  // centring below always runs against the settled grid.
   function fitGridHeightToViewport(passesLeft, stretchLocked, generation) {
     if (!terminal || generation !== heightFitGeneration) return;
     var screen = document.querySelector('.xterm-screen');
-    if (!screen) return;
+    if (!screen) {
+      traceHeightFit('bail-no-screen', generation, passesLeft, 0);
+      return;
+    }
     var screenHeight = screen.getBoundingClientRect().height;
-    if (!(screenHeight > 0) || terminal.rows < 1) return;
+    if (!(screenHeight > 0) || terminal.rows < 1) {
+      traceHeightFit('bail-zero-measure', generation, passesLeft, screenHeight);
+      return;
+    }
     var viewportHeight = window.innerHeight - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
     var currentLineHeight = terminal.options.lineHeight || 1;
     if (passesLeft <= 1) {
@@ -1445,6 +1477,7 @@ return exports; })();
       if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX && currentLineHeight > 1.005) {
         terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
       }
+      traceHeightFit('final', generation, passesLeft, screenHeight);
       centerGridVertically(screenHeight);
       followCursorVertically(true);
       return;
@@ -1452,6 +1485,7 @@ return exports; })();
     var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
     if (!(baseCellHeight > 0)) return;
     var adjusted = false;
+    var fontStepped = false;
     if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX) {
       if (currentLineHeight > 1.005) {
         // The stretch overshot: hand back exactly the excess, and stop
@@ -1468,6 +1502,7 @@ return exports; })();
         terminal.options.fontSize = currentFontSizePx;
         postToHost({ type: 'font-size', fontSizePx: currentFontSizePx });
         adjusted = true;
+        fontStepped = true;
       }
     } else if (!stretchLocked) {
       var desiredLineHeight = viewportHeight / (terminal.rows * baseCellHeight);
@@ -1478,6 +1513,7 @@ return exports; })();
       }
     }
     if (!adjusted) {
+      traceHeightFit('settled', generation, passesLeft, screenHeight);
       centerGridVertically(screenHeight);
       // The fit has SETTLED: only now is the vertical follow computed against
       // real geometry. Forcing it from refit's first frame sampled the grid
@@ -1490,8 +1526,9 @@ return exports; })();
       followCursorVertically(true);
       return;
     }
+    traceHeightFit(fontStepped ? 'adjust-font' : stretchLocked ? 'giveback' : 'adjust-stretch', generation, passesLeft, screenHeight);
     requestAnimationFrame(function () {
-      fitGridHeightToViewport(passesLeft - 1, stretchLocked, generation);
+      fitGridHeightToViewport(fontStepped ? passesLeft : passesLeft - 1, stretchLocked, generation);
     });
   }
 
@@ -1597,6 +1634,16 @@ return exports; })();
     // open/close ("disorienting in resize events").
     pinnedToStart = true;
     autoFitFontToScreen();
+    // The fit chain below must start from the same clean slate a constructed
+    // terminal does (the rule softReinit already follows): autoFitFontToScreen
+    // just reset the FONT, and a line-height stretch left over from the
+    // PREVIOUS chain makes the new font x old stretch overflow. The chain then
+    // misreads that as its own stretch overshooting, hands it back, and LOCKS
+    // stretching - so once its font correction lands, nothing can reclaim the
+    // slack. Caught live by the fit trace on a fresh open of a parked 210x48
+    // session: settled at line height 1 with a 530px grid in a 635px viewport,
+    // stretchLocked by a giveback of the prior chain's 1.194.
+    terminal.options.lineHeight = 1;
     applyGeometry();
     heightFitGeneration += 1;
     var generation = heightFitGeneration;
@@ -1759,7 +1806,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: 'ce4fe536011f',
+      buildId: 'ad4cabdd9625',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
@@ -1815,6 +1862,7 @@ return exports; })();
       lastJumpFirstWriteMs: lastJumpFirstWriteMs,
       jumpNudgeCount: jumpNudgeCount,
       viewportSettleRefits: viewportSettleRefits,
+      heightFitTrace: JSON.parse(JSON.stringify(heightFitTrace)),
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }

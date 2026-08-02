@@ -15,6 +15,16 @@
     // open/close ("disorienting in resize events").
     pinnedToStart = true;
     autoFitFontToScreen();
+    // The fit chain below must start from the same clean slate a constructed
+    // terminal does (the rule softReinit already follows): autoFitFontToScreen
+    // just reset the FONT, and a line-height stretch left over from the
+    // PREVIOUS chain makes the new font x old stretch overflow. The chain then
+    // misreads that as its own stretch overshooting, hands it back, and LOCKS
+    // stretching - so once its font correction lands, nothing can reclaim the
+    // slack. Caught live by the fit trace on a fresh open of a parked 210x48
+    // session: settled at line height 1 with a 530px grid in a 635px viewport,
+    // stretchLocked by a giveback of the prior chain's 1.194.
+    terminal.options.lineHeight = 1;
     applyGeometry();
     heightFitGeneration += 1;
     var generation = heightFitGeneration;
