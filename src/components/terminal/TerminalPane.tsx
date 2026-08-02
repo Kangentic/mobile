@@ -54,6 +54,10 @@ const MAX_TERMINAL_FONT_SIZE_PX = 56;
 // echo is unaffected - keys go phone->desktop directly, not through this batch.
 const CHUNK_BATCH_INTERVAL_MS = 32;
 const FONT_SIZE_POST_THROTTLE_MS = 50;
+// How long the reset button waits for its stream refresh to produce a re-seed
+// before falling back to a local refit (the offline path). A live channel
+// round-trips a seed well inside this.
+const REFIT_FALLBACK_DELAY_MS = 700;
 
 // Metro asset reference; ESM import syntax cannot load an html asset.
 const xtermHtmlModule = require('../../terminal/xterm.html') as number;
@@ -263,7 +267,18 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     };
   }, [sessionId, runTerminalEval]);
 
+  // When the last init was posted; the reset button reads it to decide whether
+  // its stream refresh actually produced a re-seed.
+  const lastInitPostAtRef = useRef(0);
+  const refitFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (refitFallbackTimerRef.current !== null) clearTimeout(refitFallbackTimerRef.current);
+    };
+  }, []);
+
   const postInit = useCallback(() => {
+    lastInitPostAtRef.current = Date.now();
     const scrollback = getBufferedData(sessionId);
     const ptyDimensions = getTerminalDimensions(sessionId);
     // Put the terminal back into the modes the desktop's TUI set once at
@@ -574,6 +589,15 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
         />
         <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />
+        <View style={styles.scrollLatestButton}>
+          <IconButton
+            iconName="to-latest"
+            variant="raised"
+            testID="terminal-scroll-latest"
+            accessibilityLabel="Jump to the latest terminal output"
+            onPress={() => postToTerminal({ type: 'scroll-latest' })}
+          />
+        </View>
         <View style={styles.refitButton}>
           <IconButton
             iconName="contract"
@@ -581,11 +605,18 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
             testID="terminal-refit"
             accessibilityLabel="Fit the terminal to the screen"
             onPress={() => {
-              // Local refit AND a fresh frame from the desktop: the one
-              // button that unsticks a wedged mirror (missed resize,
-              // stale seed) as well as resetting zoom.
-              postToTerminal({ type: 'refit' });
+              // A fresh frame from the desktop, then a local refit ONLY if the
+              // re-seed never arrived. Posting both eagerly painted twice per
+              // press (the refit's fit passes, then the seed's own re-init),
+              // which read as screen flashes; the re-seed re-fits everything
+              // itself, so the explicit refit is purely the offline fallback.
+              const pressedAt = Date.now();
               refreshTerminalStream(sessionId);
+              if (refitFallbackTimerRef.current !== null) clearTimeout(refitFallbackTimerRef.current);
+              refitFallbackTimerRef.current = setTimeout(() => {
+                refitFallbackTimerRef.current = null;
+                if (lastInitPostAtRef.current < pressedAt) postToTerminal({ type: 'refit' });
+              }, REFIT_FALLBACK_DELAY_MS);
             }}
           />
         </View>
@@ -600,6 +631,11 @@ const styles = StyleSheet.create({
   },
   refitButton: {
     bottom: 12,
+    position: 'absolute',
+    right: 12,
+  },
+  scrollLatestButton: {
+    bottom: 64,
     position: 'absolute',
     right: 12,
   },

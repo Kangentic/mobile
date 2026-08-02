@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Archive,
+  ArrowDownToLine,
   ArrowLeftRight,
   Bot,
   ChevronDown,
@@ -40,6 +41,7 @@ export type IconName =
   | 'add'
   | 'send'
   | 'contract'
+  | 'to-latest'
   | 'user'
   | 'agent';
 
@@ -59,6 +61,7 @@ const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   add: Plus,
   send: Send,
   contract: Shrink,
+  'to-latest': ArrowDownToLine,
   user: User,
   agent: Bot,
 };

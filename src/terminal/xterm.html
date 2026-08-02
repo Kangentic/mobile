@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build a7ed7f06ec18) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build cd3c73868c79) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -402,11 +402,24 @@ return exports; })();
   // frame (0.94^(dt/16)), the keep threshold ends the glide, and the total
   // unit cap bounds what one fling may cost over the relay - each unit is one
   // key sequence, so an unbounded glide would be an unbounded payload.
-  var FLING_MIN_START_VELOCITY_PX_PER_MS = 0.4;
-  var FLING_MIN_KEEP_VELOCITY_PX_PER_MS = 0.05;
-  var FLING_DECAY_PER_FRAME = 0.94;
-  var FLING_MAX_UNITS_TOTAL = 150;
+  // Tuned live 2026-08-02: the first cut (start 0.4, decay 0.94, cap 150)
+  // glided ~20 lines and often did not trigger at all, because a long fast
+  // drag usually SLOWS just before the finger lifts and fell under the start
+  // threshold - reported as "a big scroll doesn't continue". 0.968 per frame
+  // is iOS UIScrollView's normal deceleration (0.998 per ms), the start
+  // threshold now catches an ordinary flick, and the cap allows a few hundred
+  // lines per fling while still bounding the relay payload.
+  var FLING_MIN_START_VELOCITY_PX_PER_MS = 0.2;
+  var FLING_MIN_KEEP_VELOCITY_PX_PER_MS = 0.04;
+  var FLING_DECAY_PER_FRAME = 0.968;
+  var FLING_MAX_UNITS_TOTAL = 400;
   var FLING_SAMPLE_WINDOW_MS = 100;
+  // Jump-to-latest overshoot sizes. Past-the-end scrolling is a no-op on
+  // every mechanism, so overshooting reaches the tail from any depth without
+  // knowing it; the constants just bound the one-shot payload (~11 bytes per
+  // wheel report, 4 per page key).
+  var SCROLL_TO_LATEST_WHEEL_UNITS = 500;
+  var SCROLL_TO_LATEST_PAGE_KEYS = 30;
   // Built rather than escaped: this glue lives inside a template literal in
   // scripts/buildXtermHtml.mjs, where a backslash escape would be consumed by
   // the generator instead of reaching the page.
@@ -938,6 +951,23 @@ return exports; })();
     requestAnimationFrame(glideFrame);
   }
 
+  /**
+   * Jump to the newest output, whatever the depth. With real scrollback the
+   * jump is local; when the AGENT owns its history (the alt-screen TUI) the
+   * depth is unknowable from here, so overshoot instead - scrolling past the
+   * end is a no-op on every mechanism, which makes the overshoot exact.
+   */
+  function scrollToLatest() {
+    if (!terminal) return;
+    stopHistoryFling();
+    var mechanism = scrollMechanism();
+    if (mechanism === 'viewport') {
+      terminal.scrollToBottom();
+      return;
+    }
+    scrollHistoryByUnits(mechanism === 'mouse' ? SCROLL_TO_LATEST_WHEEL_UNITS : SCROLL_TO_LATEST_PAGE_KEYS, mechanism);
+  }
+
   // Ported from the desktop renderer's terminal-webgl.ts. xterm's WebGL renderer
   // is 10-50x faster than the DOM fallback for output bursts. The GPU can drop
   // the context (driver reset, memory pressure); the naive "dispose on loss"
@@ -1174,6 +1204,56 @@ return exports; })();
     requestAnimationFrame(refit);
   }
 
+  /**
+   * Re-seed WITHOUT tearing the terminal down. A full createTerminal disposes
+   * the DOM and the WebGL context and rebuilds both, which paints as a hard
+   * blank-then-redraw - and the reset button triggers a re-seed on top of its
+   * own refit, so the user saw "multiple screen flashes" per press. xterm's
+   * reset() is RIS: it clears both buffers and all modes with the renderer,
+   * textarea attributes, and onData wiring untouched, so the same replay
+   * paints in place. The hard path remains for what reset() cannot change:
+   * the clean-feed flag baked in at construction.
+   */
+  function softReinit(initMessage) {
+    initCounts.soft += 1;
+    knownCols = initMessage.cols;
+    knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
+    currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
+    lastAppCursorMode = false;
+    lastReportedModes = null;
+    manualPanUntil = 0;
+    stopHistoryFling();
+    dragSamples = [];
+    applyVerticalOffset(0);
+    pinnedToStart = true;
+    if (initMessage.theme && typeof initMessage.theme.background === 'string') {
+      document.documentElement.style.background = initMessage.theme.background;
+      document.body.style.background = initMessage.theme.background;
+    }
+    var gridHost = document.getElementById('terminal');
+    if (gridHost) gridHost.style.paddingTop = '0px';
+    setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
+    terminal.reset();
+    terminal.options.theme = initMessage.theme;
+    // A previous height fit may have stretched the line height; the fresh fit
+    // below assumes the same clean slate a constructed terminal starts with.
+    terminal.options.lineHeight = 1;
+    terminal.options.fontSize = currentFontSizePx;
+    autoFitFontToScreen();
+    applyGeometry();
+    if (initMessage.scrollback) {
+      terminal.write(initMessage.scrollback, function () {
+        applyGeometry();
+        afterWriteFlushed();
+      });
+      cleanFeedWrite(initMessage.scrollback);
+    } else {
+      applyGeometry();
+      reportModesIfFlipped();
+    }
+    requestAnimationFrame(refit);
+  }
+
   function applyFontSize(fontSizePx) {
     if (!terminal) return;
     // Pinch obeys the texture cap too: past it the GPU clamps the canvas and
@@ -1388,12 +1468,19 @@ return exports; })();
     }
     if (!message || typeof message.type !== 'string') return;
     if (message.type === 'init') {
+      // Prefer the in-place reset: it repaints without the dispose-blank. The
+      // hard rebuild is only for the flag reset() cannot change.
+      if (terminal && cleanFeedEnabled === (message.cleanFeed === true)) {
+        softReinit(message);
+        return;
+      }
       if (terminal) {
         terminal.dispose();
         terminal = null;
         var container = document.getElementById('terminal');
         while (container.firstChild) container.removeChild(container.firstChild);
       }
+      initCounts.hard += 1;
       createTerminal(message);
     } else if (message.type === 'write') {
       if (terminal && typeof message.data === 'string') {
@@ -1428,6 +1515,8 @@ return exports; })();
       stopHistoryFling();
       applyVerticalOffset(0);
       refit();
+    } else if (message.type === 'scroll-latest') {
+      scrollToLatest();
     } else if (message.type === 'pinch') {
       if (message.active === true) pinchMessageCounts.activeTrue += 1;
       else pinchMessageCounts.activeFalse += 1;
@@ -1497,6 +1586,9 @@ return exports; })();
   var dragSamples = [];
   var flingGeneration = 0;
   var flingStats = { started: 0, totalUnits: 0 };
+  // How many re-seeds took the in-place reset vs a full DOM rebuild; the dev
+  // probe's way to verify the reset button stopped hard-flashing.
+  var initCounts = { hard: 0, soft: 0 };
 
   /**
    * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
@@ -1541,7 +1633,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: 'a7ed7f06ec18',
+      buildId: 'cd3c73868c79',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
@@ -1590,6 +1682,7 @@ return exports; })();
       lastScrollRoundTripMs: lastScrollRoundTripMs,
       verticalOffsetPx: verticalOffsetPx,
       flingStats: JSON.parse(JSON.stringify(flingStats)),
+      initCounts: JSON.parse(JSON.stringify(initCounts)),
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }

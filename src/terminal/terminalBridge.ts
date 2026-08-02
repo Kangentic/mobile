@@ -39,6 +39,13 @@ export type HostToTerminalMessage =
   | { type: 'set-font-size'; fontSizePx: number }
   /** Snap back to the fitted view: recompute the fit-to-screen font and reset pan. */
   | { type: 'refit' }
+  /**
+   * Jump to the newest output. Mechanism-aware in the page: local
+   * scrollToBottom when the buffer has real scrollback, an overshooting
+   * wheel-down burst when the agent owns its history (past-the-end reports are
+   * no-ops, so overshooting is safe and needs no knowledge of depth).
+   */
+  | { type: 'scroll-latest' }
   /** The authoritative PTY grid changed (desktop refit); adopt it and re-fit the frame to screen. */
   | { type: 'resize'; cols: number; rows: number }
   /**
@@ -193,6 +200,9 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
   }
   if (parsedObject.type === 'refit') {
     return { type: 'refit' };
+  }
+  if (parsedObject.type === 'scroll-latest') {
+    return { type: 'scroll-latest' };
   }
   if (parsedObject.type === 'pinch' && typeof parsedObject.active === 'boolean') {
     return { type: 'pinch', active: parsedObject.active };

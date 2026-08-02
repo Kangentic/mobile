@@ -76,6 +76,10 @@ describe('terminal -> host round-trip', () => {
    * message over the three fields it cannot know would lose the arrow-key mode
    * as collateral, so they default instead.
    */
+  it('round-trips the scroll-latest host message', () => {
+    expect(decodeHostMessage(JSON.stringify({ type: 'scroll-latest' }))).toEqual({ type: 'scroll-latest' });
+  });
+
   it('defaults the sticky mode fields when an older page omits them', () => {
     expect(decodeTerminalMessage(JSON.stringify({ type: 'modes', applicationCursorKeys: true }))).toEqual({
       type: 'modes',
