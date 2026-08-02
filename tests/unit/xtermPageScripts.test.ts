@@ -373,6 +373,8 @@ describe('generated xterm.html', () => {
     netHistoryUnits: () => number;
     flingStats: () => { started: number; totalUnits: number };
     scrolledToBottom: () => number;
+    runTimers: () => void;
+    pendingTimers: () => number;
     advanceTime: (deltaMs: number) => void;
     drainFrames: (maxFrames?: number) => number;
     pendingFrames: () => number;
@@ -429,6 +431,7 @@ describe('generated xterm.html', () => {
       'window',
       'Date',
       'requestAnimationFrame',
+      'setTimeout',
       `var historyDragAnchorY = 0;
        var historyDragStartX = 0;
        var historyDragAxis = null;
@@ -450,6 +453,11 @@ describe('generated xterm.html', () => {
        var initCounts = { hard: 0, soft: 0 };
        var netHistoryUnits = 0;
        var lastUserScrollAt = 0;
+       var pendingJumpRepaint = false;
+       var lastJumpAt = null;
+       var lastJumpFirstWriteMs = null;
+       var jumpNudgeCount = 0;
+       var JUMP_RENDER_NUDGE_DELAY_MS = 250;
        ${source}
        return {
          consumeHistoryDrag: consumeHistoryDrag,
@@ -484,6 +492,7 @@ describe('generated xterm.html', () => {
     // Date.now() deltas and requestAnimationFrame, so the test owns both.
     let fakeNowMs = 0;
     const animationFrameQueue: (() => void)[] = [];
+    const timerQueue: { callback: () => void; delayMs: number }[] = [];
     const built = build(
       terminal,
       fakeDocument,
@@ -500,6 +509,7 @@ describe('generated xterm.html', () => {
       { devicePixelRatio: 2 },
       { now: () => fakeNowMs },
       (callback: () => void) => animationFrameQueue.push(callback),
+      (callback: () => void, delayMs: number) => timerQueue.push({ callback, delayMs }),
     );
     feed = built.feed;
     return {
@@ -513,6 +523,17 @@ describe('generated xterm.html', () => {
       advanceTime: (deltaMs: number) => {
         fakeNowMs += deltaMs;
       },
+      /** Fire queued timers in order, advancing the clock by each delay. */
+      runTimers: () => {
+        while (timerQueue.length > 0) {
+          const timer = timerQueue.shift();
+          if (timer) {
+            fakeNowMs += timer.delayMs;
+            timer.callback();
+          }
+        }
+      },
+      pendingTimers: () => timerQueue.length,
       /** Run queued frames, 16ms apart, until the glide stops scheduling. */
       drainFrames: (maxFrames = 400) => {
         let framesRun = 0;
@@ -854,11 +875,33 @@ describe('generated xterm.html', () => {
     viaViewport.scrollToLatest();
     expect(viaViewport.scrolledToBottom()).toBe(1);
     expect(viaViewport.posts()).toEqual([]);
+    expect(viaViewport.pendingTimers()).toBe(0);
 
     const viaPageKeys = buildHistoryScroll({ mouseTracking: false, bufferType: 'alternate' });
     viaPageKeys.scrollToLatest();
     expect(viaPageKeys.posts()).toHaveLength(1);
     expect(viaPageKeys.posts()[0].data).toBe(`${String.fromCharCode(27)}[1;5F`);
+    expect(viaPageKeys.pendingTimers()).toBe(0);
+  });
+
+  /**
+   * A QUIET Claude Code answers Ctrl+End from scrollback with a BLANK frame
+   * and paints nothing further until input or output arrives - proven shared
+   * state, the desktop showed the same black screen as the phone. The jump
+   * therefore schedules ONE wheel-down a beat later: a scroll no-op at the
+   * bottom, but INPUT, which is what makes the TUI paint (the automated form
+   * of the user's manual "scroll 1px" cure). Exactly one report - the
+   * mis-split hazard rule holds.
+   */
+  it('nudges the idle TUI to paint after a jump, with a single wheel report', () => {
+    const harness = buildHistoryScroll({ mouseTracking: true });
+    harness.scrollToLatest();
+    expect(harness.posts()).toHaveLength(1);
+
+    harness.runTimers();
+
+    expect(harness.posts()).toHaveLength(2);
+    expect(harness.posts()[1].data).toBe(`${String.fromCharCode(27)}[<65;40;15M`);
   });
 
   /**

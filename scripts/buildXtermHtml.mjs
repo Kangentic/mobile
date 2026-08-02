@@ -126,6 +126,15 @@ const bridgeGlue = `
   // every mechanism, so overshooting reaches the tail from any depth without
   // knowing it; the constants just bound the one-shot payload (~11 bytes per
   // wheel report, 4 per page key).
+  // After a jump, ONE wheel-down report follows a beat later. A quiet
+  // Claude Code answers Ctrl+End from scrollback by painting a BLANK frame
+  // and does not paint again until the next input or output arrives - proven
+  // shared-state: the desktop showed the same black screen as the phone, so
+  // this is the TUI's own idle redraw, not a mobile rendering failure. The
+  // nudge is exactly the user's manual cure ("scrolling just 1px renders it"):
+  // a single wheel-down is a scroll no-op at the bottom but is INPUT, and
+  // input makes the TUI paint. One report, so nothing can mis-split.
+  var JUMP_RENDER_NUDGE_DELAY_MS = 250;
   // FOLLOW SEMANTICS are the classic terminal contract: AT the bottom, new
   // output follows (which the agent does natively - when its view is at the
   // tail, that is where it draws); scrolled UP, the view STAYS where the user
@@ -715,8 +724,26 @@ const bridgeGlue = `
     // Ctrl+End simply ignores it, and drag/fling still work there.
     lastScrollInputAt = Date.now();
     pendingJumpRepaint = true;
+    lastJumpAt = Date.now();
+    lastJumpFirstWriteMs = null;
     postToHost({ type: 'input', data: ESCAPE + '[1;5F' });
     netHistoryUnits = 0;
+    if (mechanism === 'mouse') {
+      // One wheel-down, a beat later: a QUIET Claude Code answers Ctrl+End
+      // from scrollback with a BLANK frame and paints nothing further until
+      // input or output arrives (proven shared-state - the desktop showed the
+      // same black screen). At the bottom the report is a scroll no-op, but it
+      // is INPUT, which is exactly what makes the TUI paint - the automated
+      // version of the user's own "scroll 1px" cure. A single report cannot
+      // mis-split.
+      setTimeout(function () {
+        if (!terminal || scrollMechanism() !== 'mouse') return;
+        jumpNudgeCount += 1;
+        var column = Math.max(1, Math.ceil(terminal.cols / 2));
+        var row = Math.max(1, Math.ceil(terminal.rows / 2));
+        postToHost({ type: 'input', data: ESCAPE + '[<65;' + column + ';' + row + 'M' });
+      }, JUMP_RENDER_NUDGE_DELAY_MS);
+    }
   }
 
   // Ported from the desktop renderer's terminal-webgl.ts. xterm's WebGL renderer
@@ -1251,6 +1278,9 @@ const bridgeGlue = `
           lastScrollRoundTripMs = Date.now() - lastScrollInputAt;
           lastScrollInputAt = null;
         }
+        if (lastJumpAt !== null && lastJumpFirstWriteMs === null) {
+          lastJumpFirstWriteMs = Date.now() - lastJumpAt;
+        }
         terminal.write(message.data, afterWriteFlushed);
         cleanFeedWrite(message.data);
       }
@@ -1363,6 +1393,12 @@ const bridgeGlue = `
   // repaint once flushed. Counted for the probe.
   var pendingJumpRepaint = false;
   var jumpRepaintCount = 0;
+  // Jump timeline for the probe: when the jump was sent, how long until its
+  // redraw came back (null = nothing arrived, the blank-frame case), and how
+  // many render nudges went out.
+  var lastJumpAt = null;
+  var lastJumpFirstWriteMs = null;
+  var jumpNudgeCount = 0;
 
   /**
    * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
@@ -1459,6 +1495,9 @@ const bridgeGlue = `
       initCounts: JSON.parse(JSON.stringify(initCounts)),
       netHistoryUnits: netHistoryUnits,
       jumpRepaintCount: jumpRepaintCount,
+      lastJumpAt: lastJumpAt,
+      lastJumpFirstWriteMs: lastJumpFirstWriteMs,
+      jumpNudgeCount: jumpNudgeCount,
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
     };
   }
