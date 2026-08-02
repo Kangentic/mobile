@@ -186,17 +186,39 @@ Consequences:
   and the page already tracks `lastAppCursorMode` so it knows whether to emit `ESC[A` or
   `ESCOA`. Tapping `↑` should already scroll history today (unverified on device).
 
-**Do not synthesize wheel events.** That was an earlier proposal, rejected after reading the
-bundle: the alt-buffer handler emits exactly ONE arrow per wheel event with no loop, so N wheel
-events would become N separate `triggerDataEvent` calls and therefore N relay messages. Wrong
-shape for a phone on cellular.
+**Shipped and verified on a Pixel 10 (2026-08-02, commit `c3a8e77`).** Both directions scroll,
+the input box stays empty, and no "sending arrow keys" warning appears.
 
-Proposed fix instead, branching on `terminal.buffer.active.type`:
+Two earlier attempts failed on hardware while passing their tests. Recorded so neither is
+retried:
 
-- **Alternate buffer**: build the arrow sequence repeated N times as a single string and send it
-  as **one write**. The page already tracks `lastAppCursorMode`, so it knows `ESC[A` vs `ESCOA`.
-  One relay round trip per gesture rather than per line.
-- **Normal buffer**: `terminal.scrollLines()` locally. Zero network.
+1. **Arrow keys.** Claude Code reads them as input-history navigation, so a drag recalled the
+   previous message into the composer. The agent even says so on screen: *"Scroll wheel is
+   sending arrow keys - use PgUp/PgDn to scroll"*.
+2. **Arrows via a synthesized wheel.** Same destination, because xterm's alt-buffer branch
+   converts an unconsumed wheel straight back into those arrows.
+
+The mistake behind both was reading only the FIRST branch of xterm's alt-buffer wheel handler.
+The whole thing is:
+
+```js
+if (!buffer.hasScrollback) {
+  if (coreMouseService.consumeWheelEvent(...) === 0) return cancel();   // mouse report wins
+  ... else emit ESC [ A / ESC [ B                                        // fallback only
+}
+```
+
+So the working design picks the mechanism the buffer and mode actually allow, preferring the
+smooth one:
+
+| Mechanism | When | Granularity |
+| --- | --- | --- |
+| `viewport` | normal buffer, real scrollback | line, local, no network |
+| `wheel` | alt buffer + mouse tracking | line; xterm encodes the mouse report, same as a desktop wheel |
+| `page` | alt buffer, no tracking | page (PgUp/PgDn), steppier, fallback only |
+
+The drag unit follows the mechanism, so content tracks the hand roughly 1:1 either way. A burst
+is always posted as ONE write, never one message per unit.
 
 When the user has zoomed in far enough that the grid overflows vertically, drag pans first and
 chains into history scrolling at the top edge (standard overscroll).
