@@ -268,9 +268,27 @@ const bridgeGlue = `
    */
   function scrollMechanism() {
     if (!terminal) return 'page';
-    if (terminal.buffer.active.type !== 'alternate') return 'viewport';
+    // MOUSE REPORTING IS THE AUTHORITY, not the buffer type.
+    //
+    // This mirror's buffer type is an artifact of where the replayed seed
+    // happened to start, not a fact about the remote app. The phone's feed is a
+    // RING: it holds a tail (measured live at 124KB of a 626KB desktop
+    // scrollback), so the alt-screen enter that the TUI emitted once at startup
+    // is long evicted. Every re-init after that - a tab switch, a session swap,
+    // returning from the background - replays a stream that begins mid-frame,
+    // and xterm renders it into the NORMAL buffer while the desktop PTY is
+    // still in the alternate one. Measured live: desktop inAltScreen true,
+    // phone bufferType 'normal', mouseTrackingMode 'any' on both.
+    //
+    // Deriving the mechanism from the buffer then picked 'viewport', which
+    // scrolls LOCALLY through a buffer that has no scrollback: nothing moved and
+    // nothing was sent, so history scrolling went completely silent and stayed
+    // silent. Asking whether the app wants mouse reports answers the question
+    // that actually matters, and is true in either buffer.
     var mouseMode = terminal.modes ? terminal.modes.mouseTrackingMode : null;
-    return mouseMode && mouseMode !== 'none' ? 'mouse' : 'page';
+    if (mouseMode && mouseMode !== 'none') return 'mouse';
+    if (terminal.buffer.active.type !== 'alternate') return 'viewport';
+    return 'page';
   }
 
   /**

@@ -128,7 +128,8 @@ node scripts/mobileInspect.mjs tap <x> <y>                 # adb input tap
 node scripts/mobileInspect.mjs text "<string>"             # adb input text (spaces handled)
 node scripts/mobileInspect.mjs key <ANDROID_KEYCODE>       # adb input keyevent
 node scripts/mobileInspect.mjs logcat [--lines n] [--tag t]  # dumped ReactNativeJS log tail
-node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route>
+node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route|pairing|terminal>
+node scripts/mobileInspect.mjs term <state|eval|font|refit|scroll|dragunits|swipe> [...]
 node scripts/mobileInspect.mjs serve                       # long-lived server, logs app hellos
 node scripts/mobileInspect.mjs relaunch                    # force-stop + launch, VERIFIED foregrounded
 ```
@@ -148,13 +149,46 @@ Production bundles never contain the bridge: the boot site is `__DEV__`-and-env 
 module loads via dynamic import, the same stripping arrangement as the mock desktop. Wire
 shapes live in `src/devsupport/inspectProtocol.ts`; the script mirrors them by hand.
 
-When the TERMINAL looks wrong but every RN-side probe says the state is fine, go one layer
-deeper: `node scripts/webviewEval.mjs "<expression>"` evaluates JavaScript inside the terminal
-WebView itself over the Chrome DevTools Protocol (the dev build exposes a
-`webview_devtools_remote` socket; the script discovers and forwards it). Measuring
-`.xterm-screen` geometry against the on-screen pixels this way is how the GPU
-`MAX_TEXTURE_SIZE` canvas clamp was diagnosed - the layout was correct and only the painted
-scale was wrong, which no RN-side probe could see.
+### The terminal harness (`term`)
+
+When the TERMINAL looks wrong but every RN-side probe says the state is fine, the numbers that
+decide its behaviour are all inside the WebView. `term` reads them and drives it:
+
+```
+node scripts/mobileInspect.mjs term state          # the probe, prefixed with a freshness verdict
+node scripts/mobileInspect.mjs term eval "<expr>"  # anything, evaluated in the page
+node scripts/mobileInspect.mjs term font <px>      # exactly what a pinch does
+node scripts/mobileInspect.mjs term refit          # exactly what the reset button does
+node scripts/mobileInspect.mjs term scroll <units> # a raw history burst, skipping the gesture
+node scripts/mobileInspect.mjs term dragunits <px> # what a drag of N px WOULD compute
+node scripts/mobileInspect.mjs term swipe <dy> [ms]  # a real one-finger drag via adb
+```
+
+`font` is the one that matters most: pinch needs multi-touch, `adb` cannot synthesize it, so
+before this every zoom test needed a person holding the phone. `swipe` drives real
+MotionEvents (use a long duration - a fast swipe delivers too few move samples for the drag
+handler to fire, which reads as "scrolling is broken" when it merely had nothing to consume).
+
+The probe reports geometry, `lineHeight`, buffer type, the mouse tracking mode AND encoding,
+which exit the last gesture took, and the PTY write attempt/failure counts. That last pair
+closes a real blind spot: `writeTerminal` failures are swallowed at the call site, so a write
+that silently stopped reaching the desktop used to look identical to a gesture that never
+fired.
+
+**Read the freshness verdict.** `xterm.html` is a Metro asset cached by content hash and
+untouched by Fast Refresh, so the device can serve a stale page against a fresh bundle - which
+looks exactly like a fix that did not work, and produced three false negatives in one session.
+`buildXtermHtml.mjs` stamps a build id into both the page and `src/terminal/xtermBuildId.ts`;
+`term state` compares them, and every other `term` command refuses to act on a mismatch
+(`--force` overrides). A stale page is cleared by `relaunch`.
+
+`term` needs the inspect bridge (so, a dev build and the rig). Its ground-truth companion needs
+no app cooperation at all: `node scripts/webviewEval.mjs "<expression>"` evaluates JavaScript
+inside the WebView over the Chrome DevTools Protocol (the dev build exposes a
+`webview_devtools_remote` socket; the script discovers and forwards it). Reach for it when the
+bridge itself is suspect, or when the JS bundle is too broken to answer - it is how the GPU
+`MAX_TEXTURE_SIZE` canvas clamp was diagnosed. Both can call `window.__kangenticTerminal`,
+which is where the page's own state is exposed.
 
 ## Store listing screenshots
 
