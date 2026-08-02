@@ -493,6 +493,19 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
      throttles those event posts. The lint cannot see that .onUpdate/.onEnd are event handlers. */
   const pinchGesture = Gesture.Pinch()
     .runOnJS(true)
+    // The WebView cannot tell reliably that a pinch is happening: once this
+    // gesture claims the touches, the page can stop receiving touchend for a
+    // finger and counts it as still down forever, so its own touch list shows a
+    // phantom second finger and every later one-finger drag reads as
+    // multi-touch. Measured live at 15 touchstarts against 13 touchends, with
+    // history scrolling dead until the terminal was rebuilt. This layer owns the
+    // gesture, so it is the one that can say.
+    .onBegin(() => {
+      postToTerminal({ type: 'pinch', active: true });
+    })
+    .onFinalize(() => {
+      postToTerminal({ type: 'pinch', active: false });
+    })
     .onUpdate((pinchEvent) => {
       const nextFontSize = clampTerminalFontSize(Math.round(pinchBaseFontSizeRef.current * pinchEvent.scale));
       if (nextFontSize === fontSizePxRef.current) return;

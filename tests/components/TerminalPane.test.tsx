@@ -39,11 +39,17 @@ jest.mock('expo-asset', () => ({
 // The pinch gesture is device-only behavior; a chainable stub keeps the
 // component renderable while the real zoom is covered by the E2E checklist.
 jest.mock('react-native-gesture-handler', () => {
+  // A Proxy rather than a fixed method list: the builder is chainable by
+  // design, so enumerating the methods in use means every new one added to the
+  // component fails here as "onX is not a function" rather than as anything
+  // resembling the change that caused it.
   const mockChainablePinch = (): Record<string, () => unknown> => {
-    const gestureStub: Record<string, () => unknown> = {};
-    for (const methodName of ['runOnJS', 'onStart', 'onUpdate', 'onEnd']) {
-      gestureStub[methodName] = () => gestureStub;
-    }
+    const gestureStub = new Proxy(
+      {},
+      {
+        get: () => () => gestureStub,
+      },
+    ) as Record<string, () => unknown>;
     return gestureStub;
   };
   return {
