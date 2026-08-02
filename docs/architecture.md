@@ -197,20 +197,18 @@ under `scripts/xterm-page/`, CSP-locked to
 inline-only), fed the scrollback snapshot plus live PTY chunks over a small postMessage bridge
 (`src/terminal/terminalBridge.ts`). The desktop reports its PTY grid (`ptyDimensions` on the
 snapshot, `terminal-resize` events on change), so the phone renders at the exact grid the bytes
-were laid out for instead of inferring a width. It is a **faithful read-only mirror** whenever a
-desktop surface holds the terminal: it renders that grid 1:1 with horizontal pan,
-follow-the-cursor and pinch-zoom, and sizes the font so the grid's ROWS fill the phone's height
-(a wider-than-screen grid then overflows and pans). A grid a desktop reader is looking at is
-never reshaped by the phone; typed input is the only thing sent there. The one exception
-(decision change 2026-08-02; `docs/terminal-ownership-design.md`) is a session the desktop has
-PARKED at its resting grid - no desktop surface shows it - where the phone requests its own
-measured full-portrait grid through the `interactive-terminal` verb's `resize` action and gives
-it back with `release-size` on screen close, app background, or any desktop-shaped grid arriving
-(the desktop always wins, and the release is what lets the desktop re-park). The decision lives
-in the pure reducer `src/terminal/gridHold.ts`, keyed on the exact park sentinel (120x30, coupled
-to the desktop's spawn defaults); `src/channel/verbClient.ts` carries all three actions. The
-page computes the preferred grid from MEASURED cell metrics after each settled fit and posts it
-as `preferred-grid` (`scripts/xterm-page/heightFit.js`). A pre-0.4.0 desktop that reports
+were laid out for instead of inferring a width. It is a **faithful read-only mirror**: it renders
+that grid 1:1 with horizontal pan, follow-the-cursor and pinch-zoom, and sizes the font so the
+grid's ROWS fill the phone's height (a wider-than-screen grid then overflows and pans). It
+**never resizes the desktop PTY** - a shared session must not be reshaped by the phone, so the
+only thing sent upstream is typed input. The protocol carries `resize` and `release-size` actions
+on the `interactive-terminal` verb, but they exist for the desktop: `src/channel/verbClient.ts`
+exposes `write` alone, and nothing in `src/` sends the other two. (A phone-requested grid for
+desktop-parked sessions was built, verified live end to end, and removed the same day: the
+phone-fitted narrow grid read WORSE than the desktop's own layout, whose rules and boxes are
+drawn for a wide frame - `docs/terminal-ownership-design.md` records the full arc. The durable
+fix is desktop-side: unwatched sessions rest at a detail-shaped 210x48 grid, so the mirror is
+identical whether a desktop surface shows the session or not.) A pre-0.4.0 desktop that reports
 no grid falls back to inferring the column count from the scrollback. Arrow keys track the
 terminal's DECCKM mode (CSI vs SS3); the quick-key bar (Esc / Tab / arrows / Enter / Ctrl-C /
 slash) plus a text input row write through `interactive-terminal`.

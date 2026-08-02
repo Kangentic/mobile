@@ -33,7 +33,6 @@
       }
       centerGridVertically(screenHeight);
       followCursorVertically(true);
-      reportPreferredGrid();
       return;
     }
     var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
@@ -75,46 +74,11 @@
       // grid never overflows mid-fit, which is why the first verification
       // pass missed it.
       followCursorVertically(true);
-      reportPreferredGrid();
       return;
     }
     requestAnimationFrame(function () {
       fitGridHeightToViewport(passesLeft - 1, stretchLocked, generation);
     });
-  }
-
-  // The grid that would fill THIS phone's portrait viewport with readable
-  // glyphs, from the settled fit's MEASURED cell metrics (the CELL_*_RATIO
-  // constants are guesses; the painted grid is truth), scaled linearly to
-  // the target font. The line-height stretch is divided back out: it is a
-  // fit artifact of the CURRENT grid, and a granted grid starts at line
-  // height 1. Posted after every settled fit, deduped; the host acts on it
-  // only when the desktop has parked the session (src/terminal/gridHold.ts).
-  function reportPreferredGrid() {
-    if (!terminal || terminal.cols < 1 || terminal.rows < 1) return;
-    if (!(currentFontSizePx > 0)) return;
-    var screen = document.querySelector('.xterm-screen');
-    if (!screen) return;
-    var rect = screen.getBoundingClientRect();
-    if (!(rect.width > 0) || !(rect.height > 0)) return;
-    var scale = PREFERRED_GRID_FONT_PX / currentFontSizePx;
-    var cellWidth = (rect.width / terminal.cols) * scale;
-    var lineHeight = terminal.options.lineHeight || 1;
-    var cellHeight = (rect.height / terminal.rows / lineHeight) * scale;
-    if (!(cellWidth > 0) || !(cellHeight > 0)) return;
-    var preferredCols = Math.floor(window.innerWidth / cellWidth);
-    var preferredRows = Math.floor((window.innerHeight - HEIGHT_FIT_BOTTOM_CLEARANCE_PX) / cellHeight);
-    preferredCols = Math.max(PREFERRED_GRID_MIN_COLS, Math.min(PREFERRED_GRID_MAX_COLS, preferredCols));
-    preferredRows = Math.max(PREFERRED_GRID_MIN_ROWS, Math.min(PREFERRED_GRID_MAX_ROWS, preferredRows));
-    if (
-      lastReportedPreferredGrid &&
-      lastReportedPreferredGrid.cols === preferredCols &&
-      lastReportedPreferredGrid.rows === preferredRows
-    ) {
-      return;
-    }
-    lastReportedPreferredGrid = { cols: preferredCols, rows: preferredRows };
-    postToHost({ type: 'preferred-grid', cols: preferredCols, rows: preferredRows });
   }
 
   // Height the fit cannot reach: a SHORT desktop grid (the desktop parks a

@@ -50,35 +50,34 @@ jumps whenever a desktop window changes.
 >
 > The sections below are preserved as the design record, not as the plan.
 
-> **ADDENDUM (2026-08-02, later the same day): the PARKED case met the reopening bar - the
-> narrow resize path is BUILT; ownership stays shelved.**
+> **ADDENDUM (2026-08-02, evening): the narrow resize path was BUILT, verified live, and
+> REMOVED the same day - the mirror wins everywhere, and the fix moved to the desktop.**
 >
-> With the desktop's task detail closed, the resting park leaves a session at 120x30, and the
-> mirror of that grid fills a phone's portrait height at roughly a third of its width. The
-> user named the criterion directly: "the number one consideration here is that on mobile, it
-> utilizes the full portrait mode height of the terminal so the user can see history - we also
-> need to make sure this works for all phone types/sizes." Only a phone-computed grid
-> guarantees that by construction, so the parked case is exactly "a real reading task the
-> mirror + zoom demonstrably cannot serve" - for the PARKED grid only.
+> The parked case (desktop rests an unwatched session at a small grid; the mirror of it filled
+> a phone's height at a fraction of its width) briefly met the reopening bar. The full narrow
+> slice was implemented and verified end to end on the real desktop over the hosted relay:
+> page-measured preferred grid, a pure hold reducer keyed on the exact park sentinel,
+> request/hold/desktop-takeover/release/re-park all observed live (mobile commit 5434967,
+> reverted by the commit carrying this addendum).
 >
-> What shipped is the narrow slice, not the ownership machinery this doc was about:
+> Then the A/B settled it the other way. The phone-fitted 49x37 grid was judged LESS usable
+> than the desktop-sized mirror in real use: Claude Code draws its rules and boxes for a wide
+> frame, and at ~49 cols they dominate every line while the text wraps ("stuffy"). The
+> desktop-sized view carries far more context, and pan/zoom - or simply holding the phone
+> closer - spends that density well.
 >
-> - The phone requests its measured full-portrait grid ONLY when the desktop reports the park
->   sentinel (120x30, coupled to the desktop's spawn defaults). Any desktop surface holding
->   the terminal keeps the untouched mirror model.
-> - No arbiter is needed because the park sentinel IS the arbitration: park dims mean no
->   desktop surface is showing the session, and any other dims arriving mean the desktop took
->   it - the phone reverts to the mirror AND releases, which is load-bearing (an unreleased
->   guard blocks the desktop's next park, and a blocked park would strand the phone mirroring
->   forever with no cue to re-request).
-> - The decision is a pure reducer, `src/terminal/gridHold.ts`, driven from TerminalPane; the
->   page reports `preferred-grid` from measured cell metrics after each settled fit; the
->   desktop side gained the park-vs-restore fixes recorded in the kangentic repo
->   (`docs/session-lifecycle.md`, the resting-grid section) - including the rule that an
->   unpaired desktop never parks at all.
+> The durable fix is DESKTOP-side and one constant deep: the resting park now targets a
+> detail-shaped grid (210x48, `RESTING_GRID_COLS/ROWS` in the kangentic repo's
+> session-manager.ts) instead of the 120x30 spawn default, so the phone's mirror is identical
+> whether a desktop surface shows the session or not. The phone sends keystrokes only, again,
+> and the whole request machinery is deleted rather than dormant. The `resize`/`release-size`
+> actions remain in the protocol, granted and unused, and the desktop's size guard remains
+> implemented and tested; commit 5434967 holds the full phone-side implementation should a
+> case ever arise that the roomier resting grid does not cover.
 >
-> Everything the first direction change dropped (DetailHost 'mobile', mirrored view + Resume
-> Control, the column setting, portrait lock) stays dropped.
+> Lesson recorded for the next reopening debate: "fills the screen" and "reads well" are
+> different properties. The TUI's own layout is tuned for wide frames, so the readable phone
+> view is the desktop's frame made dense, not a narrow frame made native.
 
 The phone **takes ownership of the terminal** and requests its own grid, rather than mirroring
 whatever the desktop left behind. Ownership is mutually exclusive and arbitrated in main,
