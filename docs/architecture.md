@@ -103,14 +103,16 @@ decides *what* it may do:
 | `interactive-terminal` | Raw keystroke write to the session PTY (full terminal parity) |
 | `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...) |
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
-| `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (in the DEFAULT pairing grant: it only lets the desktop send the device ciphertext) |
+| `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
 is being approved, and the desktop enforces that the response binds to a specific outstanding
 prompt id (`${sessionId}:${toolUseId}`, also covering `AskUserQuestion`/`ExitPlanMode` pauses,
-which ride the same permission machinery). `interactive-terminal` and `board-tool-write` are
-explicit-grant-only; the default pairing grant is read-only. The `board-tool-*` surface is NOT
+which ride the same permission machinery). The default pairing grant is ALL TEN verbs
+(`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts`): pairing proves
+possession of both devices, so pairing is the approval, and the desktop's Mobile Devices
+settings narrow a device per-verb after the fact. The `board-tool-*` surface is NOT
 MCP: the `tool` name is the desktop's internal command-registry key, dispatched as a direct
 function call against a hand-classified allowlist (raw-SQL and code-execution tools are
 excluded desktop-side, and the protocol package's `BOARD_TOOL_READ_NAMES`/

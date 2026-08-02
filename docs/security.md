@@ -116,11 +116,13 @@ This follows the lesson of Chrome Remote Desktop and VS Code tunnels, which are 
 but capability-unscoped, and of the SSH forced-command pattern, which shows that a filter on an
 otherwise-general command channel is the wrong shape.
 
-The default pairing grant is the read-only four (`read-stream`, `read-board`, `read-diff`,
-`board-tool-read`) plus `register-push`, which only lets the desktop send this device encrypted
-notifications and carries no read or write authority of its own; every write/control verb
-(`send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
-`board-tool-write`) requires an explicit per-verb grant in the desktop's Mobile Devices settings. `interactive-terminal` is deliberately
+The default pairing grant is **all ten verbs** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's
+`pairing-service.ts` spreads `CAPABILITY_VERBS` whole). This is deliberate: the pairing ceremony
+proves possession of both devices, so pairing is the approval, and the per-verb allowlist in the
+desktop's Mobile Devices settings exists to NARROW a device after the fact rather than as a
+default-deny gate. The load-bearing guarantee is the previous paragraph's - the verbs a grant
+can contain are the ten above, with no shell, file, or arbitrary-command verb to grant.
+`interactive-terminal` is deliberately
 raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
 already running, never a new shell. Its resize/release actions (the phone sizing that PTY to the
 phone screen) ride the same grant rather than a new verb: a device already trusted to type raw
