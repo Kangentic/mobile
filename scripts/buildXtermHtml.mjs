@@ -81,14 +81,18 @@ const bridgeGlue = `
   // grid underneath the one that replaced it (a keyboard open fires several
   // viewport changes in a row, and two live loops would each step the font).
   var heightFitGeneration = 0;
-  // Lines one drag STEP (a single touchmove) may scroll. Bounds the payload of
-  // a hard fling: in the alt buffer every line is one arrow sequence inside the
-  // batched write, so an uncapped delta would post an arbitrarily long string.
-  var MAX_SCROLL_LINES_PER_STEP = 12;
+  // Scroll units one drag STEP (a single touchmove) may cover. Bounds the
+  // payload of a hard fling: every unit is one key sequence inside the batched
+  // write, so an uncapped delta would post an arbitrarily long string.
+  var MAX_SCROLL_UNITS_PER_STEP = 12;
   // Built rather than escaped: this glue lives inside a template literal in
   // scripts/buildXtermHtml.mjs, where a backslash escape would be consumed by
   // the generator instead of reaching the page.
   var ESCAPE = String.fromCharCode(27);
+  // Non-null only while a synthetic wheel burst is in flight (see
+  // scrollHistoryByUnits): onData banks here instead of posting, so N notches
+  // cost ONE relay message rather than N.
+  var wheelBurstData = null;
   // Monospace cell size relative to font size (Menlo/Consolas ~0.6 wide, ~1.2
   // tall); good enough for the fit-to-screen guess.
   var CELL_WIDTH_RATIO = 0.6;
@@ -204,56 +208,99 @@ const bridgeGlue = `
   //
   // A fullscreen TUI (Claude Code under /tui fullscreen) lives in the ALTERNATE
   // buffer, which by spec has no scrollback at all - on the phone or on the
-  // desktop. The desktop still scrolls because xterm turns a mouse WHEEL into
-  // arrow keys the AGENT acts on, redrawing itself. A touch drag fires no wheel
-  // event, so the phone sent nothing and history was simply unreachable.
+  // desktop. The desktop still scrolls because a mouse WHEEL reaches the agent,
+  // which scrolls itself. A touch drag fires no wheel event, so the phone sent
+  // nothing and history was simply unreachable.
   //
-  // Deliberately NOT fixed by synthesizing WheelEvents: xterm's alt-buffer
-  // handler emits exactly ONE arrow per wheel event with no loop, so N lines
-  // would become N separate data events and therefore N relay messages. For a
-  // phone on cellular that is the wrong shape. One batched write per step.
+  // The alt buffer scrolls by PAGE KEYS, not by arrows and not by a wheel.
+  // Claude Code says so itself, on screen, when it sees the wrong one:
+  //
+  //   "Scroll wheel is sending arrow keys - use PgUp/PgDn to scroll"
+  //
+  // Two earlier attempts got this wrong and are recorded so they are not
+  // retried. Sending ARROWS scrolls nothing: the app reads them as input
+  // history, so a drag recalled the previous message into the composer
+  // (observed on a Pixel 10). Synthesizing a WHEEL lands in the same place,
+  // because xterm's alt-buffer branch converts an unconsumed wheel straight
+  // back into those same arrows.
+  //
+  // So the alt buffer moves a PAGE at a time. That is the app's own
+  // granularity, not a choice available to us. The normal buffer still scrolls
+  // by line, locally, because there the scrollback is real.
+  //
+  // The one thing we own either way is PAYLOAD SHAPE: a burst becomes ONE
+  // write, never one per unit.
 
   /**
-   * Finger travel converted to whole lines, capped per step. Negative scrolls
-   * toward history. Sub-line remainders return 0 so the caller can leave the
-   * anchor alone and let a slow drag accumulate.
+   * Finger travel converted to whole scroll UNITS, capped per step. Negative
+   * scrolls toward history. A unit is one page in the alt buffer and one line
+   * in the normal buffer, so the caller passes the matching unit height.
+   * Sub-unit remainders return 0 so the caller can leave the anchor alone and
+   * let a slow drag accumulate rather than stall.
    */
-  function dragToScrollLines(deltaPx, cellHeightPx) {
-    if (!(cellHeightPx > 0)) return 0;
-    var lines = Math.trunc(deltaPx / cellHeightPx);
-    return Math.max(-MAX_SCROLL_LINES_PER_STEP, Math.min(MAX_SCROLL_LINES_PER_STEP, lines));
+  function dragToScrollUnits(deltaPx, unitHeightPx) {
+    if (!(unitHeightPx > 0)) return 0;
+    var units = Math.trunc(deltaPx / unitHeightPx);
+    return Math.max(-MAX_SCROLL_UNITS_PER_STEP, Math.min(MAX_SCROLL_UNITS_PER_STEP, units));
   }
 
   /**
-   * The batched arrow sequence for a line count (negative = toward history),
-   * the same bytes xterm's own alt-buffer wheel handler emits one notch at a
-   * time. The O vs [ introducer follows the application-cursor mode the page
-   * already tracks, so the two can never disagree.
+   * Which of the three scroll mechanisms this buffer/mode combination allows.
+   *
+   * 'viewport' - normal buffer: real scrollback, moved locally, LINE granular.
+   * 'wheel'    - alt buffer with mouse tracking on: xterm encodes a mouse
+   *              report and the agent scrolls itself, LINE granular. This is
+   *              exactly what a desktop wheel does, so it is the smooth one and
+   *              the one to prefer.
+   * 'page'     - alt buffer with no mouse tracking: PgUp/PgDn, the control the
+   *              app names on screen. PAGE granular, so noticeably steppier;
+   *              only a fallback.
    */
-  function arrowScrollSequence(lines) {
-    if (!lines) return '';
-    var one = ESCAPE + (lastAppCursorMode ? 'O' : '[') + (lines < 0 ? 'A' : 'B');
-    var sequence = '';
-    for (var index = 0; index < Math.abs(lines); index += 1) sequence += one;
-    return sequence;
+  function scrollMechanism() {
+    if (!terminal) return 'page';
+    if (terminal.buffer.active.type !== 'alternate') return 'viewport';
+    var mouseMode = terminal.modes ? terminal.modes.mouseTrackingMode : null;
+    return mouseMode && mouseMode !== 'none' ? 'wheel' : 'page';
   }
 
   /**
-   * Move through history by that many lines, choosing whichever mechanism the
-   * active buffer actually allows.
-   * The alt buffer holds exactly one screen, so the only way back is to ask the
-   * agent to redraw; the normal buffer has real scrollback, so move the
-   * viewport locally and send NOTHING (no round trip, and no keystrokes the
-   * agent could misread as input).
+   * Move through history by that many units (negative = toward older output).
+   * Whatever a burst produces is posted as ONE write, never one per unit.
    */
-  function scrollHistoryByLines(lines) {
-    if (!terminal || !lines) return;
-    if (terminal.buffer.active.type === 'alternate') {
-      var sequence = arrowScrollSequence(lines);
-      if (sequence) postToHost({ type: 'input', data: sequence });
+  function scrollHistoryByUnits(units, mechanism) {
+    if (!terminal || !units) return;
+    if (mechanism === 'viewport') {
+      terminal.scrollLines(units);
       return;
     }
-    terminal.scrollLines(lines);
+    if (mechanism === 'wheel') {
+      var screen = document.querySelector('.xterm-screen');
+      if (!screen) return;
+      var bounds = screen.getBoundingClientRect();
+      var notch = bounds.height / terminal.rows;
+      // Let xterm encode it: the mouse protocol has coordinates and modifier
+      // rules we have no business reimplementing, and it already knows the
+      // active mode. Bank what it emits so the burst is a single message.
+      wheelBurstData = '';
+      for (var wheelIndex = 0; wheelIndex < Math.abs(units); wheelIndex += 1) {
+        (terminal.element || screen).dispatchEvent(new WheelEvent('wheel', {
+          deltaY: units < 0 ? -notch : notch,
+          deltaMode: 0,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }
+      var burst = wheelBurstData;
+      wheelBurstData = null;
+      if (burst) postToHost({ type: 'input', data: burst });
+      return;
+    }
+    var key = ESCAPE + (units < 0 ? '[5~' : '[6~');
+    var pages = '';
+    for (var pageIndex = 0; pageIndex < Math.abs(units); pageIndex += 1) pages += key;
+    postToHost({ type: 'input', data: pages });
   }
 
   /**
@@ -282,12 +329,17 @@ const bridgeGlue = `
       historyDragAnchorY = currentY;
       return;
     }
-    var cellHeight = screen.getBoundingClientRect().height / terminal.rows;
-    // A finger moving DOWN reveals OLDER content, which is negative lines.
-    var lines = dragToScrollLines(-dragged, cellHeight);
-    if (!lines) return;
-    historyDragAnchorY -= lines * cellHeight;
-    scrollHistoryByLines(lines);
+    var gridHeight = screen.getBoundingClientRect().height;
+    var mechanism = scrollMechanism();
+    // The unit follows the mechanism, so the content tracks the hand roughly
+    // 1:1 either way: a line of travel per line scrolled, or a screenful of
+    // travel per page when only the coarse control is available.
+    var unitHeight = mechanism === 'page' ? gridHeight : gridHeight / terminal.rows;
+    // A finger moving DOWN reveals OLDER content, which is negative units.
+    var units = dragToScrollUnits(-dragged, unitHeight);
+    if (!units) return;
+    historyDragAnchorY -= units * unitHeight;
+    scrollHistoryByUnits(units, mechanism);
   }
 
   // Ported from the desktop renderer's terminal-webgl.ts. xterm's WebGL renderer
@@ -497,6 +549,11 @@ const bridgeGlue = `
     // interactive-terminal verb). Typing also re-arms follow-the-cursor.
     terminal.onData(function (data) {
       manualPanUntil = 0;
+      // Mid-burst: bank it. scrollHistoryByUnits posts the whole burst once.
+      if (wheelBurstData !== null) {
+        wheelBurstData += data;
+        return;
+      }
       postToHost({ type: 'input', data: data });
     });
     if (initMessage.scrollback) {
