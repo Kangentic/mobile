@@ -147,11 +147,6 @@ describe('generated xterm.html', () => {
     fontSizePx: number;
     /** Renderer cell height per font pixel, before the line-height stretch. */
     cellHeightRatio: number;
-    /** Grid cols + rendered cell width per font pixel; defaulted because most
-     *  fit tests exercise the vertical axis only. */
-    cols?: number;
-    cellWidthRatio?: number;
-    viewportWidth?: number;
   }): {
     fit: (passesLeft: number, stretchLocked: boolean, generation: number) => void;
     screenHeight: () => number;
@@ -159,29 +154,21 @@ describe('generated xterm.html', () => {
     followed: () => number;
     paddingTop: () => string;
     fontSizePosts: () => number[];
-    preferredGridPosts: () => { cols: number; rows: number }[];
   } {
-    // The whole module: the fit, the centring, the preferred-grid report,
-    // and the texture-cap cluster. Its load-time GPU probe self-guards (its
-    // own try/catch keeps the conservative default when the fake document
-    // has no createElement).
+    // The whole module: the fit, the centring, and the texture-cap cluster.
+    // Its load-time GPU probe self-guards (its own try/catch keeps the
+    // conservative default when the fake document has no createElement).
     const source = pageModule('heightFit.js');
-    const cols = options.cols ?? 80;
-    const cellWidthRatio = options.cellWidthRatio ?? 0.6;
-    const terminal = { cols, rows: options.rows, options: { fontSize: options.fontSizePx, lineHeight: 1 } };
+    const terminal = { rows: options.rows, options: { fontSize: options.fontSizePx, lineHeight: 1 } };
     const screenHeight = (): number =>
       terminal.rows * Math.ceil(terminal.options.fontSize * options.cellHeightRatio * terminal.options.lineHeight);
-    const screenWidth = (): number => terminal.cols * terminal.options.fontSize * cellWidthRatio;
     const gridHost = { style: { paddingTop: '0px' } };
     const fakeDocument = {
       querySelector: (selector: string) =>
-        selector === '.xterm-screen'
-          ? { getBoundingClientRect: () => ({ height: screenHeight(), width: screenWidth() }) }
-          : null,
+        selector === '.xterm-screen' ? { getBoundingClientRect: () => ({ height: screenHeight() }) } : null,
       getElementById: (id: string) => (id === 'terminal' ? gridHost : null),
     };
     const fontSizePosts: number[] = [];
-    const preferredGridPosts: { cols: number; rows: number }[] = [];
     assertInjectionsAreAlive('heightFit.js', source, [
       'currentFontSizePx',
       'followCursorVertically',
@@ -190,12 +177,6 @@ describe('generated xterm.html', () => {
       'HEIGHT_FIT_TOLERANCE_PX',
       'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
       'MIN_AUTO_FONT_PX',
-      'PREFERRED_GRID_FONT_PX',
-      'PREFERRED_GRID_MIN_COLS',
-      'PREFERRED_GRID_MAX_COLS',
-      'PREFERRED_GRID_MIN_ROWS',
-      'PREFERRED_GRID_MAX_ROWS',
-      'lastReportedPreferredGrid',
       'postToHost',
       'requestAnimationFrame',
     ]);
@@ -210,14 +191,8 @@ describe('generated xterm.html', () => {
       'HEIGHT_FIT_TOLERANCE_PX',
       'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
       'MIN_AUTO_FONT_PX',
-      'PREFERRED_GRID_FONT_PX',
-      'PREFERRED_GRID_MIN_COLS',
-      'PREFERRED_GRID_MAX_COLS',
-      'PREFERRED_GRID_MIN_ROWS',
-      'PREFERRED_GRID_MAX_ROWS',
       'initialFontSizePx',
       `var currentFontSizePx = initialFontSizePx;
-       var lastReportedPreferredGrid = null;
        var followedAfterSettle = 0;
        function followCursorVertically(force) { followedAfterSettle += 1; }
        ${source}
@@ -230,17 +205,14 @@ describe('generated xterm.html', () => {
     };
     const built = build(
       terminal,
-      { innerHeight: options.viewportHeight, innerWidth: options.viewportWidth ?? 411 },
+      { innerHeight: options.viewportHeight },
       fakeDocument,
       // Frames run inline: each pass still measures the fake renderer AFTER
       // the previous pass wrote to it, which is the ordering that matters.
       (callback: () => void) => callback(),
-      (message: { type: string; fontSizePx?: number; cols?: number; rows?: number }) => {
+      (message: { type: string; fontSizePx?: number }) => {
         if (message.type === 'font-size' && typeof message.fontSizePx === 'number') {
           fontSizePosts.push(message.fontSizePx);
-        }
-        if (message.type === 'preferred-grid' && typeof message.cols === 'number' && typeof message.rows === 'number') {
-          preferredGridPosts.push({ cols: message.cols, rows: message.rows });
         }
       },
       1,
@@ -248,11 +220,6 @@ describe('generated xterm.html', () => {
       pageVar('HEIGHT_FIT_TOLERANCE_PX'),
       pageVar('HEIGHT_FIT_BOTTOM_CLEARANCE_PX'),
       pageVar('MIN_AUTO_FONT_PX'),
-      pageVar('PREFERRED_GRID_FONT_PX'),
-      pageVar('PREFERRED_GRID_MIN_COLS'),
-      pageVar('PREFERRED_GRID_MAX_COLS'),
-      pageVar('PREFERRED_GRID_MIN_ROWS'),
-      pageVar('PREFERRED_GRID_MAX_ROWS'),
       options.fontSizePx,
     );
     return {
@@ -262,7 +229,6 @@ describe('generated xterm.html', () => {
       followed: built.followed,
       paddingTop: () => gridHost.style.paddingTop,
       fontSizePosts: () => fontSizePosts,
-      preferredGridPosts: () => preferredGridPosts,
     };
   }
 
@@ -322,41 +288,6 @@ describe('generated xterm.html', () => {
     const slack = 624 - harness.screenHeight();
     expect(slack, 'precondition: a 14-row grid cannot fill the pane').toBeGreaterThan(100);
     expect(harness.paddingTop()).toBe(`${Math.floor(slack / 2)}px`);
-  });
-
-  /**
-   * FIT-TO-PHONE input: the preferred grid is computed from the settled
-   * fit's MEASURED cell metrics scaled to the 14px target - never from the
-   * CELL_*_RATIO guesses. Numbers derived by hand from the fake renderer:
-   * 30 rows at font 12, ratio 1.21 settles at line height 1.3 with a 19px
-   * cell (ceiled), so cellH14 = 19 / 1.3 * (14/12) = 17.05 -> 36 rows in a
-   * 622px band; 80 cols at 7.2px cells -> 8.4px at 14 -> 48 cols in 411px.
-   */
-  it('reports the measured preferred grid once per settle, deduped', () => {
-    const harness = buildHeightFit({ rows: 30, viewportHeight: 624, fontSizePx: 12, cellHeightRatio: 1.21 });
-
-    harness.fit(4, false, 1);
-    expect(harness.preferredGridPosts()).toEqual([{ cols: 48, rows: 36 }]);
-
-    // A second settle at the same geometry costs no message.
-    harness.fit(4, false, 1);
-    expect(harness.preferredGridPosts()).toHaveLength(1);
-  });
-
-  it('clamps the preferred grid to the request bounds', () => {
-    // A tiny viewport would compute fewer than the floor rows/cols a TUI
-    // needs; the request clamps rather than asking for an unusable grid.
-    const harness = buildHeightFit({
-      rows: 30,
-      viewportHeight: 240,
-      viewportWidth: 200,
-      fontSizePx: 12,
-      cellHeightRatio: 1.21,
-    });
-
-    harness.fit(4, false, 1);
-
-    expect(harness.preferredGridPosts()).toEqual([{ cols: 40, rows: 20 }]);
   });
 
   /**

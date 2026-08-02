@@ -33,12 +33,6 @@ export interface InspectTerminalHandle {
   expectedBuildId: string;
   evaluate: (expression: string) => Promise<unknown>;
   writeStats: () => InspectTerminalWriteStats;
-  /** The fit-to-phone hold machine's current state; see src/terminal/gridHold.ts. */
-  gridHold: () => {
-    phase: 'mirror' | 'requested' | 'holding';
-    preferredGrid: { cols: number; rows: number } | null;
-    requestedGrid: { cols: number; rows: number } | null;
-  };
 }
 
 let currentRoute: InspectRouteInfo | null = null;

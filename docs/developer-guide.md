@@ -156,8 +156,6 @@ decide its behaviour are all inside the WebView. `term` reads them and drives it
 
 ```
 node scripts/mobileInspect.mjs term state          # the probe, prefixed with a freshness verdict
-                                                   #   (includes gridHold: the fit-to-phone
-                                                   #   hold machine's phase and grids)
 node scripts/mobileInspect.mjs term eval "<expr>"  # anything, evaluated in the page
 node scripts/mobileInspect.mjs term font <px>      # exactly what a pinch does
 node scripts/mobileInspect.mjs term refit          # exactly what the reset button does

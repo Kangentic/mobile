@@ -19,7 +19,6 @@ import {
 } from '@kangentic/protocol';
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
-import { DESKTOP_PARK_GRID } from '@/terminal/gridHold';
 import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
 import {
@@ -1086,12 +1085,6 @@ export function createMockDesktop(): MockDesktop {
   // one build that ships images. Read from the capture so a re-record at a new
   // grid cannot leave this behind.
   let ptyDimensions = activeGrid();
-  // The paused session is the mock's PARKED session: nobody on the (mock)
-  // desktop is watching it, so it rests at the desktop park grid - which
-  // makes it the rig's way to exercise resize-when-parked end to end
-  // (src/terminal/gridHold.ts). Null = parked; non-null = the fit-to-phone
-  // grid a phone requested and still holds.
-  let pausedSessionDimensions: { cols: number; rows: number } | null = null;
   const oneShotTimers = new Set<ReturnType<typeof setTimeout>>();
   // Session-lifecycle simulation (the /respawn and /end-session magic
   // composer commands): the streaming task's CURRENT session id, mirroring
@@ -1108,19 +1101,6 @@ export function createMockDesktop(): MockDesktop {
   function emitPtyResize(): void {
     if (activeSessionId === null) return;
     emit({ kind: 'terminal-resize', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { ...ptyDimensions } });
-  }
-
-  function pausedSessionGrid(): { cols: number; rows: number } {
-    return pausedSessionDimensions ?? { ...DESKTOP_PARK_GRID };
-  }
-
-  function emitPausedPtyResize(): void {
-    emit({
-      kind: 'terminal-resize',
-      sessionId: MOCK_PAUSED_SESSION_ID,
-      taskId: MOCK_PAUSED_TASK_ID,
-      payload: pausedSessionGrid(),
-    });
   }
 
   function later(delayMs: number, action: () => void): void {
@@ -1600,8 +1580,7 @@ export function createMockDesktop(): MockDesktop {
             activity: { state: 'idle', reason: { kind: 'idle' } },
             usage: mockUsage(61_000, MOCK_MODEL_FABLE),
             awaitedPromptId: null,
-            // Parked (or phone-held): see pausedSessionDimensions.
-            ptyDimensions: pausedSessionGrid(),
+            ptyDimensions: activeGrid(),
           };
           return ok(request, pausedSnapshot as unknown as JsonValue);
         }
@@ -1781,29 +1760,16 @@ export function createMockDesktop(): MockDesktop {
       case 'interactive-terminal': {
         const payload = parseCapabilityRequestPayload('interactive-terminal', request.payload);
         // Mirrors the desktop's action union: resize holds the grid until
-        // release-size restores it. The PAUSED session restores to the
-        // desktop park grid (it is the mock's parked session); the streaming
-        // sessions restore to the grid the active capture was recorded at
-        // (activeGrid()) - the capture is the only other grid this mock
-        // reports.
+        // release-size restores the grid the active capture was recorded at
+        // (activeGrid()). There is no fixed desktop-default any more - the
+        // capture is the only source of a grid this mock reports.
         if (payload.action === 'resize') {
-          if (payload.sessionId === MOCK_PAUSED_SESSION_ID) {
-            const pausedColsChanged = payload.dimensions.cols !== pausedSessionGrid().cols;
-            pausedSessionDimensions = { cols: payload.dimensions.cols, rows: payload.dimensions.rows };
-            emitPausedPtyResize();
-            return ok(request, { resized: true, colsChanged: pausedColsChanged });
-          }
           const colsChanged = payload.dimensions.cols !== ptyDimensions.cols;
           ptyDimensions = { cols: payload.dimensions.cols, rows: payload.dimensions.rows };
           emitPtyResize();
           return ok(request, { resized: true, colsChanged });
         }
         if (payload.action === 'release-size') {
-          if (payload.sessionId === MOCK_PAUSED_SESSION_ID) {
-            pausedSessionDimensions = null;
-            emitPausedPtyResize();
-            return ok(request, { released: true });
-          }
           ptyDimensions = activeGrid();
           emitPtyResize();
           return ok(request, { released: true });

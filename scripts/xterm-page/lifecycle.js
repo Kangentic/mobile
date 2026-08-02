@@ -36,7 +36,6 @@
     // grid that replaced it.
     var gridHost = document.getElementById('terminal');
     if (gridHost) gridHost.style.paddingTop = '0px';
-    lastReportedPreferredGrid = null;
     setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
   }
 

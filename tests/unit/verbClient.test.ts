@@ -128,42 +128,12 @@ describe('VerbClient', () => {
     expect(content).toEqual({ original: 'old', modified: 'new', language: 'typescript' });
   });
 
-  it('writeInteractiveTerminal sends a write-action payload', async () => {
+  it('writeInteractiveTerminal sends a write-action payload (the phone never resizes the desktop)', async () => {
     const { verbs, requests } = await establishedHarness((request) => okResponse(request, { written: true }));
 
     await expect(verbs.writeInteractiveTerminal('sess-1', 'ls\r')).resolves.toEqual({ written: true });
     expect(requests[0].verb).toBe('interactive-terminal');
     expect(requests[0].payload).toEqual({ sessionId: 'sess-1', action: 'write', data: 'ls\r' });
-  });
-
-  /**
-   * The fit-to-phone pair (the parked case only; src/terminal/gridHold.ts
-   * owns when they fire). resize carries the dimensions object the protocol
-   * types; release carries only the action - the desktop restores its own
-   * remembered grid.
-   */
-  it('resizeInteractiveTerminal and releaseInteractiveTerminalSize send their action payloads', async () => {
-    const { verbs, requests } = await establishedHarness((request) => {
-      const payload = request.payload as { action?: string };
-      if (payload.action === 'resize') return okResponse(request, { resized: true, colsChanged: true });
-      return okResponse(request, { released: true });
-    });
-
-    await expect(verbs.resizeInteractiveTerminal('sess-1', { cols: 48, rows: 36 })).resolves.toEqual({
-      resized: true,
-      colsChanged: true,
-    });
-    expect(requests[0].payload).toEqual({ sessionId: 'sess-1', action: 'resize', dimensions: { cols: 48, rows: 36 } });
-
-    await expect(verbs.releaseInteractiveTerminalSize('sess-1')).resolves.toEqual({ released: true });
-    expect(requests[1].payload).toEqual({ sessionId: 'sess-1', action: 'release-size' });
-  });
-
-  it('resize and release reject on responses missing their result fields', async () => {
-    const { verbs } = await establishedHarness((request) => okResponse(request, { written: true }));
-
-    await expect(verbs.resizeInteractiveTerminal('sess-1', { cols: 48, rows: 36 })).rejects.toThrow(/resized/);
-    await expect(verbs.releaseInteractiveTerminalSize('sess-1')).rejects.toThrow(/released/);
   });
 
   it('write verbs send their typed payloads and parse boolean results', async () => {

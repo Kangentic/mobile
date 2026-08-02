@@ -50,7 +50,6 @@ async function buildTerminalPayload(): Promise<unknown> {
     loadedBuildId: loadedBuildId ?? null,
     buildIdMatches: loadedBuildId === terminal.expectedBuildId,
     writes: terminal.writeStats(),
-    gridHold: terminal.gridHold(),
     page,
   };
 }
