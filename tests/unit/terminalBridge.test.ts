@@ -58,10 +58,31 @@ describe('terminal -> host round-trip', () => {
   });
 
   it('round-trips modes and font-size messages', () => {
-    const modes: TerminalToHostMessage = { type: 'modes', applicationCursorKeys: true };
+    const modes: TerminalToHostMessage = {
+      type: 'modes',
+      applicationCursorKeys: true,
+      mouseTrackingMode: 'any',
+      mouseEncoding: 'SGR',
+      alternateBuffer: true,
+    };
     expect(decodeTerminalMessage(encodeTerminalMessage(modes))).toEqual(modes);
     const fontSize: TerminalToHostMessage = { type: 'font-size', fontSizePx: 7 };
     expect(decodeTerminalMessage(encodeTerminalMessage(fontSize))).toEqual(fontSize);
+  });
+
+  /**
+   * A page from an older build reports only the DECCKM flag. Dropping the whole
+   * message over the three fields it cannot know would lose the arrow-key mode
+   * as collateral, so they default instead.
+   */
+  it('defaults the sticky mode fields when an older page omits them', () => {
+    expect(decodeTerminalMessage(JSON.stringify({ type: 'modes', applicationCursorKeys: true }))).toEqual({
+      type: 'modes',
+      applicationCursorKeys: true,
+      mouseTrackingMode: 'none',
+      mouseEncoding: 'DEFAULT',
+      alternateBuffer: false,
+    });
   });
 
   it('round-trips a renderer report (webgl and dom)', () => {
