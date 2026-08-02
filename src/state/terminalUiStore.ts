@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { TerminalStickyModes } from '@/terminal/modeRestore';
 
 interface TerminalUiStoreState {
   /**
@@ -7,6 +8,14 @@ interface TerminalUiStoreState {
    * sequences instead of CSI; everything defaults to false (normal mode).
    */
   applicationCursorModeBySessionId: Record<string, boolean>;
+  /**
+   * The last sticky VT modes the WebView reported per session, replayed ahead
+   * of the scrollback on every re-init. It OUTLIVES the WebView deliberately:
+   * a terminal recreated from a ring that no longer holds the TUI's startup
+   * DECSETs cannot rediscover them, and this is the only surviving record.
+   * Cleared with the rest of the session's render state on unmount.
+   */
+  stickyModesBySessionId: Record<string, TerminalStickyModes>;
   /**
    * A one-shot request to flip the session's lens, raised by deep chat
    * content (the prompt cards' "Answer in terminal" escape hatch - the
@@ -24,6 +33,7 @@ interface TerminalUiStoreState {
    */
   focusKeyboardRequestBySessionId: Record<string, boolean>;
   setApplicationCursorMode: (sessionId: string, enabled: boolean) => void;
+  setStickyModes: (sessionId: string, modes: TerminalStickyModes) => void;
   requestSessionMode: (sessionId: string, mode: 'terminal' | 'chat', options?: { focusKeyboard?: boolean }) => void;
   consumeRequestedMode: (sessionId: string) => void;
   consumeFocusKeyboardRequest: (sessionId: string) => void;
@@ -37,6 +47,7 @@ interface TerminalUiStoreState {
  */
 export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
   applicationCursorModeBySessionId: {},
+  stickyModesBySessionId: {},
   requestedModeBySessionId: {},
   focusKeyboardRequestBySessionId: {},
 
@@ -46,6 +57,21 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
       return {
         applicationCursorModeBySessionId: { ...state.applicationCursorModeBySessionId, [sessionId]: enabled },
       };
+    }),
+
+  setStickyModes: (sessionId, modes) =>
+    set((state) => {
+      const current = state.stickyModesBySessionId[sessionId];
+      if (
+        current !== undefined &&
+        current.applicationCursorKeys === modes.applicationCursorKeys &&
+        current.mouseTrackingMode === modes.mouseTrackingMode &&
+        current.mouseEncoding === modes.mouseEncoding &&
+        current.alternateBuffer === modes.alternateBuffer
+      ) {
+        return state;
+      }
+      return { stickyModesBySessionId: { ...state.stickyModesBySessionId, [sessionId]: modes } };
     }),
 
   requestSessionMode: (sessionId, mode, options) =>
@@ -75,17 +101,21 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
   clearSession: (sessionId) =>
     set((state) => {
       const hasCursorMode = sessionId in state.applicationCursorModeBySessionId;
+      const hasStickyModes = sessionId in state.stickyModesBySessionId;
       const hasRequestedMode = sessionId in state.requestedModeBySessionId;
       const hasFocusRequest = sessionId in state.focusKeyboardRequestBySessionId;
-      if (!hasCursorMode && !hasRequestedMode && !hasFocusRequest) return state;
+      if (!hasCursorMode && !hasStickyModes && !hasRequestedMode && !hasFocusRequest) return state;
       const nextCursorModes = { ...state.applicationCursorModeBySessionId };
       delete nextCursorModes[sessionId];
+      const nextStickyModes = { ...state.stickyModesBySessionId };
+      delete nextStickyModes[sessionId];
       const nextRequestedModes = { ...state.requestedModeBySessionId };
       delete nextRequestedModes[sessionId];
       const nextFocusRequests = { ...state.focusKeyboardRequestBySessionId };
       delete nextFocusRequests[sessionId];
       return {
         applicationCursorModeBySessionId: nextCursorModes,
+        stickyModesBySessionId: nextStickyModes,
         requestedModeBySessionId: nextRequestedModes,
         focusKeyboardRequestBySessionId: nextFocusRequests,
       };

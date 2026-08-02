@@ -10,6 +10,7 @@ import {
   type HostToTerminalMessage,
 } from '@/terminal/terminalBridge';
 import { parseColsFromScrollback } from '@/terminal/liveTail';
+import { buildModeRestoreSequence } from '@/terminal/modeRestore';
 import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
 import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
@@ -265,9 +266,18 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const postInit = useCallback(() => {
     const scrollback = getBufferedData(sessionId);
     const ptyDimensions = getTerminalDimensions(sessionId);
+    // Put the terminal back into the modes the desktop's TUI set once at
+    // startup BEFORE replaying the tail. The feed is a ring, so those DECSETs
+    // are long evicted, and without this every re-init comes up in the normal
+    // buffer with mouse reporting off while the PTY is in the alternate screen
+    // with it on - which silently disables history scrolling. See
+    // src/terminal/modeRestore.ts for the measurements.
+    const modeRestore = buildModeRestoreSequence(
+      useTerminalUiStore.getState().stickyModesBySessionId[sessionId] ?? null,
+    );
     postToTerminal({
       type: 'init',
-      scrollback,
+      scrollback: modeRestore + scrollback,
       // The desktop's exact grid. When the dims have not arrived yet (e.g.
       // mid-reconnect, before the snapshot lands) infer cols from content and
       // leave rows null; the real grid arrives shortly as a 'resize'.
@@ -415,7 +425,17 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         return;
       }
       if (message.type === 'modes') {
-        useTerminalUiStore.getState().setApplicationCursorMode(sessionId, message.applicationCursorKeys);
+        const terminalUi = useTerminalUiStore.getState();
+        terminalUi.setApplicationCursorMode(sessionId, message.applicationCursorKeys);
+        // Remembered so the NEXT init can replay them. The WebView's parser is
+        // the only place these are known, and a terminal rebuilt from a ring
+        // that has evicted the TUI's startup DECSETs cannot rediscover them.
+        terminalUi.setStickyModes(sessionId, {
+          applicationCursorKeys: message.applicationCursorKeys,
+          mouseTrackingMode: message.mouseTrackingMode,
+          mouseEncoding: message.mouseEncoding,
+          alternateBuffer: message.alternateBuffer,
+        });
         return;
       }
       if (message.type === 'font-size') {

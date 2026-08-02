@@ -61,6 +61,10 @@ const bridgeGlue = `
   var knownRows = null;
   var currentFontSizePx = 12;
   var lastAppCursorMode = false;
+  // Last sticky-mode set posted to the host, so a report costs a message only
+  // when something actually flipped. Null after every (re-)init: the restored
+  // modes must be reported afresh against the new terminal.
+  var lastReportedModes = null;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
   // not fight the user's finger; auto-pan resumes after the pause.
   var MANUAL_PAN_PAUSE_MS = 4000;
@@ -200,13 +204,39 @@ const bridgeGlue = `
     }
   }
 
+  /**
+   * Report the STICKY modes whenever any of them flips.
+   *
+   * DECCKM drives the quick keys' arrow encoding. The other three exist so the
+   * host can REPLAY them: a TUI asserts its modes once at startup and never
+   * again, the phone's feed ring evicts those bytes within a few hundred KB,
+   * and every later re-init would otherwise render into a different state than
+   * the desktop PTY (see src/terminal/modeRestore.ts). This reports PARSED
+   * truth, which is why it lives here and not in a scan of the byte stream -
+   * a DECSET can arrive split across two chunks.
+   */
   function reportModesIfFlipped() {
     if (!terminal || !terminal.modes) return;
     var appCursor = terminal.modes.applicationCursorKeysMode === true;
-    if (appCursor !== lastAppCursorMode) {
-      lastAppCursorMode = appCursor;
-      postToHost({ type: 'modes', applicationCursorKeys: appCursor });
+    var next = {
+      type: 'modes',
+      applicationCursorKeys: appCursor,
+      mouseTrackingMode: terminal.modes.mouseTrackingMode || 'none',
+      mouseEncoding: coreMouseEncoding().encoding,
+      alternateBuffer: terminal.buffer.active.type === 'alternate',
+    };
+    if (
+      lastReportedModes !== null &&
+      lastReportedModes.applicationCursorKeys === next.applicationCursorKeys &&
+      lastReportedModes.mouseTrackingMode === next.mouseTrackingMode &&
+      lastReportedModes.mouseEncoding === next.mouseEncoding &&
+      lastReportedModes.alternateBuffer === next.alternateBuffer
+    ) {
+      return;
     }
+    lastReportedModes = next;
+    lastAppCursorMode = appCursor;
+    postToHost(next);
   }
 
   function afterWriteFlushed() {
@@ -564,6 +594,7 @@ const bridgeGlue = `
     // there, so this is the only guard between a wide grid and the GPU limit).
     currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
     lastAppCursorMode = false;
+    lastReportedModes = null;
     manualPanUntil = 0;
     // Every (re-)init is a fresh open - including a session swap and the
     // re-seed when the pane becomes visible again - so the frame starts at

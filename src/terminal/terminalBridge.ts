@@ -45,8 +45,23 @@ export type HostToTerminalMessage =
 export type TerminalToHostMessage =
   | { type: 'ready' }
   | { type: 'input'; data: string }
-  /** DECCKM report: arrows need SS3 (application cursor mode) instead of CSI. */
-  | { type: 'modes'; applicationCursorKeys: boolean }
+  /**
+   * The STICKY VT modes, reported whenever any of them flips. Parsed truth from
+   * the WebView's own VT parser, which is the only place they are known.
+   *
+   * `applicationCursorKeys` (DECCKM) tells the quick keys to send SS3 arrows
+   * instead of CSI. The rest exist to be REPLAYED: a TUI sets them once at
+   * startup, the phone's feed ring evicts those bytes, and every later re-init
+   * would otherwise come up in a different state than the desktop PTY. See
+   * src/terminal/modeRestore.ts.
+   */
+  | {
+      type: 'modes';
+      applicationCursorKeys: boolean;
+      mouseTrackingMode: string;
+      mouseEncoding: string;
+      alternateBuffer: boolean;
+    }
   /** The glue changed the font size autonomously (fit-to-screen zoom); keeps the host's pinch base in sync. */
   | { type: 'font-size'; fontSizePx: number }
   /** Which renderer backs the terminal: WebGL (GPU) or the DOM fallback. Observability for a degraded terminal. */
@@ -110,7 +125,16 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
     return { type: 'input', data: parsedObject.data };
   }
   if (parsedObject.type === 'modes' && typeof parsedObject.applicationCursorKeys === 'boolean') {
-    return { type: 'modes', applicationCursorKeys: parsedObject.applicationCursorKeys };
+    // The three sticky fields default rather than reject: a page from an older
+    // build reports only the DECCKM flag, and losing the arrow-key mode over a
+    // missing field would break typing to fix a scrolling bug.
+    return {
+      type: 'modes',
+      applicationCursorKeys: parsedObject.applicationCursorKeys,
+      mouseTrackingMode: typeof parsedObject.mouseTrackingMode === 'string' ? parsedObject.mouseTrackingMode : 'none',
+      mouseEncoding: typeof parsedObject.mouseEncoding === 'string' ? parsedObject.mouseEncoding : 'DEFAULT',
+      alternateBuffer: parsedObject.alternateBuffer === true,
+    };
   }
   if (parsedObject.type === 'font-size' && isFiniteNumber(parsedObject.fontSizePx)) {
     return { type: 'font-size', fontSizePx: parsedObject.fontSizePx };
