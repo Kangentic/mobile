@@ -38,25 +38,40 @@ jest.mock('expo-asset', () => ({
   },
 }));
 
-// The pinch gesture is device-only behavior; a chainable stub keeps the
-// component renderable while the real zoom is covered by the E2E checklist.
+// The real multi-touch recognizer is device-only behavior. The chainable stub
+// keeps the component renderable AND captures every callback the component
+// registers by method name, so a test can fire that callback directly and
+// assert what it posts - the pinch lifecycle (onTouchesDown/onStart/
+// onTouchesUp/onTouchesCancelled/onFinalize) is plain JS wiring around a
+// numberOfTouches threshold, testable without a real recognizer underneath it.
 jest.mock('react-native-gesture-handler', () => {
   // A Proxy rather than a fixed method list: the builder is chainable by
   // design, so enumerating the methods in use means every new one added to the
   // component fails here as "onX is not a function" rather than as anything
   // resembling the change that caused it.
-  const mockChainablePinch = (): Record<string, () => unknown> => {
+  const pinchCallbacksByMethodName: Record<string, (...callbackArguments: unknown[]) => unknown> = {};
+  const mockChainablePinch = (): Record<string, (...callbackArguments: unknown[]) => unknown> => {
     const gestureStub = new Proxy(
       {},
       {
-        get: () => () => gestureStub,
+        get: (_target, propertyName) => {
+          // A function for 'then' would make this object read as a thenable to
+          // anything that ever awaits it; hand back undefined for that and for
+          // any symbol property rather than capturing them as callbacks.
+          if (typeof propertyName !== 'string' || propertyName === 'then') return undefined;
+          return (callback: (...callbackArguments: unknown[]) => unknown) => {
+            pinchCallbacksByMethodName[propertyName] = callback;
+            return gestureStub;
+          };
+        },
       },
-    ) as Record<string, () => unknown>;
+    ) as Record<string, (...callbackArguments: unknown[]) => unknown>;
     return gestureStub;
   };
   return {
     GestureDetector: ({ children }: { children: unknown }) => children,
     Gesture: { Pinch: mockChainablePinch },
+    __pinchCallbacksByMethodName: pinchCallbacksByMethodName,
   };
 });
 
@@ -105,11 +120,21 @@ jest.mock('@/components/terminal/DirectKeyInput', () => {
 
 interface WebViewMockModule {
   __postMessageMock: jest.Mock;
-  __capturedProps: { current: { onMessage?: (event: { nativeEvent: { data: string } }) => void } | null };
+  __capturedProps: {
+    current: {
+      onMessage?: (event: { nativeEvent: { data: string } }) => void;
+      onRenderProcessGone?: () => void;
+      onContentProcessDidTerminate?: () => void;
+    } | null;
+  };
 }
 
 interface DirectKeyInputMockModule {
   __focusMock: jest.Mock;
+}
+
+interface GestureHandlerMockModule {
+  __pinchCallbacksByMethodName: Record<string, (...callbackArguments: unknown[]) => unknown>;
 }
 
 const webViewMock = jest.requireMock<WebViewMockModule>('react-native-webview');
@@ -117,6 +142,7 @@ const actionsMock = jest.requireMock<{ writeTerminal: jest.Mock; refreshTerminal
   '@/connection/actions',
 );
 const directKeyInputMock = jest.requireMock<DirectKeyInputMockModule>('@/components/terminal/DirectKeyInput');
+const gestureHandlerMock = jest.requireMock<GestureHandlerMockModule>('react-native-gesture-handler');
 
 async function renderPaneAndReady(isActive = true): Promise<ReturnType<typeof render>> {
   const result = render(
@@ -145,6 +171,23 @@ function postFromWebView(data: string): void {
 
 function decodedPosts(): ReturnType<typeof decodeHostMessage>[] {
   return webViewMock.__postMessageMock.mock.calls.map((call) => decodeHostMessage(call[0] as string));
+}
+
+/**
+ * The FIRST posted 'pinch' message, narrowed so `.active` is reachable. Every
+ * test here fires only one pinch callback before reading this, so first and
+ * latest agree - a test that fires two in sequence needs the last one instead.
+ */
+function findPinchMessage(): { type: 'pinch'; active: boolean } | undefined {
+  const found = decodedPosts().find((message) => message?.type === 'pinch');
+  return found?.type === 'pinch' ? found : undefined;
+}
+
+/** Fires the pinch-gesture callback the component registered under this method name. */
+function firePinchCallback(methodName: string, touchesEvent?: { numberOfTouches: number }): void {
+  act(() => {
+    gestureHandlerMock.__pinchCallbacksByMethodName[methodName]?.(touchesEvent);
+  });
 }
 
 describe('TerminalPane (faithful mirror)', () => {
@@ -499,5 +542,160 @@ describe('TerminalPane (faithful mirror)', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  /**
+   * postInit reads stickyModesBySessionId and is supposed to PREPEND the
+   * restore sequence to the replayed ring - see src/terminal/modeRestore.ts
+   * for why (a fullscreen TUI's startup DECSETs are long evicted from the
+   * ring by the time a re-init happens). Driven end to end - a real 'modes'
+   * report, then a real re-seed - rather than seeding the store directly, so
+   * this exercises the WebView-report -> store -> next-init wiring, not just
+   * the store or the pure sequence builder (both already covered on their
+   * own in terminalUiStore.test.ts and modeRestore.test.ts).
+   */
+  it('replays the stored sticky-mode restore sequence ahead of the ring on the next re-seed', async () => {
+    retainTerminal('sess-1');
+    appendChunk('sess-1', 'ring-bytes');
+    const result = await renderPaneAndReady();
+
+    // A REAL mode transition (not a baseline): the desktop's TUI entered the
+    // alternate screen with 'any' mouse tracking, SGR-encoded.
+    postFromWebView(
+      JSON.stringify({
+        type: 'modes',
+        applicationCursorKeys: false,
+        mouseTrackingMode: 'any',
+        mouseEncoding: 'SGR',
+        alternateBuffer: true,
+        initial: false,
+      }),
+    );
+
+    // Take the re-seed path a tab switch exercises: away, then back.
+    rerenderPane(result, false);
+    webViewMock.__postMessageMock.mockClear();
+    rerenderPane(result, true);
+
+    const reseed = decodedPosts().find((message) => message?.type === 'init');
+    expect(reseed).toBeDefined();
+    if (reseed?.type === 'init') {
+      // Hardcoded literal, not buildModeRestoreSequence: this test must stay
+      // sensitive to postInit forgetting to prepend it, not to a change in
+      // the sequence's own shape (modeRestore.test.ts owns that).
+      expect(reseed.scrollback).toBe('\x1b[?1049h\x1b[?1003h\x1b[?1006hring-bytes');
+    }
+  });
+
+  /**
+   * Observed failure mode this guards: the OS kills the WebView's renderer
+   * (Android render process under memory pressure, the iOS content process).
+   * Without a handler, that is a permanently blank terminal - the WebView
+   * instance survives in React but nothing inside it is alive to render
+   * into, and nothing ever re-inits it. recoverWebView resets terminalReady
+   * (tearing down the dead view's chunk subscription) and remounts a fresh
+   * WebView, whose own 'ready' re-seeds normal service.
+   */
+  it.each(['onRenderProcessGone', 'onContentProcessDidTerminate'] as const)(
+    'recovers after a killed WebView renderer (%s): stops writing into the dead view and re-seeds once a fresh page reports ready',
+    async (crashPropName) => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        webViewMock.__postMessageMock.mockClear();
+
+        act(() => {
+          webViewMock.__capturedProps.current?.[crashPropName]?.();
+        });
+
+        // The dead view's chunk subscription is torn down: bytes arriving with
+        // no live WebView to render them must not be written anywhere, even
+        // once the batch timer that would otherwise flush them has fully
+        // elapsed (CHUNK_BATCH_INTERVAL_MS is 32ms) - advancing past it is
+        // what tells "torn down" apart from "just hasn't flushed yet".
+        act(() => appendChunk('sess-1', 'lost-in-the-crash'));
+        act(() => {
+          jest.advanceTimersByTime(100);
+        });
+        expect(decodedPosts().some((message) => message?.type === 'write')).toBe(false);
+
+        // The remounted page finishes loading and reports ready: normal
+        // service resumes with a fresh re-seed, proving the pane actually
+        // recovered rather than staying permanently blank.
+        postFromWebView(JSON.stringify({ type: 'ready' }));
+        expect(decodedPosts().some((message) => message?.type === 'init')).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  /**
+   * The pinch lifecycle: the WebView cannot tell reliably that a pinch is
+   * happening on its own (see the long comment on pinchGesture in
+   * TerminalPane.tsx), so this layer reports it, gated on numberOfTouches
+   * rather than the gesture's own begin/end lifecycle. These thresholds
+   * shipped broken twice before landing here (onBegin fired on the very
+   * first touch of any kind; onFinalize stayed high through a full
+   * lift-one-finger-and-drag motion), so pinning the >= 2 / <= 1 thresholds
+   * is pinning a regression that has already happened.
+   */
+  describe('pinch lifecycle reports to the WebView', () => {
+    it('reports pinch-active once two touches are down, not on the first', async () => {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      firePinchCallback('onTouchesDown', { numberOfTouches: 1 });
+      expect(findPinchMessage()).toBeUndefined();
+
+      firePinchCallback('onTouchesDown', { numberOfTouches: 2 });
+      expect(findPinchMessage()?.active).toBe(true);
+    });
+
+    it('reports pinch-active on start unconditionally (the second-finger-mid-gesture backstop)', async () => {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      firePinchCallback('onStart');
+      expect(findPinchMessage()?.active).toBe(true);
+    });
+
+    it('ends the pinch once touches drop to one, not while two remain', async () => {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      firePinchCallback('onTouchesUp', { numberOfTouches: 2 });
+      expect(findPinchMessage()).toBeUndefined();
+
+      firePinchCallback('onTouchesUp', { numberOfTouches: 1 });
+      expect(findPinchMessage()?.active).toBe(false);
+    });
+
+    it('ends the pinch on cancellation once touches drop to one, not while two remain', async () => {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      firePinchCallback('onTouchesCancelled', { numberOfTouches: 2 });
+      expect(findPinchMessage()).toBeUndefined();
+
+      // 1, not 0: the boundary value is what actually distinguishes <= 1
+      // from a narrower threshold - a call with 0 would pass either way.
+      firePinchCallback('onTouchesCancelled', { numberOfTouches: 1 });
+      expect(findPinchMessage()?.active).toBe(false);
+    });
+
+    it('always ends the pinch on finalize, regardless of touch count', async () => {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      firePinchCallback('onFinalize');
+      expect(findPinchMessage()?.active).toBe(false);
+    });
   });
 });
