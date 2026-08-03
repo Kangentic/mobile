@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.2.0',
+  version: '0.3.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -68,8 +68,10 @@ const config: ExpoConfig = {
     // SPENT: 3 (uploaded 2026-07-27) and 4 (uploaded 2026-07-28 under 0.2.0,
     // and ACCEPTED by Apple, confirmed by the submit job's --await-processing
     // step rather than inferred from a green check). 1 and 2 were rejected in
-    // processing and never registered. The next release takes 5.
-    buildNumber: '4',
+    // processing and never registered. 5 is taken by the v0.3.0 release cut
+    // 2026-08-03; the ios-b5 tag written by the submit job is the
+    // authoritative record once Apple accepts it.
+    buildNumber: '5',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -205,7 +207,9 @@ const config: ExpoConfig = {
     //
     // SPENT: 1 (internal, 2026-07-26, uploaded by hand through the Console) and
     // 2 (internal, 2026-07-28, the first release the API ever committed).
-    // The next release takes 3.
+    // 3 is taken by the v0.3.0 internal release cut 2026-08-03; the
+    // android-vc3 tag written by the submit job is the authoritative record
+    // once the upload lands.
     //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
@@ -213,7 +217,7 @@ const config: ExpoConfig = {
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 2,
+    versionCode: 3,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
