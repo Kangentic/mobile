@@ -23,6 +23,20 @@ describe('inspectProtocol', () => {
     expect(decodeInspectRequest(12 as unknown as string)).toBeNull();
   });
 
+  it('round-trips a terminal-eval request and carries its argument', () => {
+    const raw = JSON.stringify({ type: 'request', id: 'req-eval-1', kind: 'terminal-eval', argument: '1+1' });
+    const decoded = decodeInspectRequest(raw);
+    expect(decoded).toStrictEqual({ type: 'request', id: 'req-eval-1', kind: 'terminal-eval', argument: '1+1' });
+  });
+
+  it('decodes a request without an argument field without adding one', () => {
+    const raw = JSON.stringify({ type: 'request', id: 'req-no-arg', kind: 'terminal-eval' });
+    const decoded = decodeInspectRequest(raw);
+    expect(decoded).toStrictEqual({ type: 'request', id: 'req-no-arg', kind: 'terminal-eval' });
+    expect(decoded).not.toBeNull();
+    expect(decoded && 'argument' in decoded).toBe(false);
+  });
+
   it('encodes responses and the hello as parseable JSON', () => {
     const response = JSON.parse(
       encodeInspectResponse({ type: 'response', id: 'req-2', ok: true, payload: { answer: 42 } }),

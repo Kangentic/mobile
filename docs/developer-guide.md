@@ -129,7 +129,7 @@ node scripts/mobileInspect.mjs text "<string>"             # adb input text (spa
 node scripts/mobileInspect.mjs key <ANDROID_KEYCODE>       # adb input keyevent
 node scripts/mobileInspect.mjs logcat [--lines n] [--tag t]  # dumped ReactNativeJS log tail
 node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route|pairing|terminal>
-node scripts/mobileInspect.mjs term <state|eval|font|refit|scroll|dragunits|swipe> [...]
+node scripts/mobileInspect.mjs term <state|eval|font|refit|scroll|dragunits|swipe|pinch|hostmsg> [...]
 node scripts/mobileInspect.mjs serve                       # long-lived server, logs app hellos
 node scripts/mobileInspect.mjs relaunch                    # force-stop + launch, VERIFIED foregrounded
 ```

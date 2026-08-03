@@ -1,6 +1,6 @@
 import React from 'react';
 import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
-import { act, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
@@ -8,12 +8,14 @@ import {
   appendChunk,
   resetTerminalFeed,
   retainTerminal,
+  seedScrollback,
   setTerminalDimensions,
 } from '@/state/terminalFeed';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 
 jest.mock('@/connection/actions', () => ({
   writeTerminal: jest.fn().mockResolvedValue(undefined),
+  refreshTerminalStream: jest.fn(),
 }));
 
 // Drives the foreground/background transitions the pane refits on.
@@ -111,7 +113,9 @@ interface DirectKeyInputMockModule {
 }
 
 const webViewMock = jest.requireMock<WebViewMockModule>('react-native-webview');
-const actionsMock = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
+const actionsMock = jest.requireMock<{ writeTerminal: jest.Mock; refreshTerminalStream: jest.Mock }>(
+  '@/connection/actions',
+);
 const directKeyInputMock = jest.requireMock<DirectKeyInputMockModule>('@/components/terminal/DirectKeyInput');
 
 async function renderPaneAndReady(isActive = true): Promise<ReturnType<typeof render>> {
@@ -149,7 +153,12 @@ describe('TerminalPane (faithful mirror)', () => {
     jest.clearAllMocks();
     resetTerminalFeed();
     webViewMock.__capturedProps.current = null;
-    useTerminalUiStore.setState({ applicationCursorModeBySessionId: {}, focusKeyboardRequestBySessionId: {} });
+    useTerminalUiStore.setState({
+      applicationCursorModeBySessionId: {},
+      stickyModesBySessionId: {},
+      requestedModeBySessionId: {},
+      focusKeyboardRequestBySessionId: {},
+    });
     appStateListeners.clear();
     jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener): NativeEventSubscription => {
       const appStateListener = listener as (nextStatus: AppStateStatus) => void;
@@ -215,6 +224,74 @@ describe('TerminalPane (faithful mirror)', () => {
     postFromWebView(JSON.stringify({ type: 'modes', applicationCursorKeys: true }));
 
     expect(useTerminalUiStore.getState().applicationCursorModeBySessionId['sess-1']).toBe(true);
+  });
+
+  /**
+   * An INITIAL modes report describes whatever the replayed seed established,
+   * not a mode the desktop changed. Once something is already stored, letting
+   * an initial report write would let a seed that lacked the DECSETs overwrite
+   * the very modes being held to restore them - and since every later init
+   * reports the same degraded baseline, the terminal could never climb back
+   * out. A REAL transition (initial: false) must still overwrite.
+   */
+  it('protects the stored sticky-modes baseline from a later INITIAL report, but a real transition still overwrites it', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
+
+    postFromWebView(
+      JSON.stringify({
+        type: 'modes',
+        applicationCursorKeys: true,
+        mouseTrackingMode: 'any',
+        mouseEncoding: 'SGR',
+        alternateBuffer: true,
+        initial: false,
+      }),
+    );
+    expect(useTerminalUiStore.getState().stickyModesBySessionId['sess-1']).toEqual({
+      applicationCursorKeys: true,
+      mouseTrackingMode: 'any',
+      mouseEncoding: 'SGR',
+      alternateBuffer: true,
+    });
+
+    // A degraded baseline (initial: true) for a re-init that lacked the
+    // DECSETs must not overwrite what is already stored.
+    postFromWebView(
+      JSON.stringify({
+        type: 'modes',
+        applicationCursorKeys: true,
+        mouseTrackingMode: 'none',
+        mouseEncoding: 'SGR',
+        alternateBuffer: false,
+        initial: true,
+      }),
+    );
+    expect(useTerminalUiStore.getState().stickyModesBySessionId['sess-1']).toEqual({
+      applicationCursorKeys: true,
+      mouseTrackingMode: 'any',
+      mouseEncoding: 'SGR',
+      alternateBuffer: true,
+    });
+
+    // The same degraded fields, but as a REAL transition (initial: false):
+    // this one is allowed to overwrite.
+    postFromWebView(
+      JSON.stringify({
+        type: 'modes',
+        applicationCursorKeys: true,
+        mouseTrackingMode: 'none',
+        mouseEncoding: 'SGR',
+        alternateBuffer: false,
+        initial: false,
+      }),
+    );
+    expect(useTerminalUiStore.getState().stickyModesBySessionId['sess-1']).toEqual({
+      applicationCursorKeys: true,
+      mouseTrackingMode: 'none',
+      mouseEncoding: 'SGR',
+      alternateBuffer: false,
+    });
   });
 
   it('pauses WebView writes while inactive and re-seeds on becoming active', async () => {
@@ -309,5 +386,118 @@ describe('TerminalPane (faithful mirror)', () => {
     await renderPaneAndReady();
 
     expect(directKeyInputMock.__focusMock).not.toHaveBeenCalled();
+  });
+
+  it('posts scroll-latest when the jump-to-latest button is pressed', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
+    webViewMock.__postMessageMock.mockClear();
+
+    fireEvent.press(screen.getByTestId('terminal-scroll-latest'));
+
+    expect(decodedPosts().some((message) => message?.type === 'scroll-latest')).toBe(true);
+  });
+
+  /**
+   * The reset button posts a fresh frame from the desktop first, then falls
+   * back to a LOCAL refit only if that stream refresh never produces a
+   * re-seed within REFIT_FALLBACK_DELAY_MS (700ms) - the offline path.
+   */
+  it('falls back to a local refit when the stream refresh produces no re-seed within the fallback delay', async () => {
+    jest.useFakeTimers();
+    try {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      // Move the clock past the instant postInit() stamped during ready, so
+      // the fallback's `lastInitPostAtRef.current < pressedAt` comparison is
+      // not comparing against the exact same frozen millisecond.
+      act(() => {
+        jest.advanceTimersByTime(10);
+      });
+      webViewMock.__postMessageMock.mockClear();
+
+      fireEvent.press(screen.getByTestId('terminal-refit'));
+      expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
+      // No re-seed arrives - the stream refresh is fire-and-forget here.
+      expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
+
+      act(() => {
+        jest.advanceTimersByTime(700);
+      });
+
+      expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not fall back to a local refit when the stream refresh produces a re-seed before the fallback delay', async () => {
+    jest.useFakeTimers();
+    try {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      act(() => {
+        jest.advanceTimersByTime(10);
+      });
+      webViewMock.__postMessageMock.mockClear();
+
+      fireEvent.press(screen.getByTestId('terminal-refit'));
+      expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
+
+      // The stream refresh's re-seed lands well inside the fallback delay.
+      act(() => {
+        jest.advanceTimersByTime(10);
+        seedScrollback('sess-1', 'fresh seed');
+      });
+      // The re-seed itself posts an init - proof the seed actually landed.
+      expect(decodedPosts().some((message) => message?.type === 'init')).toBe(true);
+
+      act(() => {
+        jest.advanceTimersByTime(700);
+      });
+
+      expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
+   * INPUT_ECHO_WINDOW_MS: bytes arriving shortly after this pane SENT input
+   * are that input's echo, and batching an echo is pure added lag. The
+   * negative control (no preceding input) proves this is the ECHO fast path
+   * and not batching having broken outright.
+   */
+  it('paints a chunk immediately after this pane sent input, skipping the batch timer', async () => {
+    jest.useFakeTimers();
+    try {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      // Negative control: with no preceding input, a chunk waits out the
+      // CHUNK_BATCH_INTERVAL_MS (32ms) batch timer.
+      act(() => appendChunk('sess-1', 'unprompted-output'));
+      expect(decodedPosts().some((message) => message?.type === 'write')).toBe(false);
+      act(() => {
+        jest.advanceTimersByTime(32);
+      });
+      expect(decodedPosts().some((message) => message?.type === 'write')).toBe(true);
+      webViewMock.__postMessageMock.mockClear();
+
+      // The WebView reports it sent input (a typed key, or a scroll burst).
+      postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
+
+      // The echo arrives inside the input-echo window: it posts immediately,
+      // with zero timer advance.
+      act(() => appendChunk('sess-1', 'echo-of-input'));
+      const echoWrite = decodedPosts().find((message) => message?.type === 'write');
+      expect(echoWrite).toBeDefined();
+      if (echoWrite?.type === 'write') {
+        expect(echoWrite.data).toBe('echo-of-input');
+      }
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

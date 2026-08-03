@@ -69,8 +69,8 @@ describe('generated xterm.html', () => {
         `script block ${scriptCount} (starts: ${source.slice(0, 50).replace(/\s+/g, ' ')})`,
       ).not.toThrow();
     }
-    // xterm + fit + webgl + headless shim + bridge glue.
-    expect(scriptCount).toBe(5);
+    // xterm + webgl + headless shim + bridge glue.
+    expect(scriptCount).toBe(4);
   });
 
   it('carries the bridge glue markers the pane depends on', () => {
@@ -400,6 +400,23 @@ describe('generated xterm.html', () => {
   });
 
   /**
+   * The 'resize' branch used to run the exact font-and-geometry half the
+   * 'refit' branch above was cured of. On the reconnect race (init raced
+   * ahead with rows null) the seed's fit stretches lineHeight for a GUESSED
+   * row count; when the real grid then arrives as 'resize', adopting the
+   * cols/rows without the lineHeight reset and the measured height fit
+   * rendered the real rows under the stale stretch, until the user pressed
+   * the reset button.
+   */
+  it('answers a resize message with the whole refit, not the font-and-geometry half', () => {
+    const handlerBody = pageModule('dispatch.js');
+    const resizeBranch = handlerBody.slice(handlerBody.indexOf("message.type === 'resize'"));
+    expect(resizeBranch).toContain('refit();');
+    expect(resizeBranch).not.toContain('autoFitFontToScreen()');
+    expect(resizeBranch).not.toContain('applyGeometry()');
+  });
+
+  /**
    * The build stamp is the guardrail against measuring a stale page, so it has
    * to be the one thing that cannot quietly rot: the page and the bundle
    * constant come from a single generator run and must agree.
@@ -431,6 +448,31 @@ describe('generated xterm.html', () => {
     expect(manifestMatch, 'builder must declare PAGE_MODULE_ORDER').not.toBeNull();
     const manifest = [...(manifestMatch?.[1] ?? '').matchAll(/'([^']+)'/g)].map((entry) => entry[1]);
     expect(manifest.length).toBeGreaterThan(0);
+
+    // The order is duplicated here ON PURPOSE, not derived from the builder:
+    // concatenation order is load-time behavior (state before the statements
+    // that run at load, bootstrap's listeners last), and everything else in
+    // this test re-derives its expectations from the builder itself - so a
+    // manifest reorder that regenerates cleanly would stay green while
+    // changing what runs before what. Update both lists together,
+    // deliberately.
+    expect(manifest).toEqual([
+      'state.js',
+      'domHelpers.js',
+      'fontGeometry.js',
+      'followPan.js',
+      'modes.js',
+      'historyScroll.js',
+      'webglRenderer.js',
+      'cleanFeed.js',
+      'lifecycle.js',
+      'heightFit.js',
+      'panClamp.js',
+      'refit.js',
+      'dispatch.js',
+      'probe.js',
+      'bootstrap.js',
+    ]);
 
     // Directory and manifest agree both ways. The builder throws on this at
     // generation time; catching it here means a stray or missing module file
@@ -570,8 +612,8 @@ describe('generated xterm.html', () => {
           ? { getBoundingClientRect: () => ({ height: 600, width: 400, left: 0, top: 0 }) }
           : null,
     };
-    // State the module reads and writes but declares elsewhere (state.js and
-    // gestureState.js), re-declared with harness-chosen initial values - the
+    // State the module reads and writes but declares elsewhere (state.js),
+    // re-declared with harness-chosen initial values - the
     // anchor starts at 0 rather than the page's null so the first drag of a
     // test already has a reference point. Tuning constants are read from the
     // page itself via pageVar so a retune cannot leave these tests green
@@ -1284,5 +1326,352 @@ describe('generated xterm.html', () => {
     harness.consumeHistoryDrag({ touches: [{ clientX: 0, clientY: 100 }, { clientX: 0, clientY: 200 }] });
 
     expect(harness.deltas()).toEqual([]);
+  });
+
+  /**
+   * reportModesIfFlipped, run against a fake terminal whose modes/buffer are
+   * mutable so the harness can drive a baseline report and then a flip. The
+   * module's OTHER function (afterWriteFlushed) is never called here, so its
+   * own dependencies (panToCursor, followCursorVertically, the jump-repaint
+   * fields, requestAnimationFrame) only need to exist as harmless stubs.
+   */
+  interface ModesReport {
+    type: string;
+    applicationCursorKeys: boolean;
+    mouseTrackingMode: string;
+    mouseEncoding: string;
+    alternateBuffer: boolean;
+    initial: boolean;
+  }
+
+  function buildModesHarness(): {
+    call: () => void;
+    posts: () => ModesReport[];
+    setModes: (partial: { applicationCursorKeysMode?: boolean; mouseTrackingMode?: string }) => void;
+    setBufferType: (bufferType: string) => void;
+    setMouseEncoding: (encoding: string) => void;
+  } {
+    const source = pageModule('modes.js');
+    assertInjectionsAreAlive('modes.js', source, [
+      'terminal',
+      'coreMouseEncoding',
+      'postToHost',
+      'lastReportedModes',
+      'lastAppCursorMode',
+      'panToCursor',
+      'followCursorVertically',
+      'pendingJumpRepaint',
+      'jumpRepaintCount',
+      'requestAnimationFrame',
+    ]);
+
+    const terminalState = {
+      modes: { applicationCursorKeysMode: false, mouseTrackingMode: 'none' },
+      buffer: { active: { type: 'normal' } },
+    };
+    const mouseEncodingState = { encoding: 'DEFAULT' };
+    // Typed at the collector boundary: the page glue posts plain objects, and
+    // the assertions below are what hold their shape to ModesReport.
+    const posts: ModesReport[] = [];
+
+    const build = new Function(
+      'terminal',
+      'coreMouseEncoding',
+      'postToHost',
+      'panToCursor',
+      'followCursorVertically',
+      'requestAnimationFrame',
+      `var lastReportedModes = null;
+       var lastAppCursorMode = false;
+       var pendingJumpRepaint = false;
+       var jumpRepaintCount = 0;
+       ${source}
+       return { call: reportModesIfFlipped };`,
+    ) as (...dependencies: unknown[]) => { call: () => void };
+
+    const built = build(
+      terminalState,
+      () => ({ encoding: mouseEncodingState.encoding }),
+      (message: ModesReport) => posts.push(message),
+      () => undefined,
+      () => undefined,
+      (callback: () => void) => callback(),
+    );
+
+    return {
+      call: built.call,
+      posts: () => posts,
+      setModes: (partial) => Object.assign(terminalState.modes, partial),
+      setBufferType: (bufferType) => {
+        terminalState.buffer.active.type = bufferType;
+      },
+      setMouseEncoding: (encoding) => {
+        mouseEncodingState.encoding = encoding;
+      },
+    };
+  }
+
+  describe('modes.js reportModesIfFlipped', () => {
+    it('posts an initial baseline on the first report, deriving every field from the terminal', () => {
+      const harness = buildModesHarness();
+      harness.setModes({ applicationCursorKeysMode: true, mouseTrackingMode: 'vt200' });
+      harness.setBufferType('alternate');
+      harness.setMouseEncoding('SGR');
+
+      harness.call();
+
+      expect(harness.posts()).toEqual([
+        {
+          type: 'modes',
+          applicationCursorKeys: true,
+          mouseTrackingMode: 'vt200',
+          mouseEncoding: 'SGR',
+          alternateBuffer: true,
+          initial: true,
+        },
+      ]);
+    });
+
+    it('defaults mouseTrackingMode to none when the terminal reports a falsy value', () => {
+      const harness = buildModesHarness();
+      harness.setModes({ mouseTrackingMode: '' });
+
+      harness.call();
+
+      expect(harness.posts()[0]).toMatchObject({ mouseTrackingMode: 'none' });
+    });
+
+    it('posts nothing on a second call when nothing changed', () => {
+      const harness = buildModesHarness();
+      harness.setModes({ applicationCursorKeysMode: true, mouseTrackingMode: 'vt200' });
+      harness.call();
+      expect(harness.posts()).toHaveLength(1);
+
+      harness.call();
+
+      expect(harness.posts()).toHaveLength(1);
+    });
+
+    it('reports again with initial false when exactly one field flips', () => {
+      const harness = buildModesHarness();
+      harness.setModes({ applicationCursorKeysMode: true, mouseTrackingMode: 'vt200' });
+      harness.call();
+
+      harness.setModes({ mouseTrackingMode: 'any' });
+      harness.call();
+
+      expect(harness.posts()).toHaveLength(2);
+      expect(harness.posts()[1]).toEqual({
+        type: 'modes',
+        applicationCursorKeys: true,
+        mouseTrackingMode: 'any',
+        mouseEncoding: 'DEFAULT',
+        alternateBuffer: false,
+        initial: false,
+      });
+    });
+  });
+
+  /**
+   * onHostMessage, extracted from dispatch.js and run against stubbed
+   * dependencies: a fake or absent terminal keeps the write/refit/resize
+   * branches inert unless a test drives them, and every function dispatch.js
+   * calls out to is a spy. initCounts and pinchMessageCounts are passed in as
+   * mutable objects (the same shape the real module owns at module scope),
+   * so the test reads them directly rather than through an accessor.
+   */
+  function buildDispatchHarness(
+    options: {
+      terminal?: Record<string, unknown> | null;
+      cleanFeedEnabled?: boolean;
+    } = {},
+  ): {
+    onHostMessage: (rawData: string) => void;
+    initCounts: { hard: number; soft: number };
+    pinchMessageCounts: { activeTrue: number; activeFalse: number };
+    softReinitCalls: () => unknown[];
+    createTerminalCalls: () => unknown[];
+    terminalDisposeCallCount: () => number;
+    stopHistoryFlingCallCount: () => number;
+    pinchActive: () => boolean;
+    historyDragAnchorY: () => number | null;
+    historyDragAxis: () => string | null;
+    tapDirty: () => boolean;
+  } {
+    const source = pageModule('dispatch.js');
+    const onHostMessageSource = source.slice(
+      source.indexOf('function onHostMessage'),
+      source.indexOf('// react-native-webview delivers'),
+    );
+    assertInjectionsAreAlive('dispatch.js', onHostMessageSource, [
+      'terminal',
+      'cleanFeedEnabled',
+      'softReinit',
+      'createTerminal',
+      'initCounts',
+      'document',
+      'afterWriteFlushed',
+      'cleanFeedWrite',
+      'applyFontSize',
+      'pinchActive',
+      'pinchMessageCounts',
+      'historyDragAnchorY',
+      'historyDragAxis',
+      'tapDirty',
+      'stopHistoryFling',
+      'applyVerticalOffset',
+      'refit',
+      'scrollToLatest',
+      'knownCols',
+      'knownRows',
+      'manualPanUntil',
+      'cleanTerminal',
+      'lastScrollInputAt',
+      'lastScrollRoundTripMs',
+      'lastJumpAt',
+      'lastJumpFirstWriteMs',
+    ]);
+
+    const initCounts = { hard: 0, soft: 0 };
+    const pinchMessageCounts = { activeTrue: 0, activeFalse: 0 };
+    const softReinitCalls: unknown[] = [];
+    const createTerminalCalls: unknown[] = [];
+    let terminalDisposeCallCount = 0;
+    let stopHistoryFlingCallCount = 0;
+
+    const initialTerminal =
+      options.terminal === undefined
+        ? null
+        : {
+            ...options.terminal,
+            dispose: () => {
+              terminalDisposeCallCount += 1;
+            },
+          };
+    const fakeGridHost = { firstChild: null };
+    const fakeDocument = { getElementById: (id: string) => (id === 'terminal' ? fakeGridHost : null) };
+
+    const build = new Function(
+      'terminalArgument',
+      'cleanFeedEnabledArgument',
+      'document',
+      'softReinit',
+      'createTerminal',
+      'initCounts',
+      'afterWriteFlushed',
+      'cleanFeedWrite',
+      'applyFontSize',
+      'stopHistoryFling',
+      'applyVerticalOffset',
+      'refit',
+      'scrollToLatest',
+      'pinchMessageCounts',
+      `var terminal = terminalArgument;
+       var cleanFeedEnabled = cleanFeedEnabledArgument;
+       var pinchActive = false;
+       var historyDragAnchorY = 42;
+       var historyDragAxis = 'vertical';
+       var tapDirty = false;
+       var knownCols = 80;
+       var knownRows = 24;
+       var manualPanUntil = 0;
+       var cleanTerminal = null;
+       var lastScrollInputAt = null;
+       var lastScrollRoundTripMs = null;
+       var lastJumpAt = null;
+       var lastJumpFirstWriteMs = null;
+       ${onHostMessageSource}
+       return {
+         onHostMessage: onHostMessage,
+         pinchActive: function () { return pinchActive; },
+         historyDragAnchorY: function () { return historyDragAnchorY; },
+         historyDragAxis: function () { return historyDragAxis; },
+         tapDirty: function () { return tapDirty; },
+       };`,
+    ) as (...dependencies: unknown[]) => {
+      onHostMessage: (rawData: string) => void;
+      pinchActive: () => boolean;
+      historyDragAnchorY: () => number | null;
+      historyDragAxis: () => string | null;
+      tapDirty: () => boolean;
+    };
+
+    const built = build(
+      initialTerminal,
+      options.cleanFeedEnabled ?? false,
+      fakeDocument,
+      (message: unknown) => softReinitCalls.push(message),
+      (message: unknown) => createTerminalCalls.push(message),
+      initCounts,
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      () => {
+        stopHistoryFlingCallCount += 1;
+      },
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      pinchMessageCounts,
+    );
+
+    return {
+      onHostMessage: built.onHostMessage,
+      initCounts,
+      pinchMessageCounts,
+      softReinitCalls: () => softReinitCalls,
+      createTerminalCalls: () => createTerminalCalls,
+      terminalDisposeCallCount: () => terminalDisposeCallCount,
+      stopHistoryFlingCallCount: () => stopHistoryFlingCallCount,
+      pinchActive: built.pinchActive,
+      historyDragAnchorY: built.historyDragAnchorY,
+      historyDragAxis: built.historyDragAxis,
+      tapDirty: built.tapDirty,
+    };
+  }
+
+  describe('dispatch.js onHostMessage - pinch branch', () => {
+    it('tracks pinch start: counts, latches pinchActive, and stops any history fling', () => {
+      const harness = buildDispatchHarness();
+
+      harness.onHostMessage(JSON.stringify({ type: 'pinch', active: true }));
+
+      expect(harness.pinchMessageCounts.activeTrue).toBe(1);
+      expect(harness.pinchMessageCounts.activeFalse).toBe(0);
+      expect(harness.pinchActive()).toBe(true);
+      expect(harness.stopHistoryFlingCallCount()).toBe(1);
+    });
+
+    it('tracks pinch end: counts, clears pinchActive, and drops the drag anchor/axis with tapDirty set', () => {
+      const harness = buildDispatchHarness();
+      harness.onHostMessage(JSON.stringify({ type: 'pinch', active: true }));
+
+      harness.onHostMessage(JSON.stringify({ type: 'pinch', active: false }));
+
+      expect(harness.pinchMessageCounts.activeFalse).toBe(1);
+      expect(harness.pinchActive()).toBe(false);
+      expect(harness.historyDragAnchorY()).toBeNull();
+      expect(harness.historyDragAxis()).toBeNull();
+      expect(harness.tapDirty()).toBe(true);
+    });
+  });
+
+  describe('dispatch.js onHostMessage - init hard vs soft path', () => {
+    it('takes the soft reinit path when the clean-feed flag matches, then the hard rebuild path when it flips', () => {
+      const harness = buildDispatchHarness({ terminal: {}, cleanFeedEnabled: false });
+
+      harness.onHostMessage(JSON.stringify({ type: 'init', cleanFeed: false, scrollback: '', cols: 80, rows: 24 }));
+      expect(harness.softReinitCalls()).toHaveLength(1);
+      expect(harness.createTerminalCalls()).toHaveLength(0);
+      expect(harness.terminalDisposeCallCount()).toBe(0);
+      expect(harness.initCounts.hard).toBe(0);
+
+      harness.onHostMessage(JSON.stringify({ type: 'init', cleanFeed: true, scrollback: '', cols: 80, rows: 24 }));
+      expect(harness.terminalDisposeCallCount()).toBe(1);
+      expect(harness.initCounts.hard).toBe(1);
+      expect(harness.createTerminalCalls()).toHaveLength(1);
+      // Unchanged from the soft path above - the flip took the hard path only.
+      expect(harness.softReinitCalls()).toHaveLength(1);
+    });
   });
 });

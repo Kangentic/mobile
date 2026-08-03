@@ -3,7 +3,6 @@
   // the phone. The only thing sent up is typed input. The font is sized so the
   // whole frame fits the screen; pinch zoom + pan read the detail.
   var terminal = null;
-  var fitAddon = null;
   // WebGL renderer state, reset per createTerminal. See attachWebgl.
   var webglAddon = null;
   var webglRetryTimer = null;
@@ -69,14 +68,14 @@
   var HEIGHT_FIT_TRACE_MAX = 24;
   function traceHeightFit(event, generation, passesLeft, screenHeight) {
     heightFitTrace.push({
-      e: event,
-      g: generation,
-      p: passesLeft,
-      sh: Math.round(screenHeight),
-      ih: window.innerHeight,
-      f: currentFontSizePx,
-      lh: terminal && terminal.options ? Math.round((terminal.options.lineHeight || 1) * 1000) / 1000 : null,
-      t: Date.now() % 1000000,
+      event: event,
+      generation: generation,
+      passesLeft: passesLeft,
+      screenHeightPx: Math.round(screenHeight),
+      innerHeightPx: window.innerHeight,
+      fontSizePx: currentFontSizePx,
+      lineHeight: terminal && terminal.options ? Math.round((terminal.options.lineHeight || 1) * 1000) / 1000 : null,
+      timestampMs: Date.now() % 1000000,
     });
     if (heightFitTrace.length > HEIGHT_FIT_TRACE_MAX) heightFitTrace.shift();
   }

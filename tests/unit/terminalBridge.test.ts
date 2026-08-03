@@ -47,6 +47,18 @@ describe('host -> terminal round-trip', () => {
     const resize: HostToTerminalMessage = { type: 'resize', cols: 48, rows: 26 };
     expect(decodeHostMessage(encodeHostMessage(resize))).toEqual(resize);
   });
+
+  it('round-trips a pinch message, active true and active false', () => {
+    const pinchStart: HostToTerminalMessage = { type: 'pinch', active: true };
+    expect(decodeHostMessage(encodeHostMessage(pinchStart))).toEqual(pinchStart);
+    const pinchEnd: HostToTerminalMessage = { type: 'pinch', active: false };
+    expect(decodeHostMessage(encodeHostMessage(pinchEnd))).toEqual(pinchEnd);
+  });
+
+  it('rejects a pinch message missing or with a non-boolean active field', () => {
+    expect(decodeHostMessage('{"type":"pinch"}')).toBeNull();
+    expect(decodeHostMessage('{"type":"pinch","active":"yes"}')).toBeNull();
+  });
 });
 
 describe('terminal -> host round-trip', () => {
@@ -71,15 +83,15 @@ describe('terminal -> host round-trip', () => {
     expect(decodeTerminalMessage(encodeTerminalMessage(fontSize))).toEqual(fontSize);
   });
 
+  it('round-trips the scroll-latest host message', () => {
+    expect(decodeHostMessage(encodeHostMessage({ type: 'scroll-latest' }))).toEqual({ type: 'scroll-latest' });
+  });
+
   /**
    * A page from an older build reports only the DECCKM flag. Dropping the whole
    * message over the three fields it cannot know would lose the arrow-key mode
    * as collateral, so they default instead.
    */
-  it('round-trips the scroll-latest host message', () => {
-    expect(decodeHostMessage(JSON.stringify({ type: 'scroll-latest' }))).toEqual({ type: 'scroll-latest' });
-  });
-
   it('defaults the sticky mode fields when an older page omits them', () => {
     expect(decodeTerminalMessage(JSON.stringify({ type: 'modes', applicationCursorKeys: true }))).toEqual({
       type: 'modes',
