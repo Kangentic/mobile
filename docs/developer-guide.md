@@ -219,6 +219,18 @@ closes a real blind spot: `writeTerminal` failures are swallowed at the call sit
 that silently stopped reaching the desktop used to look identical to a gesture that never
 fired.
 
+**"Cannot scroll up" is not always a bug.** Alt-screen scrolling is owned by the AGENT: the
+phone only emits wheel reports, and a Claude Code sitting at a MODAL prompt (the session-resume
+dialog after a desktop restart, a permission prompt, any select) repaints the same frame
+instead of scrolling - for a desktop wheel exactly as much as for the phone. Verified live
+2026-08-02 on a parked session showing the resume dialog: an injected drag moved every counter
+(`scrollPostCount`, `netHistoryUnits`, the write attempts, even a stamped
+`lastScrollRoundTripMs` - the TUI ANSWERED, with an identical frame) while before/after
+screenshots stayed pixel-identical. The one-minute triage: `term state`, `term swipe`,
+`term state` again, screenshots around it. Counters moving under an unchanged frame means the
+TUI is refusing - answer its prompt (quick-key Enter) and scrolling returns. Counters NOT
+moving is a phone-side fault worth debugging.
+
 **Read the freshness verdict.** `xterm.html` is a Metro asset cached by content hash and
 untouched by Fast Refresh, so the device can serve a stale page against a fresh bundle - which
 looks exactly like a fix that did not work, and produced three false negatives in one session.

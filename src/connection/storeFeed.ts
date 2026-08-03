@@ -4,7 +4,13 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
-import { appendChunk, isTerminalRetained, seedScrollback, setTerminalDimensions } from '@/state/terminalFeed';
+import {
+  appendChunk,
+  getTerminalDimensions,
+  isTerminalRetained,
+  seedScrollback,
+  setTerminalDimensions,
+} from '@/state/terminalFeed';
 
 /**
  * The single place feed events and subscription snapshots meet store
@@ -141,7 +147,23 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       appendChunk(event.sessionId, event.payload.data);
     }),
     feed.on('terminal-resize', (event) => {
+      // An event that repeats the dims the ring already holds means the
+      // desktop terminal never reflowed, so the buffered bytes are still
+      // laid out correctly and the live chunks stay coherent - skip the
+      // re-seed rather than pay a serialized-frame round trip to repaint an
+      // identical view. The desktop DOES emit such no-ops: its resize() has
+      // no same-dims guard, and a task-detail remount (a project switch
+      // away and back) re-sends the detail's unchanged fit. A null baseline
+      // still re-seeds - with no known layout, the fresh frame is the truth.
+      const previousDimensions = getTerminalDimensions(event.sessionId);
       setTerminalDimensions(event.sessionId, event.payload);
+      if (
+        previousDimensions !== null &&
+        previousDimensions.cols === event.payload.cols &&
+        previousDimensions.rows === event.payload.rows
+      ) {
+        return;
+      }
       if (isTerminalRetained(event.sessionId)) {
         const existingTimer = resizeReseedTimers.get(event.sessionId);
         if (existingTimer !== undefined) clearTimeout(existingTimer);
