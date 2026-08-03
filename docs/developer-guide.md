@@ -1952,7 +1952,7 @@ testing does not count toward production access.**
 
 | Track | Testers | Review | Status | Unlocks production? |
 |---|---|---|---|---|
-| Internal | up to 100, by email list | none, live in minutes | **v0.2.0 (vc2) released 2026-07-28**, one tester list | **No** |
+| Internal | up to 100, by email list | none, live in minutes | **v0.3.0 (vc3) released 2026-08-03**, one tester list | **No** |
 | Closed (`alpha`) | 12+ required, opted in 14 continuous days | yes | not created | **Yes**, this is the gate |
 | Open (`beta`) | unlimited, publicly discoverable | yes | not created | optional |
 | Production | everyone | yes | locked until the closed test passes | n/a |
