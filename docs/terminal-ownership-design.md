@@ -402,14 +402,17 @@ The original list, for the record:
 
 ## Still open
 
-- Grace-period duration on background (proposed ~10s, unconfirmed).
-- Default column count and preset values, to be found by testing.
-- Whether suppressing a desktop detail's terminal while keeping Changes and Chat is clean in
-  the current component structure, or fights the one-xterm invariant's assumptions.
-- Whether tapping the phone's existing `↑` quick key already scrolls history. If it does, the
-  scroll diagnosis above is fully confirmed and the work is purely gesture wiring. Blocked on
-  device access; the phone dropped off adb during the session.
-- Whether drag-to-scroll should also apply in the NORMAL buffer (a non-fullscreen agent), where
-  real scrollback exists and the same gesture should move xterm's viewport instead of sending
-  arrows. xterm's own wheel handler already branches on `hasScrollback`, so synthesizing wheel
-  events gets this right for free; sending arrows directly would not.
+Recorded while ownership was still on the table; annotated after the direction change so a
+skim does not re-litigate settled questions.
+
+- ~~Grace-period duration on background~~ - shelved with the ownership model (see the
+  direction change above); there is no phone-requested grid to grace-period.
+- ~~Default column count and preset values~~ - shelved with the column setting, same note.
+- ~~Whether suppressing a desktop detail's terminal while keeping Changes and Chat is clean~~ -
+  belongs to the shelved mirrored-view/Resume Control design, same note.
+- ~~Whether tapping the phone's existing `↑` quick key already scrolls history~~ - since
+  verified on device: shipped on a Pixel 10 (2026-08-02, commit `c3a8e77`, see the arrow-key
+  note above).
+- ~~Whether drag-to-scroll should also apply in the NORMAL buffer~~ - it does now: the
+  `viewport` mechanism (see `scrollMechanism` in `scripts/xterm-page/historyScroll.js`) moves
+  xterm's own scrollback locally when the buffer is normal and mouse reporting is off.

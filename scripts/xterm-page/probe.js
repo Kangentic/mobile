@@ -125,15 +125,15 @@
      * What consumeHistoryDrag WOULD compute for a vertical delta, with no side
      * effects. Isolates the geometry half of the gesture from touch delivery:
      * if a real drag does nothing, this says whether the arithmetic or the
-     * events are at fault. Deliberately mirrors the real code path rather than
-     * re-deriving it, so the two cannot drift.
+     * events are at fault. Shares unitHeightFor and dragToScrollUnits with
+     * the real code path, so the two cannot drift.
      */
     dragUnits: function (deltaPx) {
       var screen = document.querySelector('.xterm-screen');
       if (!screen || !terminal || terminal.rows < 1) return null;
       var gridHeight = screen.getBoundingClientRect().height;
       var mechanism = scrollMechanism();
-      var unitHeight = mechanism === 'page' ? gridHeight : gridHeight / terminal.rows;
+      var unitHeight = unitHeightFor(mechanism, gridHeight);
       return {
         mechanism: mechanism,
         gridHeight: gridHeight,

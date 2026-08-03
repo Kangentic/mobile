@@ -10,7 +10,7 @@
  *   node scripts/mobileInspect.mjs key <ANDROID_KEYCODE>
  *   node scripts/mobileInspect.mjs logcat [--lines <n>] [--tag <tag>]
  *   node scripts/mobileInspect.mjs state <connection|stores|subscriptions|feed-stats|route|pairing|terminal>
- *   node scripts/mobileInspect.mjs term <state|eval|font|refit|scroll|dragunits|swipe> [...]
+ *   node scripts/mobileInspect.mjs term <state|eval|font|refit|scroll|dragunits|swipe|pinch|hostmsg> [...]
  *   node scripts/mobileInspect.mjs serve
  *   node scripts/mobileInspect.mjs relaunch
  *
@@ -39,6 +39,9 @@ import { spawnSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 
 const INSPECT_PORT = 8791;
+// 'terminal-eval' is deliberately absent: it is a real protocol kind, but its
+// CLI entry point is `term eval`, which runs the staleness check first. A bare
+// `state terminal-eval` would evaluate against a page that may be stale.
 const STATE_KINDS = [
   'connection',
   'stores',
@@ -47,7 +50,6 @@ const STATE_KINDS = [
   'route',
   'pairing',
   'terminal',
-  'terminal-eval',
 ];
 
 function fail(message) {
@@ -227,13 +229,17 @@ function startServer() {
 }
 
 /**
- * One request/response round trip with the app, resolved as a value.
+ * A connected inspect session: one server, one app socket, any number of
+ * request/response round trips over it.
  *
- * The server binds a fixed port, so two of these cannot overlap - callers that
- * need several (the terminal commands, which probe for staleness before acting)
- * must await each in turn.
+ * The server binds a fixed port, so two SESSIONS cannot overlap - but the
+ * round trips within one session share the socket deliberately. commandTerm
+ * needs two (the freshness probe, then the action), and the earlier
+ * one-server-per-request shape closed the socket between them, which forced
+ * the app through its full 5s reconnect backoff (inspectBridge's
+ * RETRY_DELAY_MS) - a built-in stall on every term command.
  */
-function requestState(kind, argument, timeoutMs) {
+function openInspectSession(timeoutMs) {
   return new Promise((resolve, reject) => {
     let server;
     try {
@@ -244,8 +250,9 @@ function requestState(kind, argument, timeoutMs) {
       );
       return;
     }
-    const requestId = randomUUID();
-    const overallTimer = setTimeout(() => {
+    const pendingById = new Map();
+    let appSocket = null;
+    const helloTimer = setTimeout(() => {
       server.close();
       reject(
         new Error(
@@ -256,9 +263,29 @@ function requestState(kind, argument, timeoutMs) {
       );
     }, timeoutMs);
     server.on('error', (serverError) => {
-      clearTimeout(overallTimer);
+      clearTimeout(helloTimer);
       reject(new Error(`inspect server error: ${serverError.message}`));
     });
+    const session = {
+      /** One round trip on the shared socket, resolved as the payload. */
+      request(kind, argument) {
+        return new Promise((resolveRequest, rejectRequest) => {
+          const requestId = randomUUID();
+          const requestTimer = setTimeout(() => {
+            pendingById.delete(requestId);
+            rejectRequest(new Error(`timed out after ${timeoutMs}ms waiting for the app to answer '${kind}'`));
+          }, timeoutMs);
+          pendingById.set(requestId, { resolve: resolveRequest, reject: rejectRequest, timer: requestTimer });
+          const request = { type: 'request', id: requestId, kind };
+          if (argument !== undefined) request.argument = argument;
+          appSocket.send(JSON.stringify(request));
+        });
+      },
+      close() {
+        if (appSocket !== null) appSocket.close();
+        server.close();
+      },
+    };
     server.on('connection', (socket) => {
       socket.on('message', (raw) => {
         let message;
@@ -268,30 +295,40 @@ function requestState(kind, argument, timeoutMs) {
           return;
         }
         if (message.type === 'hello') {
-          const request = { type: 'request', id: requestId, kind };
-          if (argument !== undefined) request.argument = argument;
-          socket.send(JSON.stringify(request));
+          if (appSocket !== null) return;
+          appSocket = socket;
+          clearTimeout(helloTimer);
+          resolve(session);
           return;
         }
-        if (message.type === 'response' && message.id === requestId) {
-          clearTimeout(overallTimer);
-          socket.close();
-          server.close(() => {
-            if (message.ok) resolve(message.payload);
-            else reject(new Error(`app answered with an error: ${message.error}`));
-          });
+        if (message.type === 'response') {
+          const pending = pendingById.get(message.id);
+          if (pending === undefined) return;
+          pendingById.delete(message.id);
+          clearTimeout(pending.timer);
+          if (message.ok) pending.resolve(message.payload);
+          else pending.reject(new Error(`app answered with an error: ${message.error}`));
         }
       });
     });
   });
 }
 
+/** One request/response round trip in a session of its own. */
+async function requestState(kind, argument, timeoutMs) {
+  const session = await openInspectSession(timeoutMs);
+  try {
+    return await session.request(kind, argument);
+  } finally {
+    session.close();
+  }
+}
+
 async function commandState(args) {
   const kind = args[0];
   if (!STATE_KINDS.includes(kind)) fail(`usage: state <${STATE_KINDS.join('|')}>`);
   const timeoutMs = Number(flagValue(args, '--timeout') ?? '20000');
-  const argument = kind === 'terminal-eval' ? args[1] : undefined;
-  const payload = await requestState(kind, argument, timeoutMs);
+  const payload = await requestState(kind, undefined, timeoutMs);
   console.log(JSON.stringify(payload, null, 2));
 }
 
@@ -306,6 +343,8 @@ async function commandState(args) {
  *   term scroll <units>         a raw history burst, skipping the gesture layer
  *   term dragunits <px>         what a drag of that many pixels WOULD compute
  *   term swipe <dy> [ms]        a real one-finger drag via adb (real MotionEvents)
+ *   term pinch <scale> [--drag <dy>]  a REAL two-finger pinch via raw events (emulator only)
+ *   term hostmsg '<json>'       inject a host->terminal bridge message from outside
  *
  * Every command except `state` refuses to run against a STALE page unless
  * --force. xterm.html is a Metro asset cached by content hash and skipped by
@@ -329,8 +368,8 @@ function reportFreshness(probe) {
   return false;
 }
 
-async function terminalEval(expression, timeoutMs) {
-  const value = await requestState('terminal-eval', expression, timeoutMs);
+async function terminalEval(session, expression) {
+  const value = await session.request('terminal-eval', expression);
   console.log(JSON.stringify(value, null, 2));
 }
 
@@ -344,17 +383,12 @@ async function terminalEval(expression, timeoutMs) {
  * not work" when it merely had nothing to consume. Default 800ms.
  */
 function terminalSwipe(deltaY, durationMs) {
-  const sizeOutput = runAdb(['shell', 'wm', 'size']).stdout;
-  const sizeMatch = sizeOutput.match(/(\d+)x(\d+)\s*$/m);
-  if (!sizeMatch) fail(`could not parse screen size from: ${sizeOutput.trim()}`);
-  const [, widthText, heightText] = sizeMatch;
-  const width = Number(widthText);
-  const height = Number(heightText);
+  const screen = screenSize();
   // Left of centre and clear of both the segmented switcher at the top and the
   // refit button at the bottom right.
-  const x = Math.round(width * 0.4);
-  const startY = Math.round(height * (deltaY > 0 ? 0.35 : 0.7));
-  const endY = Math.max(1, Math.min(height - 1, startY + deltaY));
+  const x = Math.round(screen.width * 0.4);
+  const startY = Math.round(screen.height * (deltaY > 0 ? 0.35 : 0.7));
+  const endY = Math.max(1, Math.min(screen.height - 1, startY + deltaY));
   runAdb(['shell', 'input', 'swipe', String(x), String(startY), String(x), String(endY), String(durationMs)]);
   console.log(`swiped x=${x} y=${startY} -> ${endY} over ${durationMs}ms`);
 }
@@ -513,78 +547,85 @@ async function commandTerm(args) {
   const timeoutMs = Number(flagValue(args, '--timeout') ?? '20000');
   const force = args.includes('--force');
 
-  const probe = await requestState('terminal', undefined, timeoutMs);
-  const fresh = reportFreshness(probe);
+  // One session for the freshness probe AND the action: closing the socket
+  // between them would send the app through its 5s reconnect backoff.
+  const session = await openInspectSession(timeoutMs);
+  try {
+    const probe = await session.request('terminal', undefined);
+    const fresh = reportFreshness(probe);
 
-  if (action === 'state') {
-    console.log(JSON.stringify(probe, null, 2));
-    process.exitCode = fresh ? 0 : 1;
-    return;
-  }
-  if (!fresh && !force) {
-    console.error('[inspect] refusing to act on a stale page; pass --force if you really mean to');
-    process.exitCode = 1;
-    return;
-  }
-
-  if (action === 'eval') {
-    const expression = args[1];
-    if (!expression) fail('usage: term eval "<expression>"');
-    await terminalEval(expression, timeoutMs);
-    return;
-  }
-  if (action === 'font') {
-    const fontSizePx = Number(args[1]);
-    if (!Number.isFinite(fontSizePx)) fail('usage: term font <px>');
-    await terminalEval(`window.__kangenticTerminal.setFontSize(${fontSizePx})`, timeoutMs);
-    return;
-  }
-  if (action === 'refit') {
-    await terminalEval('window.__kangenticTerminal.refit()', timeoutMs);
-    return;
-  }
-  if (action === 'scroll') {
-    const units = Number(args[1]);
-    if (!Number.isFinite(units)) fail('usage: term scroll <units> (negative scrolls toward history)');
-    await terminalEval(`window.__kangenticTerminal.scroll(${units})`, timeoutMs);
-    return;
-  }
-  if (action === 'dragunits') {
-    const deltaPx = Number(args[1]);
-    if (!Number.isFinite(deltaPx)) fail('usage: term dragunits <px>');
-    await terminalEval(`window.__kangenticTerminal.dragUnits(${deltaPx})`, timeoutMs);
-    return;
-  }
-  if (action === 'hostmsg') {
-    // Inject a HOST->terminal bridge message from outside, via a window
-    // MessageEvent (the page listens on window and document, exactly how
-    // react-native-webview delivers real ones). This is how the RN-side half of
-    // a gesture gets reproduced without fingers: the 'pinch' lifecycle messages
-    // only ever come from a real pinch, so without this the terminal's
-    // pinch-blocked state was unreachable from any script.
-    const rawMessage = args[1];
-    if (!rawMessage) fail('usage: term hostmsg \'{"type":"pinch","active":true}\'');
-    try {
-      JSON.parse(rawMessage);
-    } catch {
-      fail(`hostmsg payload is not valid JSON: ${rawMessage}`);
+    if (action === 'state') {
+      console.log(JSON.stringify(probe, null, 2));
+      process.exitCode = fresh ? 0 : 1;
+      return;
     }
-    await terminalEval(
-      `(function(){window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(rawMessage)}}));return 'delivered';})()`,
-      timeoutMs,
-    );
-    return;
+    if (!fresh && !force) {
+      console.error('[inspect] refusing to act on a stale page; pass --force if you really mean to');
+      process.exitCode = 1;
+      return;
+    }
+
+    if (action === 'eval') {
+      const expression = args[1];
+      if (!expression) fail('usage: term eval "<expression>"');
+      await terminalEval(session, expression);
+      return;
+    }
+    if (action === 'font') {
+      const fontSizePx = Number(args[1]);
+      if (!Number.isFinite(fontSizePx)) fail('usage: term font <px>');
+      await terminalEval(session, `window.__kangenticTerminal.setFontSize(${fontSizePx})`);
+      return;
+    }
+    if (action === 'refit') {
+      await terminalEval(session, 'window.__kangenticTerminal.refit()');
+      return;
+    }
+    if (action === 'scroll') {
+      const units = Number(args[1]);
+      if (!Number.isFinite(units)) fail('usage: term scroll <units> (negative scrolls toward history)');
+      await terminalEval(session, `window.__kangenticTerminal.scroll(${units})`);
+      return;
+    }
+    if (action === 'dragunits') {
+      const deltaPx = Number(args[1]);
+      if (!Number.isFinite(deltaPx)) fail('usage: term dragunits <px>');
+      await terminalEval(session, `window.__kangenticTerminal.dragUnits(${deltaPx})`);
+      return;
+    }
+    if (action === 'hostmsg') {
+      // Inject a HOST->terminal bridge message from outside, via a window
+      // MessageEvent (the page listens on window and document, exactly how
+      // react-native-webview delivers real ones). This is how the RN-side half of
+      // a gesture gets reproduced without fingers: the 'pinch' lifecycle messages
+      // only ever come from a real pinch, so without this the terminal's
+      // pinch-blocked state was unreachable from any script.
+      const rawMessage = args[1];
+      if (!rawMessage) fail('usage: term hostmsg \'{"type":"pinch","active":true}\'');
+      try {
+        JSON.parse(rawMessage);
+      } catch {
+        fail(`hostmsg payload is not valid JSON: ${rawMessage}`);
+      }
+      await terminalEval(
+        session,
+        `(function(){window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(rawMessage)}}));return 'delivered';})()`,
+      );
+      return;
+    }
+    if (action === 'pinch') {
+      const scale = Number(args[1]);
+      if (!Number.isFinite(scale) || scale <= 0) fail('usage: term pinch <scale> [--drag <dy>]');
+      const dragFlag = flagValue(args, '--drag');
+      commandPinch(scale, dragFlag === undefined ? null : Math.round(Number(dragFlag)));
+      return;
+    }
+    const deltaY = Number(args[1]);
+    if (!Number.isFinite(deltaY)) fail('usage: term swipe <dy> [durationMs] (positive dy drags DOWN, toward history)');
+    terminalSwipe(Math.round(deltaY), Number(args[2] ?? '800'));
+  } finally {
+    session.close();
   }
-  if (action === 'pinch') {
-    const scale = Number(args[1]);
-    if (!Number.isFinite(scale) || scale <= 0) fail('usage: term pinch <scale> [--drag <dy>]');
-    const dragFlag = flagValue(args, '--drag');
-    commandPinch(scale, dragFlag === undefined ? null : Math.round(Number(dragFlag)));
-    return;
-  }
-  const deltaY = Number(args[1]);
-  if (!Number.isFinite(deltaY)) fail('usage: term swipe <dy> [durationMs] (positive dy drags DOWN, toward history)');
-  terminalSwipe(Math.round(deltaY), Number(args[2] ?? '800'));
 }
 
 function commandServe() {

@@ -76,6 +76,15 @@
   }
 
   /**
+   * Pixels of finger travel per scroll unit: the full grid per PAGE, one row
+   * otherwise. The single source the drag, the fling, and the dev probe's
+   * dragUnits all share, so their arithmetic cannot drift.
+   */
+  function unitHeightFor(mechanism, gridHeightPx) {
+    return mechanism === 'page' ? gridHeightPx : gridHeightPx / terminal.rows;
+  }
+
+  /**
    * Move through history by that many units (negative = toward older output).
    * Whatever a burst produces is posted as ONE write, never one per unit.
    */
@@ -210,7 +219,7 @@
     // The unit follows the mechanism, so the content tracks the hand roughly
     // 1:1 either way: a line of travel per line scrolled, or a screenful of
     // travel per page when only the coarse control is available.
-    var unitHeight = mechanism === 'page' ? gridHeight : gridHeight / terminal.rows;
+    var unitHeight = unitHeightFor(mechanism, gridHeight);
     // A finger moving DOWN reveals OLDER content, which is negative units.
     var units = dragToScrollUnits(-dragged, unitHeight);
     if (!units) {
@@ -290,7 +299,7 @@
       velocityPxPerMs *= Math.pow(FLING_DECAY_PER_FRAME, deltaMs / 16);
       var mechanism = scrollMechanism();
       if (mechanism === 'page') return;
-      var unitHeight = screen.getBoundingClientRect().height / terminal.rows;
+      var unitHeight = unitHeightFor(mechanism, screen.getBoundingClientRect().height);
       var units = dragToScrollUnits(-bankPx, unitHeight);
       if (units !== 0) {
         // Consume exactly what was emitted; the fractional remainder glides on.

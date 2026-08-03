@@ -77,8 +77,6 @@
       cursorBlink: false,
     });
     resetWebglState();
-    fitAddon = new window.FitAddon.FitAddon();
-    terminal.loadAddon(fitAddon);
     terminal.open(document.getElementById('terminal'));
     attachWebgl();
     reportRenderer();

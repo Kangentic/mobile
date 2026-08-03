@@ -12,6 +12,7 @@ import {
 import { parseColsFromScrollback } from '@/terminal/liveTail';
 import { buildModeRestoreSequence } from '@/terminal/modeRestore';
 import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
+import type { InspectTerminalHandle, InspectTerminalWriteStats } from '@/devsupport/inspectState';
 import { getBufferedData, getTerminalDimensions, subscribeChunks } from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
@@ -77,17 +78,6 @@ const inspectEnabled = __DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_INSPECT === 
 
 /** How long to wait for the WebView to answer an injected expression. */
 const TERMINAL_EVAL_TIMEOUT_MS = 5000;
-
-/**
- * PTY write outcomes, for the inspect probe.
- *
- * Failures are deliberately swallowed at the call site (the connection banner
- * is the user-facing surface for a dropped channel), which meant a write that
- * silently stopped reaching the desktop produced NO signal anywhere - the gesture
- * looked correct, the payload looked correct, and the terminal simply did not
- * move. Counting three numbers costs nothing and turns that into a reading.
- */
-const terminalWriteStats = { attempts: 0, failures: 0, lastError: null as string | null, lastAttemptAt: 0 };
 
 interface PendingTerminalEval {
   resolve: (value: unknown) => void;
@@ -171,6 +161,15 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const directKeyRef = useRef<DirectKeyInputHandle>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
+  // Bumped to remount the WebView after the OS kills its renderer (the
+  // Android render process under memory pressure, the iOS content process).
+  // Without a handler that surfaces as a native crash or a permanently blank
+  // terminal; a remount reloads the page, whose 'ready' re-seeds from the ring.
+  const [webViewGeneration, setWebViewGeneration] = useState(0);
+  const recoverWebView = useCallback(() => {
+    setTerminalReady(false);
+    setWebViewGeneration((generation) => generation + 1);
+  }, []);
   // Read inside the live-feed listener so pausing takes effect without
   // re-subscribing the feed on every tab switch.
   const isActiveRef = useRef(isActive);
@@ -186,6 +185,21 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const lastInputSentAtRef = useRef(0);
   const pendingEvalsRef = useRef(new Map<string, PendingTerminalEval>());
   const evalSequenceRef = useRef(0);
+  // PTY write outcomes, for the inspect probe. Failures are deliberately
+  // swallowed at the call site (the connection banner is the user-facing
+  // surface for a dropped channel), which meant a write that silently stopped
+  // reaching the desktop produced NO signal anywhere - the gesture looked
+  // correct, the payload looked correct, and the terminal simply did not
+  // move. Counting three numbers costs nothing and turns that into a reading.
+  // Per PANE, not module-level: two mounted panes (a session screen stacked
+  // under another) must not mix their counts under whichever sessionId
+  // happens to be registered with the inspect bridge.
+  const terminalWriteStatsRef = useRef<InspectTerminalWriteStats>({
+    attempts: 0,
+    failures: 0,
+    lastError: null,
+    lastAttemptAt: 0,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -253,14 +267,16 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   useEffect(() => {
     if (!inspectEnabled) return;
     let released = false;
+    let registeredHandle: InspectTerminalHandle | null = null;
     void import('@/devsupport/inspectState').then((inspectStateModule) => {
       if (released) return;
-      inspectStateModule.setInspectTerminal({
+      registeredHandle = {
         sessionId,
         expectedBuildId: XTERM_BUILD_ID,
         evaluate: runTerminalEval,
-        writeStats: () => ({ ...terminalWriteStats }),
-      });
+        writeStats: () => ({ ...terminalWriteStatsRef.current }),
+      };
+      inspectStateModule.setInspectTerminal(registeredHandle);
     });
     const pending = pendingEvalsRef.current;
     return () => {
@@ -271,7 +287,13 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       }
       pending.clear();
       void import('@/devsupport/inspectState').then((inspectStateModule) => {
-        inspectStateModule.setInspectTerminal(null);
+        // Only clear our OWN registration. With two panes mounted (a session
+        // screen stacked under another), the covered pane's unmount must not
+        // null out the visible pane's still-valid handle - that read as "no
+        // terminal pane mounted" while a terminal was on screen and working.
+        if (registeredHandle !== null && inspectStateModule.getInspectTerminal() === registeredHandle) {
+          inspectStateModule.setInspectTerminal(null);
+        }
       });
     };
   }, [sessionId, runTerminalEval]);
@@ -510,12 +532,13 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       // the connection banner is the surface for that state - but they are
       // COUNTED, because a silent write failure is otherwise indistinguishable
       // from a gesture that never fired.
-      terminalWriteStats.attempts += 1;
-      terminalWriteStats.lastAttemptAt = Date.now();
+      terminalWriteStatsRef.current.attempts += 1;
+      terminalWriteStatsRef.current.lastAttemptAt = Date.now();
       lastInputSentAtRef.current = Date.now();
       void writeTerminal(sessionId, message.data).catch((writeError: unknown) => {
-        terminalWriteStats.failures += 1;
-        terminalWriteStats.lastError = writeError instanceof Error ? writeError.message : String(writeError);
+        terminalWriteStatsRef.current.failures += 1;
+        terminalWriteStatsRef.current.lastError =
+          writeError instanceof Error ? writeError.message : String(writeError);
       });
     },
     [postInit, sessionId],
@@ -595,6 +618,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     <GestureDetector gesture={pinchGesture}>
       <View style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}>
         <WebView
+          key={`terminal-webview-${webViewGeneration}`}
           ref={webViewRef}
           testID="terminal-webview"
           source={{ uri: terminalHtmlUri }}
@@ -604,6 +628,8 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
           scrollEnabled={false}
           setSupportMultipleWindows={false}
           onMessage={onWebViewMessage}
+          onRenderProcessGone={recoverWebView}
+          onContentProcessDidTerminate={recoverWebView}
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
         />
         <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />

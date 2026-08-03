@@ -77,13 +77,21 @@
       // The desktop's authoritative grid (snapshot, or a desktop-side refit, or
       // the FIRST time dims arrive when they lost the race with init). Adopt it
       // and re-fit the whole frame to screen. READ-ONLY - nothing is sent back.
+      //
+      // The WHOLE refit(), for the same reason as the 'refit' branch above:
+      // on the race path the seed already fit a GUESSED row count (init came
+      // with rows null), stretching lineHeight for the wrong grid. The old
+      // font-and-geometry half adopted the real cols/rows but reconciled
+      // nothing, so the grid rendered at the real rows under the stale
+      // stretch until the user pressed the reset button. Repeats never reach
+      // here: the host only posts 'resize' when the dims actually changed
+      // (terminalFeed's setTerminalDimensions has a same-dims guard).
       if (terminal && typeof message.cols === 'number' && typeof message.rows === 'number') {
         knownCols = message.cols;
         knownRows = message.rows;
         manualPanUntil = 0;
         if (cleanTerminal) cleanTerminal.resize(knownCols, knownRows);
-        autoFitFontToScreen();
-        applyGeometry();
+        refit();
       }
     }
   }

@@ -18,7 +18,9 @@
  * below). The files are page-scope fragments, not Node modules:
  *  - No import/export and no Node APIs; browser globals only.
  *  - Top-level var declarations are shared across ALL modules (one lexical
- *    scope), which is how state.js and gestureState.js serve everything else.
+ *    scope): state.js holds most shared state, and a few fragments declare
+ *    the state they own at top level (verticalOffsetPx in followPan.js,
+ *    maxGlTextureSize in heightFit.js, the retry delays in webglRenderer.js).
  *  - Function declarations hoist across the whole IIFE, so call order across
  *    files is fine; only statements that RUN at load are order-sensitive
  *    (state first, bootstrap last).
@@ -35,7 +37,6 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const xtermJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'), 'utf8');
 const xtermCss = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'), 'utf8');
-const xtermFitJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'), 'utf8');
 const xtermWebglJs = readFileSync(join(repoRoot, 'node_modules', '@xterm', 'addon-webgl', 'lib', 'addon-webgl.js'), 'utf8');
 // @xterm/headless ships a CJS-only bundle (assigns to `exports`, no UMD); the
 // wrapper below fakes `exports` and captures the module as a page global. It
@@ -169,9 +170,6 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
 <div id="scroll-container"><div id="terminal"></div></div>
 <script>
 ${xtermJs}
-</script>
-<script>
-${xtermFitJs}
 </script>
 <script>
 ${xtermWebglJs}

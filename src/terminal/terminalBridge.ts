@@ -41,9 +41,11 @@ export type HostToTerminalMessage =
   | { type: 'refit' }
   /**
    * Jump to the newest output. Mechanism-aware in the page: local
-   * scrollToBottom when the buffer has real scrollback, an overshooting
-   * wheel-down burst when the agent owns its history (past-the-end reports are
-   * no-ops, so overshooting is safe and needs no knowledge of depth).
+   * scrollToBottom when the buffer has real scrollback; otherwise Ctrl+End
+   * (the TUI's own depth-independent jump binding), plus one delayed
+   * wheel-down nudge under mouse tracking so a quiet TUI repaints. Never an
+   * overshoot burst - a big burst can mis-split into the agent's composer as
+   * literal text (see scrollToLatest in scripts/xterm-page/historyScroll.js).
    */
   | { type: 'scroll-latest' }
   /** The authoritative PTY grid changed (desktop refit); adopt it and re-fit the frame to screen. */
