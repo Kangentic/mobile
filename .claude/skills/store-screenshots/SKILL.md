@@ -188,8 +188,17 @@ Do not open a PR unless asked; the board's Tests column owns that.
   that is ambiguous over the session screen's three-page pager. The flow taps
   the native bar button (`resource-id: BackButton`) where it exists.
 - **A segment tap can dispatch and do nothing.** Maestro reports COMPLETED, the
-  pager never turns, and `retryIfNoChange` is false. Both segment taps are
-  guarded and re-tapped.
+  pager never turns, and `retryIfNoChange` is false. All three segment taps are
+  guarded on their destination and re-tapped.
+- **The session opens on TERMINAL, so the flow pages to Chat itself.** Only a
+  NEEDS-YOU row carries `mode=chat`, and the flow taps the row well before the
+  mock raises the prompt at tick 20, so `SessionScreen` falls through to its
+  `terminal` default. The app is right to stay put, so do not "fix" this by
+  making a pending prompt switch lenses.
+- **Search the feed UP, not down.** That same tick-20 prompt moves the target row
+  from Thinking to the top of Idle, where it stays. A DOWN search that runs after
+  it lands scrolls away from the row and fails at full timeout, which reads as a
+  broken feed rather than a race.
 - **The Changes page is attempted, not asserted.** One bad navigation used to
   cost every frame after it. A skipped page is reported by name instead.
 - **iOS icon precedence is `sf` > `xcasset` > `src`.** Adding an `sf` back to
