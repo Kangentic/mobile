@@ -182,6 +182,67 @@ describe('the shot list matches the capture flow', () => {
     // filename, so the numeric prefixes are load-bearing rather than decorative.
     expect([...SHOT_NAMES]).toEqual([...SHOT_NAMES].sort());
   });
+
+  /**
+   * Regression cover for a race that reproduced intermittently: the same
+   * commit was observed passing and failing on consecutive runs.
+   *
+   * The activity row this flow searches for sits in one of two places
+   * depending on whether the mock's tick-20 permission prompt has landed yet
+   * (Thinking, below the fold, before; the top of Idle, after - and it stays
+   * there, because this flow deliberately leaves the prompt unanswered). A
+   * DOWN search races that transition: it wins when the search happens to run
+   * before tick 20 and loses when it does not, having scrolled to the end of
+   * the feed with the row sitting above the whole time. Searching UP is safe
+   * in both states, so this locks the direction (and the 90s budget the
+   * longer search needs) rather than trusting a comment not to regress.
+   */
+  it('searches UP for the pending session row, not DOWN into the race', () => {
+    const scrollBlocks = [...flowSource.matchAll(/^- scrollUntilVisible:/gm)];
+    // Non-vacuity guard: the slice below assumes exactly one such block.
+    expect(scrollBlocks.length).toBe(1);
+
+    const blockStart = flowSource.indexOf('- scrollUntilVisible:');
+    const nextTopLevelCommand = flowSource.indexOf('\n- ', blockStart + 1);
+    const block = flowSource.slice(
+      blockStart,
+      nextTopLevelCommand === -1 ? flowSource.length : nextTopLevelCommand,
+    );
+
+    expect(block).toContain('activity-row-mock-session-1');
+    expect(block).toContain('direction: UP');
+
+    const timeoutMatch = block.match(/timeout:\s*(\d+)/);
+    expect(timeoutMatch).not.toBeNull();
+    expect(Number(timeoutMatch?.[1])).toBeGreaterThanOrEqual(90_000);
+  });
+
+  /**
+   * Regression cover for the companion fix: SessionScreen resolves its lens
+   * as route param -> the task's remembered lens -> a `terminal` default
+   * (src/screens/task/SessionScreen.tsx), and this flow taps the activity row
+   * well before the mock's tick-20 prompt attaches a `mode=chat` route param
+   * to it. So the session opens on Terminal, and the flow must page to Chat
+   * itself before the permission card can be on screen at all - asserting the
+   * card straight after open (the old ordering) waits on a screen the app was
+   * never going to show.
+   */
+  it('dismisses the coach-mark, pages to Chat, then waits for the permission card - in that order', () => {
+    // Non-vacuity guard: every anchor below must actually be found, or the
+    // ordering comparison would pass by finding nothing to compare.
+    const hintDismissalCompletesAt = flowSource.lastIndexOf('session-mode-hint');
+    const chatTapAt = flowSource.indexOf('session-mode-chat');
+    const permissionCardAssertedAt = flowSource.indexOf('permission-approve');
+    expect(hintDismissalCompletesAt).toBeGreaterThanOrEqual(0);
+    expect(chatTapAt).toBeGreaterThanOrEqual(0);
+    expect(permissionCardAssertedAt).toBeGreaterThanOrEqual(0);
+
+    // lastIndexOf on the hint id: it appears three times (the runFlow guard,
+    // the tap, and the notVisible wait), and what matters is that dismissal
+    // has FINISHED, not merely started, before the Chat tap fires.
+    expect(hintDismissalCompletesAt).toBeLessThan(chatTapAt);
+    expect(chatTapAt).toBeLessThan(permissionCardAssertedAt);
+  });
 });
 
 /**
