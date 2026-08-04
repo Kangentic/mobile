@@ -10,13 +10,6 @@
   "engines": {
     "node": ">=22"
   },
-  "expo": {
-    "install": {
-      "exclude": [
-        "react-native-gesture-handler"
-      ]
-    }
-  },
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",
@@ -73,7 +66,7 @@
     "react": "19.2.3",
     "react-native": "0.86.2",
     "react-native-enriched-markdown": "^0.7.4",
-    "react-native-gesture-handler": "~2.32.0",
+    "react-native-gesture-handler": "~3.1.0",
     "react-native-get-random-values": "~1.11.0",
     "react-native-pager-view": "8.0.2",
     "react-native-reanimated": "4.5.1",
