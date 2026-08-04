@@ -387,7 +387,9 @@ plugins/                     # Local Expo config plugins: withAndroidPushService
                              #   permissions + FGS type), withIosManualSigning (App Store signing,
                              #   inert outside CI), withAndroidE2eGwpAsanOff (e2e APK only),
                              #   withAndroidCmakeBuildStaging (relocates CMake's .cxx staging to a
-                             #   short absolute root so Android builds from any path depth)
+                             #   short absolute root so Android builds from any path depth),
+                             #   withAndroidGradleHeap (raises the Gradle daemon heap past the
+                             #   template's 2048m so R8 survives a four-ABI production build)
 targets/nse/                 # iOS Notification Service Extension source, injected via plugin - later phase
 app/                          # expo-router route wrappers (thin - render the src/screens/ implementation)
   task/[taskId].tsx           # full-screen task view; file-diff.tsx hosts the per-file diff

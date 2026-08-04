@@ -385,6 +385,11 @@ const config: ExpoConfig = {
     // identical on every platform, so ci.yml can verify the block landed. See
     // the plugin for both MAX_PATH mechanisms.
     './plugins/withAndroidCmakeBuildStaging.ts',
+    // Replaces the template's 2048m org.gradle.jvmargs: R8 (enabled above via
+    // enableMinifyInReleaseBuilds) OOMed the daemon on the first four-ABI
+    // production build, taking the concurrent CMake configure down with it.
+    // See the plugin for why this is project config, not a CI env var.
+    './plugins/withAndroidGradleHeap.ts',
     // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
     // .github/workflows/build-ios.yml does. See the plugin for why signing has
     // to be scoped to the app target instead of passed to xcodebuild.
