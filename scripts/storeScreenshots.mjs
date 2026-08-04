@@ -276,21 +276,37 @@ function enterDemoMode() {
   // state after any interrupted run, not an exotic one. Starting from a known
   // clean bar costs one broadcast.
   //
-  // THE SETTLE IS LOAD-BEARING, and the exit alone was not enough.
+  // The exit and the settle are cheap insurance, NOT a proven fix. Read the
+  // next paragraph before trusting them, and look at every status bar anyway.
   //
-  // `am broadcast` returns once the broadcast is DISPATCHED; SystemUI handles it
-  // later on its own thread. Back-to-back exit/enter therefore races, and losing
-  // that race leaves demo mode on - the exact state the exit exists to clear.
-  // The artifact record shows both outcomes from the same shelf at the same
-  // geometry: the 7-inch frames captured in f44227d (which added the exit) have
-  // one wifi glyph, and the ones captured later in 9ce5396 have two. Same code,
-  // same density, different outcome, which is what a race looks like and what
-  // rules out the non-standard 280 bucket as the cause.
+  // The original theory was a dispatch race: `am broadcast` returns once the
+  // broadcast is DISPATCHED and SystemUI handles it later on its own thread, so
+  // a back-to-back exit/enter could leave demo mode on - the state the exit
+  // exists to clear - and a later `network` command would then ADD a second
+  // wifi glyph instead of replacing the first.
+  //
+  // THAT THEORY DOES NOT FIT THE EVIDENCE, and the settle below did not prevent
+  // the defect. A 2026-08-04 capture reproduced two wifi glyphs WITH this settle
+  // in place, on a COLD-BOOTED emulator (so demo mode was off, and the
+  // "already on" precondition the theory needs was absent) and at 480dpi on the
+  // PHONE shelf, not the 280dpi 7-inch one previously blamed. Density is
+  // innocent, but so is the shelf: any of them can produce it.
+  //
+  // Then 28 deliberate trials failed to reproduce it even once, across four
+  // reconstructions: demo-mode-already-on, the `wm size`/`wm density` change,
+  // an 8s gap between geometry and demo mode, and the app foregrounded. A
+  // further run sampled the bar every 15s for two minutes and it never grew a
+  // second glyph. The one variable never isolated is Maestro itself, since the
+  // defect has only ever appeared during a `maestro test`.
+  //
+  // So the mechanism is UNKNOWN and the reproduction rate is low - roughly one
+  // run in four by the artifact record. Do not read a clean shelf as proof the
+  // settle works; it is one won race, not a fix. If it recurs, the honest next
+  // step is a readback (screenshot the bar and count the icons) rather than a
+  // longer sleep, because there is no evidence sleeping longer helps.
   //
   // Sleeping on the device rather than in Node keeps this a single synchronous
-  // adb call. One second is a guess informed by the failure, not a measured
-  // floor - so it reduces the odds rather than proving them zero, and every
-  // capture still has to be looked at.
+  // adb call.
   demo(['-e', 'command', 'exit']);
   adb(['shell', 'sleep', '1'], { allowFailure: true });
   demo(['-e', 'command', 'enter']);
