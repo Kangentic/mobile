@@ -45,7 +45,9 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   inert unless EXPO_PUBLIC_KANGENTIC_E2E=1;
                               #   withAndroidCmakeBuildStaging: relocates CMake's .cxx staging to a
                               #   short absolute root so Android builds from any path depth,
-                              #   Windows-gated inside the generated Gradle)
+                              #   Windows-gated inside the generated Gradle;
+                              #   withAndroidGradleHeap: raises the Gradle daemon heap past the
+                              #   template's 2048m so R8 survives a four-ABI production build)
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
