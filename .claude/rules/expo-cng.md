@@ -31,6 +31,19 @@ unreproducible for any other contributor or CI machine.
   `npm install` takes latest and silently
   drifts against it. Non-Expo packages may use `npm install` normally.
 - After any dependency change, run `npx expo install --check` to confirm nothing drifted.
+- **The drift gate can go red with NO change in this repository.** Expo resolves expected
+  versions server-side, so a mapping can move under a lockfile that never changed: the same tree
+  passed on `main` and failed hours later on a pull request, twice, with react-native-gesture-handler
+  flipping between the 2.32 and 3.1 lines in both directions inside two days. Diagnose a red
+  `Native config (prebuild)` by checking whether the diff touches a manifest at all before
+  assuming the branch caused it.
+- **`expo.install.exclude` in `package.json` is the deliberate-hold mechanism, and it SILENCES a
+  required check.** Listing a package there drops it from `expo install --check` and `--fix`
+  entirely, which is correct when the repo has deliberately chosen a version the SDK mapping
+  disagrees with, and dangerous otherwise: it suppresses signal on a gate that blocks merges, and
+  it does not pin anything (the version in `dependencies` is what ships). Reach for it only to
+  hold a version a change deliberately vetted, never to quiet a genuine drift, and treat removing
+  an entry as part of whichever change next vets that package.
 
 ## Enforcement (self-maintaining)
 
