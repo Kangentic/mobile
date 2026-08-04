@@ -60,30 +60,37 @@ env:
 # viewport therefore scrolls AWAY from it half the time - which is exactly what
 # happened, running to the end of the feed while the row sat above.
 #
-# Swiping DOWN moves content toward the beginning.
-- swipe:
-    direction: DOWN
-    duration: 400
-- swipe:
-    direction: DOWN
-    duration: 400
-- swipe:
-    direction: DOWN
-    duration: 400
+# SEARCH UP, TOWARD THE BEGINNING - the row's resting place, not its starting
+# one. Three swipes plus a DOWN search used to stand here and it raced the mock:
+# it found the row when the search happened to run before tick 20 and failed
+# outright when it did not, having scrolled to the end of the feed with the row
+# sitting above the whole time.
+#
+# The two positions are what makes a DOWN search unsafe. Before the prompt the
+# session is in Thinking, below the fold; the moment it is raised the row moves
+# to the top of Idle and STAYS there, because this flow deliberately leaves the
+# prompt unanswered. So the row's position is only stable in one direction, and
+# it is up.
+#
+# Scrolling UP is also safe early: it walks to the top, finds nothing yet, and
+# keeps retrying across its window until the prompt lands and the row appears
+# exactly where it already is. That is why the timeout is 90s rather than 60 -
+# it has to cover the mock's ~20s tick-20 prompt from a cold launch, not just
+# the scrolling.
+#
 # visibilityPercentage is deliberately low: an activity card is tall enough that
 # it is rarely 100% inside the viewport, and the default 100 rejected a row that
 # was plainly on screen. waitToSettleTimeoutMs matters because this feed mutates
 # between scrolls (usage bars tick, sections re-sort), which is exactly the case
-# Maestro's own tip names. Unlike a one-shot assert, this retries across its
-# whole window, so it tolerates the prompt arriving mid-search.
+# Maestro's own tip names.
 - scrollUntilVisible:
     element:
       id: "activity-row-mock-session-1"
-    direction: DOWN
+    direction: UP
     visibilityPercentage: 20
     centerElement: true
     waitToSettleTimeoutMs: 800
-    timeout: 60000
+    timeout: 90000
 - tapOn:
     id: "activity-row-mock-session-1"
 # 45s: this screen mounts all three panes at once, terminal WebView included.
@@ -91,17 +98,13 @@ env:
     visible:
       id: "session-screen"
     timeout: 45000
-# CHAT IS WHERE WE LAND, not Terminal. Opening a prompt-pending row goes
-# straight to the lens that can answer the prompt, so the permission card is
-# already on screen - capture it before anything is tapped, because approving or
-# navigating away dismisses it and the mock raises it only once per session.
-- extendedWaitUntil:
-    visible:
-      id: "permission-approve"
-    timeout: 45000
 # The first-run "One session, two views" coach-mark covers most of a phone
 # screen. It is correct product behaviour and wrong for a listing image, so
 # dismiss it (it is tap-to-dismiss) and only then capture.
+#
+# DISMISSED BEFORE THE CHAT TAP, not after: the coach-mark sits over the mode
+# switcher, so a tap aimed at a segment while it is up hits the coach-mark
+# instead and the pager never turns.
 - runFlow:
     when:
       visible:
@@ -113,6 +116,43 @@ env:
           notVisible:
             id: "session-mode-hint"
           timeout: 10000
+# TERMINAL IS WHERE WE LAND, so page to Chat explicitly.
+#
+# This flow used to assert the permission card straight after the session
+# opened, on the belief that a prompt-pending row lands on the lens that can
+# answer it. That is only true when the route carries `mode=chat`, which the
+# feed attaches to a NEEDS-YOU row. We tap the row much earlier than that: the
+# mock raises the prompt at tick 20, so at tap time the session is still
+# Thinking and the route carries no mode. SessionScreen's priority is then
+# route param -> the task's remembered lens -> the `terminal` default
+# (src/screens/task/SessionScreen.tsx), so we land on Terminal with the prompt
+# pending and the Chat segment wearing its attention dot.
+#
+# The app is right to stay put - `chatAttention` exists precisely so a pending
+# prompt never yanks a surface someone may be typing into - so the flow pages
+# over instead.
+#
+# Guarded on the CHAT LENS rather than on the permission card, because the card
+# does not exist until tick 20: guarding on it would re-tap for a reason that
+# has nothing to do with the tap landing. Same dispatched-but-ignored failure
+# mode as the Changes tap below, and the remembered lens makes it likelier
+# still - a later shelf mounts on whatever segment the previous run left
+# behind.
+- tapOn:
+    id: "session-mode-chat"
+- runFlow:
+    when:
+      notVisible:
+        id: "conversation-list"
+    commands:
+      - tapOn:
+          id: "session-mode-chat"
+# Capture the card before anything else is tapped: approving or navigating away
+# dismisses it and the mock raises it only once per session.
+- extendedWaitUntil:
+    visible:
+      id: "permission-approve"
+    timeout: 45000
 - takeScreenshot:
     path: ${OUTPUT_DIR}/03-session-chat
     label: Readable transcript with a permission card
