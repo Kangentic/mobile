@@ -88,11 +88,10 @@ function hostWithoutPort(authority: string): string | null {
  * inside it is userinfo, not the host - so `ws://127.0.0.1:8080@evil.test`
  * dials **evil.test**, with `127.0.0.1`/`8080` as a username and password.
  * A prefix match reads that as loopback-plus-a-port and waves it through,
- * which is precisely the bypass this function exists to close: the pairing
- * token is the Noise PSK, so one crafted `relayAddress` in an otherwise
- * ordinary QR would put it on the wire in cleartext to an attacker-chosen
- * host, and the address is then persisted to the trust anchor for every
- * later session.
+ * which is precisely the bypass this function exists to close: one crafted
+ * `relayAddress` in an otherwise ordinary QR routes the whole ceremony
+ * through an attacker-chosen host, and that address is then persisted to the
+ * trust anchor for every later session.
  *
  * Credentials are rejected outright rather than parsed around: this app has
  * no use for relay userinfo, so an `@` here is only ever an attempt to look
@@ -110,11 +109,18 @@ function plaintextRelayHost(relayAddress: string): string | null {
 }
 
 /**
- * The pairing token IS the Noise PSK and is dialed verbatim as the relay's
- * `?slot=` parameter (channel/slot.ts), so a non-TLS relay would put the PSK
- * on the wire in cleartext. Require `wss://`, independent of any OS-level
+ * The relay address arrives inside a SCANNED QR, so it is attacker
+ * controllable: a crafted payload naming a plaintext host routes the entire
+ * ceremony through that host, and pairing then persists it to the trust anchor
+ * for every later session. Require `wss://`, independent of any OS-level
  * cleartext policy, carving out only loopback for local dev (docs/security.md),
  * plus the emulator's host-loopback alias for the build shapes above.
+ *
+ * This rule predates `derivePairingSlotId` and used to be justified by the
+ * pairing token being dialed verbatim as `?slot=`, which put the Noise PSK in
+ * cleartext on the wire. `channel/slot.ts` derives a routing label now and the
+ * token never leaves the QR, so that particular exposure is gone. The
+ * address-pinning reason above is not, which is why the restriction stays.
  *
  * Deliberately hand-rolled rather than built on `new URL()`: Hermes ships a
  * partial URL implementation and React Native's polyfill situation varies by
@@ -131,12 +137,19 @@ function isSecureRelayAddress(relayAddress: string): boolean {
 
 /**
  * Validates a scanned (or pasted) pairing URI before any handshake attempt.
- * Expiry and version checks here are UX only - "this code expired, scan
- * again" beats an opaque authentication failure - the real security
- * boundary is the Noise prologue binding enforced during the handshake
- * itself (docs/security.md). The relay-scheme check is not UX-only: it is
- * defense-in-depth against leaking the pairing-token PSK over a plaintext
- * relay connection.
+ * The expiry check is UX only - "this code expired, scan again" beats an
+ * opaque authentication failure - since the real security boundary is the
+ * Noise prologue binding enforced during the handshake itself
+ * (docs/security.md).
+ *
+ * The version check is stronger than UX, and it must stay ahead of every dial.
+ * Both relay slots are zero-negotiation rendezvous values, so peers on
+ * different protocol versions derive different slots and simply never meet:
+ * without this, a version mismatch surfaces as the relay's 4408 park timeout,
+ * which reads as "pairing just hangs" rather than "update the desktop".
+ *
+ * The relay-scheme check is not UX-only either: it pins the host that the
+ * ceremony, and every later session, will talk to. See isSecureRelayAddress.
  */
 export function validateScannedQr(uri: string, now: Date = new Date()): QrValidationResult {
   let payload: PairingQrPayload;

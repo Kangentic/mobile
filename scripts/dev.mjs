@@ -156,9 +156,12 @@ const LOCAL_RELAY_URL = `ws://127.0.0.1:${RELAY_PORT}`;
 let RELAY_URL = LOCAL_RELAY_URL;
 /** True when RELAY_URL points somewhere this machine is not hosting. */
 let relayIsRemote = false;
-// Until every local relay checkout carries the widened default, always start
-// the relay with the session slot length allowed (32-hex session slot plus
-// the 64-hex pairing slot). Harmless once the relay default matches.
+// BOTH slots are 32 hex characters now: protocol 0.12.0 derives the pairing
+// slot (derivePairingSlotId, 16 bytes) instead of dialing the 64-hex token
+// verbatim, matching deriveSessionSlotId's shape. The 64-hex alternative is
+// kept only so an older relay checkout, or an older peer, still rendezvouses
+// against this rig rather than failing at upgrade with a bare 400. Matches the
+// relay's own current default, so it is a no-op against a current checkout.
 const RELAY_SLOT_PATTERN = '^([0-9a-f]{32}|[0-9a-f]{64})$';
 const DEFAULT_AVD = 'kangentic_pixel';
 const MODES = ['mock', 'live', 'pair', 'stub', 'doctor', 'emu', 'adb', 'stop'];

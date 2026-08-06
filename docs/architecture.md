@@ -55,7 +55,10 @@ carries, and nothing more:
 4. The protocol version.
 
 It never carries a long-lived secret. The token is mixed into the Noise handshake as a
-**pre-shared key (PSK)**; see `docs/security.md` for why this is deliberately not a PAKE. After
+**pre-shared key (PSK)**; see `docs/security.md` for why this is deliberately not a PAKE. The
+token stays in the QR and goes nowhere else: the relay slot both peers dial is *derived* from
+it (`derivePairingSlotId`), never the token itself, because the slot travels in cleartext in
+the relay URL. After
 the handshake, both sides derive a **Short Authentication String (SAS)** from the transcript
 hash and display it on both screens; the user confirms the two match before the pairing
 completes. On success, the desktop signs the phone's public key into a device roster with a
