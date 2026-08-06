@@ -70,8 +70,11 @@ echo "Setting up adb reverse tcp:8080 tcp:8080..."
 adb reverse tcp:8080 tcp:8080
 
 # Start the relay with exactly the local rig's env and nothing else
-# (scripts/dev.mjs's ensureRelay): only SLOT_ID_PATTERN, widened to accept the
-# 32-hex session slot alongside the relay's own 64-hex pairing-slot default.
+# (scripts/dev.mjs's ensureRelay): only SLOT_ID_PATTERN. Both slots are 32 hex
+# characters as of protocol 0.12.0, which derives the pairing slot rather than
+# dialing the 64-hex token verbatim; the 64-hex alternative is retained only to
+# tolerate an older relay checkout. Keep this identical to dev.mjs's
+# RELAY_SLOT_PATTERN.
 # Do NOT raise MAX_CONNECTIONS_PER_SLOT, MAX_CONNECTIONS_PER_IP, or the rate
 # limits here - the local rig runs these same 11 launchApp cycles against the
 # relay's defaults on this same one-IP loopback topology and passes. If a run

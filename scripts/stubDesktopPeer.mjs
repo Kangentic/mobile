@@ -29,6 +29,7 @@ import {
   createKKHandshake,
   createPairingResponderHandshake,
   decodeMessage,
+  derivePairingSlotId,
   deriveSecretstreamPair,
   deriveSessionSlotId,
   deriveShortAuthenticationString,
@@ -134,7 +135,10 @@ function onFrame(socket, listener) {
 const PAIRING_WAIT_MS = 10 * 60 * 1000;
 
 async function runPairing(relayUrl, desktopStatic, pairingToken) {
-  const slotId = bytesToHex(pairingToken);
+  // Derived, never the token itself - the slot travels in cleartext in the
+  // relay URL and the token is the Noise PSK. Mirrors the desktop's
+  // startPairing() byte-for-byte.
+  const slotId = derivePairingSlotId(pairingToken);
   const deadline = Date.now() + PAIRING_WAIT_MS;
 
   // The relay reaps a parked (peer-less) connection after PARK_TIMEOUT_MS

@@ -1,18 +1,25 @@
 /**
- * The session relay slot must byte-match what the desktop dials
- * (openSessionForDevice -> deriveSessionSlotId), or the two sides never
- * rendezvous. Phase 1 shipped a hex-of-the-desktop-key candidate that did
- * NOT match; this locks the mobile derivation to the protocol package's
- * canonical export so it can never drift locally again.
+ * Both relay slots must byte-match what the desktop dials (startPairing ->
+ * derivePairingSlotId, openSessionForDevice -> deriveSessionSlotId), or the two
+ * sides never rendezvous. Phase 1 shipped a hex-of-the-desktop-key candidate
+ * that did NOT match; this locks both mobile derivations to the protocol
+ * package's canonical exports so neither can drift locally again.
  */
 import { describe, expect, it } from 'vitest';
-import { bytesToHex, deriveSessionSlotId, generateX25519KeyPair } from '@kangentic/protocol';
+import { bytesToHex, derivePairingSlotId, deriveSessionSlotId, generateX25519KeyPair } from '@kangentic/protocol';
 import { deriveSlotId } from '@/channel/slot';
 
 describe('deriveSlotId', () => {
-  it('pairing slot is the hex of the pairing token itself', () => {
+  it('pairing slot byte-matches the protocol package derivation the desktop dials', () => {
     const pairingToken = new Uint8Array(32).fill(7);
-    expect(deriveSlotId({ kind: 'pairing', pairingToken })).toBe(bytesToHex(pairingToken));
+    const slotId = deriveSlotId({ kind: 'pairing', pairingToken });
+
+    expect(slotId).toBe(derivePairingSlotId(pairingToken));
+    // The labeled derivation is 16 bytes -> 32 hex chars, and is NOT the raw
+    // token: the token is the Noise PSK, and the slot travels in cleartext in
+    // the relay URL, so dialing the token verbatim would publish the PSK.
+    expect(slotId).toHaveLength(32);
+    expect(slotId).not.toBe(bytesToHex(pairingToken));
   });
 
   it('session slot byte-matches the protocol package derivation the desktop dials', () => {

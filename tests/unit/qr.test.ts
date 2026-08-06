@@ -291,4 +291,43 @@ describe('validateScannedQr', () => {
     if (result.ok) throw new Error('unreachable');
     expect(result.errorKind).toBe('version-incompatible');
   });
+
+  /**
+   * Deliberately the literal '2' rather than the constant or a nonsense value:
+   * v2 is what a desktop older than the derived-pairing-slot change actually
+   * sends, and it is the one incompatible version a user will really meet. The
+   * '999' case above proves the comparison exists; this one guards against
+   * someone later waving v2 through for "backwards compatibility". They derive
+   * the pairing slot differently (bytesToHex of the token, not
+   * derivePairingSlotId), so admitting one would trade a clear "update the
+   * desktop" for a hang until the relay's 4408 park timeout.
+   */
+  it("rejects protocolVersion '2', the version a pre-derived-slot desktop sends", () => {
+    const payload = buildValidPayload({ protocolVersion: '2' });
+    const uri = encodePairingQrPayload(payload);
+
+    const result = validateScannedQr(uri, anchorNow(0));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.errorKind).toBe('version-incompatible');
+  });
+
+  /**
+   * Ordering, not just presence: the version check must sit ahead of the
+   * relay-scheme check, so an old desktop is reported as an old desktop rather
+   * than as a bad relay address. Note the check ABOVE it, expiry, wins over
+   * version by the same logic - which is a live trap when hand-minting a stale
+   * v2 URI to test this by hand, since it comes back 'expired'.
+   */
+  it('reports version-incompatible ahead of an insecure relay address', () => {
+    const payload = buildValidPayload({ protocolVersion: '2', relayAddress: 'ws://evil.test:8080' });
+    const uri = encodePairingQrPayload(payload);
+
+    const result = validateScannedQr(uri, anchorNow(0));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.errorKind).toBe('version-incompatible');
+  });
 });

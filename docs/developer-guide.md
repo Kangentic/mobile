@@ -97,10 +97,14 @@ Details worth knowing:
 - **Relay checkout:** the rig expects the `kangentic-relay` repo as a sibling directory
   (`../kangentic-relay`), overridable via `--relay-repo`, the `KANGENTIC_RELAY_REPO` env var, or
   `relayRepoPath` in the state file. It starts the relay's `npm run dev` with
-  `SLOT_ID_PATTERN='^([0-9a-f]{32}|[0-9a-f]{64})$'` (the 32-hex ongoing-session slot plus the
-  64-hex pairing slot); when it adopts an already-running relay it probes for 32-hex acceptance
-  and warns with the exact restart command if the pattern is too narrow (symptom: pairing works,
-  every session 400s at upgrade).
+  `SLOT_ID_PATTERN='^([0-9a-f]{32}|[0-9a-f]{64})$'`. **Both slots are 32 hex characters** as of
+  protocol 0.12.0, which derives the pairing slot rather than dialing the 64-hex token verbatim;
+  the 64-hex alternative is retained only so an older relay checkout or peer still rendezvouses.
+  This now matches the relay's own default, so it is a no-op against a current checkout. When
+  the rig adopts an already-running relay it probes for 32-hex acceptance and warns with the
+  exact restart command if the pattern is too narrow - against a relay narrowed to 64-hex only,
+  that now means nothing rendezvouses at all rather than the old "pairing works, every session
+  400s at upgrade".
 - **`.devrig.local.json`** (repo root, gitignored, safe to delete): `relayRepoPath`,
   `stubPhoneKey` (captured automatically from the stub's output after a pairing), `avdName`.
 - **`adb reverse tcp:8080 tcp:8080`** is required for any relay connectivity - the app only
@@ -377,6 +381,15 @@ Workflow for a protocol change:
 so peers on different minor versions still interoperate (an older phone ignores unknown fields; a
 newer desktop tolerates their absence). A breaking wire change bumps `PROTOCOL_VERSION`, which is
 bound into the Noise prologue and forces all peers to upgrade in lockstep.
+
+0.12.0 is the worked example, and it shows the cost. It derived the pairing slot
+(`derivePairingSlotId`) instead of dialing the pairing token verbatim, which took
+`PROTOCOL_VERSION` from `2` to `3` even though no message shape changed: a slot derivation
+counts as wire-breaking because the slot is a zero-negotiation rendezvous value, so peers
+deriving it differently never meet and simply hang until the relay's park timeout. Because the
+version is bound into the KK **session** prologue and not only the pairing one, **every
+already-paired device had to re-pair**, which is acceptable only because the app has not rolled
+out. Budget for that whenever `PROTOCOL_VERSION` moves.
 
 ## Project Structure
 

@@ -10,7 +10,9 @@ const ERROR_MESSAGES: Record<QrValidationErrorKind, string> = {
   'not-a-pairing-uri': 'That QR code is not a Kangentic pairing code.',
   malformed: 'That pairing code could not be read. Try scanning again.',
   expired: 'This pairing code has expired. Generate a new one on the desktop.',
-  'version-incompatible': 'This desktop is running an incompatible version. Update it and try again.',
+  // Names neither side as the stale one: after a PROTOCOL_VERSION bump the phone is ahead of an
+  // old desktop, but a phone that has not updated is behind a current one, and both land here.
+  'version-incompatible': 'The desktop and this app are on incompatible versions. Update both and try again.',
   'insecure-relay': 'This pairing code points at an insecure relay. Kangentic requires a secure (wss://) connection.',
 };
 

@@ -71,20 +71,28 @@ the wire.
   stays load-bearing, and a missing Final must never be read as evidence a device is still there.
 - **No Double Ratchet.** Double Ratchet solves offline, asynchronous message queuing, which this
   interactive link does not have; adding it would be unjustified complexity.
-- **Relay scheme enforcement:** the pairing token is mixed into the handshake as the Noise PSK
-  and dialed verbatim as the relay's slot parameter, so a plaintext relay connection would put
-  it on the wire in cleartext. The phone (`src/pairing/qr.ts`) refuses to pair through any
-  relay address that isn't `wss://`, carving out only loopback (`ws://localhost`, `127.0.0.1`,
-  `::1`) for a local dev relay.
+- **Relay scheme enforcement:** the relay address arrives inside a scanned QR, so it is
+  attacker controllable, and `activePairing` persists it to the trust anchor for every later
+  session. A crafted payload naming a plaintext host would therefore route the whole ceremony,
+  and everything after it, through that host. The phone (`src/pairing/qr.ts`) refuses to pair
+  through any relay address that isn't `wss://`, carving out only loopback (`ws://localhost`,
+  `127.0.0.1`, `::1`) for a local dev relay.
+
+  This rule predates protocol 0.12.0 and used to be justified by a second exposure that no
+  longer exists: the pairing token was dialed verbatim as the relay's `?slot=` parameter while
+  also serving as the Noise PSK, so a plaintext connection put the PSK on the wire. The slot is
+  a derived routing label now (`derivePairingSlotId`, see Relay slots below) and the token never
+  leaves the QR. The address-pinning reason above is untouched by that, which is why the
+  restriction stays.
 
   **That carve-out is decided by parsing the address's AUTHORITY, never by prefix matching.**
   A prefix test can only ask what an address starts with, which says nothing about the host it
   resolves to, and it accepted two impostors: `ws://127.0.0.1:8080@evil.test`, where everything
   before the `@` is userinfo so the real host is `evil.test`; and `ws://[::1]evil.com`, where
-  truncating at the closing bracket read the host as `[::1]`. Either would have handed the
-  pairing token - the Noise PSK - to an attacker-chosen host in cleartext, and `activePairing`
-  would then have persisted that host to the trust anchor for every later session. The same
-  rules live in `@kangentic/protocol`'s `relay-address.ts` (0.11.1), which the desktop reads
+  truncating at the closing bracket read the host as `[::1]`. Either would have run the whole
+  ceremony through an attacker-chosen host, and `activePairing` would then have persisted that
+  host to the trust anchor for every later session. The same
+  rules live in `@kangentic/protocol`'s `relay-address.ts` (0.12.0), which the desktop reads
   through `src/shared/relay.ts`, so both ends enforce one definition. Two build shapes additionally accept `ws://10.0.2.2`, the
   Android emulator's NAT alias for the host's loopback interface, so a rig relay is reachable
   without an `adb reverse`: a `__DEV__` bundle, and a build from the **`e2e` EAS profile**,
@@ -106,6 +114,34 @@ the wire.
   profile that ships. Note the gate is on the BUILD, not the device: an `e2e` or dev build
   installed on a physical phone would accept `10.0.2.2`, where it is an ordinary private address
   rather than a loopback alias, so neither belongs on a phone that pairs with anything real.
+
+## Relay slots
+
+A slot id is the rendezvous label two peers dial to find each other (`${relayUrl}?slot=<hex>`).
+Both are derived in `@kangentic/protocol` and mirrored by `src/channel/slot.ts`, which the
+desktop matches byte for byte:
+
+| Slot | Derivation | Shape |
+|---|---|---|
+| Pairing | `derivePairingSlotId(pairingToken)` | labeled BLAKE2s, 16 bytes / 32 hex |
+| Session | `deriveSessionSlotId(desktopStaticPublicKey, phoneStaticPublicKey)` | labeled BLAKE2s, 16 bytes / 32 hex |
+
+**A slot is a routing label, never key material.** It rides in a URL query string, the
+most-logged part of a request, so anything secret placed there is published to every hop that
+can read a request URI. Before protocol 0.12.0 the pairing slot was the hex of the pairing
+token itself, which published it: the same 32 bytes were also the Noise `IKpsk0` pre-shared
+key, so on a hosted relay whatever terminates TLS saw the PSK, and `IKpsk0` degraded to plain
+`IK` against such an observer. Deriving the slot keeps the label public and the PSK secret; the
+token now never leaves the QR. Its 128 bits are sized to defeat blind enumeration, which is all
+a rendezvous label has to do.
+
+**A slot derivation is a wire-breaking change.** The slot is a zero-negotiation value, so peers
+computing it differently never meet, and the symptom is a hang until the relay's park timeout
+rather than an error. `PROTOCOL_VERSION` is therefore bumped whenever a derivation changes (v3
+introduced the derived pairing slot), and `validateScannedQr` compares it before anything
+dials, turning that hang into an explicit "update the desktop" at QR-scan time. Because the
+version is also bound into the KK **session** prologue, such a bump invalidates every existing
+pairing and all devices must re-pair.
 
 ## Authorization
 

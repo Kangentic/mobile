@@ -176,13 +176,23 @@ a finished conversation permanently unreadable.
 switcher mirrors the desktop sidebar instead of showing one flat list of every project on the
 machine. **0.11.1** (PR #211) is the security fix below.
 
-Additive throughout, so `PROTOCOL_VERSION` stays at `2` and no handshake changed. Mobile pins
-`^0.11.1` and typechecks against the registry copy rather than the dev rig's local link, which
-is what CI actually installs.
+Additive throughout, so `PROTOCOL_VERSION` stayed at `2` across all of them and no handshake
+changed. Mobile typechecks against the registry copy rather than the dev rig's local link,
+which is what CI actually installs.
 
-**No relay change was needed for any of them.** The relay forwards ciphertext only and never
-parses a capability payload; its slot pattern already accepts both slot lengths and its frame
-cap sits far above these payloads.
+**0.12.0** (desktop PR #265) broke that streak, and is the reason the pin now reads `^0.12.0`.
+It derives the pairing relay slot from the pairing token (`derivePairingSlotId`) instead of
+dialing the token verbatim as `?slot=`, because the token is simultaneously the Noise `IKpsk0`
+pre-shared key: publishing it in a request URI meant whatever terminates TLS on a hosted relay
+saw the PSK, degrading `IKpsk0` to plain `IK` for such an observer. A slot derivation is
+zero-negotiation, so `PROTOCOL_VERSION` went `2` -> `3` to turn a silent never-rendezvous into
+a `version-incompatible` result at QR-scan time. **That invalidated every existing pairing**,
+since the version is bound into the KK session prologue as well as the pairing one. See
+`docs/security.md`'s Relay slots section.
+
+**No relay change was needed for any of them, 0.12.0 included.** The relay forwards ciphertext
+only and never parses a capability payload; its slot pattern already accepts 32 hex characters,
+which is what both derived slots now produce, and its frame cap sits far above these payloads.
 
 ## The relay-address hole, closed at the source
 
