@@ -1505,7 +1505,7 @@ async function main() {
     RELAY_URL = flags.relay;
     relayIsRemote = !/^wss?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(RELAY_URL);
     if (relayIsRemote && !RELAY_URL.startsWith('wss://')) {
-      fail(`--relay ${RELAY_URL} is a remote plaintext address. The pairing token IS the Noise PSK and is dialed verbatim as the relay slot, so the phone refuses anything but wss:// off-loopback (src/pairing/qr.ts). Use wss://.`);
+      fail(`--relay ${RELAY_URL} is a remote plaintext address. The relay address rides in the scanned QR and is persisted to the trust anchor for every later session, so the phone refuses anything but wss:// off-loopback (src/pairing/qr.ts). Use wss://.`);
     }
     log(`relay: ${RELAY_URL}${relayIsRemote ? ' (hosted - nothing local started)' : ''}`);
   }
