@@ -60,9 +60,9 @@ npm run dev:pair -- --serial <serial> --relay wss://relay.kangentic.com
 a public host over the network, so USB carries only Metro. `dev:pair` clears
 the app to unpaired, which is required by fact 2 above.
 
-A remote `ws://` is refused by the rig with the reason: the pairing token is
-the Noise PSK and is dialed verbatim as the relay slot, so plaintext
-off-loopback is never acceptable.
+A remote `ws://` is refused by the rig with the reason: the relay address
+rides in the scanned QR and is persisted to the trust anchor for every later
+session, so plaintext off-loopback is never acceptable.
 
 ### 4. Pair through the real ceremony
 

@@ -66,9 +66,10 @@ describe('validateScannedQr', () => {
   });
 
   it('rejects a ws:// host that only LOOKS like loopback', () => {
-    // The pairing token IS the Noise PSK and is dialed verbatim as ?slot=, so
-    // every one of these would put it on the wire in cleartext to a host the
-    // attacker picked, and persist that host to the trust anchor.
+    // Every one of these routes the whole ceremony through a host the attacker
+    // picked, and persists that host to the trust anchor for every later
+    // session. (Before protocol 0.12.0 it also put the Noise PSK on the wire in
+    // cleartext, because the pairing token was dialed verbatim as ?slot=.)
     const impostors = [
       // Userinfo: everything before the '@' is credentials, so this dials evil.test.
       'ws://127.0.0.1:8080@evil.test',
@@ -329,5 +330,24 @@ describe('validateScannedQr', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.errorKind).toBe('version-incompatible');
+  });
+
+  /**
+   * The other half of that ordering, and the one the docstring above calls a
+   * live trap: expiry outranks version, so a stale v2 URI comes back 'expired'
+   * and says nothing about the version at all. Pinning it means the trap is
+   * recorded as behavior rather than as a warning someone has to remember, and
+   * a future reorder that "fixes" the confusing message has to do so on
+   * purpose.
+   */
+  it('reports expired ahead of an incompatible version', () => {
+    const payload = buildValidPayload({ expiresAt: isoTimestamp(-600), protocolVersion: '2' });
+    const uri = encodePairingQrPayload(payload);
+
+    const result = validateScannedQr(uri, anchorNow(0));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.errorKind).toBe('expired');
   });
 });

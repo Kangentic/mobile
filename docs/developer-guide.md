@@ -418,8 +418,18 @@ bound into the Noise prologue and forces all peers to upgrade in lockstep.
 counts as wire-breaking because the slot is a zero-negotiation rendezvous value, so peers
 deriving it differently never meet and simply hang until the relay's park timeout. Because the
 version is bound into the KK **session** prologue and not only the pairing one, **every
-already-paired device had to re-pair**, which is acceptable only because the app has not rolled
-out. Budget for that whenever `PROTOCOL_VERSION` moves.
+already-paired device went dark until both ends ran matching software**, which is acceptable
+only because the app has not rolled out. Budget for that outage whenever `PROTOCOL_VERSION`
+moves.
+
+Be precise about what that outage is, because the desktop's own PR #265 message says "must
+re-pair" and that is loose: **the pairing itself survives a version bump.** Nothing stores a
+protocol version alongside the pinned identity - not the phone's trust anchor
+(`src/pairing/trustAnchor.ts`), not the desktop's roster (the desktop reads `PROTOCOL_VERSION`
+only to mint the QR payload) - and `deriveSessionSlotId` takes no version, so both peers keep
+meeting in the same session slot throughout. Once both ends update, the existing pinned keys
+reconnect on their own: no second QR scan, no second SAS confirmation. What breaks in between is
+session establishment, not the trust relationship.
 
 ## Project Structure
 

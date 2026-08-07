@@ -143,10 +143,14 @@ function isSecureRelayAddress(relayAddress: string): boolean {
  * (docs/security.md).
  *
  * The version check is stronger than UX, and it must stay ahead of every dial.
- * Both relay slots are zero-negotiation rendezvous values, so peers on
- * different protocol versions derive different slots and simply never meet:
- * without this, a version mismatch surfaces as the relay's 4408 park timeout,
- * which reads as "pairing just hangs" rather than "update the desktop".
+ * A relay slot is a zero-negotiation rendezvous value, so whenever a derivation
+ * changes between versions - as the PAIRING slot's did in v3 - peers computing
+ * it differently simply never meet. Without this check that surfaces as the
+ * relay's 4408 park timeout, which reads as "pairing just hangs" rather than as
+ * the two sides being on incompatible versions. (The SESSION slot derives from
+ * the two static keys alone and carries no version, so a mismatch there parks
+ * both peers in the SAME slot and fails later, on the prologue - which is why
+ * this check has to be ahead of the dial, not merely somewhere in the flow.)
  *
  * The relay-scheme check is not UX-only either: it pins the host that the
  * ceremony, and every later session, will talk to. See isSecureRelayAddress.
