@@ -81,7 +81,7 @@ src/
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
                   #   pure event/breadcrumb scrubber (see crash-reporting-scope.md)
-  lib/            # Shared pure utilities (crypto polyfills, haptics)
+  lib/            # Shared pure utilities (crypto polyfills, haptics, the activity spin matrix)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library

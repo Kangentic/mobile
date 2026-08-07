@@ -770,14 +770,13 @@ function parseActivityMark(markName, manifest) {
     );
   }
 
-  // undefined exactly when the mark declares no motion, because
-  // KNOWN_ACTIVITY_MOTIONS is derived from this table plus null.
-  const expectedProperty = declaredMotion === null ? undefined : ACTIVITY_MOTION_PROPERTIES[declaredMotion];
-
   let march;
   let spin;
   let dashUserUnits;
-  if (expectedProperty !== undefined) {
+  if (declaredMotion !== null) {
+    // Always a real property name: the allowlist above is this table's keys
+    // plus null, so a non-null motion that reached here has an entry.
+    const expectedProperty = ACTIVITY_MOTION_PROPERTIES[declaredMotion];
     if (dashedElements.length !== 1) {
       throw new Error(
         `syncBranding: mark "${markName}" animates, but ${dashedElements.length} of its elements carry a ` +

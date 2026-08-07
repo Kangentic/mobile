@@ -36,15 +36,15 @@ export interface AgentStatusIconProps {
  * That is why this component composes <Circle>/<Path>/<Rect> from the generated
  * shape data instead of inlining XML through SvgXml the way Brandmark does: a
  * prop cannot be animated inside an XML blob.
- *
- * The spin drives the GROUP rather than the circle, because react-native-svg's
- * Fabric group takes its transform as a `matrix` prop and Reanimated writes
- * straight to the shadow node. See src/lib/activitySpin.ts for why a `rotation`
- * prop would silently do nothing.
  */
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 /**
+ * The spin drives the GROUP rather than the circle, because react-native-svg's
+ * Fabric group takes its transform as a `matrix` prop and Reanimated writes
+ * straight to the shadow node. See src/lib/activitySpin.ts for why a `rotation`
+ * prop would silently do nothing.
+ *
  * `matrix` is the group's NATIVE transform prop on the New Architecture, but
  * react-native-svg's public GProps exposes only the JS-side conveniences
  * (`rotation`, `originX`, ...) that it folds into that matrix AT RENDER TIME.
@@ -130,11 +130,21 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
   const marching = !reducedMotion && !belowFloor && march !== undefined;
   const spinning = !reducedMotion && !belowFloor && spin !== undefined;
 
-  // The spin turns the dashed outline about ITS OWN centre, in user units:
-  // react-native-svg has no CSS transform-origin, and taking the viewBox centre
-  // instead would swing an off-centre mark around the grid rather than spin it
-  // in place. Resolved out here because useAnimatedProps runs before the shape
-  // map below, which is the only other place cx/cy is in scope.
+  // The origin, in user units, because react-native-svg has no CSS
+  // transform-origin to inherit. Upstream's rule is a FIXED grid centre
+  // (activity.css: `.kng-spin { transform-origin: 12px 12px }`), not a
+  // per-mark value; this derives it from the dashed circle's own centre
+  // instead, which every spin mark in the package agrees with because every one
+  // of them is drawn at 12,12. Those two rules would only part company on an
+  // off-centre spinning ring, which does not exist upstream - if one ever
+  // ships, decide deliberately which rule wins rather than letting the mobile
+  // ring drift from the web one.
+  //
+  // The fallback is the agent-idle path, not defensive dead code: the envelope
+  // carries no circle at all, so `spinOrigin` is undefined there and the matrix
+  // below is computed and then never rendered. Resolved out here because
+  // useAnimatedProps runs before the shape map, which is the only other place
+  // cx/cy is in scope.
   const spinOrigin = mark.shapes.find(
     (shape): shape is ActivityCircleShape => shape.kind === 'circle' && shape.dash !== undefined,
   );
