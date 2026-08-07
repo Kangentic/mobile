@@ -133,9 +133,12 @@ const ACTIVITY_MARKS = ['agent-idle', 'agent-working'];
 /**
  * The SVG elements the activity renderer knows how to draw as react-native-svg
  * components. `<g>` is unwrapped rather than listed: upstream uses it purely to
- * hang the `kng-march` CSS class on, and this renderer expresses that animation
- * as animated props instead. Any other element fails the run, because a shape
- * this script silently skipped would ship as a mark missing part of its glyph.
+ * hang a motion's CSS class on (`kng-spin` today, `kng-march` before 2.8.0), and
+ * this renderer expresses that animation as animated props instead. Note the
+ * class is never read, so a mark that changes primitive is invisible here - the
+ * manifest's `motion` field is what this script goes by. Any other element fails
+ * the run, because a shape this script silently skipped would ship as a mark
+ * missing part of its glyph.
  */
 const KNOWN_ACTIVITY_ELEMENTS = new Set(['rect', 'circle', 'path']);
 
@@ -149,12 +152,27 @@ const KNOWN_ACTIVITY_ELEMENTS = new Set(['rect', 'circle', 'path']);
 const KNOWN_ACTIVITY_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
 /**
- * The motions the component implements. activity.json also declares a `spin`
- * (a 1200ms transform, the shape this app used before adopting the package),
- * which no mark selects today. If a generated mark ever selects it, that is a
- * deliberate renderer change here - not a mark that quietly renders still.
+ * The motions the component implements, mapped to the CSS property each one
+ * animates upstream. Both are a dashed circle travelling one full cycle per
+ * period and differ only in the primitive that moves it, so they share every
+ * geometric check below and diverge on the property assertion alone.
+ *
+ * 2.8.0 moved agent-working (and both control rings) from the march to the
+ * spin: stroke-dashoffset is a paint property the desktop's Chromium cannot
+ * composite, so its indicators froze for as long as the renderer's main thread
+ * was blocked. On a pathLength=100 circle a dash-offset shift of d is exactly a
+ * rotation of d percent of 360 degrees, so the two render identically, and the
+ * spin's duration moved 1200 -> 1400 to match the march so marks of different
+ * primitives stay in lockstep.
+ *
+ * A motion absent from this table stops the run rather than shipping a mark
+ * that quietly holds still, so adding one is a deliberate renderer change in
+ * AgentStatusIcon. `blink` (an opacity, added in 2.8.0 for terminal-working) is
+ * deliberately missing: ACTIVITY_MARKS does not sync that mark, so nothing here
+ * can select it.
  */
-const KNOWN_ACTIVITY_MOTIONS = new Set([null, 'march']);
+const ACTIVITY_MOTION_PROPERTIES = { march: 'stroke-dashoffset', spin: 'transform' };
+const KNOWN_ACTIVITY_MOTIONS = new Set([null, ...Object.keys(ACTIVITY_MOTION_PROPERTIES)]);
 
 /**
  * Tolerance for the dash-length check below. The manifest rounds its user-unit
@@ -747,26 +765,32 @@ function parseActivityMark(markName, manifest) {
   if (!KNOWN_ACTIVITY_MOTIONS.has(declaredMotion)) {
     throw new Error(
       `syncBranding: mark "${markName}" declares motion "${declaredMotion}", expected one of ` +
-        `${[...KNOWN_ACTIVITY_MOTIONS].map((motion) => String(motion)).join(', ')}. AgentStatusIcon implements the ` +
-        'march only, so a new motion must stop the run rather than render a mark that quietly holds still.',
+        `${[...KNOWN_ACTIVITY_MOTIONS].map((motion) => String(motion)).join(', ')}. AgentStatusIcon implements those ` +
+        'motions only, so a new one must stop the run rather than render a mark that quietly holds still.',
     );
   }
 
+  // undefined exactly when the mark declares no motion, because
+  // KNOWN_ACTIVITY_MOTIONS is derived from this table plus null.
+  const expectedProperty = declaredMotion === null ? undefined : ACTIVITY_MOTION_PROPERTIES[declaredMotion];
+
   let march;
+  let spin;
   let dashUserUnits;
-  if (declaredMotion === 'march') {
+  if (expectedProperty !== undefined) {
     if (dashedElements.length !== 1) {
       throw new Error(
-        `syncBranding: mark "${markName}" marches, but ${dashedElements.length} of its elements carry a ` +
-          'stroke-dasharray. The march animates exactly one outline.',
+        `syncBranding: mark "${markName}" animates, but ${dashedElements.length} of its elements carry a ` +
+          `stroke-dasharray. The ${declaredMotion} animates exactly one outline.`,
       );
     }
     const [dashedElement] = dashedElements;
     if (dashedElement.tagName !== 'circle') {
       throw new Error(
-        `syncBranding: mark "${markName}" marches on a <${dashedElement.tagName}>, but the user-unit dash can only be ` +
+        `syncBranding: mark "${markName}" animates a <${dashedElement.tagName}>, but the user-unit dash can only be ` +
           'verified against a circle (2*pi*r). That check is the only mechanical proof the shipped dash is in user ' +
-          'units rather than the pathLength ratio, so re-derive the period deliberately instead of loosening this.',
+          'units rather than the pathLength ratio, so re-derive the period deliberately instead of loosening this. ' +
+          'A spinning mark is still a dashed circle, so it earns no exemption.',
       );
     }
     dashUserUnits = parseActivityDashPair(markName, 'dashUserUnits', mark.dashUserUnits);
@@ -778,9 +802,12 @@ function parseActivityMark(markName, manifest) {
           `${manifest.grid.pathLength}. The user-unit period is derived from that equivalence.`,
       );
     }
-    // One full dash cycle in user units. The CSS keyframe travels
+    // One full dash cycle in user units. The march's CSS keyframe travels
     // stroke-dashoffset to -pathLength; because the ratio dash sums to
     // pathLength, the user-unit equivalent is exactly the user-unit dash sum.
+    // Derived for EVERY animated motion, not just the march that consumes it:
+    // the closure check below is the only mechanical proof the shipped dash is
+    // in user units, and a spinning mark is just as able to ship the ratio form.
     const periodUserUnits = roundToFourDecimals(dashUserUnits[0] + dashUserUnits[1]);
     const radius = parseFloatAttribute(dashedElement.attributes, 'r', undefined, dashedElement.context);
     const circumference = 2 * Math.PI * radius;
@@ -805,13 +832,21 @@ function parseActivityMark(markName, manifest) {
           'AgentStatusIcon drives Easing.linear; another curve needs a deliberate change there.',
       );
     }
-    if (motionSpec.property !== 'stroke-dashoffset') {
+    if (motionSpec.property !== expectedProperty) {
       throw new Error(
         `syncBranding: activity.json motion.${declaredMotion}.property is "${motionSpec.property}", expected ` +
-          '"stroke-dashoffset". The march is a dash offset animation, not a transform.',
+          `"${expectedProperty}". Which primitive a mark gets is decided by geometry rather than taste, so a motion ` +
+          'that changed property is a redrawn mark, not a rename.',
       );
     }
-    march = { durationMs: motionSpec.durationMs, periodUserUnits };
+    // The spin carries no periodUserUnits: it travels 360 degrees, not an arc
+    // length, so a dash-travel distance would be a number nothing could use.
+    // It is still derived above, because the closure check needs it.
+    if (declaredMotion === 'march') {
+      march = { durationMs: motionSpec.durationMs, periodUserUnits };
+    } else {
+      spin = { durationMs: motionSpec.durationMs };
+    }
   } else if (dashedElements.length !== 0) {
     throw new Error(
       `syncBranding: mark "${markName}" declares no motion, but ${dashedElements.length} of its elements carry a ` +
@@ -851,6 +886,7 @@ function parseActivityMark(markName, manifest) {
     markName,
     shapes,
     march,
+    spin,
     restRendering: mark.reducedMotion,
     minPx: mark.minPx,
     strokeLinecap: rootAttributes['stroke-linecap'],
@@ -891,8 +927,9 @@ function buildActivityModule() {
     ' * The activity status marks as typed shape data, parsed from',
     ' * @kangentic/branding/assets/activity/*.svg and its activity.json contract.',
     ' * Structured elements rather than inlined XML, because the working mark',
-    ' * MARCHES: its stroke-dashoffset is animated, and an animated prop needs a',
-    ' * real addressable node, which an SvgXml blob cannot give.',
+    ' * MOVES: the spin animates a transform matrix on a group around its ring,',
+    ' * and an animated prop needs a real addressable node, which an SvgXml blob',
+    ' * cannot give.',
     ' *',
     ' * Every mark is currentColor, so the consumer supplies the tone and no hex',
     ' * appears here. Dashes are the manifest\'s USER-UNIT form, never the',
@@ -921,7 +958,7 @@ function buildActivityModule() {
     '  cx: number;',
     '  cy: number;',
     '  r: number;',
-    '  /** The user-unit stroke dash, present only on the outline that marches. */',
+    '  /** The user-unit stroke dash, present only on the outline that animates. */',
     '  dash?: readonly [number, number];',
     '}',
     '',
@@ -938,10 +975,20 @@ function buildActivityModule() {
     '  periodUserUnits: number;',
     '}',
     '',
+    '/**',
+    ' * One full turn per period. There is no distance to carry the way the march',
+    ' * has one: a rotation travels 360 degrees whatever the outline measures.',
+    ' */',
+    'export interface ActivitySpinMotion {',
+    '  durationMs: number;',
+    '}',
+    '',
     'export interface ActivityMark {',
     '  shapes: readonly ActivityShape[];',
-    '  /** Present only on a marching mark. */',
+    '  /** Present only on a marching mark. Mutually exclusive with `spin`. */',
     '  march?: ActivityMarchMotion;',
+    '  /** Present only on a spinning mark. Mutually exclusive with `march`. */',
+    '  spin?: ActivitySpinMotion;',
     '  restRendering: ActivityRestRendering;',
     '  /** Below this rendered size, draw a dot instead of the mark. */',
     '  minPx: number;',
@@ -963,6 +1010,9 @@ function buildActivityModule() {
     lines.push('    ],');
     if (mark.march !== undefined) {
       lines.push(`    march: { durationMs: ${mark.march.durationMs}, periodUserUnits: ${mark.march.periodUserUnits} },`);
+    }
+    if (mark.spin !== undefined) {
+      lines.push(`    spin: { durationMs: ${mark.spin.durationMs} },`);
     }
     lines.push(`    restRendering: ${quoteString(mark.restRendering)},`);
     lines.push(`    minPx: ${mark.minPx},`);

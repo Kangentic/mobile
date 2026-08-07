@@ -93,7 +93,7 @@ function elementNumberAttribute(elementMarkup: string, attributeName: string): n
 const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
-/** The dashed outline of a marching mark, as the only circle carrying a dash. */
+/** The dashed outline of an animated mark, as the only circle carrying a dash. */
 function dashedCircle(markName: ActivityMarkName): ActivityCircleShape {
   const dashed = activityMarks[markName].shapes.filter(
     (shape): shape is ActivityCircleShape => shape.kind === 'circle' && shape.dash !== undefined,
@@ -143,6 +143,28 @@ describe('activityMarks', () => {
     }
   });
 
+  /**
+   * The generator picks which timing field to emit off the manifest's `motion`
+   * string, and nothing else re-checks that it picked the right one. Emitting
+   * `march` for a mark that declares `spin` would still typecheck, still carry
+   * the right duration, and still render a ring - one that walks its dash
+   * instead of turning, diverging from the desktop and the website with every
+   * gate green. Upstream now ships a third primitive (`blink`) too, so the
+   * mapping has more than one way to be wrong.
+   */
+  it('emits the timing field its declared motion selects, and only that one', () => {
+    for (const markName of MARK_NAMES) {
+      const mark = activityMarks[markName];
+      const declaredMotion = manifest.marks[markName].motion;
+      expect(mark.march !== undefined, `${markName} march for motion ${declaredMotion}`).toBe(
+        declaredMotion === 'march',
+      );
+      expect(mark.spin !== undefined, `${markName} spin for motion ${declaredMotion}`).toBe(
+        declaredMotion === 'spin',
+      );
+    }
+  });
+
   it('keeps the indicator floor at the manifest value', () => {
     // Both agent marks are indicators (12px), not controls (16px). Below the
     // floor AgentStatusIcon draws a dot instead of the mark.
@@ -153,9 +175,10 @@ describe('activityMarks', () => {
 });
 
 describe('the needs-you envelope (agent-idle)', () => {
-  it('is static, with no dash and no march', () => {
+  it('is static, with no dash and no motion of either kind', () => {
     const mark = activityMarks['agent-idle'];
     expect(mark.march).toBeUndefined();
+    expect(mark.spin).toBeUndefined();
     expect(mark.restRendering).toBe('static');
     for (const shape of mark.shapes) {
       if (shape.kind === 'circle') expect(shape.dash, 'a static mark must carry no dash').toBeUndefined();
@@ -259,13 +282,32 @@ describe('the needs-you envelope (agent-idle)', () => {
 });
 
 describe('the working ring (agent-working)', () => {
-  it('marches on a stroke-dashoffset at the manifest duration', () => {
-    const march = activityMarks['agent-working'].march;
-    expect(march, 'agent-working must march').toBeDefined();
-    if (march === undefined) return;
-    expect(march.durationMs).toBe(manifest.motion.march.durationMs);
-    expect(manifest.motion.march.property).toBe('stroke-dashoffset');
-    expect(manifest.marks['agent-working'].motion).toBe('march');
+  it('spins a transform at the manifest duration', () => {
+    const spin = activityMarks['agent-working'].spin;
+    expect(spin, 'agent-working must spin').toBeDefined();
+    if (spin === undefined) return;
+    expect(spin.durationMs).toBe(manifest.motion.spin.durationMs);
+    expect(manifest.motion.spin.property).toBe('transform');
+    expect(manifest.marks['agent-working'].motion).toBe('spin');
+    // Exclusive, not additive: 2.8.0 MOVED the ring off the dash offset. A mark
+    // carrying both would mean the generator emitted a motion it did not select
+    // and AgentStatusIcon would drive two animations over one outline.
+    expect(activityMarks['agent-working'].march, 'a spinning mark must not also march').toBeUndefined();
+  });
+
+  /**
+   * Why the swap is a no-op to look at. `stroke-dashoffset` is a paint property
+   * the desktop's Chromium cannot composite, so its indicators froze whenever
+   * the renderer's main thread blocked; a transform composites. The durations
+   * are asserted EQUAL rather than as the literal 1400 because that equality is
+   * the point of the upstream change: marks on different primitives have to
+   * stay in lockstep, and spin moved 1200 -> 1400 to get there.
+   */
+  it('shares one period with the march, so mixed primitives stay in lockstep', () => {
+    expect(manifest.motion.spin.durationMs).toBe(manifest.motion.march.durationMs);
+    expect(manifest.motion.spin.timing).toBe(manifest.motion.march.timing);
+    // Different primitives, though - that is the whole change.
+    expect(manifest.motion.spin.property).not.toBe(manifest.motion.march.property);
   });
 
   /**
@@ -289,12 +331,15 @@ describe('the working ring (agent-working)', () => {
    */
   it('closes the ring: one dash cycle equals its circumference', () => {
     const circle = dashedCircle('agent-working');
-    const march = activityMarks['agent-working'].march;
     const dashCycle = (circle.dash ?? [0, 0])[0] + (circle.dash ?? [0, 0])[1];
     const circumference = 2 * Math.PI * circle.r;
 
+    // The spin carries no periodUserUnits to cross-check - it travels 360
+    // degrees, not an arc length - so the generated dash IS the check now.
+    // Keep it: the generator runs the same closure guard, and a spinning mark
+    // that shipped the ratio form would render as a solid ring turning
+    // invisibly, which looks like nothing being wrong at all.
     expect(dashCycle).toBeCloseTo(circumference, 3);
-    expect(march?.periodUserUnits).toBeCloseTo(circumference, 3);
     // And the ratio form provably would NOT have: it overshoots by ~43 units,
     // covering the whole ring, which is how the motion vanishes.
     const ratioCycle = parseManifestDash(manifest.marks['agent-working'].dash ?? '').reduce((sum, part) => sum + part, 0);

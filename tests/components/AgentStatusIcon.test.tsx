@@ -1,31 +1,39 @@
 /**
  * AgentStatusIcon draws @kangentic/branding's activity marks: a green ring that
- * marches while the agent thinks, and the yellow envelope for an idle session.
+ * spins while the agent thinks, and the yellow envelope for an idle session.
  *
  * Every expected value is read from the generated mark data rather than typed as
  * a literal. That is deliberate and it is the point of the module: the geometry,
- * the 1400ms march and the reduced-motion rendering arrive with the assets, so a
+ * the 1400ms period and the reduced-motion rendering arrive with the assets, so a
  * test that restated them would pass while the component and the brand drifted
  * apart - which is the exact failure the package exists to prevent.
  *
- * Three behaviours here are silent when broken:
+ * Four behaviours here are silent when broken:
  *
- *   THE MARCH NOT RUNNING. The dash is applied either way, so a component that
+ *   THE SPIN NOT RUNNING. The dash is applied either way, so a component that
  *   never starts its animation renders a correct-looking static arc. The test
  *   asserts on the timing call, not on the drawn output.
  *
+ *   THE MATRIX ON THE WRONG NODE. react-native-svg's Fabric group takes its
+ *   transform as `matrix`; a `rotation` prop, or a matrix handed to the circle
+ *   instead of the group, sets something nothing reads and the ring sits still
+ *   while every other assertion here stays green. Note this tier can only prove
+ *   WHICH node got the prop - whether the matrix is the right rotation is
+ *   tests/unit/activitySpin.test.ts's job, and whether it runs on the UI thread
+ *   nothing but a device can answer.
+ *
  *   REDUCED MOTION CLOSING THE RING. agent-working rests 'keep-dash', holding
- *   its 3/4 arc. The rotation this replaced rested on a SOLID ring, which read
- *   as a different state rather than as a paused one.
+ *   its 3/4 arc. An earlier rotation rested on a SOLID ring, which read as a
+ *   different state rather than as a paused one.
  *
  *   RECYCLING RESIDUE. FlashList rebinds one row's views to the next item. The
  *   spinner used to be a transform on the shared wrapper view, so a cancelled
  *   spin left a frozen mid-rotation and the envelope rendered tilted (the
  *   "tilted envelope", commit e4e5524), which needed an explicit reset. The
- *   marks are now disjoint element trees, so the animated node unmounts on
- *   rebind and no reset is needed. That is a property worth pinning: a future
- *   change that morphs one shared element between the two states reintroduces
- *   the bug, and this test is what would notice.
+ *   marks are disjoint element trees, so the animated node unmounts on rebind
+ *   and no reset is needed. That property matters MORE now, not less: the
+ *   rotation is back, and it is only safe because it lives on a <G> inside the
+ *   working branch. Hoist it to the shared <Svg> root and the bug returns.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react-native';
@@ -59,6 +67,7 @@ jest.mock('react-native-svg', () => {
     default: MockSvg,
     Svg: MockSvg,
     Circle: mockSvgElement('circle'),
+    G: mockSvgElement('g'),
     Path: mockSvgElement('path'),
     Rect: mockSvgElement('rect'),
   };
@@ -67,12 +76,12 @@ jest.mock('react-native-svg', () => {
 const workingMark = activityMarks['agent-working'];
 const idleMark = activityMarks['agent-idle'];
 
-// The march policy is optional on the generated type, and most of this file is
+// The spin policy is optional on the generated type, and most of this file is
 // about it. Say so once here: a branding bump that drops it should name the
 // assumption it broke rather than failing on an undefined property read.
-const workingMarch = workingMark.march;
-if (workingMarch === undefined) {
-  throw new Error('agent-working must declare a march; @kangentic/branding changed its activity manifest');
+const workingSpin = workingMark.spin;
+if (workingSpin === undefined) {
+  throw new Error('agent-working must declare a spin; @kangentic/branding changed its activity manifest');
 }
 const [workingRing] = workingMark.shapes.filter((shape) => shape.kind === 'circle' && shape.dash !== undefined);
 if (workingRing === undefined || workingRing.kind !== 'circle' || workingRing.dash === undefined) {
@@ -175,42 +184,69 @@ describe('the working ring', () => {
     expect(circle.props.strokeDasharray).toEqual([...workingDash]);
   });
 
-  it('marches the dash offset a full cycle at the manifest duration', () => {
-    // The drawn output cannot distinguish a running march from a static arc, so
-    // this asserts the timing call itself. Both numbers come from the generated
-    // data: a hardcoded duration or dash in the component would fail here.
+  it('turns a full revolution at the manifest duration', () => {
+    // The drawn output cannot distinguish a running spin from a static arc, so
+    // this asserts the timing call itself. The duration comes from the
+    // generated data: a hardcoded 1400 in the component would fail here.
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-    // withRepeat is the OTHER half of "does the march actually run forever":
+    // withRepeat is the OTHER half of "does the spin actually run forever":
     // its second argument (-1) means loop forever, its third (false) means do
-    // not reverse, so the dash walks one full cycle and restarts from zero
+    // not reverse, so the ring turns one full revolution and restarts from zero
     // rather than ping-ponging backwards. jest.setup.ts's mock is
     // `(animation) => animation`, discarding both arguments, so a -1 silently
-    // swapped for a 1 (marches exactly one 1400ms cycle and then freezes on a
-    // real device) would leave every other assertion in this file green. This
+    // swapped for a 1 (turns exactly one 1400ms revolution and then freezes on
+    // a real device) would leave every other assertion in this file green. This
     // spy is the only thing that would catch it.
     const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
     renderIcon({ kind: 'working' });
 
     expect(withTimingSpy).toHaveBeenCalledWith(
-      -workingMarch.periodUserUnits,
+      // One TURN, not one degree count: the matrix helper takes turns, so the
+      // 360 lives in src/lib/activitySpin.ts and is proven there.
+      1,
       expect.objectContaining({
-        duration: workingMarch.durationMs,
+        duration: workingSpin.durationMs,
         // scripts/syncBranding.mjs hard-fails the sync unless the manifest's
-        // motion.march.timing is "linear", so linear easing is a real contract,
+        // motion.spin.timing is "linear", so linear easing is a real contract,
         // not a style choice. Asserted against the mocked export (what
         // jest.setup.ts defines Easing.linear as here), not a string literal.
         easing: Reanimated.Easing.linear,
         reduceMotion: Reanimated.ReduceMotion.System,
       }),
     );
-    expect(withRepeatSpy).toHaveBeenCalledWith(-workingMarch.periodUserUnits, -1, false);
+    expect(withRepeatSpy).toHaveBeenCalledWith(1, -1, false);
   });
 
-  it('hands the animated offset to the circle', () => {
+  /**
+   * WHICH node carries the transform is the whole safety argument. On the group
+   * it unmounts with the working branch; on the shared <Svg> root it would
+   * survive a rebind and tilt the envelope (e4e5524). And react-native-svg's
+   * Fabric group reads `matrix` alone - `rotation` is a render-time convenience
+   * Reanimated never routes through, so a mark animating it would sit still.
+   */
+  it('hands the animated matrix to the group around the ring, not to the ring', () => {
     renderIcon({ kind: 'working' });
-    expect(screen.getByTestId('svg-circle').props.animatedProps).toEqual(
-      expect.objectContaining({ strokeDashoffset: expect.any(Number) }),
+
+    const group = screen.getByTestId('svg-g');
+    expect(group.props.animatedProps).toEqual(
+      expect.objectContaining({ matrix: expect.any(Array) }),
     );
+    // Six finite numbers: SVG's matrix(a, b, c, d, e, f).
+    const { matrix } = group.props.animatedProps;
+    expect(matrix).toHaveLength(6);
+    for (const component of matrix) {
+      expect(Number.isFinite(component)).toBe(true);
+    }
+    // The circle inside is plain - the dash never changes, only the group turns.
+    expect(screen.getByTestId('svg-circle').props.animatedProps).toBeUndefined();
+    // And the root is untouched, which is what keeps a rebind clean.
+    expect(screen.getByTestId('agent-status-working').props.animatedProps).toBeUndefined();
+  });
+
+  it('keeps the dash on the circle, not on the group that turns it', () => {
+    renderIcon({ kind: 'working' });
+    expect(screen.getByTestId('svg-circle').props.strokeDasharray).toEqual([...workingDash]);
+    expect(screen.getByTestId('svg-g').props.strokeDasharray).toBeUndefined();
   });
 });
 
@@ -256,8 +292,11 @@ describe('reduced motion', () => {
     // 'keep-dash': the dash SURVIVES, so the mark reads as a paused spinner.
     expect(workingMark.restRendering).toBe('keep-dash');
     expect(circle.props.strokeDasharray).toEqual([...workingDash]);
-    // ...but nothing drives it.
+    // ...but nothing drives it, and no rotating group is mounted at all - a
+    // stopped <G> holding an identity matrix would work, but it would also be
+    // one more shared-looking node for a later change to hang a transform on.
     expect(circle.props.animatedProps).toBeUndefined();
+    expect(screen.queryByTestId('svg-g')).toBeNull();
     expect(withTimingSpy).not.toHaveBeenCalled();
   });
 
@@ -272,13 +311,18 @@ describe('reduced motion', () => {
 
 describe('list recycling', () => {
   /**
-   * The reason no reset is needed. Rebinding working -> idle in place must leave
-   * NOTHING of the animation behind, and it does so structurally: the ring and
-   * the envelope share no element, so the animated node unmounts.
+   * THE tilted-envelope regression, stated as an assertion. This is the exact
+   * bug commit e4e5524 fixed with a reset, and reintroducing a rotation is
+   * precisely what could bring it back: a transform on any node that SURVIVES
+   * the rebind keeps whatever angle Reanimated last wrote, because Reanimated
+   * writes to the native view and React's prop diff never clears it.
+   *
+   * So the assertion is about survival, not about pixels: after rebinding, no
+   * rotating group may exist and no node in the envelope may carry a matrix.
    */
-  it('leaves no animated node or dash behind when a row rebinds working to idle', () => {
+  it('leaves no rotating group, matrix or dash behind when a row rebinds working to idle', () => {
     const { rerender } = renderIcon({ kind: 'working', testID: 'row-status' });
-    expect(screen.getByTestId('svg-circle').props.animatedProps).toBeDefined();
+    expect(screen.getByTestId('svg-g').props.animatedProps).toBeDefined();
 
     rerender(
       <ThemeProvider>
@@ -286,14 +330,29 @@ describe('list recycling', () => {
       </ThemeProvider>,
     );
 
+    // The group that carried the rotation is gone, not merely stopped.
+    expect(screen.queryByTestId('svg-g')).toBeNull();
     expect(screen.queryByTestId('svg-circle')).toBeNull();
+
     const rect = screen.getByTestId('svg-rect');
     expect(rect.props.animatedProps).toBeUndefined();
+    expect(rect.props.matrix).toBeUndefined();
     expect(rect.props.strokeDasharray).toBeUndefined();
-    expect(screen.getByTestId('row-status').props.color).toBe(darkTerminalTheme.colors.warning);
+
+    // The flap too: the envelope is two shapes and a tilt would take both.
+    const flap = screen.getByTestId('svg-path');
+    expect(flap.props.animatedProps).toBeUndefined();
+    expect(flap.props.matrix).toBeUndefined();
+
+    // And the shared root, which is the ONE node that does survive the rebind.
+    // If a future change hoists the transform up here, this is what fails.
+    const root = screen.getByTestId('row-status');
+    expect(root.props.animatedProps).toBeUndefined();
+    expect(root.props.matrix).toBeUndefined();
+    expect(root.props.color).toBe(darkTerminalTheme.colors.warning);
   });
 
-  it('restarts the march when a row rebinds idle back to working', () => {
+  it('restarts the spin when a row rebinds idle back to working', () => {
     const { rerender } = renderIcon({ kind: 'idle', testID: 'row-status' });
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
 
@@ -303,11 +362,8 @@ describe('list recycling', () => {
       </ThemeProvider>,
     );
 
-    expect(withTimingSpy).toHaveBeenCalledWith(
-      -workingMarch.periodUserUnits,
-      expect.objectContaining({ duration: workingMarch.durationMs }),
-    );
-    expect(screen.getByTestId('svg-circle').props.animatedProps).toBeDefined();
+    expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: workingSpin.durationMs }));
+    expect(screen.getByTestId('svg-g').props.animatedProps).toBeDefined();
   });
 });
 
@@ -334,13 +390,16 @@ describe('the legibility floor', () => {
     expect(screen.getByTestId('svg-path')).toBeTruthy();
   });
 
-  it('does not march the below-floor dot', () => {
+  it('does not spin the below-floor dot', () => {
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
     renderIcon({ kind: 'working', size: workingMark.minPx - 1 });
 
     const dot = screen.getByTestId('svg-circle');
     expect(dot.props.fill).toBe('currentColor');
     expect(dot.props.animatedProps).toBeUndefined();
+    // A rotating dot is invisible but not free: it would drive a timing loop
+    // forever on every recycled row that fell below the floor.
+    expect(screen.queryByTestId('svg-g')).toBeNull();
     expect(withTimingSpy).not.toHaveBeenCalled();
   });
 });

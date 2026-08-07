@@ -9,8 +9,9 @@
  * The activity status marks as typed shape data, parsed from
  * @kangentic/branding/assets/activity/*.svg and its activity.json contract.
  * Structured elements rather than inlined XML, because the working mark
- * MARCHES: its stroke-dashoffset is animated, and an animated prop needs a
- * real addressable node, which an SvgXml blob cannot give.
+ * MOVES: the spin animates a transform matrix on a group around its ring,
+ * and an animated prop needs a real addressable node, which an SvgXml blob
+ * cannot give.
  *
  * Every mark is currentColor, so the consumer supplies the tone and no hex
  * appears here. Dashes are the manifest's USER-UNIT form, never the
@@ -39,7 +40,7 @@ export interface ActivityCircleShape {
   cx: number;
   cy: number;
   r: number;
-  /** The user-unit stroke dash, present only on the outline that marches. */
+  /** The user-unit stroke dash, present only on the outline that animates. */
   dash?: readonly [number, number];
 }
 
@@ -56,10 +57,20 @@ export interface ActivityMarchMotion {
   periodUserUnits: number;
 }
 
+/**
+ * One full turn per period. There is no distance to carry the way the march
+ * has one: a rotation travels 360 degrees whatever the outline measures.
+ */
+export interface ActivitySpinMotion {
+  durationMs: number;
+}
+
 export interface ActivityMark {
   shapes: readonly ActivityShape[];
-  /** Present only on a marching mark. */
+  /** Present only on a marching mark. Mutually exclusive with `spin`. */
   march?: ActivityMarchMotion;
+  /** Present only on a spinning mark. Mutually exclusive with `march`. */
+  spin?: ActivitySpinMotion;
   restRendering: ActivityRestRendering;
   /** Below this rendered size, draw a dot instead of the mark. */
   minPx: number;
@@ -83,7 +94,7 @@ export const activityMarks: Record<ActivityMarkName, ActivityMark> = {
     shapes: [
       { kind: 'circle', cx: 12, cy: 12, r: 9, dash: [42.4115, 14.1372] },
     ],
-    march: { durationMs: 1400, periodUserUnits: 56.5487 },
+    spin: { durationMs: 1400 },
     restRendering: 'keep-dash',
     minPx: 12,
   },
