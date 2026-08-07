@@ -56,6 +56,89 @@ Read `store/screenshots/README.md` before regenerating: Play demands exactly 16:
 every shelf including tablets, which is why the capture sets resolution and density
 independently rather than using the emulator's own geometry.
 
+## Play Console advisories - standing decisions
+
+Play raises "For your next release" notes under **User experience**. They are advice, not gates,
+and two of them are permanent fixtures rather than work items. Both were investigated on
+2026-08-06 against release 0.3.0. **Read this section before acting on either warning**: the
+obvious response to each is wrong, and both look like one-line fixes.
+
+### "Your app uses deprecated APIs or parameters for edge-to-edge" - upstream, no action
+
+Flags `Window.getStatusBarColor`, `setStatusBarColor`, `setNavigationBarColor`. **Every flagged
+call site is framework code**, none of it ours:
+
+- React Native: `WindowUtil.kt`'s `Window.enableEdgeToEdge()` assigns both colors under
+  `@Suppress("DEPRECATION")`, and `StatusBarModule.kt`'s `getTypedExportedConstants` reads
+  `window.statusBarColor` on module init regardless of what JS does.
+- Material Components 1.13.0 (`BottomSheetDialog` / `EdgeToEdgeUtils`, R8-renamed to
+  `bottomsheet.a` and `internal.c`), which arrives via `react-native-screens`, `expo-router`,
+  `@expo/ui` and `@expo/log-box`. 1.13.0 is current.
+
+App code touches none of it. The only status-bar usage is `<StatusBar style="light" />` from
+`expo-status-bar` (`app/_layout.tsx`), which drives bar appearance through `WindowInsetsController`
+rather than colors. The APIs are deprecated and already no-op at targetSdk 35 and above, and this
+app targets 36 - Play's scan is static, so it flags the DEX reference whether or not the code can
+run.
+
+**Re-check after the next React Native, Expo SDK, or Material bump and expect it to clear itself.
+Do not attempt an app-level workaround**; there is no app-level call to remove.
+
+### "Remove resizability and orientation restrictions ... large screen devices" - deliberate, permanent
+
+Flags `MainActivity` and ML Kit's `GmsBarcodeScanningDelegateActivity`, both
+`android:screenOrientation="PORTRAIT"`. `MainActivity`'s comes from `orientation: 'portrait'` in
+`app.config.ts`. **The lock stays.** `tests/unit/appConfigOrientation.test.ts` pins it so the
+one-line "fix" fails loudly.
+
+The reasoning, because the warning implies a deadline that does not exist:
+
+- **Large screens already adapt, and have since 0.3.0 shipped.** The app targets SDK 36 - not
+  inferred from the Expo default but read off the generated `AndroidManifest.xml` at HEAD, and
+  corroborated by the emulator reporting `v36` - so Android 16 already ignores `screenOrientation`,
+  `resizeableActivity` and aspect-ratio limits on any display at sw600dp or wider, with no
+  pillarboxing. What the advisory asks for is already the live behaviour on the devices it is
+  about.
+- **Phones are never forced.** Android 17 (API 37) removes the temporary opt-out property but
+  **keeps the sw600dp threshold**: restrictions are ignored only on displays wider than 600dp.
+  Screens under sw600dp, and apps categorised as games, stay exempt in 16 and 17 alike. There is
+  no announced plan to extend this to phones, so "be adaptive before targetSdk 37" is not the
+  situation.
+- **Removing the lock would cost more than it buys.** It would newly expose phone landscape,
+  where four `fitToContents` form sheets (`MoveTaskScreen`, `ProjectPickerScreen`,
+  `CreateTaskScreen`, `EditTaskScreen`) cap content at 420px against a window roughly 360dp tall,
+  and every screen would need a visual pass with no forcing function behind it.
+
+So the advisory will fire on every release, forever. That is the correct signal: we do
+deliberately restrict phones to portrait.
+
+**Closed doors - do not re-propose:**
+
+- **`PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY`.** Not merely that it expires at targetSdk 37:
+  it restores compatibility mode, which **pillarboxes tablets that render fine today** at 617dp and
+  720dp per our own shelf captures. It is a visible regression on the exact devices it claims to
+  protect, and whether it even silences Play's static manifest scan is unverified.
+- **`orientation: 'default'`.** Does not remove the attribute. `@expo/config-plugins`
+  (`build/android/Orientation.js`) writes `unspecified` instead, so the manifest still carries
+  `android:screenOrientation`. It would also flip iOS, since `orientation` is the cross-platform
+  key that writes `UISupportedInterfaceOrientations` too.
+- **A `tools:replace` plugin for the ML Kit activity.** It would strip the lock from
+  `GmsBarcodeScanningDelegateActivity`, which is genuinely dead code here (`PairingScanScreen` uses
+  the in-view `CameraView`, never `launchScanner`). But while `MainActivity` keeps its lock the
+  advisory still fires, so the plugin buys nothing and adds a manifest-merge surface that only a
+  real Gradle build can validate. Revisit only if `MainActivity`'s lock ever goes.
+- **The `expo.camera.barcode-scanner-enabled` Gradle property.** Setting it `false` flips both
+  `play-services-code-scanner` and `com.google.mlkit:barcode-scanning` to `compileOnly` from the
+  same `build.gradle` line, which removes the ML Kit activity **and** breaks in-view QR scanning -
+  the pairing ceremony.
+- **Restricting Play's Form factors to phone.** Would drop tablet users, and would not silence
+  this advisory anyway: it is a manifest scan, not a distribution check.
+
+**What would reopen this.** If phone landscape ever becomes a supported shape, the four 420px caps
+are the known first blocker, and `/store-screenshots` plus the Play large-screen listing come into
+scope. Nothing about the shelves changes otherwise: Play requires 9:16 on all three Android
+shelves, tablets included, so the captures are portrait by rule.
+
 ## App title
 
 Kangentic
