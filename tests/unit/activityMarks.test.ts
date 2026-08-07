@@ -359,4 +359,31 @@ describe('the working ring (agent-working)', () => {
     // different state rather than as a paused one.
     expect(activityMarks['agent-working'].restRendering).toBe('keep-dash');
   });
+
+  /**
+   * A PREMISE PIN, not a wiring proof. AgentStatusIcon derives the spin's
+   * rotation origin from this dashed circle's own cx/cy rather than from a
+   * fixed grid centre, and its docblock is explicit that the two agree only
+   * because every spin mark upstream happens to be drawn at the grid centre
+   * (activity.css's `.kng-spin { transform-origin: 12px 12px }`) - "those two
+   * rules would only part company on an off-centre spinning ring". This
+   * assertion is what would notice the marks parting company.
+   *
+   * It cannot prove the component actually WIRES cx/cy into the rotation
+   * correctly: under jest.setup.ts's Reanimated mock, useAnimatedProps's
+   * factory runs synchronously during render, before the spin's useEffect has
+   * set spinTurns off its initial 0, and a rotation of exactly 0 turns is the
+   * identity transform for ANY centre - so a swapped or hardcoded origin
+   * would render an identical matrix and every AgentStatusIcon.test.tsx
+   * assertion would stay green. That failure mode is only reachable by
+   * exercising spinMatrixAboutPoint directly (tests/unit/activitySpin.test.ts
+   * already does, with an explicit off-centre case) or on a real device.
+   */
+  it('centres its dashed ring on the grid centre, the premise the spin origin fallback relies on', () => {
+    const [, , gridWidth, gridHeight] = ACTIVITY_VIEW_BOX.split(' ').map(Number);
+    const circle = dashedCircle('agent-working');
+
+    expect(circle.cx).toBe(gridWidth / 2);
+    expect(circle.cy).toBe(gridHeight / 2);
+  });
 });
