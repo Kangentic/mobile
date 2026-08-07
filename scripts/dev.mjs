@@ -670,8 +670,12 @@ async function probeMetroStatus() {
   }
 }
 
-/** True when the relay accepts a 32-hex session slot at upgrade time. */
-function probeSessionSlot() {
+/**
+ * True when the relay accepts a 32-hex slot at upgrade time. As of protocol
+ * 0.12.0 that is the shape of BOTH derived slots, pairing and session alike,
+ * so this one probe covers every rendezvous the rig performs.
+ */
+function probeDerivedSlot() {
   return new Promise((resolveProbe) => {
     const randomSlot = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
     const socket = new WebSocket(`${RELAY_URL}/?slot=${randomSlot}`);
@@ -1052,12 +1056,13 @@ async function ensureRelay(relayRepo) {
   const state = await probeHealthz();
   if (state === 'relay') {
     log(`adopting the relay already running on port ${RELAY_PORT}`);
-    const acceptsSessionSlot = await probeSessionSlot();
-    if (!acceptsSessionSlot) {
-      warn('the running relay REJECTS the 32-hex session slot: pairing will work, but every');
-      warn('ongoing session will fail with HTTP 400 at upgrade. Restart it with:');
+    const acceptsDerivedSlot = await probeDerivedSlot();
+    if (!acceptsDerivedSlot) {
+      warn('the running relay REJECTS the 32-hex slot. BOTH slots are 32 hex as of protocol');
+      warn('0.12.0, so NOTHING rendezvouses - pairing itself included, not just the ongoing');
+      warn('session. Restart it with:');
       warn(`  $env:SLOT_ID_PATTERN='${RELAY_SLOT_PATTERN}'; npm run dev   (PowerShell, in the relay repo)`);
-      warn('or pull the relay fix that widens the default pattern.');
+      warn('or pull a relay checkout whose own default already accepts 32 hex.');
     }
     return;
   }
@@ -1317,7 +1322,7 @@ async function doctor({ relayRepo, avdName, requestedSerial }) {
   const relayState = await probeHealthz();
   if (relayState === 'relay') {
     add(true, `relay running on port ${RELAY_PORT}`);
-    add(await probeSessionSlot(), 'relay accepts the 32-hex session slot', `restart it with SLOT_ID_PATTERN='${RELAY_SLOT_PATTERN}'`);
+    add(await probeDerivedSlot(), 'relay accepts the 32-hex derived slot (pairing and session)', `restart it with SLOT_ID_PATTERN='${RELAY_SLOT_PATTERN}'`);
   } else if (relayState === 'free') {
     add(true, `port ${RELAY_PORT} free (rig will start the relay when a connected mode needs it)`);
   } else {

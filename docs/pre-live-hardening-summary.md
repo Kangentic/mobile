@@ -69,12 +69,16 @@ relay at `ws://127.0.0.1:8080` via USB `adb reverse`.
 ## Fixed in this branch, worth knowing about
 
 **Security.** `isSecureRelayAddress` accepted `ws://127.0.0.1:8080@evil.test`. Everything before
-an `@` in a URL authority is userinfo, so that address dials **evil.test** - and the pairing
-token IS the Noise PSK, dialed verbatim as the relay slot. One crafted QR field put it on the
-wire in cleartext to an attacker-chosen host, and `activePairing` then persisted that host to the
-trust anchor for every later session. The loopback list was not behind the dev gate, so this
-applied to production builds. Now parses the authority rather than prefix-matching. **The same
-flaw exists in the published `@kangentic/protocol` and still needs fixing upstream.**
+an `@` in a URL authority is userinfo, so that address dials **evil.test**. One crafted QR field
+routed the whole ceremony through an attacker-chosen host, and `activePairing` then persisted
+that host to the trust anchor for every later session. At the time it was worse still, because
+the pairing token was also dialed verbatim as the relay slot while being the Noise PSK, so the
+PSK went out in cleartext too; protocol 0.12.0 closed that second exposure by deriving the slot,
+and the host-pinning problem this paragraph describes is the part that was never about the slot.
+The loopback list was not behind the dev gate, so this applied to production builds. Now parses
+the authority rather than prefix-matching. The same fix landed upstream in `@kangentic/protocol`
+0.11.1 (`relay-address.ts`), which the desktop reads, so both ends enforce one definition; the
+phone keeps its own copy only for the `10.0.2.2` emulator carve-out, which is mobile-only.
 
 **Correctness.** A stale `read-board` response could revert an upgraded board to the filtered
 projection (no post-await staleness guard, unlike `subscribeDiff`). `applySnapshot` could
@@ -164,7 +168,7 @@ and a transport drop clears the flag before the next handshake. Both paths misse
 forever and looked exactly like a re-handshake that never happened. `SessionManager.onRekey` now
 carries the signal; it reached 1 over the hosted relay with the session intact.
 
-## Protocol 0.10.0, 0.11.0 and 0.11.1 (published)
+## Protocol 0.10.0, 0.11.0, 0.11.1 and 0.12.0 (published)
 
 Desktop PR **#209** merged and `@kangentic/protocol` **0.10.0** published via the
 `protocol-v0.10.0` tag. `read-board` gains an `archived` action returning a page of completed
@@ -186,9 +190,13 @@ dialing the token verbatim as `?slot=`, because the token is simultaneously the 
 pre-shared key: publishing it in a request URI meant whatever terminates TLS on a hosted relay
 saw the PSK, degrading `IKpsk0` to plain `IK` for such an observer. A slot derivation is
 zero-negotiation, so `PROTOCOL_VERSION` went `2` -> `3` to turn a silent never-rendezvous into
-a `version-incompatible` result at QR-scan time. **That invalidated every existing pairing**,
-since the version is bound into the KK session prologue as well as the pairing one. See
-`docs/security.md`'s Relay slots section.
+a `version-incompatible` result at QR-scan time. **That took every existing pairing offline
+until both ends updated**, since the version is bound into the KK session prologue as well as
+the pairing one. It did NOT invalidate them: no protocol version is stored beside the pinned
+identity on either side, so the pinned keys reconnect once the software matches, with no repeat
+of the QR/SAS ceremony. See `docs/security.md`'s Relay slots section, and the
+`PROTOCOL_VERSION` discussion in `docs/developer-guide.md` for why the desktop's "must re-pair"
+phrasing overstates it.
 
 **No relay change was needed for any of them, 0.12.0 included.** The relay forwards ciphertext
 only and never parses a capability payload; its slot pattern already accepts 32 hex characters,

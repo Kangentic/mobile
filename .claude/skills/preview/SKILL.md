@@ -297,10 +297,11 @@ and consumes an `ios.buildNumber` if submitted.
   loopback hosts, so the emulator reaches a host relay exclusively through adb reverse - and the
   mapping is wiped on every emulator reboot. The dev rig re-applies it on every run; if you
   bypass the rig, re-run it yourself after any reboot (`adb reverse --list` to check).
-- **Relay slot pattern.** Until the relay-side fix ships everywhere, a local relay must run with
-  `SLOT_ID_PATTERN='^([0-9a-f]{32}|[0-9a-f]{64})$'` or pairing succeeds and the ongoing session
-  400s at upgrade. The rig sets this when it starts the relay and warns when it adopts a relay
-  that rejects 32-hex slots.
+- **Relay slot pattern.** A local relay must accept 32-hex slots: as of protocol 0.12.0 BOTH
+  the pairing and the session slot are derived 32-hex values, so a relay narrowed to 64-hex
+  rendezvouses nothing at all. The rig starts the relay with
+  `SLOT_ID_PATTERN='^([0-9a-f]{32}|[0-9a-f]{64})$'` (the 64-hex alternative tolerates an older
+  relay checkout only) and warns when it adopts a relay that rejects 32-hex slots.
 
 ## Allowed Tools
 

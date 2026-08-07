@@ -12,7 +12,9 @@ import { describe, expect, it } from 'vitest';
 import { bytesToHex, derivePairingSlotId, deriveSessionSlotId, generateX25519KeyPair, randomBytes } from '@kangentic/protocol';
 import { deriveSlotId } from '@/channel/slot';
 
-const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const scriptsDir = join(repoRoot, 'scripts');
+const ciScriptsDir = join(repoRoot, '.github', 'scripts');
 
 describe('deriveSlotId', () => {
   it('pairing slot byte-matches the protocol package derivation the desktop dials', () => {
@@ -93,31 +95,54 @@ describe('scripts/stubDesktopPeer.mjs pairing slot matches src/channel/slot.ts',
 /**
  * `.github/scripts/run-maestro-paired.sh` and `scripts/dev.mjs` both hand-
  * maintain a comment demanding their SLOT_ID_PATTERN / RELAY_SLOT_PATTERN
- * stay "identical", with no shared source of truth. A literal string
- * comparison would only prove the two copies agree with EACH OTHER, not that
- * either still fits what the app actually dials post-0.12.0. This ties the
- * pattern to the real derivations instead: both relay slots this app
- * produces must be accepted by the pattern the local rig starts the relay
- * with, or `dev:stub` never rendezvous even though every individual piece
+ * stay "identical", with no shared source of truth. Both halves are needed and
+ * neither is sufficient: a literal comparison of the two copies proves only
+ * that they agree with EACH OTHER, which stays true if both drift away from
+ * what the app dials, while checking one copy against the real derivations
+ * leaves the other free to rot silently until a CI-only rendezvous failure.
+ * So this asserts both - the two copies match, AND each independently accepts
+ * every relay slot this app actually produces. Otherwise `dev:stub` (or the
+ * `maestro-paired` job) never rendezvous even though every individual piece
  * looks correct in isolation.
  */
-describe('scripts/dev.mjs RELAY_SLOT_PATTERN accepts both derived relay slots', () => {
+describe('the rig relay slot patterns accept both derived relay slots', () => {
   const devRigSource = readFileSync(join(scriptsDir, 'dev.mjs'), 'utf8');
-  const patternMatch = devRigSource.match(/const RELAY_SLOT_PATTERN = '([^']+)';/);
+  const ciRigSource = readFileSync(join(ciScriptsDir, 'run-maestro-paired.sh'), 'utf8');
+  const devRigPatternMatch = devRigSource.match(/const RELAY_SLOT_PATTERN = '([^']+)';/);
+  const ciRigPatternMatch = ciRigSource.match(/SLOT_ID_PATTERN='([^']+)'/);
 
-  it('is scanning a file that still declares RELAY_SLOT_PATTERN (non-vacuity guard)', () => {
-    expect(patternMatch).not.toBeNull();
+  it('is scanning files that still declare the pattern (non-vacuity guard)', () => {
+    expect(devRigPatternMatch).not.toBeNull();
+    expect(ciRigPatternMatch).not.toBeNull();
   });
 
-  it('accepts a derived pairing slot', () => {
-    const relaySlotPattern = new RegExp(patternMatch![1]);
-    const pairingSlot = derivePairingSlotId(randomBytes(32));
-    expect(pairingSlot).toMatch(relaySlotPattern);
+  /**
+   * The two copies are hand-maintained in different languages, so nothing but
+   * this assertion enforces the "keep this identical to dev.mjs" comment each
+   * one carries. It is deliberately paired with the derivation checks below:
+   * agreeing with each other proves nothing if both have drifted away from
+   * what the app dials.
+   */
+  it('scripts/dev.mjs and .github/scripts/run-maestro-paired.sh declare the SAME pattern', () => {
+    expect(ciRigPatternMatch![1]).toBe(devRigPatternMatch![1]);
   });
 
-  it('accepts a derived session slot', () => {
-    const relaySlotPattern = new RegExp(patternMatch![1]);
-    const sessionSlot = deriveSessionSlotId(generateX25519KeyPair().publicKey, generateX25519KeyPair().publicKey);
-    expect(sessionSlot).toMatch(relaySlotPattern);
-  });
+  const rigPatterns = [
+    { name: 'scripts/dev.mjs', match: devRigPatternMatch },
+    { name: '.github/scripts/run-maestro-paired.sh', match: ciRigPatternMatch },
+  ];
+
+  for (const { name, match } of rigPatterns) {
+    it(`${name} accepts a derived pairing slot`, () => {
+      const relaySlotPattern = new RegExp(match![1]);
+      const pairingSlot = derivePairingSlotId(randomBytes(32));
+      expect(pairingSlot).toMatch(relaySlotPattern);
+    });
+
+    it(`${name} accepts a derived session slot`, () => {
+      const relaySlotPattern = new RegExp(match![1]);
+      const sessionSlot = deriveSessionSlotId(generateX25519KeyPair().publicKey, generateX25519KeyPair().publicKey);
+      expect(sessionSlot).toMatch(relaySlotPattern);
+    });
+  }
 });

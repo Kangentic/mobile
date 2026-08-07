@@ -88,15 +88,17 @@ describe('beginPairing', () => {
   });
 
   /**
-   * The discriminating case: pairingToken and desktopStaticPublicKey are both
-   * 32-byte Uint8Arrays on the same payload, so a wiring mistake that reads
-   * the wrong field is a real, easy-to-make mistake, not a hypothetical one.
-   * Asserting only equality with derivePairingSlotId(payload.pairingToken)
-   * above would not catch it, since a consistently-wrong field would still
-   * "byte-match the protocol package" for whatever it derived from - it
-   * would just be deriving from the wrong 32 bytes. This proves the actual
-   * pairing token was the input, by showing it produces a DIFFERENT slot
-   * than the desktop key does.
+   * pairingToken and desktopStaticPublicKey are both 32-byte Uint8Arrays on the
+   * same payload, so a wiring mistake that reads the wrong field is a real,
+   * easy-to-make mistake, not a hypothetical one.
+   *
+   * This is a REDUNDANT guard, deliberately: the equality assertion above
+   * already catches the wrong-field bug on its own, because
+   * derivePairingSlotId(desktopStaticPublicKey) and
+   * derivePairingSlotId(pairingToken) are derived from two independent random
+   * 32-byte values and so never collide. What this case adds is a failure
+   * message that NAMES the confusable field, so the next person to break it
+   * reads "it used the desktop key" instead of a bare hex mismatch.
    */
   it('is not the slot for the desktop static public key (the field beside it on the same payload)', async () => {
     const payload = buildPayload();

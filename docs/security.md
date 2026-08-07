@@ -91,12 +91,13 @@ the wire.
   before the `@` is userinfo so the real host is `evil.test`; and `ws://[::1]evil.com`, where
   truncating at the closing bracket read the host as `[::1]`. Either would have run the whole
   ceremony through an attacker-chosen host, and `activePairing` would then have persisted that
-  host to the trust anchor for every later session. The same
-  rules live in `@kangentic/protocol`'s `relay-address.ts` (0.12.0), which the desktop reads
-  through `src/shared/relay.ts`, so both ends enforce one definition. Two build shapes additionally accept `ws://10.0.2.2`, the
-  Android emulator's NAT alias for the host's loopback interface, so a rig relay is reachable
-  without an `adb reverse`: a `__DEV__` bundle, and a build from the **`e2e` EAS profile**,
-  which sets `EXPO_PUBLIC_KANGENTIC_E2E=1`. E2E needs a release-shaped binary (Maestro tests the
+  host to the trust anchor for every later session. The same rules live in
+  `@kangentic/protocol`'s `relay-address.ts` (0.11.1), which the desktop reads through
+  `src/shared/relay.ts`, so both ends enforce one definition. Two build shapes additionally
+  accept `ws://10.0.2.2`, the Android emulator's NAT alias for the host's loopback interface, so
+  a rig relay is reachable without an `adb reverse`: a `__DEV__` bundle, and a build from the
+  **`e2e` EAS profile**, which sets `EXPO_PUBLIC_KANGENTIC_E2E=1`. E2E needs a release-shaped
+  binary (Maestro tests the
   final bundled app, and a dev client drags in a dev menu, a Metro dependency, and a bundle URL
   that `pm clear` wipes), and without the flag that binary refuses the local relay.
 
@@ -139,9 +140,15 @@ a rendezvous label has to do.
 computing it differently never meet, and the symptom is a hang until the relay's park timeout
 rather than an error. `PROTOCOL_VERSION` is therefore bumped whenever a derivation changes (v3
 introduced the derived pairing slot), and `validateScannedQr` compares it before anything
-dials, turning that hang into an explicit "update the desktop" at QR-scan time. Because the
-version is also bound into the KK **session** prologue, such a bump invalidates every existing
-pairing and all devices must re-pair.
+dials, turning that hang into an explicit `version-incompatible` result at QR-scan time. The
+message names neither side as the stale one, because a bump leaves a current phone ahead of an
+old desktop and an un-updated phone behind a current one, and the phone cannot tell which it is.
+
+Because the version is also bound into the KK **session** prologue, such a bump takes every
+existing pairing offline until both ends run matching software. It does not invalidate the
+pairing: no protocol version is stored beside the pinned identity on either side, and the
+session slot derives from the two static keys alone, so the pinned keys reconnect once the
+software matches, with no repeat of the QR/SAS ceremony.
 
 ## Authorization
 
