@@ -270,8 +270,38 @@ shelves, tablets included, and a real tablet is not 9:16 (nor is a modern phone 
 1080x2400). Setting `wm size` and `wm density` INDEPENDENTLY satisfies both constraints at once:
 1080x1920@480 is 360dp (phone), 1080x1920@280 is ~617dp (7-inch), 1440x2560@320 is 720dp
 (10-inch). Because crossing 600dp is what triggers large-screen layout, reviewing the tablet
-captures IS the tablet-layout verification - this app has no tablet-specific code and had never
-been run at tablet width before these were produced.
+captures IS the tablet-layout verification - this app has no tablet-specific code, and these
+captures were the first time it had been run at tablet width.
+
+**Large screens rotate, and the portrait lock does not stop them.** The captures above are all
+9:16, so they only ever exercised tablet PORTRAIT. The app targets SDK 36, so Android 16 ignores
+`android:screenOrientation` on any display at sw600dp or wider - the tablet geometry above
+qualifies, and tablet LANDSCAPE is therefore a shape that ships whether or not it was designed
+for. It was checked at 1280x720dp on 2026-08-06: the home feed, the session terminal, the session
+chat, the board, and the Create Task form sheet all hold up, and the board's column chips actually
+fit on one row there. Not checked: the MoveTask and ProjectPicker sheets, whose `LIST_MAX_HEIGHT`
+of 420 caps a scrollable list rather than a text field, so they exercise a different mechanism
+from CreateTask's. All the 420 caps are well inside a 720dp-tall window, but only CreateTask's was
+observed. See the Play Console advisories section of [store-listing.md](store-listing.md) for why
+the lock stays.
+
+To reproduce, on an **API 36** emulator (the AVD used for the captures is API 35, where the lock
+is still honoured and the check passes vacuously - and prefer the `default` system image over
+`google_apis`, which starves the app):
+
+```
+adb shell settings put system accelerometer_rotation 0   # else user_rotation is ignored
+adb shell settings put system user_rotation 1
+adb shell am get-config                                  # want "land" at sw720dp
+```
+
+Run it at BOTH geometries and expect them to disagree - that disagreement is the check. At
+1440x2560@320 (sw720dp) the display turns and the app fills 2560x1440 with no letterboxing; at
+phone width (sw411dp) the same commands leave it `port`, because there the lock still wins. If
+both legs agree, the setup is wrong and the result means nothing. Confirm `mResumedActivity` is
+`com.kangentic.mobile/.MainActivity` first (`adb shell dumpsys activity activities`): the dev
+client ships its own portrait-locked activities, and reading one of those instead is the easy way
+to get a confident wrong answer.
 
 **Turn expo-dev-menu's floating "Tools" button off** (dev menu -> bottom -> "Tools button"). It
 is a dev-build overlay pinned over the app's top-right corner, so it lands in every frame as a
