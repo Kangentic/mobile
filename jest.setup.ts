@@ -44,10 +44,11 @@ jest.mock('react-native-reanimated', () => {
       return mockSharedValue;
     },
     useAnimatedStyle: (styleFactory: () => object) => styleFactory(),
-    // AgentStatusIcon animates an SVG prop (the marching stroke-dashoffset)
-    // rather than a style. Paired with the identity `createAnimatedComponent`
-    // above, the animated props land as plain props on the SVG element, so
-    // tests assert on props rather than on rendered geometry.
+    // AgentStatusIcon animates SVG props (the spin's transform matrix on a
+    // group, the march's stroke-dashoffset on a circle) rather than a style.
+    // Paired with the identity `createAnimatedComponent` above, the animated
+    // props land as plain props on the SVG element, so tests assert on props
+    // rather than on rendered geometry.
     useAnimatedProps: (propsFactory: () => object) => propsFactory(),
     useDerivedValue: (valueFactory: () => unknown) => ({ value: valueFactory() }),
     // Tests that need the reduced-motion branch jest.spyOn this export.

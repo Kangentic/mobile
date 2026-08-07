@@ -59,7 +59,7 @@ src/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
                   #   column chips, composer/, diff/ cells
   brand/          # Generated brand data (brandmark XML, Overseer frames + motion sequences,
-                  #   activity mark shapes + march timing) - syncBranding.mjs owns them
+                  #   activity mark shapes + spin/march timing) - syncBranding.mjs owns them
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
