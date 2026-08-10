@@ -1952,8 +1952,14 @@ reported - continuous GC on the main thread before the throw.
 five-minute ceiling caps the exposure window; it does not find the leak.
 
 **Do this against a build WITHOUT the ceiling.** With the keepalive stopping after five minutes,
-heap growth stops with it, so the fixed build probably cannot reproduce the crash at all. Running
-the soak after upgrading forfeits the evidence permanently.
+heap growth stops with it, so a current build probably cannot reproduce the crash at all.
+
+That does **not** make the soak urgent, which is worth stating because the opposite is the easy
+assumption: `0494983` is the last pre-ceiling commit and git keeps it indefinitely, so the
+unbounded build stays reproducible forever. Shipping the fix costs only the natural crash signal
+in Sentry, and a REACT-NATIVE-5 event carries an OOM stack, not a heap dump - it was never going
+to identify the allocator on its own. Run the soak when convenient; just run it from that commit
+rather than from HEAD.
 
 **Not the shipped Play build, though - it cannot be dumped.** `adb shell am dumpheap` requires the
 target to be debuggable (or the device to be `userdebug`/rooted), and this project sets neither
