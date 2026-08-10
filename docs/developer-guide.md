@@ -1937,7 +1937,7 @@ GWP-ASan was active on an AOSP `userdebug` x86_64 emulator. Whether the same def
 DSN is live in production builds this exact signature would arrive in Sentry as a native crash, so
 a real rate there is what would justify widening the opt-out. Do not widen it pre-emptively.
 
-## Finding the background heap leak (open, and order-dependent)
+## The REACT-NATIVE-5 OOM: a leaked session screen, not a background leak
 
 REACT-NATIVE-5 was an `OutOfMemoryError` against the **Java** heap's stock 256MB growth limit
 after 5h31m of process uptime, with the app backgrounded under the keepalive foreground service
@@ -1948,8 +1948,42 @@ that tipped a heap already at its ceiling. Any main-thread allocation would have
 `giving up on allocation because <1% of heap free after GC` clause is also the freeze the user
 reported - continuous GC on the main thread before the throw.
 
-**The allocator has not been identified, and bounding the keepalive did not identify it.** The
-five-minute ceiling caps the exposure window; it does not find the leak.
+**The leak is identified: every session-screen open retains its xterm WebView and view tree, and
+nothing ever releases them.** Measured on the affected Pixel against the shipped Play build, from
+a cold start, 1:1 with navigation:
+
+```
+open/close   Dalvik Heap Alloc   Views   WebViews
+    0             7.5 MB           188       0
+    1             9.5 MB           338       1
+    3            10.5 MB           638       3
+    6            14.0 MB          1090       6
+```
+
+Exactly one WebView and ~150 views leaked per open, ~1.07 MB of ART heap each, perfectly linear.
+They survive a forced GC (`Views` and `WebViews` unchanged after collection, while
+`Dalvik Heap Alloc` drops), so these are retained references, not uncollected garbage. From a
+7.5 MB baseline that reaches the 256 MB growth limit in roughly **230 session opens** - an evening
+of cycling between agents - and the ~4 MB of native heap per leak also explains the crash event's
+`free_memory` of 740 MB against 2.2-2.8 GB in the REACT-NATIVE-3 events on the same phone.
+
+**Where it is NOT.** `react-native-webview`'s `onDropViewInstance` does call
+`cleanupCallbacksAndDestroy()` (`RNCWebViewManagerImpl.kt`), so the library releases the WebView
+correctly when Fabric drops the view. Twenty surviving WebViews after twenty pops means the drop
+never happens - React is not unmounting the SessionScreen subtree when the route is popped. Start
+at the expo-router / react-native-screens boundary, not inside `TerminalPane`, whose own effects
+all have cleanups.
+
+**This reframes the keepalive's role in REACT-NATIVE-5.** The keepalive never leaked - the
+background path is flat four ways (below). What it did was hold the process resident for 5h31m so
+that ordinary foreground accumulation never got reset by an OS kill. The five-minute ceiling
+therefore does fix the OOM, but by making the process reapable again, not by stopping a background
+leak. Fixing the unmount is the real repair; the ceiling only buys back the safety net.
+
+Reproduce with `adb shell dumpsys meminfo com.kangentic.mobile`, reading `Views` and `WebViews`
+from the Objects block and `Heap Alloc` from the **Dalvik Heap** row. Do not read `Java Heap` out
+of the App Summary block: that is a PSS figure covering shared and zygote pages and it moves for
+reasons unrelated to allocation - it showed 24-40 MB while the real ART allocation was 13 MB.
 
 ### What has been measured, and what it ruled out
 
@@ -1975,13 +2009,10 @@ across background/foreground transitions**. Steady-state Java heap sits around 2
 and 40 MB freshly resumed, against a 256 MB growth limit - roughly a 6x gap that something would
 have to close.
 
-**Do not read this as "there is no bug".** The longest window run was 24 minutes against a crash
-that took 5h31m; the granularity is PSS, not a dominator tree; it is one device; and
-REACT-NATIVE-5 is a single event from a single user, so a rare confluence rather than a
-systematic leak is entirely consistent with the data. What the measurements do establish is that
-the obvious candidates are not it, and that whoever picks this up should not start there. Note
-also the crash event's `free_memory` was 740 MB against 2.2-2.8 GB in the REACT-NATIVE-3 events
-on the same device - device-wide pressure at that moment is an unexplored thread.
+These four probes are what redirected the search to the foreground path. Read them as "the
+background path is clean", not as "there was no bug" - they were run at PSS granularity over
+24-minute windows, and it was the `Views`/`WebViews` object counts, not the heap figures, that
+eventually made the real leak obvious.
 
 **Do this against a build WITHOUT the ceiling.** With the keepalive stopping after five minutes,
 heap growth stops with it, so a current build probably cannot reproduce the crash at all.
