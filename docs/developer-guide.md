@@ -1937,6 +1937,50 @@ GWP-ASan was active on an AOSP `userdebug` x86_64 emulator. Whether the same def
 DSN is live in production builds this exact signature would arrive in Sentry as a native crash, so
 a real rate there is what would justify widening the opt-out. Do not widen it pre-emptively.
 
+## Finding the background heap leak (open, and order-dependent)
+
+REACT-NATIVE-5 was an `OutOfMemoryError` against the **Java** heap's stock 256MB growth limit
+after 5h31m of process uptime, with the app backgrounded under the keepalive foreground service
+for most of it. The `JSApplicationIllegalArgumentException: ... 'backgroundColor' ... RCTView`
+title Sentry groups it under is the third link in a `Caused by` chain and is a red herring: a
+64-byte `LayerDrawable` allocation inside a Fabric `PreAllocateViewMountItem` was simply the one
+that tipped a heap already at its ceiling. Any main-thread allocation would have done. The
+`giving up on allocation because <1% of heap free after GC` clause is also the freeze the user
+reported - continuous GC on the main thread before the throw.
+
+**The allocator has not been identified, and bounding the keepalive did not identify it.** The
+five-minute ceiling caps the exposure window; it does not find the leak.
+
+**Do this against a build WITHOUT the ceiling** - the shipped `0.4.0+4`, or a build from a commit
+before the bound landed. This ordering is the whole point: with the keepalive stopping after five
+minutes, heap growth stops with it, so the fixed build probably cannot reproduce the crash at all.
+Running the soak after upgrading forfeits the evidence permanently.
+
+1. Install the unbounded build on a physical device and pair it against a live desktop with an
+   agent session actively streaming. `device.low_memory` was `false` in the crash, so the device
+   being otherwise healthy is expected and not a reason to stop.
+2. Baseline right after backgrounding:
+   `adb shell am dumpheap com.kangentic.mobile /data/local/tmp/heap-baseline.hprof`
+3. Leave it backgrounded for several hours. The reported crash took 5h31m of uptime; the
+   REACT-NATIVE-3 timestamps cluster around overnight stretches.
+4. Second dump, same command, `/data/local/tmp/heap-after.hprof`.
+5. `adb pull` both, convert with `hprof-conv` if Android Studio asks, and diff the **dominators**
+   in the Memory Profiler. The question is which retained set grew, not which class has the most
+   instances.
+
+Candidates considered and left open, none confirmed: OkHttp / `WebSocketModule` frames queueing
+on the Java side while the JS thread is throttled; notifee notification objects; retained Fabric
+view state across the background cycle; the xterm WebView. Note the in-JS buffers were checked
+and are bounded (`src/state/terminalFeed.ts` caps each retained session's ring at 128KB), and
+they live on the Hermes heap anyway, which is not the heap that died.
+
+One targeted candidate worth knowing about before reading the dump: a session screen left open
+while the app backgrounds keeps `terminal: true` on its stream subscription
+(`subscriptionManager.ts`), so live PTY bytes keep arriving with no one watching. Dropping that on
+background is a one-line change through the existing `setStreamWantsTerminal`, and it was
+deliberately NOT made pre-emptively - a speculative fix landed before the dump would muddy exactly
+the reading the dump exists to give.
+
 ## Credential inventory
 
 Every credential this project uses, where it lives, and what happens if it is lost. No values here,
