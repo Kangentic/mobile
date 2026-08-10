@@ -24,6 +24,16 @@ let lastKnownPermissionGranted: boolean | null = null;
  * looked yet, so callers gating behaviour on this should treat only an explicit
  * `false` as denial - an unread cache must behave as it did before the cache
  * existed, never as a denial.
+ *
+ * `false` does NOT mean the user refused. Android has no NOT_DETERMINED
+ * authorization status (notifee reports only DENIED or AUTHORIZED there), so a
+ * permission that has simply never been requested reads back identically to one
+ * that was. In practice the `null` window is also tiny, because
+ * initializeNotifications seeds this at boot. A caller that needs "the user
+ * turned us down" - rather than "we cannot post notifications right now" - must
+ * pair this with settingsStore's persisted hasRequestedNotificationPermission,
+ * which is the only record that the app ever asked. Both current gates (the
+ * background keepalive and the Settings blocked-notice) do exactly that.
  */
 export function notificationPermissionGranted(): boolean | null {
   return lastKnownPermissionGranted;

@@ -10,6 +10,7 @@ const notifeeState = vi.hoisted(() => ({
   createChannels: vi.fn(async (_channels: unknown) => undefined),
   requestPermission: vi.fn(async () => ({ authorizationStatus: 1 })),
   getNotificationSettings: vi.fn(async () => ({ authorizationStatus: 1 })),
+  openNotificationSettings: vi.fn(async () => undefined),
 }));
 
 vi.mock('@notifee/react-native', () => ({
@@ -17,6 +18,7 @@ vi.mock('@notifee/react-native', () => ({
     createChannels: notifeeState.createChannels,
     requestPermission: notifeeState.requestPermission,
     getNotificationSettings: notifeeState.getNotificationSettings,
+    openNotificationSettings: notifeeState.openNotificationSettings,
   },
   AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
@@ -43,6 +45,7 @@ describe('notification channels', () => {
     notifeeState.createChannels.mockClear();
     notifeeState.requestPermission.mockReset();
     notifeeState.getNotificationSettings.mockReset();
+    notifeeState.openNotificationSettings.mockClear();
   });
 
   it('creates the five channels once, with the right importance levels', async () => {
@@ -112,6 +115,19 @@ describe('notification channels', () => {
     notifeeState.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
     await channels.refreshNotificationPermission();
     expect(cache.notificationPermissionGranted()).toBe(true);
+  });
+
+  /**
+   * The only recovery path once Android has stopped showing the runtime
+   * prompt (after two dismissals): Settings must be able to hand the user
+   * off to the OS notification settings screen for this app.
+   */
+  it('openSystemNotificationSettings opens the OS settings screen for this app', async () => {
+    const channels = await loadChannels();
+
+    await channels.openSystemNotificationSettings();
+
+    expect(notifeeState.openNotificationSettings).toHaveBeenCalledTimes(1);
   });
 
   it('a granted request updates the cache too, not just the refresh path', async () => {

@@ -27,11 +27,25 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { useChannelStore } from '@/state/channelStore';
 // Safe to import statically: permissionCache has no imports at all, which is
 // the whole point of it being separate from channels.ts.
-import { setNotificationPermissionGranted } from '@/notifications/permissionCache';
+import { notificationPermissionGranted, setNotificationPermissionGranted } from '@/notifications/permissionCache';
 import { flushMicrotasks, waitUntil } from '../helpers/async';
 
 /** Must match BACKGROUND_KEEPALIVE_MAX_MS. Held separately on purpose - see the file header. */
 const EXPECTED_KEEPALIVE_CEILING_MS = 5 * 60_000;
+
+/**
+ * A promise this file resolves by hand, for pinning the notification-permission
+ * in-flight guard: the guard only matters in the window where the first
+ * requestPermission() call has not settled yet, and vitest's normal awaits give
+ * no way to hold a call open on demand.
+ */
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolveDeferred!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    resolveDeferred = resolve;
+  });
+  return { promise, resolve: resolveDeferred };
+}
 
 const mockRunBootstrap = vi.hoisted(() => vi.fn<() => Promise<void>>());
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: mockRunBootstrap }));
@@ -147,7 +161,17 @@ describe('connectionManager background keepalive ceiling', () => {
   beforeEach(() => {
     (globalThis as { __DEV__?: boolean }).__DEV__ = true;
     process.env.EXPO_PUBLIC_KANGENTIC_MOCK = '1';
-    useSettingsStore.setState({ backgroundNotificationsMode: 'foreground-service', hydrated: true });
+    // hasRequestedNotificationPermission is set explicitly, not left to the
+    // store default: establishAndWarm() fires maybeRequestNotificationPermission
+    // as a side effect, which flips this flag partway through the first test and
+    // leaves it set for the rest of the file. That made the denied-permission
+    // test below depend on declaration order rather than on its own setup, since
+    // "denied" means asked AND refused.
+    useSettingsStore.setState({
+      backgroundNotificationsMode: 'foreground-service',
+      hasRequestedNotificationPermission: true,
+      hydrated: true,
+    });
     mockRunBootstrap.mockReset();
     mockRunBootstrap.mockResolvedValue(undefined);
     mockDesktopSeam.stub = null;
@@ -156,6 +180,8 @@ describe('connectionManager background keepalive ceiling', () => {
     setNotificationPermissionGranted(true);
     notifeeMocks.displayNotification.mockClear();
     notifeeMocks.stopForegroundService.mockClear();
+    notifeeMocks.getNotificationSettings.mockReset();
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
   });
 
   afterEach(async () => {
@@ -165,7 +191,11 @@ describe('connectionManager background keepalive ceiling', () => {
     vi.useRealTimers();
     delete (globalThis as { __DEV__?: boolean }).__DEV__;
     delete process.env.EXPO_PUBLIC_KANGENTIC_MOCK;
-    useSettingsStore.setState({ backgroundNotificationsMode: 'off', hydrated: false });
+    useSettingsStore.setState({
+      backgroundNotificationsMode: 'off',
+      hasRequestedNotificationPermission: false,
+      hydrated: false,
+    });
     useChannelStore.getState().reset();
   });
 
@@ -263,6 +293,32 @@ describe('connectionManager background keepalive ceiling', () => {
   });
 
   /**
+   * The mirror of the test above, and the reason the gate consults the persisted
+   * flag instead of the cache alone.
+   *
+   * Android has no NOT_DETERMINED authorization status - notifee reports plain
+   * DENIED - and initializeNotifications seeds the cache at boot, so an install
+   * that has never been ASKED caches exactly the same `false` as one that
+   * refused. Gating on the cache alone therefore withdrew the keepalive from
+   * every install that had not answered the prompt yet, which is all of them
+   * until the prompt fires, and all of them forever if it never does.
+   */
+  it('still starts the keepalive when the permission was never asked for', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+
+    setNotificationPermissionGranted(false);
+    useSettingsStore.setState({ hasRequestedNotificationPermission: false });
+    onAppStateChange('background');
+    // The service posts through a (pre-warmed) dynamic import, so it lands a
+    // microtask after the synchronous gate decision.
+    await flushMicrotasks();
+
+    expect(notifeeMocks.displayNotification).toHaveBeenCalledTimes(1);
+    expect(getActiveConnection()).not.toBeNull();
+  });
+
+  /**
    * startConnectionLifecycle runs before hydrate() resolves, so an early
    * background reads the in-memory 'foreground-service' default rather than the
    * persisted value - and would start a service a 'push-only' user turned off.
@@ -272,6 +328,32 @@ describe('connectionManager background keepalive ceiling', () => {
     const onAppStateChange = await establishAndWarm();
 
     useSettingsStore.setState({ hydrated: false });
+    onAppStateChange('background');
+
+    expect(notifeeMocks.displayNotification).not.toHaveBeenCalled();
+    expect(getActiveConnection()).toBeNull();
+  });
+
+  /**
+   * The AppState 'active' handler refreshes the cached permission from the
+   * OS (Android only), which is how a permission revoked from system
+   * settings while the app was backgrounded becomes visible to the
+   * background-keepalive gate again. Without it, a user who revoked
+   * POST_NOTIFICATIONS while away would background right back into a
+   * foreground service that can display nothing.
+   */
+  it('refreshes the permission cache on foreground and withholds the keepalive once it reads back denied', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+
+    // The cache holds true from beforeEach; only a real refresh on 'active'
+    // can flip it, since backgrounding alone reads whatever is already cached.
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 0 });
+    onAppStateChange('active');
+    await waitUntil(() => notificationPermissionGranted() === false, {
+      label: 'permission cache refreshed to denied',
+    });
+
     onAppStateChange('background');
 
     expect(notifeeMocks.displayNotification).not.toHaveBeenCalled();
@@ -330,6 +412,80 @@ describe('connectionManager notification permission prompt', () => {
     await waitUntil(() => mockRunBootstrap.mock.calls.length === 2, { label: 're-established' });
 
     expect(notifeeMocks.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The race this guard exists for: the open system dialog pauses the
+   * activity, Android reports a background transition, the channel closes
+   * and reconnects on answering the dialog, and that second onEstablished
+   * can land before markNotificationPermissionRequested() has finished
+   * persisting the first answer. Only notificationPermissionPromptInFlight
+   * stops a second requestPermission() call in that window - the persisted
+   * flag alone cannot, because it has not been written yet.
+   */
+  it('does not call requestPermission a second time while the first call is still pending', async () => {
+    const { startConnectionLifecycle, getActiveConnection } = await import('@/connection/connectionManager');
+
+    const firstPermissionRequest = createDeferred<{ authorizationStatus: number }>();
+    notifeeMocks.requestPermission.mockImplementation(() => firstPermissionRequest.promise);
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established, { label: 'session established' });
+    await waitUntil(() => notifeeMocks.requestPermission.mock.calls.length === 1, {
+      label: 'first permission request issued',
+    });
+    // Still pending: the persisted flag cannot be what suppresses a second
+    // call below, because it has not been written yet.
+    expect(useSettingsStore.getState().hasRequestedNotificationPermission).toBe(false);
+
+    const activeConnection = getActiveConnection();
+    if (!activeConnection) throw new Error('expected an active connection after establishment');
+    activeConnection.controller.session.reset();
+    (mockDesktopSeam.stub as StubSessionInitiator).beginHandshake();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 2, { label: 're-established' });
+
+    // The second onEstablished fired while the first request was still
+    // pending; only the in-flight guard can have stopped a second call here.
+    expect(notifeeMocks.requestPermission).toHaveBeenCalledTimes(1);
+
+    firstPermissionRequest.resolve({ authorizationStatus: 1 });
+    await waitUntil(() => useSettingsStore.getState().hasRequestedNotificationPermission, {
+      label: 'permission requested',
+    });
+    expect(notifeeMocks.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * "A prompt that never appeared is worse than one offered again": a
+   * rejected requestPermission() must leave hasRequestedNotificationPermission
+   * unset, so the next establishment retries instead of the app silently
+   * never asking again.
+   */
+  it('leaves the flag unset when the request rejects, and asks again on the next establishment', async () => {
+    const { startConnectionLifecycle, getActiveConnection } = await import('@/connection/connectionManager');
+
+    notifeeMocks.requestPermission.mockRejectedValueOnce(new Error('permission request failed'));
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established, { label: 'session established' });
+    await waitUntil(() => notifeeMocks.requestPermission.mock.calls.length === 1, {
+      label: 'permission request issued',
+    });
+    // Let the rejection's .catch()/.finally() run before reading the flag.
+    await flushMicrotasks();
+    expect(useSettingsStore.getState().hasRequestedNotificationPermission).toBe(false);
+
+    notifeeMocks.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
+    const activeConnection = getActiveConnection();
+    if (!activeConnection) throw new Error('expected an active connection after establishment');
+    activeConnection.controller.session.reset();
+    (mockDesktopSeam.stub as StubSessionInitiator).beginHandshake();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 2, { label: 're-established' });
+    await waitUntil(() => useSettingsStore.getState().hasRequestedNotificationPermission, {
+      label: 'permission requested',
+    });
+
+    expect(notifeeMocks.requestPermission).toHaveBeenCalledTimes(2);
   });
 
   it('does not ask when notifications are switched off entirely', async () => {
