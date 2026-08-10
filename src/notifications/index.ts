@@ -1,10 +1,11 @@
 import { Platform } from 'react-native';
-import { createNotificationChannels } from './channels';
+import { createNotificationChannels, refreshNotificationPermission } from './channels';
 import { registerBackgroundPushTask } from './backgroundPushTask';
 import { registerForegroundServiceRunner } from './foregroundService';
 import { registerNotificationTapHandlers } from './tapRouter';
 
-export { requestNotificationPermission } from './channels';
+export { openSystemNotificationSettings, refreshNotificationPermission, requestNotificationPermission } from './channels';
+export { notificationPermissionGranted } from './permissionCache';
 export { decryptPushBlob, PUSH_PLACEHOLDER_BODY, PUSH_PLACEHOLDER_TITLE, type DecryptedPushNotification } from './pushDecrypt';
 export { setActivePushIdentityPublicKey } from './pushIdentity';
 export {
@@ -39,5 +40,11 @@ export function initializeNotifications(): void {
   void createNotificationChannels().catch(() => {
     // Channel creation failing (no notification permission model applies
     // to channels, so this is exotic) must never block boot.
+  });
+  // Seeds the permission cache the background-keepalive gate reads
+  // synchronously. Refreshed again on every foreground.
+  void refreshNotificationPermission().catch(() => {
+    // Leaves the cache at null, which the gate treats as "unknown", not
+    // "denied" - a failed read must not disable the keepalive.
   });
 }

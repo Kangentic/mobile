@@ -9,6 +9,7 @@ import {
   channelIdForCategory,
   titleForCategory,
 } from './categoryCopy';
+import { setNotificationPermissionGranted } from './permissionCache';
 
 /**
  * Android notification channels, mirroring the desktop's push channel
@@ -92,11 +93,36 @@ export async function createNotificationChannels(): Promise<void> {
   ]);
 }
 
+function grantedFromStatus(authorizationStatus: AuthorizationStatus): boolean {
+  return authorizationStatus === AuthorizationStatus.AUTHORIZED || authorizationStatus === AuthorizationStatus.PROVISIONAL;
+}
+
+/**
+ * Refreshes the cached permission state from the OS. Cheap, and called on every
+ * foreground: the user can revoke the permission in system settings at any
+ * time, and returning to the app is the only moment we get to notice.
+ */
+export async function refreshNotificationPermission(): Promise<boolean> {
+  const settings = await notifee.getNotificationSettings();
+  const granted = grantedFromStatus(settings.authorizationStatus);
+  setNotificationPermissionGranted(granted);
+  return granted;
+}
+
 /** Android 13+ runtime notification permission (POST_NOTIFICATIONS), via notifee. */
 export async function requestNotificationPermission(): Promise<boolean> {
   const settings = await notifee.requestPermission();
-  return (
-    settings.authorizationStatus === AuthorizationStatus.AUTHORIZED ||
-    settings.authorizationStatus === AuthorizationStatus.PROVISIONAL
-  );
+  const granted = grantedFromStatus(settings.authorizationStatus);
+  setNotificationPermissionGranted(granted);
+  return granted;
+}
+
+/**
+ * Opens the OS notification settings for this app. The only recovery path once
+ * the user has dismissed the runtime prompt twice: Android stops showing it
+ * after that, so requestNotificationPermission() silently resolves denied
+ * forever and the in-app prompt can never come back.
+ */
+export async function openSystemNotificationSettings(): Promise<void> {
+  await notifee.openNotificationSettings();
 }

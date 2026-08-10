@@ -3,17 +3,19 @@ import { ChannelController, SubscriptionManager, type VerbClient } from '@/chann
 import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
 import { setActivePushIdentityPublicKey } from '@/notifications/pushIdentity';
+import { notificationPermissionGranted } from '@/notifications/permissionCache';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { bindFeedToStores, createSnapshotSinks } from './storeFeed';
 import { runBootstrap } from './bootstrap';
 
 // The notifee-backed notification modules (foreground service, local
-// notifier, push registration) load lazily: notifee throws at import time
-// when its native module is absent (Jest component tests reach this file
+// notifier, push registration, channels) load lazily: notifee throws at import
+// time when its native module is absent (Jest component tests reach this file
 // through actions.ts), and the lifecycle only needs them at established/
-// background time anyway. pushIdentity stays static - it is pure TS over
-// the already-imported device identity.
+// background time anyway. pushIdentity and permissionCache stay static - both
+// are pure TS, and the permission cache specifically MUST be readable
+// synchronously on the background transition (see its own header).
 
 /**
  * The app's one connection lifecycle owner, a module-level singleton
@@ -320,6 +322,7 @@ async function performOpenConnection(): Promise<void> {
           // Registration is best-effort; the status surface stays 'pending'.
         });
     }
+    maybeRequestNotificationPermission();
   });
 
   // The only observable that a rekey happened. Streams and subscriptions
@@ -387,9 +390,83 @@ function closeConnection(intent: ConnectionTeardownIntent = 'stay-silent'): void
   useChannelStore.getState().reset();
 }
 
+/**
+ * Ask for POST_NOTIFICATIONS once, the first time a session actually
+ * establishes.
+ *
+ * Establishment IS the paired signal, which is what makes this one rule cover
+ * both populations: an install that has been paired for weeks prompts on its
+ * first establishment after updating (nothing else would ever reach it again),
+ * and a fresh install prompts the moment pairing first connects rather than on
+ * a cold first launch before the user knows what the app is.
+ *
+ * The permission was never requested anywhere before this - the function
+ * existed and was exported, but its only callers were tests - so every install
+ * ran with notifications silently undeliverable, local and remote alike.
+ *
+ * onEstablished re-fires on every rekey (~2 minutes) and every reconnect, so
+ * the persisted flag is what makes this once-ever, and it has to be read from a
+ * HYDRATED store: startConnectionLifecycle runs before hydrate() resolves, and
+ * an establishment that beats hydration would re-prompt someone who already
+ * answered.
+ */
+let notificationPermissionPromptInFlight = false;
+
+function maybeRequestNotificationPermission(): void {
+  if (Platform.OS !== 'android') return;
+  // An open system dialog pauses the activity, which Android reports as a
+  // background transition, which closes the channel - so answering the prompt
+  // reconnects and re-establishes, and that second onEstablished can land
+  // before the persisted flag is written. This guard is what stops the user
+  // being asked twice in a row.
+  if (notificationPermissionPromptInFlight) return;
+  const settings = useSettingsStore.getState();
+  if (!settings.hydrated) return;
+  if (settings.hasRequestedNotificationPermission) return;
+  if (settings.backgroundNotificationsMode === 'off') return;
+  notificationPermissionPromptInFlight = true;
+  void import('@/notifications/channels')
+    .then(async ({ requestNotificationPermission }) => {
+      // A denial resolves false rather than throwing, so the flag is still
+      // written: Android will not show the prompt again anyway, and Settings
+      // carries the recovery route from there.
+      await requestNotificationPermission();
+      await useSettingsStore.getState().markNotificationPermissionRequested();
+    })
+    .catch(() => {
+      // Leaving the flag unset retries on the next establishment, which is
+      // the right side to fail on: a prompt that never appeared is worse
+      // than one offered again.
+    })
+    .finally(() => {
+      notificationPermissionPromptInFlight = false;
+    });
+}
+
+/**
+ * Hard ceiling on the background keepalive.
+ *
+ * Android 15+ gives a dataSync foreground service a cumulative 6h/24h budget
+ * and kills the process with ForegroundServiceDidNotStopInTimeException when it
+ * overruns; notifee 9.1.8 exposes no Service.onTimeout hook, so there is no
+ * signal to react to and this timer is the only bound in the stack. Unbounded,
+ * the service also let the Java heap climb to its 256MB limit over a long
+ * background stretch, which surfaced as a frozen UI (GC thrash on the main
+ * thread) on resume.
+ *
+ * Five minutes covers the case the keepalive is actually for - switched apps
+ * for a moment - and makes budget exhaustion arithmetically unreachable (72
+ * background stretches in a day). Anything longer is remote push's job, and
+ * push covers the same alert categories: the desktop suppresses its own push
+ * only while this phone's channel is established, so tearing the channel down
+ * hands alerting over rather than dropping it.
+ */
+const BACKGROUND_KEEPALIVE_MAX_MS = 5 * 60_000;
+
 let stopLocalNotifier: (() => void) | null = null;
 let backgroundKeepaliveActive = false;
 let keepaliveGeneration = 0;
+let keepaliveCeilingTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Foreground service + local notifier while backgrounded with the channel alive (Android, mode 'foreground-service'). */
 function startBackgroundKeepalive(): void {
@@ -397,6 +474,15 @@ function startBackgroundKeepalive(): void {
   backgroundKeepaliveActive = true;
   keepaliveGeneration += 1;
   const generation = keepaliveGeneration;
+  keepaliveCeilingTimer = setTimeout(() => {
+    keepaliveCeilingTimer = null;
+    if (generation !== keepaliveGeneration) return;
+    // Order is load-bearing: stop THEN close. closeConnection() does not stop
+    // the keepalive, so closing first would leave the foreground-service
+    // notification posted with no channel behind it.
+    stopBackgroundKeepalive();
+    closeConnection();
+  }, BACKGROUND_KEEPALIVE_MAX_MS);
   void import('@/notifications/foregroundService')
     .then(({ startConnectedForegroundService }) => {
       // A foreground bounce can beat the import; never start a stale service.
@@ -419,6 +505,12 @@ function startBackgroundKeepalive(): void {
 }
 
 function stopBackgroundKeepalive(): void {
+  // Before the early return: a timer with no active keepalive behind it is
+  // exactly the state worth clearing, not one worth skipping.
+  if (keepaliveCeilingTimer) {
+    clearTimeout(keepaliveCeilingTimer);
+    keepaliveCeilingTimer = null;
+  }
   if (!backgroundKeepaliveActive) return;
   backgroundKeepaliveActive = false;
   keepaliveGeneration += 1;
@@ -435,10 +527,33 @@ function onAppStateChange(status: AppStateStatus): void {
   if (status === 'active') {
     stopBackgroundKeepalive();
     void openConnection();
+    // Keeps the cache the background gate reads synchronously current: the
+    // user can revoke the permission from system settings at any time, and
+    // returning to the app is the only moment we get to notice.
+    void import('@/notifications/channels')
+      .then(({ refreshNotificationPermission }) => refreshNotificationPermission())
+      .catch(() => {
+        // Cache keeps its previous value; the gate fails open either way.
+      });
   } else if (status === 'background') {
-    const backgroundMode = useSettingsStore.getState().backgroundNotificationsMode;
+    const settings = useSettingsStore.getState();
     const hasEstablishedConnection = activeConnection?.controller.session.isEstablished === true;
-    if (Platform.OS === 'android' && backgroundMode === 'foreground-service' && hasEstablishedConnection) {
+    // hydrated matters: startConnectionLifecycle runs before hydrate()
+    // resolves, so an early background would otherwise read the in-memory
+    // 'foreground-service' default and start a service a 'push-only' user
+    // turned off. Unhydrated falls through to closeConnection, the safe side.
+    //
+    // notificationPermissionGranted() is checked as `!== false` rather than
+    // `=== true` so an unread cache (null) behaves as before it existed. A
+    // denied permission means the local notifier can display nothing, so the
+    // service would burn the dataSync budget to deliver nothing at all.
+    const wantsKeepalive =
+      Platform.OS === 'android' &&
+      settings.hydrated &&
+      settings.backgroundNotificationsMode === 'foreground-service' &&
+      hasEstablishedConnection &&
+      notificationPermissionGranted() !== false;
+    if (wantsKeepalive) {
       startBackgroundKeepalive();
     } else {
       closeConnection();

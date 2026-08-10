@@ -1,11 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { AppState, Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import type { PushCategory } from '@kangentic/protocol';
 import { Brandmark, Button, Card, Icon, MonoText, Row, Screen, SectionHeader, Stack, StatusDot, Text, useTheme } from '@/components';
 import { resyncPushRegistrationCategories } from '@/connection/connectionManager';
-import { getPushRegistrationStatus, type PushRegistrationStatus } from '@/notifications';
+import {
+  getPushRegistrationStatus,
+  notificationPermissionGranted,
+  openSystemNotificationSettings,
+  refreshNotificationPermission,
+  type PushRegistrationStatus,
+} from '@/notifications';
 import { crashNatively, crashTestEnabled, throwTestError } from '@/observability/crashReporting';
 import { useChannelStore } from '@/state/channelStore';
 import {
@@ -207,6 +213,7 @@ export function SettingsScreen(): React.JSX.Element {
               ))}
             </Stack>
           </Card>
+          <NotificationPermissionNotice />
           <PushRegistrationStatusLine />
         </Stack>
 
@@ -321,6 +328,55 @@ export function SettingsScreen(): React.JSX.Element {
 function RowDivider(): React.JSX.Element {
   const theme = useTheme();
   return <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />;
+}
+
+/**
+ * Shown only when POST_NOTIFICATIONS is denied, because at that point every
+ * notification mode above is inert: local alerts and remote push both need it.
+ *
+ * A button rather than another in-app prompt on purpose. Android stops showing
+ * the runtime prompt after two dismissals, and thereafter
+ * requestNotificationPermission() just resolves denied without displaying
+ * anything - so system settings is the only recovery path that still works.
+ */
+function NotificationPermissionNotice(): React.JSX.Element | null {
+  // Seeded synchronously from the cache rather than by an async read on mount.
+  // The cache is already current by the time this screen can be reached:
+  // initializeNotifications seeds it at boot and the connection lifecycle
+  // refreshes it on every foreground.
+  const [granted, setGranted] = useState<boolean | null>(() => notificationPermissionGranted());
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    // Returning from the system settings screen fires 'active', which is the
+    // only moment a grant made outside the app becomes visible to it. The
+    // lifecycle refreshes on the same event, but this cannot read its result
+    // off the cache - both are reacting to the same tick.
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status !== 'active') return;
+      void refreshNotificationPermission()
+        .then(setGranted)
+        .catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  if (Platform.OS !== 'android' || granted !== false) return null;
+  return (
+    <Card>
+      <Stack gap="sm">
+        <Text variant="bodyStrong">Notifications are blocked</Text>
+        <Text variant="caption" color="muted">
+          No alerts can reach you until you allow them.
+        </Text>
+        <Button
+          testID="settings-open-notification-settings"
+          label="Open settings"
+          onPress={() => void openSystemNotificationSettings()}
+        />
+      </Stack>
+    </Card>
+  );
 }
 
 function PushRegistrationStatusLine(): React.JSX.Element {
