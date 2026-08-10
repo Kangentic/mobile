@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSettingsStore } from '@/state/settingsStore';
 
 // In-memory secure store so the vitest (node) run has no native module.
+// `onlyKeys` narrows the simulated failure to specific keys; null means every
+// read fails (a whole-Keystore outage).
 const { storedValues, readFailure } = vi.hoisted(() => ({
   storedValues: new Map<string, string>(),
-  readFailure: { active: false },
+  readFailure: { active: false, onlyKeys: null as Set<string> | null },
 }));
 vi.mock('expo-secure-store', () => ({
   getItemAsync: (key: string) =>
-    readFailure.active ? Promise.reject(new Error('keystore unavailable')) : Promise.resolve(storedValues.get(key) ?? null),
+    readFailure.active && (readFailure.onlyKeys === null || readFailure.onlyKeys.has(key))
+      ? Promise.reject(new Error('keystore unavailable'))
+      : Promise.resolve(storedValues.get(key) ?? null),
   setItemAsync: (key: string, value: string) => {
     storedValues.set(key, value);
     return Promise.resolve();
@@ -233,6 +237,7 @@ describe('settingsStore - hydrate never gets stuck unhydrated', () => {
   beforeEach(() => {
     storedValues.clear();
     readFailure.active = false;
+    readFailure.onlyKeys = null;
     useSettingsStore.setState({ hydrated: false, hapticsEnabled: true, hasRequestedNotificationPermission: false });
   });
 
@@ -257,5 +262,47 @@ describe('settingsStore - hydrate never gets stuck unhydrated', () => {
 
     expect(useSettingsStore.getState().backgroundNotificationsMode).toBe('push-only');
     expect(useSettingsStore.getState().hasRequestedNotificationPermission).toBe(true);
+  });
+
+  /**
+   * One unreadable key must not default the other seven, which is what a single
+   * try/catch around the whole Promise.all did.
+   *
+   * The two casualties here are the ones with teeth. A defaulted
+   * backgroundNotificationsMode reads 'foreground-service', starting the very
+   * service a 'push-only' user turned off - the exact bug the `hydrated` gate
+   * exists to prevent, arriving through a different door. A defaulted
+   * pushCategoriesEnabled reads all-enabled, and the next established bootstrap
+   * registers that map with the desktop, re-enabling categories the user
+   * switched off; the first subsequent toggle then persists it over the real
+   * one, because the setter writes the whole map it holds in memory.
+   */
+  it('defaults only the key that failed, not the seven that read fine', async () => {
+    storedValues.set('settings.backgroundNotificationsMode', 'push-only');
+    storedValues.set(
+      'settings.pushCategoriesEnabled',
+      JSON.stringify({
+        'input-required': false,
+        'turn-complete': false,
+        'session-failed': false,
+        'plan-complete': false,
+        'spawn-stalled': false,
+      }),
+    );
+    storedValues.set('settings.hapticsEnabled', 'false');
+    readFailure.active = true;
+    readFailure.onlyKeys = new Set(['settings.dictationMode']);
+
+    await useSettingsStore.getState().hydrate();
+
+    const settings = useSettingsStore.getState();
+    expect(settings.hydrated).toBe(true);
+    // The one key that actually failed falls back to its default.
+    expect(settings.dictationMode).toBe('auto-send');
+    // Everything else survives.
+    expect(settings.backgroundNotificationsMode).toBe('push-only');
+    expect(settings.hapticsEnabled).toBe(false);
+    expect(settings.pushCategoriesEnabled['turn-complete']).toBe(false);
+    expect(settings.pushCategoriesEnabled['input-required']).toBe(false);
   });
 });

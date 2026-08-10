@@ -26,10 +26,14 @@ import { runBootstrap } from './bootstrap';
  *
  * Lifecycle policy: connect while the app is foregrounded and paired.
  * On background it depends on settings: with backgroundNotificationsMode
- * 'foreground-service' (Android only) and an established connection, the
- * channel stays alive under a notifee foreground service and the local
- * notifier turns activity transitions into notifications; in every other
- * case ('push-only', 'off', iOS, or no established connection) the
+ * 'foreground-service' (Android only), hydrated settings, an established
+ * connection, and POST_NOTIFICATIONS not known-denied, the channel stays
+ * alive under a notifee foreground service and the local notifier turns
+ * activity transitions into notifications - for at most five minutes
+ * (BACKGROUND_KEEPALIVE_MAX_MS), after which the service stops and the
+ * channel is disposed, handing alerting over to remote push. In every other
+ * case ('push-only', 'off', iOS, no established connection, settings not yet
+ * hydrated, or a permission the user was asked for and refused) the
  * connection is disposed immediately as before (iOS suspends the socket
  * within seconds anyway, the desktop treats a vanished phone fine - relay
  * close tears its subscriptions down - and remote E2E push covers the
@@ -404,21 +408,25 @@ function closeConnection(intent: ConnectionTeardownIntent = 'stay-silent'): void
  * existed and was exported, but its only callers were tests - so every install
  * ran with notifications silently undeliverable, local and remote alike.
  *
- * onEstablished re-fires on every rekey (~2 minutes) and every reconnect, so
- * the persisted flag is what makes this once-ever, and it has to be read from a
- * HYDRATED store: startConnectionLifecycle runs before hydrate() resolves, and
- * an establishment that beats hydration would re-prompt someone who already
- * answered.
+ * onEstablished re-fires on every reconnect, so the persisted flag is what
+ * makes this once-ever, and it has to be read from a HYDRATED store:
+ * startConnectionLifecycle runs before hydrate() resolves, and an
+ * establishment that beats hydration would re-prompt someone who already
+ * answered. (A rekey does NOT re-fire it - SessionManager routes an
+ * already-established re-handshake to onRekey instead, as the bootstrap-retry
+ * comment above also notes.)
  */
 let notificationPermissionPromptInFlight = false;
 
 function maybeRequestNotificationPermission(): void {
   if (Platform.OS !== 'android') return;
   // An open system dialog pauses the activity, which Android reports as a
-  // background transition, which closes the channel - so answering the prompt
+  // background transition. In the modes where that transition closes the
+  // channel ('push-only', or settings not yet hydrated) answering the prompt
   // reconnects and re-establishes, and that second onEstablished can land
   // before the persisted flag is written. This guard is what stops the user
-  // being asked twice in a row.
+  // being asked twice in a row. Under 'foreground-service' the keepalive holds
+  // the channel open instead, so the race cannot arise there.
   if (notificationPermissionPromptInFlight) return;
   const settings = useSettingsStore.getState();
   if (!settings.hydrated) return;
@@ -449,17 +457,23 @@ function maybeRequestNotificationPermission(): void {
  * Android 15+ gives a dataSync foreground service a cumulative 6h/24h budget
  * and kills the process with ForegroundServiceDidNotStopInTimeException when it
  * overruns; notifee 9.1.8 exposes no Service.onTimeout hook, so there is no
- * signal to react to and this timer is the only bound in the stack. Unbounded,
- * the service also let the Java heap climb to its 256MB limit over a long
- * background stretch, which surfaced as a frozen UI (GC thrash on the main
- * thread) on resume.
+ * signal to react to and this timer is the only bound in the stack.
+ *
+ * It also bounds process LIFETIME, which is how it bears on the REACT-NATIVE-5
+ * OOM. Do not read that as "the background path leaks": four measured probes
+ * say it does not (see the developer guide). What an unbounded service did was
+ * hold the process resident for hours, so ordinary FOREGROUND accumulation - a
+ * session screen leaking a WebView per open - was never reset by an OS kill.
+ * The ceiling makes the process reapable again; fixing the unmount is the
+ * actual repair.
  *
  * Five minutes covers the case the keepalive is actually for - switched apps
- * for a moment - and makes budget exhaustion arithmetically unreachable (72
- * background stretches in a day). Anything longer is remote push's job, and
- * push covers the same alert categories: the desktop suppresses its own push
- * only while this phone's channel is established, so tearing the channel down
- * hands alerting over rather than dropping it.
+ * for a moment - and puts budget exhaustion out of realistic reach: it would
+ * take 72 separate background stretches, each running the full five minutes,
+ * inside one 24h window. Anything longer is remote push's job, and push covers
+ * the same alert categories: the desktop suppresses its own push only while
+ * this phone's channel is established, so tearing the channel down hands
+ * alerting over rather than dropping it.
  */
 const BACKGROUND_KEEPALIVE_MAX_MS = 5 * 60_000;
 
@@ -529,12 +543,17 @@ function onAppStateChange(status: AppStateStatus): void {
     void openConnection();
     // Keeps the cache the background gate reads synchronously current: the
     // user can revoke the permission from system settings at any time, and
-    // returning to the app is the only moment we get to notice.
-    void import('@/notifications/channels')
-      .then(({ refreshNotificationPermission }) => refreshNotificationPermission())
-      .catch(() => {
-        // Cache keeps its previous value; the gate fails open either way.
-      });
+    // returning to the app is the only moment we get to notice. Android-only,
+    // like every reader of that cache and like initializeNotifications itself -
+    // otherwise this pulls notifee into the graph on every iOS foreground to
+    // compute a value nothing on iOS ever reads.
+    if (Platform.OS === 'android') {
+      void import('@/notifications/channels')
+        .then(({ refreshNotificationPermission }) => refreshNotificationPermission())
+        .catch(() => {
+          // Cache keeps its previous value; the gate fails open either way.
+        });
+    }
   } else if (status === 'background') {
     const settings = useSettingsStore.getState();
     const hasEstablishedConnection = activeConnection?.controller.session.isEstablished === true;
@@ -543,16 +562,25 @@ function onAppStateChange(status: AppStateStatus): void {
     // 'foreground-service' default and start a service a 'push-only' user
     // turned off. Unhydrated falls through to closeConnection, the safe side.
     //
-    // notificationPermissionGranted() is checked as `!== false` rather than
-    // `=== true` so an unread cache (null) behaves as before it existed. A
-    // denied permission means the local notifier can display nothing, so the
+    // A denied permission means the local notifier can display nothing, so the
     // service would burn the dataSync budget to deliver nothing at all.
+    //
+    // "Denied" has to mean ASKED AND REFUSED, which the cache alone cannot say:
+    // Android has no NOT_DETERMINED status (notifee reports only DENIED or
+    // AUTHORIZED there), so a permission nobody has requested yet reads exactly
+    // like one the user refused. initializeNotifications seeds the cache at
+    // boot, so on a never-granted install it holds `false` long before the
+    // prompt fires - and gating on the cache alone would withdraw the keepalive
+    // from every install that has not answered yet, which before this change
+    // had it. The persisted flag is the only record of whether we ever asked.
+    const notificationsKnownDenied =
+      settings.hasRequestedNotificationPermission && notificationPermissionGranted() === false;
     const wantsKeepalive =
       Platform.OS === 'android' &&
       settings.hydrated &&
       settings.backgroundNotificationsMode === 'foreground-service' &&
       hasEstablishedConnection &&
-      notificationPermissionGranted() !== false;
+      !notificationsKnownDenied;
     if (wantsKeepalive) {
       startBackgroundKeepalive();
     } else {
@@ -593,6 +621,14 @@ export function stopConnectionLifecycle(): void {
  * deliberately leaving it, which is exactly unpair's situation.
  */
 export function reconnectNow(intent: ConnectionTeardownIntent = 'stay-silent'): void {
+  // closeConnection() does not own the keepalive, so this has to. Without it a
+  // ceiling timer armed by an earlier background would still be holding the OLD
+  // generation, and would fire against the connection opened just below - a
+  // teardown of a live foreground session five minutes later. Today's callers
+  // are all foreground taps, and the 'active' transition has already stopped
+  // the keepalive by then, so this is closing the invariant rather than fixing
+  // a reachable bug.
+  stopBackgroundKeepalive();
   closeConnection(intent);
   void openConnection();
 }

@@ -178,8 +178,12 @@ stops the service and disposes the channel, handing alerting to remote push. Thr
 the bound is not tunable upward without revisiting all three. Android 15+ gives a `dataSync`
 foreground service a cumulative 6h/24h budget and kills the process on overrun; notifee 9.1.8
 exposes no `Service.onTimeout` hook, so there is no signal to react to and a JS timer is the only
-bound available; and an unbounded service let the Java heap climb to its 256MB limit over a long
-background stretch, which surfaced as a frozen UI (GC thrash on the main thread) on resume.
+bound available; and an unbounded service held the process resident for hours at a time, which is
+how it bears on the REACT-NATIVE-5 OOM. Note what that third reason is NOT: the background path
+does not leak, and four measured probes in the developer guide say so. The leak is in the
+FOREGROUND path (a session screen retains a WebView per open), and an always-resident process is
+simply what stopped an OS kill from ever resetting that accumulation. The ceiling makes the
+process reapable again; fixing the unmount is the real repair.
 Nothing is lost by the handover on a build that HAS remote push: the desktop suppresses its own
 push only while this phone's channel is established, so the same alert categories keep firing
 through push instead.
@@ -196,7 +200,11 @@ stopped yet.
 The keepalive also does not start unless settings have **hydrated** (an early background would
 otherwise read the in-memory `'foreground-service'` default over a persisted `'push-only'`) and
 `POST_NOTIFICATIONS` is not known-denied - with the permission denied the local notifier can
-display nothing, so the service would spend the budget to deliver nothing. Reconnects re-subscribe
+display nothing, so the service would spend the budget to deliver nothing. "Known-denied" means
+asked AND refused, and needs both the cache and the persisted
+`hasRequestedNotificationPermission` flag to establish: Android has no `NOT_DETERMINED`
+authorization status, so a permission never requested reads back exactly like one the user
+turned down. Reconnects re-subscribe
 and
 re-snapshot everything (the wire has no cursors by design); the triage home follows board
 snapshots - every task with a non-null `session_id` gets a `read-stream` subscription, and
@@ -299,11 +307,16 @@ task screen via `tapRouter.ts`.
 establishment is the paired signal, so the one rule reaches both a fresh install (prompted when
 pairing first connects, not on a cold launch) and an install paired long before the prompt
 existed (prompted on its first establishment after updating). `settings.hasRequestedNotificationPermission`
-makes it once-ever, since `onEstablished` re-fires on every rekey and reconnect. The last known
+makes it once-ever, since `onEstablished` re-fires on every reconnect (a rekey does not - an
+already-established re-handshake routes to `onRekey` instead). The last known
 state is cached in `permissionCache.ts` - deliberately notifee-free, because the keepalive gate
 must read it synchronously on the background transition and an awaited read there is what causes
-`ForegroundServiceDidNotStartInTimeException`. Once denied twice, Android stops showing the
-runtime prompt entirely, so Settings offers a route to the system notification settings instead. Unpairing sends `register-push` with `action: 'unregister'` while
+`ForegroundServiceDidNotStartInTimeException`. That same persisted flag is what lets both the
+gate and the Settings notice tell "never asked" from "refused", which the cache cannot express on
+Android. Once denied twice, Android stops showing the runtime prompt entirely, so Settings offers
+a route to the system notification settings instead.
+
+Unpairing sends `register-push` with `action: 'unregister'` while
 the channel is still up and wipes the local push key (`pushKeys.clearPushRegistration()`), so the
 previously paired desktop can no longer push anything this phone can decrypt - delivery through
 Expo/FCM still reaches the OS-level token, but every attempt now degrades to the generic

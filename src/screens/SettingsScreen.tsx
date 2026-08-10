@@ -334,8 +334,18 @@ function RowDivider(): React.JSX.Element {
 }
 
 /**
- * Shown only when POST_NOTIFICATIONS is denied, because at that point every
- * notification mode above is inert: local alerts and remote push both need it.
+ * Shown only when POST_NOTIFICATIONS has been asked for AND refused, because at
+ * that point every notification mode above is inert: local alerts and remote
+ * push both need it.
+ *
+ * Both halves of that condition are load-bearing. Android has no
+ * NOT_DETERMINED authorization status - notifee reports only DENIED or
+ * AUTHORIZED - so a permission nobody has requested yet is indistinguishable
+ * from one the user refused, and initializeNotifications seeds the cache at
+ * boot. Keying on the cache alone would tell a brand-new user that
+ * notifications are blocked before the app had ever asked them, on a screen
+ * whose only offered remedy is a trip to system settings. The persisted
+ * hasRequestedNotificationPermission flag is the only record that we asked.
  *
  * A button rather than another in-app prompt on purpose. Android stops showing
  * the runtime prompt after two dismissals, and thereafter
@@ -348,6 +358,7 @@ function NotificationPermissionNotice(): React.JSX.Element | null {
   // initializeNotifications seeds it at boot and the connection lifecycle
   // refreshes it on every foreground.
   const [granted, setGranted] = useState<boolean | null>(() => notificationPermissionGranted());
+  const hasRequestedNotificationPermission = useSettingsStore((state) => state.hasRequestedNotificationPermission);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -364,7 +375,7 @@ function NotificationPermissionNotice(): React.JSX.Element | null {
     return () => subscription.remove();
   }, []);
 
-  if (Platform.OS !== 'android' || granted !== false) return null;
+  if (Platform.OS !== 'android' || !hasRequestedNotificationPermission || granted !== false) return null;
   return (
     <Card>
       <Stack gap="sm">

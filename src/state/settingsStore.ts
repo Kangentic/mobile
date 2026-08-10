@@ -23,6 +23,31 @@ const NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY = 'settings.hasRequestedNoti
 /** The remembered per-task lens is capped so the map cannot grow unboundedly. */
 const PREFERRED_SESSION_LENS_CAP = 50;
 
+/**
+ * One setting read, allowed to fail without taking the others with it.
+ *
+ * hydrate() must always end hydrated (see its own comment), and the obvious way
+ * to get that - a single try/catch around one Promise.all - makes ONE
+ * unreadable key reset EVERY setting to its default. That is not a tidy
+ * distinction. `backgroundNotificationsMode` would fall back to
+ * 'foreground-service' for someone who chose 'push-only', starting the exact
+ * service the `hydrated` gate exists to withhold; and `pushCategoriesEnabled`
+ * would fall back to all-enabled, which the next established bootstrap
+ * registers with the desktop, re-enabling categories the user switched off.
+ * Both are then made permanent by the first subsequent toggle, because those
+ * setters persist the whole map they hold in memory.
+ *
+ * `async` rather than a bare `.catch()` so a synchronous throw out of
+ * SecureStore is caught too, matching what the enclosing try/catch used to do.
+ */
+async function readSetting(storageKey: string): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(storageKey);
+  } catch {
+    return null;
+  }
+}
+
 /** The lenses a task remembers: Changes is a destination, not a preference. */
 export type PreferredSessionLens = 'terminal' | 'chat';
 
@@ -108,8 +133,13 @@ interface SettingsStoreState {
   collapsedTriageSection: string | null;
   /**
    * Whether the POST_NOTIFICATIONS runtime prompt has ever been shown. The
-   * prompt fires on session establishment, which repeats on every rekey and
-   * reconnect, so this flag is what makes it once-ever.
+   * prompt fires on session establishment, which repeats on every reconnect,
+   * so this flag is what makes it once-ever.
+   *
+   * It doubles as the only record that the app has ever ASKED: Android reports
+   * no NOT_DETERMINED status, so a permission never requested is
+   * indistinguishable from one refused, and both the keepalive gate and the
+   * Settings "blocked" notice need to tell those apart.
    */
   hasRequestedNotificationPermission: boolean;
   hydrated: boolean;
@@ -157,25 +187,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
    * flag false forever, one failed read at boot would silently disable the
    * notification permission request for the entire lifetime of that install,
    * which is precisely the bug those gates were added to fix.
+   *
+   * Each key is read through readSetting, which fails alone: see its comment
+   * for why one failure must not default the other seven.
    */
   hydrate: async () => {
-    let stored: (string | null)[];
-    try {
-      stored = await Promise.all([
-        SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
-        SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
-        SecureStore.getItemAsync(HAPTICS_ENABLED_STORAGE_KEY),
-        SecureStore.getItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
-        SecureStore.getItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY),
-        SecureStore.getItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
-        SecureStore.getItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
-        SecureStore.getItemAsync(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
-      ]);
-    } catch {
-      // Every parser below treats null as "absent, use the default", so an
-      // all-null read IS the default state - no separate failure branch needed.
-      stored = [null, null, null, null, null, null, null, null];
-    }
     const [
       storedDictationMode,
       storedModeHintSeen,
@@ -185,7 +201,16 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedPushCategoriesEnabled,
       storedCollapsedTriageSection,
       storedNotificationPermissionRequested,
-    ] = stored;
+    ] = await Promise.all([
+      readSetting(DICTATION_MODE_STORAGE_KEY),
+      readSetting(SESSION_MODE_HINT_STORAGE_KEY),
+      readSetting(HAPTICS_ENABLED_STORAGE_KEY),
+      readSetting(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
+      readSetting(PREFERRED_SESSION_LENS_STORAGE_KEY),
+      readSetting(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
+      readSetting(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
+      readSetting(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
+    ]);
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
       hasSeenSessionModeHint: storedModeHintSeen === 'true',

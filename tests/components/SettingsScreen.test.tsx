@@ -77,6 +77,10 @@ describe('SettingsScreen', () => {
         'plan-complete': true,
         'spawn-stalled': true,
       },
+      // The steady state for these tests: the app has already asked for
+      // POST_NOTIFICATIONS at some point. The never-asked case is a distinct
+      // branch of the blocked notice and has its own test below.
+      hasRequestedNotificationPermission: true,
       hydrated: true,
     });
     useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true, relayUrl: 'ws://127.0.0.1:8080' });
@@ -142,6 +146,22 @@ describe('SettingsScreen', () => {
     // as a denial - otherwise every cold start flashes a blocked warning.
     mockNotificationPermissionGranted.mockReturnValue(null);
     renderSettings();
+    expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
+  });
+
+  /**
+   * The cache reads `false` on any install that has not granted the permission,
+   * including one that was never asked: Android has no NOT_DETERMINED status,
+   * so notifee reports plain DENIED, and initializeNotifications seeds the
+   * cache at boot. Keying the notice on the cache alone therefore told a
+   * brand-new user "Notifications are blocked" before the app had ever asked
+   * them, and offered a trip to system settings as the fix.
+   */
+  it('does not claim notifications are blocked before the app has ever asked', () => {
+    mockNotificationPermissionGranted.mockReturnValue(false);
+    useSettingsStore.setState({ hasRequestedNotificationPermission: false });
+    renderSettings();
+
     expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
   });
 
