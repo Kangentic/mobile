@@ -18,6 +18,7 @@ const BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY = 'settings.backgroundNotificati
 const PREFERRED_SESSION_LENS_STORAGE_KEY = 'settings.preferredSessionLensByTaskId';
 const PUSH_CATEGORIES_ENABLED_STORAGE_KEY = 'settings.pushCategoriesEnabled';
 const COLLAPSED_TRIAGE_SECTION_STORAGE_KEY = 'settings.collapsedTriageSection';
+const NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY = 'settings.hasRequestedNotificationPermission';
 
 /** The remembered per-task lens is capped so the map cannot grow unboundedly. */
 const PREFERRED_SESSION_LENS_CAP = 50;
@@ -105,6 +106,12 @@ interface SettingsStoreState {
   pushCategoriesEnabled: Record<PushCategory, boolean>;
   /** The one Agents-feed section (by title) the user has collapsed, or null if both are expanded. */
   collapsedTriageSection: string | null;
+  /**
+   * Whether the POST_NOTIFICATIONS runtime prompt has ever been shown. The
+   * prompt fires on session establishment, which repeats on every rekey and
+   * reconnect, so this flag is what makes it once-ever.
+   */
+  hasRequestedNotificationPermission: boolean;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setDictationMode: (mode: DictationMode) => Promise<void>;
@@ -114,6 +121,7 @@ interface SettingsStoreState {
   setPreferredSessionLens: (taskId: string, lens: PreferredSessionLens) => Promise<void>;
   setPushCategoryEnabled: (category: PushCategory, enabled: boolean) => Promise<void>;
   toggleTriageSectionCollapsed: (title: string) => Promise<void>;
+  markNotificationPermissionRequested: () => Promise<void>;
   /** Clears preferences keyed by the desktop's own task IDs (currently just
    * preferredSessionLensByTaskId), which go stale on unpair or a new
    * pairing - the desktop's task IDs mean nothing to a different desktop. */
@@ -134,6 +142,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   preferredSessionLensByTaskId: {},
   pushCategoriesEnabled: defaultPushCategoriesEnabled(),
   collapsedTriageSection: null,
+  hasRequestedNotificationPermission: false,
   hydrated: false,
 
   hydrate: async () => {
@@ -145,6 +154,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedLensMap,
       storedPushCategoriesEnabled,
       storedCollapsedTriageSection,
+      storedNotificationPermissionRequested,
     ] = await Promise.all([
       SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
       SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
@@ -153,6 +163,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       SecureStore.getItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY),
       SecureStore.getItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
       SecureStore.getItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
+      SecureStore.getItemAsync(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
     ]);
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
@@ -164,6 +175,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       preferredSessionLensByTaskId: parsePreferredLensMap(storedLensMap),
       pushCategoriesEnabled: parsePushCategoriesEnabled(storedPushCategoriesEnabled),
       collapsedTriageSection: parseCollapsedTriageSection(storedCollapsedTriageSection),
+      hasRequestedNotificationPermission: storedNotificationPermissionRequested === 'true',
       hydrated: true,
     });
   },
@@ -176,6 +188,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   markSessionModeHintSeen: async () => {
     set({ hasSeenSessionModeHint: true });
     await SecureStore.setItemAsync(SESSION_MODE_HINT_STORAGE_KEY, 'true');
+  },
+
+  markNotificationPermissionRequested: async () => {
+    set({ hasRequestedNotificationPermission: true });
+    await SecureStore.setItemAsync(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY, 'true');
   },
 
   setHapticsEnabled: async (enabled) => {

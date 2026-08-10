@@ -9,21 +9,32 @@ import type { AndroidChannel } from '@notifee/react-native';
 const notifeeState = vi.hoisted(() => ({
   createChannels: vi.fn(async (_channels: unknown) => undefined),
   requestPermission: vi.fn(async () => ({ authorizationStatus: 1 })),
+  getNotificationSettings: vi.fn(async () => ({ authorizationStatus: 1 })),
 }));
 
 vi.mock('@notifee/react-native', () => ({
   default: {
     createChannels: notifeeState.createChannels,
     requestPermission: notifeeState.requestPermission,
+    getNotificationSettings: notifeeState.getNotificationSettings,
   },
   AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
 }));
 
 type ChannelsModule = typeof import('@/notifications/channels');
+type PermissionCacheModule = typeof import('@/notifications/permissionCache');
 
 async function loadChannels(): Promise<ChannelsModule> {
   return import('@/notifications/channels');
+}
+
+/**
+ * Must be loaded through the same resetModules generation as channels.ts, or
+ * the cache read here is a different module instance from the one written to.
+ */
+async function loadPermissionCache(): Promise<PermissionCacheModule> {
+  return import('@/notifications/permissionCache');
 }
 
 describe('notification channels', () => {
@@ -31,6 +42,7 @@ describe('notification channels', () => {
     vi.resetModules();
     notifeeState.createChannels.mockClear();
     notifeeState.requestPermission.mockReset();
+    notifeeState.getNotificationSettings.mockReset();
   });
 
   it('creates the five channels once, with the right importance levels', async () => {
@@ -74,5 +86,44 @@ describe('notification channels', () => {
     expect(await channels.requestNotificationPermission()).toBe(true);
     notifeeState.requestPermission.mockResolvedValue({ authorizationStatus: 0 });
     expect(await channels.requestNotificationPermission()).toBe(false);
+    // PROVISIONAL is iOS-only but channels.ts accepts it, so pin it rather
+    // than leave the third branch of grantedFromStatus uncovered.
+    notifeeState.requestPermission.mockResolvedValue({ authorizationStatus: 2 });
+    expect(await channels.requestNotificationPermission()).toBe(true);
+  });
+
+  /**
+   * The cache is what the background-keepalive gate reads, and it must be read
+   * SYNCHRONOUSLY: an awaited permission check in front of the foreground
+   * service start is what causes ForegroundServiceDidNotStartInTimeException.
+   */
+  it('starts unknown, then records what the OS reported', async () => {
+    const channels = await loadChannels();
+    const cache = await loadPermissionCache();
+
+    // null, not false: nothing has looked yet, and the gate must not read an
+    // unread cache as a denial.
+    expect(cache.notificationPermissionGranted()).toBeNull();
+
+    notifeeState.getNotificationSettings.mockResolvedValue({ authorizationStatus: 0 });
+    expect(await channels.refreshNotificationPermission()).toBe(false);
+    expect(cache.notificationPermissionGranted()).toBe(false);
+
+    notifeeState.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
+    await channels.refreshNotificationPermission();
+    expect(cache.notificationPermissionGranted()).toBe(true);
+  });
+
+  it('a granted request updates the cache too, not just the refresh path', async () => {
+    const channels = await loadChannels();
+    const cache = await loadPermissionCache();
+
+    notifeeState.requestPermission.mockResolvedValue({ authorizationStatus: 0 });
+    await channels.requestNotificationPermission();
+    expect(cache.notificationPermissionGranted()).toBe(false);
+
+    notifeeState.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
+    await channels.requestNotificationPermission();
+    expect(cache.notificationPermissionGranted()).toBe(true);
   });
 });

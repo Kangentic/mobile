@@ -9,9 +9,15 @@ import { AndroidConfig, withAndroidManifest, type ConfigPlugin } from '@expo/con
 /**
  * Android manifest additions for the notification stack (CNG: never
  * hand-edit android/):
- * - POST_NOTIFICATIONS (Android 13+ runtime permission; requested in-app)
+ * - POST_NOTIFICATIONS (Android 13+ runtime permission; requested in-app on
+ *   the first session establishment, see connectionManager's
+ *   maybeRequestNotificationPermission. Declaring it here does NOT request it,
+ *   and for a while nothing did: the request function existed with no caller
+ *   but tests, so every install ran with notifications undeliverable.)
  * - FOREGROUND_SERVICE + FOREGROUND_SERVICE_DATA_SYNC (the background
- *   "stay connected" service that keeps the secure channel alive)
+ *   "stay connected" service that keeps the secure channel alive, bounded to
+ *   five minutes per background stretch - Android 15+ kills the process when a
+ *   dataSync service overruns its cumulative 6h/24h budget)
  * - foregroundServiceType="dataSync" on notifee's foreground service
  *   (mandatory on Android 14+: an FGS must declare its type or crash at
  *   startForeground time)

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Platform } from 'react-native';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SettingsScreen } from '@/screens/SettingsScreen';
@@ -18,8 +19,14 @@ jest.mock('expo-secure-store', () => ({
 
 // The notifications barrel statically pulls notifee, which throws at import
 // time without its native module; the screen only reads the status snapshot.
+const mockOpenSystemNotificationSettings = jest.fn().mockResolvedValue(undefined);
+const mockRefreshNotificationPermission = jest.fn().mockResolvedValue(true);
+const mockNotificationPermissionGranted = jest.fn<boolean | null, []>().mockReturnValue(true);
 jest.mock('@/notifications', () => ({
   getPushRegistrationStatus: jest.fn().mockReturnValue('not-connected'),
+  notificationPermissionGranted: () => mockNotificationPermissionGranted(),
+  openSystemNotificationSettings: () => mockOpenSystemNotificationSettings(),
+  refreshNotificationPermission: () => mockRefreshNotificationPermission(),
 }));
 
 const mockResyncPushRegistrationCategories = jest.fn().mockResolvedValue(undefined);
@@ -76,6 +83,10 @@ describe('SettingsScreen', () => {
     setCrashTestFlag(undefined);
     mockThrowTestError.mockClear();
     mockCrashNatively.mockClear();
+    mockOpenSystemNotificationSettings.mockClear();
+    mockRefreshNotificationPermission.mockClear();
+    mockRefreshNotificationPermission.mockResolvedValue(true);
+    mockNotificationPermissionGranted.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -98,6 +109,40 @@ describe('SettingsScreen', () => {
     renderSettings();
     fireEvent.press(screen.getByTestId('settings-notifications-push-only'));
     expect(useSettingsStore.getState().backgroundNotificationsMode).toBe('push-only');
+  });
+
+  /**
+   * The notice is the only recovery path once Android has stopped showing the
+   * runtime prompt, so it must appear on a denial and stay out of the way
+   * otherwise - a permanently-visible warning would train the user past it.
+   *
+   * Branches on the platform because jest.config.js runs this file under BOTH
+   * the ios and android projects, and the divergence is the point: the whole
+   * notification display stack is Android-only, so iOS must not read a
+   * permission at all, let alone tell the user one is blocked.
+   */
+  it('offers a route to system settings when the notification permission is denied', () => {
+    mockNotificationPermissionGranted.mockReturnValue(false);
+    renderSettings();
+
+    if (Platform.OS !== 'android') {
+      expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
+      return;
+    }
+
+    fireEvent.press(screen.getByTestId('settings-open-notification-settings'));
+    expect(mockOpenSystemNotificationSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the blocked-notifications notice when the permission is granted or unknown', () => {
+    renderSettings();
+    expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
+
+    // null is "nothing has looked yet", which must read as unknown rather than
+    // as a denial - otherwise every cold start flashes a blocked warning.
+    mockNotificationPermissionGranted.mockReturnValue(null);
+    renderSettings();
+    expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
   });
 
   it('flips the haptics toggle', () => {
