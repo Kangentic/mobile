@@ -22,7 +22,10 @@ import {
 
 const PUSH_STATUS_LABELS: Record<PushRegistrationStatus, string> = {
   registered: 'Remote push: registered',
-  'unavailable-no-fcm': 'Remote push: not configured on this build',
+  // States the consequence, not just the fact: with no FCM there is no push to
+  // take over when the background keepalive hits its five-minute ceiling, so
+  // this is the one build where alerting genuinely stops rather than handing off.
+  'unavailable-no-fcm': 'Remote push: off on this build - brief background alerts only',
   'capability-denied': 'Remote push: not granted by your desktop',
   'not-connected': 'Remote push: registers on connect',
   pending: 'Remote push: registering...',
