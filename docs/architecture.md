@@ -180,8 +180,18 @@ foreground service a cumulative 6h/24h budget and kills the process on overrun; 
 exposes no `Service.onTimeout` hook, so there is no signal to react to and a JS timer is the only
 bound available; and an unbounded service let the Java heap climb to its 256MB limit over a long
 background stretch, which surfaced as a frozen UI (GC thrash on the main thread) on resume.
-Nothing is lost by the handover: the desktop suppresses its own push only while this phone's
-channel is established, so the same alert categories keep firing through push instead.
+Nothing is lost by the handover on a build that HAS remote push: the desktop suppresses its own
+push only while this phone's channel is established, so the same alert categories keep firing
+through push instead.
+
+**Known consequence for builds without FCM.** A build with no `google-services.json` reports
+`unavailable-no-fcm` (`pushRegistration.ts`) and has no remote push at all, so for those installs
+- self-hosted, built from source - background alerting now ends with the keepalive rather than
+continuing indefinitely. The ceiling is deliberately NOT relaxed for them: Android enforces its
+own, harder cap on the same service regardless of whether push exists, so an exemption would hand
+the least-supported configuration the one most likely to be killed mid-use. The honest summary is
+that an unbounded foreground service was never a supported alerting channel, it just had not been
+stopped yet.
 
 The keepalive also does not start unless settings have **hydrated** (an early background would
 otherwise read the in-memory `'foreground-service'` default over a persisted `'push-only'`) and

@@ -2,9 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSettingsStore } from '@/state/settingsStore';
 
 // In-memory secure store so the vitest (node) run has no native module.
-const { storedValues } = vi.hoisted(() => ({ storedValues: new Map<string, string>() }));
+const { storedValues, readFailure } = vi.hoisted(() => ({
+  storedValues: new Map<string, string>(),
+  readFailure: { active: false },
+}));
 vi.mock('expo-secure-store', () => ({
-  getItemAsync: (key: string) => Promise.resolve(storedValues.get(key) ?? null),
+  getItemAsync: (key: string) =>
+    readFailure.active ? Promise.reject(new Error('keystore unavailable')) : Promise.resolve(storedValues.get(key) ?? null),
   setItemAsync: (key: string, value: string) => {
     storedValues.set(key, value);
     return Promise.resolve();
@@ -215,5 +219,43 @@ describe('settingsStore - clearDesktopScopedPreferences', () => {
 
     expect(useSettingsStore.getState().preferredSessionLensByTaskId).toEqual({});
     expect(storedValues.get('settings.preferredSessionLensByTaskId')).toBe('{}');
+  });
+});
+
+/**
+ * `hydrated` gates the background keepalive and the one-shot
+ * POST_NOTIFICATIONS prompt (both in connectionManager.ts), and both read a
+ * false flag as "do not act yet". So a read failure that left the flag false
+ * forever would silently disable the notification permission request for the
+ * whole life of that install - the exact bug those gates exist to fix.
+ */
+describe('settingsStore - hydrate never gets stuck unhydrated', () => {
+  beforeEach(() => {
+    storedValues.clear();
+    readFailure.active = false;
+    useSettingsStore.setState({ hydrated: false, hapticsEnabled: true, hasRequestedNotificationPermission: false });
+  });
+
+  it('still ends hydrated, on defaults, when the secure store read rejects', async () => {
+    readFailure.active = true;
+
+    await expect(useSettingsStore.getState().hydrate()).resolves.toBeUndefined();
+
+    expect(useSettingsStore.getState().hydrated).toBe(true);
+    expect(useSettingsStore.getState().backgroundNotificationsMode).toBe('foreground-service');
+    expect(useSettingsStore.getState().hasRequestedNotificationPermission).toBe(false);
+  });
+
+  it('a later successful hydrate still reads the persisted values', async () => {
+    readFailure.active = true;
+    await useSettingsStore.getState().hydrate();
+
+    readFailure.active = false;
+    storedValues.set('settings.backgroundNotificationsMode', 'push-only');
+    storedValues.set('settings.hasRequestedNotificationPermission', 'true');
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().backgroundNotificationsMode).toBe('push-only');
+    expect(useSettingsStore.getState().hasRequestedNotificationPermission).toBe(true);
   });
 });
