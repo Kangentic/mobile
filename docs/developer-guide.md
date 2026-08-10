@@ -1951,6 +1951,38 @@ reported - continuous GC on the main thread before the throw.
 **The allocator has not been identified, and bounding the keepalive did not identify it.** The
 five-minute ceiling caps the exposure window; it does not find the leak.
 
+### What has been measured, and what it ruled out
+
+`dumpsys meminfo` works on a non-debuggable app even though `am dumpheap` does not, so the
+following ran against the **real Play build** (`0.4.0+4`) on the affected Pixel 10 Pro - paired,
+with a live desktop session streaming, USB-powered so Doze stayed `ACTIVE` throughout, and with
+the foreground service verified alive at every sample. It measures whether the Java heap grows,
+and how fast; it cannot attribute growth to an allocator.
+
+| Probe | Condition | Java heap |
+|-------|-----------|-----------|
+| Steady state, light path | Board screen, `terminal:false`, 24 min | Flat, 22.5-22.7 MB |
+| Steady state, heavy path | Session screen, `terminal:true`, 24 min | Flat, 24.2-24.6 MB |
+| Traffic burst | 5.1 MB / 40k lines of PTY output | GC'd DOWN to 21 MB, no growth |
+| Cycle accumulation | 25 background/foreground round trips | Flat, 39.7-40.5 MB (+/-400 KB) |
+
+Across all four, view count, `Activities` and `AppContexts` stayed constant (no view or context
+leak), and total PSS *declined* as the system reclaimed backgrounded pages.
+
+So three plausible mechanisms are ruled out at this granularity: **PTY bytes leaking Java-side**,
+**OkHttp/`WebSocketModule` frames queueing while backgrounded**, and **per-cycle accumulation
+across background/foreground transitions**. Steady-state Java heap sits around 24 MB backgrounded
+and 40 MB freshly resumed, against a 256 MB growth limit - roughly a 6x gap that something would
+have to close.
+
+**Do not read this as "there is no bug".** The longest window run was 24 minutes against a crash
+that took 5h31m; the granularity is PSS, not a dominator tree; it is one device; and
+REACT-NATIVE-5 is a single event from a single user, so a rare confluence rather than a
+systematic leak is entirely consistent with the data. What the measurements do establish is that
+the obvious candidates are not it, and that whoever picks this up should not start there. Note
+also the crash event's `free_memory` was 740 MB against 2.2-2.8 GB in the REACT-NATIVE-3 events
+on the same device - device-wide pressure at that moment is an unexplored thread.
+
 **Do this against a build WITHOUT the ceiling.** With the keepalive stopping after five minutes,
 heap growth stops with it, so a current build probably cannot reproduce the crash at all.
 
