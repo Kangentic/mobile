@@ -1951,14 +1951,26 @@ reported - continuous GC on the main thread before the throw.
 **The allocator has not been identified, and bounding the keepalive did not identify it.** The
 five-minute ceiling caps the exposure window; it does not find the leak.
 
-**Do this against a build WITHOUT the ceiling** - the shipped `0.4.0+4`, or a build from a commit
-before the bound landed. This ordering is the whole point: with the keepalive stopping after five
-minutes, heap growth stops with it, so the fixed build probably cannot reproduce the crash at all.
-Running the soak after upgrading forfeits the evidence permanently.
+**Do this against a build WITHOUT the ceiling.** With the keepalive stopping after five minutes,
+heap growth stops with it, so the fixed build probably cannot reproduce the crash at all. Running
+the soak after upgrading forfeits the evidence permanently.
 
-1. Install the unbounded build on a physical device and pair it against a live desktop with an
-   agent session actively streaming. `device.low_memory` was `false` in the crash, so the device
-   being otherwise healthy is expected and not a reason to stop.
+**Not the shipped Play build, though - it cannot be dumped.** `adb shell am dumpheap` requires the
+target to be debuggable (or the device to be `userdebug`/rooted), and this project sets neither
+`android:debuggable` nor `android:profileable` anywhere: the production build is a plain `user`
+release, so the dump is refused. Discovering that after an overnight soak costs the whole night.
+
+Use a **`development`-profile build from a commit before the bound landed** (`0494983` is the last
+one). It is debuggable, so it dumps. Its absolute numbers are not release numbers - dev bundle, no
+R8 - but the target here is *which retained set grows monotonically over hours*, and that survives
+the difference. If release-accurate numbers turn out to matter, the next step up is a
+release-buildType build with debuggable forced on for that one artifact, which needs a small config
+plugin (follow `withAndroidE2eGwpAsanOff.ts`, which is gated to a single profile the same way) -
+never a hand edit under `android/`.
+
+1. Install that build on a physical device and pair it against a live desktop with an agent
+   session actively streaming. `device.low_memory` was `false` in the crash, so the device being
+   otherwise healthy is expected and not a reason to stop.
 2. Baseline right after backgrounding:
    `adb shell am dumpheap com.kangentic.mobile /data/local/tmp/heap-baseline.hprof`
 3. Leave it backgrounded for several hours. The reported crash took 5h31m of uptime; the
