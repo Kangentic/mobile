@@ -145,7 +145,37 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   hasRequestedNotificationPermission: false,
   hydrated: false,
 
+  /**
+   * `hydrated` means "the persisted values have been resolved, or provably
+   * cannot be", NOT "a read succeeded". A rejected read still ends hydrated,
+   * on the in-memory defaults.
+   *
+   * That distinction is load-bearing rather than tidy-minded. Two gates now
+   * hang off this flag - the background keepalive and the one-shot
+   * POST_NOTIFICATIONS prompt (both in connectionManager.ts) - and they read a
+   * false flag as "do not act yet". If a single Keystore hiccup could leave the
+   * flag false forever, one failed read at boot would silently disable the
+   * notification permission request for the entire lifetime of that install,
+   * which is precisely the bug those gates were added to fix.
+   */
   hydrate: async () => {
+    let stored: (string | null)[];
+    try {
+      stored = await Promise.all([
+        SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
+        SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
+        SecureStore.getItemAsync(HAPTICS_ENABLED_STORAGE_KEY),
+        SecureStore.getItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
+        SecureStore.getItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY),
+        SecureStore.getItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
+        SecureStore.getItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
+        SecureStore.getItemAsync(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
+      ]);
+    } catch {
+      // Every parser below treats null as "absent, use the default", so an
+      // all-null read IS the default state - no separate failure branch needed.
+      stored = [null, null, null, null, null, null, null, null];
+    }
     const [
       storedDictationMode,
       storedModeHintSeen,
@@ -155,16 +185,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedPushCategoriesEnabled,
       storedCollapsedTriageSection,
       storedNotificationPermissionRequested,
-    ] = await Promise.all([
-      SecureStore.getItemAsync(DICTATION_MODE_STORAGE_KEY),
-      SecureStore.getItemAsync(SESSION_MODE_HINT_STORAGE_KEY),
-      SecureStore.getItemAsync(HAPTICS_ENABLED_STORAGE_KEY),
-      SecureStore.getItemAsync(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
-      SecureStore.getItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY),
-      SecureStore.getItemAsync(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
-      SecureStore.getItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
-      SecureStore.getItemAsync(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
-    ]);
+    ] = stored;
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
       hasSeenSessionModeHint: storedModeHintSeen === 'true',

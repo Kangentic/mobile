@@ -199,6 +199,13 @@ describe('connectionManager background keepalive ceiling', () => {
     } finally {
       vi.useRealTimers();
     }
+
+    // The acceptance-criterion path, and now the default one for every user:
+    // coming back after the ceiling has fired must reconnect, not sit dead.
+    // The handshake needs real timers, hence outside the block above.
+    onAppStateChange('active');
+    await waitUntil(() => useChannelStore.getState().established, { label: 're-established after the ceiling' });
+    expect(getActiveConnection()).not.toBeNull();
   });
 
   /**
