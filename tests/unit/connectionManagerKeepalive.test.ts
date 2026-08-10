@@ -275,6 +275,49 @@ describe('connectionManager background keepalive ceiling', () => {
   });
 
   /**
+   * closeConnection() does not own the keepalive (see reconnectNow's own
+   * comment), so reconnectNow() has to stop it explicitly rather than relying
+   * on a prior AppState 'active' transition to have already done so. Left
+   * armed, a ceiling timer from an earlier background would still hold the
+   * SAME keepalive generation and fire later against whatever connection is
+   * active by then - tearing down the fresh session reconnectNow just opened,
+   * not the backgrounded one the timer was meant for.
+   *
+   * The discriminating assertion is the one right after reconnectNow(), not
+   * the survival one: dropping the stopBackgroundKeepalive() call from
+   * reconnectNow leaves the original timer's generation untouched, so it
+   * still fires on schedule and calls stopForegroundService from INSIDE the
+   * ceiling handler instead - just five minutes later than this test expects.
+   */
+  it('stops the keepalive when reconnectNow is called, so a stale ceiling timer cannot fire later', async () => {
+    const { reconnectNow } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifeeMocks.displayNotification).toHaveBeenCalledTimes(1);
+
+      // Partway through the ceiling, well short of either edge.
+      await vi.advanceTimersByTimeAsync(EXPECTED_KEEPALIVE_CEILING_MS / 2);
+
+      reconnectNow();
+      // stopBackgroundKeepalive's own service-stop reaches notifee through a
+      // dynamic import, landing a microtask after the synchronous call.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifeeMocks.stopForegroundService).toHaveBeenCalledTimes(1);
+
+      // Past where the ORIGINAL ceiling timer would have fired had
+      // reconnectNow left it armed. A second stop call here means it did.
+      await vi.advanceTimersByTimeAsync(EXPECTED_KEEPALIVE_CEILING_MS);
+      expect(notifeeMocks.stopForegroundService).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * With POST_NOTIFICATIONS denied the local notifier can display nothing, so a
    * foreground service would spend the dataSync budget and the Java heap to
    * deliver exactly nothing. This is the state the crash reports were all

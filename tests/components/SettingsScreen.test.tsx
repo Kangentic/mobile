@@ -1,6 +1,6 @@
 import React from 'react';
-import { Platform } from 'react-native';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SettingsScreen } from '@/screens/SettingsScreen';
 import { useChannelStore } from '@/state/channelStore';
@@ -10,6 +10,16 @@ const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
 }));
+
+// Drives the AppState 'active' transition NotificationPermissionNotice listens
+// for. Spied on the real AppState (registered in beforeEach) rather than
+// mocked as a module: react-native re-exports it lazily, so replacing the
+// module leaves the component with an undefined AppState.
+const appStateListeners = new Set<(nextStatus: AppStateStatus) => void>();
+
+function emitAppState(nextStatus: AppStateStatus): void {
+  for (const listener of appStateListeners) listener(nextStatus);
+}
 
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn().mockResolvedValue(null),
@@ -91,6 +101,18 @@ describe('SettingsScreen', () => {
     mockRefreshNotificationPermission.mockClear();
     mockRefreshNotificationPermission.mockResolvedValue(true);
     mockNotificationPermissionGranted.mockReturnValue(true);
+    appStateListeners.clear();
+    // Re-installed fresh every test (idempotent over jest.spyOn), never
+    // restored in afterEach: restoring here would strip every OTHER mock in
+    // this file too (jest.restoreAllMocks() is global, not scoped to this
+    // one spy), which the next test's own beforeEach reconfiguration would
+    // mask today but is exactly the kind of setup a later test could rely on
+    // without re-declaring.
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener): NativeEventSubscription => {
+      const appStateListener = listener as (nextStatus: AppStateStatus) => void;
+      appStateListeners.add(appStateListener);
+      return { remove: () => appStateListeners.delete(appStateListener) } as unknown as NativeEventSubscription;
+    });
   });
 
   afterEach(() => {
@@ -136,6 +158,36 @@ describe('SettingsScreen', () => {
 
     fireEvent.press(screen.getByTestId('settings-open-notification-settings'));
     expect(mockOpenSystemNotificationSettings).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The cache is seeded once at mount and otherwise never updates on its own,
+   * so returning from the system settings screen (which fires AppState
+   * 'active') is the only moment a grant made outside the app becomes visible
+   * here. Without this listener, a user who grants POST_NOTIFICATIONS from
+   * system settings and comes back would see "Notifications are blocked"
+   * forever, with nothing left to re-check and clear it.
+   */
+  it('clears the blocked notice once the permission reads back granted after returning to the app', async () => {
+    mockNotificationPermissionGranted.mockReturnValue(false);
+    renderSettings();
+
+    if (Platform.OS !== 'android') {
+      // iOS never registers the listener at all; the notice never appears
+      // regardless of the cache, which the test above already covers.
+      expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
+      return;
+    }
+
+    expect(screen.getByTestId('settings-open-notification-settings')).toBeTruthy();
+
+    mockRefreshNotificationPermission.mockResolvedValue(true);
+    act(() => {
+      emitAppState('active');
+    });
+
+    await waitFor(() => expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull());
+    expect(mockRefreshNotificationPermission).toHaveBeenCalledTimes(1);
   });
 
   it('hides the blocked-notifications notice when the permission is granted or unknown', () => {
