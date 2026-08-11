@@ -308,7 +308,10 @@ establishment is the paired signal, so the one rule reaches both a fresh install
 pairing first connects, not on a cold launch) and an install paired long before the prompt
 existed (prompted on its first establishment after updating). `settings.hasRequestedNotificationPermission`
 makes it once-ever, since `onEstablished` re-fires on every reconnect (a rekey does not - an
-already-established re-handshake routes to `onRekey` instead). The last known
+already-established re-handshake routes to `onRekey` instead). Two further guards: a user whose
+mode is `'off'` is never prompted at all, and an in-flight guard covers the window where an open
+system dialog backgrounds the app and the reconnect re-establishes before the flag is persisted.
+The last known
 state is cached in `permissionCache.ts` - deliberately notifee-free, because the keepalive gate
 must read it synchronously on the background transition and an awaited read there is what causes
 `ForegroundServiceDidNotStartInTimeException`. That same persisted flag is what lets both the

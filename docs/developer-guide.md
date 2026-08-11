@@ -463,7 +463,9 @@ src/
                   #   (its replay player)
   terminal/       # Pure liveTail cleaner, key sequences, WebView bridge, generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
-  notifications/  # Push registration, E2E blob decrypt, category prefs, presence suppression - later phase
+  notifications/  # Push key + registration, E2E blob decrypt, notifee channels, background task,
+                  #   local notifier, foreground service, tap routing, permission cache
+                  #   (Android display ships; the iOS NSE is the later-phase part)
   state/          # Zustand stores + the non-Zustand terminalFeed PTY ring buffers
   voice/          # Dictation hook over the OS speech engines
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
