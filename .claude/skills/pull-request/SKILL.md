@@ -116,11 +116,10 @@ local branch.
 
 ## Step 3.5 - Coverage pass (gated)
 
-If `package.json` exists and the diff (`git diff origin/<sourceBranch>...HEAD`) touches source
-files, spawn one `test-builder` agent in write mode scoped to the diff: "Audit coverage of this
-diff and implement any genuinely missing tests, following the tier rules and anti-flake
-patterns. A clean no-op is fine if coverage is already adequate." If `package.json` does not
-exist yet, skip.
+If the diff (`git diff origin/<sourceBranch>...HEAD`) touches source files, spawn one
+`test-builder` agent in write mode scoped to the diff: "Audit coverage of this diff and
+implement any genuinely missing tests, following the tier rules and anti-flake patterns. A
+clean no-op is fine if coverage is already adequate."
 
 ## Step 4 - Push
 
