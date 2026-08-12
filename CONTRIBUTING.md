@@ -141,13 +141,20 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ### What to expect
 
+- **Your first PR waits on a maintainer before any check runs.** This repo uses GitHub's
+  default first-time-contributor policy, so until a maintainer clicks "Approve and run
+  workflows" nothing runs. The checks list reads as *empty* rather than red, which is easy to
+  misread as a broken PR. If the CLA bot comment has not appeared either, that is the same gate
+  rather than a broken bot. Nothing is wrong; say so in the PR thread if it sits.
 - Your PR must be green on every check that registers. From
   `.github/workflows/ci.yml`, each runs as its own parallel job: **`Lint (ESLint)`**,
   **`Type check (tsc)`**, **`Unit Tests (Vitest)`**, **`Component Tests (Jest)`**,
   **`Native config (prebuild)`**, and **`Release counters (stores)`**. From
-  `.github/workflows/e2e.yml`: **`E2E Tests (Maestro)`**, which builds a real APK and runs the
-  smoke flow on an Android emulator, so it takes appreciably longer than the rest. Plus **`cla`**
-  (CLA Assistant).
+  `.github/workflows/e2e.yml`: **`E2E Tests (Maestro)`**. Plus **`cla`** (CLA Assistant).
+- `E2E Tests (Maestro)` is a thin gate, the same shape as the component tier below. The work
+  happens in jobs that are not themselves required: one builds a real APK, and `E2E Tests (Smoke)`
+  runs the smoke flow on an Android emulator. Expect those names in the list, and expect the tier
+  to take appreciably longer than the rest.
 - The component tier is split across two runners. Those shards show up as their own jobs
   (`Component Tests (1/2)` and `(2/2)`) but are not themselves required: the `Component Tests (Jest)`
   gate is. The unit tier is unsharded, so `Unit Tests (Vitest)` both runs the tests and is the
@@ -164,7 +171,47 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - Android release builds and the iOS compile check are **not** PR checks. They are
   dispatch-triggered or tag-triggered, so they never gate a PR. See the CI builds section of
   [docs/developer-guide.md](docs/developer-guide.md).
-- If a check fails, push a fix and CI re-runs automatically.
+- Steps that need repository secrets are skipped on a PR from a fork, by design. `Release
+  counters (stores)` logs a warning reading "expected on a fork PR" and passes without contacting
+  Play or App Store Connect, and the E2E build guards its keystore and `google-services.json`
+  steps the same way. That is the intended fork path, not a failure.
+- If a check fails, push a fix and CI re-runs automatically. Contributors cannot re-run a check
+  directly, since that needs write access. To re-trigger a run for a failure unrelated to your
+  change, push a new commit (an empty `git commit --allow-empty` is fine) or ask a maintainer.
+  Avoid repeatedly closing and reopening the PR: each event cancels the in-flight E2E run.
+
+### Approvals and merging
+
+A maintainer reviews your PR and, once it is approved and green, **merges it**. Contributors do
+not need write access to the repository and are not expected to merge their own PRs. Opening the
+PR from your fork is all that is required from you.
+
+A maintainer may push follow-up commits to your branch for polish or hardening before merging.
+This is normal and not a reflection on your work; it is how the bar stays consistent. The
+approval is a good moment to skim anything that was applied. If you want to hold the merge
+(more changes are coming, or you want a different squash), say so in the PR thread.
+
+Small, focused PRs are easier to review and merge faster.
+
+Repeat contributors may be granted write access over time. It mainly buys smoother CI, since an
+in-repo branch gets the repository secrets and skips the first-run approval gate, plus the
+ability to merge your own approved PR. Until then, a maintainer lands it for you.
+
+### UI contributions
+
+This is a phone app, so most changes are visible ones. Include a screenshot or a short screen
+recording from the emulator in the PR. It makes the review much faster and is always
+appreciated. UI changes are reviewed against `.claude/rules/ui-conventions.md`: shared design-system
+primitives, the font floor, FlashList for growable lists, and `testID` on interactive elements.
+
+### How maintainers land your PR
+
+You do not need to run any of this; it is here so the flow is not a mystery. Maintainers drive a
+PR to green and merge it through an internal Kanban board: a Tests column runs `/pull-request`
+(which pushes the branch and drives the CI checks to green, auto-fixing along the way), and a
+Ship It column runs `/merge-pull-request` (which merges the green PR). The board mechanics, git
+worktrees, and agent skills are documented in [CLAUDE.md](CLAUDE.md) and are not something a
+contributor is expected to set up.
 
 ### Security
 
