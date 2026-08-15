@@ -171,4 +171,26 @@ describe('alignHeightToTextLineGrid', () => {
       }),
     ).toBe(416);
   });
+
+  /**
+   * DESCRIPTION_FLOOR_HEIGHT is deliberately a whole number of lines so this
+   * function returns it unchanged (pinned above); that guarantee only holds
+   * because alignment is a cliff at each line boundary, not a smooth
+   * round-down. One point under the floor drops a WHOLE line, not one point:
+   * this is the boundary the "kept a whole number of text lines" comment on
+   * DESCRIPTION_FLOOR_HEIGHT depends on.
+   */
+  it('drops a full line, not one point, just under a line boundary', () => {
+    // DESCRIPTION_FLOOR_HEIGHT (96) is 4 lines (20 each) plus 16 padding; one
+    // point under that boundary (95) drops to 3 lines plus padding (76), not
+    // 95 itself. A literal, like the pinned cases above, so a coordinated
+    // change to BODY_LINE_HEIGHT cannot keep this green silently.
+    expect(
+      alignHeightToTextLineGrid({
+        height: DESCRIPTION_FLOOR_HEIGHT - 1,
+        lineHeight: BODY_LINE_HEIGHT,
+        verticalPadding: FIELD_VERTICAL_PADDING,
+      }),
+    ).toBe(76);
+  });
 });

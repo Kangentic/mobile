@@ -1,6 +1,7 @@
 import React from 'react';
 import { Dimensions, StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import type { ReactTestInstance } from 'react-test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { MoveTaskScreen } from '@/screens/MoveTaskScreen';
@@ -13,6 +14,27 @@ import {
   MOVE_SHEET_RESERVED_HEIGHT,
   SHEET_CONTENT_CEILING,
 } from '@/lib/sheetContentHeights';
+
+/**
+ * Walks up from a queried host node to its nearest HOST ancestor (skipping
+ * the composite wrapper layers a mocked ScrollView renders through in this
+ * Jest environment), so the caller can assert that ancestor IS the
+ * SheetScrollerSlot's View rather than merely that a slot exists somewhere
+ * above it. Stopping at anything but the nearest host would let a slot that
+ * wraps the wrong element (e.g. the whole Stack, which is exactly the
+ * misplacement SheetScrollerSlot's own invariant comment warns against)
+ * pass this check by accident.
+ */
+function nearestHostAncestor(instance: ReactTestInstance): ReactTestInstance {
+  let current = instance.parent;
+  while (current !== null && typeof current.type !== 'string') {
+    current = current.parent;
+  }
+  if (current === null) {
+    throw new Error('expected a host ancestor');
+  }
+  return current;
+}
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -154,6 +176,33 @@ describe('MoveTaskScreen', () => {
 
     expect(screen.getByTestId('move-target-p2-triage')).toBeTruthy();
     expect(screen.queryByTestId('move-target-lane-doing')).toBeNull();
+  });
+});
+
+/**
+ * The iOS form-sheet fix (SheetScrollerSlot) works by owning the scroller's
+ * layout slot (see the component's invariant comment); a future refactor
+ * that unwraps the ScrollView from its slot would silently reopen the bug
+ * the wrapper exists to fix, and nothing else here would notice. This locks
+ * the WIRING (the slot actually sits between the Stack and the list), not
+ * the slot's own structural behavior, which SheetScrollerSlot.test.tsx
+ * already covers.
+ */
+describe('MoveTaskScreen scroller slot wiring', () => {
+  beforeEach(() => {
+    mockParams = { taskId: 'task-1', projectId: 'project-1' };
+    useBoardStore.getState().reset();
+    seedBoard();
+  });
+
+  it('renders the column list inside a SheetScrollerSlot', () => {
+    renderMoveTaskScreen();
+
+    const scroller = screen.getByTestId('move-target-list');
+    const slotHost = nearestHostAncestor(scroller);
+
+    expect(slotHost.props.collapsable).toBe(false);
+    expect(StyleSheet.flatten(slotHost.props.style)).toMatchObject({ overflow: 'hidden' });
   });
 });
 
