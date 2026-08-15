@@ -1,6 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { StyleSheet, TextInput } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult, type BarcodeType } from 'expo-camera';
 import { Screen, Stack, Text, Button, Card, useTheme } from '@/components';
 import { validateScannedQr, type QrValidationErrorKind } from '@/pairing/qr';
@@ -30,30 +30,68 @@ export function PairingScanScreen(): React.JSX.Element {
   const [pastedLink, setPastedLink] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  // Synchronous re-entry latch. A useState guard is not visible same-tick, so
+  // it let the camera's ~30fps barcode stream (or a double tap of the paste
+  // submit) through together: two beginPairing dials into the same single-use
+  // relay slot and two stacked confirm frames. Checked and set with no await
+  // in between; isProcessing is its render-facing shadow (camera unwiring,
+  // the paste submit's disabled state).
+  const pairingInFlightRef = useRef(false);
+
+  // The only writer of the latch pair. The ref and the state must move
+  // together; a site that set one without the other would silently desync
+  // the synchronous guard from what the UI shows.
+  const setPairingInFlight = useCallback((inFlight: boolean) => {
+    pairingInFlightRef.current = inFlight;
+    setIsProcessing(inFlight);
+  }, []);
+
+  // Re-arm on focus regain. The latch deliberately survives the navigation to
+  // /pair-confirm: this screen stays mounted beneath it, and releasing the
+  // latch there would re-wire the camera so a stray barcode event could push
+  // a second confirm frame. Coming back ("Go back" after a failed ceremony,
+  // or a SAS reject) is the moment a rescan becomes legitimate again. The
+  // initial-focus firing is a no-op, both values are already false.
+  useFocusEffect(
+    useCallback(() => {
+      setPairingInFlight(false);
+    }, [setPairingInFlight]),
+  );
 
   const handleUri = useCallback(
     async (uri: string) => {
-      if (isProcessing) return;
+      if (pairingInFlightRef.current) return;
       setErrorMessage(null);
       const result = validateScannedQr(uri);
       if (!result.ok) {
+        // A rejected code must not latch: the user corrects and retries now.
         setErrorMessage(ERROR_MESSAGES[result.errorKind]);
         return;
       }
-      setIsProcessing(true);
+      setPairingInFlight(true);
+      // Only beginPairing sits inside the try. If router.navigate threw with
+      // the wider scope, the catch would report "could not start pairing"
+      // after the ceremony had already dialed the single-use relay slot, and
+      // releasing the latch would invite the second dial the latch exists to
+      // prevent.
       try {
         await beginPairing(result.payload, PAIRING_DEVICE_NAME);
-        router.push('/pair-confirm');
       } catch {
         // beginPairing can reject before the state machine exists (e.g. a
         // SecureStore failure loading the device identity); surface it here
         // rather than leaving an unhandled rejection with no user feedback.
+        // No navigation happened, so no focus change will re-arm the screen:
+        // release the latch here or it stays dead until remount.
         setErrorMessage(UNEXPECTED_ERROR_MESSAGE);
-      } finally {
-        setIsProcessing(false);
+        setPairingInFlight(false);
+        return;
       }
+      // navigate, not push, as a dedupe seatbelt; not replace, which would
+      // drop this screen from the stack and break the confirm screen's
+      // "Go back"-to-rescan path.
+      router.navigate('/pair-confirm');
     },
-    [isProcessing, router],
+    [router, setPairingInFlight],
   );
 
   const handleBarcodeScanned = useCallback(
@@ -75,7 +113,7 @@ export function PairingScanScreen(): React.JSX.Element {
             Camera access is needed to scan a desktop pairing code.
           </Text>
           <Button testID="pairing-request-camera-permission" label="Grant camera access" onPress={() => void requestPermission()} />
-          <PasteLinkFallback pastedLink={pastedLink} setPastedLink={setPastedLink} onSubmit={handleUri} />
+          <PasteLinkFallback pastedLink={pastedLink} setPastedLink={setPastedLink} onSubmit={handleUri} isSubmitInFlight={isProcessing} />
           {errorMessage ? (
             <Text testID="pairing-scan-error" variant="caption" color="danger">
               {errorMessage}
@@ -95,7 +133,7 @@ export function PairingScanScreen(): React.JSX.Element {
         onBarcodeScanned={isProcessing ? undefined : handleBarcodeScanned}
       />
       <Stack gap="sm" style={{ padding: theme.spacing.lg }}>
-        <PasteLinkFallback pastedLink={pastedLink} setPastedLink={setPastedLink} onSubmit={handleUri} />
+        <PasteLinkFallback pastedLink={pastedLink} setPastedLink={setPastedLink} onSubmit={handleUri} isSubmitInFlight={isProcessing} />
         {errorMessage ? (
           <Text testID="pairing-scan-error" variant="caption" color="danger">
             {errorMessage}
@@ -110,10 +148,12 @@ interface PasteLinkFallbackProps {
   pastedLink: string;
   setPastedLink: (value: string) => void;
   onSubmit: (uri: string) => void;
+  /** Disables submit while a pairing attempt is in flight; the ref latch in handleUri is the actual re-entry guard. */
+  isSubmitInFlight: boolean;
 }
 
 /** For camera-permission-denied users, and for Maestro E2E, which cannot drive a real camera. */
-function PasteLinkFallback({ pastedLink, setPastedLink, onSubmit }: PasteLinkFallbackProps): React.JSX.Element {
+function PasteLinkFallback({ pastedLink, setPastedLink, onSubmit, isSubmitInFlight }: PasteLinkFallbackProps): React.JSX.Element {
   const theme = useTheme();
   return (
     <Card>
@@ -141,7 +181,12 @@ function PasteLinkFallback({ pastedLink, setPastedLink, onSubmit }: PasteLinkFal
             fontSize: theme.typography.body.fontSize,
           }}
         />
-        <Button testID="pairing-paste-link-submit" label="Pair" onPress={() => onSubmit(pastedLink)} disabled={pastedLink.length === 0} />
+        <Button
+          testID="pairing-paste-link-submit"
+          label="Pair"
+          onPress={() => onSubmit(pastedLink)}
+          disabled={pastedLink.length === 0 || isSubmitInFlight}
+        />
       </Stack>
     </Card>
   );
