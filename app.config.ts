@@ -399,6 +399,12 @@ const config: ExpoConfig = {
     // .github/workflows/build-ios.yml does. See the plugin for why signing has
     // to be scoped to the app target instead of passed to xcodebuild.
     './plugins/withIosManualSigning.ts',
+    // Injects a collision-safe UUID generator at the top of the Podfile's
+    // post_install hook. Without it, CocoaPods' sequential UUID counter can
+    // hand an SPM object the Pods project root object's own UUID, which saves
+    // a Pods.xcodeproj with no PBXProject that xcodebuild rejects as damaged.
+    // Upstream bug, input-shape dependent; see the plugin for the evidence.
+    './plugins/withIosPodsUuidCollisionGuard.ts',
     // Source-map + debug-symbol upload only, gated on SENTRY_AUTH_TOKEN. The
     // plugin entry is omitted entirely rather than passed empty options: an
     // absent auth token must not make the plugin run and fail (or silently
