@@ -72,12 +72,9 @@ describe('FileDiffScreen', () => {
 
     const options = mockStackScreenOptions.at(-1);
     expect(options?.title).toBe('alpha.ts');
-    // iOS derives the back button's label from the PREVIOUS screen's title, and
-    // the screen this is always pushed from (task/[taskId]/index) renders
-    // headerShown: false, so it has no title to lend. expo-router then falls
-    // back to the route's FILE PATH and the button read literally
-    // "task/[taskId]/index" on every iPhone. Android draws a bare chevron and
-    // never showed it, which is how it survived into a store screenshot.
+    // The pinned back label. The iOS borrowed-title mechanism behind it is
+    // documented on app/_layout.tsx's Stack.Screen block and locked by
+    // tests/unit/routeTitles.test.ts.
     expect(options?.headerBackTitle).toBe('Session');
   });
 

@@ -105,9 +105,14 @@ function RootStack(): React.JSX.Element {
           contentStyle: { backgroundColor: theme.colors.background },
         }}
       >
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="task/[taskId]/index" options={{ headerShown: false }} />
-        <Stack.Screen name="task/[taskId]/changes" options={{ headerShown: false }} />
+        {/* The headerShown:false routes still declare a title. iOS borrows the
+            PREVIOUS route's title as the native back label of whatever is
+            pushed on top, and with no title it renders the literal route path:
+            the back button read "(tabs)" on Settings and Pair on every iPhone.
+            Locked by tests/unit/routeTitles.test.ts. */}
+        <Stack.Screen name="(tabs)" options={{ headerShown: false, title: 'Kangentic' }} />
+        <Stack.Screen name="task/[taskId]/index" options={{ headerShown: false, title: 'Session' }} />
+        <Stack.Screen name="task/[taskId]/changes" options={{ headerShown: false, title: 'Changes' }} />
         <Stack.Screen name="create-task" options={formSheetOptions} />
         <Stack.Screen name="move-task" options={formSheetOptions} />
         <Stack.Screen name="edit-task" options={formSheetOptions} />
@@ -115,13 +120,14 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="task-actions" options={formSheetOptions} />
         {/* Renders its own TaskHeader, exactly as the session screen does, so the
             two kinds of task open into the same chrome. */}
-        <Stack.Screen name="completed-task" options={{ headerShown: false }} />
+        <Stack.Screen name="completed-task" options={{ headerShown: false, title: 'Completed task' }} />
         <Stack.Screen name="file-diff" options={{ title: 'Changes' }} />
         <Stack.Screen name="pair" options={{ title: 'Pair a device' }} />
         <Stack.Screen name="pair-confirm" options={{ title: 'Confirm pairing' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         {/* Singular: one phone, one desktop trust anchor. See SettingsScreen's row. */}
         <Stack.Screen name="devices" options={{ title: 'Paired desktop' }} />
+        <Stack.Screen name="+not-found" options={{ title: 'Not found' }} />
       </Stack>
     </>
   );
