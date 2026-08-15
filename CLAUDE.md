@@ -47,7 +47,11 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   short absolute root so Android builds from any path depth,
                               #   Windows-gated inside the generated Gradle;
                               #   withAndroidGradleHeap: raises the Gradle daemon heap past the
-                              #   template's 2048m so R8 survives a four-ABI production build)
+                              #   template's 2048m so R8 survives a four-ABI production build;
+                              #   withIosPodsUuidCollisionGuard: injects a collision-safe UUID
+                              #   generator into the generated Podfile's post_install hook so an
+                              #   SPM object cannot take the Pods root object's UUID, droppable
+                              #   when Expo or CocoaPods fixes the generator upstream)
 targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
