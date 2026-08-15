@@ -104,9 +104,11 @@ The reasoning, because the warning implies a deadline that does not exist:
   Screens under sw600dp, and apps categorised as games, stay exempt in 16 and 17 alike. There is
   no announced plan to extend this to phones, so "be adaptive before targetSdk 37" is not the
   situation.
-- **Removing the lock would cost more than it buys.** It would newly expose phone landscape,
-  where four `fitToContents` form sheets (`MoveTaskScreen`, `ProjectPickerScreen`,
-  `CreateTaskScreen`, `EditTaskScreen`) cap content at 420px against a window roughly 360dp tall,
+- **Removing the lock would cost more than it buys.** It would newly expose phone landscape:
+  the four capped `fitToContents` form sheets (`MoveTaskScreen`, `ProjectPickerScreen`,
+  `CreateTaskScreen`, `EditTaskScreen`) now derive their caps from the window height
+  (`src/lib/sheetContentHeights.ts`), so a ~360dp-tall window shrinks the capped region to its
+  floor instead of overflowing - but a keyboard-up writing sheet still cannot fit that window,
   and every screen would need a visual pass with no forcing function behind it.
 
 So the advisory will fire on every release, forever. That is the correct signal: we do

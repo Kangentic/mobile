@@ -13,6 +13,7 @@ export { Stack, type StackProps } from './Stack';
 export { SectionHeader, type SectionHeaderProps } from './SectionHeader';
 export { Icon, type IconProps } from './Icon';
 export { TextField, type TextFieldProps } from './TextField';
+export { SheetScrollerSlot, type SheetScrollerSlotProps } from './SheetScrollerSlot';
 export { SegmentedTabBar, type SegmentedTabBarProps, type SegmentedTabBarItem } from './SegmentedTabBar';
 export { SegmentedSwitcher, type SegmentedSwitcherProps, type SegmentOption } from './SegmentedSwitcher';
 export { ConnectionBanner } from './ConnectionBanner';

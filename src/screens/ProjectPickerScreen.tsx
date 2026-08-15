@@ -1,17 +1,29 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Check } from 'lucide-react-native';
 import type { ReadBoardProjectSummary } from '@kangentic/protocol';
-import { AgentStatusIcon, Stack, Text, TextField, useTheme } from '@/components';
+import { AgentStatusIcon, SheetScrollerSlot, Stack, Text, TextField, useTheme } from '@/components';
 import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
+import { clampSheetContentHeight, SHEET_KEYBOARD_ALLOWANCE } from '@/lib/sheetContentHeights';
 
 /** Above this many projects the list gets a filter field; below it, scanning is faster than typing. */
 const SEARCH_THRESHOLD = 8;
-/** Keeps a long list inside the sheet instead of growing it past the screen. */
-const LIST_MAX_HEIGHT = 420;
+/**
+ * Keeps a long list inside the sheet instead of growing it past the screen.
+ * The cap derives from the window height (see sheetContentHeights.ts); this
+ * reserve is the sheet's chrome around the list: container padding 16+24,
+ * title 24, one Stack gap 8, and 70 of top clearance (status bar plus sheet
+ * margin) the sheet can never occupy. When the filter field shows, its 44
+ * height, its extra gap 8, and the keyboard allowance join the reserve so
+ * the rows stay tappable above an open keyboard.
+ */
+const PICKER_SHEET_RESERVED_HEIGHT = 142;
+const PICKER_FILTER_EXTRA_HEIGHT = 52;
+/** Three touch-height rows: the least list that still reads as a list. */
+const LIST_FLOOR_HEIGHT = 132;
 
 interface ProjectAgentCounts {
   needsYou: number;
@@ -70,6 +82,15 @@ export function ProjectPickerScreen(): React.JSX.Element {
   }, [boardsByProjectId, bySessionId]);
 
   const showSearch = projects.length > SEARCH_THRESHOLD;
+  const { height: windowHeight } = useWindowDimensions();
+  const listMaxHeight = clampSheetContentHeight({
+    windowHeight,
+    reservedHeight:
+      PICKER_SHEET_RESERVED_HEIGHT +
+      insets.bottom +
+      (showSearch ? PICKER_FILTER_EXTRA_HEIGHT + SHEET_KEYBOARD_ALLOWANCE : 0),
+    floorHeight: LIST_FLOOR_HEIGHT,
+  });
   const visibleProjects = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
     if (trimmed.length === 0) return projects;
@@ -149,41 +170,44 @@ export function ProjectPickerScreen(): React.JSX.Element {
         {/* handled, not never: the rows are tappable while the filter field
             holds the keyboard, and the default would spend the first tap
             dismissing it. */}
-        <ScrollView
-          style={{ maxHeight: LIST_MAX_HEIGHT }}
-          keyboardShouldPersistTaps="handled"
-          testID="board-project-list"
-        >
-          {visibleProjects.length === 0 ? (
-            <View style={{ paddingVertical: theme.spacing.md }}>
-              <Text color="muted">No project matches that.</Text>
-            </View>
-          ) : (
-            sections.map((section) => (
-              <View key={section.id}>
-                {section.title !== null ? (
-                  <View style={{ paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.xs, paddingHorizontal: theme.spacing.md }}>
-                    <Text variant="caption" color="muted" style={styles.groupTitle}>
-                      {section.title}
-                    </Text>
-                  </View>
-                ) : null}
-                {section.projects.map((project) => (
-                  <ProjectRow
-                    key={project.id}
-                    project={project}
-                    counts={countsByProjectId.get(project.id) ?? null}
-                    selected={project.id === currentProjectId}
-                    onSelect={() => {
-                      selectProject(project.id);
-                      router.back();
-                    }}
-                  />
-                ))}
+        <SheetScrollerSlot>
+          <ScrollView
+            style={{ maxHeight: listMaxHeight }}
+            contentContainerStyle={{ paddingBottom: theme.spacing.sm }}
+            keyboardShouldPersistTaps="handled"
+            testID="board-project-list"
+          >
+            {visibleProjects.length === 0 ? (
+              <View style={{ paddingVertical: theme.spacing.md }}>
+                <Text color="muted">No project matches that.</Text>
               </View>
-            ))
-          )}
-        </ScrollView>
+            ) : (
+              sections.map((section) => (
+                <View key={section.id}>
+                  {section.title !== null ? (
+                    <View style={{ paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.xs, paddingHorizontal: theme.spacing.md }}>
+                      <Text variant="caption" color="muted" style={styles.groupTitle}>
+                        {section.title}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {section.projects.map((project) => (
+                    <ProjectRow
+                      key={project.id}
+                      project={project}
+                      counts={countsByProjectId.get(project.id) ?? null}
+                      selected={project.id === currentProjectId}
+                      onSelect={() => {
+                        selectProject(project.id);
+                        router.back();
+                      }}
+                    />
+                  ))}
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </SheetScrollerSlot>
       </Stack>
     </View>
   );

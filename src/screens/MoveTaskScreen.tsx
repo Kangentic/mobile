@@ -1,12 +1,13 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Button, Icon, Row, Stack, Text, useTheme } from '@/components';
+import { Button, Icon, Row, SheetScrollerSlot, Stack, Text, useTheme } from '@/components';
 import { CapabilityError } from '@/channel';
 import { moveTaskOptimistic } from '@/connection/actions';
 import { findTaskById, selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
+import { clampSheetContentHeight } from '@/lib/sheetContentHeights';
 
 /**
  * Move a task to another column, as a native form sheet route.
@@ -21,19 +22,32 @@ import { triggerHaptic } from '@/lib/haptics';
  * Keeps the column list inside the sheet rather than growing it past the
  * screen: 'fitToContents' sizes the sheet to its content, so a board with
  * enough columns would otherwise push the Move button below the fold with no
- * way to scroll down to it. Matches ProjectPickerScreen's LIST_MAX_HEIGHT.
+ * way to scroll down to it. The cap derives from the window height (see
+ * sheetContentHeights.ts); this reserve is everything else the sheet needs:
+ * container padding 16+24, title 24, two-line task title 40, error line 24,
+ * button 44 plus its 4 marginTop, four Stack gaps 32, and 70 of top
+ * clearance (status bar plus sheet margin) the sheet can never occupy.
+ * No keyboard allowance: this sheet has no text input.
  *
  * A capped ScrollView rather than a FlashList because a board's columns are a
  * handful, set by hand on the desktop - the cap is about the sheet's height,
  * not about virtualizing a list that grows without bound.
  */
-const LIST_MAX_HEIGHT = 420;
+const MOVE_SHEET_RESERVED_HEIGHT = 278;
+/** Three touch-height rows: the least list that still reads as a list. */
+const LIST_FLOOR_HEIGHT = 132;
 
 export function MoveTaskScreen(): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const { taskId, projectId } = useLocalSearchParams<{ taskId?: string; projectId?: string }>();
+  const listMaxHeight = clampSheetContentHeight({
+    windowHeight,
+    reservedHeight: MOVE_SHEET_RESERVED_HEIGHT + insets.bottom,
+    floorHeight: LIST_FLOOR_HEIGHT,
+  });
 
   // Select stable store references only; derive the arrays with useMemo. A
   // selector that returns a fresh array every render loops useSyncExternalStore.
@@ -84,58 +98,65 @@ export function MoveTaskScreen(): React.JSX.Element {
             {task.title}
           </Text>
         ) : null}
-        <ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} keyboardShouldPersistTaps="handled" testID="move-target-list">
-          {columns.map((column) => {
-            const isCurrent = task?.swimlane_id === column.id;
-            const isSelected = selectedColumnId === column.id;
-            return (
-              <Pressable
-                key={column.id}
-                testID={`move-target-${column.id}`}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: isSelected, disabled: isCurrent }}
-                disabled={isCurrent}
-                onPress={() => setSelectedColumnId(column.id)}
-                style={[
-                  styles.columnRow,
-                  {
-                    minHeight: theme.minTouchSize,
-                    paddingHorizontal: theme.spacing.md,
-                    borderRadius: theme.radii.md,
-                    backgroundColor: isCurrent
-                      ? theme.colors.accentSubtle
-                      : isSelected
-                        ? theme.colors.surfaceRaised
-                        : 'transparent',
-                  },
-                ]}
-              >
-                <Row gap="sm" style={styles.columnRowContent}>
-                  <Icon
-                    name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                    color={isSelected ? 'accent' : 'secondary'}
-                    size={20}
-                  />
-                  <Text variant="body" style={styles.flex}>
-                    {column.name}
-                  </Text>
-                  {isCurrent ? (
-                    // Hand-rolled rather than the shared Badge primitive: Badge
-                    // has no accent-tinted fill variant, so it cannot reproduce
-                    // this accentMuted stadium look without extending it.
-                    <View
-                      style={[styles.currentBadge, { backgroundColor: theme.colors.accentMuted, borderRadius: theme.radii.full }]}
-                    >
-                      <Text variant="caption" color="accent" style={styles.currentBadgeText}>
-                        Current
-                      </Text>
-                    </View>
-                  ) : null}
-                </Row>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <SheetScrollerSlot>
+          <ScrollView
+            style={{ maxHeight: listMaxHeight }}
+            contentContainerStyle={{ paddingBottom: theme.spacing.sm }}
+            keyboardShouldPersistTaps="handled"
+            testID="move-target-list"
+          >
+            {columns.map((column) => {
+              const isCurrent = task?.swimlane_id === column.id;
+              const isSelected = selectedColumnId === column.id;
+              return (
+                <Pressable
+                  key={column.id}
+                  testID={`move-target-${column.id}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: isSelected, disabled: isCurrent }}
+                  disabled={isCurrent}
+                  onPress={() => setSelectedColumnId(column.id)}
+                  style={[
+                    styles.columnRow,
+                    {
+                      minHeight: theme.minTouchSize,
+                      paddingHorizontal: theme.spacing.md,
+                      borderRadius: theme.radii.md,
+                      backgroundColor: isCurrent
+                        ? theme.colors.accentSubtle
+                        : isSelected
+                          ? theme.colors.surfaceRaised
+                          : 'transparent',
+                    },
+                  ]}
+                >
+                  <Row gap="sm" style={styles.columnRowContent}>
+                    <Icon
+                      name={isSelected ? 'radio-button-on' : 'radio-button-off'}
+                      color={isSelected ? 'accent' : 'secondary'}
+                      size={20}
+                    />
+                    <Text variant="body" style={styles.flex}>
+                      {column.name}
+                    </Text>
+                    {isCurrent ? (
+                      // Hand-rolled rather than the shared Badge primitive: Badge
+                      // has no accent-tinted fill variant, so it cannot reproduce
+                      // this accentMuted stadium look without extending it.
+                      <View
+                        style={[styles.currentBadge, { backgroundColor: theme.colors.accentMuted, borderRadius: theme.radii.full }]}
+                      >
+                        <Text variant="caption" color="accent" style={styles.currentBadgeText}>
+                          Current
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Row>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </SheetScrollerSlot>
 
         {errorMessage ? (
           <Text variant="caption" color="danger">

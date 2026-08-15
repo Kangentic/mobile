@@ -1,14 +1,33 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Button, Stack, Text, TextField, useTheme } from '@/components';
+import { Button, SheetScrollerSlot, Stack, Text, TextField, useTheme } from '@/components';
 import { CapabilityError } from '@/channel';
 import { createTask } from '@/connection/actions';
 import { selectColumnsOrdered, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
+import {
+  alignHeightToTextLineGrid,
+  clampSheetContentHeight,
+  SHEET_KEYBOARD_ALLOWANCE,
+} from '@/lib/sheetContentHeights';
 
 const BACKLOG_COLUMN_NAME = 'Backlog';
+
+/**
+ * Everything this sheet needs around the description box, so the box's cap
+ * (see sheetContentHeights.ts) can leave room for it: container padding
+ * 16+24, title 24, title field 44, chips row 46, error line 24, button 44,
+ * five Stack gaps 40, and 70 of top clearance (status bar plus sheet margin)
+ * the sheet can never occupy. The keyboard allowance is always added: this
+ * sheet exists to type into.
+ */
+const CREATE_SHEET_RESERVED_HEIGHT = 332;
+/** Four body lines: the least description box that still invites writing. */
+const DESCRIPTION_FLOOR_HEIGHT = 96;
+/** The empty box's resting height, when the window's cap leaves it room. */
+const DESCRIPTION_PREFERRED_MIN_HEIGHT = 120;
 
 /**
  * New-task form, presented as a NATIVE form sheet (see app/_layout.tsx's
@@ -25,9 +44,10 @@ const BACKLOG_COLUMN_NAME = 'Backlog';
  * A form sheet has no such window to miss: the platform owns the presentation
  * (UISheetPresentationController on iOS, the Compose bottom sheet on Android),
  * the backdrop, and keyboard avoidance, identically on both. There is
- * deliberately no KeyboardAvoidingView, backdrop Pressable, or safe-area
- * padding here - adding any of them would be fighting the platform for a job
- * it already does.
+ * deliberately no KeyboardAvoidingView or backdrop Pressable here - adding
+ * either would be fighting the platform for a job it already does. (The
+ * container's bottom inset padding is spacing, not avoidance: 'fitToContents'
+ * hugs the content, so the button needs clearance from the gesture bar.)
  */
 export function CreateTaskScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -40,6 +60,33 @@ export function CreateTaskScreen(): React.JSX.Element {
   // useSyncExternalStore into an infinite loop. Same rule as SessionScreen.
   const board = useBoardStore((state) => (projectId ? (state.boardsByProjectId[projectId] ?? null) : null));
   const columns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
+
+  const { height: windowHeight } = useWindowDimensions();
+  /**
+   * The description box is sized by its CONTENT, not pinned: a multiline
+   * TextInput with no fixed height grows to fit, and 'fitToContents' grows
+   * the sheet with it, so the sheet is as tall as what is actually being
+   * written.
+   *
+   * Fractional detents were tried instead of all this and are worse: a
+   * fixed-fraction sheet does not shrink when the keyboard opens, so its
+   * lower third - the column chips and the Create button - became
+   * unreachable. 'fitToContents' is what keeps the sheet clear of the
+   * keyboard, and this cap is what keeps 'fitToContents' honest: it derives
+   * from the window height so the whole keyboard-up sheet fits above the
+   * keyboard on small phones too (a fixed 420 did not, per the 2026-08-15
+   * iOS tester recording), and it is aligned to the text line grid so an
+   * overflowing description clips at a whole line instead of mid-line.
+   */
+  const descriptionMaxHeight = alignHeightToTextLineGrid({
+    height: clampSheetContentHeight({
+      windowHeight,
+      reservedHeight: CREATE_SHEET_RESERVED_HEIGHT + insets.bottom + SHEET_KEYBOARD_ALLOWANCE,
+      floorHeight: DESCRIPTION_FLOOR_HEIGHT,
+    }),
+    lineHeight: theme.typography.body.lineHeight,
+    verticalPadding: 2 * theme.spacing.sm,
+  });
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -102,41 +149,49 @@ export function CreateTaskScreen(): React.JSX.Element {
           placeholder="Description (optional)"
           multiline
           testID="create-task-description"
-          style={styles.descriptionField}
+          style={{
+            maxHeight: descriptionMaxHeight,
+            // minHeight follows the cap: in layout, minHeight beats maxHeight,
+            // so a fixed floor above a tiny window's cap would grow the box
+            // right back past it.
+            minHeight: Math.min(DESCRIPTION_PREFERRED_MIN_HEIGHT, descriptionMaxHeight),
+          }}
         />
         {/* keyboardShouldPersistTaps is not inherited from an outer scroll
             view, and defaults to "never": without it the first tap on a chip
             is spent dismissing the keyboard and the column never changes. */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-          <View style={[styles.columnChips, { gap: theme.spacing.xs }]}>
-            {columnChoices.map((choiceName) => {
-              const isSelected = columnName === choiceName;
-              return (
-                <Pressable
-                  key={choiceName}
-                  testID={`create-task-column-${choiceName}`}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: isSelected }}
-                  onPress={() => setPickedColumnName(choiceName)}
-                  style={[
-                    styles.columnChip,
-                    {
-                      minHeight: theme.minTouchSize,
-                      paddingHorizontal: theme.spacing.md,
-                      borderRadius: theme.radii.md,
-                      borderColor: isSelected ? theme.colors.accent : theme.colors.border,
-                      backgroundColor: isSelected ? theme.colors.surfaceRaised : 'transparent',
-                    },
-                  ]}
-                >
-                  <Text variant="body" color={isSelected ? 'primary' : 'secondary'}>
-                    {choiceName}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </ScrollView>
+        <SheetScrollerSlot>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            <View style={[styles.columnChips, { gap: theme.spacing.xs }]}>
+              {columnChoices.map((choiceName) => {
+                const isSelected = columnName === choiceName;
+                return (
+                  <Pressable
+                    key={choiceName}
+                    testID={`create-task-column-${choiceName}`}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: isSelected }}
+                    onPress={() => setPickedColumnName(choiceName)}
+                    style={[
+                      styles.columnChip,
+                      {
+                        minHeight: theme.minTouchSize,
+                        paddingHorizontal: theme.spacing.md,
+                        borderRadius: theme.radii.md,
+                        borderColor: isSelected ? theme.colors.accent : theme.colors.border,
+                        backgroundColor: isSelected ? theme.colors.surfaceRaised : 'transparent',
+                      },
+                    ]}
+                  >
+                    <Text variant="body" color={isSelected ? 'primary' : 'secondary'}>
+                      {choiceName}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </ScrollView>
+        </SheetScrollerSlot>
 
         {errorMessage ? (
           <Text variant="caption" color="danger">
@@ -170,20 +225,5 @@ const styles = StyleSheet.create({
   container: {
     // Deliberately NOT flex: 1 - see the sheetAllowedDetents note above.
     width: '100%',
-  },
-  descriptionField: {
-    /**
-     * Sized by its CONTENT, not pinned: a multiline TextInput with no fixed
-     * height grows to fit, and 'fitToContents' grows the sheet with it, so the
-     * sheet is as tall as what is actually being written.
-     *
-     * Fractional detents were tried instead of all this and are worse: a
-     * fixed-fraction sheet does not shrink when the keyboard opens, so its
-     * lower third - the column chips and the Create button - became
-     * unreachable. 'fitToContents' is what keeps the sheet clear of the
-     * keyboard, and the cap below is what keeps 'fitToContents' honest.
-     */
-    maxHeight: 420,
-    minHeight: 120,
   },
 });
