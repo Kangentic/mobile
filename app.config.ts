@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.4.0',
+  version: '0.4.1',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -68,14 +68,16 @@ const config: ExpoConfig = {
     // SPENT: 3 (uploaded 2026-07-27) and 4 (uploaded 2026-07-28 under 0.2.0,
     // and ACCEPTED by Apple, confirmed by the submit job's --await-processing
     // step rather than inferred from a green check). 1 and 2 were rejected in
-    // processing and never registered. 5 was the v0.3.0 release cut 2026-08-03,
-    // confirmed spent by the ios-b5 tag on the remote. 6 is taken by the v0.4.0
-    // release cut 2026-08-07; the ios-b6 tag written by the submit job is the
+    // processing and never registered. 5 was the v0.3.0 release cut 2026-08-03
+    // and 6 the v0.4.0 release cut 2026-08-07, both confirmed spent by the
+    // ios-b5 and ios-b6 tags on the remote. 7 is taken by the v0.4.1 release
+    // cut 2026-08-15; the ios-b7 tag written by the submit job is the
     // authoritative record once Apple accepts it.
     //
-    // Note 6 follows 5 even though `version` moved 0.3.0 -> 0.4.0, per the
-    // global-not-per-version rule above: a semver bump frees nothing.
-    buildNumber: '6',
+    // Numbers stay globally increasing across semver bumps (7 follows 6 even
+    // though `version` moved 0.4.0 -> 0.4.1), per the global-not-per-version
+    // rule above: a semver bump frees nothing.
+    buildNumber: '7',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -211,10 +213,11 @@ const config: ExpoConfig = {
     //
     // SPENT: 1 (internal, 2026-07-26, uploaded by hand through the Console) and
     // 2 (internal, 2026-07-28, the first release the API ever committed).
-    // 3 was the v0.3.0 internal release cut 2026-08-03, confirmed spent by the
-    // android-vc3 tag on the remote. 4 is taken by the v0.4.0 internal release
-    // cut 2026-08-07; the android-vc4 tag written by the submit job is the
-    // authoritative record once the upload lands.
+    // 3 was the v0.3.0 internal release cut 2026-08-03 and 4 the v0.4.0
+    // internal release cut 2026-08-07, both confirmed spent by the android-vc3
+    // and android-vc4 tags on the remote. 5 is taken by the v0.4.1 internal
+    // release cut 2026-08-15; the android-vc5 tag written by the submit job is
+    // the authoritative record once the upload lands.
     //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
@@ -222,7 +225,7 @@ const config: ExpoConfig = {
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 4,
+    versionCode: 5,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
