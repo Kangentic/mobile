@@ -329,3 +329,63 @@ env:
 - takeScreenshot:
     path: ${OUTPUT_DIR}/05-board
     label: Kanban board with live agent sessions
+# ---------------------------------------------------------------------------
+# TEMPORARY VERIFICATION - REVERT BEFORE MERGE. Not store shots: the 9x-named
+# frames below only exist to prove the iOS form-sheet fix (Move sheet rows
+# over the title, Edit sheet cap) on a CI simulator before the TestFlight
+# cycle, because no local iOS loop exists. The name check in build-ios.yml
+# treats unexpected names as a warning, so the run stays green.
+#
+# The paused card carries the long title AND long description, so its Edit
+# sheet exercises the description cap; its Move sheet lists all 7 columns.
+- longPressOn:
+    id: "board-card-mock-task-paused"
+- extendedWaitUntil:
+    visible:
+      id: "task-actions-sheet"
+    timeout: 15000
+- tapOn:
+    id: "task-action-move"
+- extendedWaitUntil:
+    visible:
+      id: "move-task-sheet"
+    timeout: 15000
+- waitForAnimationToEnd:
+    timeout: 5000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/90-verify-move-sheet
+    label: TEMP - Move sheet rows must sit below the title
+# Dismiss through the dimmed backdrop above the sheet, then reopen for Edit.
+- tapOn:
+    point: "50%,5%"
+- extendedWaitUntil:
+    notVisible:
+      id: "move-task-sheet"
+    timeout: 10000
+- longPressOn:
+    id: "board-card-mock-task-paused"
+- extendedWaitUntil:
+    visible:
+      id: "task-actions-sheet"
+    timeout: 15000
+- tapOn:
+    id: "task-action-edit"
+- extendedWaitUntil:
+    visible:
+      id: "edit-task-sheet"
+    timeout: 15000
+- waitForAnimationToEnd:
+    timeout: 5000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/91-verify-edit-sheet
+    label: TEMP - Edit sheet description clipping at the cap
+# Focus the description so the keyboard-up geometry is captured too. If the
+# simulator has a hardware keyboard attached this still captures the resting
+# sheet, which is not wasted.
+- tapOn:
+    id: "edit-task-description"
+- waitForAnimationToEnd:
+    timeout: 8000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/92-verify-edit-keyboard
+    label: TEMP - Save button must clear the keyboard
