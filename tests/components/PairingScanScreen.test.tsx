@@ -270,6 +270,13 @@ describe('PairingScanScreen', () => {
       mockCameraPermission.granted = true;
       render(<PairingScanScreen />);
 
+      // Non-empty so the paste submit's `pastedLink.length === 0` disabled
+      // term is false going in; otherwise the assertion below would pass
+      // regardless of isSubmitInFlight and prove nothing about this call
+      // site's wiring.
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      expect(screen.getByTestId('pairing-paste-link-submit').props.accessibilityState.disabled).toBe(false);
+
       await act(async () => {
         mockLatestCameraViewProps.current?.onBarcodeScanned?.({ data: validPairingUri() });
       });
@@ -278,6 +285,56 @@ describe('PairingScanScreen', () => {
       // does not replace: once a scan is in flight, the CameraView gets no
       // handler at all.
       expect(mockLatestCameraViewProps.current?.onBarcodeScanned).toBeUndefined();
+      // isSubmitInFlight is threaded to PasteLinkFallback at this call site
+      // too (a second, textually-identical wiring on the camera-granted
+      // branch); the before/after pair on the same expression makes this
+      // attributable to isSubmitInFlight specifically, not to the
+      // already-covered empty-input disabled term.
+      expect(screen.getByTestId('pairing-paste-link-submit').props.accessibilityState.disabled).toBe(true);
+    });
+
+    it('re-wires the camera handler and allows a second scan after focus regain', async () => {
+      mockCameraPermission.granted = true;
+      render(<PairingScanScreen />);
+
+      const scannedUri = validPairingUri();
+      await act(async () => {
+        mockLatestCameraViewProps.current?.onBarcodeScanned?.({ data: scannedUri });
+      });
+      expect(beginPairing).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+
+      // The scan screen stays mounted beneath the pushed confirm screen, so
+      // the camera keeps running; the handler is unwired while the latch
+      // holds.
+      expect(mockLatestCameraViewProps.current?.onBarcodeScanned).toBeUndefined();
+
+      // "Go back" from the confirm screen refires the focus effect. The
+      // design comment on the effect names the camera specifically:
+      // releasing the latch there would re-wire the camera so a stray
+      // barcode event could push a second confirm frame - so the re-arm
+      // must actually reach the camera surface, not just the paste button's
+      // disabled state proven above.
+      act(() => {
+        mockLatestFocusEffect.current?.();
+      });
+
+      // Re-read from the ref rather than reusing a stashed props object:
+      // mockLatestCameraViewProps.current is overwritten on every render, so
+      // a reference captured before the focus effect would be a stale
+      // snapshot and make this assertion pass vacuously.
+      const rewiredOnBarcodeScanned = mockLatestCameraViewProps.current?.onBarcodeScanned;
+      expect(rewiredOnBarcodeScanned).toBeDefined();
+
+      await act(async () => {
+        rewiredOnBarcodeScanned?.({ data: scannedUri });
+      });
+
+      // The call count, not just definedness, is what discriminates a
+      // genuinely re-armed handler from one that is re-wired but still
+      // blocked by a latch the focus effect failed to release.
+      expect(beginPairing).toHaveBeenCalledTimes(2);
+      expect(mockNavigate).toHaveBeenCalledTimes(2);
     });
 
     it('a same-tick burst mixing the paste submit and a barcode scan begins pairing exactly once', async () => {
