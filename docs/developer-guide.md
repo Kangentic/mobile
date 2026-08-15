@@ -279,11 +279,12 @@ captures were the first time it had been run at tablet width.
 qualifies, and tablet LANDSCAPE is therefore a shape that ships whether or not it was designed
 for. It was checked at 1280x720dp on 2026-08-06: the home feed, the session terminal, the session
 chat, the board, and the Create Task form sheet all hold up, and the board's column chips actually
-fit on one row there. Not checked: the MoveTask and ProjectPicker sheets, whose `LIST_MAX_HEIGHT`
-of 420 caps a scrollable list rather than a text field, so they exercise a different mechanism
-from CreateTask's. All the 420 caps are well inside a 720dp-tall window, but only CreateTask's was
-observed. See the Play Console advisories section of [store-listing.md](store-listing.md) for why
-the lock stays.
+fit on one row there. Not checked: the MoveTask and ProjectPicker sheets, which cap a scrollable
+list rather than a text field, so they exercise a different mechanism from CreateTask's. The
+sheet caps are no longer fixed 420s: `src/lib/sheetContentHeights.ts` derives each cap from the
+window height (420 stays the ceiling, so tall windows render as before), which means a short or
+landscape window now shrinks the capped region instead of overflowing the sheet. See the Play
+Console advisories section of [store-listing.md](store-listing.md) for why the lock stays.
 
 To reproduce, on an **API 36** emulator (the AVD used for the captures is API 35, where the lock
 is still honoured and the check passes vacuously - and prefer the `default` system image over
