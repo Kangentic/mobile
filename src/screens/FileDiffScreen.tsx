@@ -112,13 +112,15 @@ export function FileDiffScreen(): React.JSX.Element {
   return (
     <Screen testID="file-diff-screen">
       {/*
-        headerBackTitle is set explicitly because iOS derives the back button's
-        label from the PREVIOUS screen's title, and the screen this is always
-        pushed from - task/[taskId]/index - renders headerShown: false and so
-        has no title to borrow. expo-router then falls back to the route's
-        FILE PATH, and the back button read literally "task/[taskId]/index"
-        on every iPhone. Android draws a bare chevron and never showed it,
-        which is why it survived to a store screenshot.
+        iOS derives the back button's label from the PREVIOUS screen's title;
+        the mechanism, and why every route in app/_layout.tsx declares one, is
+        documented on that file's Stack.Screen block. task/[taskId]/index
+        declares 'Session', which borrows to this same label. The explicit
+        override stays so this listing-captured frame does not depend on which
+        route pushed the screen. It also assumes the session route is the only
+        live push site: if task/[taskId]/changes (registered, currently
+        unreachable) ever pushes this screen, the pinned label would misname
+        the origin.
       */}
       <RouterStack.Screen
         options={{
