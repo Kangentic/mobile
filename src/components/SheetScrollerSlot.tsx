@@ -1,9 +1,8 @@
 import React from 'react';
-import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 export interface SheetScrollerSlotProps {
   children: React.ReactNode;
-  style?: StyleProp<ViewStyle>;
 }
 
 /**
@@ -32,9 +31,9 @@ export interface SheetScrollerSlotProps {
  *   scroll view and force-resizes whatever it finds to the full sheet size,
  *   which is worse than the bug this wrapper fixes.
  */
-export function SheetScrollerSlot({ children, style }: SheetScrollerSlotProps): React.JSX.Element {
+export function SheetScrollerSlot({ children }: SheetScrollerSlotProps): React.JSX.Element {
   return (
-    <View collapsable={false} style={[styles.slot, style]}>
+    <View collapsable={false} style={styles.slot}>
       {children}
     </View>
   );

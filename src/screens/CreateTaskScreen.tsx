@@ -10,22 +10,13 @@ import { triggerHaptic } from '@/lib/haptics';
 import {
   alignHeightToTextLineGrid,
   clampSheetContentHeight,
+  CREATE_SHEET_RESERVED_HEIGHT,
+  DESCRIPTION_FLOOR_HEIGHT,
   SHEET_KEYBOARD_ALLOWANCE,
 } from '@/lib/sheetContentHeights';
 
 const BACKLOG_COLUMN_NAME = 'Backlog';
 
-/**
- * Everything this sheet needs around the description box, so the box's cap
- * (see sheetContentHeights.ts) can leave room for it: container padding
- * 16+24, title 24, title field 44, chips row 46, error line 24, button 44,
- * five Stack gaps 40, and 70 of top clearance (status bar plus sheet margin)
- * the sheet can never occupy. The keyboard allowance is always added: this
- * sheet exists to type into.
- */
-const CREATE_SHEET_RESERVED_HEIGHT = 332;
-/** Four body lines: the least description box that still invites writing. */
-const DESCRIPTION_FLOOR_HEIGHT = 96;
 /** The empty box's resting height, when the window's cap leaves it room. */
 const DESCRIPTION_PREFERRED_MIN_HEIGHT = 120;
 
@@ -161,7 +152,12 @@ export function CreateTaskScreen(): React.JSX.Element {
             view, and defaults to "never": without it the first tap on a chip
             is spent dismissing the keyboard and the column never changes. */}
         <SheetScrollerSlot>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            testID="create-task-column-scroller"
+          >
             <View style={[styles.columnChips, { gap: theme.spacing.xs }]}>
               {columnChoices.map((choiceName) => {
                 const isSelected = columnName === choiceName;

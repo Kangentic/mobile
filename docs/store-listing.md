@@ -136,9 +136,11 @@ deliberately restrict phones to portrait.
 - **Restricting Play's Form factors to phone.** Would drop tablet users, and would not silence
   this advisory anyway: it is a manifest scan, not a distribution check.
 
-**What would reopen this.** If phone landscape ever becomes a supported shape, the four 420px caps
-are the known first blocker, and `/store-screenshots` plus the Play large-screen listing come into
-scope. Nothing about the shelves changes otherwise: Play requires 9:16 on all three Android
+**What would reopen this.** If phone landscape ever becomes a supported shape, the known first
+blocker is the keyboard-up writing sheets: the caps now derive from the window height and shrink
+to their floors on a short window, but a ~360dp-tall landscape window minus a keyboard cannot
+host even the floored Create/Edit sheets. Then `/store-screenshots` plus the Play large-screen
+listing come into scope. Nothing about the shelves changes otherwise: Play requires 9:16 on all three Android
 shelves, tablets included, so the captures are portrait by rule.
 
 ## App title

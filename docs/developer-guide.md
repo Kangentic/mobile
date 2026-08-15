@@ -282,8 +282,10 @@ chat, the board, and the Create Task form sheet all hold up, and the board's col
 fit on one row there. Not checked: the MoveTask and ProjectPicker sheets, which cap a scrollable
 list rather than a text field, so they exercise a different mechanism from CreateTask's. The
 sheet caps are no longer fixed 420s: `src/lib/sheetContentHeights.ts` derives each cap from the
-window height (420 stays the ceiling, so tall windows render as before), which means a short or
-landscape window now shrinks the capped region instead of overflowing the sheet. See the Play
+window height, which means a short or landscape window now shrinks the capped region instead of
+overflowing the sheet. 420 stays the ceiling, so tall windows render the two list sheets as
+before; the Create/Edit description boxes additionally align the cap to the text line grid, so
+their effective ceiling is 416. See the Play
 Console advisories section of [store-listing.md](store-listing.md) for why the lock stays.
 
 To reproduce, on an **API 36** emulator (the AVD used for the captures is API 35, where the lock

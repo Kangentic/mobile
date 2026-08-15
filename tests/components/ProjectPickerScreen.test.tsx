@@ -1,8 +1,18 @@
 import React from 'react';
+import { Dimensions, StyleSheet } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { ProjectPickerScreen } from '@/screens/ProjectPickerScreen';
 import { useBoardStore } from '@/state/boardStore';
+import {
+  clampSheetContentHeight,
+  LIST_FLOOR_HEIGHT,
+  PICKER_FILTER_EXTRA_HEIGHT,
+  PICKER_SHEET_RESERVED_HEIGHT,
+  SHEET_CONTENT_CEILING,
+  SHEET_KEYBOARD_ALLOWANCE,
+} from '@/lib/sheetContentHeights';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -100,5 +110,106 @@ describe('ProjectPickerScreen', () => {
 
     const rows = screen.getAllByRole('radio');
     expect(rows.map((row) => row.props.testID)).toEqual(['board-project-project-early', 'board-project-project-late']);
+  });
+});
+
+/**
+ * The project list's height cap is derived from the window, not fixed: a
+ * fixed maxHeight: 420 shipped first and pushed rows below the fold on small
+ * phones (the 2026-08-15 iOS tester recording). These tests pin the WIRING
+ * (windowHeight + insets.bottom + the screen's own budget, plus the extra
+ * reserve the filter field and its keyboard allowance add once the project
+ * count crosses SEARCH_THRESHOLD) reach the rendered style, not the
+ * derivation math itself, which is pinned separately in
+ * tests/unit/sheetContentHeights.test.ts.
+ */
+describe('ProjectPickerScreen project list height cap', () => {
+  // A non-zero, non-default gesture-bar-shaped inset: with the safe-area
+  // mock's default of 0, a screen that forgot to add insets.bottom would
+  // pass every assertion below by coincidence.
+  const BOTTOM_INSET = 34;
+  const HISTORICAL_FIXED_CAP = 420; // the bug this module's derivation replaced
+
+  beforeEach(() => {
+    // Deliberately independent of the sibling describe above: do not rely on
+    // whatever store state its last test happened to leave behind.
+    useBoardStore.getState().reset();
+    useBoardStore.setState({
+      projects: [
+        { id: 'project-1', name: 'Alpha' },
+        { id: 'project-2', name: 'Beta' },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  function mockWindowHeight(height: number): void {
+    jest.spyOn(Dimensions, 'get').mockImplementation(() => ({ width: 400, height, scale: 2, fontScale: 1 }));
+  }
+
+  function renderWithInsets(): ReturnType<typeof render> {
+    return render(
+      <ThemeProvider>
+        <SafeAreaProvider
+          initialMetrics={{
+            frame: { x: 0, y: 0, width: 400, height: 800 },
+            insets: { top: 0, left: 0, right: 0, bottom: BOTTOM_INSET },
+          }}
+        >
+          <ProjectPickerScreen />
+        </SafeAreaProvider>
+      </ThemeProvider>,
+    );
+  }
+
+  /** Mirrors exactly what ProjectPickerScreen derives listMaxHeight from. */
+  function expectedListMaxHeight(windowHeight: number, showSearch: boolean): number {
+    return clampSheetContentHeight({
+      windowHeight,
+      reservedHeight:
+        PICKER_SHEET_RESERVED_HEIGHT +
+        BOTTOM_INSET +
+        (showSearch ? PICKER_FILTER_EXTRA_HEIGHT + SHEET_KEYBOARD_ALLOWANCE : 0),
+      floorHeight: LIST_FLOOR_HEIGHT,
+    });
+  }
+
+  /** Below SEARCH_THRESHOLD (8): no filter field, so no filter/keyboard reserve. */
+  it('reserves only the base budget when there is no filter field', () => {
+    mockWindowHeight(500);
+    // This describe's own beforeEach seeds 2 projects, below SEARCH_THRESHOLD.
+    renderWithInsets();
+
+    expect(screen.queryByTestId('board-project-search')).toBeNull();
+    const style = StyleSheet.flatten(screen.getByTestId('board-project-list').props.style);
+    const expectedMaxHeight = expectedListMaxHeight(500, false);
+
+    expect(expectedMaxHeight).not.toBe(HISTORICAL_FIXED_CAP);
+    expect(style.maxHeight).toBe(expectedMaxHeight);
+  });
+
+  /** Above SEARCH_THRESHOLD (8): the filter field and its keyboard allowance join the reserve. */
+  it('reserves the filter field and its keyboard allowance once past SEARCH_THRESHOLD projects', () => {
+    useBoardStore.setState({
+      projects: Array.from({ length: 9 }, (_, projectIndex) => ({
+        id: `project-${projectIndex}`,
+        name: `Project ${projectIndex}`,
+      })),
+    });
+    mockWindowHeight(850);
+    renderWithInsets();
+
+    expect(screen.getByTestId('board-project-search')).toBeTruthy();
+    const style = StyleSheet.flatten(screen.getByTestId('board-project-list').props.style);
+    const expectedMaxHeight = expectedListMaxHeight(850, true);
+
+    // Sanity: this window keeps the clamp strictly between the floor and the
+    // ceiling (which also proves it is not the historical fixed 420).
+    expect(expectedMaxHeight).toBeGreaterThan(LIST_FLOOR_HEIGHT);
+    expect(expectedMaxHeight).toBeLessThan(SHEET_CONTENT_CEILING);
+    expect(style.maxHeight).toBe(expectedMaxHeight);
   });
 });

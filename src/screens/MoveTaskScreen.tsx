@@ -7,7 +7,11 @@ import { CapabilityError } from '@/channel';
 import { moveTaskOptimistic } from '@/connection/actions';
 import { findTaskById, selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
-import { clampSheetContentHeight } from '@/lib/sheetContentHeights';
+import {
+  clampSheetContentHeight,
+  LIST_FLOOR_HEIGHT,
+  MOVE_SHEET_RESERVED_HEIGHT,
+} from '@/lib/sheetContentHeights';
 
 /**
  * Move a task to another column, as a native form sheet route.
@@ -22,21 +26,14 @@ import { clampSheetContentHeight } from '@/lib/sheetContentHeights';
  * Keeps the column list inside the sheet rather than growing it past the
  * screen: 'fitToContents' sizes the sheet to its content, so a board with
  * enough columns would otherwise push the Move button below the fold with no
- * way to scroll down to it. The cap derives from the window height (see
- * sheetContentHeights.ts); this reserve is everything else the sheet needs:
- * container padding 16+24, title 24, two-line task title 40, error line 24,
- * button 44 plus its 4 marginTop, four Stack gaps 32, and 70 of top
- * clearance (status bar plus sheet margin) the sheet can never occupy.
- * No keyboard allowance: this sheet has no text input.
+ * way to scroll down to it. The cap derives from the window height, and the
+ * reserve (everything else this sheet needs around the list) is budgeted in
+ * sheetContentHeights.ts next to the math that consumes it.
  *
  * A capped ScrollView rather than a FlashList because a board's columns are a
  * handful, set by hand on the desktop - the cap is about the sheet's height,
  * not about virtualizing a list that grows without bound.
  */
-const MOVE_SHEET_RESERVED_HEIGHT = 278;
-/** Three touch-height rows: the least list that still reads as a list. */
-const LIST_FLOOR_HEIGHT = 132;
-
 export function MoveTaskScreen(): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
