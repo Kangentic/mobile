@@ -10,22 +10,13 @@ import { findTaskById, useBoardStore } from '@/state/boardStore';
 import {
   alignHeightToTextLineGrid,
   clampSheetContentHeight,
+  DESCRIPTION_FLOOR_HEIGHT,
+  EDIT_SHEET_RESERVED_HEIGHT,
   SHEET_KEYBOARD_ALLOWANCE,
 } from '@/lib/sheetContentHeights';
 
 const TASK_TITLE_MAX_LENGTH = 200;
 
-/**
- * Everything this sheet needs around the description box, so the box's cap
- * (see sheetContentHeights.ts) can leave room for it: container padding
- * 16+24, title 24, title field 44, error line 24, button 44, four Stack gaps
- * 32, and 70 of top clearance (status bar plus sheet margin) the sheet can
- * never occupy. The keyboard allowance is always added: this sheet exists to
- * type into.
- */
-const EDIT_SHEET_RESERVED_HEIGHT = 278;
-/** Four body lines: the least description box that still invites editing. */
-const DESCRIPTION_FLOOR_HEIGHT = 96;
 /** The short-description resting height, when the window's cap leaves room. */
 const DESCRIPTION_PREFERRED_MIN_HEIGHT = 160;
 

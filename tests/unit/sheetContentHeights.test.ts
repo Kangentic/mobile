@@ -2,17 +2,25 @@ import { describe, expect, it } from 'vitest';
 import {
   alignHeightToTextLineGrid,
   clampSheetContentHeight,
+  CREATE_SHEET_RESERVED_HEIGHT,
+  DESCRIPTION_FLOOR_HEIGHT,
+  EDIT_SHEET_RESERVED_HEIGHT,
+  LIST_FLOOR_HEIGHT,
+  MOVE_SHEET_RESERVED_HEIGHT,
+  PICKER_FILTER_EXTRA_HEIGHT,
+  PICKER_SHEET_RESERVED_HEIGHT,
   SHEET_CONTENT_CEILING,
   SHEET_KEYBOARD_ALLOWANCE,
 } from '@/lib/sheetContentHeights';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 
 /** The tester recording's phone: a 393x852pt iPhone with a 34pt bottom inset. */
 const TESTER_WINDOW_HEIGHT = 852;
 const TESTER_BOTTOM_INSET = 34;
 
-/** Theme values the screens pass in (body line height, 2 * spacing.sm). */
-const BODY_LINE_HEIGHT = 20;
-const FIELD_VERTICAL_PADDING = 16;
+/** The real theme values the screens pass in at their call sites. */
+const BODY_LINE_HEIGHT = darkTerminalTheme.typography.body.lineHeight;
+const FIELD_VERTICAL_PADDING = 2 * darkTerminalTheme.spacing.sm;
 
 describe('clampSheetContentHeight', () => {
   it('holds the ceiling when the window has room to spare', () => {
@@ -50,50 +58,70 @@ describe('clampSheetContentHeight', () => {
     ).toBe(200);
   });
 
-  // The derivations the screens document, kept executable so a token change
-  // that silently invalidates them shows up here rather than on a device.
+  it('lets the ceiling win over a misconfigured floor above it', () => {
+    // A floor above the ceiling is a caller bug; the documented behavior is
+    // that the ceiling wins rather than the floor blowing past it.
+    expect(
+      clampSheetContentHeight({
+        windowHeight: 1000,
+        reservedHeight: 100,
+        floorHeight: 500,
+        ceilingHeight: 420,
+      }),
+    ).toBe(420);
+  });
+
+  // The derivations the screens rely on, executed against the REAL budget
+  // constants (imported above, not retyped), so a budget change that
+  // invalidates them fails here rather than on a device.
   describe('on the tester recording phone (852pt window, 34pt inset)', () => {
     it('keeps the Move list at the ceiling (no visual change from the fixed cap)', () => {
-      const moveListReservedHeight = 278 + TESTER_BOTTOM_INSET;
+      const moveListReservedHeight = MOVE_SHEET_RESERVED_HEIGHT + TESTER_BOTTOM_INSET;
       expect(
         clampSheetContentHeight({
           windowHeight: TESTER_WINDOW_HEIGHT,
           reservedHeight: moveListReservedHeight,
-          floorHeight: 132,
+          floorHeight: LIST_FLOOR_HEIGHT,
         }),
       ).toBe(SHEET_CONTENT_CEILING);
     });
 
     it('shrinks the Edit description so the sheet clears the keyboard', () => {
-      const editReservedHeight = 278 + TESTER_BOTTOM_INSET + SHEET_KEYBOARD_ALLOWANCE;
+      const editReservedHeight =
+        EDIT_SHEET_RESERVED_HEIGHT + TESTER_BOTTOM_INSET + SHEET_KEYBOARD_ALLOWANCE;
       const cap = clampSheetContentHeight({
         windowHeight: TESTER_WINDOW_HEIGHT,
         reservedHeight: editReservedHeight,
-        floorHeight: 96,
+        floorHeight: DESCRIPTION_FLOOR_HEIGHT,
       });
-      expect(cap).toBe(200);
+      expect(cap).toBe(192);
       // The whole keyboard-up sheet now fits above the keyboard.
       expect(cap + editReservedHeight).toBeLessThanOrEqual(TESTER_WINDOW_HEIGHT);
     });
 
     it('shrinks the Create description so the sheet clears the keyboard', () => {
-      const createReservedHeight = 332 + TESTER_BOTTOM_INSET + SHEET_KEYBOARD_ALLOWANCE;
-      expect(
-        clampSheetContentHeight({
-          windowHeight: TESTER_WINDOW_HEIGHT,
-          reservedHeight: createReservedHeight,
-          floorHeight: 96,
-        }),
-      ).toBe(146);
+      const createReservedHeight =
+        CREATE_SHEET_RESERVED_HEIGHT + TESTER_BOTTOM_INSET + SHEET_KEYBOARD_ALLOWANCE;
+      const cap = clampSheetContentHeight({
+        windowHeight: TESTER_WINDOW_HEIGHT,
+        reservedHeight: createReservedHeight,
+        floorHeight: DESCRIPTION_FLOOR_HEIGHT,
+      });
+      expect(cap).toBe(138);
+      expect(cap + createReservedHeight).toBeLessThanOrEqual(TESTER_WINDOW_HEIGHT);
     });
 
     it('shrinks the filtered project list so rows stay tappable over the keyboard', () => {
-      const filteredPickerReservedHeight = 194 + TESTER_BOTTOM_INSET + SHEET_KEYBOARD_ALLOWANCE;
+      const filteredPickerReservedHeight =
+        PICKER_SHEET_RESERVED_HEIGHT +
+        PICKER_FILTER_EXTRA_HEIGHT +
+        TESTER_BOTTOM_INSET +
+        SHEET_KEYBOARD_ALLOWANCE;
       expect(
         clampSheetContentHeight({
           windowHeight: TESTER_WINDOW_HEIGHT,
           reservedHeight: filteredPickerReservedHeight,
-          floorHeight: 132,
+          floorHeight: LIST_FLOOR_HEIGHT,
         }),
       ).toBe(284);
     });
@@ -111,14 +139,17 @@ describe('alignHeightToTextLineGrid', () => {
     ).toBe(196);
   });
 
-  it('leaves an already aligned cap unchanged', () => {
+  it('returns the description floor unchanged: the floor is a whole number of lines', () => {
+    // Load-bearing: the screens align AFTER clamping, so a floor that were
+    // not grid-aligned would be rounded back below itself on the smallest
+    // windows, silently voiding the floor guarantee.
     expect(
       alignHeightToTextLineGrid({
-        height: 96,
+        height: DESCRIPTION_FLOOR_HEIGHT,
         lineHeight: BODY_LINE_HEIGHT,
         verticalPadding: FIELD_VERTICAL_PADDING,
       }),
-    ).toBe(96);
+    ).toBe(DESCRIPTION_FLOOR_HEIGHT);
   });
 
   it('never returns less than one full line', () => {

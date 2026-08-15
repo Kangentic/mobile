@@ -1,10 +1,18 @@
 import React from 'react';
+import { Dimensions, StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { MoveTaskScreen } from '@/screens/MoveTaskScreen';
 import { CapabilityError } from '@/channel';
 import { useBoardStore } from '@/state/boardStore';
 import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import {
+  clampSheetContentHeight,
+  LIST_FLOOR_HEIGHT,
+  MOVE_SHEET_RESERVED_HEIGHT,
+  SHEET_CONTENT_CEILING,
+} from '@/lib/sheetContentHeights';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -146,5 +154,85 @@ describe('MoveTaskScreen', () => {
 
     expect(screen.getByTestId('move-target-p2-triage')).toBeTruthy();
     expect(screen.queryByTestId('move-target-lane-doing')).toBeNull();
+  });
+});
+
+/**
+ * The column list's height cap is derived from the window, not fixed: a
+ * fixed maxHeight: 420 shipped first and pushed the Move button off screen on
+ * small phones with enough columns (the 2026-08-15 iOS tester recording).
+ * These tests pin the WIRING (windowHeight + insets.bottom + the screen's own
+ * budget reach the rendered style), not the derivation math itself, which is
+ * pinned separately in tests/unit/sheetContentHeights.test.ts.
+ */
+describe('MoveTaskScreen column list height cap', () => {
+  // A non-zero, non-default gesture-bar-shaped inset: with the safe-area
+  // mock's default of 0, a screen that forgot to add insets.bottom would
+  // pass every assertion below by coincidence.
+  const BOTTOM_INSET = 34;
+  const HISTORICAL_FIXED_CAP = 420; // the bug this module's derivation replaced
+
+  beforeEach(() => {
+    // Deliberately independent of the sibling describe above: do not rely on
+    // whatever mockParams/store state its last test happened to leave behind.
+    mockParams = { taskId: 'task-1', projectId: 'project-1' };
+    useBoardStore.getState().reset();
+    seedBoard();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  function mockWindowHeight(height: number): void {
+    jest.spyOn(Dimensions, 'get').mockImplementation(() => ({ width: 400, height, scale: 2, fontScale: 1 }));
+  }
+
+  function renderWithInsets(): ReturnType<typeof render> {
+    return render(
+      <ThemeProvider>
+        <SafeAreaProvider
+          initialMetrics={{
+            frame: { x: 0, y: 0, width: 400, height: 800 },
+            insets: { top: 0, left: 0, right: 0, bottom: BOTTOM_INSET },
+          }}
+        >
+          <MoveTaskScreen />
+        </SafeAreaProvider>
+      </ThemeProvider>,
+    );
+  }
+
+  /** Mirrors exactly what MoveTaskScreen derives listMaxHeight from. */
+  function expectedListMaxHeight(windowHeight: number): number {
+    return clampSheetContentHeight({
+      windowHeight,
+      reservedHeight: MOVE_SHEET_RESERVED_HEIGHT + BOTTOM_INSET,
+      floorHeight: LIST_FLOOR_HEIGHT,
+    });
+  }
+
+  it('rests at the historical 420 ceiling on a tall window, unaligned (lists stay unaligned)', () => {
+    mockWindowHeight(1280);
+    renderWithInsets();
+
+    const style = StyleSheet.flatten(screen.getByTestId('move-target-list').props.style);
+
+    expect(expectedListMaxHeight(1280)).toBe(SHEET_CONTENT_CEILING);
+    expect(style.maxHeight).toBe(SHEET_CONTENT_CEILING);
+  });
+
+  it('shrinks the list cap on a short window, strictly between the floor and the ceiling', () => {
+    mockWindowHeight(600);
+    renderWithInsets();
+
+    const style = StyleSheet.flatten(screen.getByTestId('move-target-list').props.style);
+    const expectedMaxHeight = expectedListMaxHeight(600);
+
+    // Sanity: this window actually exercises the clamp, not either saturated end.
+    expect(expectedMaxHeight).toBeGreaterThan(LIST_FLOOR_HEIGHT);
+    expect(expectedMaxHeight).toBeLessThan(SHEET_CONTENT_CEILING);
+    expect(expectedMaxHeight).not.toBe(HISTORICAL_FIXED_CAP);
+    expect(style.maxHeight).toBe(expectedMaxHeight);
   });
 });
