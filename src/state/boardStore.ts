@@ -504,3 +504,28 @@ export function findTaskById(
   }
   return null;
 }
+
+/**
+ * The column a located task sits in, or null when no cached board holds the
+ * task or its swimlane_id names no column in that board's snapshot.
+ *
+ * Safe as a Zustand selector, unlike findTaskById's fresh object: the return
+ * value is the column ELEMENT inside the store's own columns array, so for a
+ * given state the reference is stable. Raw board.columns deliberately, not
+ * selectColumnsOrdered: a task parked in an archived or ghost column must
+ * still resolve (its column is status, hidden or not), and the ordered
+ * variant returns a fresh sorted array, which would loop useSyncExternalStore
+ * anyway. An optimistic move swaps the task's swimlane_id under an unchanged
+ * columns array, so the selector re-labels instantly; a re-snapshot replaces
+ * the array and repaints.
+ */
+export function selectTaskColumn(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  taskId: string,
+): BoardColumnWire | null {
+  const located = findTaskById(state, taskId);
+  if (!located) return null;
+  const board = state.boardsByProjectId[located.projectId];
+  if (!board) return null;
+  return board.columns.find((column) => column.id === located.task.swimlane_id) ?? null;
+}
