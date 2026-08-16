@@ -1,0 +1,79 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# The session header's current-column chip: shows where the task sits, tap
+# opens the move-task sheet (the same sheet board-move.yaml reaches through
+# the long-press actions hop). stub-task-1 starts in Doing every flow (the
+# stub restores its canned board on session establish), so moving it to
+# To Do must re-label the chip (optimistic write + the stub's task-updated
+# re-snapshot) and land the card in the To Do column on the board.
+- launchApp
+# 60s: cold boot + channel re-establish after launchApp's force-stop.
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 60000
+# The Agents feed's section collapse is PERSISTED, so it survives launchApp
+# and leaks between flows. Wait for the header first, then expand only if
+# the row is still missing (same defensive entry as open-task-from-triage).
+- extendedWaitUntil:
+    visible:
+      id: "section-header-idle"
+    timeout: 60000
+- runFlow:
+    when:
+      notVisible:
+        id: "activity-row-stub-session-1"
+    commands:
+      - tapOn:
+          id: "section-header-idle"
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 20000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    # 45s: this screen mounts all three panes at once, terminal WebView
+    # included. 20s held only on a warm emulator.
+    timeout: 45000
+# The chip renders once the board snapshot locates the task.
+- extendedWaitUntil:
+    visible:
+      id: "task-header-column"
+    timeout: 15000
+- tapOn:
+    id: "task-header-column"
+- extendedWaitUntil:
+    visible:
+      id: "move-task-sheet"
+    timeout: 10000
+- tapOn:
+    id: "move-target-lane-todo"
+- tapOn:
+    id: "move-confirm"
+- extendedWaitUntil:
+    notVisible:
+      id: "move-task-sheet"
+    timeout: 10000
+# The chip re-labels to the target column. Text, not id: the chip's testID is
+# stable across the move and the label is stub fixture DATA, not app copy -
+# the same carve-out other flows document for asserting stub-authored
+# content. The stub's canned transcript and terminal frames contain no
+# "To Do", so the match cannot land on pane content.
+- extendedWaitUntil:
+    visible:
+      text: "To Do"
+    timeout: 15000
+# And the board agrees: the card sits in the To Do column now.
+- back
+- tapOn:
+    text: "Board"
+- tapOn:
+    id: "board-column-chip-lane-todo"
+- extendedWaitUntil:
+    visible:
+      id: "board-card-stub-task-1"
+    timeout: 20000

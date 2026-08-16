@@ -125,8 +125,9 @@ excluded desktop-side, and the protocol package's `BOARD_TOOL_READ_NAMES`/
 
 ```
 app/              # expo-router route wrappers (thin - render the src/screens/ implementation)
-  task/[taskId]/  # index = the Session view (terminal/chat lenses); changes = the diff
-                  #   destination; file-diff.tsx hosts the per-file diff on the stack
+  task/[taskId]/  # index = the Session view (terminal/chat lenses; the header's column chip
+                  #   opens the move-task sheet); changes = the diff destination;
+                  #   file-diff.tsx hosts the per-file diff on the stack
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen + lenses),
                   #   FileDiff, Pairing (Scan/Confirm), Settings, Devices

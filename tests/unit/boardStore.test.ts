@@ -11,6 +11,7 @@ import {
   selectColumnTaskCount,
   selectLiveSessionIds,
   selectProjectAccentColor,
+  selectTaskColumn,
   selectTasksForColumn,
   useBoardStore,
 } from '@/state/boardStore';
@@ -213,6 +214,62 @@ describe('boardStore', () => {
     useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
     expect(findTaskById(useBoardStore.getState(), 'task-2')?.projectId).toBe('project-1');
     expect(findTaskById(useBoardStore.getState(), 'task-ghost')).toBeNull();
+  });
+
+  describe('selectTaskColumn', () => {
+    it('resolves the located task\'s column by swimlane_id', () => {
+      useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+      expect(selectTaskColumn(useBoardStore.getState(), 'task-1')?.id).toBe('lane-todo');
+    });
+
+    it('returns null for an unlocated task', () => {
+      useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+      expect(selectTaskColumn(useBoardStore.getState(), 'task-ghost')).toBeNull();
+    });
+
+    it('returns null when the task\'s swimlane names no column in the holding board', () => {
+      useBoardStore.getState().applyBoardSnapshot(
+        boardSnapshotFixture({
+          projectId: 'project-1',
+          columns: COLUMNS,
+          tasks: [boardTaskFixture({ id: 'task-orphan', swimlane_id: 'lane-missing', position: 0 })],
+        }),
+      );
+      expect(selectTaskColumn(useBoardStore.getState(), 'task-orphan')).toBeNull();
+    });
+
+    /**
+     * Raw board.columns, not selectColumnsOrdered: the chip is STATUS, so a
+     * task parked in a hidden archived column must still show where it sits
+     * rather than silently losing its move affordance.
+     */
+    it('resolves a column that selectColumnsOrdered would filter out', () => {
+      useBoardStore.getState().applyBoardSnapshot(
+        boardSnapshotFixture({
+          projectId: 'project-1',
+          columns: COLUMNS,
+          tasks: [boardTaskFixture({ id: 'task-parked', swimlane_id: 'lane-old-sprint', position: 0 })],
+        }),
+      );
+      const board = useBoardStore.getState().boardsByProjectId['project-1'];
+      expect(selectColumnsOrdered(board).map((column) => column.id)).not.toContain('lane-old-sprint');
+      expect(selectTaskColumn(useBoardStore.getState(), 'task-parked')?.id).toBe('lane-old-sprint');
+    });
+
+    /**
+     * The useSyncExternalStore contract the selector exists to honor: for one
+     * state it must return the SAME reference every call (the column element
+     * inside the store's own array), or a Zustand-subscribed component loops.
+     */
+    it('returns a stable reference for an unchanged state', () => {
+      useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+      const state = useBoardStore.getState();
+      const firstResult = selectTaskColumn(state, 'task-1');
+      const secondResult = selectTaskColumn(state, 'task-1');
+      expect(firstResult).not.toBeNull();
+      expect(secondResult).toBe(firstResult);
+      expect(state.boardsByProjectId['project-1'].columns).toContain(firstResult);
+    });
   });
 
   describe('selectProjectAccentColor', () => {
