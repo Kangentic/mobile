@@ -103,13 +103,18 @@ function RootStack(): React.JSX.Element {
           headerStyle: { backgroundColor: theme.colors.surface },
           headerTintColor: theme.colors.textPrimary,
           contentStyle: { backgroundColor: theme.colors.background },
+          // Chevron only, no back label, so the title keeps the header's
+          // width (Android never shows one; this aligns iOS with it and
+          // with our own TaskHeader's bare chevron).
+          headerBackButtonDisplayMode: 'minimal',
         }}
       >
-        {/* The headerShown:false routes still declare a title. iOS borrows the
-            PREVIOUS route's title as the native back label of whatever is
-            pushed on top, and with no title it renders the literal route path:
-            the back button read "(tabs)" on Settings and Pair on every iPhone.
-            Locked by tests/unit/routeTitles.test.ts. */}
+        {/* The headerShown:false routes still declare a title. iOS borrows
+            the PREVIOUS route's title for the back button - since 'minimal'
+            above it feeds only the long-press menu and accessibility label,
+            not a visible text label - and with no title those surfaces get
+            the literal route path: the back button read "(tabs)" on Settings
+            and Pair on every iPhone. Locked by tests/unit/routeTitles.test.ts. */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false, title: 'Kangentic' }} />
         <Stack.Screen name="task/[taskId]/index" options={{ headerShown: false, title: 'Session' }} />
         <Stack.Screen name="task/[taskId]/changes" options={{ headerShown: false, title: 'Changes' }} />
