@@ -134,6 +134,54 @@ export async function revokePushRegistrationForUnpair(): Promise<void> {
 }
 
 /**
+ * A desktop-side revoke, delivered as the session's Final frame. Final is
+ * only ever sent on deliberate unpair - never on quit, sleep, backgrounding,
+ * or reconnect (see docs/security.md) - so it is a certain signal: clear the
+ * pairing and land the UI on the unpaired home. The push unregister here is
+ * LOCAL-only, unlike revokePushRegistrationForUnpair: the desktop that just
+ * revoked us has already dropped this device's registration, and the channel
+ * an unregister request would ride is being torn down under us.
+ */
+let remoteRevocationInFlight = false;
+
+async function handleDesktopRevocation(controller: ChannelController): Promise<void> {
+  // Two Finals back-to-back would interleave at the awaits without this.
+  if (remoteRevocationInFlight) return;
+  // A Final racing a local unpair or a background teardown belongs to a
+  // connection whose fate was already decided.
+  if (activeConnection?.controller !== controller) return;
+  remoteRevocationInFlight = true;
+  try {
+    // Flip the UI first: closeConnection's store reset preserves pairedState,
+    // and the reopen re-derives 'unpaired' from the cleared anchor.
+    useChannelStore.getState().setPairedState('unpaired');
+    try {
+      const { clearPushRegistration } = await import('@/notifications/pushKeys');
+      await clearPushRegistration();
+    } catch {
+      // Best-effort, same as revokePushRegistrationForUnpair's local half.
+    }
+    try {
+      const { unpairLocally } = await import('./actions');
+      await unpairLocally('stay-silent');
+    } catch {
+      // A failed Keychain delete leaves a stale anchor behind; the desktop
+      // no longer answers it, and Devices still offers a manual unpair.
+    }
+    try {
+      const { router } = await import('expo-router');
+      if (router.canDismiss()) router.dismissAll();
+      router.navigate('/');
+    } catch {
+      // Navigator not mounted (a background revoke); the next launch renders
+      // the unpaired home on its own.
+    }
+  } finally {
+    remoteRevocationInFlight = false;
+  }
+}
+
+/**
  * Re-sends the register-push payload after the user changes a category
  * toggle in Settings, so the desktop's filter reflects the new preference
  * immediately rather than waiting for the next reconnect. Fire-and-forget,
@@ -335,6 +383,15 @@ async function performOpenConnection(): Promise<void> {
     useChannelStore.getState().noteRekey();
   });
 
+  // The desktop's revoke goodbye (see handleDesktopRevocation). Deferred a
+  // microtask because this listener fires inside the session's own frame
+  // handling, and the revocation handler tears that very session down.
+  const unsubscribeRemoteClosed = controller.session.onRemoteClosed(() => {
+    queueMicrotask(() => {
+      void handleDesktopRevocation(controller);
+    });
+  });
+
   const teardownThisAttempt = (intent: ConnectionTeardownIntent): void => {
     inspectStateModule?.setInspectSubscriptions(null);
     bootstrapGeneration += 1;
@@ -342,6 +399,7 @@ async function performOpenConnection(): Promise<void> {
     unsubscribeTransportState();
     unsubscribeEstablished();
     unsubscribeRekey();
+    unsubscribeRemoteClosed();
     unbindFeed();
     subscriptions.dispose();
     controller.dispose({ sendFinalFrame: intent === 'announce-departure' });

@@ -166,6 +166,17 @@ export class StubSessionInitiator {
   }
 
   /**
+   * Seals an empty Final-tagged frame - the desktop's revoke goodbye
+   * (BridgeSession.sendGoodbye). Lets tests drive the phone's inbound-Final
+   * revocation path, which no untagged send() can reach.
+   */
+  sendFinalFrame(): void {
+    if (!this.streams) throw new Error('StubSessionInitiator is not established yet');
+    const frame = this.streams.send.seal(new Uint8Array(0), FrameTag.Final);
+    this.transport.send(wrapSessionFrame(SessionFrameKind.Application, frame));
+  }
+
+  /**
    * Auto-answers decoded capability-requests, mirroring the desktop's
    * CapabilityRouter dispatch. Return null to leave a request unanswered
    * (for timeout tests). Requests still land in `messages` either way.

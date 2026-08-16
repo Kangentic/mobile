@@ -192,7 +192,9 @@ with no new lifecycle plumbing:
 | session exits | no, disarms (a respawn spawns at desktop dims anyway) |
 
 Contention is latest-writer-wins, and a desktop resize while the phone holds updates the
-guard's restore target.
+guard's restore target. Revocation itself is announced to the phone as well - the desktop's
+revoke sends the session's Final goodbye and the phone clears its own pairing in response
+(see `docs/security.md`) - so the "device revoked" row is end-to-end, not desktop-only.
 
 ## The phone's grid
 

@@ -23,21 +23,23 @@ jest.mock('@/screens/usePairedDesktopInfo', () => {
   };
 });
 
-const mockClear = jest.fn().mockResolvedValue(undefined);
+// The screen itself no longer touches the anchor store, but the requireActual
+// of usePairedDesktopInfo above still imports it - keep SecureStore out.
 jest.mock('@/pairing/trustAnchor', () => ({
-  // The arrow defers the mockClear read past import-time hoisting.
-  TrustAnchorStore: jest.fn().mockImplementation(() => ({ clear: () => mockClear() })),
+  TrustAnchorStore: jest.fn().mockImplementation(() => ({ clear: jest.fn() })),
 }));
 
-const mockReconnectNow = jest.fn();
+const mockUnpairLocally = jest.fn().mockResolvedValue(undefined);
 const mockRevokePushRegistrationForUnpair = jest.fn().mockResolvedValue(undefined);
 // The arrow defers the mock read past import-time hoisting - but it MUST forward
-// its arguments. Written as `() => mockReconnectNow()` the wrapper silently drops
+// its arguments. Written as `() => mockUnpairLocally()` the wrapper silently drops
 // them, so any toHaveBeenCalledWith assertion fails against correct production
 // code and a bare toHaveBeenCalled passes no matter what is passed. If a factory
 // needs no hoisting dodge, prefer a bare `jest.fn()` (see PairingConfirmScreen.test.tsx).
+jest.mock('@/connection/actions', () => ({
+  unpairLocally: (intent: ConnectionTeardownIntent) => mockUnpairLocally(intent),
+}));
 jest.mock('@/connection/connectionManager', () => ({
-  reconnectNow: (intent?: ConnectionTeardownIntent) => mockReconnectNow(intent),
   revokePushRegistrationForUnpair: () => mockRevokePushRegistrationForUnpair(),
 }));
 
@@ -71,24 +73,23 @@ describe('DevicesScreen', () => {
     expect(screen.getByTestId('devices-connection-dot')).toBeTruthy();
   });
 
-  it('unpairs only after the two-step confirm, clearing the anchor and reconnecting', async () => {
+  it('unpairs only after the two-step confirm, announcing the departure', async () => {
     renderDevices();
     fireEvent.press(screen.getByTestId('devices-unpair'));
-    expect(mockClear).not.toHaveBeenCalled();
+    expect(mockUnpairLocally).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
     });
     expect(mockRevokePushRegistrationForUnpair).toHaveBeenCalled();
-    expect(mockClear).toHaveBeenCalled();
     // Unpair is a deliberate departure: the desktop should be told, so its
-    // Mobile Devices badge flips to Offline immediately.
-    expect(mockReconnectNow).toHaveBeenCalledWith('announce-departure');
+    // Mobile Devices panel reacts immediately.
+    expect(mockUnpairLocally).toHaveBeenCalledWith('announce-departure');
     expect(mockBack).toHaveBeenCalled();
-    // Push revocation happens BEFORE the trust anchor is cleared, while the
+    // Push revocation happens BEFORE the anchor-clearing teardown, while the
     // channel (and thus the desktop connection to send "unregister" over)
     // is still up.
-    expect(mockRevokePushRegistrationForUnpair.mock.invocationCallOrder[0]).toBeLessThan(mockClear.mock.invocationCallOrder[0]);
+    expect(mockRevokePushRegistrationForUnpair.mock.invocationCallOrder[0]).toBeLessThan(mockUnpairLocally.mock.invocationCallOrder[0]);
   });
 
   /**
@@ -111,7 +112,7 @@ describe('DevicesScreen', () => {
       await act(async () => {
         fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
       });
-      expect(mockClear).toHaveBeenCalled();
+      expect(mockUnpairLocally).toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
     }
@@ -119,7 +120,8 @@ describe('DevicesScreen', () => {
 
   /** Unpair had no failure path at all: it left the phone paired and said nothing. */
   it('says why when the unpair fails instead of silently staying paired', async () => {
-    mockRevokePushRegistrationForUnpair.mockRejectedValueOnce(new Error('Keystore is locked'));
+    // A locked Keystore rejects the trust-anchor clear inside unpairLocally.
+    mockUnpairLocally.mockRejectedValueOnce(new Error('Keystore is locked'));
     renderDevices();
     fireEvent.press(screen.getByTestId('devices-unpair'));
 
@@ -127,7 +129,6 @@ describe('DevicesScreen', () => {
       fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
     });
     expect(screen.getByText('Keystore is locked')).toBeTruthy();
-    expect(mockClear).not.toHaveBeenCalled();
     expect(mockBack).not.toHaveBeenCalled();
   });
 

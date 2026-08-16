@@ -2,13 +2,10 @@ import React, { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Card, MonoText, Row, Screen, Stack, StatusDot, Text, useTheme } from '@/components';
-import { wipeDesktopContent } from '@/connection/actions';
-import { reconnectNow, revokePushRegistrationForUnpair } from '@/connection/connectionManager';
-import { TrustAnchorStore } from '@/pairing/trustAnchor';
+import { unpairLocally } from '@/connection/actions';
+import { revokePushRegistrationForUnpair } from '@/connection/connectionManager';
 import { useChannelStore } from '@/state/channelStore';
 import { formatKeyFingerprint, usePairedDesktopInfo } from './usePairedDesktopInfo';
-
-const trustAnchorStore = new TrustAnchorStore();
 
 /**
  * The paired-desktop overview: what this phone trusts, how it is connected,
@@ -45,16 +42,11 @@ export function DevicesScreen(): React.JSX.Element {
     setUnpairing(true);
     setUnpairError(null);
     void revokePushRegistrationForUnpair()
-      .then(() => trustAnchorStore.clear())
+      // 'announce-departure' tells the desktop this phone is deliberately
+      // leaving, so its Mobile Devices panel reacts now instead of inferring
+      // it from a dropped socket ~12s later.
+      .then(() => unpairLocally('announce-departure'))
       .then(() => {
-        // Revoking trust also revokes what was fetched under it: every
-        // store and cache holding the desktop's content is cleared so
-        // nothing readable outlives the pairing on an unlocked phone.
-        wipeDesktopContent();
-        // Unpair is a permanent departure: tell the desktop so its Mobile
-        // Devices badge flips to Offline now, instead of inferring it from a
-        // dropped socket ~12s later.
-        reconnectNow('announce-departure');
         router.back();
       })
       // Unpair had no failure path at all: a rejected revoke or a Keychain

@@ -338,4 +338,50 @@ describe('SessionManager (KK responder)', () => {
     expect(desktop.messages).toEqual([{ type: 'heartbeat' }]);
     expect(desktop.finalFrameCount).toBe(0);
   });
+
+  /**
+   * The receive side of the goodbye: an inbound Final fires onRemoteClosed
+   * and nothing else. The session-level contract deliberately leaves the
+   * streams intact (mirroring the desktop's bridge-session) - what to DO
+   * about a goodbye is connectionManager's decision, not this layer's.
+   */
+  it('fires onRemoteClosed when an inbound Final arrives on an established session', async () => {
+    const { sessionManager, desktop } = await createConnectedRig();
+    const receivedByPhone: BridgeMessage[] = [];
+    sessionManager.onMessage((message) => receivedByPhone.push(message));
+    let remoteClosedCount = 0;
+    sessionManager.onRemoteClosed(() => {
+      remoteClosedCount += 1;
+    });
+
+    desktop.beginHandshake();
+    await waitUntil(() => sessionManager.isEstablished && desktop.isEstablished);
+
+    desktop.sendFinalFrame();
+    await waitUntil(() => remoteClosedCount === 1);
+
+    expect(sessionManager.isEstablished).toBe(true);
+    expect(receivedByPhone).toEqual([]);
+  });
+
+  it('drops a Final that arrives while the session is not established', async () => {
+    const { sessionManager, desktop } = await createConnectedRig();
+    let remoteClosedCount = 0;
+    sessionManager.onRemoteClosed(() => {
+      remoteClosedCount += 1;
+    });
+
+    desktop.beginHandshake();
+    await waitUntil(() => sessionManager.isEstablished && desktop.isEstablished);
+
+    // A backgrounding teardown resets the phone's session while the desktop
+    // still holds streams: a goodbye landing in that window must be dropped
+    // (no streams to open it under), never fired.
+    sessionManager.reset();
+    desktop.sendFinalFrame();
+    await flushMicrotasks();
+
+    expect(remoteClosedCount).toBe(0);
+    expect(sessionManager.isEstablished).toBe(false);
+  });
 });

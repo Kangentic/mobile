@@ -8,7 +8,14 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
 import { lastContentLineFromScrollback } from '@/terminal/liveTail';
-import { getActiveConnection, requireSubscriptions, requireVerbClient } from './connectionManager';
+import { TrustAnchorStore } from '@/pairing/trustAnchor';
+import {
+  getActiveConnection,
+  reconnectNow,
+  requireSubscriptions,
+  requireVerbClient,
+  type ConnectionTeardownIntent,
+} from './connectionManager';
 import { runBootstrap } from './bootstrap';
 
 /**
@@ -443,6 +450,35 @@ export function wipeDesktopContent(): void {
   // rejected write leaves a stale, non-secret lens map that the next lens
   // pick or wipe overwrites, so the failure is safe to swallow.
   void useSettingsStore.getState().clearDesktopScopedPreferences().catch(() => {});
+}
+
+const trustAnchorStore = new TrustAnchorStore();
+
+/**
+ * The local half of unpairing, shared by both ways a pairing ends: the
+ * user's own Unpair button (DevicesScreen, 'announce-departure') and a
+ * desktop-side revoke arriving as the session's Final frame
+ * (connectionManager's revocation handler, 'stay-silent' - the desktop
+ * already knows). Clears the trust anchor, wipes everything fetched under
+ * it, and swaps the connection so the reopen lands on the unpaired path.
+ * The push unregister stays with the callers - only a local unpair still
+ * has a channel to send it over - and navigation is the caller's concern.
+ *
+ * The clear goes first (a reconnect before it would redial the old
+ * desktop), but the wipe and the teardown must not hinge on it: a locked
+ * Keystore rejecting the delete still rethrows to the caller's error
+ * surface, while the finally guarantees no content fetched under the old
+ * trust outlives the unpair and no stale channel keeps running. A stale
+ * anchor is the recoverable half - Devices still offers a retry - whereas
+ * un-wiped content on a remotely revoked phone is not.
+ */
+export async function unpairLocally(intent: ConnectionTeardownIntent): Promise<void> {
+  try {
+    await trustAnchorStore.clear();
+  } finally {
+    wipeDesktopContent();
+    reconnectNow(intent);
+  }
 }
 
 /** Pull-to-refresh: re-run the bootstrap (re-subscribes replace desktop-side, so this is snapshot refresh everywhere). */
