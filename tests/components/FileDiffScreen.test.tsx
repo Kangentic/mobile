@@ -63,7 +63,7 @@ describe('FileDiffScreen', () => {
     useDiffStore.getState().reset();
   });
 
-  it('titles the header with the file name and names the back button Session', () => {
+  it('titles the header with the file name and pins no back label', () => {
     render(
       <ThemeProvider>
         <FileDiffScreen />
@@ -72,10 +72,11 @@ describe('FileDiffScreen', () => {
 
     const options = mockStackScreenOptions.at(-1);
     expect(options?.title).toBe('alpha.ts');
-    // The pinned back label. The iOS borrowed-title mechanism behind it is
-    // documented on app/_layout.tsx's Stack.Screen block and locked by
-    // tests/unit/routeTitles.test.ts.
-    expect(options?.headerBackTitle).toBe('Session');
+    // Back buttons are chevron-only app-wide (headerBackButtonDisplayMode
+    // 'minimal' in app/_layout.tsx). An explicit headerBackTitle is the one
+    // combination with a history of defeating that mode upstream, so no
+    // screen may reintroduce one - see FileDiffScreen's comment.
+    expect(options?.headerBackTitle).toBeUndefined();
   });
 
   it('renders add and remove lines from the stored file content', () => {

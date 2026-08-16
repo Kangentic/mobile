@@ -112,20 +112,16 @@ export function FileDiffScreen(): React.JSX.Element {
   return (
     <Screen testID="file-diff-screen">
       {/*
-        iOS derives the back button's label from the PREVIOUS screen's title;
-        the mechanism, and why every route in app/_layout.tsx declares one, is
-        documented on that file's Stack.Screen block. task/[taskId]/index
-        declares 'Session', which borrows to this same label. The explicit
-        override stays so this listing-captured frame does not depend on which
-        route pushed the screen. It also assumes the session route is the only
-        live push site: if task/[taskId]/changes (registered, currently
-        unreachable) ever pushes this screen, the pinned label would misname
-        the origin.
+        No headerBackTitle: back buttons are chevron-only app-wide
+        (headerBackButtonDisplayMode 'minimal' in app/_layout.tsx), so a
+        pinned label would never render and an explicit backTitle is the one
+        combination with a history of defeating the minimal mode
+        (react-native-screens #2809, fixed, but not worth re-owning). The
+        long-press menu label borrows the previous route's title on its own.
       */}
       <RouterStack.Screen
         options={{
           title: fileName.length > 0 ? fileName : 'Changes',
-          headerBackTitle: 'Session',
         }}
       />
       <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
