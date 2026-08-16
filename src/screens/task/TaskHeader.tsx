@@ -41,6 +41,7 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
   // project by construction; a param only bridges the pre-snapshot window,
   // where the chip is hidden anyway.
   const locatedProjectId = useBoardStore((state) => (taskId ? (findTaskById(state, taskId)?.projectId ?? null) : null));
+  const showColumnChip = column !== null && locatedProjectId !== null;
 
   const openMoveSheet = useCallback(() => {
     if (!taskId || !locatedProjectId) return;
@@ -78,20 +79,21 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
         <Text variant="bodyStrong" numberOfLines={1} style={styles.title}>
           {taskTitle}
         </Text>
-        {column && locatedProjectId ? (
-          <ColumnChip column={column} onPress={openMoveSheet} onLongPress={openActionsSheet} />
-        ) : null}
         {displayId !== null ? (
-          // The header row's own padding is only xs; without the extra margin
-          // the number kisses the screen edge.
+          // The header row's own padding is only xs; whichever element is
+          // last carries an sm margin so it does not kiss the screen edge -
+          // the column chip when it renders, this number otherwise.
           <MonoText
             size="caption"
             color="muted"
-            style={{ marginRight: theme.spacing.sm }}
+            style={{ marginRight: showColumnChip ? 0 : theme.spacing.sm }}
             testID="task-header-display-id"
           >
             #{displayId}
           </MonoText>
+        ) : null}
+        {column && locatedProjectId ? (
+          <ColumnChip column={column} onPress={openMoveSheet} onLongPress={openActionsSheet} />
         ) : null}
         {onOpenChanges ? (
           // Icon-only with a full touch target: the title keeps its room and
@@ -122,11 +124,14 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
 }
 
 /**
- * The task's current column, rendered in ColumnChipBar's chip language
- * (hairline outline, the desktop's tinted column icon plus the name). Status
- * as much as affordance: the session view has no other indication of where
- * the task sits. Width-capped so a long column name squeezes the flex title
- * only so far; the label ellipsizes past the cap.
+ * The task's current column: status first (the session view has no other
+ * indication of where the task sits), command second (tap = move sheet,
+ * long-press = actions hub). A compact raised pill at caption volume, in the
+ * header's own affordance language (raised fill, pressed dim, no outline) -
+ * a bordered chip here read as a foreign button next to the plain title and
+ * #N. The 44pt touch box lives on the invisible Pressable around the pill,
+ * and the width cap keeps a long column name from squeezing the flex title
+ * past its ellipsis.
  */
 function ColumnChip({
   column,
@@ -146,31 +151,35 @@ function ColumnChip({
       testID="task-header-column"
       onPress={onPress}
       onLongPress={onLongPress}
-      style={({ pressed }) => [
-        styles.columnChip,
-        {
-          minHeight: theme.minTouchSize,
-          borderRadius: theme.radii.md,
-          paddingHorizontal: theme.spacing.md,
-          borderColor: theme.colors.border,
-          opacity: pressed ? 0.7 : 1,
-        },
-      ]}
+      style={[styles.columnChipTarget, { minHeight: theme.minTouchSize, marginRight: theme.spacing.sm }]}
     >
-      <Row gap="xs" style={styles.columnChipContent}>
-        {/* ColumnChipBar's icon fallback, verbatim: the desktop's column icon
-            tinted with the column's color, a plain color dot for a column
-            with neither a custom icon nor a role default. */}
-        {ColumnIcon !== null ? (
-          // eslint-disable-next-line react-hooks/static-components -- not created during render: getColumnIcon returns a module-level lucide component from a fixed registry, referentially stable per column (ColumnChipBar renders the same way)
-          <ColumnIcon size={COLUMN_CHIP_ICON_SIZE} color={column.color} strokeWidth={2} />
-        ) : column.color ? (
-          <View style={[styles.columnDot, { backgroundColor: column.color }]} />
-        ) : null}
-        <Text variant="caption" color="secondary" numberOfLines={1} style={styles.columnChipLabel}>
-          {column.name}
-        </Text>
-      </Row>
+      {({ pressed }) => (
+        <Row
+          gap="xs"
+          style={[
+            styles.columnChipPill,
+            {
+              borderRadius: theme.radii.full,
+              paddingHorizontal: theme.spacing.sm,
+              paddingVertical: theme.spacing.xs,
+              backgroundColor: theme.colors.surfaceRaised,
+              opacity: pressed ? 0.7 : 1,
+            },
+          ]}
+        >
+          {/* ColumnChipBar's icon fallback, verbatim: the desktop's column icon
+              tinted with the column's color, a plain color dot for a column
+              with neither a custom icon nor a role default. */}
+          {ColumnIcon !== null ? (
+            <ColumnIcon size={COLUMN_CHIP_ICON_SIZE} color={column.color} strokeWidth={2} />
+          ) : column.color ? (
+            <View style={[styles.columnDot, { backgroundColor: column.color }]} />
+          ) : null}
+          <Text variant="caption" color="secondary" numberOfLines={1} style={styles.columnChipLabel}>
+            {column.name}
+          </Text>
+        </Row>
+      )}
     </Pressable>
   );
 }
@@ -187,14 +196,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  columnChip: {
+  columnChipTarget: {
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    backgroundColor: 'transparent',
     maxWidth: COLUMN_CHIP_MAX_WIDTH,
     flexShrink: 0,
   },
-  columnChipContent: {
+  columnChipPill: {
     alignItems: 'center',
   },
   columnChipLabel: {
