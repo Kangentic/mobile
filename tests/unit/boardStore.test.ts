@@ -270,6 +270,27 @@ describe('boardStore', () => {
       expect(secondResult).toBe(firstResult);
       expect(state.boardsByProjectId['project-1'].columns).toContain(firstResult);
     });
+
+    /**
+     * The other half of the selector's doc-comment contract: an optimistic
+     * move swaps the task's swimlane_id under an UNCHANGED columns array, so
+     * the header chip re-labels the instant the user confirms a move,
+     * before the desktop's re-snapshot lands.
+     */
+    it('re-labels under an optimistic move without replacing the columns array', () => {
+      useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+      const columnsBeforeMove = useBoardStore.getState().boardsByProjectId['project-1'].columns;
+
+      useBoardStore.getState().applyOptimisticMove({
+        projectId: 'project-1',
+        taskId: 'task-1',
+        toSwimlaneId: 'lane-doing',
+        toPosition: 0,
+      });
+
+      expect(selectTaskColumn(useBoardStore.getState(), 'task-1')?.id).toBe('lane-doing');
+      expect(useBoardStore.getState().boardsByProjectId['project-1'].columns).toBe(columnsBeforeMove);
+    });
   });
 
   describe('selectProjectAccentColor', () => {
