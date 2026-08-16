@@ -65,10 +65,14 @@ the wire.
   the damage of a compromised session key.
 - **Replay protection:** per-direction 64-bit counter nonces reject anything at or below the last
   seen value.
-- **A goodbye is a courtesy, not a proof.** A deliberate teardown (unpairing) sends a
-  `FrameTag.Final`-tagged frame so the desktop can drop the device promptly, but its *absence*
-  proves nothing: anyone who can drop the socket can suppress it. The desktop's presence probing
-  stays load-bearing, and a missing Final must never be read as evidence a device is still there.
+- **A goodbye is a courtesy, not a proof.** A `FrameTag.Final`-tagged frame is only ever sent on
+  a deliberate unpair - the phone's own Unpair button, or the desktop revoking the device - and
+  never on quit, sleep, backgrounding, or reconnect. That exclusivity is what lets a received
+  Final be acted on as revocation: the phone clears its trust anchor, push key, and cached
+  desktop content and returns to the unpaired home (`connectionManager`'s remote-close handler),
+  and the desktop drops the device from its roster. A Final's *absence* still proves nothing:
+  anyone who can drop the socket can suppress it. The desktop's presence probing stays
+  load-bearing, and a missing Final must never be read as evidence a device is still there.
 - **No Double Ratchet.** Double Ratchet solves offline, asynchronous message queuing, which this
   interactive link does not have; adding it would be unjustified complexity.
 - **Relay scheme enforcement:** the relay address arrives inside a scanned QR, so it is
@@ -174,9 +178,16 @@ the moment the phone releases, disconnects, or is revoked. The `board-tool-*` ve
 allowlist of the desktop's task/backlog command registry; the raw-SQL escape hatch and every
 code-execution tool family are excluded desktop-side.
 
-**Revocation is removal from the signed roster AND a rekey of the channel.** Removing a device
-from the roster without rotating keys is not revocation; a device also ages out via a per-device
-key expiry, so a lost phone is not trusted forever even if revocation is missed.
+**Revocation is removal from the signed roster, announced over the live channel.** When the
+desktop revokes a device it sends the Final goodbye over the established session before
+disposing it, so a connected phone clears its own pairing (trust anchor, push key, cached
+content) immediately and lands on the unpaired home. A phone that is offline at that moment
+gets no Final - nothing can carry it - and instead observes the relay accepting its socket
+while the desktop never initiates a handshake again; the phone escalates that sustained silence
+in the UI with a route to unpair locally, but its trust anchor survives until the user acts.
+The rekey half (rotating the desktop's static key so a removed device cannot even answer a
+future handshake) is desktop Phase 3 scope and not yet shipped; a device also ages out via a
+per-device key expiry, so a lost phone is not trusted forever even if revocation is missed.
 
 ## Key storage
 
@@ -209,10 +220,10 @@ relay slot). This app does not claim otherwise. Mitigations: self-hosting your o
 devices can consume relay capacity at all.
 
 One frame size is worth naming rather than leaving under "frame sizes". The deliberate-teardown
-goodbye seals an EMPTY plaintext, so it is the only frame the phone ever sends at the
+goodbye seals an EMPTY plaintext, so it is the only frame either peer ever sends at the
 secretstream minimum (a tag byte plus the Poly1305 tag); every ordinary `BridgeMessage` is
-encoded JSON and far larger. A relay operator can therefore tell a deliberate unpair from a
-dropped socket by length alone, without breaking anything. That is a departure signal, not
+encoded JSON and far larger. A relay operator can therefore tell a deliberate unpair - from
+either side - from a dropped socket by length alone, without breaking anything. That is a departure signal, not
 content, and it is information the operator would get from the slot going quiet moments later
 anyway - but it is newly precise, so it is stated here rather than implied.
 
@@ -231,7 +242,10 @@ Unpairing revokes push, not just trust: `DevicesScreen` calls
 `register-push` with `action: 'unregister'` and then wipes the local push key
 (`pushKeys.clearPushRegistration()`) before the trust anchor is cleared. Without this, an
 unpaired desktop would retain a valid `(expoPushToken, pushKey)` pair and could still push
-notifications this phone would decrypt and display.
+notifications this phone would decrypt and display. A desktop-side revoke covers the same
+property from the other end: the desktop drops the device's push registration itself as the
+first step of its revoke, so the phone's revocation handler only wipes the local key - no
+unregister request is needed over a channel the desktop is tearing down.
 
 ### Expo is in the delivery path, deliberately
 
