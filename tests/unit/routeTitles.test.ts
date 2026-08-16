@@ -1,16 +1,17 @@
 /**
  * Guards the root stack against untitled route registrations.
  *
- * iOS derives the native back button's label from the PREVIOUS route's
- * `title`. A registration without one falls back to the literal route name,
- * which is how the back button read "(tabs)" on Settings and on the pairing
- * screen in a tester recording (2026-08-15), and "task/[taskId]/index" on the
- * file diff before FileDiffScreen papered over it. Android draws a bare
- * chevron and never shows the label, so only iOS testers catch it, months
- * late. This scan makes the mistake mechanical instead of tester-caught. It
- * also catches a route file with no registration at all, and a back-label
- * string that has drifted out of sync between a screen's own
- * `headerBackTitle` and the route title it borrows.
+ * iOS derives the native back button's borrowed title from the PREVIOUS
+ * route's `title`. A registration without one falls back to the literal
+ * route name, which is how the back button read "(tabs)" on Settings and on
+ * the pairing screen in a tester recording (2026-08-15). Back buttons are
+ * chevron-only now (`headerBackButtonDisplayMode: 'minimal'`, pinned below),
+ * so the borrowed title feeds the long-press menu and the accessibility
+ * label rather than a visible label - surfaces only iOS testers catch,
+ * months late. This scan makes the mistake mechanical instead of
+ * tester-caught. It also catches a route file with no registration at all,
+ * and a screen reintroducing the pinned `headerBackTitle` that minimal mode
+ * exists to replace.
  *
  * Form-sheet routes are exempt: they render no native header and nothing is
  * pushed on top of a sheet, so their titles feed no back label.
@@ -87,6 +88,22 @@ function deriveExpectedRouteNames(directoryPath: string, relativeRoutePath = '')
   return expectedRouteNames;
 }
 
+/** Every .ts/.tsx file under a directory, recursively - the scan set for the pinned-back-label ban below. */
+function listSourceFiles(directoryPath: string): string[] {
+  const sourceFilePaths: string[] = [];
+  for (const directoryEntry of readdirSync(directoryPath, { withFileTypes: true })) {
+    const entryPath = `${directoryPath}/${directoryEntry.name}`;
+    if (directoryEntry.isDirectory()) {
+      sourceFilePaths.push(...listSourceFiles(entryPath));
+      continue;
+    }
+    if (/\.tsx?$/.test(directoryEntry.name)) {
+      sourceFilePaths.push(entryPath);
+    }
+  }
+  return sourceFilePaths;
+}
+
 describe('root stack route titles', () => {
   const registrations = readRegistrations();
 
@@ -134,23 +151,26 @@ describe('root stack route titles', () => {
     expect(missingRegistrations).toEqual([]);
   });
 
-  it("FileDiffScreen's headerBackTitle stays in sync with the session route's title", () => {
-    // FileDiffScreen hardcodes headerBackTitle: 'Session' because that is the
-    // literal title app/_layout.tsx currently gives task/[taskId]/index -
-    // nothing fails today if either string is renamed alone. Both values are
-    // extracted from source here rather than hardcoded, so a coordinated
-    // rename of both stays green and a lone rename of either one fails.
-    const fileDiffScreenSource = readFileSync(`${repositoryRoot}src/screens/FileDiffScreen.tsx`, 'utf8');
-    const headerBackTitleMatch = fileDiffScreenSource.match(/headerBackTitle:\s*['"]([^'"]+)['"]/);
-    expect(headerBackTitleMatch).not.toBeNull();
+  it("the root stack pins chevron-only back buttons (headerBackButtonDisplayMode 'minimal')", () => {
+    // The predecessor of this test kept FileDiffScreen's pinned
+    // headerBackTitle in sync with the session route's title. Minimal mode
+    // replaced that design outright: no visible back label anywhere, so the
+    // invariant flipped from "the pinned strings match" to "the mode is set
+    // and no screen pins a label" (the next test). Match the option syntax
+    // in the shared screenOptions block, before the first registration, so
+    // a per-screen override cannot satisfy the check for the stack.
+    const screenOptionsSource = rootLayoutSource.slice(0, rootLayoutSource.indexOf('<Stack.Screen'));
+    expect(screenOptionsSource).toMatch(/headerBackButtonDisplayMode:\s*['"]minimal['"]/);
+  });
 
-    const sessionRegistration = registrations.find(
-      (registration) => registration.name === 'task/[taskId]/index',
-    );
-    expect(sessionRegistration).toBeDefined();
-    const sessionTitleMatch = sessionRegistration?.source.match(/\btitle:\s*['"]([^'"]+)['"]/);
-    expect(sessionTitleMatch).not.toBeNull();
-
-    expect(headerBackTitleMatch?.[1]).toEqual(sessionTitleMatch?.[1]);
+  it('no screen reintroduces a pinned headerBackTitle', () => {
+    // An explicit headerBackTitle is the one combination with an upstream
+    // history of defeating minimal mode (react-native-screens #2809, fixed,
+    // but not worth re-owning) - see FileDiffScreen's comment. Match the
+    // OPTION (the key with a quoted string value), not the bare word, so
+    // prose comments naming headerBackTitle stay legal.
+    const offendingFilePaths = [...listSourceFiles(appDirectoryPath), ...listSourceFiles(`${repositoryRoot}src/screens`)]
+      .filter((sourceFilePath) => /headerBackTitle:\s*['"]/.test(readFileSync(sourceFilePath, 'utf8')));
+    expect(offendingFilePaths).toEqual([]);
   });
 });
