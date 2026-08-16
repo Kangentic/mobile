@@ -8,7 +8,6 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
 import { lastContentLineFromScrollback } from '@/terminal/liveTail';
-import { TrustAnchorStore } from '@/pairing/trustAnchor';
 import {
   getActiveConnection,
   reconnectNow,
@@ -452,8 +451,6 @@ export function wipeDesktopContent(): void {
   void useSettingsStore.getState().clearDesktopScopedPreferences().catch(() => {});
 }
 
-const trustAnchorStore = new TrustAnchorStore();
-
 /**
  * The local half of unpairing, shared by both ways a pairing ends: the
  * user's own Unpair button (DevicesScreen, 'announce-departure') and a
@@ -474,7 +471,12 @@ const trustAnchorStore = new TrustAnchorStore();
  */
 export async function unpairLocally(intent: ConnectionTeardownIntent): Promise<void> {
   try {
-    await trustAnchorStore.clear();
+    // Lazy on purpose: many unit suites import actions.ts while mocking
+    // connectionManager but not expo-secure-store, and trustAnchor.ts reads
+    // the keychain-accessibility constant at module scope - a static import
+    // here would force every one of those suites to stub it.
+    const { TrustAnchorStore } = await import('@/pairing/trustAnchor');
+    await new TrustAnchorStore().clear();
   } finally {
     wipeDesktopContent();
     reconnectNow(intent);
