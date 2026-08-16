@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { TaskHeader } from '@/screens/task/TaskHeader';
 import { useActivityStore } from '@/state/activityStore';
@@ -104,5 +104,31 @@ describe('TaskHeader column chip', () => {
       pathname: '/task-actions',
       params: { taskId: 'task-1', projectId: 'project-1' },
     });
+  });
+
+  /**
+   * selectTaskColumn's doc comment (src/state/boardStore.ts) promises the
+   * chip re-labels "the instant the user confirms a move, before the
+   * desktop's re-snapshot lands" - an optimistic move swaps swimlane_id
+   * under an UNCHANGED columns array. boardStore.test.ts locks the selector
+   * half of that; this locks that the mounted chip actually re-renders
+   * against it, rather than freezing on the column it first subscribed to.
+   */
+  it('re-labels the chip when an optimistic move lands under an unchanged columns array', () => {
+    seedLocatedTask();
+    renderTaskHeader();
+    expect(screen.getByText('To Do')).toBeTruthy();
+
+    act(() => {
+      useBoardStore.getState().applyOptimisticMove({
+        projectId: 'project-1',
+        taskId: 'task-1',
+        toSwimlaneId: 'lane-doing',
+        toPosition: 0,
+      });
+    });
+
+    expect(screen.getByText('Doing')).toBeTruthy();
+    expect(screen.queryByText('To Do')).toBeNull();
   });
 });

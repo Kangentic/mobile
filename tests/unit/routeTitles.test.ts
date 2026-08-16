@@ -159,7 +159,12 @@ describe('root stack route titles', () => {
     // and no screen pins a label" (the next test). Match the option syntax
     // in the shared screenOptions block, before the first registration, so
     // a per-screen override cannot satisfy the check for the stack.
-    const screenOptionsSource = rootLayoutSource.slice(0, rootLayoutSource.indexOf('<Stack.Screen'));
+    const firstScreenTagIndex = rootLayoutSource.indexOf('<Stack.Screen');
+    // Non-vacuity: if the tag text ever changes shape, indexOf silently
+    // returns -1 and slice(0, -1) would cover nearly the whole file rather
+    // than failing loudly - assert the split point was actually found.
+    expect(firstScreenTagIndex).toBeGreaterThan(0);
+    const screenOptionsSource = rootLayoutSource.slice(0, firstScreenTagIndex);
     expect(screenOptionsSource).toMatch(/headerBackButtonDisplayMode:\s*['"]minimal['"]/);
   });
 
@@ -169,8 +174,14 @@ describe('root stack route titles', () => {
     // but not worth re-owning) - see FileDiffScreen's comment. Match the
     // OPTION (the key with a quoted string value), not the bare word, so
     // prose comments naming headerBackTitle stay legal.
-    const offendingFilePaths = [...listSourceFiles(appDirectoryPath), ...listSourceFiles(`${repositoryRoot}src/screens`)]
-      .filter((sourceFilePath) => /headerBackTitle:\s*['"]/.test(readFileSync(sourceFilePath, 'utf8')));
+    const scannedFilePaths = [...listSourceFiles(appDirectoryPath), ...listSourceFiles(`${repositoryRoot}src/screens`)];
+    // Non-vacuity: a scan over an empty set passes having checked nothing,
+    // the same trap tests/unit/maestroFlows.test.ts guards against for its
+    // own directory scan.
+    expect(scannedFilePaths.length).toBeGreaterThan(10);
+    const offendingFilePaths = scannedFilePaths.filter((sourceFilePath) =>
+      /headerBackTitle:\s*['"]/.test(readFileSync(sourceFilePath, 'utf8')),
+    );
     expect(offendingFilePaths).toEqual([]);
   });
 });
