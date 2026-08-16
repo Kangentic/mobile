@@ -34,7 +34,7 @@ export function ChangesScreen(): React.JSX.Element {
 
   return (
     <Screen testID="changes-screen">
-      <TaskHeader taskTitle={locatedTaskTitle ?? 'Changes'} sessionId={locatedSessionId} displayId={locatedDisplayId} />
+      <TaskHeader taskTitle={locatedTaskTitle ?? 'Changes'} sessionId={locatedSessionId} displayId={locatedDisplayId} taskId={taskId} />
       <ChangesTab taskId={taskId} projectId={projectId} isActive={true} />
     </Screen>
   );

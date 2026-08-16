@@ -1,10 +1,12 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Button, Stack, Text, useTheme } from '@/components';
+import { Button, Row, Stack, Text, useTheme } from '@/components';
 
 export interface SessionEndedStateProps {
   /** Switches the task screen to the Changes tab (diffs outlive the session). */
   onViewChanges: () => void;
+  /** Opens the move-task sheet; null while no cached board holds the task (nothing to move within). */
+  onMoveTask?: (() => void) | null;
 }
 
 /**
@@ -13,7 +15,7 @@ export interface SessionEndedStateProps {
  * pager so a frozen last frame is never mistaken for a live one; the screen
  * auto-recovers the moment the board announces a successor session.
  */
-export function SessionEndedState({ onViewChanges }: SessionEndedStateProps): React.JSX.Element {
+export function SessionEndedState({ onViewChanges, onMoveTask = null }: SessionEndedStateProps): React.JSX.Element {
   const theme = useTheme();
   return (
     <View
@@ -26,14 +28,24 @@ export function SessionEndedState({ onViewChanges }: SessionEndedStateProps): Re
           The desktop is no longer running a session for this task. If it starts a new one, this
           screen reconnects automatically.
         </Text>
-        <View style={{ marginTop: theme.spacing.md }}>
+        {/* View changes stays first: reviewing the diff is the more common
+            next act; moving the card on is the follow-through. */}
+        <Row gap="sm" style={{ marginTop: theme.spacing.md }}>
           <Button
             label="View changes"
             variant="ghost"
             onPress={onViewChanges}
             testID="session-ended-view-changes"
           />
-        </View>
+          {onMoveTask ? (
+            <Button
+              label="Move task"
+              variant="ghost"
+              onPress={onMoveTask}
+              testID="session-ended-move-task"
+            />
+          ) : null}
+        </Row>
       </Stack>
     </View>
   );

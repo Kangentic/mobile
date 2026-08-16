@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -294,10 +294,85 @@ describe('SessionScreen session binding', () => {
     seedTaskWithSession('sess-a');
     renderSessionScreen();
     // No header chip anymore; the pane is mounted in the pager (the footer
-    // switcher, stubbed in this suite, switches to it in place).
+    // switcher, stubbed in this suite, switches to it in place). The header's
+    // COLUMN chip is different in kind - a command, not a surface - and only
+    // navigates on press, so nothing here has pushed.
     expect(screen.queryByTestId('task-header-changes')).toBeNull();
     expect(screen.getByTestId('session-pane-changes')).toBeTruthy();
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Move is a native form sheet ROUTE, so the screen only navigates. The
+   * sheet's own behaviour (current column disabled, append position, failure
+   * message) lives in tests/components/MoveTaskScreen.test.tsx. No projectId
+   * param on purpose: the chip resolves the project from the board that
+   * actually holds the task.
+   */
+  it('tapping the header column chip navigates to the move-task form sheet with the task and project', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+
+    fireEvent.press(screen.getByTestId('task-header-column'));
+
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/move-task',
+      params: { taskId: 'task-1', projectId: 'project-1' },
+    });
+    expect(screen.queryByTestId('move-task-sheet')).toBeNull();
+  });
+
+  /**
+   * Without a located task there is no board to move within, and navigating
+   * would open an empty dead sheet. The affordance is absent, not inert -
+   * absence IS the guard.
+   */
+  it('renders no move affordance before the board has located the task', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    renderSessionScreen();
+
+    expect(screen.queryByTestId('task-header-column')).toBeNull();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('offers Move task in the ended state while the task is still on a full board', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    act(() => {
+      seedTaskWithSession(null);
+    });
+    expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('session-ended-move-task'));
+
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/move-task',
+      params: { taskId: 'task-1', projectId: 'project-1' },
+    });
+  });
+
+  /**
+   * Under the sessions projection an ended task is dropped from the board, so
+   * MoveTaskScreen could not locate it either: the Move button hides while
+   * View changes stays (diffs outlive the session).
+   */
+  it('hides Move task when the sessions projection dropped the task', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+    renderSessionScreen();
+
+    act(() => {
+      pushSessionEnded('sess-a');
+      seedBoardWithoutTask();
+      useActivityStore.getState().removeSession('sess-a');
+    });
+
+    expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+    expect(screen.queryByTestId('session-ended-move-task')).toBeNull();
+    expect(screen.getByTestId('session-ended-view-changes')).toBeTruthy();
   });
 
 });

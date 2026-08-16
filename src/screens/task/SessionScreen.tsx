@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
@@ -41,6 +41,7 @@ const REJECTED_FEED_GRACE_MS = 1500;
  */
 export function SessionScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string; mode?: string }>();
+  const router = useRouter();
   const taskId = params.taskId;
 
   // Select primitives, never the object findTaskById builds: returning a
@@ -189,9 +190,17 @@ export function SessionScreen(): React.JSX.Element {
     onModeChange('changes');
   }, [onModeChange]);
 
+  // Move is a native form sheet ROUTE (app/move-task.tsx): this screen only
+  // navigates. locatedProjectId, not the param fallback: MoveTaskScreen needs
+  // the board that actually HOLDS the task.
+  const openMoveSheet = useCallback(() => {
+    if (!locatedProjectId) return;
+    router.push({ pathname: '/move-task', params: { taskId, projectId: locatedProjectId } });
+  }, [router, taskId, locatedProjectId]);
+
   return (
     <Screen testID="session-screen">
-      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} displayId={locatedDisplayId} />
+      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} displayId={locatedDisplayId} taskId={taskId} />
       {/* behavior="padding" on BOTH platforms: edge-to-edge Android never
           resizes the window for the soft keyboard, so without JS-side
           padding the keyboard fully covers the composer (send button
@@ -216,7 +225,12 @@ export function SessionScreen(): React.JSX.Element {
             </View>
           </PagerView>
 
-          {sessionEnded ? <SessionEndedState onViewChanges={openChanges} /> : null}
+          {sessionEnded ? (
+            <SessionEndedState
+              onViewChanges={openChanges}
+              onMoveTask={locatedProjectId !== null ? openMoveSheet : null}
+            />
+          ) : null}
         </View>
 
         {showModeHint ? <ModeToggleHint onDismiss={dismissModeHint} /> : null}
