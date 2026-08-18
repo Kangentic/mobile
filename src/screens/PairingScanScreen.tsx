@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { StyleSheet, TextInput } from 'react-native';
+import { Linking, StyleSheet, TextInput } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult, type BarcodeType } from 'expo-camera';
 import { Screen, Stack, Text, Button, Card, useTheme } from '@/components';
@@ -17,6 +17,8 @@ const ERROR_MESSAGES: Record<QrValidationErrorKind, string> = {
 };
 
 const UNEXPECTED_ERROR_MESSAGE = 'Could not start pairing. Try again.';
+
+const SETTINGS_UNAVAILABLE_MESSAGE = 'Could not open Settings.';
 
 /** Hoisted so the active CameraView is not handed a fresh settings object on every keystroke into the paste field. */
 const BARCODE_SCANNER_SETTINGS: { barcodeTypes: BarcodeType[] } = { barcodeTypes: ['qr'] };
@@ -101,22 +103,43 @@ export function PairingScanScreen(): React.JSX.Element {
     [handleUri],
   );
 
+  const openAppSettings = useCallback(() => {
+    // openSettings rejects when the OS declines to open the URL. There is
+    // nothing to fall back to beyond the paste card already on screen, and an
+    // uncaught rejection would be invisible in release, so say so rather than
+    // leaving the tap looking ignored.
+    void Linking.openSettings().catch(() => setErrorMessage(SETTINGS_UNAVAILABLE_MESSAGE));
+  }, []);
+
   if (!permission) {
     return <Screen testID="pairing-scan-screen" />;
   }
 
   if (!permission.granted) {
+    // iOS shows the system camera prompt once per install. Once the user has
+    // refused, requestPermission() resolves without prompting anything, so a
+    // button wired to it renders normally and does nothing at all - Settings is
+    // the only route back. canAskAgain is the only signal that separates "not
+    // asked yet" from "asked and refused".
+    const canPromptForCamera = permission.canAskAgain;
     return (
       <Screen testID="pairing-scan-screen">
         <Stack gap="lg" style={[styles.centered, { padding: theme.spacing.lg }]}>
           <Text variant="body" color="secondary">
-            Camera access is needed to scan a desktop pairing code.
+            {canPromptForCamera
+              ? 'Camera access is needed to scan a desktop pairing code.'
+              : 'Turn on camera access in Settings to scan a code.'}
           </Text>
           {/* Neutral wording is required, not a style choice: App Review cited 5.1.1(iv) against
               "Grant camera access" on this exact screen (0.4.1 build 7, 2026-08-18). A custom
               pre-permission screen may explain, but its button must not push toward the OS prompt.
-              The explainer above carries the reason; the button only advances. */}
-          <Button testID="pairing-request-camera-permission" label="Continue" onPress={() => void requestPermission()} />
+              The explainer above carries the reason; the button only advances. "Open Settings" is
+              held to the same bar: it names where the tap goes, not an instruction to grant. */}
+          <Button
+            testID="pairing-request-camera-permission"
+            label={canPromptForCamera ? 'Continue' : 'Open Settings'}
+            onPress={canPromptForCamera ? () => void requestPermission() : openAppSettings}
+          />
           <PasteLinkFallback pastedLink={pastedLink} setPastedLink={setPastedLink} onSubmit={handleUri} isSubmitInFlight={isProcessing} />
           {errorMessage ? (
             <Text testID="pairing-scan-error" variant="caption" color="danger">
