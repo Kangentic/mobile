@@ -72,13 +72,19 @@ const config: ExpoConfig = {
     // and 6 the v0.4.0 release cut 2026-08-07, both confirmed spent by the
     // ios-b5 and ios-b6 tags on the remote. 7 was the v0.4.1 release cut
     // 2026-08-15, confirmed spent by the ios-b7 tag. 8 is taken by the v0.5.0
-    // release cut 2026-08-16; the ios-b8 tag written by the submit job is the
-    // authoritative record once Apple accepts it.
+    // release cut 2026-08-16, confirmed spent by the ios-b8 tag.
+    //
+    // 9 is this resubmission. Build 7 (v0.4.1) was REJECTED by App Review on
+    // 2026-08-18 under guideline 5.1.1(iv): the camera pre-permission screen's
+    // button read "Grant camera access" where Apple requires neutral wording.
+    // 8 cannot carry the fix - it was already uploaded - so the corrected
+    // binary needs a number of its own even though `version` does not move.
     //
     // Numbers stay globally increasing across semver bumps (8 follows 7 even
     // though `version` moved 0.4.1 -> 0.5.0), per the global-not-per-version
-    // rule above: a semver bump frees nothing.
-    buildNumber: '8',
+    // rule above: a semver bump frees nothing. The converse holds here: 9
+    // follows 8 under an UNCHANGED `version`, because the gate is per app.
+    buildNumber: '9',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
