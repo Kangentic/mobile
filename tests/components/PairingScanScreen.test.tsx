@@ -1,4 +1,5 @@
 import React from 'react';
+import { Linking } from 'react-native';
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react-native';
 import { encodePairingQrPayload, PROTOCOL_VERSION } from '@kangentic/protocol';
 import { PairingScanScreen } from '@/screens/PairingScanScreen';
@@ -52,7 +53,16 @@ interface MockCameraViewProps {
 // even for tests that never touch the camera. The CameraView stub captures
 // its latest props so tests can drive onBarcodeScanned directly - the same
 // entry point the real ~30fps barcode stream uses.
-const mockCameraPermission = { granted: false };
+// canAskAgain is as load-bearing as granted and must be modelled: iOS shows the
+// system camera prompt once per install, so the screen branches on it to decide
+// between asking the OS and routing to Settings. Omitting it here would leave
+// `!permission.canAskAgain` true under test, silently rendering the Settings
+// variant for every denied-branch test in this file while they all still pass.
+const mockCameraPermission = { granted: false, canAskAgain: true };
+// Shared rather than a fresh jest.fn() per render, so a test can assert the
+// screen asked the OS. It also matches the real hook, whose requestPermission
+// identity is stable across renders.
+const mockRequestPermission = jest.fn();
 const mockLatestCameraViewProps: { current: MockCameraViewProps | null } = { current: null };
 
 jest.mock('expo-camera', () => ({
@@ -63,7 +73,10 @@ jest.mock('expo-camera', () => ({
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
     return require('react').createElement(View, { testID: props.testID });
   },
-  useCameraPermissions: () => [{ granted: mockCameraPermission.granted }, jest.fn()],
+  useCameraPermissions: () => [
+    { granted: mockCameraPermission.granted, canAskAgain: mockCameraPermission.canAskAgain },
+    mockRequestPermission,
+  ],
 }));
 
 /**
@@ -90,6 +103,7 @@ describe('PairingScanScreen', () => {
     // could otherwise leak into the next test. Re-assert the baseline here.
     beginPairing.mockResolvedValue(undefined);
     mockCameraPermission.granted = false;
+    mockCameraPermission.canAskAgain = true;
     mockLatestCameraViewProps.current = null;
     mockLatestFocusEffect.current = null;
   });
@@ -239,6 +253,55 @@ describe('PairingScanScreen', () => {
       // The re-armed attempt must actually reach the confirm screen, not
       // just re-invoke beginPairing.
       expect(mockNavigate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // The pre-permission screen App Review looked at. Both the branch and the
+  // copy are pinned: guideline 5.1.1(iv) rejected 0.4.1 build 7 over this
+  // button's wording, so the labels here are a compliance contract rather than
+  // decoration, and a test that lets them drift back is not doing its job.
+  describe('camera permission recovery', () => {
+    it('asks the OS while the system prompt is still available', () => {
+      const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+
+      render(<PairingScanScreen />);
+
+      expect(screen.getByText('Continue')).toBeTruthy();
+      fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+
+      expect(mockRequestPermission).toHaveBeenCalledTimes(1);
+      expect(openSettings).not.toHaveBeenCalled();
+    });
+
+    it('routes to Settings once the OS will not prompt again', () => {
+      // iOS prompts once per install. After a refusal requestPermission()
+      // resolves without showing anything, so the pre-fix button rendered
+      // normally and did nothing at all - the whole reason for this branch.
+      mockCameraPermission.canAskAgain = false;
+      const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+
+      render(<PairingScanScreen />);
+
+      expect(screen.getByText('Open Settings')).toBeTruthy();
+      fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+
+      expect(openSettings).toHaveBeenCalledTimes(1);
+      expect(mockRequestPermission).not.toHaveBeenCalled();
+    });
+
+    it('reports a Settings launch the OS refuses instead of rejecting unhandled', async () => {
+      mockCameraPermission.canAskAgain = false;
+      jest.spyOn(Linking, 'openSettings').mockRejectedValue(new Error('cannot open'));
+
+      render(<PairingScanScreen />);
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+      });
+
+      expect(screen.getByTestId('pairing-scan-error')).toBeTruthy();
+      // The paste fallback is still the way forward, so it must survive the failure.
+      expect(screen.getByTestId('pairing-paste-link-submit')).toBeTruthy();
     });
   });
 
