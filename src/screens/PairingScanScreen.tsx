@@ -112,7 +112,11 @@ export function PairingScanScreen(): React.JSX.Element {
           <Text variant="body" color="secondary">
             Camera access is needed to scan a desktop pairing code.
           </Text>
-          <Button testID="pairing-request-camera-permission" label="Grant camera access" onPress={() => void requestPermission()} />
+          {/* Neutral wording is required, not a style choice: App Review cited 5.1.1(iv) against
+              "Grant camera access" on this exact screen (0.4.1 build 7, 2026-08-18). A custom
+              pre-permission screen may explain, but its button must not push toward the OS prompt.
+              The explainer above carries the reason; the button only advances. */}
+          <Button testID="pairing-request-camera-permission" label="Continue" onPress={() => void requestPermission()} />
           <PasteLinkFallback pastedLink={pastedLink} setPastedLink={setPastedLink} onSubmit={handleUri} isSubmitInFlight={isProcessing} />
           {errorMessage ? (
             <Text testID="pairing-scan-error" variant="caption" color="danger">
