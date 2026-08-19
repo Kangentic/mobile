@@ -77,7 +77,9 @@ describe('notification channels', () => {
   it('titleForCategory names each category, shared with the local notifier', async () => {
     const channels = await loadChannels();
     expect(channels.titleForCategory('input-required')).toBe('Agent needs your input');
-    expect(channels.titleForCategory('turn-complete')).toBe('Turn complete');
+    // Not "Turn complete" any more: both producers settle-debounce this, so it
+    // marks a session going quiet rather than each turn ending.
+    expect(channels.titleForCategory('turn-complete')).toBe('Agent went idle');
     expect(channels.titleForCategory('session-failed')).toBe('Session stopped');
     expect(channels.titleForCategory('plan-complete')).toBe('Plan complete');
     expect(channels.titleForCategory('spawn-stalled')).toBe('Still preparing');
@@ -141,5 +143,32 @@ describe('notification channels', () => {
     notifeeState.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
     await channels.requestNotificationPermission();
     expect(cache.notificationPermissionGranted()).toBe(true);
+  });
+
+  /**
+   * NOT_DETERMINED has to survive as its own state rather than collapsing into
+   * denied. It is iOS-only (Android reports plain DENIED for a permission
+   * nobody has requested), and two callers depend on telling them apart: the
+   * prompt gate, which asks again when the OS says nobody has been asked even
+   * though the persisted flag survived a reinstall, and the Settings notice,
+   * which must not tell a fresh iOS user they are blocked.
+   */
+  it('distinguishes not-determined from denied, while both read back as not-granted', async () => {
+    const channels = await loadChannels();
+    const cache = await loadPermissionCache();
+
+    notifeeState.getNotificationSettings.mockResolvedValue({ authorizationStatus: -1 });
+    expect(await channels.refreshNotificationPermission()).toBe(false);
+    expect(cache.notificationPermissionStatus()).toBe('not-determined');
+    expect(cache.notificationPermissionGranted()).toBe(false);
+
+    notifeeState.getNotificationSettings.mockResolvedValue({ authorizationStatus: 0 });
+    await channels.refreshNotificationPermission();
+    expect(cache.notificationPermissionStatus()).toBe('denied');
+
+    // PROVISIONAL (iOS quiet delivery) is granted: notifications do arrive.
+    notifeeState.getNotificationSettings.mockResolvedValue({ authorizationStatus: 2 });
+    await channels.refreshNotificationPermission();
+    expect(cache.notificationPermissionStatus()).toBe('granted');
   });
 });

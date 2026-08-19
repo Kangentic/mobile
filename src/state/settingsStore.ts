@@ -16,7 +16,17 @@ const SESSION_MODE_HINT_STORAGE_KEY = 'settings.hasSeenSessionModeHint';
 const HAPTICS_ENABLED_STORAGE_KEY = 'settings.hapticsEnabled';
 const BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY = 'settings.backgroundNotificationsMode';
 const PREFERRED_SESSION_LENS_STORAGE_KEY = 'settings.preferredSessionLensByTaskId';
-const PUSH_CATEGORIES_ENABLED_STORAGE_KEY = 'settings.pushCategoriesEnabled';
+/**
+ * v2 because the DEFAULT for one category changed (spawn-stalled went off), and
+ * a default change alone could not reach the installs that needed it:
+ * setPushCategoryEnabled persists the WHOLE map, so anyone who had ever toggled
+ * anything carried an explicit `"spawn-stalled": true` that overrode any new
+ * default. Reading v1 under the v2 rules is the migration - see
+ * parsePushCategoriesEnabled.
+ */
+const PUSH_CATEGORIES_ENABLED_STORAGE_KEY = 'settings.pushCategoriesEnabled.v2';
+/** Read-only now; the v2 key is the only one written. Left in place as dead data. */
+const PUSH_CATEGORIES_ENABLED_LEGACY_STORAGE_KEY = 'settings.pushCategoriesEnabled';
 const COLLAPSED_TRIAGE_SECTION_STORAGE_KEY = 'settings.collapsedTriageSection';
 const NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY = 'settings.hasRequestedNotificationPermission';
 
@@ -32,7 +42,7 @@ const PREFERRED_SESSION_LENS_CAP = 50;
  * distinction. `backgroundNotificationsMode` would fall back to
  * 'foreground-service' for someone who chose 'push-only', starting the exact
  * service the `hydrated` gate exists to withhold; and `pushCategoriesEnabled`
- * would fall back to all-enabled, which the next established bootstrap
+ * would fall back to the defaults, which the next established bootstrap
  * registers with the desktop, re-enabling categories the user switched off.
  * Both are then made permanent by the first subsequent toggle, because those
  * setters persist the whole map they hold in memory.
@@ -82,18 +92,44 @@ function parseCollapsedTriageSection(raw: string | null): string | null {
   }
 }
 
+/**
+ * Per-category defaults. A literal table rather than a loop over
+ * PUSH_CATEGORIES so that a category added to the protocol becomes a COMPILE
+ * ERROR here (Record<PushCategory, boolean> demands every key) instead of
+ * silently inheriting whatever the loop wrote. That is strictly stronger than
+ * the absent-means-enabled rule this replaced, which existed to stop a new
+ * category going dark.
+ *
+ * spawn-stalled is the one default-off entry: "slow starts" is noise nobody
+ * asked for. The category stays in the protocol, the Settings row, and the
+ * Notifee channel - it is defaulted off, not removed, so anyone who wants it
+ * can switch it back on and that choice sticks.
+ */
+const PUSH_CATEGORY_DEFAULTS: Record<PushCategory, boolean> = {
+  'input-required': true,
+  'turn-complete': true,
+  'session-failed': true,
+  'plan-complete': true,
+  'spawn-stalled': false,
+};
+
 function defaultPushCategoriesEnabled(): Record<PushCategory, boolean> {
-  const defaults = {} as Record<PushCategory, boolean>;
-  for (const category of PUSH_CATEGORIES) defaults[category] = true;
-  return defaults;
+  return { ...PUSH_CATEGORY_DEFAULTS };
 }
 
 /**
- * Missing keys default to enabled (a category added after this map was
- * last written must not silently go dark), matching the desktop's
- * `RegisterPushRequestPayload.categories` absent-means-all convention.
+ * Overlays a stored map onto the defaults. Keys that are absent or not boolean
+ * keep their default.
+ *
+ * `migrateSpawnStalledOff` is the v1 -> v2 migration, and it is deliberately
+ * narrow: it forces spawn-stalled to false and copies EVERY OTHER category's
+ * stored value through unchanged. So a v1 user who had turned some other
+ * category off keeps it off, and the migration can never turn spawn-stalled
+ * back ON for anyone - the direction that would reintroduce the noise. Once the
+ * user touches any toggle, the whole map is written to v2 and read back
+ * verbatim, so a deliberate re-enable sticks.
  */
-function parsePushCategoriesEnabled(raw: string | null): Record<PushCategory, boolean> {
+function parsePushCategoriesEnabled(raw: string | null, migrateSpawnStalledOff = false): Record<PushCategory, boolean> {
   const parsed = defaultPushCategoriesEnabled();
   if (raw === null) return parsed;
   try {
@@ -103,6 +139,7 @@ function parsePushCategoriesEnabled(raw: string | null): Record<PushCategory, bo
       const storedValue = (stored as Record<string, unknown>)[category];
       if (typeof storedValue === 'boolean') parsed[category] = storedValue;
     }
+    if (migrateSpawnStalledOff) parsed['spawn-stalled'] = false;
     return parsed;
   } catch {
     return parsed;
@@ -127,7 +164,7 @@ interface SettingsStoreState {
   backgroundNotificationsMode: BackgroundNotificationsMode;
   /** Last lens the user chose per task (terminal is the unset default). */
   preferredSessionLensByTaskId: Record<string, PreferredSessionLens>;
-  /** Per-category push + local-notification opt-in; all categories default enabled. */
+  /** Per-category push + local-notification opt-in; see PUSH_CATEGORY_DEFAULTS. */
   pushCategoriesEnabled: Record<PushCategory, boolean>;
   /** The one Agents-feed section (by title) the user has collapsed, or null if both are expanded. */
   collapsedTriageSection: string | null;
@@ -189,7 +226,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
    * which is precisely the bug those gates were added to fix.
    *
    * Each key is read through readSetting, which fails alone: see its comment
-   * for why one failure must not default the other seven.
+   * for why one failure must not default the others.
    */
   hydrate: async () => {
     const [
@@ -199,6 +236,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedBackgroundMode,
       storedLensMap,
       storedPushCategoriesEnabled,
+      storedLegacyPushCategoriesEnabled,
       storedCollapsedTriageSection,
       storedNotificationPermissionRequested,
     ] = await Promise.all([
@@ -208,6 +246,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       readSetting(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
       readSetting(PREFERRED_SESSION_LENS_STORAGE_KEY),
       readSetting(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
+      readSetting(PUSH_CATEGORIES_ENABLED_LEGACY_STORAGE_KEY),
       readSetting(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
       readSetting(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
     ]);
@@ -219,7 +258,15 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
         ? storedBackgroundMode
         : 'foreground-service',
       preferredSessionLensByTaskId: parsePreferredLensMap(storedLensMap),
-      pushCategoriesEnabled: parsePushCategoriesEnabled(storedPushCategoriesEnabled),
+      // v2 present means the map was written under the current rules; read it
+      // verbatim. v2 absent means this install predates the spawn-stalled
+      // default change, so its v1 map is read with that one category forced
+      // off. hydrate stays read-only, so the migration simply re-runs (with the
+      // same result) until the first toggle writes v2.
+      pushCategoriesEnabled:
+        storedPushCategoriesEnabled !== null
+          ? parsePushCategoriesEnabled(storedPushCategoriesEnabled)
+          : parsePushCategoriesEnabled(storedLegacyPushCategoriesEnabled, true),
       collapsedTriageSection: parseCollapsedTriageSection(storedCollapsedTriageSection),
       hasRequestedNotificationPermission: storedNotificationPermissionRequested === 'true',
       hydrated: true,

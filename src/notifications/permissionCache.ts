@@ -17,29 +17,50 @@
  * notifee-free for the pure decrypt path.
  */
 
-let lastKnownPermissionGranted: boolean | null = null;
+/**
+ * What the OS last told us, kept as three states rather than a boolean because
+ * the two platforms differ in what they can express - see the comment on
+ * notificationPermissionStatus below.
+ */
+export type NotificationPermissionStatus = 'granted' | 'denied' | 'not-determined';
+
+let lastKnownPermissionStatus: NotificationPermissionStatus | null = null;
 
 /**
  * Synchronous read of the cached permission state. `null` means nothing has
- * looked yet, so callers gating behaviour on this should treat only an explicit
- * `false` as denial - an unread cache must behave as it did before the cache
- * existed, never as a denial.
+ * looked yet; initializeNotifications seeds this at boot, so the window is tiny.
  *
- * `false` does NOT mean the user refused. Android has no NOT_DETERMINED
- * authorization status (notifee reports only DENIED or AUTHORIZED there), so a
- * permission that has simply never been requested reads back identically to one
- * that was. In practice the `null` window is also tiny, because
- * initializeNotifications seeds this at boot. A caller that needs "the user
- * turned us down" - rather than "we cannot post notifications right now" - must
- * pair this with settingsStore's persisted hasRequestedNotificationPermission,
- * which is the only record that the app ever asked. Both current gates (the
- * background keepalive and the Settings blocked-notice) do exactly that.
+ * THE TWO PLATFORMS DIFFER, and the difference is why this is not a boolean.
+ * iOS reports NOT_DETERMINED, so 'not-determined' there genuinely means "nobody
+ * has ever been asked". Android has no such status - notifee reports only DENIED
+ * or AUTHORIZED - so a permission that was never requested reads back as
+ * 'denied', identical to one the user refused, and 'not-determined' never occurs.
+ *
+ * So an Android caller that needs "the user turned us down" must still pair this
+ * with settingsStore's persisted hasRequestedNotificationPermission, which is the
+ * only record that the app ever asked. An iOS caller can read never-asked
+ * directly from here, and MUST prefer that: iOS Keychain items survive app
+ * deletion, so the persisted flag can outlive the authorization it describes.
+ */
+export function notificationPermissionStatus(): NotificationPermissionStatus | null {
+  return lastKnownPermissionStatus;
+}
+
+/**
+ * Derived "can we post a notification right now" view, kept because the
+ * background-keepalive gate in connectionManager is Android-only and reads it
+ * that way. 'not-determined' maps to false: we cannot post until asked.
+ *
+ * `null` still means nothing has looked yet, and callers gating behaviour on
+ * this must treat only an explicit `false` as denial - an unread cache has to
+ * behave as it did before the cache existed.
  */
 export function notificationPermissionGranted(): boolean | null {
-  return lastKnownPermissionGranted;
+  if (lastKnownPermissionStatus === null) return null;
+  return lastKnownPermissionStatus === 'granted';
 }
 
 /** Written by channels.ts after any notifee permission read or request. */
-export function setNotificationPermissionGranted(granted: boolean): void {
-  lastKnownPermissionGranted = granted;
+export function setNotificationPermissionStatus(status: NotificationPermissionStatus): void {
+  lastKnownPermissionStatus = status;
 }

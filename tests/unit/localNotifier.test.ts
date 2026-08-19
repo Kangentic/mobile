@@ -80,6 +80,14 @@ function activityStateEvent(state: 'thinking' | 'idle'): ActivityEvent {
   };
 }
 
+/**
+ * Must match IDLE_SETTLE_MS in localNotifier.ts. Held as a literal on purpose:
+ * importing the constant would make these tests track whatever the source says,
+ * so deleting the debounce entirely (setting it to 0) would keep them green -
+ * which is precisely the regression they exist to catch.
+ */
+const EXPECTED_IDLE_SETTLE_MS = 45_000;
+
 function seedSession(): void {
   useBoardStore
     .getState()
@@ -95,6 +103,10 @@ describe('startLocalNotifier', () => {
   let dateNowSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
+    // Only the timer functions, never Date: the cooldown is driven by the
+    // hand-advanced nowMs below, and letting the fake clock own Date.now too
+    // would make the two mechanisms fight.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     nowMs = 1_000_000;
     dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     displayNotification.mockClear();
@@ -111,6 +123,7 @@ describe('startLocalNotifier', () => {
     stopNotifier = null;
     dateNowSpy?.mockRestore();
     dateNowSpy = null;
+    vi.useRealTimers();
   });
 
   it('fires on a background transition into permission, on the needs-attention channel with the task title', () => {
@@ -189,7 +202,7 @@ describe('startLocalNotifier', () => {
     expect(displayNotification).not.toHaveBeenCalled();
   });
 
-  it('fires turn-complete on the completions channel for a thinking-to-idle transition', () => {
+  it('fires turn-complete on the completions channel once a thinking-to-idle transition has settled', () => {
     seedSession();
     stopNotifier = startLocalNotifier();
     appStateMock.emit('background');
@@ -197,11 +210,92 @@ describe('startLocalNotifier', () => {
     useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
     expect(displayNotification).not.toHaveBeenCalled();
     useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    // Nothing yet: reaching idle only ARMS the settle timer.
+    expect(displayNotification).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
 
     expect(displayNotification).toHaveBeenCalledTimes(1);
     const notification = displayNotification.mock.calls[0][0];
-    expect(notification.title).toBe('Turn complete');
+    expect(notification.title).toBe('Agent went idle');
     expect(notification.android?.channelId).toBe('completions');
+  });
+
+  /**
+   * The flood this debounce exists for. Every exchange in a conversation ends
+   * in idle, so before the settle window a three-reply back-and-forth was three
+   * notifications - and the 30s cooldown does not help, because real turns are
+   * usually further apart than that. Only the LAST idle, the one that actually
+   * sticks, should alert.
+   */
+  it('does not fire for a session that goes back to work inside the settle window', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    // Three quick exchanges, each ending in idle, none of them settling.
+    for (let exchange = 0; exchange < 3; exchange += 1) {
+      useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+      useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+      vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS / 3);
+    }
+    expect(displayNotification).not.toHaveBeenCalled();
+
+    // Only once it stays idle does one alert land - one, not four.
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A prompt arriving during the settle window is the sharpest version of the
+   * same case: the session is emphatically not finished, and input-required
+   * fires on its own.
+   */
+  it('cancels a pending settle when the session asks for permission instead', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS * 2);
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    expect(displayNotification.mock.calls[0][0].title).toBe('Agent needs your input');
+  });
+
+  /**
+   * The debounce opens a window the app can be foregrounded inside, so the
+   * background gate has to be re-checked when the timer FIRES, not only when it
+   * is armed. Otherwise an alert posts over the UI the user is looking at.
+   */
+  it('does not fire a settled idle if the app came forward inside the window', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    appStateMock.emit('active');
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+    expect(displayNotification).not.toHaveBeenCalled();
+  });
+
+  /** A timer surviving the stop would fire into a foregrounded app, or a later test. */
+  it('clears a pending settle timer when the notifier is stopped', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    stopNotifier();
+    stopNotifier = null;
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+    expect(displayNotification).not.toHaveBeenCalled();
   });
 
   it('applies a 30s per-(session, kind) cooldown', () => {
@@ -245,10 +339,11 @@ describe('startLocalNotifier', () => {
     // A different, still-enabled category is unaffected.
     useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
     useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
     expect(displayNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('a disabled turn-complete category never fires locally on a thinking-to-idle transition', () => {
+  it('a disabled turn-complete category never fires locally on a settled thinking-to-idle transition', () => {
     seedSession();
     useSettingsStore.getState().setPushCategoryEnabled('turn-complete', false);
     stopNotifier = startLocalNotifier();
@@ -256,6 +351,7 @@ describe('startLocalNotifier', () => {
 
     useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
     useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
     expect(displayNotification).not.toHaveBeenCalled();
   });
 

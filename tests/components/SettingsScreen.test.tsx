@@ -31,10 +31,12 @@ jest.mock('expo-secure-store', () => ({
 // time without its native module; the screen only reads the status snapshot.
 const mockOpenSystemNotificationSettings = jest.fn().mockResolvedValue(undefined);
 const mockRefreshNotificationPermission = jest.fn().mockResolvedValue(true);
-const mockNotificationPermissionGranted = jest.fn<boolean | null, []>().mockReturnValue(true);
+const mockNotificationPermissionStatus = jest
+  .fn<'granted' | 'denied' | 'not-determined' | null, []>()
+  .mockReturnValue('granted');
 jest.mock('@/notifications', () => ({
   getPushRegistrationStatus: jest.fn().mockReturnValue('not-connected'),
-  notificationPermissionGranted: () => mockNotificationPermissionGranted(),
+  notificationPermissionStatus: () => mockNotificationPermissionStatus(),
   openSystemNotificationSettings: () => mockOpenSystemNotificationSettings(),
   refreshNotificationPermission: () => mockRefreshNotificationPermission(),
 }));
@@ -80,12 +82,14 @@ describe('SettingsScreen', () => {
       hasSeenSessionModeHint: false,
       hapticsEnabled: true,
       backgroundNotificationsMode: 'foreground-service',
+      // The real defaults, spawn-stalled included: "slow starts" is off unless
+      // the user asks for it, and the rows below assert that shows in the UI.
       pushCategoriesEnabled: {
         'input-required': true,
         'turn-complete': true,
         'session-failed': true,
         'plan-complete': true,
-        'spawn-stalled': true,
+        'spawn-stalled': false,
       },
       // The steady state for these tests: the app has already asked for
       // POST_NOTIFICATIONS at some point. The never-asked case is a distinct
@@ -100,7 +104,7 @@ describe('SettingsScreen', () => {
     mockOpenSystemNotificationSettings.mockClear();
     mockRefreshNotificationPermission.mockClear();
     mockRefreshNotificationPermission.mockResolvedValue(true);
-    mockNotificationPermissionGranted.mockReturnValue(true);
+    mockNotificationPermissionStatus.mockReturnValue('granted');
     appStateListeners.clear();
     // Re-installed fresh every test (idempotent over jest.spyOn), never
     // restored in afterEach: restoring here would strip every OTHER mock in
@@ -138,23 +142,18 @@ describe('SettingsScreen', () => {
   });
 
   /**
-   * The notice is the only recovery path once Android has stopped showing the
+   * The notice is the only recovery path once the OS has stopped showing the
    * runtime prompt, so it must appear on a denial and stay out of the way
    * otherwise - a permanently-visible warning would train the user past it.
    *
-   * Branches on the platform because jest.config.js runs this file under BOTH
-   * the ios and android projects, and the divergence is the point: the whole
-   * notification display stack is Android-only, so iOS must not read a
-   * permission at all, let alone tell the user one is blocked.
+   * Cross-platform NOW, which is the fix: it used to bail on
+   * `Platform.OS !== 'android'`, so an iOS user whose authorization was denied
+   * saw a screen full of enabled-looking toggles and nothing else. That is
+   * exactly the state the bug reporter was in.
    */
   it('offers a route to system settings when the notification permission is denied', () => {
-    mockNotificationPermissionGranted.mockReturnValue(false);
+    mockNotificationPermissionStatus.mockReturnValue('denied');
     renderSettings();
-
-    if (Platform.OS !== 'android') {
-      expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
-      return;
-    }
 
     fireEvent.press(screen.getByTestId('settings-open-notification-settings'));
     expect(mockOpenSystemNotificationSettings).toHaveBeenCalledTimes(1);
@@ -164,24 +163,19 @@ describe('SettingsScreen', () => {
    * The cache is seeded once at mount and otherwise never updates on its own,
    * so returning from the system settings screen (which fires AppState
    * 'active') is the only moment a grant made outside the app becomes visible
-   * here. Without this listener, a user who grants POST_NOTIFICATIONS from
-   * system settings and comes back would see "Notifications are blocked"
-   * forever, with nothing left to re-check and clear it.
+   * here. Without this listener, a user who grants the permission from system
+   * settings and comes back would see "Notifications are blocked" forever,
+   * with nothing left to re-check and clear it. The listener registration used
+   * to be Android-gated too, so on iOS the notice could never clear.
    */
   it('clears the blocked notice once the permission reads back granted after returning to the app', async () => {
-    mockNotificationPermissionGranted.mockReturnValue(false);
+    mockNotificationPermissionStatus.mockReturnValue('denied');
     renderSettings();
-
-    if (Platform.OS !== 'android') {
-      // iOS never registers the listener at all; the notice never appears
-      // regardless of the cache, which the test above already covers.
-      expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
-      return;
-    }
 
     expect(screen.getByTestId('settings-open-notification-settings')).toBeTruthy();
 
     mockRefreshNotificationPermission.mockResolvedValue(true);
+    mockNotificationPermissionStatus.mockReturnValue('granted');
     act(() => {
       emitAppState('active');
     });
@@ -196,25 +190,59 @@ describe('SettingsScreen', () => {
 
     // null is "nothing has looked yet", which must read as unknown rather than
     // as a denial - otherwise every cold start flashes a blocked warning.
-    mockNotificationPermissionGranted.mockReturnValue(null);
+    mockNotificationPermissionStatus.mockReturnValue(null);
     renderSettings();
     expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
   });
 
   /**
-   * The cache reads `false` on any install that has not granted the permission,
-   * including one that was never asked: Android has no NOT_DETERMINED status,
-   * so notifee reports plain DENIED, and initializeNotifications seeds the
-   * cache at boot. Keying the notice on the cache alone therefore told a
-   * brand-new user "Notifications are blocked" before the app had ever asked
-   * them, and offered a trip to system settings as the fix.
+   * How each platform answers "have we asked yet?", and why the notice needs
+   * two conditions rather than one. Branches on the platform because
+   * jest.config.js runs this file under BOTH the ios and android projects.
+   *
+   * Android has no NOT_DETERMINED status - notifee reports plain DENIED, and
+   * initializeNotifications seeds the cache at boot - so a never-asked install
+   * looks identical to a refused one, and only the persisted flag separates
+   * them. Keying the notice on the cache alone therefore told a brand-new user
+   * "Notifications are blocked" before the app had ever asked them.
+   *
+   * iOS says so directly, which is the more trustworthy source there: Keychain
+   * items survive app deletion, so the persisted flag can outlive the
+   * authorization it describes.
    */
   it('does not claim notifications are blocked before the app has ever asked', () => {
-    mockNotificationPermissionGranted.mockReturnValue(false);
-    useSettingsStore.setState({ hasRequestedNotificationPermission: false });
+    if (Platform.OS === 'android') {
+      mockNotificationPermissionStatus.mockReturnValue('denied');
+      useSettingsStore.setState({ hasRequestedNotificationPermission: false });
+    } else {
+      mockNotificationPermissionStatus.mockReturnValue('not-determined');
+      // Deliberately left TRUE: on iOS a stale flag must not be what decides
+      // this, or a reinstall shows a blocked notice it has no business showing.
+      useSettingsStore.setState({ hasRequestedNotificationPermission: true });
+    }
     renderSettings();
 
     expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
+  });
+
+  /**
+   * "Stay connected" is the Android background keepalive, and the gate that
+   * starts it requires Platform.OS === 'android' - so on iOS the option is
+   * inert and offering it misdescribes what the app will do.
+   */
+  it('offers the background-keepalive mode on Android only', () => {
+    renderSettings();
+
+    if (Platform.OS === 'android') {
+      expect(screen.getByTestId('settings-notifications-foreground-service')).toBeTruthy();
+      return;
+    }
+
+    expect(screen.queryByTestId('settings-notifications-foreground-service')).toBeNull();
+    // The stored value is 'foreground-service' (set in beforeEach) and is left
+    // alone; it simply reads as push-only here, which is what actually happens.
+    expect(screen.getByTestId('settings-notifications-push-only').props.accessibilityState.selected).toBe(true);
+    expect(useSettingsStore.getState().backgroundNotificationsMode).toBe('foreground-service');
   });
 
   it('flips the haptics toggle', () => {
@@ -231,14 +259,20 @@ describe('SettingsScreen', () => {
 
   it('toggles a push category without disturbing the others', () => {
     renderSettings();
-    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
+    fireEvent.press(screen.getByTestId('settings-category-turn-complete'));
     expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
       'input-required': true,
-      'turn-complete': true,
+      'turn-complete': false,
       'session-failed': true,
       'plan-complete': true,
       'spawn-stalled': false,
     });
+  });
+
+  /** The default lands in the UI, not just the store: the row reads as off. */
+  it('shows the slow-starts category switched off by default', () => {
+    renderSettings();
+    expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(false);
   });
 
   it('resyncs the desktop registration when a category toggle changes', async () => {
@@ -258,15 +292,15 @@ describe('SettingsScreen', () => {
     // role AND accessibilityState, so assert against the element carrying
     // the testID, not a nested Switch node.
     const row = screen.getByTestId('settings-category-spawn-stalled');
-    expect(row.props.accessibilityState.checked).toBe(true);
+    expect(row.props.accessibilityState.checked).toBe(false);
 
     fireEvent.press(row);
-    expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(false);
-    expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(false);
-
-    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
     expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(true);
     expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(true);
+
+    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
+    expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(false);
+    expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(false);
   });
 
   it('hides the crash-test section by default', () => {

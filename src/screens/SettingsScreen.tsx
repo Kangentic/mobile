@@ -7,9 +7,10 @@ import { Brandmark, Button, Card, Icon, MonoText, Row, Screen, SectionHeader, St
 import { resyncPushRegistrationCategories } from '@/connection/connectionManager';
 import {
   getPushRegistrationStatus,
-  notificationPermissionGranted,
+  notificationPermissionStatus,
   openSystemNotificationSettings,
   refreshNotificationPermission,
+  type NotificationPermissionStatus,
   type PushRegistrationStatus,
 } from '@/notifications';
 import { crashNatively, crashTestEnabled, throwTestError } from '@/observability/crashReporting';
@@ -85,6 +86,27 @@ const NOTIFICATION_MODE_OPTIONS: {
   },
 ];
 
+/**
+ * 'foreground-service' is Android-only in fact, not just in emphasis: the
+ * keepalive gate in connectionManager requires Platform.OS === 'android', so on
+ * iOS the option is inert and offering it is a lie about what the app will do.
+ * Hide it there.
+ *
+ * The STORED value is left alone. An iOS user whose setting says
+ * 'foreground-service' (the default, or carried from an Android install) reads
+ * back as 'push-only' for display only, which is what actually happens; tapping
+ * writes the real value, so nothing is silently rewritten behind them.
+ */
+function visibleNotificationModeOptions(): typeof NOTIFICATION_MODE_OPTIONS {
+  if (Platform.OS === 'android') return NOTIFICATION_MODE_OPTIONS;
+  return NOTIFICATION_MODE_OPTIONS.filter((option) => option.mode !== 'foreground-service');
+}
+
+function selectedNotificationMode(mode: BackgroundNotificationsMode): BackgroundNotificationsMode {
+  if (Platform.OS === 'android' || mode !== 'foreground-service') return mode;
+  return 'push-only';
+}
+
 const PUSH_CATEGORY_OPTIONS: { category: PushCategory; label: string; description: string; testID: string }[] = [
   {
     category: 'input-required',
@@ -93,9 +115,11 @@ const PUSH_CATEGORY_OPTIONS: { category: PushCategory; label: string; descriptio
     testID: 'settings-category-input-required',
   },
   {
+    // Wire id unchanged; the meaning moved. Both producers now settle-debounce
+    // this, so it marks a session going quiet rather than each turn ending.
     category: 'turn-complete',
-    label: 'Turn complete',
-    description: 'An agent finished its turn',
+    label: 'Agent went idle',
+    description: 'When a session settles',
     testID: 'settings-category-turn-complete',
   },
   {
@@ -202,13 +226,13 @@ export function SettingsScreen(): React.JSX.Element {
           <SectionHeader title="Notifications" testID="settings-section-notifications" />
           <Card>
             <Stack gap="xs">
-              {NOTIFICATION_MODE_OPTIONS.map((option, optionIndex) => (
+              {visibleNotificationModeOptions().map((option, optionIndex) => (
                 <React.Fragment key={option.mode}>
                   {optionIndex > 0 ? <RowDivider /> : null}
                   <RadioRow
                     label={option.label}
                     description={option.description}
-                    selected={option.mode === backgroundNotificationsMode}
+                    selected={option.mode === selectedNotificationMode(backgroundNotificationsMode)}
                     testID={option.testID}
                     onPress={() => void setBackgroundNotificationsMode(option.mode)}
                   />
@@ -334,48 +358,57 @@ function RowDivider(): React.JSX.Element {
 }
 
 /**
- * Shown only when POST_NOTIFICATIONS has been asked for AND refused, because at
- * that point every notification mode above is inert: local alerts and remote
- * push both need it.
+ * Shown when the notification permission has been asked for AND refused,
+ * because at that point every notification mode above is inert: local alerts
+ * and remote push both need it. Cross-platform - an iOS user whose
+ * authorization is denied previously saw a screen full of enabled-looking
+ * toggles and nothing else, which is exactly the state the bug reporter was in.
  *
- * Both halves of that condition are load-bearing. Android has no
- * NOT_DETERMINED authorization status - notifee reports only DENIED or
- * AUTHORIZED - so a permission nobody has requested yet is indistinguishable
- * from one the user refused, and initializeNotifications seeds the cache at
- * boot. Keying on the cache alone would tell a brand-new user that
- * notifications are blocked before the app had ever asked them, on a screen
- * whose only offered remedy is a trip to system settings. The persisted
- * hasRequestedNotificationPermission flag is the only record that we asked.
+ * THE TWO PLATFORMS ANSWER "have we asked?" DIFFERENTLY, and the difference is
+ * why this is not one condition:
+ *
+ * - iOS reports NOT_DETERMINED, so the OS itself says whether anyone has been
+ *   asked. Read it directly. It is also the ONLY trustworthy source there: iOS
+ *   Keychain items survive app deletion, so the persisted flag can outlive the
+ *   authorization it describes and would tell a reinstalled app it had already
+ *   asked when it had not.
+ * - Android has no NOT_DETERMINED - notifee reports only DENIED or AUTHORIZED -
+ *   so a permission nobody has requested reads back identically to one that was
+ *   refused, and initializeNotifications seeds the cache at boot. Keying on the
+ *   cache alone would tell a brand-new user that notifications are blocked
+ *   before the app had ever asked, on a screen whose only offered remedy is a
+ *   trip to system settings. The persisted hasRequestedNotificationPermission
+ *   flag is the only record that we asked.
  *
  * A button rather than another in-app prompt on purpose. Android stops showing
- * the runtime prompt after two dismissals, and thereafter
- * requestNotificationPermission() just resolves denied without displaying
- * anything - so system settings is the only recovery path that still works.
+ * the runtime prompt after two dismissals and iOS asks exactly once ever;
+ * thereafter requestNotificationPermission() just resolves denied without
+ * displaying anything, so system settings is the only recovery path that works.
  */
 function NotificationPermissionNotice(): React.JSX.Element | null {
   // Seeded synchronously from the cache rather than by an async read on mount.
   // The cache is already current by the time this screen can be reached:
   // initializeNotifications seeds it at boot and the connection lifecycle
   // refreshes it on every foreground.
-  const [granted, setGranted] = useState<boolean | null>(() => notificationPermissionGranted());
+  const [status, setStatus] = useState<NotificationPermissionStatus | null>(() => notificationPermissionStatus());
   const hasRequestedNotificationPermission = useSettingsStore((state) => state.hasRequestedNotificationPermission);
 
   useEffect(() => {
-    if (Platform.OS !== 'android') return;
     // Returning from the system settings screen fires 'active', which is the
     // only moment a grant made outside the app becomes visible to it. The
     // lifecycle refreshes on the same event, but this cannot read its result
     // off the cache - both are reacting to the same tick.
-    const subscription = AppState.addEventListener('change', (status) => {
-      if (status !== 'active') return;
+    const subscription = AppState.addEventListener('change', (appStateStatus) => {
+      if (appStateStatus !== 'active') return;
       void refreshNotificationPermission()
-        .then(setGranted)
+        .then(() => setStatus(notificationPermissionStatus()))
         .catch(() => undefined);
     });
     return () => subscription.remove();
   }, []);
 
-  if (Platform.OS !== 'android' || !hasRequestedNotificationPermission || granted !== false) return null;
+  if (status !== 'denied') return null;
+  if (Platform.OS === 'android' && !hasRequestedNotificationPermission) return null;
   return (
     <Card>
       <Stack gap="sm">

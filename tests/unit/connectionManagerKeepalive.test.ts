@@ -27,7 +27,7 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { useChannelStore } from '@/state/channelStore';
 // Safe to import statically: permissionCache has no imports at all, which is
 // the whole point of it being separate from channels.ts.
-import { notificationPermissionGranted, setNotificationPermissionGranted } from '@/notifications/permissionCache';
+import { notificationPermissionGranted, setNotificationPermissionStatus } from '@/notifications/permissionCache';
 import { flushMicrotasks, waitUntil } from '../helpers/async';
 
 /** Must match BACKGROUND_KEEPALIVE_MAX_MS. Held separately on purpose - see the file header. */
@@ -111,12 +111,19 @@ vi.mock('@/connection/mockDesktop', async () => {
   };
 });
 
+/**
+ * Mutable so the iOS cases can flip it. connectionManager reads Platform.OS
+ * inside the functions under test, never at module scope, so reassigning the
+ * field between tests is enough - no module re-import needed.
+ */
+const platformMock = vi.hoisted(() => ({ OS: 'android' as 'android' | 'ios' }));
+
 vi.mock('react-native', () => ({
   AppState: {
     currentState: 'active',
     addEventListener: vi.fn(() => ({ remove: vi.fn() })),
   },
-  Platform: { OS: 'android' },
+  Platform: platformMock,
 }));
 
 vi.mock('expo-secure-store', () => ({
@@ -177,7 +184,7 @@ describe('connectionManager background keepalive ceiling', () => {
     mockDesktopSeam.stub = null;
     // Module-level state: without this reset the denied-permission test below
     // would leak into whatever runs after it.
-    setNotificationPermissionGranted(true);
+    setNotificationPermissionStatus('granted');
     notifeeMocks.displayNotification.mockClear();
     notifeeMocks.stopForegroundService.mockClear();
     notifeeMocks.getNotificationSettings.mockReset();
@@ -328,7 +335,7 @@ describe('connectionManager background keepalive ceiling', () => {
     const { getActiveConnection } = await import('@/connection/connectionManager');
     const onAppStateChange = await establishAndWarm();
 
-    setNotificationPermissionGranted(false);
+    setNotificationPermissionStatus('denied');
     onAppStateChange('background');
 
     expect(notifeeMocks.displayNotification).not.toHaveBeenCalled();
@@ -350,7 +357,7 @@ describe('connectionManager background keepalive ceiling', () => {
     const { getActiveConnection } = await import('@/connection/connectionManager');
     const onAppStateChange = await establishAndWarm();
 
-    setNotificationPermissionGranted(false);
+    setNotificationPermissionStatus('denied');
     useSettingsStore.setState({ hasRequestedNotificationPermission: false });
     onAppStateChange('background');
     // The service posts through a (pre-warmed) dynamic import, so it lands a
@@ -423,15 +430,19 @@ describe('connectionManager notification permission prompt', () => {
     mockRunBootstrap.mockReset();
     mockRunBootstrap.mockResolvedValue(undefined);
     mockDesktopSeam.stub = null;
-    setNotificationPermissionGranted(true);
+    platformMock.OS = 'android';
+    setNotificationPermissionStatus('granted');
     notifeeMocks.requestPermission.mockClear();
     notifeeMocks.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
+    notifeeMocks.getNotificationSettings.mockReset();
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
   });
 
   afterEach(async () => {
     const { stopConnectionLifecycle } = await import('@/connection/connectionManager');
     stopConnectionLifecycle();
     vi.useRealTimers();
+    platformMock.OS = 'android';
     delete (globalThis as { __DEV__?: boolean }).__DEV__;
     delete process.env.EXPO_PUBLIC_KANGENTIC_MOCK;
     useSettingsStore.setState({ backgroundNotificationsMode: 'off', hasRequestedNotificationPermission: false, hydrated: false });
@@ -554,6 +565,72 @@ describe('connectionManager notification permission prompt', () => {
 
     startConnectionLifecycle();
     await waitUntil(() => mockRunBootstrap.mock.calls.length === 1, { label: 'bootstrap ran' });
+    await flushMicrotasks();
+
+    expect(notifeeMocks.requestPermission).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The TestFlight bug. This function opened with `if (Platform.OS !== 'android')
+   * return`, so iOS was never asked for authorization - and the failure was
+   * invisible, because registration still succeeded:
+   * getDevicePushTokenAsync only calls registerForRemoteNotifications(), which
+   * yields an APNs token with no authorization behind it. The phone got a token,
+   * the desktop sent, APNs delivered, and iOS discarded every alert.
+   */
+  it('asks on iOS too', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    platformMock.OS = 'ios';
+    setNotificationPermissionStatus('not-determined');
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established, { label: 'session established' });
+    await waitUntil(() => useSettingsStore.getState().hasRequestedNotificationPermission, { label: 'permission requested' });
+
+    expect(notifeeMocks.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * iOS Keychain items survive app deletion, so the persisted "we already asked"
+   * flag can outlive the authorization it describes: reinstall, and the flag is
+   * still true while iOS has reset authorization to NOT_DETERMINED. A flag-only
+   * gate would leave that install never asked AND told in Settings that
+   * notifications are blocked. When the OS says nobody has been asked, the OS wins.
+   *
+   * THE CACHE IS SEEDED STALE HERE ON PURPOSE. That is the production shape:
+   * initializeNotifications refreshes the cache fire-and-forget at bundle entry
+   * and nothing orders that against establishment, so whatever this reads
+   * synchronously may not reflect the OS yet. Reading the cache instead of the
+   * OS is the bug this pins - with a stale 'granted' in hand, a cache-based gate
+   * decides "not not-determined" and never prompts the very device that needs it.
+   */
+  it('asks again on iOS when the OS reports not-determined, even against a stale cache', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    platformMock.OS = 'ios';
+    useSettingsStore.setState({ hasRequestedNotificationPermission: true });
+    setNotificationPermissionStatus('granted');
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: -1 }); // NOT_DETERMINED
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established, { label: 'session established' });
+    await waitUntil(() => notifeeMocks.requestPermission.mock.calls.length === 1, { label: 'permission requested' });
+
+    expect(notifeeMocks.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The override above is scoped to not-determined, not to iOS generally: an iOS
+   * user who was asked and refused must not be re-prompted on every establishment.
+   */
+  it('does not re-ask on iOS once the OS reports a real answer', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    platformMock.OS = 'ios';
+    useSettingsStore.setState({ hasRequestedNotificationPermission: true });
+    setNotificationPermissionStatus('granted');
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 0 }); // DENIED
+
+    startConnectionLifecycle();
+    await waitUntil(() => notifeeMocks.getNotificationSettings.mock.calls.length >= 1, { label: 'permission re-read' });
     await flushMicrotasks();
 
     expect(notifeeMocks.requestPermission).not.toHaveBeenCalled();

@@ -28,18 +28,43 @@ import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
 /** Matches the desktop's own per-(session, category) push cooldown. */
 const LOCAL_NOTIFICATION_COOLDOWN_MS = 30_000;
 
+/**
+ * How long a session must stay idle before 'turn-complete' fires.
+ *
+ * WITHOUT THIS, a conversation is one alert per reply. The category fires on a
+ * thinking -> idle transition and every exchange ends in idle, so each reply is
+ * its own notification. The 30s cooldown above only collapses replies that land
+ * within 30s of each other, which real turns rarely do - a single trivial task
+ * was producing 20+ alerts, and several tasks in flight multiplied it.
+ *
+ * This is also NOT redundant with the desktop's identical debounce. The desktop
+ * suppresses remote push for any device with a live bridge session, so while
+ * the five-minute background keepalive holds the channel open, THIS notifier is
+ * the only thing firing. Fixing one side alone leaves the flood intact for
+ * exactly the case that was reported.
+ *
+ * 45s is a starting value, tuned live: long enough to swallow a
+ * question-and-answer exchange, short enough that a genuinely finished session
+ * still alerts promptly.
+ */
+const IDLE_SETTLE_MS = 45_000;
+
 function resolveTaskTitle(entry: SessionActivityEntry): string {
   const boardTask = useBoardStore.getState().boardsByProjectId[entry.projectId]?.tasksById[entry.taskId];
   return boardTask && boardTask.title.length > 0 ? boardTask.title : 'Agent session';
 }
 
+/**
+ * The categories that fire IMMEDIATELY on a transition. 'turn-complete' is
+ * deliberately absent: it is settle-debounced instead, see IDLE_SETTLE_MS and
+ * the timer handling in startLocalNotifier.
+ */
 function categoriesForTransition(entry: SessionActivityEntry, previousEntry: SessionActivityEntry | undefined): PushCategory[] {
   const categories: PushCategory[] = [];
   const enteredPermission = entry.state === 'permission' && previousEntry?.state !== 'permission';
   const promptChanged =
     entry.state === 'permission' && entry.awaitedPromptId !== null && previousEntry?.awaitedPromptId !== entry.awaitedPromptId;
   if (enteredPermission || promptChanged) categories.push('input-required');
-  if (previousEntry?.state === 'thinking' && entry.state === 'idle') categories.push('turn-complete');
   // Only an UNINTENTIONAL end is worth waking someone for. A deliberate Stop,
   // suspend or shutdown is the user's own action taken at the desktop they are
   // sitting at, and this category is 'session-failed', not 'session-stopped'.
@@ -89,23 +114,67 @@ export function startLocalNotifier(): () => void {
       });
   };
 
+  const idleSettleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const cancelIdleSettle = (sessionId: string): void => {
+    const pendingTimer = idleSettleTimers.get(sessionId);
+    if (pendingTimer === undefined) return;
+    clearTimeout(pendingTimer);
+    idleSettleTimers.delete(sessionId);
+  };
+
+  const scheduleIdleSettle = (entry: SessionActivityEntry): void => {
+    // First-write-wins, matching the desktop's permission debounce: a repeated
+    // arm must not push the deadline out, or a session that keeps flickering
+    // never alerts at all.
+    if (idleSettleTimers.has(entry.sessionId)) return;
+    idleSettleTimers.set(
+      entry.sessionId,
+      setTimeout(() => {
+        idleSettleTimers.delete(entry.sessionId);
+        // Re-read at FIRE time rather than trusting the entry captured 45s ago.
+        // Cancellation below covers the transitions we observe; this covers a
+        // session that changed without one reaching us.
+        const currentEntry = useActivityStore.getState().bySessionId[entry.sessionId];
+        if (!currentEntry || currentEntry.state !== 'idle') return;
+        // The background check belongs HERE, not only at arm time: the app can
+        // come forward inside the settle window, and nothing may post over the
+        // in-app UI. (stopLocalNotifier also clears these on foreground, so
+        // this is the belt to that braces.)
+        if (appStateStatus !== 'background') return;
+        fire('turn-complete', currentEntry);
+      }, IDLE_SETTLE_MS),
+    );
+  };
+
   let previousBySessionId = useActivityStore.getState().bySessionId;
   const unsubscribeStore = useActivityStore.subscribe((state) => {
     const currentBySessionId = state.bySessionId;
     if (currentBySessionId === previousBySessionId) return;
     const previous = previousBySessionId;
     previousBySessionId = currentBySessionId;
-    // Track transitions even while foregrounded (above), but only notify
-    // while backgrounded: the in-app UI is the foreground surface.
-    if (appStateStatus !== 'background') return;
     for (const entry of Object.values(currentBySessionId)) {
-      for (const category of categoriesForTransition(entry, previous[entry.sessionId])) fire(category, entry);
+      const previousEntry = previous[entry.sessionId];
+      // Arm and cancel on EVERY transition, before the background gate below.
+      // A missed cancel is worse than a missed arm: it fires an alert for a
+      // session that went straight back to work.
+      if (entry.state === 'thinking' || entry.state === 'permission') {
+        cancelIdleSettle(entry.sessionId);
+      } else if (previousEntry?.state === 'thinking' && entry.state === 'idle') {
+        scheduleIdleSettle(entry);
+      }
+      // Track transitions even while foregrounded, but only notify while
+      // backgrounded: the in-app UI is the foreground surface.
+      if (appStateStatus !== 'background') continue;
+      for (const category of categoriesForTransition(entry, previousEntry)) fire(category, entry);
     }
   });
 
   return () => {
     appStateSubscription.remove();
     unsubscribeStore();
+    for (const pendingTimer of idleSettleTimers.values()) clearTimeout(pendingTimer);
+    idleSettleTimers.clear();
     lastFiredAtByKey.clear();
   };
 }

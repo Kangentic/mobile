@@ -78,7 +78,7 @@ describe('decryptPushBlob', () => {
 
     const expectedTitles = {
       'input-required': 'Agent needs your input',
-      'turn-complete': 'Turn complete',
+      'turn-complete': 'Agent went idle',
       'session-failed': 'Session stopped',
       'plan-complete': 'Plan complete',
       'spawn-stalled': 'Still preparing',
