@@ -322,6 +322,10 @@ on each `thinking -> idle` transition produced one alert per reply (20+ for a si
 task). Both producers now arm a ~45s timer on reaching idle, cancel it if the session returns to
 `thinking` or `permission` (or exits), and re-check the live state when it fires: the desktop in
 `push-notifier.ts` (mirroring its 2s permission debounce) and the phone in `localNotifier.ts`.
+On the phone, "still idle" means `state === 'idle'` **and** `feedStatus !== 'ended'`: a
+`session-ended` event sets `feedStatus` and leaves `state` untouched, so checking `state` alone
+would let a pending settle outlive the session and fire "Agent went idle" 45s after
+`session-failed` - or, for a deliberate stop, fire an alert where the design is to send none.
 Both are needed - the desktop suppresses remote push for any device with a live bridge session, so
 during the five-minute background keepalive the local notifier is the only thing firing.
 
