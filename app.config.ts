@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.5.0',
+  version: '0.5.1',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -74,11 +74,19 @@ const config: ExpoConfig = {
     // 2026-08-15, confirmed spent by the ios-b7 tag. 8 is taken by the v0.5.0
     // release cut 2026-08-16, confirmed spent by the ios-b8 tag.
     //
-    // 9 is this resubmission. Build 7 (v0.4.1) was rejected by APP REVIEW on
-    // 2026-08-18 under guideline 5.1.1(iv): the camera pre-permission screen's
-    // button read "Grant camera access" where Apple requires neutral wording.
-    // 8 cannot carry the fix - it was already uploaded - so the corrected
-    // binary needs a number of its own even though `version` does not move.
+    // 9 is this resubmission, cut as v0.5.1 on 2026-08-19. Build 7 (v0.4.1) was
+    // rejected by APP REVIEW on 2026-08-18 under guideline 5.1.1(iv): the
+    // camera pre-permission screen's button read "Grant camera access" where
+    // Apple requires neutral wording. 8 cannot carry the fix, it was already
+    // uploaded, so the corrected binary needs a number of its own.
+    //
+    // The version moved 0.5.0 -> 0.5.1 to give the fix an App Store Connect
+    // version record of its own. That is a submission-side requirement, not a
+    // numbering one: Apple lists a build only under a version record matching
+    // its CFBundleShortVersionString, so a 0.5.0 binary cannot be selected for
+    // the 0.4.1 record that was rejected. An earlier revision of this comment
+    // said 9 ships "under an UNCHANGED version"; that was written before the
+    // release chose 0.5.1 and is no longer true.
     //
     // NOTE THE TWO KINDS OF REJECTION, which this ledger uses the same word
     // for. A rejection IN PROCESSING (1 and 2, ITMS-90683) means the upload
@@ -88,9 +96,11 @@ const config: ExpoConfig = {
     // the first kind frees a number. Do not read "rejected" here as "free".
     //
     // Numbers stay globally increasing across semver bumps (8 follows 7 even
-    // though `version` moved 0.4.1 -> 0.5.0), per the global-not-per-version
-    // rule above: a semver bump frees nothing. The converse holds here: 9
-    // follows 8 under an UNCHANGED `version`, because the gate is per app.
+    // though `version` moved 0.4.1 -> 0.5.0, and 9 follows 8 across
+    // 0.5.0 -> 0.5.1), per the global-not-per-version rule above: a semver bump
+    // frees nothing. 9 was set on 2026-08-18 and never uploaded, confirmed by
+    // the absence of an ios-b9 tag on the remote, so it carries forward into
+    // this release rather than being burned and replaced by 10.
     buildNumber: '9',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
@@ -233,8 +243,11 @@ const config: ExpoConfig = {
     // cut 2026-08-15, confirmed spent by the android-vc5 tag. 6 was the v0.5.0
     // internal release cut 2026-08-16, confirmed spent by the android-vc6 tag.
     //
-    // 6 still stands: the 2026-08-18 resubmission that moved ios.buildNumber to
-    // 9 is an iOS-only App Review fix, and the two counters are independent.
+    // 7 is the v0.5.1 internal release cut 2026-08-19. An earlier revision of
+    // this comment said "6 still stands", which was true while the App Review
+    // fix was iOS-only; this release ships both platforms, so Android takes a
+    // number too. The counters remain independent, and 7 follows 6 on Android's
+    // own sequence regardless of what iOS did.
     //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
@@ -242,7 +255,7 @@ const config: ExpoConfig = {
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 6,
+    versionCode: 7,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
