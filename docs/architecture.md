@@ -143,7 +143,8 @@ src/
                   #   the generated self-contained xterm.html asset
   diff/            # Pure unified-diff line computation (jsdiff) + path display helpers
   notifications/   # Push registration, E2E blob decrypt, notifee channels, local notifier,
-                  #   foreground service, background push task, tap routing (Android; iOS NSE later)
+                  #   foreground service, background push task, tap routing (tap routing
+                  #   is cross-platform; rich display is Android until the iOS NSE ships)
   state/           # Zustand stores (activity/board/transcript/diff/channel/settings) +
                   #   the non-Zustand terminalFeed PTY ring buffers
   voice/           # Dictation hook over the OS speech engines
@@ -268,14 +269,24 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
    per-device bearer secret.
 3. The payload is ciphertext plus a generic placeholder (see `.claude/rules/e2e-notification-privacy.md`).
    On iOS, a Notification Service Extension (added via an Expo config plugin, no eject) decrypts
-   and rewrites the notification on-device. On Android, a high-priority data-only FCM message is
-   decrypted by a Notifee background handler, which posts the rich local notification.
+   and rewrites the notification on-device. **The NSE is not built yet**, so an iOS push currently
+   renders as the placeholder only. On Android, a high-priority data-only FCM message is decrypted
+   by a Notifee background handler, which posts the rich local notification.
+   **The placeholder `title`/`body` are sent to iOS devices only.** The desktop branches on the
+   registration's `platform`: Android gets a data-only message, because expo-notifications
+   presents any push carrying a title or body itself, natively, ON TOP of the decrypted one the
+   background task posts - which showed every Android alert twice. Omitting both suppresses the
+   native render while the task still runs. iOS keeps them, since without the NSE that placeholder
+   is the only visible content an iOS push can have.
 4. Presence suppression: when the app is foregrounded with the channel up, the desktop notifies
-   over the socket and skips the push.
+   over the socket and skips the push. The phone re-checks this on receipt too - the background
+   task suppresses its display whenever `AppState.currentState` is provably `'active'` (only that,
+   never "not background": a killed-app launch has no Activity and reports `null`/`'unknown'`).
 
-Phone side (`src/notifications/`; DISPLAY is Android-only in this phase, while registration is
-deliberately platform-agnostic - an iOS device registers its key/token ahead of the NSE shipping,
-and its pushes safely degrade to the generic placeholder until then): the 32-byte push key is
+Phone side (`src/notifications/`; RICH DISPLAY is Android-only in this phase, while registration,
+the permission request, tap routing, and the permission-state surface in Settings are all
+cross-platform - an iOS device registers its key/token ahead of the NSE shipping, and its pushes
+safely degrade to the generic placeholder until then): the 32-byte push key is
 generated on-device and exchanged via the `register-push` verb on every established bootstrap,
 alongside the device's enabled `categories` (`pushRegistration.ts` - idempotent, re-sent on Expo
 token rotation or a category-preference change, and non-fatal without FCM credentials or against
@@ -288,13 +299,31 @@ categories (`categoryCopy.ts` - `input-required` / `turn-complete` / `session-fa
 any one agent's terms) onto four notifee channels (needs-attention / completions / failures /
 stalls); any failure degrades to the generic placeholder.
 
-| Category | Placeholder title (`titleForCategory`) |
-|----------|------------------------------------------|
-| `input-required` | "Agent needs your input" |
-| `turn-complete` | "Turn complete" |
-| `session-failed` | "Session stopped" |
-| `plan-complete` | "Plan complete" |
-| `spawn-stalled` | "Still preparing" |
+| Category | Title (`titleForCategory`) | Default |
+|----------|----------------------------|---------|
+| `input-required` | "Agent needs your input" | on |
+| `turn-complete` | "Agent went idle" | on |
+| `session-failed` | "Session stopped" | on |
+| `plan-complete` | "Plan complete" | on |
+| `spawn-stalled` | "Still preparing" | **off** |
+
+`spawn-stalled` ("slow starts") is the one default-off category. It stays in the protocol, the
+Settings list, and the `stalls` channel - defaulted off, not removed, so re-enabling it sticks.
+The defaults live in `PUSH_CATEGORY_DEFAULTS` (`src/state/settingsStore.ts`) as a
+`Record<PushCategory, boolean>` literal, so a category added to the protocol is a compile error
+rather than a silent default. Because `setPushCategoryEnabled` persists the whole map, a bare
+default change could not reach installs that had ever touched a toggle; the store therefore reads
+a `settings.pushCategoriesEnabled.v2` key and, when it is absent, migrates the v1 map by forcing
+`spawn-stalled` false and copying every other category through unchanged.
+
+`turn-complete` is **settle-debounced on both sides**, and its name is now historical: it reports
+a session going quiet, not a turn ending. Every exchange in a conversation ends in idle, so firing
+on each `thinking -> idle` transition produced one alert per reply (20+ for a single trivial
+task). Both producers now arm a ~45s timer on reaching idle, cancel it if the session returns to
+`thinking` or `permission` (or exits), and re-check the live state when it fires: the desktop in
+`push-notifier.ts` (mirroring its 2s permission debounce) and the phone in `localNotifier.ts`.
+Both are needed - the desktop suppresses remote push for any device with a live bridge session, so
+during the five-minute background keepalive the local notifier is the only thing firing.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`
@@ -302,24 +331,47 @@ outside React). While backgrounded in foreground-service mode, `localNotifier.ts
 activity-store transitions into the same notifications locally (three of the five categories have
 an activity-store signal to fire from; 30s per-session-per-category cooldown, suppressed while
 foregrounded, and gated by the same per-category Settings toggle as remote push), and
-`foregroundService.ts` owns the ongoing LOW-importance connection notification. Taps route to the
-task screen via `tapRouter.ts`.
+`foregroundService.ts` owns the ongoing LOW-importance connection notification.
 
-`POST_NOTIFICATIONS` (Android 13+) is requested once, the first time a session establishes -
-establishment is the paired signal, so the one rule reaches both a fresh install (prompted when
-pairing first connects, not on a cold launch) and an install paired long before the prompt
-existed (prompted on its first establishment after updating). `settings.hasRequestedNotificationPermission`
-makes it once-ever, since `onEstablished` re-fires on every reconnect (a rekey does not - an
-already-established re-handshake routes to `onRekey` instead). Two further guards: a user whose
-mode is `'off'` is never prompted at all, and an in-flight guard covers the window where an open
-system dialog backgrounds the app and the reconnect re-establishes before the flag is persisted.
-The last known
-state is cached in `permissionCache.ts` - deliberately notifee-free, because the keepalive gate
-must read it synchronously on the background transition and an awaited read there is what causes
-`ForegroundServiceDidNotStartInTimeException`. That same persisted flag is what lets both the
-gate and the Settings notice tell "never asked" from "refused", which the cache cannot express on
-Android. Once denied twice, Android stops showing the runtime prompt entirely, so Settings offers
-a route to the system notification settings instead.
+Taps route to the task screen via `tapRouter.ts`, differently per platform because the two carry
+task identity differently. Android reads `{ taskId, projectId, sessionId }` straight off the
+notification, which Notifee posted after decrypting. iOS has no NSE, so the tapped notification
+carries only the sealed blob: the router decrypts it **on tap**, when the app is running and the
+push key is reachable, and routes from the plaintext (`addNotificationResponseReceivedListener`
+for a warm tap, `getLastNotificationResponseAsync()` for a cold start). That is what keeps
+`taskId` out of the OS-visible payload; a plaintext routing id in `data` would be the easy version
+and is what `e2e-notification-privacy.md` forbids. A failed decrypt routes nowhere and the app
+opens to Home.
+
+The runtime notification permission - Android 13+'s `POST_NOTIFICATIONS` and iOS's
+`UNUserNotificationCenter` authorization, both via `notifee.requestPermission()` - is requested
+once, the first time a session establishes. Establishment is the paired signal, so the one rule
+reaches both a fresh install (prompted when pairing first connects, not on a cold launch) and an
+install paired long before the prompt existed (prompted on its first establishment after
+updating). `settings.hasRequestedNotificationPermission` makes it once-ever, since
+`onEstablished` re-fires on every reconnect (a rekey does not - an already-established
+re-handshake routes to `onRekey` instead). Two further guards: a user whose mode is `'off'` is
+never prompted at all, and an in-flight guard covers the window where an open system dialog
+backgrounds the app and the reconnect re-establishes before the flag is persisted.
+
+**iOS was never asked at all until this landed**, and the failure was silent rather than loud:
+`getDevicePushTokenAsync` only calls `registerForRemoteNotifications()`, which yields an APNs
+token with no user authorization behind it - so the phone got a token, registration reported
+success, the desktop sent, APNs delivered, and iOS discarded every alert.
+
+The last known state is cached in `permissionCache.ts` - deliberately notifee-free, because the
+keepalive gate must read it synchronously on the background transition and an awaited read there
+is what causes `ForegroundServiceDidNotStartInTimeException`. It is a **tri-state**
+(`granted` / `denied` / `not-determined`) because the platforms differ in what they can express.
+iOS reports `NOT_DETERMINED`, so "nobody has been asked" is directly readable there - and it must
+be preferred over the persisted flag, since iOS Keychain items survive app deletion and the flag
+can outlive the authorization it describes: the prompt therefore fires on iOS whenever the OS
+reports not-determined, whatever the flag says. Android has no such status (notifee reports plain
+`DENIED`), so there the persisted flag remains the only record that the app ever asked, and both
+the keepalive gate and the Settings notice still pair the two. Once denied twice, Android stops
+showing the runtime prompt entirely, so Settings offers a route to the system notification
+settings instead - on both platforms, since an iOS user with a denied authorization needs exactly
+the same recovery route.
 
 Unpairing sends `register-push` with `action: 'unregister'` while
 the channel is still up and wipes the local push key (`pushKeys.clearPushRegistration()`), so the

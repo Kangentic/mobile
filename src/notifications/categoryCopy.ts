@@ -39,8 +39,12 @@ export function titleForCategory(category: PushCategory): string {
   switch (category) {
     case 'input-required':
       return 'Agent needs your input';
+    // The wire id stays 'turn-complete' (changing it would be a protocol
+    // release), but the signal no longer means "a turn ended". Both producers
+    // now settle-debounce it, so it fires once when a session goes quiet rather
+    // than once per reply - see localNotifier's idle timer and the desktop's.
     case 'turn-complete':
-      return 'Turn complete';
+      return 'Agent went idle';
     case 'session-failed':
       return 'Session stopped';
     case 'plan-complete':

@@ -26,6 +26,23 @@ vi.mock('expo-task-manager', () => ({
   defineTask: taskManagerState.defineTask,
 }));
 
+/**
+ * `currentState` is deliberately typed to include the values a HEADLESS launch
+ * produces. There is no Activity in a killed-app task, so React Native has no
+ * app state to report and this reads back null or 'unknown' rather than
+ * 'background' - which is why the gate under test suppresses only on a
+ * provable 'active'.
+ */
+const appStateMock = vi.hoisted(() => ({ currentState: 'background' as string | null }));
+
+vi.mock('react-native', () => ({
+  AppState: {
+    get currentState() {
+      return appStateMock.currentState;
+    },
+  },
+}));
+
 vi.mock('expo-notifications', () => ({
   registerTaskAsync: taskManagerState.registerTaskAsync,
 }));
@@ -70,6 +87,7 @@ type TaskExecutor = (body: { data: unknown; error: null; executionInfo: { taskNa
 describe('backgroundPushTask', () => {
   beforeEach(() => {
     vi.resetModules();
+    appStateMock.currentState = 'background';
     secureStoreState.storedValues.clear();
     taskManagerState.defineTask.mockClear();
     taskManagerState.registerTaskAsync.mockClear();
@@ -167,5 +185,48 @@ describe('backgroundPushTask', () => {
     });
 
     expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Nothing fires over the top of the UI. The desktop already skips devices with
+   * a live bridge session, but that is coarse - a relay hiccup, a reconnect, or
+   * the five-minute keepalive ceiling landing while the user is actually looking
+   * at the app all get a push through - so the display gates on app state too.
+   */
+  it('suppresses the display while the app is foregrounded', async () => {
+    appStateMock.currentState = 'active';
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE POLARITY TEST, and the reason the gate is `=== 'active'` rather than
+   * `!== 'background'`. A killed-app launch has no Activity, so AppState has no
+   * state to report: React Native hands back null or 'unknown'. Mirroring the
+   * local notifier's inversion here would read those as "not background" and
+   * silently kill the killed-app push path - the entire feature this task is.
+   */
+  it.each([['background'], ['inactive'], ['unknown'], [null]])('still displays when app state reads %s', async (state) => {
+    appStateMock.currentState = state;
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
   });
 });

@@ -9,7 +9,7 @@ import {
   channelIdForCategory,
   titleForCategory,
 } from './categoryCopy';
-import { setNotificationPermissionGranted } from './permissionCache';
+import { setNotificationPermissionStatus, type NotificationPermissionStatus } from './permissionCache';
 
 /**
  * Android notification channels, mirroring the desktop's push channel
@@ -69,7 +69,12 @@ export async function createNotificationChannels(): Promise<void> {
     {
       id: COMPLETIONS_CHANNEL_ID,
       name: 'Completions',
-      description: 'An agent finished its turn or a plan was approved.',
+      // Re-creating an existing channel DOES update its name and description,
+      // so this reaches installs that already have the channel. It does NOT
+      // update importance once the user has customised it, which is why the
+      // relabel deliberately leaves importance alone rather than pretending to
+      // change it.
+      description: 'An agent settled into idle, or a plan was approved.',
       importance: AndroidImportance.DEFAULT,
     },
     {
@@ -93,8 +98,17 @@ export async function createNotificationChannels(): Promise<void> {
   ]);
 }
 
-function grantedFromStatus(authorizationStatus: AuthorizationStatus): boolean {
-  return authorizationStatus === AuthorizationStatus.AUTHORIZED || authorizationStatus === AuthorizationStatus.PROVISIONAL;
+/**
+ * PROVISIONAL is iOS-only (quiet delivery straight to the notification centre)
+ * and counts as granted: notifications do arrive. NOT_DETERMINED is also
+ * iOS-only - Android reports DENIED for a permission nobody has requested -
+ * which is exactly the distinction permissionCache exists to carry.
+ */
+function statusFromAuthorization(authorizationStatus: AuthorizationStatus): NotificationPermissionStatus {
+  if (authorizationStatus === AuthorizationStatus.AUTHORIZED || authorizationStatus === AuthorizationStatus.PROVISIONAL) {
+    return 'granted';
+  }
+  return authorizationStatus === AuthorizationStatus.NOT_DETERMINED ? 'not-determined' : 'denied';
 }
 
 /**
@@ -104,17 +118,23 @@ function grantedFromStatus(authorizationStatus: AuthorizationStatus): boolean {
  */
 export async function refreshNotificationPermission(): Promise<boolean> {
   const settings = await notifee.getNotificationSettings();
-  const granted = grantedFromStatus(settings.authorizationStatus);
-  setNotificationPermissionGranted(granted);
-  return granted;
+  const status = statusFromAuthorization(settings.authorizationStatus);
+  setNotificationPermissionStatus(status);
+  return status === 'granted';
 }
 
-/** Android 13+ runtime notification permission (POST_NOTIFICATIONS), via notifee. */
+/**
+ * The runtime notification permission, via notifee. Cross-platform on purpose:
+ * this is Android 13+'s POST_NOTIFICATIONS and iOS's
+ * UNUserNotificationCenter authorization, and notifee's requestPermission()
+ * covers both. iOS needs it as much as Android does - without it APNs delivers
+ * the push and iOS silently discards every alert.
+ */
 export async function requestNotificationPermission(): Promise<boolean> {
   const settings = await notifee.requestPermission();
-  const granted = grantedFromStatus(settings.authorizationStatus);
-  setNotificationPermissionGranted(granted);
-  return granted;
+  const status = statusFromAuthorization(settings.authorizationStatus);
+  setNotificationPermissionStatus(status);
+  return status === 'granted';
 }
 
 /**

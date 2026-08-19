@@ -3,7 +3,7 @@ import { ChannelController, SubscriptionManager, type VerbClient } from '@/chann
 import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
 import { setActivePushIdentityPublicKey } from '@/notifications/pushIdentity';
-import { notificationPermissionGranted } from '@/notifications/permissionCache';
+import { notificationPermissionGranted, notificationPermissionStatus } from '@/notifications/permissionCache';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { bindFeedToStores, createSnapshotSinks } from './storeFeed';
@@ -453,8 +453,9 @@ function closeConnection(intent: ConnectionTeardownIntent = 'stay-silent'): void
 }
 
 /**
- * Ask for POST_NOTIFICATIONS once, the first time a session actually
- * establishes.
+ * Ask for the runtime notification permission once, the first time a session
+ * actually establishes. BOTH platforms: Android's POST_NOTIFICATIONS and iOS's
+ * UNUserNotificationCenter authorization.
  *
  * Establishment IS the paired signal, which is what makes this one rule cover
  * both populations: an install that has been paired for weeks prompts on its
@@ -463,8 +464,13 @@ function closeConnection(intent: ConnectionTeardownIntent = 'stay-silent'): void
  * a cold first launch before the user knows what the app is.
  *
  * The permission was never requested anywhere before this - the function
- * existed and was exported, but its only callers were tests - so every install
- * ran with notifications silently undeliverable, local and remote alike.
+ * existed and was exported, but its only callers were tests - so every Android
+ * install ran with notifications silently undeliverable. iOS was worse and for
+ * longer: this function returned early there, so iOS was NEVER asked, and the
+ * failure was invisible because registration still succeeded.
+ * getDevicePushTokenAsync only calls registerForRemoteNotifications(), which
+ * yields an APNs token with no user authorization whatsoever - so the phone got
+ * a token, the desktop sent, APNs delivered, and iOS discarded every alert.
  *
  * onEstablished re-fires on every reconnect, so the persisted flag is what
  * makes this once-ever, and it has to be read from a HYDRATED store:
@@ -477,7 +483,6 @@ function closeConnection(intent: ConnectionTeardownIntent = 'stay-silent'): void
 let notificationPermissionPromptInFlight = false;
 
 function maybeRequestNotificationPermission(): void {
-  if (Platform.OS !== 'android') return;
   // An open system dialog pauses the activity, which Android reports as a
   // background transition. In the modes where that transition closes the
   // channel ('push-only', or settings not yet hydrated) answering the prompt
@@ -488,14 +493,35 @@ function maybeRequestNotificationPermission(): void {
   if (notificationPermissionPromptInFlight) return;
   const settings = useSettingsStore.getState();
   if (!settings.hydrated) return;
-  if (settings.hasRequestedNotificationPermission) return;
   if (settings.backgroundNotificationsMode === 'off') return;
+  // The persisted flag is the once-ever gate on Android, and the whole gate:
+  // decided synchronously, nothing else to consult.
+  //
+  // On iOS the flag can OUTLIVE the authorization it describes. Keychain items
+  // survive app deletion, so a reinstall starts with the flag still true while
+  // iOS has reset authorization to NOT_DETERMINED - that install would never be
+  // asked AND would be told in Settings that notifications are blocked. So iOS
+  // falls through to ask the OS below instead of trusting the flag.
+  const alreadyAsked = settings.hasRequestedNotificationPermission;
+  if (alreadyAsked && Platform.OS !== 'ios') return;
   notificationPermissionPromptInFlight = true;
   void import('@/notifications/channels')
-    .then(async ({ requestNotificationPermission }) => {
+    .then(async ({ refreshNotificationPermission, requestNotificationPermission }) => {
+      if (alreadyAsked) {
+        // iOS only (Android returned above). READ THE OS, do not read the
+        // cache: initializeNotifications seeds it fire-and-forget at bundle
+        // entry, and nothing orders that against establishment, so a
+        // synchronous read here can still be null - which would look like
+        // "not not-determined" and silently skip the prompt on exactly the
+        // reinstalled device this branch exists for. One extra native read per
+        // establishment is the price, and it keeps the cache fresh besides.
+        await refreshNotificationPermission();
+        if (notificationPermissionStatus() !== 'not-determined') return;
+      }
       // A denial resolves false rather than throwing, so the flag is still
-      // written: Android will not show the prompt again anyway, and Settings
-      // carries the recovery route from there.
+      // written: neither platform re-shows the prompt after a refusal anyway
+      // (Android stops after two dismissals, iOS asks exactly once ever), and
+      // Settings carries the recovery route from there.
       await requestNotificationPermission();
       await useSettingsStore.getState().markNotificationPermissionRequested();
     })

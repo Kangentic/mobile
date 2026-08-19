@@ -152,44 +152,40 @@ describe('registerPushWithDesktop', () => {
     expect(pushRegistration.getPushRegistrationStatus()).toBe('capability-denied');
   });
 
-  it('sends every category by default, and re-registers (not idempotent-skipped) when a category is toggled off', async () => {
+  it('sends every category except spawn-stalled by default, and re-registers (not idempotent-skipped) when a category is toggled', async () => {
     expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
     const { pushRegistration, settingsStoreModule, registerPush, verbs } = await loadHarness();
     registerPush.mockResolvedValue({ registered: true });
 
+    // spawn-stalled ("slow starts") defaults OFF, so the desktop is told not to
+    // send it without the user having to find the toggle.
     await pushRegistration.registerPushWithDesktop(verbs);
-    expect(registerPush.mock.calls[0][0].categories).toEqual([
-      'input-required',
-      'turn-complete',
-      'session-failed',
-      'plan-complete',
-      'spawn-stalled',
-    ]);
+    expect(registerPush.mock.calls[0][0].categories).toEqual(['input-required', 'turn-complete', 'session-failed', 'plan-complete']);
 
-    await settingsStoreModule.useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', false);
-    await pushRegistration.registerPushWithDesktop(verbs);
-
-    expect(registerPush).toHaveBeenCalledTimes(2); // NOT skipped by the token-unchanged idempotence guard
-    expect(registerPush.mock.calls[1][0].categories).toEqual(['input-required', 'turn-complete', 'session-failed', 'plan-complete']);
-
-    // Revert the toggle: sameCategories compares the CURRENT category list
-    // against whatever was registered last (now the 4-category list from the
-    // call above), not against some remembered "have I ever seen this exact
-    // set" latch. Turning spawn-stalled back on makes the current list (5
-    // categories) unequal to the last-registered list (4), so this must hit
-    // the wire again - a one-way latch that only re-registers on the FIRST
-    // change away from the default would instead skip this call.
     await settingsStoreModule.useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', true);
     await pushRegistration.registerPushWithDesktop(verbs);
 
-    expect(registerPush).toHaveBeenCalledTimes(3);
-    expect(registerPush.mock.calls[2][0].categories).toEqual([
+    expect(registerPush).toHaveBeenCalledTimes(2); // NOT skipped by the token-unchanged idempotence guard
+    expect(registerPush.mock.calls[1][0].categories).toEqual([
       'input-required',
       'turn-complete',
       'session-failed',
       'plan-complete',
       'spawn-stalled',
     ]);
+
+    // Revert the toggle: sameCategories compares the CURRENT category list
+    // against whatever was registered last (now the 5-category list from the
+    // call above), not against some remembered "have I ever seen this exact
+    // set" latch. Turning spawn-stalled back off makes the current list (4
+    // categories) unequal to the last-registered list (5), so this must hit
+    // the wire again - a one-way latch that only re-registers on the FIRST
+    // change away from the default would instead skip this call.
+    await settingsStoreModule.useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', false);
+    await pushRegistration.registerPushWithDesktop(verbs);
+
+    expect(registerPush).toHaveBeenCalledTimes(3);
+    expect(registerPush.mock.calls[2][0].categories).toEqual(['input-required', 'turn-complete', 'session-failed', 'plan-complete']);
   });
 });
 

@@ -69,66 +69,52 @@ describe('settingsStore - preferred session lens per task', () => {
 });
 
 describe('settingsStore - per-category push preferences', () => {
+  /** What a fresh install must end up with: everything but slow starts. */
+  const DEFAULTS = {
+    'input-required': true,
+    'turn-complete': true,
+    'session-failed': true,
+    'plan-complete': true,
+    'spawn-stalled': false,
+  } as const;
+
+  const CATEGORY_KEY = 'settings.pushCategoriesEnabled.v2';
+  const LEGACY_CATEGORY_KEY = 'settings.pushCategoriesEnabled';
+
   beforeEach(() => {
     storedValues.clear();
-    useSettingsStore.setState({
-      pushCategoriesEnabled: {
-        'input-required': true,
-        'turn-complete': true,
-        'session-failed': true,
-        'plan-complete': true,
-        'spawn-stalled': true,
-      },
-    });
+    useSettingsStore.setState({ pushCategoriesEnabled: { ...DEFAULTS } });
   });
 
-  it('defaults every category to enabled', () => {
-    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
-      'input-required': true,
-      'turn-complete': true,
-      'session-failed': true,
-      'plan-complete': true,
-      'spawn-stalled': true,
-    });
+  it('defaults every category to enabled except spawn-stalled', () => {
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual(DEFAULTS);
   });
 
-  it('toggles one category without disturbing the others, and persists', async () => {
-    await useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', false);
+  it('toggles one category without disturbing the others, and persists to the v2 key', async () => {
+    await useSettingsStore.getState().setPushCategoryEnabled('turn-complete', false);
 
-    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
-      'input-required': true,
-      'turn-complete': true,
-      'session-failed': true,
-      'plan-complete': true,
-      'spawn-stalled': false,
-    });
-    expect(JSON.parse(storedValues.get('settings.pushCategoriesEnabled') ?? '{}')).toMatchObject({ 'spawn-stalled': false });
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({ ...DEFAULTS, 'turn-complete': false });
+    expect(JSON.parse(storedValues.get(CATEGORY_KEY) ?? '{}')).toMatchObject({ 'turn-complete': false });
+    // The legacy key is read-only now; a write must never land there.
+    expect(storedValues.has(LEGACY_CATEGORY_KEY)).toBe(false);
   });
 
-  it('hydrate restores stored values and defaults a missing key to enabled (forward-compat)', async () => {
-    storedValues.set('settings.pushCategoriesEnabled', JSON.stringify({ 'input-required': false, 'turn-complete': false }));
+  it('hydrate restores stored values and defaults a missing key (forward-compat)', async () => {
+    storedValues.set(CATEGORY_KEY, JSON.stringify({ 'input-required': false, 'turn-complete': false }));
     await useSettingsStore.getState().hydrate();
 
     expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
+      ...DEFAULTS,
       'input-required': false,
       'turn-complete': false,
-      'session-failed': true,
-      'plan-complete': true,
-      'spawn-stalled': true,
     });
   });
 
-  it('hydrate ignores a malformed stored value and falls back to all-enabled', async () => {
-    storedValues.set('settings.pushCategoriesEnabled', 'not json');
+  it('hydrate ignores a malformed stored value and falls back to the defaults', async () => {
+    storedValues.set(CATEGORY_KEY, 'not json');
     await useSettingsStore.getState().hydrate();
 
-    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
-      'input-required': true,
-      'turn-complete': true,
-      'session-failed': true,
-      'plan-complete': true,
-      'spawn-stalled': true,
-    });
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual(DEFAULTS);
   });
 
   // 'not json' above throws inside JSON.parse and is caught by the outer
@@ -140,17 +126,69 @@ describe('settingsStore - per-category push preferences', () => {
     ['an array', '[1,2,3]'],
     ['null', 'null'],
     ['a bare number', '5'],
-  ])('hydrate falls back to all-enabled when the stored JSON parses to %s, not a plain object', async (_description, raw) => {
-    storedValues.set('settings.pushCategoriesEnabled', raw);
+  ])('hydrate falls back to the defaults when the stored JSON parses to %s, not a plain object', async (_description, raw) => {
+    storedValues.set(CATEGORY_KEY, raw);
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual(DEFAULTS);
+  });
+
+  /**
+   * THE MIGRATION, and why a bare default change was not enough.
+   *
+   * setPushCategoryEnabled persists the WHOLE map, so every install that had
+   * ever touched a toggle carried an explicit `"spawn-stalled": true` that
+   * would override any new default - exactly the population reporting the
+   * noise. Reading v1 forces that one category off.
+   */
+  it('forces spawn-stalled off when migrating a v1 map that has it explicitly on', async () => {
+    storedValues.set(
+      LEGACY_CATEGORY_KEY,
+      JSON.stringify({
+        'input-required': true,
+        'turn-complete': true,
+        'session-failed': true,
+        'plan-complete': true,
+        'spawn-stalled': true,
+      }),
+    );
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(false);
+  });
+
+  /**
+   * The other half of the invariant: the migration touches spawn-stalled and
+   * NOTHING ELSE. A v1 user who had deliberately switched a category off must
+   * not have it switched back on by the upgrade.
+   */
+  it('copies every other v1 category through the migration unchanged', async () => {
+    storedValues.set(LEGACY_CATEGORY_KEY, JSON.stringify({ 'plan-complete': false, 'spawn-stalled': true }));
     await useSettingsStore.getState().hydrate();
 
     expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
-      'input-required': true,
-      'turn-complete': true,
-      'session-failed': true,
-      'plan-complete': true,
-      'spawn-stalled': true,
+      ...DEFAULTS,
+      'plan-complete': false,
+      'spawn-stalled': false,
     });
+  });
+
+  /**
+   * The migration must not be sticky: once the user says they DO want slow
+   * starts, that choice lives in v2 and outranks a stale v1 map entirely.
+   */
+  it('honours a deliberate re-enable in v2 over the legacy map', async () => {
+    storedValues.set(LEGACY_CATEGORY_KEY, JSON.stringify({ 'spawn-stalled': true, 'turn-complete': false }));
+    storedValues.set(CATEGORY_KEY, JSON.stringify({ ...DEFAULTS, 'spawn-stalled': true }));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({ ...DEFAULTS, 'spawn-stalled': true });
+  });
+
+  it('lands on the defaults for a fresh install with neither key stored', async () => {
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual(DEFAULTS);
   });
 });
 

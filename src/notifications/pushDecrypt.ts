@@ -16,6 +16,34 @@ import { titleForCategory } from './categoryCopy';
 export const PUSH_PLACEHOLDER_TITLE = 'Kangentic';
 export const PUSH_PLACEHOLDER_BODY = 'Agent needs attention';
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The envelope blob can arrive directly as data.blob, or wrapped inside the
+ * JSON string expo-notifications surfaces as data.dataString (or the FCM-level
+ * `body` key on some delivery paths). Checked in that order.
+ *
+ * Lives here rather than next to the Android background task because BOTH
+ * platforms need it now: the iOS tap router reads the same blob out of an
+ * expo-notifications response. This module is the notifee-free one, so it is
+ * the only place both callers can import from.
+ */
+export function extractBlobFromTaskData(data: unknown): string | null {
+  if (!isUnknownRecord(data)) return null;
+  if (typeof data.blob === 'string') return data.blob;
+  const nestedJson = typeof data.dataString === 'string' ? data.dataString : typeof data.body === 'string' ? data.body : null;
+  if (nestedJson === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(nestedJson);
+    if (isUnknownRecord(parsed) && typeof parsed.blob === 'string') return parsed.blob;
+  } catch {
+    // Malformed JSON: fall through to null and the placeholder path.
+  }
+  return null;
+}
+
 export interface DecryptedPushNotification {
   title: string;
   body: string;

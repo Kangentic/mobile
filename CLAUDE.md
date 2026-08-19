@@ -79,7 +79,9 @@ src/
                   #   generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
-                  #   local notifier, foreground service, tap routing (Android display; iOS NSE later)
+                  #   local notifier, foreground service, tap routing (permission,
+                  #   registration, tap routing and Settings status are cross-platform;
+                  #   RICH display is Android-only until the iOS NSE ships)
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory) + the non-Zustand terminalFeed PTY ring buffers
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
