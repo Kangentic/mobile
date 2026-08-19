@@ -49,6 +49,21 @@ const LOCAL_NOTIFICATION_COOLDOWN_MS = 30_000;
  */
 const IDLE_SETTLE_MS = 45_000;
 
+/**
+ * Whether a session is quiet in the sense 'turn-complete' means: still running,
+ * and not doing anything.
+ *
+ * BOTH FIELDS ARE LOAD-BEARING. `session-ended` sets `feedStatus` and leaves
+ * `state` untouched (activityStore.ts), so a session that crashes or is stopped
+ * while sitting idle stays `state: 'idle'` forever. Checking `state` alone
+ * would let a pending settle survive the end and fire "Agent went idle" 45s
+ * after the session was already reported as failed - or, worse, fire it for a
+ * deliberate stop, which notifies nothing at all by design.
+ */
+function isSettledIdle(entry: SessionActivityEntry): boolean {
+  return entry.state === 'idle' && entry.feedStatus !== 'ended';
+}
+
 function resolveTaskTitle(entry: SessionActivityEntry): string {
   const boardTask = useBoardStore.getState().boardsByProjectId[entry.projectId]?.tasksById[entry.taskId];
   return boardTask && boardTask.title.length > 0 ? boardTask.title : 'Agent session';
@@ -136,7 +151,7 @@ export function startLocalNotifier(): () => void {
         // Cancellation below covers the transitions we observe; this covers a
         // session that changed without one reaching us.
         const currentEntry = useActivityStore.getState().bySessionId[entry.sessionId];
-        if (!currentEntry || currentEntry.state !== 'idle') return;
+        if (!currentEntry || !isSettledIdle(currentEntry)) return;
         // The background check belongs HERE, not only at arm time: the app can
         // come forward inside the settle window, and nothing may post over the
         // in-app UI. (stopLocalNotifier also clears these on foreground, so
@@ -158,9 +173,9 @@ export function startLocalNotifier(): () => void {
       // Arm and cancel on EVERY transition, before the background gate below.
       // A missed cancel is worse than a missed arm: it fires an alert for a
       // session that went straight back to work.
-      if (entry.state === 'thinking' || entry.state === 'permission') {
+      if (!isSettledIdle(entry)) {
         cancelIdleSettle(entry.sessionId);
-      } else if (previousEntry?.state === 'thinking' && entry.state === 'idle') {
+      } else if (previousEntry?.state === 'thinking') {
         scheduleIdleSettle(entry);
       }
       // Track transitions even while foregrounded, but only notify while

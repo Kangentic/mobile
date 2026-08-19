@@ -283,6 +283,46 @@ describe('startLocalNotifier', () => {
     expect(displayNotification).not.toHaveBeenCalled();
   });
 
+  /**
+   * A session that ENDS while a settle is pending must not also report going
+   * idle. `session-ended` sets feedStatus only and leaves `state` at 'idle'
+   * (activityStore.ts), so neither the arm/cancel branch nor a fire-time check
+   * on `state` alone notices - the crash would fire session-failed immediately
+   * and "Agent went idle" 45s later, a double notification on the very path
+   * this work exists to de-duplicate.
+   */
+  it('cancels a pending settle when the session ends unintentionally, firing only session-failed', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(false));
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    expect(displayNotification.mock.calls[0][0].title).toBe('Session stopped');
+  });
+
+  /**
+   * The sharper half: a DELIBERATE stop notifies nothing at all (it is the
+   * user's own action at the desk they are sitting at), so a pending settle
+   * surviving it would be a phantom alert for a session the user just closed.
+   */
+  it('cancels a pending settle when the session is stopped deliberately, firing nothing', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(true));
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+    expect(displayNotification).not.toHaveBeenCalled();
+  });
+
   /** A timer surviving the stop would fire into a foregrounded app, or a later test. */
   it('clears a pending settle timer when the notifier is stopped', () => {
     seedSession();
