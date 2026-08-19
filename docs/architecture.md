@@ -347,6 +347,15 @@ for a warm tap, `getLastNotificationResponseAsync()` for a cold start). That is 
 and is what `e2e-notification-privacy.md` forbids. A failed decrypt routes nowhere and the app
 opens to Home.
 
+Those two iOS deliveries are independent, and one tap can arrive through both, so the router
+de-duplicates on `notification.request.identifier` and routes a given tap once. This mirrors
+expo-notifications' own `useLastNotificationResponse`, which reads the cached response and
+subscribes to the listener and then compares the same field (`determineNextResponse`); the
+package's changelog records a fixed iOS bug where the response listener emitted duplicate
+events. Without the guard the same task screen is pushed twice and the user needs two back
+presses to leave it. The guard engages only on a non-empty string identifier, so a payload
+without one still routes: dropping a real tap is worse than a rare double.
+
 The runtime notification permission - Android 13+'s `POST_NOTIFICATIONS` and iOS's
 `UNUserNotificationCenter` authorization, both via `notifee.requestPermission()` - is requested
 once, the first time a session establishes. Establishment is the paired signal, so the one rule

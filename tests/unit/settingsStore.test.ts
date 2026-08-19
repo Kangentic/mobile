@@ -310,15 +310,19 @@ describe('settingsStore - hydrate never gets stuck unhydrated', () => {
    * backgroundNotificationsMode reads 'foreground-service', starting the very
    * service a 'push-only' user turned off - the exact bug the `hydrated` gate
    * exists to prevent, arriving through a different door. A defaulted
-   * pushCategoriesEnabled reads all-enabled, and the next established bootstrap
-   * registers that map with the desktop, re-enabling categories the user
-   * switched off; the first subsequent toggle then persists it over the real
-   * one, because the setter writes the whole map it holds in memory.
+   * pushCategoriesEnabled reads back the defaults, and the next established
+   * bootstrap registers that map with the desktop, re-enabling categories the
+   * user switched off; the first subsequent toggle then persists it over the
+   * real one, because the setter writes the whole map it holds in memory.
+   *
+   * The category map is seeded under the CURRENT (v2) key on purpose: seeding
+   * the legacy key instead sends hydrate down the v1 migration branch, so the
+   * test would silently stop exercising the clean read it claims to.
    */
   it('defaults only the key that failed, not the seven that read fine', async () => {
     storedValues.set('settings.backgroundNotificationsMode', 'push-only');
     storedValues.set(
-      'settings.pushCategoriesEnabled',
+      'settings.pushCategoriesEnabled.v2',
       JSON.stringify({
         'input-required': false,
         'turn-complete': false,
