@@ -323,6 +323,26 @@ describe('startLocalNotifier', () => {
     expect(displayNotification).not.toHaveBeenCalled();
   });
 
+  /**
+   * The one thing the fire-time re-read actually catches that cancellation
+   * cannot. This is a store SUBSCRIPTION, so every transition is observed and
+   * already cancels - but an entry can VANISH between arming and firing (pruned
+   * for a session no board claims, or cleared by a store reset on unpair), and
+   * there is no transition to observe for that.
+   */
+  it('drops a pending settle whose session is gone from the store by fire time', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    useActivityStore.getState().reset();
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+    expect(displayNotification).not.toHaveBeenCalled();
+  });
+
   /** A timer surviving the stop would fire into a foregrounded app, or a later test. */
   it('clears a pending settle timer when the notifier is stopped', () => {
     seedSession();

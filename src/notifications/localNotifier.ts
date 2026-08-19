@@ -139,17 +139,29 @@ export function startLocalNotifier(): () => void {
   };
 
   const scheduleIdleSettle = (entry: SessionActivityEntry): void => {
-    // First-write-wins, matching the desktop's permission debounce: a repeated
-    // arm must not push the deadline out, or a session that keeps flickering
-    // never alerts at all.
+    // RESTARTING THE CLOCK ON EVERY BOUNCE IS THE DEBOUNCE. Arming only
+    // happens on a thinking -> idle edge, and any entry that is not settled-idle
+    // cancels first (see the subscriber), so a session that goes back to work
+    // loses its pending timer and the next settled idle starts a fresh full
+    // window rather than inheriting the old deadline. Only an idle that STICKS
+    // for IDLE_SETTLE_MS alerts.
+    //
+    // That leaves this guard unreachable today: re-arming would need two
+    // consecutive store updates both showing a thinking -> idle edge, and the
+    // subscriber advances its previous snapshot on every change. It stays as
+    // cheap insurance against a future caller that arms twice.
     if (idleSettleTimers.has(entry.sessionId)) return;
     idleSettleTimers.set(
       entry.sessionId,
       setTimeout(() => {
         idleSettleTimers.delete(entry.sessionId);
-        // Re-read at FIRE time rather than trusting the entry captured 45s ago.
-        // Cancellation below covers the transitions we observe; this covers a
-        // session that changed without one reaching us.
+        // Re-read at FIRE time rather than trusting the entry captured a window
+        // ago. The hazard is narrower than "the session changed without telling
+        // us": this is a store SUBSCRIPTION, so every transition is observed and
+        // the subscriber above has already cancelled on any of them. What the
+        // re-read catches is the entry no longer being there - pruned for a
+        // session no board claims, or cleared by a store reset on unpair - after
+        // which the pending "went idle" is correctly dropped.
         const currentEntry = useActivityStore.getState().bySessionId[entry.sessionId];
         if (!currentEntry || !isSettledIdle(currentEntry)) return;
         // The background check belongs HERE, not only at arm time: the app can
