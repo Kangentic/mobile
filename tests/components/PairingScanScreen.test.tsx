@@ -1,5 +1,5 @@
 import React from 'react';
-import { Linking } from 'react-native';
+import { AppState, Linking, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react-native';
 import { encodePairingQrPayload, PROTOCOL_VERSION } from '@kangentic/protocol';
 import { PairingScanScreen } from '@/screens/PairingScanScreen';
@@ -21,6 +21,20 @@ const { beginPairing } = jest.requireMock<{ beginPairing: jest.Mock }>('@/pairin
 // the exact verb rather than treating push/navigate as interchangeable.
 const mockNavigate = jest.fn();
 const mockPush = jest.fn();
+
+// Tracks every jest.spyOn(...) this file installs (Linking.openSettings in
+// several tests below, AppState.addEventListener in beforeEach) so the
+// shared afterEach can restore each one explicitly. jest.config.js sets no
+// restoreMocks, and a bare jest.restoreAllMocks() would also strip any spy
+// the jest-expo preset installs during its own setup, outside this file's
+// control - scoping restoration to what this file actually installed is the
+// safer local fix.
+const spiesToRestore: { mockRestore: () => void }[] = [];
+
+function trackSpy<Spy extends { mockRestore: () => void }>(spy: Spy): Spy {
+  spiesToRestore.push(spy);
+  return spy;
+}
 
 // Captures the screen's focus effect so a test can replay it, simulating the
 // native stack popping back to this still-mounted screen ("Go back" from the
@@ -63,6 +77,18 @@ const mockCameraPermission = { granted: false, canAskAgain: true };
 // screen asked the OS. It also matches the real hook, whose requestPermission
 // identity is stable across renders.
 const mockRequestPermission = jest.fn();
+// The hook's third tuple element (verified against expo-modules-core's
+// createPermissionHook: it returns [status, requestPermission, getPermission],
+// and the screen calls the third one refreshCameraPermission). It must
+// resolve rather than being a bare jest.fn(): the screen's AppState 'active'
+// effect always chains a `.catch()` onto its return value (see
+// PairingScanScreen.tsx), so an unconfigured jest.fn() (undefined by
+// default) would throw "Cannot read properties of undefined (reading
+// 'catch')" the first time a test fires that event, rather than the
+// assertion failure the test actually intends. Without this third element at
+// all, refreshCameraPermission is undefined at runtime under test, which is
+// the gap this mock previously had.
+const mockRefreshCameraPermission = jest.fn().mockResolvedValue(undefined);
 const mockLatestCameraViewProps: { current: MockCameraViewProps | null } = { current: null };
 
 jest.mock('expo-camera', () => ({
@@ -76,8 +102,22 @@ jest.mock('expo-camera', () => ({
   useCameraPermissions: () => [
     { granted: mockCameraPermission.granted, canAskAgain: mockCameraPermission.canAskAgain },
     mockRequestPermission,
+    mockRefreshCameraPermission,
   ],
 }));
+
+// Captures the screen's AppState 'change' listener (installed fresh via
+// trackSpy in beforeEach below) so a test can drive the 'active' transition
+// that fires when the user returns from Settings. Mirrors the identical
+// pattern in tests/components/SettingsScreen.test.tsx: the real AppState is
+// spied on rather than module-mocked, because react-native re-exports
+// AppState lazily, so replacing the whole module would leave the component
+// with an undefined AppState.
+const appStateListeners = new Set<(nextStatus: AppStateStatus) => void>();
+
+function emitAppState(nextStatus: AppStateStatus): void {
+  for (const listener of appStateListeners) listener(nextStatus);
+}
 
 /**
  * Genuinely valid: built with the real protocol encoder from fixed bytes (no
@@ -102,14 +142,34 @@ describe('PairingScanScreen', () => {
     // mockReturnValueOnce), so a test that queued one and never consumed it
     // could otherwise leak into the next test. Re-assert the baseline here.
     beginPairing.mockResolvedValue(undefined);
+    mockRefreshCameraPermission.mockResolvedValue(undefined);
     mockCameraPermission.granted = false;
     mockCameraPermission.canAskAgain = true;
     mockLatestCameraViewProps.current = null;
     mockLatestFocusEffect.current = null;
+    appStateListeners.clear();
+    // Spied fresh every test and tracked via trackSpy so the shared afterEach
+    // restores it, rather than layering a new spy over the previous test's on
+    // every run.
+    trackSpy(jest.spyOn(AppState, 'addEventListener')).mockImplementation(
+      (_event, listener): NativeEventSubscription => {
+        const appStateListener = listener as (nextStatus: AppStateStatus) => void;
+        appStateListeners.add(appStateListener);
+        return { remove: () => appStateListeners.delete(appStateListener) } as unknown as NativeEventSubscription;
+      },
+    );
   });
 
   afterEach(() => {
     cleanup();
+    // Restores every spy trackSpy recorded (the jest.spyOn(Linking,
+    // 'openSettings') calls in the camera-permission-recovery tests below,
+    // and the AppState.addEventListener spy just installed above).
+    // jest.config.js sets no restoreMocks, so without this a spy configured
+    // to reject in one test (e.g. openSettings.mockRejectedValue(...)) would
+    // stay mocked-as-rejecting for every later test in the file.
+    for (const spy of spiesToRestore) spy.mockRestore();
+    spiesToRestore.length = 0;
   });
 
   // Renders via the permission-denied branch, which shows the paste fallback
@@ -262,10 +322,14 @@ describe('PairingScanScreen', () => {
   // decoration, and a test that lets them drift back is not doing its job.
   describe('camera permission recovery', () => {
     it('asks the OS while the system prompt is still available', () => {
-      const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+      const openSettings = trackSpy(jest.spyOn(Linking, 'openSettings')).mockResolvedValue(undefined);
 
       render(<PairingScanScreen />);
 
+      // Pinned alongside the button label: only the label was asserted
+      // before, so swapping the two explainer strings between branches would
+      // have passed every test in this file.
+      expect(screen.getByText('Camera access is needed to scan a desktop pairing code.')).toBeTruthy();
       expect(screen.getByText('Continue')).toBeTruthy();
       fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
 
@@ -278,10 +342,11 @@ describe('PairingScanScreen', () => {
       // resolves without showing anything, so the pre-fix button rendered
       // normally and did nothing at all - the whole reason for this branch.
       mockCameraPermission.canAskAgain = false;
-      const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+      const openSettings = trackSpy(jest.spyOn(Linking, 'openSettings')).mockResolvedValue(undefined);
 
       render(<PairingScanScreen />);
 
+      expect(screen.getByText('Turn on camera access in Settings to scan a code.')).toBeTruthy();
       expect(screen.getByText('Open Settings')).toBeTruthy();
       fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
 
@@ -291,7 +356,7 @@ describe('PairingScanScreen', () => {
 
     it('reports a Settings launch the OS refuses instead of rejecting unhandled', async () => {
       mockCameraPermission.canAskAgain = false;
-      jest.spyOn(Linking, 'openSettings').mockRejectedValue(new Error('cannot open'));
+      trackSpy(jest.spyOn(Linking, 'openSettings')).mockRejectedValue(new Error('cannot open'));
 
       render(<PairingScanScreen />);
 
@@ -299,9 +364,84 @@ describe('PairingScanScreen', () => {
         fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
       });
 
-      expect(screen.getByTestId('pairing-scan-error')).toBeTruthy();
+      // The exact string, not just presence: the file uses this same pattern
+      // for UNEXPECTED_ERROR_MESSAGE above, and a getByTestId(...).toBeTruthy()
+      // alone would pass even if the wrong message rendered.
+      expect(screen.getByTestId('pairing-scan-error').props.children).toBe('Could not open Settings.');
       // The paste fallback is still the way forward, so it must survive the failure.
       expect(screen.getByTestId('pairing-paste-link-submit')).toBeTruthy();
+    });
+
+    it('clears a stale Settings error on a retry that succeeds', async () => {
+      mockCameraPermission.canAskAgain = false;
+      const openSettings = trackSpy(jest.spyOn(Linking, 'openSettings'))
+        .mockRejectedValueOnce(new Error('cannot open'))
+        .mockResolvedValue(undefined);
+
+      render(<PairingScanScreen />);
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+      });
+      expect(screen.getByTestId('pairing-scan-error').props.children).toBe('Could not open Settings.');
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+      });
+
+      // openAppSettings clears the error before opening Settings, not only on
+      // a successful resolution: a stale "Could not open Settings." from the
+      // failed first tap must not survive a second tap that succeeds.
+      expect(screen.queryByTestId('pairing-scan-error')).toBeNull();
+      expect(openSettings).toHaveBeenCalledTimes(2);
+    });
+
+    // useCameraPermissions reads status once on mount and never again on its
+    // own, so granting camera access in Settings and returning previously
+    // stranded the user on this very screen forever. These pin the fix: the
+    // effect refreshes only on 'active', and cleans up its listener so it
+    // cannot keep firing against an unmounted screen.
+    describe('AppState refresh on return from Settings', () => {
+      it('refreshes camera permission when the app returns to active', () => {
+        render(<PairingScanScreen />);
+
+        act(() => {
+          emitAppState('active');
+        });
+
+        expect(mockRefreshCameraPermission).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not refresh camera permission on a non-active AppState transition', () => {
+        render(<PairingScanScreen />);
+
+        act(() => {
+          emitAppState('background');
+        });
+
+        expect(mockRefreshCameraPermission).not.toHaveBeenCalled();
+      });
+
+      it('removes the AppState listener on unmount', () => {
+        const { unmount } = render(<PairingScanScreen />);
+        // Precondition guard: exactly one listener registered, so the
+        // behavioral assertion below actually exercises the cleanup path
+        // rather than passing vacuously against an empty set.
+        expect(appStateListeners.size).toBe(1);
+
+        unmount();
+
+        // A leaked listener is the failure mode worth pinning: it would keep
+        // calling refreshCameraPermission against an unmounted screen on
+        // every later AppState transition for the rest of the app's
+        // lifetime. Asserting the behavior (not called after unmount),
+        // rather than only the bookkeeping Set size, is what actually proves
+        // the leak is gone.
+        act(() => {
+          emitAppState('active');
+        });
+        expect(mockRefreshCameraPermission).not.toHaveBeenCalled();
+      });
     });
   });
 

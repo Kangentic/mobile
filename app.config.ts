@@ -74,11 +74,18 @@ const config: ExpoConfig = {
     // 2026-08-15, confirmed spent by the ios-b7 tag. 8 is taken by the v0.5.0
     // release cut 2026-08-16, confirmed spent by the ios-b8 tag.
     //
-    // 9 is this resubmission. Build 7 (v0.4.1) was REJECTED by App Review on
+    // 9 is this resubmission. Build 7 (v0.4.1) was rejected by APP REVIEW on
     // 2026-08-18 under guideline 5.1.1(iv): the camera pre-permission screen's
     // button read "Grant camera access" where Apple requires neutral wording.
     // 8 cannot carry the fix - it was already uploaded - so the corrected
     // binary needs a number of its own even though `version` does not move.
+    //
+    // NOTE THE TWO KINDS OF REJECTION, which this ledger uses the same word
+    // for. A rejection IN PROCESSING (1 and 2, ITMS-90683) means the upload
+    // never became a Build resource, so the number was never spent. A rejection
+    // BY APP REVIEW (7) happens after processing accepted the binary: the Build
+    // resource exists, the number IS spent, and it can never be reused. Only
+    // the first kind frees a number. Do not read "rejected" here as "free".
     //
     // Numbers stay globally increasing across semver bumps (8 follows 7 even
     // though `version` moved 0.4.1 -> 0.5.0), per the global-not-per-version
@@ -223,9 +230,11 @@ const config: ExpoConfig = {
     // 3 was the v0.3.0 internal release cut 2026-08-03 and 4 the v0.4.0
     // internal release cut 2026-08-07, both confirmed spent by the android-vc3
     // and android-vc4 tags on the remote. 5 was the v0.4.1 internal release
-    // cut 2026-08-15, confirmed spent by the android-vc5 tag. 6 is taken by
-    // the v0.5.0 internal release cut 2026-08-16; the android-vc6 tag written
-    // by the submit job is the authoritative record once the upload lands.
+    // cut 2026-08-15, confirmed spent by the android-vc5 tag. 6 was the v0.5.0
+    // internal release cut 2026-08-16, confirmed spent by the android-vc6 tag.
+    //
+    // 6 still stands: the 2026-08-18 resubmission that moved ios.buildNumber to
+    // 9 is an iOS-only App Review fix, and the two counters are independent.
     //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
