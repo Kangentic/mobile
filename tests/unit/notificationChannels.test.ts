@@ -92,7 +92,7 @@ describe('notification channels', () => {
     notifeeState.requestPermission.mockResolvedValue({ authorizationStatus: 0 });
     expect(await channels.requestNotificationPermission()).toBe(false);
     // PROVISIONAL is iOS-only but channels.ts accepts it, so pin it rather
-    // than leave the third branch of grantedFromStatus uncovered.
+    // than leave the third branch of statusFromAuthorization uncovered.
     notifeeState.requestPermission.mockResolvedValue({ authorizationStatus: 2 });
     expect(await channels.requestNotificationPermission()).toBe(true);
   });

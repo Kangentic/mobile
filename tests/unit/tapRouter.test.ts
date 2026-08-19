@@ -9,6 +9,7 @@
  * rather than guess, leaving the user on Home.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushMicrotasks } from '../helpers/async';
 
 const platformMock = vi.hoisted(() => ({ OS: 'ios' as 'android' | 'ios' }));
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -46,8 +47,15 @@ async function loadModule(): Promise<TapRouterModule> {
   return import('@/notifications/tapRouter');
 }
 
-function pushResponse(data: unknown): Parameters<TapRouterModule['routeFromPushResponse']>[0] {
-  return { notification: { request: { content: { data } } } } as Parameters<TapRouterModule['routeFromPushResponse']>[0];
+/**
+ * `identifier` is optional because most cases here do not care about it. The
+ * de-duplication guard only engages on a non-empty string, so omitting it keeps
+ * every single-tap case routing exactly as it reads.
+ */
+function pushResponse(data: unknown, identifier?: string): Parameters<TapRouterModule['routeFromPushResponse']>[0] {
+  return { notification: { request: { identifier, content: { data } } } } as Parameters<
+    TapRouterModule['routeFromPushResponse']
+  >[0];
 }
 
 const DECRYPTED = {
@@ -120,6 +128,36 @@ describe('tapRouter - iOS push responses', () => {
   });
 
   /**
+   * The cold-start read and the warm listener are two independent deliveries of
+   * the SAME tap, and expo-notifications can surface one tap through both (its
+   * own useLastNotificationResponse de-duplicates by request identifier for
+   * exactly this reason). Routing both would push the task screen twice, so the
+   * user needs two back presses to leave it.
+   */
+  it('routes one tap once when both deliveries carry the same notification identifier', async () => {
+    const { routeFromPushResponse } = await loadModule();
+
+    await routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }, 'notification-1'));
+    await routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }, 'notification-1'));
+
+    expect(routerMock.push).toHaveBeenCalledTimes(1);
+    expect(decryptPushBlobMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The other half of the guard: de-duplication must not swallow a genuinely
+   * different tap, which is the failure mode that would silently break routing.
+   */
+  it('still routes a second tap carrying a different notification identifier', async () => {
+    const { routeFromPushResponse } = await loadModule();
+
+    await routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }, 'notification-1'));
+    await routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }, 'notification-2'));
+
+    expect(routerMock.push).toHaveBeenCalledTimes(2);
+  });
+
+  /**
    * A cold-start tap happened before any listener existed, so the warm listener
    * alone would drop it. Both paths have to be wired, and neither may reach for
    * notifee, whose events only ever fire for notifications notifee itself
@@ -134,6 +172,47 @@ describe('tapRouter - iOS push responses', () => {
     expect(expoNotificationsMock.getLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
     expect(notifeeMock.onForegroundEvent).not.toHaveBeenCalled();
     expect(notifeeMock.onBackgroundEvent).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The test above only proves getLastNotificationResponseAsync was CALLED,
+   * not that its resolution actually reaches routeFromPushResponse. A broken
+   * `.then((response) => routeFromPushResponse(response))` - a dropped
+   * argument, a typo - would leave every cold-start tap silently unrouted
+   * while that assertion still passed.
+   */
+  it('routes a cold-start tap through the getLastNotificationResponseAsync resolution', async () => {
+    expoNotificationsMock.getLastNotificationResponseAsync.mockResolvedValue(
+      pushResponse({ blob: 'sealed-blob' }, 'cold-start-notification'),
+    );
+    const { registerNotificationTapHandlers } = await loadModule();
+
+    registerNotificationTapHandlers();
+    await vi.waitFor(() => expect(routerMock.push).toHaveBeenCalledTimes(1));
+
+    expect(decryptPushBlobMock).toHaveBeenCalledWith('sealed-blob');
+    expect(routerMock.push).toHaveBeenCalledWith({
+      pathname: '/task/[taskId]',
+      params: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', mode: 'chat' },
+    });
+  });
+
+  /**
+   * The other failure shape of the same wiring: no cold-start response at all
+   * (a fresh install) resolves the module unavailable and getLastNotificationResponseAsync
+   * rejects. The `.catch()` after the `.then()` has to swallow it - an
+   * unswallowed rejection would surface as an unhandled rejection rather than
+   * a quiet "nothing to route".
+   */
+  it('swallows a rejected cold-start read without throwing or routing', async () => {
+    expoNotificationsMock.getLastNotificationResponseAsync.mockRejectedValue(new Error('module unavailable'));
+    const { registerNotificationTapHandlers } = await loadModule();
+
+    expect(() => registerNotificationTapHandlers()).not.toThrow();
+    // Give the rejected promise's .catch() a turn to run.
+    await flushMicrotasks();
+
+    expect(routerMock.push).not.toHaveBeenCalled();
   });
 
   it('registers the notifee handlers on Android instead, and never the expo listener', async () => {

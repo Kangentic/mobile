@@ -184,6 +184,29 @@ describe('SettingsScreen', () => {
     expect(mockRefreshNotificationPermission).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * The notice's two conditions are asymmetric ON PURPOSE:
+   * `if (status !== 'denied') return null;` then
+   * `if (Platform.OS === 'android' && !hasRequestedNotificationPermission) return null;`.
+   * On iOS, a denial shows the notice REGARDLESS of the persisted flag - only
+   * Android additionally requires it. Every denied-status test above leaves
+   * hasRequestedNotificationPermission at its beforeEach default of true, so
+   * iOS's independence from that flag was never actually exercised: a
+   * regression that added the flag check to iOS too would pass every existing
+   * test in this file.
+   */
+  it('shows the blocked notice on iOS independent of the persisted flag, but keeps it hidden on Android', () => {
+    mockNotificationPermissionStatus.mockReturnValue('denied');
+    useSettingsStore.setState({ hasRequestedNotificationPermission: false });
+    renderSettings();
+
+    if (Platform.OS === 'ios') {
+      expect(screen.getByTestId('settings-open-notification-settings')).toBeTruthy();
+    } else {
+      expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
+    }
+  });
+
   it('hides the blocked-notifications notice when the permission is granted or unknown', () => {
     renderSettings();
     expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();

@@ -51,6 +51,31 @@ function openTaskFromNotification(detail: EventDetail): void {
 }
 
 /**
+ * ONE TAP MUST ROUTE ONCE. The warm listener and the cold-start read are two
+ * independent deliveries of the same event, and expo-notifications can surface
+ * a single tap through both: its own useLastNotificationResponse hook reads the
+ * cached response AND subscribes to the listener, then de-duplicates the two by
+ * comparing `notification.request.identifier` (`determineNextResponse`), and its
+ * CHANGELOG records a fixed iOS bug where the response listener emitted
+ * duplicate events. Routing both would `router.push` the same task screen twice,
+ * costing the user two back presses to leave it.
+ *
+ * Guarded on a string identifier rather than blind equality so that a payload
+ * without one still routes: dropping a real tap is worse than a rare double.
+ *
+ * THIS ASSUMES THE DESKTOP NEVER COLLAPSES NOTIFICATIONS. iOS reuses the
+ * request identifier when a push carries `apns-collapse-id`, so a sender that
+ * collapsed per session would give two genuine taps the same identifier and
+ * this latch would swallow the second - a tap that does nothing, which is a
+ * worse failure than the double it prevents. Checked at the source rather than
+ * assumed: the desktop's sendExpoPush (mobile-bridge/push/expo-push-client.ts)
+ * emits only to/title/body/data.blob/priority/channelId/mutableContent, with no
+ * collapse id of any kind, so every delivered push gets its own identifier. Add
+ * a collapse id there and this guard has to become time-windowed.
+ */
+let lastRoutedNotificationIdentifier: string | null = null;
+
+/**
  * The iOS half: pull the sealed blob out of the tapped notification, decrypt it,
  * and route from the plaintext. Every failure (no blob, no key, tampered blob,
  * stale sentAt) resolves to no navigation at all, which lands the user on Home -
@@ -59,6 +84,11 @@ function openTaskFromNotification(detail: EventDetail): void {
  */
 export async function routeFromPushResponse(response: Notifications.NotificationResponse | null): Promise<void> {
   if (!response) return;
+  const notificationIdentifier: unknown = response.notification.request.identifier;
+  if (typeof notificationIdentifier === 'string' && notificationIdentifier.length > 0) {
+    if (notificationIdentifier === lastRoutedNotificationIdentifier) return;
+    lastRoutedNotificationIdentifier = notificationIdentifier;
+  }
   const blob = extractBlobFromTaskData(response.notification.request.content.data);
   if (blob === null) return;
   const decrypted = await decryptPushBlob(blob);

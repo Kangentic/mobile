@@ -510,6 +510,70 @@ describe('connectionManager notification permission prompt', () => {
   });
 
   /**
+   * The iOS shape of the same in-flight race, and a different window than the
+   * Android test above: on iOS with `alreadyAsked` true, the guard has to hold
+   * across the FIRST await (`refreshNotificationPermission()`), before
+   * `requestPermission()` is ever reached - not merely around requestPermission
+   * itself. `notificationPermissionPromptInFlight` is set synchronously before
+   * that await, so a second onEstablished landing while the refresh is still
+   * pending must not start its own refresh/request sequence.
+   *
+   * The second half matters just as much: the `.finally()` has to reset the
+   * flag once the first sequence settles, so a LATER establishment (not the
+   * racing one) can still prompt. A guard that never resets would silently
+   * stop asking forever after the first race.
+   */
+  it('does not start a second iOS prompt sequence while refreshNotificationPermission is still pending, and resets the guard afterwards', async () => {
+    const { startConnectionLifecycle, getActiveConnection } = await import('@/connection/connectionManager');
+    platformMock.OS = 'ios';
+    useSettingsStore.setState({ hasRequestedNotificationPermission: true });
+    setNotificationPermissionStatus('granted');
+
+    const firstRefresh = createDeferred<{ authorizationStatus: number }>();
+    notifeeMocks.getNotificationSettings.mockImplementation(() => firstRefresh.promise);
+
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established, { label: 'session established' });
+    await waitUntil(() => notifeeMocks.getNotificationSettings.mock.calls.length === 1, {
+      label: 'first refresh issued',
+    });
+
+    // The second onEstablished lands while the first refresh is still
+    // pending - before requestPermission() was ever reached.
+    const activeConnection = getActiveConnection();
+    if (!activeConnection) throw new Error('expected an active connection after establishment');
+    activeConnection.controller.session.reset();
+    (mockDesktopSeam.stub as StubSessionInitiator).beginHandshake();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 2, { label: 're-established' });
+
+    // Still only the one refresh call, and requestPermission never reached:
+    // the second establishment did not start its own prompt sequence.
+    expect(notifeeMocks.getNotificationSettings).toHaveBeenCalledTimes(1);
+    expect(notifeeMocks.requestPermission).not.toHaveBeenCalled();
+
+    // Resolve as "still granted", which returns early without ever calling
+    // requestPermission - and, via .finally(), resets the in-flight guard.
+    firstRefresh.resolve({ authorizationStatus: 1 });
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
+    // Let the whole .then()/.catch()/.finally() chain settle before driving a
+    // third establishment - otherwise the real handshake can re-establish
+    // faster than that chain unwinds, and the third call would race the
+    // .finally() reset rather than genuinely test it.
+    await flushMicrotasks();
+
+    // A THIRD establishment only starts a fresh refresh call if the guard was
+    // actually reset; stuck at true, this would time out instead.
+    activeConnection.controller.session.reset();
+    (mockDesktopSeam.stub as StubSessionInitiator).beginHandshake();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 3, { label: 're-established again' });
+    await waitUntil(() => notifeeMocks.getNotificationSettings.mock.calls.length === 2, {
+      label: 'guard reset, second refresh issued',
+    });
+
+    expect(notifeeMocks.requestPermission).not.toHaveBeenCalled();
+  });
+
+  /**
    * "A prompt that never appeared is worse than one offered again": a
    * rejected requestPermission() must leave hasRequestedNotificationPermission
    * unset, so the next establishment retries instead of the app silently
@@ -634,5 +698,62 @@ describe('connectionManager notification permission prompt', () => {
     await flushMicrotasks();
 
     expect(notifeeMocks.requestPermission).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * onAppStateChange's 'active' branch used to wrap its refreshNotificationPermission
+ * call in `if (Platform.OS === 'android')`. That gate is gone now, deliberately:
+ * the Settings blocked-notice seeds itself from this cache on BOTH platforms, and
+ * initializeNotifications already seeds the cache on both too, so leaving iOS out
+ * meant a permission revoked from system settings while the app was away went
+ * unnoticed there, and Settings could keep showing a stale "granted" with no
+ * explanation for the silence. The existing foreground-refresh test in the
+ * keepalive describe above only ever runs with this file's default Platform.OS
+ * ('android'), so the cross-platform half was never actually exercised.
+ */
+describe('connectionManager foreground permission refresh (cross-platform)', () => {
+  beforeEach(() => {
+    (globalThis as { __DEV__?: boolean }).__DEV__ = true;
+    process.env.EXPO_PUBLIC_KANGENTIC_MOCK = '1';
+    useSettingsStore.setState({
+      backgroundNotificationsMode: 'foreground-service',
+      hasRequestedNotificationPermission: true,
+      hydrated: true,
+    });
+    mockRunBootstrap.mockReset();
+    mockRunBootstrap.mockResolvedValue(undefined);
+    mockDesktopSeam.stub = null;
+    setNotificationPermissionStatus('granted');
+    notifeeMocks.getNotificationSettings.mockReset();
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
+  });
+
+  afterEach(async () => {
+    const { stopConnectionLifecycle } = await import('@/connection/connectionManager');
+    stopConnectionLifecycle();
+    platformMock.OS = 'android';
+    delete (globalThis as { __DEV__?: boolean }).__DEV__;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_MOCK;
+    useSettingsStore.setState({ backgroundNotificationsMode: 'off', hasRequestedNotificationPermission: false, hydrated: false });
+    useChannelStore.getState().reset();
+  });
+
+  it('refreshes the permission cache on an active transition on iOS, not just Android', async () => {
+    platformMock.OS = 'ios';
+    const onAppStateChange = await establishAndWarm();
+    // Establishment itself fires a refresh on iOS (maybeRequestNotificationPermission's
+    // alreadyAsked branch); let that settle before driving the transition under test,
+    // so the assertion below can only be satisfied by the 'active' handler's own call.
+    await waitUntil(() => notifeeMocks.getNotificationSettings.mock.calls.length >= 1, {
+      label: 'establishment-time refresh settled',
+    });
+
+    notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 0 }); // DENIED
+    onAppStateChange('active');
+
+    await waitUntil(() => notificationPermissionGranted() === false, {
+      label: 'iOS permission cache refreshed to denied on an active transition',
+    });
   });
 });

@@ -625,19 +625,25 @@ function onAppStateChange(status: AppStateStatus): void {
   if (status === 'active') {
     stopBackgroundKeepalive();
     void openConnection();
-    // Keeps the cache the background gate reads synchronously current: the
-    // user can revoke the permission from system settings at any time, and
-    // returning to the app is the only moment we get to notice. Android-only,
-    // like every reader of that cache and like initializeNotifications itself -
-    // otherwise this pulls notifee into the graph on every iOS foreground to
-    // compute a value nothing on iOS ever reads.
-    if (Platform.OS === 'android') {
-      void import('@/notifications/channels')
-        .then(({ refreshNotificationPermission }) => refreshNotificationPermission())
-        .catch(() => {
-          // Cache keeps its previous value; the gate fails open either way.
-        });
-    }
+    // Keeps the permission cache current: the user can revoke the permission
+    // from system settings at any time, and returning to the app is the only
+    // moment we get to notice.
+    //
+    // CROSS-PLATFORM, deliberately. This was Android-only on the reasoning that
+    // nothing on iOS read the cache and that refreshing there would drag notifee
+    // into the iOS graph for nothing. Both halves stopped being true: the
+    // Settings blocked-notice seeds itself from this cache synchronously on
+    // mount on BOTH platforms, and initializeNotifications now seeds it on both
+    // too, so notifee is already in the iOS graph. Leaving iOS out meant a
+    // revoked authorization went unnoticed until the next establishment - and
+    // never at all in 'off' mode, which returns before reaching any refresh -
+    // so Settings could still show a stale "granted" and hide the very notice
+    // that exists to explain the silence.
+    void import('@/notifications/channels')
+      .then(({ refreshNotificationPermission }) => refreshNotificationPermission())
+      .catch(() => {
+        // Cache keeps its previous value; the gate fails open either way.
+      });
   } else if (status === 'background') {
     const settings = useSettingsStore.getState();
     const hasEstablishedConnection = activeConnection?.controller.session.isEstablished === true;

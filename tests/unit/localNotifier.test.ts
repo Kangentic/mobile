@@ -72,10 +72,15 @@ function sessionEndedEvent(intentional: boolean): ActivityEvent {
 }
 
 function activityStateEvent(state: 'thinking' | 'idle'): ActivityEvent {
+  return activityStateEventForSession('sess-1', 'task-1', state);
+}
+
+/** Parameterized over session/task so a test can drive two sessions independently. */
+function activityStateEventForSession(sessionId: string, taskId: string, state: 'thinking' | 'idle'): ActivityEvent {
   return {
     kind: 'activity',
-    sessionId: 'sess-1',
-    taskId: 'task-1',
+    sessionId,
+    taskId,
     payload: { type: 'activity', state, reason: state === 'thinking' ? { kind: 'turn-active' } : { kind: 'idle' } },
   };
 }
@@ -341,6 +346,53 @@ describe('startLocalNotifier', () => {
     vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
 
     expect(displayNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * idleSettleTimers is a Map keyed by sessionId, and every test above drives a
+   * single session - nothing has proven that two sessions' settle timers are
+   * actually independent rather than, say, sharing one timer keyed off the
+   * last session touched. Cancelling one session's settle (by sending it back
+   * to work) must leave a second, concurrently-idling session's own timer
+   * alone, still firing at ITS deadline.
+   */
+  it('isolates the idle-settle timer per session: cancelling one leaves a concurrently-idling session armed', () => {
+    useBoardStore.getState().applyBoardSnapshot(
+      boardSnapshotFixture({
+        projectId: 'project-1',
+        tasks: [
+          boardTaskFixture({ id: 'task-1', session_id: 'sess-1', title: 'Ship the release' }),
+          boardTaskFixture({ id: 'task-2', session_id: 'sess-2', title: 'Fix the flaky test' }),
+        ],
+      }),
+    );
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().registerSession('sess-2', 'task-2', 'project-1');
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    // Both sessions settle into idle at the same moment, arming two
+    // independent timers.
+    useActivityStore.getState().applyActivityEvent(activityStateEventForSession('sess-1', 'task-1', 'thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEventForSession('sess-1', 'task-1', 'idle'));
+    useActivityStore.getState().applyActivityEvent(activityStateEventForSession('sess-2', 'task-2', 'thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEventForSession('sess-2', 'task-2', 'idle'));
+
+    // Halfway through the window, sess-1 goes back to work - cancelling ONLY
+    // its own timer - while sess-2 stays settled.
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS / 2);
+    useActivityStore.getState().applyActivityEvent(activityStateEventForSession('sess-1', 'task-1', 'thinking'));
+
+    // sess-2's original deadline passes here; sess-1's was cancelled, so only
+    // sess-2's notification fires.
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS / 2);
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    expect(displayNotification.mock.calls[0][0].data).toEqual({ taskId: 'task-2', projectId: 'project-1', sessionId: 'sess-2' });
+
+    // sess-1 never fires at all, even well past where its cancelled timer
+    // would have landed.
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+    expect(displayNotification).toHaveBeenCalledTimes(1);
   });
 
   /** A timer surviving the stop would fire into a foregrounded app, or a later test. */
