@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.5.1',
+  version: '0.6.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -98,10 +98,22 @@ const config: ExpoConfig = {
     // Numbers stay globally increasing across semver bumps (8 follows 7 even
     // though `version` moved 0.4.1 -> 0.5.0, and 9 follows 8 across
     // 0.5.0 -> 0.5.1), per the global-not-per-version rule above: a semver bump
-    // frees nothing. 9 was set on 2026-08-18 and never uploaded, confirmed by
-    // the absence of an ios-b9 tag on the remote, so it carries forward into
-    // this release rather than being burned and replaced by 10.
-    buildNumber: '9',
+    // frees nothing.
+    //
+    // 9 IS SPENT, on the v0.5.1 release. This comment previously said it "was
+    // set on 2026-08-18 and never uploaded, confirmed by the absence of an
+    // ios-b9 tag", and that was true when written and false by the time the
+    // next release read it: the tag now exists and points at 377d0b7, the
+    // v0.5.1 release commit. Submit tags are written after Apple ACCEPTS, so
+    // the tag is proof of a spent number and this ledger is not. Read
+    // `gh api repos/Kangentic/mobile/git/matching-refs/tags` before trusting
+    // any sentence in here - a stale line is what sent the 2026-07-28 release
+    // at a number Apple had already taken.
+    //
+    // 10 is the v0.6.0 release cut 2026-08-19, carrying the notification
+    // rework: the iOS permission request, tap routing, and Settings status,
+    // none of which any prior build has ever had working.
+    buildNumber: '10',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -249,13 +261,20 @@ const config: ExpoConfig = {
     // number too. The counters remain independent, and 7 follows 6 on Android's
     // own sequence regardless of what iOS did.
     //
+    // 8 is the v0.6.0 internal release cut 2026-08-19, carrying the
+    // notification rework. Note Android already had most of that fix WITHOUT
+    // this build: the desktop half (kangentic#303) stopped the duplicate render
+    // and the remote-push flood server-side the moment it merged. What needs a
+    // new APK is the local-notifier settle debounce, spawn-stalled defaulting
+    // off, and the Settings changes.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 7,
+    versionCode: 8,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
