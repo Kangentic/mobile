@@ -1,5 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { Linking, StyleSheet, TextInput } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, Linking, StyleSheet, TextInput } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult, type BarcodeType } from 'expo-camera';
 import { Screen, Stack, Text, Button, Card, useTheme } from '@/components';
@@ -28,7 +28,7 @@ const PAIRING_DEVICE_NAME = 'Kangentic Mobile';
 export function PairingScanScreen(): React.JSX.Element {
   const router = useRouter();
   const theme = useTheme();
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, refreshCameraPermission] = useCameraPermissions();
   const [pastedLink, setPastedLink] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -103,7 +103,26 @@ export function PairingScanScreen(): React.JSX.Element {
     [handleUri],
   );
 
+  // useCameraPermissions reads the status once on mount and never again on its
+  // own: its effect's deps are stable for the component's whole life, so only
+  // an explicit call moves it. Without this, granting camera access in Settings
+  // and coming back leaves `permission.granted` on the stale `false` from mount
+  // and strands the user on the very screen that sent them to Settings.
+  // 'active' is the moment a grant made outside the app becomes visible to it,
+  // the same event SettingsScreen's notification notice listens on. Not
+  // Android-only there, because both platforms reach Settings from this screen.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status !== 'active') return;
+      void refreshCameraPermission().catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, [refreshCameraPermission]);
+
   const openAppSettings = useCallback(() => {
+    // Clear first, like handleUri: a stale "Could not open Settings." left
+    // under a retry that then succeeded would contradict the screen.
+    setErrorMessage(null);
     // openSettings rejects when the OS declines to open the URL. There is
     // nothing to fall back to beyond the paste card already on screen, and an
     // uncaught rejection would be invisible in release, so say so rather than
@@ -116,11 +135,13 @@ export function PairingScanScreen(): React.JSX.Element {
   }
 
   if (!permission.granted) {
-    // iOS shows the system camera prompt once per install. Once the user has
-    // refused, requestPermission() resolves without prompting anything, so a
-    // button wired to it renders normally and does nothing at all - Settings is
-    // the only route back. canAskAgain is the only signal that separates "not
-    // asked yet" from "asked and refused".
+    // Once the OS stops prompting, requestPermission() resolves without showing
+    // anything, so a button wired to it renders normally and does nothing at
+    // all - Settings is the only route back. canAskAgain is the signal that
+    // separates "can still ask" from "asked and refused for good"; the two
+    // platforms reach that state differently (iOS prompts once per install,
+    // Android keeps allowing prompts until a permanent denial), which is why
+    // this branches on the flag rather than on Platform.OS.
     const canPromptForCamera = permission.canAskAgain;
     return (
       <Screen testID="pairing-scan-screen">
