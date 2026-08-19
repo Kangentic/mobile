@@ -158,6 +158,24 @@ describe('tapRouter - iOS push responses', () => {
   });
 
   /**
+   * The de-dup guard is deliberately keyed on `typeof identifier === 'string'
+   * && identifier.length > 0`, not on blind equality against the last-routed
+   * value. A payload that carries no identifier at all must still route EVERY
+   * time - dropping a real tap is worse than a rare double - so two separate
+   * taps that both omit an identifier are two separate routes, not a dedup
+   * pair. Blind equality would compare `undefined === undefined` on the
+   * second call and silently swallow it.
+   */
+  it('routes every tap that omits a notification identifier, never deduping them against each other', async () => {
+    const { routeFromPushResponse } = await loadModule();
+
+    await routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }));
+    await routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }));
+
+    expect(routerMock.push).toHaveBeenCalledTimes(2);
+  });
+
+  /**
    * A cold-start tap happened before any listener existed, so the warm listener
    * alone would drop it. Both paths have to be wired, and neither may reach for
    * notifee, whose events only ever fire for notifications notifee itself

@@ -289,6 +289,38 @@ describe('startLocalNotifier', () => {
   });
 
   /**
+   * The mirror image of the test above, and the reason the background gate
+   * lives ONLY at fire time (inside scheduleIdleSettle's setTimeout callback)
+   * and not also at arm time. A session can settle into idle while the app is
+   * still in the foreground - the user has it open, watching - and then the
+   * user backgrounds the phone before the settle window closes. That must
+   * still alert: arming is unconditional on every thinking -> idle edge, and
+   * only the fire-time check decides whether to actually post.
+   *
+   * A regression that added a background check to the arm/cancel branch too
+   * (gating the whole per-entry loop on appStateStatus before scheduleIdleSettle
+   * is ever reached) would never start the timer for this session at all, so
+   * backgrounding later would have nothing left to fire.
+   */
+  it('arms the idle-settle timer even while foregrounded, and fires once backgrounded before the window closes', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    // Deliberately no 'background' emit here: the session goes thinking -> idle
+    // while appStateMock is still at its beforeEach default of 'active'.
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS / 2);
+    expect(displayNotification).not.toHaveBeenCalled();
+
+    appStateMock.emit('background');
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS / 2);
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    expect(displayNotification.mock.calls[0][0].title).toBe('Agent went idle');
+  });
+
+  /**
    * A session that ENDS while a settle is pending must not also report going
    * idle. `session-ended` sets feedStatus only and leaves `state` at 'idle'
    * (activityStore.ts), so neither the arm/cancel branch nor a fire-time check
