@@ -405,6 +405,14 @@ describe('PairingScanScreen', () => {
       it('refreshes camera permission when the app returns to active', () => {
         render(<PairingScanScreen />);
 
+        // Pins the subscribed event name itself, not just the behavior once
+        // fired: emitAppState replays whatever listener the mock captured
+        // regardless of which event name the screen subscribed with, so a
+        // source change to 'focus' or 'blur' (both Android-only, per React
+        // Native's AppState docs) would pass every test in this describe
+        // block without this line catching it.
+        expect(AppState.addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+
         act(() => {
           emitAppState('active');
         });
