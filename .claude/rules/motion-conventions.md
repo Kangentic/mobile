@@ -1,0 +1,91 @@
+---
+paths:
+  - "src/components/**"
+  - "src/screens/**"
+---
+# Rule: motion and haptics conventions
+
+The app has a motion system (theme `MotionTokens`, the `useMotionPresets` builders, `PressScale`,
+a closed `HapticCue` union) but no stated craft bar, so the constraints that matter live in a
+docstring in `presets.ts` and are invisible to anyone adding an animation from a screen file. The
+failures this prevents are the expensive kind: motion that runs fine in a dev build on a fast
+phone and drops frames on a three-year-old Android, an `entering` animation on a FlashList item
+root that replays on every recycle, and a `setState` in a gesture handler that re-renders React
+once per frame.
+
+## The rule
+
+**Gate it before building it.** Match motion to how often the user sees it. Something seen 100+
+times a day (tab switches, keyboard, scrolling, a settings toggle) gets the platform default or
+nothing. Frequent actions (press feedback, row selection) get near-imperceptible motion only.
+Sheets, modals and banners get a standard animation. Delight belongs on rare and first-run states.
+Tab switches never slide: peers are not a hierarchy.
+
+**Use the shared vocabulary, not raw values.**
+
+- Entering and exiting animations come from `useMotionPresets()`. Add a preset rather than
+  hand-rolling a builder at a call site.
+- Durations and curves come from `theme.motion` (`durations.instant|fast|base|slow`,
+  `easing.standard|decelerate|accelerate`). No literal millisecond or bezier values in screens or
+  components.
+- Entering elements use `decelerate` (ease-out). `accelerate` is for exits only, where the element
+  is leaving the moment the user is watching. Never put an accelerating curve on an entrance.
+- Pressed states use `PressScale` and `theme.motion.pressedScale`, not a per-component scale.
+- Haptics go through `triggerHaptic(cue)` with a cue from the `HapticCue` union. Never call
+  `expo-haptics` directly from a screen or component, and never add a cue without adding it to the
+  union.
+
+**Keep motion off the JS thread.**
+
+- Animate `transform` and `opacity`. Animating `width`, `height`, `margin`, `padding`, `flex`,
+  `top` or `left` re-runs layout every frame for that node and its siblings. The one exception is
+  an absolutely positioned element with no children.
+- Never `setState` from a gesture or scroll handler. Use a shared value plus `useAnimatedStyle`.
+- Never read or write a shared value during render. It fires mid-reconciliation, and a re-render
+  you did not cause replays the write. Touch shared values only in worklets, handlers and effects.
+- Prefer `.get()` and `.set()` over direct `.value` access. On Reanimated 4 (this project pins
+  4.5.1) they are the documented compiler-safe form; direct `.value` is the shape the React
+  Compiler cannot see through. Existing code predates this and still uses `.value` in
+  `Skeleton.tsx`, `PressScale.tsx` and `TriageHomeScreen.tsx`. Convert those when you touch the
+  file rather than in a sweep, the same way `typescript-style.md` handles existing `any` casts.
+- Reach for a shared value only when the value is continuous or interruptible. A two-state toggle
+  is a preset or a transition, not a worklet.
+
+**Lists.** Never hand an `entering`, `exiting` or layout animation to a FlashList `renderItem`
+root: recycling replays it on every bind. Animate the container, or use `itemLayoutAnimation`.
+
+**Reduced motion ships with the animation**, never as a follow-up. Presets already carry
+`ReduceMotion.System`. Anything hand-rolled sets it explicitly. Reduced motion means gentler, not
+absent: keep opacity and color changes that explain a state change, drop translation, scale and
+overshoot.
+
+**A haptic is never the only feedback.** It fires on the same frame as its visual, once per user
+action, never per frame and never on an entrance the user did not cause. Haptics are off
+system-wide for many users and silent on much Android hardware, so the visual has to stand alone.
+
+**Feel is judged on a release build on the slowest supported device.** A dev build's JS thread is
+slow enough to hide the problems you are looking for, and fast enough elsewhere to hide the rest.
+
+## Enforcement (self-maintaining)
+
+- **Review (live now):** `expo-rn-reviewer` covers the FlashList and list-performance conventions
+  during `/code-review`; `/design-pass` cites this rule as the motion bar for a screen pass.
+- **Type system (live now):** the `HapticCue` union makes an unlisted cue a compile error
+  (`npm run typecheck`, gated in `.github/workflows/ci.yml`).
+- **Lint (planned):** two `no-restricted-imports` / `no-restricted-syntax` rules are mechanizable
+  today and are the strongest available upgrade here. One bans importing `expo-haptics` outside
+  `src/lib/haptics.ts` (the boundary already holds, so it would land green and stay that way).
+  The other bans a raw `Easing.bezier(` call outside `src/components/motion/`, which is the
+  duplication that actually exists: `presets.ts` has a `bezierEasing` helper, and
+  `SegmentedSwitcher.tsx` and `Skeleton.tsx` each inline the same four-argument spread instead of
+  importing it. Both pass token values, so neither is a correctness bug today, but the third copy
+  is where a literal creeps in.
+- **Test (planned):** a scan for `entering=` / `exiting=` inside a `renderItem` body would catch
+  the one failure here that is silent at runtime and invisible in review.
+
+## Scope
+
+Authored motion and haptics in `src/components/**` and `src/screens/**`. Does not govern
+`src/brand/` generated motion data (the Overseer frame timings are generated output from the
+branding manifest and must not be hand-tuned), or the terminal WebView, which paints its own
+frames.

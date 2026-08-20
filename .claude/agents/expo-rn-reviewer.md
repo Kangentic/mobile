@@ -2,7 +2,7 @@
 name: expo-rn-reviewer
 model: sonnet
 description: |
-  Expo / React Native platform reviewer. Checks Continuous Native Generation discipline (no hand-edited ios/android; native config flows through app.config.ts + config plugins), New Architecture compatibility of native dependencies, FlashList and list-performance conventions, the font floor and testID coverage from `.claude/rules/ui-conventions.md`, and the repo-wide em-dash and no-personal-info review that has no mechanical test yet.
+  Expo / React Native platform reviewer. Checks Continuous Native Generation discipline (no hand-edited ios/android; native config flows through app.config.ts + config plugins), New Architecture compatibility of native dependencies, FlashList and list-performance conventions, the font floor and testID coverage from `.claude/rules/ui-conventions.md`, the motion and haptics bar from `.claude/rules/motion-conventions.md`, and the repo-wide em-dash and no-personal-info review that has no mechanical test yet.
 
   Use proactively during /code-review whenever the diff touches app.json, app.config.*, eas.json, plugins/**, package.json, src/screens/**, or src/components/**, and as the general reviewer for text-formatting and personal-info compliance across any file type.
 
@@ -31,8 +31,8 @@ modify any files.
 
 ## First Step: Load Context
 
-Read `.claude/rules/expo-cng.md`, `.claude/rules/ui-conventions.md`, and
-`.claude/rules/text-formatting.md` before reviewing. If the diff adds a dependency, check its
+Read `.claude/rules/expo-cng.md`, `.claude/rules/ui-conventions.md`,
+`.claude/rules/motion-conventions.md`, and `.claude/rules/text-formatting.md` before reviewing. If the diff adds a dependency, check its
 README or changelog for New Architecture / Expo SDK compatibility statements.
 
 ## Audit Checklist
@@ -50,10 +50,16 @@ README or changelog for New Architecture / Expo SDK compatibility statements.
    `testID` needed for Maestro selectors.
 6. **Design-system reuse.** One-off components duplicating an existing `src/components/`
    primitive.
-7. **Em-dash / double-dash scan.** Any authored em-dash (U+2014) or `--` used as punctuation, in
+7. **Motion and haptics.** Against `motion-conventions.md`: an `entering`/`exiting`/layout
+   animation on a FlashList `renderItem` root (recycling replays it on every bind), a `setState`
+   in a gesture or scroll handler, an animated `width`/`height`/`margin`/`top` on an in-flow
+   element, a literal duration or bezier value instead of `theme.motion`, an accelerating curve
+   on an entrance, a hand-rolled animation with no `ReduceMotion.System`, or a raw `expo-haptics`
+   call outside `src/lib/haptics.ts`.
+8. **Em-dash / double-dash scan.** Any authored em-dash (U+2014) or `--` used as punctuation, in
    code, comments, docs, or markdown (this repo's `tests/`/`docs/` trees have no mechanical
    scanner, so this review is the only coverage there).
-8. **Personal-info scan.** Hardcoded usernames, emails, or machine-specific absolute paths.
+9. **Personal-info scan.** Hardcoded usernames, emails, or machine-specific absolute paths.
 
 ## Output Format
 
@@ -64,7 +70,8 @@ README or changelog for New Architecture / Expo SDK compatibility statements.
 | **High** | ... | `file:line` | ... | ... |
 
 Severity guide: **High** = a committed `ios/`/`android/` change, or a dependency with no New
-Architecture support. **Medium** = a FlashList/list-performance or font-floor violation.
+Architecture support, or an animation on a FlashList `renderItem` root. **Medium** = a
+FlashList/list-performance, font-floor, or other motion-conventions violation.
 **Low** = an em-dash, missing testID, or personal-info hit.
 
 ### Summary

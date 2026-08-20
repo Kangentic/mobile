@@ -357,6 +357,17 @@ tools on each server are gated behind an explicit user request.
   write tools are listed under `permissions.ask` and in `CLAUDE.md`'s cloud-spend section.
 - **Expo plugin OAuth.** Run `/mcp` and complete the Expo login flow. Each contributor
   authenticates individually as their own personal Expo account; no credentials are committed.
+- **The Expo plugin also ships skills, and `expo-animation` is the one this repo leans on.** It
+  is the animation construction skill (the frequency gate, Reanimated worklets, spring configs,
+  gesture handoff, haptics), co-published with Emil Kowalski and identical to `animate-expo` in
+  [emilkowalski/skills](https://github.com/emilkowalski/skills). Because `enabledPlugins` is
+  committed, a fresh clone gets it with no setup, but it **first appeared in plugin version
+  1.11.0** - a machine pinned to an older cached version will not list it. Check with `/plugin`
+  if `expo-animation` is missing from the skill list. It is the construction reference;
+  `.claude/rules/motion-conventions.md` is the binding bar for this codebase, and the rule wins
+  where the two differ (notably: our `accelerate` curve is correct on exits, which the general
+  "never ease-in" advice does not carve out). The other skills in that upstream repo are
+  web-targeted (CSS, Framer Motion, Sonner) and deliberately not vendored here.
 - **Expo credentials exist on developer machines only, never in CI:**
 
   | Path | Credential | Where |

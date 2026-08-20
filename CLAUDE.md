@@ -357,6 +357,9 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   (`src/pairing/`, `src/channel/`, `src/notifications/`, `src/state/`).
 - `ui-conventions.md` - shared primitives, font floor, FlashList, testIDs (`src/screens/`,
   `src/components/`).
+- `motion-conventions.md` - the frequency gate, `MotionTokens`/`useMotionPresets` vocabulary,
+  transform-and-opacity only, no `entering` on a FlashList item root, reduced motion ships with
+  the animation, haptics through the `HapticCue` union (`src/components/`, `src/screens/`).
 - `ui-copy-brevity.md` - labels name the action, context names the object; one-line
   descriptions; a11y labels exempt (`src/screens/`, `src/components/`).
 - `e2e-maestro-runs.md` - Maestro through the CLI, one rig mode, testID selectors, the dev-client

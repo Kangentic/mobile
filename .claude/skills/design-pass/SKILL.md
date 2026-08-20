@@ -38,6 +38,10 @@ Every design decision starts from what already exists. Never invent a parallel v
   decoration competing with live PTY output.
 - **Motion rich but restrained.** Use `MotionTokens` presets and the closed haptic cue list.
   Animate containers, never FlashList item roots. Everything respects reduced motion.
+  `.claude/rules/motion-conventions.md` is the full bar and the single source of truth: read it
+  before proposing any motion change, and gate on frequency first (something the user sees 100+
+  times a day earns the platform default or nothing, so the right call is often to delete the
+  animation rather than tune it).
 
 ## Design principles (the taste layer)
 
