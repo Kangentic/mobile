@@ -1787,6 +1787,58 @@ Expo Push itself is free: no per-notification charge, no paid plan requirement, 
 Until all of this exists, `build-android.yml` emits a warning on every run and the resulting
 binary cannot receive remote notifications.
 
+### Verifying a push landed (Android)
+
+A push has TWO ways to look delivered and be broken, and neither shows up in the app: the OS can
+draw the notification instead of us, or nothing can run at all. One logcat line separates them, so
+check it before debugging anything else.
+
+`notification_enqueue` is an Android **EventLog** tag, so it is written to the `events` buffer, not
+the default main/system/crash ones. Read it with the buffer named explicitly, or a working push
+looks like no push at all:
+
+```
+adb logcat -b events
+```
+
+Use `-b all` to see it alongside the `TaskService` lines below in one stream. With the phone on USB
+and that running, send a push and find the `notification_enqueue` event. **Read the notification
+record's `tag` field** (the value in the event payload, not an `adb logcat -s` filter tag):
+
+- **Tag `NULL`, with an integer id** - the app posted it through Notifee. This is the working path.
+  Nearby you should also see `TaskService: Started headless task <id> to keep JS timers alive for
+  '<appScopeKey>'` and `Finished headless task <id> for '<appScopeKey>'`
+  (`expo-task-manager`'s `TaskService.java:663,704`). Note what that bracket does and does not
+  prove: it is the timer-keepalive headless task named `expo-task-manager`, so it says a headless JS
+  context started and stopped for this app, NOT that `kangentic-background-push` itself ran. The
+  task name does not appear in either line.
+- **Tag `FCM-Notification:<number>`** - the FIREBASE SDK drew it, which means the message carried an
+  FCM `android.notification` block, which means `onMessageReceived` was never called and our task
+  never ran. The payload was silently dropped. The cause is on the DESKTOP send path: a `title`,
+  `body`, or `channelId` on an Android message (see the notification pipeline in
+  [architecture.md](architecture.md)).
+
+This is exactly what a blank tray row is. A notification with no renderable content makes SystemUI
+substitute the string "Expand to view", and expanding shows nothing, because there is nothing to
+render. That string is not ours and greps to nothing in this repo, which is a good way to lose an
+afternoon.
+
+When a row looks empty, confirm what was actually posted:
+
+```
+adb shell dumpsys notification --noredact
+```
+
+Read `android.title`, `android.text`, `contentView`, `channelId`, and the record's `tag` for each
+`NotificationRecord` belonging to `com.kangentic.mobile`. All-null title/text plus a
+`FCM-Notification:*` tag is the failure above. Note FCM sets its own `timeout=PT72H`, so bad rows
+linger for three days rather than clearing on their own.
+
+Check which build you are actually looking at first - `adb shell dumpsys package com.kangentic.mobile`
+for `versionName` / `versionCode` - because the notification stack's behaviour depends on the
+`expo-notifications` version inside the APK, and a device on an older dependency tree invalidates
+every conclusion above.
+
 ## Crash reporting (Sentry)
 
 Like Firebase above, this is optional infrastructure that degrades to inert rather than breaking a

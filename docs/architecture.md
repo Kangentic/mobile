@@ -270,18 +270,59 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
 3. The payload is ciphertext plus a generic placeholder (see `.claude/rules/e2e-notification-privacy.md`).
    On iOS, a Notification Service Extension (added via an Expo config plugin, no eject) decrypts
    and rewrites the notification on-device. **The NSE is not built yet**, so an iOS push currently
-   renders as the placeholder only. On Android, a high-priority data-only FCM message is decrypted
-   by a Notifee background handler, which posts the rich local notification.
+   renders as the placeholder only. On Android, a high-priority data-only FCM message is received
+   by a headless `expo-task-manager` task (registered through `Notifications.registerTaskAsync`),
+   which decrypts it and hands the rich local notification to Notifee to display. Notifee owns
+   display and press events, not receipt.
    **The placeholder `title`/`body` are sent to iOS devices only.** The desktop branches on the
    registration's `platform`: Android gets a data-only message, because expo-notifications
    presents any push carrying a title or body itself, natively, ON TOP of the decrypted one the
    background task posts - which showed every Android alert twice. Omitting both suppresses the
    native render while the task still runs. iOS keeps them, since without the NSE that placeholder
    is the only visible content an iOS push can have.
+
+   **`channelId` counts as visible content and must be omitted too**, which is the sharp edge of
+   the rule above. Expo attaches an FCM `android.notification` block to any message carrying it,
+   and that block is what decides who renders: with one present, and the app BACKGROUNDED OR
+   KILLED (the case this pipeline exists for), the FCM SDK draws the tray item ITSELF and does not
+   call `onMessageReceived`, so the background task never runs. Sending `channelId` with no title
+   or body therefore produces the worst of both - a blank OS-drawn row (SystemUI substitutes
+   "Expand to view" for a notification with no renderable content) and a silently dropped payload.
+   Nothing is lost by omitting it: the channel is chosen on the phone by
+   `channelIdForCategory(decrypted.category)` after decryption, which is strictly better because
+   only the phone knows the category. **The desktop still sends it as of 2026-08-20**, so an
+   Android push renders blank today; the fix is on the desktop send path
+   (`mobile-bridge/push/push-notifier.ts`), not in this app.
+
+   Two halves of that claim have different evidence, which is worth stating because the whole
+   section and the debugging recipe in [developer-guide.md](developer-guide.md) rest on it. The
+   CLIENT-side half (an `android.notification` block moves rendering to the FCM SDK for a
+   backgrounded or killed app) is documented FCM behaviour. A foregrounded app is the exception -
+   FCM calls `onMessageReceived` there whatever the payload shape - which does not change the
+   conclusion, since a foregrounded phone is separately suppressed by presence logic. The
+   SERVER-side half (that Expo attaches that block for any message carrying `channelId`) happens
+   at `exp.host`, outside this repo, and has NOT been verified against Expo's push-service source;
+   it is consistent with community reports and with `expo-notifications` modelling `channelId`
+   under `FirebaseRemoteMessageNotification` rather than the data object.
 4. Presence suppression: when the app is foregrounded with the channel up, the desktop notifies
-   over the socket and skips the push. The phone re-checks this on receipt too - the background
-   task suppresses its display whenever `AppState.currentState` is provably `'active'` (only that,
-   never "not background": a killed-app launch has no Activity and reports `null`/`'unknown'`).
+   over the socket and skips the push. The phone re-checks this on receipt too, gating on app
+   state AND channel state together, each with a deliberately different polarity. App state
+   suppresses only when provably `'active'` (never "not background": a killed-app launch has no
+   resumed Activity, and reports whatever the native module gives a paused context - most likely
+   `'background'`, possibly `null`/`'unknown'` - so the gate deliberately treats every non-`'active'`
+   value alike rather than testing for one). Channel state suppresses unless the channel is
+   provably DOWN - `transportState` of `'idle'` or `'closed'` with nothing established. A bare
+   `established` read would be wrong, because it drops on every transport blip, so a momentary
+   reconnect would fire a notification over the top of the UI.
+
+   Be precise about how much that second half actually lets through. `RelayTransport` only reaches
+   `'closed'` on an explicit `close()`, and only sits at `'idle'` before its first dial; a
+   foreground outage retries forever, cycling `'connecting'`/`'reconnecting'`. So a foregrounded
+   phone in a dead zone still reads as watching, and the let-through case is really
+   before-first-connect or after-a-deliberate-teardown, not foregrounded-but-disconnected in
+   general. Separating a blip from a sustained outage would need a time-in-state the store does not
+   carry, and a foregrounded user already has the connection banner telling them the link is down,
+   so this is accepted rather than fixed.
 
 Phone side (`src/notifications/`; RICH DISPLAY is Android-only in this phase, while registration,
 the permission request, tap routing, and the permission-state surface in Settings are all
@@ -298,6 +339,19 @@ categories (`categoryCopy.ts` - `input-required` / `turn-complete` / `session-fa
 `plan-complete` / `spawn-stalled`, named for cross-vendor task-lifecycle vocabulary rather than
 any one agent's terms) onto four notifee channels (needs-attention / completions / failures /
 stalls); any failure degrades to the generic placeholder.
+
+**What "degrades to the placeholder" does and does not promise.** It is a statement about what is
+RENDERED: a decrypt that fails for any reason (missing key, wrong key, wrong recipient AAD, tamper,
+malformed, stale `sentAt`), or a rich notification that fails to post, still shows the generic
+"Kangentic / Agent needs attention" rather than ciphertext or plaintext. It is not a delivery
+guarantee, and since the Android message became data-only it cannot be read as one: there is no
+OS-drawn notification behind the task any more, so anything that stops the headless JS from running
+at all produces silence rather than a placeholder. The receive path therefore degrades at each step
+it can reach - a failed rich display falls through to the placeholder instead of escaping,
+`createNotificationChannels()` is awaited so a cold launch cannot outrun it, and a failed
+`registerTaskAsync` is recorded and surfaced in Settings rather than swallowed. **Doze and
+app-standby throttling of a headless launch remain outside what JS can address**, and are accepted
+residual risk rather than a covered case.
 
 | Category | Title (`titleForCategory`) | Default |
 |----------|----------------------------|---------|

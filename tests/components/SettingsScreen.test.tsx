@@ -2,6 +2,7 @@ import React from 'react';
 import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
+import type { BackgroundPushTaskStatus, PushRegistrationStatus } from '@/notifications';
 import { SettingsScreen } from '@/screens/SettingsScreen';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -34,8 +35,14 @@ const mockRefreshNotificationPermission = jest.fn().mockResolvedValue(true);
 const mockNotificationPermissionStatus = jest
   .fn<'granted' | 'denied' | 'not-determined' | null, []>()
   .mockReturnValue('granted');
+// Typed from the real exports rather than re-spelled unions: a renamed status
+// should break this mock, not quietly drift from the code under test. Type-only
+// imports are erased, so this does not defeat the jest.mock below.
+const mockGetPushRegistrationStatus = jest.fn<PushRegistrationStatus, []>().mockReturnValue('not-connected');
+const mockGetBackgroundPushTaskStatus = jest.fn<BackgroundPushTaskStatus, []>().mockReturnValue('registered');
 jest.mock('@/notifications', () => ({
-  getPushRegistrationStatus: jest.fn().mockReturnValue('not-connected'),
+  getPushRegistrationStatus: () => mockGetPushRegistrationStatus(),
+  getBackgroundPushTaskStatus: () => mockGetBackgroundPushTaskStatus(),
   notificationPermissionStatus: () => mockNotificationPermissionStatus(),
   openSystemNotificationSettings: () => mockOpenSystemNotificationSettings(),
   refreshNotificationPermission: () => mockRefreshNotificationPermission(),
@@ -105,6 +112,8 @@ describe('SettingsScreen', () => {
     mockRefreshNotificationPermission.mockClear();
     mockRefreshNotificationPermission.mockResolvedValue(true);
     mockNotificationPermissionStatus.mockReturnValue('granted');
+    mockGetPushRegistrationStatus.mockReturnValue('not-connected');
+    mockGetBackgroundPushTaskStatus.mockReturnValue('registered');
     appStateListeners.clear();
     // Re-installed fresh every test (idempotent over jest.spyOn), never
     // restored in afterEach: restoring here would strip every OTHER mock in
@@ -356,5 +365,89 @@ describe('SettingsScreen', () => {
     fireEvent.press(screen.getByTestId('settings-crash-test-native'));
     expect(mockCrashNatively).toHaveBeenCalledTimes(1);
     expect(mockThrowTestError).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * This surface was rendered but asserted NOWHERE in any tier, so a dropped
+   * label or a stopped render was invisible. It is the only place the app tells
+   * a user whether remote push actually works.
+   */
+  describe('remote push status', () => {
+    it('reports the registration status while the receive task is healthy', () => {
+      mockGetPushRegistrationStatus.mockReturnValue('registered');
+      mockGetBackgroundPushTaskStatus.mockReturnValue('registered');
+      renderSettings();
+
+      expect(screen.getByTestId('settings-push-status')).toBeTruthy();
+      expect(screen.getByText('Remote push: registered')).toBeTruthy();
+    });
+
+    /**
+     * The two halves fail independently: the token can register with the
+     * desktop perfectly while the headless task that would DISPLAY the result
+     * never registered, so pushes are sent, delivered, and silently never seen.
+     * "Remote push: registered" is the one label that is actively wrong there,
+     * so the task status has to outrank it.
+     */
+    it('overrides a registered status when the receive task never registered', () => {
+      mockGetPushRegistrationStatus.mockReturnValue('registered');
+      mockGetBackgroundPushTaskStatus.mockReturnValue('unavailable');
+      renderSettings();
+
+      expect(screen.getByText('Remote push: unavailable on this device')).toBeTruthy();
+      expect(screen.queryByText('Remote push: registered')).toBeNull();
+    });
+
+    /**
+     * THE PAIRING THAT ACTUALLY HAPPENS. A build with no google-services.json
+     * fails the token fetch AND the task registration, so these two land
+     * together. The no-FCM label must survive: it names the consequence (with
+     * no push, alerting genuinely stops when the background keepalive hits its
+     * five-minute ceiling rather than handing off), which a generic
+     * "unavailable" line does not. An unconditional override would replace the
+     * good copy with the vague copy in exactly the case the good copy is for.
+     */
+    it('keeps the no-FCM label when both halves fail together', () => {
+      mockGetPushRegistrationStatus.mockReturnValue('unavailable-no-fcm');
+      mockGetBackgroundPushTaskStatus.mockReturnValue('unavailable');
+      renderSettings();
+
+      expect(screen.getByText('Remote push: off on this build - brief background alerts only')).toBeTruthy();
+      expect(screen.queryByText('Remote push: unavailable on this device')).toBeNull();
+    });
+
+    /**
+     * iOS never registers the task at all (it is Android-only by design), so
+     * 'pending' must read as "nothing to report", not as a failure.
+     */
+    it('leaves the registration status alone while the task status is pending', () => {
+      mockGetPushRegistrationStatus.mockReturnValue('capability-denied');
+      mockGetBackgroundPushTaskStatus.mockReturnValue('pending');
+      renderSettings();
+
+      expect(screen.getByText('Remote push: not granted by your desktop')).toBeTruthy();
+    });
+
+    /**
+     * THE STEADY STATE OF EVERY WORKING iOS INSTALL, and the case that pins the
+     * override's PRECISION rather than its existence. Registration succeeds
+     * while the receive task stays 'pending' forever, because it is only ever
+     * registered on Android.
+     *
+     * The case above cannot catch this: it pairs 'pending' with a registration
+     * status that already fails the second half of the guard, so it passes even
+     * if the task status were ignored entirely. Loosen the guard from
+     * `=== 'unavailable'` to `!== 'registered'` - the obvious simplification -
+     * and every other test here still passes while every working iOS user is
+     * told push is broken.
+     */
+    it('reports a registered status on iOS, where the task stays pending forever', () => {
+      mockGetPushRegistrationStatus.mockReturnValue('registered');
+      mockGetBackgroundPushTaskStatus.mockReturnValue('pending');
+      renderSettings();
+
+      expect(screen.getByText('Remote push: registered')).toBeTruthy();
+      expect(screen.queryByText('Remote push: unavailable on this device')).toBeNull();
+    });
   });
 });

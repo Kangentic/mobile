@@ -10,6 +10,7 @@ export {
   notificationPermissionStatus,
   type NotificationPermissionStatus,
 } from './permissionCache';
+export { getBackgroundPushTaskStatus, type BackgroundPushTaskStatus } from './backgroundPushTask';
 export { decryptPushBlob, PUSH_PLACEHOLDER_BODY, PUSH_PLACEHOLDER_TITLE, type DecryptedPushNotification } from './pushDecrypt';
 export { setActivePushIdentityPublicKey } from './pushIdentity';
 export {

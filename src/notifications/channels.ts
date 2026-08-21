@@ -53,13 +53,46 @@ export const ANDROID_NOTIFICATION_PRESENTATION = {
   color: brandTokens.rust,
 } as const;
 
-let channelsCreated = false;
+let channelCreation: Promise<void> | null = null;
 
-/** Idempotent; creating an existing channel is a no-op OS-side, but the guard keeps boot paths cheap. */
+/**
+ * Idempotent; creating an existing channel is a no-op OS-side, but the guard
+ * keeps boot paths cheap.
+ *
+ * MEMOIZES THE PROMISE RATHER THAN A BOOLEAN, and both halves of that are
+ * load-bearing.
+ *
+ * Sharing the in-flight promise is what makes an `await` on this function mean
+ * anything. A boolean flipped BEFORE the await let every later caller return
+ * while the real native call was still running, which silently defeated the one
+ * caller that needs the ordering: initializeNotifications() fires this unawaited
+ * at bundle entry (index.ts), before the headless push task can possibly run, so
+ * the flag was always already set by the time backgroundPushTask.ts awaited it
+ * and the display raced the channels it needs.
+ *
+ * Clearing on rejection matters just as much. A latched flag turned one
+ * transient failure into permanent silence for the life of the process: the
+ * channels never existed OS-side, every later call returned immediately, and
+ * both the rich notification AND the needs-attention placeholder behind it
+ * failed. The Android push is data-only, so there is no OS-drawn notification
+ * left to fall back on (see e2e-notification-privacy.md).
+ */
 export async function createNotificationChannels(): Promise<void> {
-  if (channelsCreated) return;
-  channelsCreated = true;
-  await notifee.createChannels([
+  let pendingCreation = channelCreation;
+  if (pendingCreation === null) {
+    const creationAttempt = createAllChannels();
+    channelCreation = creationAttempt;
+    // Guarded on identity so a late rejection cannot discard a newer attempt.
+    creationAttempt.catch(() => {
+      if (channelCreation === creationAttempt) channelCreation = null;
+    });
+    pendingCreation = creationAttempt;
+  }
+  await pendingCreation;
+}
+
+function createAllChannels(): Promise<void> {
+  return notifee.createChannels([
     {
       id: NEEDS_ATTENTION_CHANNEL_ID,
       name: 'Needs your attention',

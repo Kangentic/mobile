@@ -275,7 +275,10 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   surface shows the session or not.
 - **E2E push:** payloads are ciphertext plus a generic placeholder only; decryption happens
   on-device (iOS Notification Service Extension / Android Notifee). Every failure degrades to
-  the placeholder, never to plaintext.
+  the placeholder, never to plaintext. That is a floor on WHAT IS RENDERED, not a promise that
+  something always renders: the Android message is data-only (no `title`, no `body`, and no
+  `channelId` - any of the three makes FCM draw the notification itself and skip the app's
+  handler entirely), so if the on-device handler never runs there is no OS fallback behind it.
 - **Accountless core:** pairing, transport, and capability code never depend on any Kangentic
   account or entitlement layer. The open-core split (this app is open source and self-hostable;
   a Kangentic-operated hosted relay is the paid product) depends on this separation holding.
