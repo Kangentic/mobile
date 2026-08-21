@@ -1793,6 +1793,36 @@ A push has TWO ways to look delivered and be broken, and neither shows up in the
 draw the notification instead of us, or nothing can run at all. One logcat line separates them, so
 check it before debugging anything else.
 
+#### First, get the phone into a state where a push can arrive
+
+Three device states produce no notification for three completely different reasons, and **two of
+them are not bugs**. Getting this wrong invalidates every conclusion below, so settle it first.
+
+- **Force-stopped: no push is delivered at all.** `adb shell am force-stop` puts the app in
+  Android's *stopped state*, which excludes it from broadcasts, so FCM never reaches it. Observed
+  directly - every delivery attempt logged
+  `W/GCM: broadcast intent callback: result=CANCELLED for Intent { act=com.google.android.c2dm.intent.RECEIVE ... pkg=com.kangentic.mobile }`
+  and nothing else happened. **A working push is indistinguishable from no push here**, which makes
+  force-stop the most misleading possible way to test the killed-app path, and it is the obvious
+  thing to reach for. Use `adb shell am kill com.kangentic.mobile` instead: it ends the process
+  without setting the stopped flag. `am kill` spares a process holding a foreground service, so the
+  connection keepalive has to be gone first; confirm with `adb shell pidof com.kangentic.mobile`.
+  Launching the app once clears the stopped flag again.
+- **Foregrounded: the task runs and deliberately posts nothing.** The receive task suppresses its
+  display whenever the app is provably active, so logcat shows
+  `Finished task 'kangentic-background-push'` with no `notification_enqueue` after it. That is the
+  gate working, not a failure. Observed: nine task runs, zero notifications, because the app was
+  open on screen.
+- **Backgrounded with the channel still established: the DESKTOP never sends.** It suppresses
+  remote push to any device with a live bridge session, and `localNotifier.ts` fires over the
+  socket instead. A real remote push needs the channel down, which means waiting out the
+  five-minute `BACKGROUND_KEEPALIVE_MAX_MS` ceiling.
+
+The state you want is: launched at least once since any force-stop, then backgrounded or killed
+with `am kill`, with no established channel.
+
+#### Then read the tag
+
 `notification_enqueue` is an Android **EventLog** tag, so it is written to the `events` buffer, not
 the default main/system/crash ones. Read it with the buffer named explicitly, or a working push
 looks like no push at all:
