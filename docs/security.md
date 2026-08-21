@@ -231,7 +231,11 @@ anyway - but it is newly precise, so it is stated here rather than implied.
 
 Push notifications are ciphertext plus a generic placeholder only (see
 `.claude/rules/e2e-notification-privacy.md`); every failure mode degrades to the placeholder,
-never to plaintext or raw ciphertext shown to the user. On-device decrypt lives in
+never to plaintext or raw ciphertext shown to the user. That is a floor on WHAT IS RENDERED, not
+a delivery guarantee: the Android message is data-only, so there is no OS-drawn notification
+behind our handler, and anything that stops it running at all produces silence rather than a
+placeholder. See the notification pipeline in [architecture.md](architecture.md) for the full
+treatment. On-device decrypt lives in
 `src/notifications/pushDecrypt.ts`: the envelope is sealed with a device-generated push key and
 this phone's static public key as the AAD, opened with a 24h staleness / 5min future-skew
 window, and any failure (missing key, wrong key, wrong recipient, tamper, malformed, stale)

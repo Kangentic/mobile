@@ -6,10 +6,12 @@ import type { PushCategory } from '@kangentic/protocol';
 import { Brandmark, Button, Card, Icon, MonoText, Row, Screen, SectionHeader, Stack, StatusDot, Text, useTheme } from '@/components';
 import { resyncPushRegistrationCategories } from '@/connection/connectionManager';
 import {
+  getBackgroundPushTaskStatus,
   getPushRegistrationStatus,
   notificationPermissionStatus,
   openSystemNotificationSettings,
   refreshNotificationPermission,
+  type BackgroundPushTaskStatus,
   type NotificationPermissionStatus,
   type PushRegistrationStatus,
 } from '@/notifications';
@@ -31,6 +33,33 @@ const PUSH_STATUS_LABELS: Record<PushRegistrationStatus, string> = {
   'not-connected': 'Remote push: registers on connect',
   pending: 'Remote push: registering...',
 };
+
+/**
+ * The headless receive task is a SECOND, independent way remote push can be
+ * dead. The verb can register this device's token with the desktop perfectly
+ * while the task that would DISPLAY the result never registered - pushes are
+ * then sent, delivered, and silently never seen.
+ *
+ * IT OVERRIDES 'registered' AND NOTHING ELSE, which is narrower than it first
+ * looks and deliberately so. 'registered' is the only label that claims
+ * success, so it is the only one that can be actively wrong. Every other status
+ * already tells the user push is not working, and the most likely companion -
+ * 'unavailable-no-fcm', since a build with no google-services.json fails BOTH
+ * the token fetch and this task registration - says it better than a generic
+ * line could: it names the consequence (alerting stops when the keepalive hits
+ * its ceiling) rather than just the fact. Overriding unconditionally would
+ * replace the good copy with the vague copy in exactly the configuration the
+ * good copy was written for.
+ */
+function resolvePushStatusLabel(
+  registrationStatus: PushRegistrationStatus,
+  taskStatus: BackgroundPushTaskStatus,
+): string {
+  if (taskStatus === 'unavailable' && registrationStatus === 'registered') {
+    return 'Remote push: unavailable on this device';
+  }
+  return PUSH_STATUS_LABELS[registrationStatus];
+}
 
 /**
  * These govern the CHAT composer's mic only. The terminal used to carry its
@@ -431,15 +460,21 @@ function PushRegistrationStatusLine(): React.JSX.Element {
   // The status is a module-level snapshot, not a store: re-read it when the
   // channel state changes (registration rides established bootstraps).
   const [status, setStatus] = useState<PushRegistrationStatus>(() => getPushRegistrationStatus());
+  // Settles at boot rather than on establish, but rides the same refresh: one
+  // snapshot read is cheaper than a second timer for a value that only moves once.
+  const [taskStatus, setTaskStatus] = useState<BackgroundPushTaskStatus>(() => getBackgroundPushTaskStatus());
   useEffect(() => {
     // A beat after the channel establishes, registration has usually run.
-    const refreshTimer = setTimeout(() => setStatus(getPushRegistrationStatus()), 1500);
+    const refreshTimer = setTimeout(() => {
+      setStatus(getPushRegistrationStatus());
+      setTaskStatus(getBackgroundPushTaskStatus());
+    }, 1500);
     return () => clearTimeout(refreshTimer);
   }, [established]);
 
   return (
     <Text variant="caption" color="muted" testID="settings-push-status">
-      {PUSH_STATUS_LABELS[status]}
+      {resolvePushStatusLabel(status, taskStatus)}
     </Text>
   );
 }

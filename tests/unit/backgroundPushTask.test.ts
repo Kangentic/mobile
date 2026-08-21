@@ -5,13 +5,16 @@
  * (e2e-notification-privacy.md).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TransportState } from '@kangentic/protocol';
 import { brandTokens } from '@/components/theme/tokens';
+import { flushMicrotasks } from '../helpers/async';
 
 const secureStoreState = vi.hoisted(() => ({ storedValues: new Map<string, string>() }));
 const taskManagerState = vi.hoisted(() => ({
   defineTask: vi.fn(),
   registerTaskAsync: vi.fn(async () => null),
   displayNotification: vi.fn(async (_notification: unknown) => 'notification-id'),
+  createChannels: vi.fn(async () => undefined),
 }));
 
 vi.mock('expo-secure-store', () => ({
@@ -50,7 +53,7 @@ vi.mock('expo-notifications', () => ({
 vi.mock('@notifee/react-native', () => ({
   default: {
     displayNotification: taskManagerState.displayNotification,
-    createChannels: vi.fn(async () => undefined),
+    createChannels: taskManagerState.createChannels,
   },
   AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
@@ -82,6 +85,17 @@ async function loadModule(): Promise<BackgroundPushTaskModule> {
   return import('@/notifications/backgroundPushTask');
 }
 
+/**
+ * Both this and loadModule() run after the beforeEach vi.resetModules(), so
+ * they share one fresh module registry: the store instance set here IS the one
+ * the task under test reads. Untouched, it sits at its real initial state
+ * ('idle', not established), which is exactly what a headless launch sees.
+ */
+async function setChannelState(state: { established: boolean; transportState: TransportState }): Promise<void> {
+  const { useChannelStore } = await import('@/state/channelStore');
+  useChannelStore.setState(state);
+}
+
 type TaskExecutor = (body: { data: unknown; error: null; executionInfo: { taskName: string } }) => Promise<void> | void;
 
 describe('backgroundPushTask', () => {
@@ -92,6 +106,7 @@ describe('backgroundPushTask', () => {
     taskManagerState.defineTask.mockClear();
     taskManagerState.registerTaskAsync.mockClear();
     taskManagerState.displayNotification.mockClear();
+    taskManagerState.createChannels.mockClear();
     decryptPushBlobMock.mockReset();
     decryptPushBlobMock.mockImplementation(async (blob) => {
       const { realDecryptPushBlob } = pushDecryptState;
@@ -173,6 +188,194 @@ describe('backgroundPushTask', () => {
     expect(notification.android?.color).toBe(brandTokens.rust);
   });
 
+  /**
+   * THE REGRESSION THIS FILE EXISTS FOR SECOND-MOST, after the decrypt-failure
+   * placeholder above.
+   *
+   * The rich display and the placeholder used to share one try block in the
+   * caller, so a throw on the DECRYPTED branch escaped past the placeholder
+   * into the task's outer catch and the user saw nothing at all - a successful
+   * decrypt producing strictly less than a failed one. It matters more than it
+   * looks: the Android push is data-only by design, so there is no OS-drawn
+   * notification behind this to fall back on. Whatever this task fails to post
+   * is never seen.
+   */
+  it('falls back to the placeholder when the rich notification itself fails to display', async () => {
+    decryptPushBlobMock.mockResolvedValueOnce({
+      title: 'Agent needs your input',
+      body: 'Ship the release',
+      category: 'input-required',
+      data: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
+    });
+    // A blocked or missing category channel fails the rich post while the plain
+    // placeholder on needs-attention still lands.
+    taskManagerState.displayNotification.mockRejectedValueOnce(new Error('channel blocked'));
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(2);
+    const fallback = taskManagerState.displayNotification.mock.calls[1][0] as {
+      title: string;
+      body: string;
+      android?: { channelId?: string };
+    };
+    expect(fallback.title).toBe('Kangentic');
+    expect(fallback.body).toBe('Agent needs attention');
+    expect(fallback.android?.channelId).toBe('needs-attention');
+  });
+
+  /**
+   * initializeNotifications() creates the channels as an UNAWAITED `void` call
+   * issued right after this task is registered, so on a cold headless launch
+   * the display can outrun it and notifee rejects a post against a channel that
+   * does not exist yet. Asserted as a genuine await rather than mere call
+   * ordering: the display must not fire while channel creation is still
+   * in flight.
+   */
+  it('awaits channel creation before displaying', async () => {
+    let releaseChannels: () => void = () => {};
+    taskManagerState.createChannels.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          releaseChannels = () => resolve(undefined);
+        }),
+    );
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    const pendingTask = executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    await flushMicrotasks();
+    expect(taskManagerState.createChannels).toHaveBeenCalledTimes(1);
+    expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+
+    releaseChannels();
+    await pendingTask;
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * THE RACE THE AWAIT ABOVE ACTUALLY HAS TO SURVIVE, and the one the test
+   * above cannot see. index.js runs initializeNotifications() at bundle entry
+   * on EVERY launch, headless included, and it fires createNotificationChannels()
+   * unawaited right after registering this task (index.ts). So in production the
+   * task's own call is never the first one. Against a guard that latches a
+   * boolean synchronously before its own await, that made the task's await
+   * return immediately and wait on nothing - precisely the race it was added to
+   * close - while the test above passed, because loading backgroundPushTask
+   * directly makes its call the first.
+   */
+  it('waits for a channel creation already started at bundle entry', async () => {
+    let releaseChannels: () => void = () => {};
+    taskManagerState.createChannels.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          releaseChannels = () => resolve(undefined);
+        }),
+    );
+    const { registerBackgroundPushTask } = await loadModule();
+    const { createNotificationChannels } = await import('@/notifications/channels');
+    // The order index.ts uses: register the task, then kick creation off unawaited.
+    registerBackgroundPushTask();
+    void createNotificationChannels();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    const pendingTask = executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    await flushMicrotasks();
+    expect(taskManagerState.createChannels).toHaveBeenCalledTimes(1);
+    expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+
+    releaseChannels();
+    await pendingTask;
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A failed creation must not LATCH. A guard that records "created" before the
+   * native call resolves, and never clears on rejection, turns one transient
+   * failure into silence for the life of the process: the channels do not exist
+   * OS-side, every later call returns immediately believing they do, and both
+   * the rich notification and the placeholder behind it fail. The Android push
+   * is data-only, so nothing else is going to draw it.
+   */
+  it('retries channel creation on the next push after a failed attempt', async () => {
+    taskManagerState.createChannels.mockRejectedValueOnce(new Error('notifee unavailable'));
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    const incomingPush = {
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    };
+    await executor(incomingPush);
+    await executor(incomingPush);
+
+    expect(taskManagerState.createChannels).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * A channel-creation failure must not take the display down with it: by far
+   * the common case is that the channels already exist OS-side from an earlier
+   * launch and the call had nothing to do.
+   */
+  it('still displays when channel creation fails', async () => {
+    taskManagerState.createChannels.mockRejectedValueOnce(new Error('notifee unavailable'));
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Registration failure was previously unobservable - nothing read the task
+   * name - so an install that could never receive a push still reported
+   * "Remote push: registered" in Settings, the one label that is actively wrong.
+   */
+  it('records the receive task as unavailable when registerTaskAsync rejects', async () => {
+    taskManagerState.registerTaskAsync.mockRejectedValueOnce(new Error('no FCM credentials'));
+    const { registerBackgroundPushTask, getBackgroundPushTaskStatus } = await loadModule();
+    expect(getBackgroundPushTaskStatus()).toBe('pending');
+
+    registerBackgroundPushTask();
+    await flushMicrotasks();
+
+    expect(getBackgroundPushTaskStatus()).toBe('unavailable');
+  });
+
+  it('records the receive task as registered when registerTaskAsync resolves', async () => {
+    const { registerBackgroundPushTask, getBackgroundPushTaskStatus } = await loadModule();
+    registerBackgroundPushTask();
+    await flushMicrotasks();
+
+    expect(getBackgroundPushTaskStatus()).toBe('registered');
+  });
+
   it('ignores notification-response payloads (action taps are the tap router job)', async () => {
     const { registerBackgroundPushTask } = await loadModule();
     registerBackgroundPushTask();
@@ -188,13 +391,72 @@ describe('backgroundPushTask', () => {
   });
 
   /**
-   * Nothing fires over the top of the UI. The desktop already skips devices with
-   * a live bridge session, but that is coarse - a relay hiccup, a reconnect, or
-   * the five-minute keepalive ceiling landing while the user is actually looking
-   * at the app all get a push through - so the display gates on app state too.
+   * Nothing fires over the top of a live session the user is watching. The
+   * desktop already skips devices with a live bridge session, but that is
+   * coarse - a relay hiccup, a reconnect, or the five-minute keepalive ceiling
+   * landing while the user is actually looking at the app all get a push
+   * through - so the display gates on app state and channel state together.
    */
-  it('suppresses the display while the app is foregrounded', async () => {
+  it('suppresses the display while the app is foregrounded and connected', async () => {
     appStateMock.currentState = 'active';
+    await setChannelState({ established: true, transportState: 'connected' });
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE CHANNEL POLARITY, and the reason the gate is not a bare `established`
+   * read. `established` drops on EVERY transport blip (channelStore.ts), so
+   * gating on it alone would fire a heads-up notification over the UI during a
+   * momentary reconnect - reintroducing precisely the noise the guard above
+   * exists to stop. Only 'idle' and 'closed' mean nothing is even trying, which
+   * is the one case worth waking someone for: foregrounded, disconnected, and
+   * otherwise about to miss the alert entirely.
+   */
+  it.each([
+    ['connecting' as TransportState, 0],
+    ['reconnecting' as TransportState, 0],
+    // Handshaking: the transport is up and `established` is moments away.
+    ['connected' as TransportState, 0],
+    ['idle' as TransportState, 1],
+    ['closed' as TransportState, 1],
+  ])('foregrounded but not established, transport %s, displays %i time(s)', async (transportState, expectedDisplays) => {
+    appStateMock.currentState = 'active';
+    await setChannelState({ established: false, transportState });
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(expectedDisplays);
+  });
+
+  /**
+   * Pins the `established ||` half of the gate, which every other test leaves
+   * redundant: `setTransportState` clears `established` on any move away from
+   * 'connected' (channelStore.ts), so the two conditions only ever co-occur in
+   * the states the transport half already covers. That invariant lives in
+   * another file and could be relaxed there without anyone touching this one,
+   * which is exactly when a silently-redundant disjunct becomes load-bearing.
+   * Set directly, because the store's own reducers cannot produce this pair.
+   */
+  it('suppresses on `established` even if the transport state says otherwise', async () => {
+    appStateMock.currentState = 'active';
+    await setChannelState({ established: true, transportState: 'idle' });
     const { registerBackgroundPushTask } = await loadModule();
     registerBackgroundPushTask();
     const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
