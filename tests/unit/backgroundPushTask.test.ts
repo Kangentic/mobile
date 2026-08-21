@@ -491,4 +491,34 @@ describe('backgroundPushTask', () => {
 
     expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * watchingAlready()'s own try/catch is new and deliberately FAILS OPEN.
+   * Nothing it reads should ever throw (AppState.currentState is a plain
+   * getter, channelStore.getState() touches no I/O), but the gate is written
+   * defensively anyway: treating a read failure as "already watching" would
+   * suppress every push for the life of the process on a device where it
+   * somehow does throw, which is the same silent-forever failure mode
+   * e2e-notification-privacy.md exists to prevent, just reached a different
+   * way than the channel-latch one above.
+   */
+  it('fails open and still displays when reading the watching-gate state throws', async () => {
+    appStateMock.currentState = 'active';
+    const { useChannelStore } = await import('@/state/channelStore');
+    const getStateSpy = vi.spyOn(useChannelStore, 'getState').mockImplementation(() => {
+      throw new Error('channel store unavailable');
+    });
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+    getStateSpy.mockRestore();
+  });
 });
