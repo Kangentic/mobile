@@ -290,9 +290,10 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
    "Expand to view" for a notification with no renderable content) and a silently dropped payload.
    Nothing is lost by omitting it: the channel is chosen on the phone by
    `channelIdForCategory(decrypted.category)` after decryption, which is strictly better because
-   only the phone knows the category. **The desktop still sends it as of 2026-08-20**, so an
-   Android push renders blank today; the fix is on the desktop send path
-   (`mobile-bridge/push/push-notifier.ts`), not in this app.
+   only the phone knows the category. The desktop sent it until 2026-08-20, which is how this was
+   found: every Android push rendered as a blank tray row and its payload was dropped in silence.
+   Fixed on the desktop send path (`mobile-bridge/push/push-notifier.ts`), which no longer sends
+   `channelId` at all.
 
    Two halves of that claim have different evidence, which is worth stating because the whole
    section and the debugging recipe in [developer-guide.md](developer-guide.md) rest on it. The
