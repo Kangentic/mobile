@@ -1806,12 +1806,16 @@ and that running, send a push and find the `notification_enqueue` event. **Read 
 record's `tag` field** (the value in the event payload, not an `adb logcat -s` filter tag):
 
 - **Tag `NULL`, with an integer id** - the app posted it through Notifee. This is the working path.
-  Nearby you should also see `TaskService: Started headless task <id> to keep JS timers alive for
-  '<appScopeKey>'` and `Finished headless task <id> for '<appScopeKey>'`
-  (`expo-task-manager`'s `TaskService.java:663,704`). Note what that bracket does and does not
-  prove: it is the timer-keepalive headless task named `expo-task-manager`, so it says a headless JS
-  context started and stopped for this app, NOT that `kangentic-background-push` itself ran. The
-  task name does not appear in either line.
+  The line that actually proves OUR task ran is
+  `TaskService: Finished task 'kangentic-background-push' with eventId '<id>'.`
+  (`expo-task-manager`'s `TaskService.java:213`). That is the one to grep for: it names the task, so
+  it cannot be confused with any other headless work.
+
+  Do not settle for the surrounding bracket. `TaskService: Started headless task <id> to keep JS
+  timers alive for '<appScopeKey>'` and `Finished headless task <id> for '<appScopeKey>'`
+  (`TaskService.java:663,704`) are the timer-keepalive pair, and neither carries a task name: they
+  say a headless JS context started and stopped for this app, NOT that
+  `kangentic-background-push` itself ran.
 - **Tag `FCM-Notification:<number>`** - the FIREBASE SDK drew it, which means the message carried an
   FCM `android.notification` block, which means `onMessageReceived` was never called and our task
   never ran. The payload was silently dropped. The cause is on the DESKTOP send path: a `title`,

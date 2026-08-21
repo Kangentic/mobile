@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AndroidChannel } from '@notifee/react-native';
+import { flushMicrotasks } from '../helpers/async';
 
 const notifeeState = vi.hoisted(() => ({
   createChannels: vi.fn(async (_channels: unknown) => undefined),
@@ -63,6 +64,64 @@ describe('notification channels', () => {
       stalls: 3,
       connection: 2,
     });
+  });
+
+  /**
+   * createNotificationChannels() memoizes the IN-FLIGHT PROMISE, not a boolean
+   * flipped before its own await. A boolean latch lets a second concurrent
+   * caller return immediately while the real notifee.createChannels() call is
+   * still running, which is exactly what backgroundPushTask.ts depends on not
+   * happening (see channels.ts's createNotificationChannels doc comment).
+   * Pinned here directly against the exported function, rather than only
+   * through backgroundPushTask.test.ts's task-executor plumbing, so this
+   * module's own tests still catch a regression to a boolean latch.
+   */
+  it('shares one in-flight creation across concurrent callers, and neither resolves before the real call does', async () => {
+    const channels = await loadChannels();
+    let releaseCreation: () => void = () => {};
+    notifeeState.createChannels.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCreation = () => resolve(undefined);
+        }),
+    );
+
+    let firstCallerResolved = false;
+    let secondCallerResolved = false;
+    const firstCaller = channels.createNotificationChannels().then(() => {
+      firstCallerResolved = true;
+    });
+    const secondCaller = channels.createNotificationChannels().then(() => {
+      secondCallerResolved = true;
+    });
+
+    await flushMicrotasks();
+    expect(notifeeState.createChannels).toHaveBeenCalledTimes(1);
+    expect(firstCallerResolved).toBe(false);
+    expect(secondCallerResolved).toBe(false);
+
+    releaseCreation();
+    await Promise.all([firstCaller, secondCaller]);
+    expect(firstCallerResolved).toBe(true);
+    expect(secondCallerResolved).toBe(true);
+  });
+
+  /**
+   * A REJECTED creation must clear the memo rather than latch failure for the
+   * life of the process. A boolean flag that never resets on rejection turns
+   * one transient notifee failure into permanent silence: the channels never
+   * exist OS-side, and every later caller returns immediately believing they
+   * do.
+   */
+  it('a rejected creation clears the memo, so a later call retries instead of failing forever', async () => {
+    const channels = await loadChannels();
+    notifeeState.createChannels.mockRejectedValueOnce(new Error('notifee unavailable'));
+
+    await expect(channels.createNotificationChannels()).rejects.toThrow('notifee unavailable');
+    expect(notifeeState.createChannels).toHaveBeenCalledTimes(1);
+
+    await channels.createNotificationChannels();
+    expect(notifeeState.createChannels).toHaveBeenCalledTimes(2);
   });
 
   it('maps push categories onto the channels', async () => {
