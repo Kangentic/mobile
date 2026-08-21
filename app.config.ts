@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.6.0',
+  version: '0.6.1',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -112,8 +112,17 @@ const config: ExpoConfig = {
     //
     // 10 is the v0.6.0 release cut 2026-08-19, carrying the notification
     // rework: the iOS permission request, tap routing, and Settings status,
-    // none of which any prior build has ever had working.
-    buildNumber: '10',
+    // none of which any prior build has ever had working. Tagged ios-b10, so
+    // it is spent.
+    //
+    // 11 is the v0.6.1 release cut 2026-08-21. Nothing in it is iOS-visible:
+    // the change is the ANDROID push receive path, and iOS still renders only
+    // the generic placeholder until the Notification Service Extension ships.
+    // It is cut anyway so the two stores do not drift a version apart, which
+    // is this project's standing rule. Numbers stay globally increasing, so
+    // 11 follows 10 across the 0.6.0 -> 0.6.1 bump even though Apple would
+    // have allowed restarting under a new version string.
+    buildNumber: '11',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -268,13 +277,26 @@ const config: ExpoConfig = {
     // new APK is the local-notifier settle debounce, spawn-stalled defaulting
     // off, and the Settings changes.
     //
+    // 9 is the v0.6.1 release cut 2026-08-21, and the same caveat applies even
+    // more strongly: the user-visible bug (every Android push rendering as a
+    // blank "Expand to view" tray row) was fixed ENTIRELY on the desktop
+    // (kangentic#545, which stopped sending channelId), and that repaired every
+    // versionCode 8 install already in the field with no app update. Verified
+    // on a Pixel 10 Pro against the shipped APK: nine real pushes, nine
+    // kangentic-background-push task runs, zero FCM-drawn rows, and a decrypted
+    // "Agent went idle / Test" in the shade. What needs THIS build is the
+    // degradation hardening behind that path - a rich-display failure now falls
+    // through to the placeholder, channel creation is awaited against a
+    // memoized promise, the foreground gate no longer swallows a push while
+    // disconnected, and a dead receive task is surfaced in Settings.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 8,
+    versionCode: 9,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
