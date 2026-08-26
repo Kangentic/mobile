@@ -1,7 +1,13 @@
 import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { bytesToHex } from '@kangentic/protocol';
 import { ChannelController, SubscriptionManager, type VerbClient } from '@/channel';
 import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
+// Static, unlike the dev-only branches below, because this one ships: it is a
+// pure predicate plus a 32-byte constant, and it has to be consulted on every
+// open. The heavy half (mockDesktop and its fixtures) stays behind a dynamic
+// import so it is not parsed on a launch that never reaches the demo.
+import { DEMO_DESKTOP_STATIC, isDemoAnchor } from '@/demo/demoIdentity';
 import { setActivePushIdentityPublicKey } from '@/notifications/pushIdentity';
 import { notificationPermissionGranted, notificationPermissionStatus } from '@/notifications/permissionCache';
 import { useChannelStore } from '@/state/channelStore';
@@ -246,6 +252,15 @@ async function openConnection(): Promise<void> {
  */
 let openAttempt: Promise<void> | null = null;
 
+/**
+ * The desktop key pushRegistration's process-global idempotence cache was
+ * built against. The unpair flow resets that cache explicitly, but a re-pair
+ * that never passes through unpair does not, so a key change observed here
+ * must drop it - or the new desktop never receives this device's push key
+ * until the next app restart.
+ */
+let pushRegistrationDesktopKeyHex: string | null = null;
+
 function openConnectionOrThrow(): Promise<void> {
   if (activeConnection) return Promise.resolve();
   if (openAttempt) return openAttempt;
@@ -294,6 +309,36 @@ async function performOpenConnection(): Promise<void> {
     useChannelStore.getState().setPairedState('unpaired');
     return;
   }
+
+  // The reviewer/demo pairing, and the ONE path here that ships in production.
+  //
+  // It reaches this point with a real, persisted trust anchor written by a real
+  // pairing ceremony, so everything above already treated it as paired - which
+  // is the whole design: the demo IS a pairing, just to a peer that lives on
+  // this device. All that remains is to route it to the in-process desktop
+  // instead of dialing anchor.relayAddress, which is never a reachable relay.
+  //
+  // Ordered after the anchor load rather than beside the mock branch above
+  // because the anchor is what identifies it; there is no env var and no build
+  // flag involved. Unlike mock and dev-pairing modes, this branch is NOT
+  // __DEV__-gated, so Metro keeps mockDesktop and its fixtures in the release
+  // graph. That is deliberate and approved (see the demo module's header and
+  // .github/scripts/capture-ios-screenshots.sh).
+  if (!mockDesktop && !devPairing && isDemoAnchor(anchor)) {
+    const { createMockDesktop } = await import('./mockDesktop');
+    mockDesktop = createMockDesktop({
+      identity: await deviceIdentityManager.getIdentity(),
+      desktopStatic: DEMO_DESKTOP_STATIC,
+    });
+  }
+
+  const anchorDesktopKeyHex = bytesToHex(anchor.desktopStaticPublicKey);
+  if (pushRegistrationDesktopKeyHex !== null && pushRegistrationDesktopKeyHex !== anchorDesktopKeyHex) {
+    const { resetPushRegistrationProcessState } = await import('@/notifications/pushRegistration');
+    resetPushRegistrationProcessState();
+  }
+  pushRegistrationDesktopKeyHex = anchorDesktopKeyHex;
+
   useChannelStore.getState().setPairedState('paired');
   const identity = mockDesktop ? mockDesktop.identity : devPairing ? devPairing.identity : await deviceIdentityManager.getIdentity();
   // The AAD every push envelope is sealed against - whichever identity
@@ -359,11 +404,20 @@ async function performOpenConnection(): Promise<void> {
     });
   };
 
+  // The demo pairing must stay networkless: the App Review notes promise it
+  // "requires no account, no desktop computer, and no network connection"
+  // (docs/store-listing.md), and registerPushWithDesktop starts with
+  // getExpoPushTokenAsync - an HTTPS call to Expo's push service - before its
+  // request ever reaches the in-process peer. The permission prompt is skipped
+  // with it: there is no real desktop behind the demo to push anything.
+  const demoConnection = isDemoAnchor(anchor);
+
   const unsubscribeEstablished = controller.session.onEstablished(() => {
     useChannelStore.getState().markEstablished();
     if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
     bootstrapGeneration += 1;
     runBootstrapWithRetry(0, bootstrapGeneration);
+    if (demoConnection) return;
     // Fire-and-forget push registration on every established handshake
     // (idempotent; re-hits the wire only on first run or token rotation).
     // Never fatal: registerPushWithDesktop records a status instead.

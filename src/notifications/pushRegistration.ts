@@ -125,6 +125,20 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
 }
 
 /**
+ * Drops the process-local idempotence bookkeeping without sending anything.
+ * The cache above is process-global, not per-desktop, so the connection
+ * manager calls this when the persisted anchor's desktop key changes within
+ * one process (a re-pair that never went through the unpair flow) - without
+ * it, the previous desktop's "already registered" state would suppress
+ * registration with the new one until the next app restart.
+ */
+export function resetPushRegistrationProcessState(): void {
+  registrationStatus = 'pending';
+  registeredThisProcess = false;
+  lastRegisteredCategories = null;
+}
+
+/**
  * Best-effort unregister, sent while the channel is still up (before the
  * unpair flow tears down the connection). Always resets local state so a
  * re-pair in the same process registers fresh rather than short-circuiting
@@ -134,9 +148,7 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
  * DeviceNotRegistered handling or roster revocation cleans it up.
  */
 export async function unregisterPushWithDesktop(verbs: PushRegistrarVerbs | null): Promise<void> {
-  registrationStatus = 'pending';
-  registeredThisProcess = false;
-  lastRegisteredCategories = null;
+  resetPushRegistrationProcessState();
   if (!verbs) return;
   try {
     await verbs.registerPush({ action: 'unregister' });

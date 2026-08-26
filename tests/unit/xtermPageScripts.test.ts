@@ -147,6 +147,12 @@ describe('generated xterm.html', () => {
     fontSizePx: number;
     /** Renderer cell height per font pixel, before the line-height stretch. */
     cellHeightRatio: number;
+    /**
+     * The FIT height (state.js's fitViewportHeight), when it differs from the
+     * live viewport - i.e. the soft keyboard is open. Defaults to the
+     * viewport, which is the keyboard-closed case every other test models.
+     */
+    fitHeight?: number;
   }): {
     fit: (passesLeft: number, stretchLocked: boolean, generation: number) => void;
     screenHeight: () => number;
@@ -172,6 +178,7 @@ describe('generated xterm.html', () => {
     assertInjectionsAreAlive('heightFit.js', source, [
       'currentFontSizePx',
       'followCursorVertically',
+      'fitViewportHeight',
       'heightFitGeneration',
       'traceHeightFit',
       'MAX_LINE_HEIGHT',
@@ -187,6 +194,7 @@ describe('generated xterm.html', () => {
       'document',
       'requestAnimationFrame',
       'postToHost',
+      'fitViewportHeight',
       'heightFitGeneration',
       'MAX_LINE_HEIGHT',
       'HEIGHT_FIT_TOLERANCE_PX',
@@ -217,6 +225,7 @@ describe('generated xterm.html', () => {
           fontSizePosts.push(message.fontSizePx);
         }
       },
+      () => options.fitHeight ?? options.viewportHeight,
       1,
       pageVar('MAX_LINE_HEIGHT'),
       pageVar('HEIGHT_FIT_TOLERANCE_PX'),
@@ -257,6 +266,39 @@ describe('generated xterm.html', () => {
     // stretch transiently overflows before its give-back) and locked in a
     // stale upward translate that shifted the whole frame ("pushed up more").
     expect(harness.followed()).toBe(1);
+  });
+
+  /**
+   * The soft keyboard. Opening it shrinks window.innerHeight, and the fit
+   * used to chase that: the chain walked the font down a step per pass until
+   * the whole 38-row grid fit the strip above the keyboard, so the terminal
+   * collapsed to near-unreadable at exactly the moment the user was typing
+   * into it (seen live on the demo pairing's Pixel walk). The fit must anchor
+   * to the orientation's FULL height and let the keyboard simply cover the
+   * grid's lower rows - the vertical follow pans the cursor back into view.
+   */
+  it('keeps the fit when the soft keyboard shrinks the window', () => {
+    const fullHeight = 900;
+    // 38 rows x ceil(17 x 1.33) = 874: already settled against the FULL
+    // height, so any font step the fit takes here is chasing the keyboard.
+    const harness = buildHeightFit({
+      rows: 38,
+      viewportHeight: 380,
+      fitHeight: fullHeight,
+      fontSizePx: 17,
+      cellHeightRatio: 1.33,
+    });
+    expect(harness.screenHeight(), 'precondition: the grid overflows the keyboard strip').toBeGreaterThan(380);
+
+    harness.fit(4, false, 1);
+
+    // Fits the FULL height, not the strip: no font collapse, no font posts.
+    expect(harness.screenHeight()).toBeLessThanOrEqual(fullHeight);
+    expect(harness.fontSizePx()).toBe(17);
+    expect(harness.fontSizePosts()).toEqual([]);
+    // And deliberately still taller than the keyboard-shrunken window - the
+    // keyboard covers rows rather than reshaping the grid.
+    expect(harness.screenHeight()).toBeGreaterThan(380);
   });
 
   /**
@@ -414,6 +456,246 @@ describe('generated xterm.html', () => {
     expect(resizeBranch).toContain('refit();');
     expect(resizeBranch).not.toContain('autoFitFontToScreen()');
     expect(resizeBranch).not.toContain('applyGeometry()');
+  });
+
+  /**
+   * state.js's fitViewportHeight: the per-orientation maximum viewport height
+   * the height fit and the font fit both anchor to, so the soft keyboard
+   * (which only ever SHRINKS window.innerHeight) cannot drag the fit down
+   * with it. Every other harness in this file injects a hand-written stand-in
+   * for this function; these tests run the REAL one, extracted from state.js
+   * the same way verticalFollowOffset is sliced from followPan.js above.
+   */
+  describe('state.js fitViewportHeight', () => {
+    function buildFitViewportHeight(): {
+      setViewport: (innerWidth: number, innerHeight: number) => void;
+      fit: () => number;
+    } {
+      const source = pageModule('state.js');
+      const fitSource = source.slice(
+        source.indexOf('var maxFitHeightByWidth = {};'),
+        source.indexOf('var MIN_AUTO_FONT_PX'),
+      );
+      expect(fitSource).toContain('function fitViewportHeight(');
+      assertInjectionsAreAlive('state.js (fitViewportHeight slice)', fitSource, ['window']);
+      const windowStub = { innerWidth: 0, innerHeight: 0 };
+      const build = new Function('window', `${fitSource} return fitViewportHeight;`) as (
+        windowReference: typeof windowStub,
+      ) => () => number;
+      const fitViewportHeight = build(windowStub);
+      return {
+        setViewport: (innerWidth: number, innerHeight: number) => {
+          windowStub.innerWidth = innerWidth;
+          windowStub.innerHeight = innerHeight;
+        },
+        fit: fitViewportHeight,
+      };
+    }
+
+    it('raises the tracked maximum as the height grows at a fixed width', () => {
+      const harness = buildFitViewportHeight();
+
+      harness.setViewport(400, 700);
+      expect(harness.fit()).toBe(700);
+
+      harness.setViewport(400, 900);
+      expect(harness.fit()).toBe(900);
+    });
+
+    it('keeps the earlier maximum when height falls at the same width (soft keyboard opening)', () => {
+      const harness = buildFitViewportHeight();
+      harness.setViewport(400, 900);
+      expect(harness.fit()).toBe(900);
+
+      // The keyboard shrinks the window without changing its width.
+      harness.setViewport(400, 380);
+
+      expect(harness.fit()).toBe(900);
+    });
+
+    it('starts a fresh maximum on a width change (rotation), from the current height, not the old width', () => {
+      const harness = buildFitViewportHeight();
+      harness.setViewport(400, 900);
+      expect(harness.fit()).toBe(900);
+
+      // Rotate to landscape: a real width change, not a keyboard shrink.
+      harness.setViewport(900, 400);
+
+      // The new width has never been seen before, so its maximum starts from
+      // THIS height (400) - not carried over from portrait's 900.
+      expect(harness.fit()).toBe(400);
+    });
+
+    it("recovers the original width's own recorded maximum when rotating back", () => {
+      const harness = buildFitViewportHeight();
+      harness.setViewport(400, 900);
+      harness.fit();
+      harness.setViewport(900, 400);
+      harness.fit();
+
+      // Back to portrait, keyboard open (shorter than portrait's own max and
+      // shorter than landscape's max): must recover portrait's 900, not
+      // landscape's 400 and not the current shrunk 380.
+      harness.setViewport(400, 380);
+
+      expect(harness.fit()).toBe(900);
+    });
+  });
+
+  /**
+   * The soft-keyboard font collapse, one layer up from the tracker above.
+   * autoFitFontToScreen sizes the font from fitViewportHeight() - the tracked
+   * per-orientation maximum - and must NOT fall back to the live
+   * window.innerHeight, which the keyboard shrinks. There is no harness for
+   * fontGeometry.js elsewhere in this file; this extracts autoFitFontToScreen
+   * on its own (applyGeometry, the file's other function, is sliced away -
+   * it is never called here and pulls in unrelated collaborators).
+   */
+  describe('fontGeometry.js autoFitFontToScreen', () => {
+    function buildAutoFitFontToScreen(options: {
+      knownRows: number;
+      knownCols: number;
+      innerHeightPx: number;
+      fitHeightPx: number;
+      initialFontSizePx: number;
+    }): {
+      fit: () => void;
+      fontSizePx: () => number;
+      fontSizePosts: () => number[];
+    } {
+      const fullSource = pageModule('fontGeometry.js');
+      const autoFitSource = fullSource.slice(
+        fullSource.indexOf('function autoFitFontToScreen('),
+        fullSource.indexOf('function applyGeometry('),
+      );
+      expect(autoFitSource).toContain('function autoFitFontToScreen(');
+      assertInjectionsAreAlive('fontGeometry.js (autoFitFontToScreen slice)', autoFitSource, [
+        'knownRows',
+        'knownCols',
+        'CELL_HEIGHT_RATIO',
+        'MIN_AUTO_FONT_PX',
+        'MAX_AUTO_FIT_FONT_PX',
+        'textureCappedFontPx',
+        'currentFontSizePx',
+        'terminal',
+        'postToHost',
+        'fitViewportHeight',
+      ]);
+      const fontSizePosts: number[] = [];
+      const terminal = { options: { fontSize: options.initialFontSizePx } };
+      const build = new Function(
+        'terminal',
+        'window',
+        'knownRows',
+        'knownCols',
+        'CELL_HEIGHT_RATIO',
+        'MIN_AUTO_FONT_PX',
+        'MAX_AUTO_FIT_FONT_PX',
+        'textureCappedFontPx',
+        'postToHost',
+        'fitViewportHeight',
+        'initialFontSizePx',
+        `var currentFontSizePx = initialFontSizePx;
+         ${autoFitSource}
+         return { fit: autoFitFontToScreen, fontSizePx: function () { return currentFontSizePx; } };`,
+      ) as (...dependencies: unknown[]) => { fit: () => void; fontSizePx: () => number };
+      const built = build(
+        terminal,
+        // Present so a regression back to window.innerHeight would resolve
+        // against THIS (shrunk) value rather than throwing ReferenceError -
+        // the whole point is that the correct function never reads it.
+        { innerHeight: options.innerHeightPx },
+        options.knownRows,
+        options.knownCols,
+        pageVar('CELL_HEIGHT_RATIO'),
+        pageVar('MIN_AUTO_FONT_PX'),
+        pageVar('MAX_AUTO_FIT_FONT_PX'),
+        // No texture cap in play at these row/col counts; pass the value through.
+        (fontPx: number) => fontPx,
+        (message: { type: string; fontSizePx?: number }) => {
+          if (message.type === 'font-size' && typeof message.fontSizePx === 'number') {
+            fontSizePosts.push(message.fontSizePx);
+          }
+        },
+        () => options.fitHeightPx,
+        options.initialFontSizePx,
+      );
+      return { fit: built.fit, fontSizePx: built.fontSizePx, fontSizePosts: () => fontSizePosts };
+    }
+
+    /**
+     * The live bug: an open soft keyboard shrinks window.innerHeight, and a
+     * font sized from it collapses toward MIN_AUTO_FONT_PX at exactly the
+     * moment the user is typing. The fix sizes from fitViewportHeight()
+     * instead - the tracked per-orientation maximum - so the keyboard being
+     * open must not change the computed font at all.
+     */
+    it('sizes the font from fitViewportHeight, not the keyboard-shrunk window.innerHeight', () => {
+      // rows=40 at the real CELL_HEIGHT_RATIO puts both candidate fonts
+      // strictly inside [MIN_AUTO_FONT_PX, MAX_AUTO_FIT_FONT_PX]: with
+      // rows=30 the full-height font landed ON the MAX_AUTO_FIT_FONT_PX
+      // ceiling, which made the "must derive from the fit height" assertion
+      // pass merely because both candidates hit the same clamp, not because
+      // either was actually computed from its height.
+      const rows = 40;
+      const fullHeight = 900;
+      const shrunkHeight = 380;
+
+      // The real scenario: the fit tracker still reports the full-orientation
+      // height while the live window is shrunk by the keyboard.
+      const keyboardOpen = buildAutoFitFontToScreen({
+        knownRows: rows,
+        knownCols: 80,
+        innerHeightPx: shrunkHeight,
+        fitHeightPx: fullHeight,
+        initialFontSizePx: 1,
+      });
+      keyboardOpen.fit();
+
+      // Reference: keyboard closed, both heights agree at the full value.
+      const keyboardClosedReference = buildAutoFitFontToScreen({
+        knownRows: rows,
+        knownCols: 80,
+        innerHeightPx: fullHeight,
+        fitHeightPx: fullHeight,
+        initialFontSizePx: 1,
+      });
+      keyboardClosedReference.fit();
+
+      // What a regression back to window.innerHeight would compute: both
+      // heights pinned to the shrunk value.
+      const ifItUsedInnerHeightInstead = buildAutoFitFontToScreen({
+        knownRows: rows,
+        knownCols: 80,
+        innerHeightPx: shrunkHeight,
+        fitHeightPx: shrunkHeight,
+        initialFontSizePx: 1,
+      });
+      ifItUsedInnerHeightInstead.fit();
+
+      // Preconditions: neither candidate font may be sitting on a clamp, or
+      // the assertions below would pass merely because both hit the same
+      // ceiling/floor rather than because either was actually derived from
+      // its height.
+      expect(
+        keyboardClosedReference.fontSizePx(),
+        'precondition: the full-height font must not be MAX_AUTO_FIT_FONT_PX-clamped',
+      ).toBeLessThan(pageVar('MAX_AUTO_FIT_FONT_PX'));
+      expect(
+        ifItUsedInnerHeightInstead.fontSizePx(),
+        'precondition: the shrunk-height font must not be MIN_AUTO_FONT_PX-floored',
+      ).toBeGreaterThan(pageVar('MIN_AUTO_FONT_PX'));
+      expect(
+        keyboardClosedReference.fontSizePx(),
+        'precondition: full and shrunk heights must fit different fonts',
+      ).not.toBe(ifItUsedInnerHeightInstead.fontSizePx());
+
+      expect(keyboardOpen.fontSizePx()).toBe(keyboardClosedReference.fontSizePx());
+      expect(keyboardOpen.fontSizePx()).toBeGreaterThan(ifItUsedInnerHeightInstead.fontSizePx());
+      // The host's pinch baseline depends on this post firing whenever the
+      // font actually changes from its prior value (1, here).
+      expect(keyboardOpen.fontSizePosts()).toEqual([keyboardOpen.fontSizePx()]);
+    });
   });
 
   /**

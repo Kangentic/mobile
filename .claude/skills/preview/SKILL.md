@@ -71,7 +71,51 @@ the dev client instead; it pays for itself immediately.
    - If a device is already listed, skip to step 3. A **physical phone** counts and is often the
      better target (real GPU, real touch, real relay latency) - see "Physical devices" in the
      Notes for the three things that differ from an emulator.
-   - If none is listed, continue to step 2.
+   - **If the user said a phone is connected but `adb devices` is empty, do NOT fall through to
+     step 2 and boot an emulator.** They asked for their phone; silently substituting an emulator
+     answers a question nobody asked. Diagnose instead - step 1a.
+   - If none is listed and nobody mentioned a phone, continue to step 2.
+
+1a. **A phone is plugged in but adb cannot see it.** Do not guess between "bad cable", "bad
+   driver" and "USB debugging is off" - Windows can tell you which, in one call, and the answer
+   is objective:
+
+   ```
+   Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_18D1' } |
+     Select-Object Status, Class, FriendlyName, InstanceId | Format-List
+   ```
+
+   `VID_18D1` is Google (Pixel). For another vendor, drop the filter and match the model name.
+   Read the **PID**, which is what the phone's USB mode actually is:
+
+   | PID | Meaning | adb sees it? |
+   |---|---|---|
+   | `4EE1` | MTP / file transfer only | **No.** USB debugging is OFF. |
+   | `4EE2` | MTP + ADB | Yes (may need authorising) |
+   | `4EE5` | PTP + ADB | Yes (may need authorising) |
+   | `4EE7` | ADB only / charging | Yes (may need authorising) |
+   | *no entry at all* | Windows does not see the phone | Cable is charge-only, or a driver problem |
+
+   - **`4EE1`, or any entry with `Class : WPD` and no ADB interface:** USB debugging is off. This
+     is not something any tool on this machine can fix. Tell the user exactly this, once:
+     **Settings > About phone > tap "Build number" 7x**, then
+     **Settings > System > Developer options > USB debugging > On**, then accept
+     **"Allow USB debugging?"** (tick "Always allow from this computer"). Then wait for the device
+     rather than making them come back and report - a background `until adb devices | grep -qE
+     "(device|unauthorized)$"; do sleep 3; done` exits the moment it appears, and matching
+     `unauthorized` too means a pending authorisation dialog surfaces instead of hanging silently.
+   - **`unauthorized` in `adb devices`:** the dialog is up on the phone and unanswered.
+   - **No entry at all:** cable or port. A charge-only cable is the usual cause.
+
+   Do not spend turns theorising before running this check - it is one call and it ends the
+   ambiguity. And note the serial it prints (the trailing segment of `InstanceId`): it is the
+   same string `adb -s` wants later.
+
+1b. **Check WHICH phone it is against what the docs assume.** `docs/developer-guide.md` describes
+   "the maintainer's physical device", and that device changes. A brand-new phone has Developer
+   options off, no dev client installed, and none of the adb authorisations the notes take for
+   granted - so "it worked last time" is about a different handset. Confirm the model and serial
+   from step 1a before assuming any recorded setup still applies.
 2. **Boot an emulator.**
    - Run `emulator -list-avds` to see what AVDs exist.
      - If none exist, report that no AVD is configured (see `docs/developer-guide.md`'s
@@ -275,19 +319,27 @@ and consumes an `ios.buildNumber` if submitted.
   - **It replaces the user's working app.** A dev client will not launch without Metro running, so
     installing one on a daily-driver phone takes their app away until they reinstall a standalone
     APK. Say so before doing it, and keep the last preview APK around as the way back.
-  - **A CI-installed APK blocks the local install, and clearing it costs the pairing.** If the
-    phone already carries a `preview`/`production` APK from `build-android.yml`, the local debug
-    build cannot go over it:
+  - **ANY already-installed build blocks the local install, and clearing it costs the pairing.**
+    Whether the phone carries a `preview`/`production` APK from `build-android.yml`, a TestFlight
+    equivalent, or - the most likely case on a daily driver - **the app installed from Play**, the
+    local debug build cannot go over it:
 
     ```
     INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.kangentic.mobile
     signatures do not match newer version
     ```
 
-    CI signs with its own keystore; `expo run:android` signs with the local debug key. The only
-    way through is `adb uninstall com.kangentic.mobile`, which **wipes app data, including the
-    pairing**. The device identity key lives in Android Keystore and is non-exportable, so there
-    is no backup or restore - the user re-pairs by QR plus SAS.
+    Three different signing keys are in play and no two match: Play re-signs with its own app
+    signing key, `build-android.yml` uses the CI keystore, and `expo run:android` uses the local
+    debug key. The only way through is `adb uninstall com.kangentic.mobile`, which **wipes app
+    data, including the pairing**. The device identity key lives in Android Keystore and is
+    non-exportable, so there is no backup or restore - the user re-pairs by QR plus SAS.
+
+    **A Play build is also a RELEASE build**, so two further things follow that are easy to miss:
+    it cannot load JS from Metro at all (no dev client, no Fast Refresh), and its JS is whatever
+    version shipped - so a working-tree change is simply not in it, however many times you reload.
+    Confirm the installed version before concluding a change "did not work":
+    `adb shell dumpsys package com.kangentic.mobile | grep versionName`.
 
     **Always ask before uninstalling.** This is the one step in this skill that destroys user
     state, and it arrives late (after a full successful Gradle build), so it is easy to treat as

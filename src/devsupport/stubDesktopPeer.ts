@@ -35,6 +35,13 @@ import {
 export interface StubPairingResponderOptions {
   desktopStatic: X25519KeyPair;
   pairingToken: Uint8Array;
+  /**
+   * Bound into the Noise prologue, and it must match whatever the initiator
+   * binds or the handshake fails to authenticate. Optional so existing callers
+   * (which pair against an initiator that also passes nothing) are unchanged;
+   * the demo ceremony passes PROTOCOL_VERSION on both sides.
+   */
+  protocolVersion?: string;
 }
 
 export class StubPairingResponder {
@@ -51,6 +58,7 @@ export class StubPairingResponder {
     this.handshake = createPairingResponderHandshake({
       localStatic: options.desktopStatic,
       pairingToken: options.pairingToken,
+      ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     });
     this.unsubscribe = transport.onFrame((frame) => this.onFrame(frame));
   }

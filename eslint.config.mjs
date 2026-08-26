@@ -91,7 +91,15 @@ export default defineConfig([
     // reports genuine crashes originating here; what is banned is
     // hand-written capture calls.
     // See .claude/rules/e2e-notification-privacy.md.
-    files: ['src/pairing/**', 'src/channel/**', 'src/notifications/**'],
+    // src/demo runs a real pairing handshake of its own, so it sits on the
+    // same error paths for the same reason. Its own key material is public,
+    // but the ban is on the DIRECTORY's error surface, not on a judgement
+    // about which bytes happen to be sensitive today. src/devsupport is in
+    // the zone because the demo pulls its loopback transport and stub peer
+    // into release builds, where they run the same handshake frames; and
+    // app/+native-intent.ts because it feeds raw, attacker-typeable deep-link
+    // URLs into the demo predicate before any error boundary exists.
+    files: ['src/pairing/**', 'src/channel/**', 'src/demo/**', 'src/devsupport/**', 'src/notifications/**', 'app/+native-intent.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -100,7 +108,7 @@ export default defineConfig([
             {
               group: ['@sentry/*', '**/observability/*', '@/observability/*'],
               message:
-                'src/pairing, src/channel and src/notifications must not report to Sentry: their error messages can carry ciphertext, key material, or attacker-controlled bytes. See .claude/rules/crash-reporting-scope.md.',
+                'src/pairing, src/channel, src/demo, src/devsupport, src/notifications and app/+native-intent.ts must not report to Sentry: their error messages can carry ciphertext, key material, or attacker-controlled bytes. See .claude/rules/crash-reporting-scope.md.',
             },
           ],
         },

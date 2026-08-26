@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Linking, StyleSheet, TextInput } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult, type BarcodeType } from 'expo-camera';
 import { Screen, Stack, Text, Button, Card, useTheme } from '@/components';
 import { validateScannedQr, type QrValidationErrorKind } from '@/pairing/qr';
 import { beginPairing } from '@/pairing/activePairing';
+import { DEMO_DEEP_LINK_PARAM, DEMO_PAIRING_SHORTCUT, isDemoPairingCode } from '@/demo/demoIdentity';
+import { AlreadyPairedError, PairingInProgressError, beginDemoPairing } from '@/demo/demoPairing';
 
 const ERROR_MESSAGES: Record<QrValidationErrorKind, string> = {
   'not-a-pairing-uri': 'That QR code is not a Kangentic pairing code.',
@@ -64,6 +66,29 @@ export function PairingScanScreen(): React.JSX.Element {
     async (uri: string) => {
       if (pairingInFlightRef.current) return;
       setErrorMessage(null);
+      // The reviewer/demo code, checked BEFORE any parsing and returning
+      // unconditionally so it can never fall through into real pairing
+      // validation. See isDemoPairingCode for why that ordering is load-bearing
+      // rather than merely tidy. Both the camera and the paste field funnel
+      // through here, so the QR, the typed code and the deep link all land on
+      // this one branch.
+      if (isDemoPairingCode(uri)) {
+        setPairingInFlight(true);
+        try {
+          await beginDemoPairing(PAIRING_DEVICE_NAME);
+        } catch (error: unknown) {
+          // The refusals are not faults, and each needs to say which one it
+          // is: "could not start pairing" on a phone that is working fine
+          // reads as a broken app.
+          setErrorMessage(
+            error instanceof AlreadyPairedError || error instanceof PairingInProgressError ? error.message : UNEXPECTED_ERROR_MESSAGE,
+          );
+          setPairingInFlight(false);
+          return;
+        }
+        router.navigate('/pair-confirm');
+        return;
+      }
       const result = validateScannedQr(uri);
       if (!result.ok) {
         // A rejected code must not latch: the user corrects and retries now.
@@ -102,6 +127,23 @@ export function PairingScanScreen(): React.JSX.Element {
     },
     [handleUri],
   );
+
+  // A demo deep link (kangentic-pair://demo) lands here as ?demo=1, set by
+  // app/+native-intent.ts. Replay it through handleUri so the link takes the
+  // identical path to a scan or a paste rather than a fourth entry point of its
+  // own.
+  //
+  // Once per mount. The ref, not the effect deps, is the guard: useFocusEffect
+  // above re-arms the in-flight latch every time this screen regains focus, so
+  // coming back from a rejected confirm would otherwise immediately restart the
+  // ceremony the user just backed out of.
+  const demoDeepLinkHandledRef = useRef(false);
+  const demoDeepLinkParam = useLocalSearchParams<{ demo?: string }>()[DEMO_DEEP_LINK_PARAM];
+  useEffect(() => {
+    if (demoDeepLinkParam !== '1' || demoDeepLinkHandledRef.current) return;
+    demoDeepLinkHandledRef.current = true;
+    void handleUri(DEMO_PAIRING_SHORTCUT);
+  }, [demoDeepLinkParam, handleUri]);
 
   // useCameraPermissions reads the status once on mount and never again on its
   // own: its effect's deps are stable for the component's whole life, so only

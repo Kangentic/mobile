@@ -3,8 +3,10 @@ paths:
   - "src/pairing/**"
   - "src/channel/**"
   - "src/connection/**"
+  - "src/demo/**"
   - "src/devsupport/**"
   - "src/notifications/**"
+  - "app/+native-intent.ts"
 ---
 # Rule: pairing, transport, and capability code stay accountless
 
@@ -18,8 +20,10 @@ degrades and the load-bearing separation the business model depends on breaks.
 
 ## The rule
 
-- No file under `src/pairing/`, `src/channel/`, `src/connection/`, `src/devsupport/`, or
-  `src/notifications/` may import from any account, billing, or entitlement module.
+- No file under `src/pairing/`, `src/channel/`, `src/connection/`, `src/demo/`,
+  `src/devsupport/`, or `src/notifications/` - nor `app/+native-intent.ts`, the deep-link
+  router that feeds the demo pairing - may import from any account, billing, or entitlement
+  module.
 - No code path in these directories may require a Kangentic account or signup to function.
 - The relay address is a user-configurable setting; self-hosting is a first-class, equally
   supported path, never a degraded one.
@@ -36,7 +40,11 @@ degrades and the load-bearing separation the business model depends on breaks.
 ## Scope
 
 `src/pairing/**`, `src/channel/**`, `src/connection/**` (the lifecycle composer over pairing +
-channel + stores), `src/devsupport/**` (the loopback transport, stub peer classes, and wire
-fixtures shared by tests and the mock desktop), `src/notifications/**`. Settings UI that merely
+channel + stores), `src/demo/**` (the reviewer/demo pairing, which composes pairing + the
+loopback peer and so inherits the same discipline), `src/devsupport/**` (the loopback transport,
+stub peer classes, and wire fixtures shared by tests, the mock desktop, and now the shipped
+demo), `src/notifications/**`, and `app/+native-intent.ts` (the deep-link router: it is
+pairing-adjacent, input-driven code that lives outside `src/`, so it is named here explicitly
+rather than caught by a directory glob). Settings UI that merely
 lets a user type in a hosted-account token (if that ever exists) lives outside these
 directories.

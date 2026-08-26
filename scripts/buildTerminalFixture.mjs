@@ -84,6 +84,10 @@ const BANNED_TERMS = [
   'relay', 'pairing', 'paired', 'noise', 'maestro', 'expo', 'react native',
   'capability', 'register-push', 'push token', 'push-notification', 'pty',
   'scrollback', 'sas', 'qr', 'kangentic',
+  // Words that admit the content is not real. Kept in step with
+  // KANGENTIC_DOMAIN_TERMS in tests/unit/mockDesktopFixtures.test.ts, which
+  // asserts the two lists are identical.
+  'mock', 'demo',
 ];
 
 /**

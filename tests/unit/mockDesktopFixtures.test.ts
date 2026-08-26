@@ -27,19 +27,27 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   MOCK_CONTEXT_WINDOW_FOR_TEST,
+  MOCK_CODEX_SESSION_DIFF,
+  MOCK_CODEX_STATIC_SESSION,
   MOCK_EXTRA_THINKING_SESSIONS,
+  MOCK_GEMINI_STATIC_SESSION,
+  MOCK_OPENCODE_STATIC_SESSION,
+  MOCK_STATIC_SESSIONS,
   MOCK_STREAM_CEILING_FOR_TEST,
   activeCapture,
   activeGrid,
+  archivedTasksFor,
   baseTranscriptForTest,
   codexTuiFrameForTest,
   diffFileContent,
   diffFileList,
+  geminiTuiFrameForTest,
   initialTasks,
   initialTasks2,
   streamingUsedTokens,
 } from '@/connection/mockDesktop';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
+import { stripAnsiPreservingLayout } from '@/terminal/liveTail';
 import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCapture';
 
 /**
@@ -87,11 +95,62 @@ const KANGENTIC_DOMAIN_TERMS = [
   // giveaway in a fixture published to the App Store was the one word the
   // review-time half of the guard did not look for.
   'kangentic',
+  // Words that admit the fixture is a fixture. Not Kangentic domain nouns like
+  // the rest, but the same failure: "Shipped: the completed mock task" sat on
+  // the Done column for months because nothing collected that surface, and
+  // since the reviewer/demo pairing shipped that column is one navigation from
+  // where an App Store reviewer lands.
+  //
+  // Kept to these two. 'fixture', 'placeholder' and 'lorem' were tried and
+  // reverted: the customer's own prose already says "benchmarking against the
+  // 10k-row fixture", which is ordinary engineering English and exactly the
+  // kind of true sentence a fictional customer should be able to write. A guard
+  // that fires on real copy gets weakened or deleted, so it bans only the words
+  // that can only ever mean "this content is not real".
+  'mock',
+  'demo',
 ];
+
+/**
+ * Prose-bearing keys, harvested recursively from a fixture value.
+ *
+ * A recursive walk rather than a hand-written traversal of the transcript union
+ * because `TranscriptEntryWire` is a wide protocol type whose members carry
+ * prose at different depths (assistant blocks, thinking blocks, tool results,
+ * system notices), and an enumeration would silently stop covering a member the
+ * day the package adds one. Restricted to prose KEYS rather than collecting
+ * every string, because ids like `mock-session-1` are not rendered anywhere and
+ * would make a ban on the word "mock" fire on scaffolding instead of on copy.
+ */
+const PROSE_KEYS = new Set(['text', 'title', 'description', 'content', 'note', 'summary', 'label', 'message']);
+
+function collectProse(value: unknown, label: string, into: { label: string; text: string }[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectProse(item, label, into);
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (typeof nested === 'string') {
+      if (PROSE_KEYS.has(key)) into.push({ label: `${label}.${key}`, text: nested });
+      continue;
+    }
+    collectProse(nested, `${label}.${key}`, into);
+  }
+}
 
 /** Every string these fixtures put on screen. */
 function renderedFixtureText(): { label: string; text: string }[] {
   const collected: { label: string; text: string }[] = [];
+  // The whole chat lens. Previously uncollected, which meant every string in
+  // the published 03-session-chat shelf was unguarded.
+  collectProse(baseTranscriptForTest(), 'transcript', collected);
+  // The Done columns and the completed-task screens behind them. Both real
+  // project ids, because the two projects carry DISTINCT archived rows now -
+  // the previous 'project-1' placeholder only ever exercised the default
+  // branch.
+  collectProse(archivedTasksFor('mock-project'), 'archived', collected);
+  collectProse(archivedTasksFor('mock-project-relay'), 'archived relay', collected);
   for (const task of [...initialTasks(), ...initialTasks2()]) {
     collected.push({ label: `task ${task.id} title`, text: task.title });
     if (task.description) collected.push({ label: `task ${task.id} description`, text: task.description });
@@ -100,8 +159,59 @@ function renderedFixtureText(): { label: string; text: string }[] {
   }
   for (const spec of MOCK_EXTRA_THINKING_SESSIONS) {
     collected.push({ label: `${spec.sessionId} title`, text: spec.title });
+  }
+  // Every static session's full surface: transcript seed, the canned chat
+  // reply, and the terminal seed - all of which render since the demo pairing
+  // made these screens reachable by App Review, and none of which the guard
+  // collected while they were dev-only.
+  for (const spec of MOCK_STATIC_SESSIONS) {
     collected.push({ label: `${spec.sessionId} user`, text: spec.userText });
     collected.push({ label: `${spec.sessionId} assistant`, text: spec.assistantText });
+    collected.push({ label: `${spec.sessionId} reply`, text: spec.replyText });
+    collected.push({ label: `${spec.sessionId} terminal seed`, text: spec.scrollback });
+    if (spec.thinkingText) collected.push({ label: `${spec.sessionId} thinking`, text: spec.thinkingText });
+    if (spec.closingText) collected.push({ label: `${spec.sessionId} closing`, text: spec.closingText });
+    for (const toolCell of spec.toolCells ?? []) {
+      // Inputs render on the tool card (a Write's content in full), results on
+      // the result card - both are screen text, both get checked.
+      collected.push({ label: `${spec.sessionId} tool input`, text: JSON.stringify(toolCell.input) });
+      collected.push({ label: `${spec.sessionId} tool result`, text: toolCell.result });
+    }
+    // The later turns render the same four surfaces the opening one does.
+    for (const [turnIndex, turn] of (spec.followUps ?? []).entries()) {
+      const turnLabel = `${spec.sessionId} follow-up ${turnIndex + 2}`;
+      collected.push({ label: `${turnLabel} user`, text: turn.userText });
+      if (turn.thinkingText) collected.push({ label: `${turnLabel} thinking`, text: turn.thinkingText });
+      if (turn.assistantText) collected.push({ label: `${turnLabel} assistant`, text: turn.assistantText });
+      if (turn.closingText) collected.push({ label: `${turnLabel} closing`, text: turn.closingText });
+      for (const toolCell of turn.toolCells ?? []) {
+        collected.push({ label: `${turnLabel} tool input`, text: JSON.stringify(toolCell.input) });
+        collected.push({ label: `${turnLabel} tool result`, text: toolCell.result });
+      }
+    }
+    for (const file of spec.diff?.files ?? []) {
+      collected.push({ label: `${spec.sessionId} diff path`, text: file.path });
+    }
+    for (const [diffPath, content] of Object.entries(spec.diff?.contents ?? {})) {
+      collected.push({ label: `${spec.sessionId} diff ${diffPath}`, text: `${content.original}\n${content.modified}` });
+    }
+  }
+  // The codex and gemini TUI frames are those sessions' live terminals.
+  // Both alternating paints of each, since status lines differ.
+  for (const paintTick of [0, 1]) {
+    for (const row of codexTuiFrameForTest(paintTick).split('\r\n')) {
+      collected.push({ label: `codex frame tick ${paintTick}`, text: row });
+    }
+    for (const row of geminiTuiFrameForTest(paintTick).split('\r\n')) {
+      collected.push({ label: `gemini frame tick ${paintTick}`, text: row });
+    }
+  }
+  // The codex session's Changes lens, which is not a static-session spec.
+  for (const file of MOCK_CODEX_SESSION_DIFF.files) {
+    collected.push({ label: 'codex diff path', text: file.path });
+  }
+  for (const [diffPath, content] of Object.entries(MOCK_CODEX_SESSION_DIFF.contents)) {
+    collected.push({ label: `codex diff ${diffPath}`, text: `${content.original}\n${content.modified}` });
   }
   // The recorded terminal, as RENDERED. Both captures are checked, not just the
   // one the store capture uses: `dev:mock` is what gets demoed live, and a leak
@@ -119,6 +229,12 @@ describe('the mock fixtures stay inside the customer fiction', () => {
     const collected = renderedFixtureText();
     expect(collected.length).toBeGreaterThan(30);
     expect(collected.some((entry) => entry.text.includes('sign-in redirect'))).toBe(true);
+    // Each surface named individually, because "more than 30 strings" stayed
+    // true the whole time the transcript and the Done column were collected by
+    // nothing at all. A count cannot tell you WHICH screen went unguarded.
+    expect(collected.some((entry) => entry.label.startsWith('transcript.'))).toBe(true);
+    expect(collected.some((entry) => entry.label.startsWith('archived.'))).toBe(true);
+    expect(collected.some((entry) => entry.text === 'Cache the product-grid query on the storefront home')).toBe(true);
   });
 
   it.each(KANGENTIC_DOMAIN_TERMS)('never says "%s" in anything it renders', (term) => {
@@ -415,6 +531,56 @@ describe('every mode reports the grid it actually replays', () => {
   });
 });
 
+describe('authored claude frames fill the grid with the live chrome', () => {
+  // Transcribed from a real session's PTY ring (2026-08-27): the input area
+  // is rules + ❯ + the amber 'auto mode on' footer, pinned to the bottom of
+  // a frame that fills the grid. A bare 20-row scrollback floating in an
+  // empty pane is exactly what read as fake next to the recorded session.
+  it('pins the input area to the bottom of a full-height frame', () => {
+    // Positively derived, not a substring scan of the very text being
+    // verified below (that self-referential filter is what let a one-in-one
+    // swap - one Claude session losing the chrome while some other session
+    // gained a copy of the marker text - cancel out against a bare length
+    // check). Exclude the three CLI-flavored static exports by identity, and
+    // also anything sharing the codex fixture's model id: MOCK_STATIC_SESSIONS
+    // additionally packs one Codex-flavored session INTO the extra-thinking
+    // bucket ('mock-session-thinking-5', never exported under its own name),
+    // so identity exclusion alone would miss it.
+    const codexModelId = MOCK_CODEX_STATIC_SESSION.model.id;
+    const framedSpecs = MOCK_STATIC_SESSIONS.filter(
+      (spec) =>
+        spec !== MOCK_CODEX_STATIC_SESSION &&
+        spec !== MOCK_GEMINI_STATIC_SESSION &&
+        spec !== MOCK_OPENCODE_STATIC_SESSION &&
+        spec.model.id !== codexModelId,
+    );
+    // The expectation side is a LITERAL set of ids, not the same predicate
+    // recomputed - so reflavoring one of these sessions to Codex (or vice
+    // versa) changes the selection side without moving the expectation,
+    // and the mismatch fails loudly instead of both sides drifting together.
+    // 'mock-session-thinking-5' is deliberately absent: it is Codex-flavored
+    // (see above) so the filter above excludes it too.
+    expect(framedSpecs.map((spec) => spec.sessionId).sort()).toEqual(
+      [
+        'mock-session-thinking-2',
+        'mock-session-thinking-3',
+        'mock-session-thinking-4',
+        'mock-session-idle',
+        'mock-session-paused',
+        'mock-project-archived-session-1',
+        'mock-project-relay-archived-session-1',
+      ].sort(),
+    );
+    for (const spec of framedSpecs) {
+      const rows = spec.scrollback.split('\r\n');
+      expect(rows.length, `${spec.sessionId} fills the grid`).toBeGreaterThanOrEqual(activeGrid().rows);
+      const bottomRows = rows.slice(-4).join('\n');
+      expect(bottomRows, `${spec.sessionId} prompt`).toContain('❯');
+      expect(bottomRows, `${spec.sessionId} footer`).toContain('auto mode on');
+    }
+  });
+});
+
 describe('the codex TUI frame stays inside the reported grid', () => {
   // Regression for b5fcd86: codexTuiFrame used to hard-code a 38-glyph border
   // while its two alternating status strings were 35 and 26 columns, so the
@@ -427,7 +593,13 @@ describe('the codex TUI frame stays inside the reported grid', () => {
   const width = activeGrid().cols;
 
   function boxRows(paintTick: number): string[] {
-    return codexTuiFrameForTest(paintTick).split('\r\n').filter((row) => row.length > 0);
+    // Stripped per row (not whole-frame: the stripper also removes bare CR,
+    // which would break the row split). The chrome carries SGR color now,
+    // and the column budget is about VISIBLE glyphs.
+    return codexTuiFrameForTest(paintTick)
+      .split('\r\n')
+      .map((row) => stripAnsiPreservingLayout(row))
+      .filter((row) => row.length > 0);
   }
 
   it.each([0, 1])('pads the box border to exactly the grid width on paint tick %i', (paintTick) => {

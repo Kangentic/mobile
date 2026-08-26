@@ -28,14 +28,16 @@ import {
 } from '@/devsupport/recordedTerminal';
 
 /**
- * The dev-only in-app fake desktop: the real channel stack (KK handshake,
+ * The in-app fake desktop: the real channel stack (KK handshake,
  * secretstream, capability envelopes, feed router) runs against this peer
  * over an in-process loopback transport, so every screen behaves exactly as
  * it does against a real desktop - streaming transcript, terminal ticks,
- * prompt cards, board writes - with no relay, no pairing, and no dependence
- * on (or pollution of) a live board. Enabled only by the dev rig's mock
- * mode (EXPO_PUBLIC_KANGENTIC_MOCK=1, dev builds only); production bundles
- * never take this path.
+ * prompt cards, board writes - with no relay, no pairing ceremony, and no
+ * dependence on (or pollution of) a live board. Two routes reach it: the dev
+ * rig's mock mode (EXPO_PUBLIC_KANGENTIC_MOCK=1, dev builds only), and - in
+ * PRODUCTION, by design - the persisted demo trust anchor (src/demo/, the
+ * App Review pairing), which means every fixture below is content an App
+ * Store reviewer can reach.
  *
  * The scenario mirrors scripts/stubDesktopPeer.mjs's agent-life simulator
  * and adds an AskUserQuestion round after the permission prompt is
@@ -83,9 +85,26 @@ const MOCK_PROJECT = { id: 'mock-project', name: 'storefront-web', color: '#58a6
 const MOCK_PROJECT_2 = { id: 'mock-project-relay', name: 'checkout-api', color: '#3fb950' };
 const MOCK_SESSION_ID = 'mock-session-1';
 const MOCK_TASK_ID = 'mock-task-1';
-/** A second, TRANSCRIPT-LESS session (agent: codex): exercises the chat reading-view fallback. */
+/**
+ * A second streaming-terminal session (agent: codex). Structured transcript
+ * AND a live fullscreen TUI mirror: every desktop adapter parses a transcript
+ * these days (Claude, Codex, Gemini, OpenCode, Droid, Grok, Kimi, Qwen,
+ * Antigravity all implement parseTranscript), so a steady-state Codex session
+ * has a real chat lens, not the reading-view fallback it modelled before.
+ */
 const MOCK_CODEX_SESSION_ID = 'mock-session-codex';
 const MOCK_CODEX_TASK_ID = 'mock-task-codex';
+/**
+ * A Gemini CLI session (agent: gemini): structured transcript plus a live
+ * fullscreen TUI, the third agent flavor. EVERY mock session carries a
+ * structured transcript by policy: the demo only shows agents whose
+ * transcripts the desktop parses, because the chat reading-view fallback is
+ * a degraded transient state and App Review should only ever meet the
+ * high-quality lens. (The fallback code path itself stays covered by the
+ * Maestro stub rig, not this mock.)
+ */
+const MOCK_GEMINI_SESSION_ID = 'mock-session-gemini';
+const MOCK_GEMINI_TASK_ID = 'mock-task-gemini';
 /** An IDLE session in the second project: exercises the Home feed's Idle section. */
 const MOCK_IDLE_SESSION_ID = 'mock-session-idle';
 const MOCK_IDLE_TASK_ID = 'mock-task-idle';
@@ -112,6 +131,8 @@ const MOCK_MODEL_OPUS = { id: 'claude-opus-4-8', displayName: 'Opus 4.8' };
 const MOCK_MODEL_FABLE = { id: 'claude-fable-5', displayName: 'Fable 5' };
 /** Matches the codex session's `agent: 'codex'` - an OpenAI Codex-family model, not a Claude one. */
 const MOCK_MODEL_CODEX = { id: 'gpt-5-codex', displayName: 'GPT-5 Codex' };
+/** The just-spawned session's model - a Gemini CLI session, agent: 'gemini'. */
+const MOCK_MODEL_GEMINI = { id: 'gemini-3-pro', displayName: 'Gemini 3 Pro' };
 /** After this many tick-driven Bash cells, the mock stops growing the transcript further - see tickEntryCount. */
 const MOCK_MAX_TICK_ENTRIES = 20;
 
@@ -162,17 +183,246 @@ function mockUsage(usedTokens: number, model: SessionUsageWire['model']): Sessio
   };
 }
 
-export interface MockExtraThinkingSessionSpec {
+/** One tool round in a static session's transcript: an assistant tool_use cell plus its result. */
+export interface MockStaticSessionToolCell {
+  name: string;
+  input: JsonValue;
+  result: string;
+  /** Renders the danger-tinted result card, so failure visuals stay reachable outside the streaming session. */
+  isError?: boolean;
+}
+
+/** A static session's Changes lens: its file list plus per-file contents, so every session's diff tells ITS story. */
+export interface MockStaticSessionDiff {
+  files: DiffFileListWire['files'];
+  contents: Record<string, DiffFileContentWire>;
+}
+
+/**
+ * A later conversation turn appended after the spec's opening turn. Real
+ * sessions are multi-turn - the user comes back, redirects, asks a follow-up -
+ * and a transcript that is always exactly one exchange deep is the tell that
+ * flips "quiet agent" to "canned" the moment a reviewer scrolls.
+ */
+export interface MockStaticSessionTurn {
+  userText: string;
+  /** Collapsed-by-default thinking cell opening the turn's assistant entry. */
+  thinkingText?: string;
+  assistantText?: string;
+  toolCells?: MockStaticSessionToolCell[];
+  closingText?: string;
+}
+
+/**
+ * A session that never streams on its own but must still ANSWER: snapshot,
+ * transcript window, a typed terminal keystroke, a sent chat message. The
+ * idle, paused, and extra-thinking sessions all share this shape, and the one
+ * registry built from it is what makes every session's terminal and chat live
+ * rather than only the streaming one's - which mattered the moment the demo
+ * pairing put these screens in front of App Review.
+ */
+export interface MockStaticSessionSpec {
   sessionId: string;
   taskId: string;
-  displayId: number;
-  swimlaneId: string;
-  title: string;
+  /**
+   * The name the desktop stamps on every assistant entry it serves: the
+   * adapter's displayName ('Claude Code', 'Codex CLI', 'Gemini CLI',
+   * 'OpenCode', ...), never a bare model name. Omitted, it is inferred from
+   * the model (a Codex-family model reports 'Codex CLI', else 'Claude Code').
+   */
+  agentName?: string;
   userText: string;
+  /** Collapsed-by-default thinking cell opening the first assistant entry. */
+  thinkingText?: string;
   assistantText: string;
+  /**
+   * Tool rounds between the opening exchange and the close. This is what
+   * gives a static session's CHAT lens real depth - tool cards, results, an
+   * error card where isError is set - instead of the two-bubble stub a
+   * reviewer would read as an empty product.
+   */
+  toolCells?: MockStaticSessionToolCell[];
+  /** The settled last word; omitted, the transcript ends on the last tool result. */
+  closingText?: string;
+  /** Later turns after the opening one - the scroll depth of a real session. */
+  followUps?: MockStaticSessionTurn[];
+  /** Absent means the Changes lens shows an empty file list for this task, not another task's diff. */
+  diff?: MockStaticSessionDiff;
+  /**
+   * The canned assistant reply to a chat message sent INTO this session.
+   * Session-specific so a reviewer poking two sessions does not see the same
+   * sentence twice, which is the tell that flips "quiet agent" to "canned".
+   */
+  replyText: string;
+  /**
+   * Seed terminal content. Lines stay under the active capture's 44-column
+   * grid (activeGrid()), because the mirror renders at the desktop's reported
+   * grid and a longer line wraps mid-word on the one screen that ships.
+   */
   scrollback: string;
   model: SessionUsageWire['model'];
   usedTokens: number;
+  activityState: 'thinking' | 'idle';
+}
+
+export interface MockExtraThinkingSessionSpec extends MockStaticSessionSpec {
+  displayId: number;
+  swimlaneId: string;
+  title: string;
+}
+
+/**
+ * Documents that appear in BOTH a chat Write card and that session's Changes
+ * lens. One constant each, referenced from both places, for the same reason
+ * the streaming session's Write cell reads diffFileContent(): a hand-copied
+ * second version drifts, and the two lenses sit one swipe apart.
+ */
+const SELF_HOST_GUIDE_DOC = [
+  '# Self-hosting the storefront',
+  '',
+  'Run the whole stack on your own hardware: the web app, the checkout',
+  'service, and Postgres. Docker Compose is the fast path; bare metal is',
+  'documented for teams with their own orchestration.',
+  '',
+  '## Docker Compose',
+  '',
+  '```yaml',
+  'services:',
+  '  web:',
+  '    image: storefront/web:2.4',
+  '    ports: ["8080:8080"]',
+  '    env_file: .env',
+  '```',
+  '',
+  '## Environment variables',
+  '',
+  '| Name | Purpose |',
+  '| --- | --- |',
+  '| DATABASE_URL | Postgres connection string |',
+  '| CHECKOUT_URL | Internal checkout service address |',
+].join('\n');
+
+const LOAD_TEST_SUMMARY_DOC = [
+  '# Checkout load-test summary',
+  '',
+  '50 concurrent carts, 4 regions, 20 minute soak.',
+  '',
+  '- p50 checkout latency: 0.79ms',
+  '- p95 checkout latency: 3.1ms',
+  '- errors: 0',
+  '',
+  'Slowest two cases (cart merge on sign-in, multi-currency totals)',
+  'have their own follow-up issues.',
+].join('\n');
+
+/**
+ * SGR fragments matching the recorded capture's palette (claudeCapture.ts):
+ * gray for chrome text, near-black gray for box borders. Built from one ESC
+ * constant so the escape appears exactly once in authored source.
+ */
+const ESC = '\u001b';
+const TUI_GRAY = ESC + '[38;2;153;153;153m';
+const TUI_DARK = ESC + '[38;2;80;80;80m';
+const TUI_RESET = ESC + '[0m';
+/**
+ * The rest of the live palette, read out of a REAL running session's PTY ring
+ * (kangentic devtools terminal forensics, 2026-08-27): the spinner gerund
+ * paints coral 215;119;87 with its parenthetical in gray; the input-area
+ * rules are gray 136;136;136 with the worktree tag embedded at the right
+ * end; the footer chips are amber 255;193;7 (permission mode) and cyan
+ * 0;204;204 (background shells).
+ */
+const TUI_CORAL = ESC + '[38;2;215;119;87m';
+const TUI_RULE = ESC + '[38;2;136;136;136m';
+const TUI_AMBER = ESC + '[38;2;255;193;7m';
+const TUI_CYAN = ESC + '[38;2;0;204;204m';
+const TUI_WHITE = ESC + '[38;2;255;255;255m';
+/**
+ * The bullet prefixes that open the hand-authored content rows below: gray
+ * for tool cells, white for assistant text, matching the recorded palette.
+ * Named so a palette correction edits these two lines, not every row.
+ */
+const TUI_TOOL_BULLET = TUI_GRAY + '●' + TUI_RESET + ' ';
+const TUI_TEXT_BULLET = TUI_WHITE + '●' + TUI_RESET + ' ';
+
+interface ClaudeTuiFrameOptions {
+  /**
+   * The task's worktree tag, embedded at the right end of the input rule
+   * exactly where the live desktop paints it.
+   */
+  branchTag: string;
+  /**
+   * The in-flight status, glyph omitted: 'Measuring… (2m 14s · ↓ 3.1k
+   * tokens)'. Rendered coral up to the parenthetical, gray from there, with
+   * the Tip rows a live turn keeps beneath it.
+   */
+  working?: string;
+  /** The settled line an idle session rests on: 'Sautéed for 12m 4s · done 4:18 PM'. All gray, like the real one. */
+  done?: string;
+  /** Footer chip after the permission mode, e.g. '1 shell'. */
+  footerExtra?: string;
+}
+
+/**
+ * Frames authored conversation rows in the chrome a real Claude Code session
+ * paints TODAY, transcribed from a live session's PTY ring (devtools
+ * terminal forensics, 2026-08-27, a 210x48 desktop-rest grid):
+ *
+ *   ✢ Fluttering… (10m 49s · ↓ 41.3k tokens · thought for 3s)
+ *     ⎿  Tip: Use /btw to ask a quick side question ...
+ *   ──────────────────────── mock-desktop-demo-pairing ─
+ *   ❯
+ *   ─────────────────────────────────────────────────────
+ *     ⏵⏵ auto mode on · 1 shell · ← 1 agent
+ *
+ * - the input area is RULES with the worktree tag at the right end, not the
+ *   old bordered box, and the prompt glyph is ❯;
+ * - the working line's gerund is coral, its parenthetical gray, and idle
+ *   sessions rest on an all-gray 'done' line instead;
+ * - the footer chip is amber 'auto mode on' (Kangentic spawns Claude Code
+ *   with --permission-mode auto, so this is what a real customer desktop
+ *   mirrors), with cyan shell chips when background work exists.
+ *
+ * The frame is padded so the input area sits at the BOTTOM of the grid.
+ * Why all this: the streaming session's terminal is a RECORDED real frame,
+ * and next to it a bare scrollback read as obviously fake. (This builder
+ * still does not reproduce syntax-highlighted diffs or dialogs; sessions
+ * needing that fidelity should be recorded, not authored.)
+ */
+function claudeTuiFrame(contentRows: string[], options: ClaudeTuiFrameOptions): string {
+  const { cols, rows } = activeGrid();
+  const bottom: string[] = [];
+  if (options.working) {
+    const parenIndex = options.working.indexOf('(');
+    const gerundPart = parenIndex >= 0 ? options.working.slice(0, parenIndex) : options.working;
+    const detailPart = parenIndex >= 0 ? options.working.slice(parenIndex) : '';
+    bottom.push(TUI_CORAL + '✻ ' + gerundPart + TUI_GRAY + detailPart + TUI_RESET);
+    bottom.push(TUI_GRAY + '  ⎿  Tip: Use /btw to ask a quick side' + TUI_RESET);
+    bottom.push(TUI_GRAY + '     question without interrupting' + TUI_RESET);
+    bottom.push(TUI_GRAY + "     Claude's current work" + TUI_RESET);
+    bottom.push('');
+  } else if (options.done) {
+    bottom.push(TUI_GRAY + '✻ ' + options.done + TUI_RESET);
+    bottom.push('');
+  }
+  const tagRuleLength = Math.max(1, cols - options.branchTag.length - 4);
+  bottom.push(TUI_RULE + '─'.repeat(tagRuleLength) + ' ' + options.branchTag + ' ─' + TUI_RESET);
+  bottom.push(TUI_GRAY + '❯ ' + TUI_RESET);
+  bottom.push(TUI_RULE + '─'.repeat(cols) + TUI_RESET);
+  bottom.push(
+    // The real footer glyph is U+23F5 '⏵', which the phone WebView's mono
+    // font lacks (it rendered as tofu on device); '▶' is the same arrow in
+    // a universally covered block.
+    '  ' +
+      TUI_AMBER +
+      '▶▶ auto mode on' +
+      (options.footerExtra ? ' ' + TUI_GRAY + '· ' + TUI_CYAN + options.footerExtra : '') +
+      TUI_RESET,
+  );
+  const frameRows = [...contentRows];
+  const fillerCount = Math.max(0, rows - frameRows.length - bottom.length);
+  for (let fillerIndex = 0; fillerIndex < fillerCount; fillerIndex += 1) frameRows.push('');
+  return [...frameRows, ...bottom].join('\r\n');
 }
 
 /**
@@ -189,14 +439,130 @@ export const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
     swimlaneId: 'lane-executing',
     title: "Refactor the catalog importer's CSV parser for large feeds",
     userText: 'The importer chokes on feeds over 2000 rows - can you speed up the parser?',
+    thinkingText:
+      'The importer reads the whole CSV into one string and splits it, so memory and latency both scale with feed size. A streaming parser that yields fixed-size chunks fixes both, but the call sites expect an array - I need to see how the importer consumes the rows before changing the signature.',
     // Deliberately long - a design-review stress test for how the Agents
     // feed's snippet line truncates once the last message runs well past
     // its two-line cap (bodyNumberOfLines on TaskCard).
     assistantText:
       'Swapped the row-by-row parser for a streaming one that processes feeds in fixed-size chunks instead of loading everything into memory at once; benchmarking against the 10k-row fixture next to confirm the P95 import time actually drops below our 200ms target.',
-    scrollback: '$ claude\r\n> Refactoring src/catalog/parseFeed.ts...\r\n',
+    replyText: 'Noted - folding that into the streaming parser before the benchmark rerun.',
+    scrollback: claudeTuiFrame([
+      '> Speed up the feed importer - it',
+      '  chokes past 2000 rows.',
+      '',
+      TUI_TOOL_BULLET + 'Read(src/catalog/parseFeed.ts)',
+      '  ⎿ 214 lines',
+      '',
+      TUI_TEXT_BULLET + 'The parser buffers the whole feed',
+      '  before the first row parses.',
+      '  Streaming it in fixed-size chunks.',
+      '',
+      TUI_TOOL_BULLET + 'Update(src/catalog/parseFeed.ts)',
+      '  ⎿ 41 insertions, 18 deletions',
+      '',
+      TUI_TOOL_BULLET + 'Bash(npm run bench -- feeds/10k.csv)',
+      '  ⎿ p95 412ms -> 187ms over 5 runs',
+      '',
+      TUI_TEXT_BULLET + 'Benchmarking the 10k-row fixture to',
+      '  confirm p95 lands under 200ms.',
+      '',
+      '> How does memory look on the 10k',
+      '  feed now?',
+      '',
+      TUI_TOOL_BULLET + 'Bash(npm run bench:mem -- 10k.csv)',
+      '  ⎿ peak RSS 84MB -> 19MB',
+      '',
+      TUI_TEXT_BULLET + 'Peak memory drops from 84MB to',
+      '  19MB - the parser never holds more',
+      '  than 250 rows at once.',
+      '',
+      '> Add a memory ceiling assert to the',
+      '  bench so a regression fails loudly.',
+      '',
+    ], { branchTag: 'perf/streaming-feed-parser', working: 'Measuring… (2m 14s · ↓ 3.1k tokens)' }),
     model: MOCK_MODEL_SONNET,
     usedTokens: 55_000,
+    activityState: 'thinking',
+    toolCells: [
+      { name: 'Read', input: { file_path: 'src/catalog/parseFeed.ts' }, result: '214 lines' },
+      {
+        name: 'Bash',
+        input: { command: 'npm run bench -- feeds/10k.csv' },
+        result: 'p95 412ms -> 187ms over 5 runs',
+      },
+    ],
+    closingText: 'Streaming parser is in and p95 on the 10k-row fixture is 187ms. Wiring a memory ceiling assert into the bench next.',
+    followUps: [
+      {
+        userText: 'How does memory look on the 10k feed now?',
+        toolCells: [
+          {
+            name: 'Bash',
+            input: { command: 'npm run bench:mem -- feeds/10k.csv' },
+            result: 'peak RSS 84MB -> 19MB over 5 runs',
+          },
+        ],
+        closingText:
+          'Peak memory drops from 84MB to 19MB: the streaming parser never holds more than 250 rows in memory at once, so feed size no longer sets the ceiling.',
+      },
+      {
+        // The in-flight ask the Thinking spinner is answering right now.
+        userText: 'Add a memory ceiling assert to the bench so a regression fails loudly.',
+      },
+    ],
+    diff: {
+      files: [
+        { path: 'src/catalog/parseFeed.ts', status: 'M', insertions: 41, deletions: 18, binary: false },
+        { path: 'src/catalog/parseFeed.bench.ts', status: 'A', insertions: 12, deletions: 0, binary: false },
+      ],
+      contents: {
+        'src/catalog/parseFeed.ts': {
+          original: [
+            'export function parseFeed(csv: string): FeedRow[] {',
+            '  const rows: FeedRow[] = [];',
+            '  for (const line of csv.split("\\n")) {',
+            '    rows.push(parseRow(line));',
+            '  }',
+            '  return rows;',
+            '}',
+            '',
+          ].join('\n'),
+          modified: [
+            'const CHUNK_ROWS = 250;',
+            '',
+            'export async function* parseFeed(feed: ReadableStream<string>): AsyncGenerator<FeedRow[]> {',
+            '  let chunk: FeedRow[] = [];',
+            '  for await (const line of lines(feed)) {',
+            '    chunk.push(parseRow(line));',
+            '    if (chunk.length === CHUNK_ROWS) {',
+            '      yield chunk;',
+            '      chunk = [];',
+            '    }',
+            '  }',
+            '  if (chunk.length > 0) yield chunk;',
+            '}',
+            '',
+          ].join('\n'),
+          language: 'typescript',
+        },
+        'src/catalog/parseFeed.bench.ts': {
+          original: '',
+          modified: [
+            'import { bench } from "vitest";',
+            'import { parseFeed } from "./parseFeed";',
+            '',
+            'bench("10k-row feed", async () => {',
+            '  for await (const chunk of parseFeed(openFixture("feeds/10k.csv"))) {',
+            '    consume(chunk);',
+            '  }',
+            '});',
+            '',
+          ].join('\n'),
+          language: 'typescript',
+        },
+      },
+    },
   },
   {
     sessionId: 'mock-session-thinking-3',
@@ -206,9 +572,106 @@ export const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
     title: 'Investigate the flaky guest-checkout test on CI',
     userText: 'checkout/guest-checkout.spec.ts fails about 1 in 5 runs on CI - can you dig in?',
     assistantText: 'Reproduced it locally - the payment iframe loads after the assert. Adding a settle wait before the submit.',
-    scrollback: '$ claude\r\n> Reproducing the flaky guest-checkout spec...\r\n',
+    replyText: 'Good call - rerunning the spec twenty more times with that in mind.',
+    scrollback: claudeTuiFrame([
+      '> Dig into the flaky guest-checkout',
+      '  spec - 1 in 5 CI runs fail.',
+      '',
+      TUI_TOOL_BULLET + 'Bash(npx vitest run checkout x20)',
+      '  ⎿ 17 passed, 3 failed',
+      '',
+      TUI_TEXT_BULLET + 'The payment iframe finishes loading',
+      '  after the assert runs. A settle',
+      '  wait before the submit fixes it.',
+      '',
+      TUI_TOOL_BULLET + 'Update(guest-checkout.spec.ts)',
+      '  ⎿ 6 insertions, 1 deletion',
+      '',
+      TUI_TOOL_BULLET + 'Bash(npx vitest run checkout x20)',
+      '  ⎿ 20 passed, 0 failed',
+      '',
+      '> Are other specs racing the same',
+      '  iframe?',
+      '',
+      TUI_TOOL_BULLET + 'Grep(paymentFrame, checkout/)',
+      '  ⎿ 3 specs reference the iframe',
+      '',
+      TUI_TEXT_BULLET + 'Two more specs wait on the same',
+      '  iframe and both already use the',
+      '  settle helper. Only guest checkout',
+      '  raced it.',
+      '',
+      '> Fold the settle wait into the',
+      '  shared checkout helper.',
+      '',
+    ], { branchTag: 'fix/guest-checkout-flake', working: 'Sifting… (4m 2s · ↓ 6.8k tokens · thought for 21s)' }),
     model: MOCK_MODEL_OPUS,
     usedTokens: 88_000,
+    activityState: 'thinking',
+    toolCells: [
+      {
+        name: 'Bash',
+        input: { command: 'npx vitest run checkout --repeat 20' },
+        result: 'Test Files  3 passed (3)\nTests  17 passed, 3 failed (20)\nDuration  84.2s',
+        isError: true,
+      },
+      {
+        name: 'Edit',
+        input: { file_path: 'checkout/guest-checkout.spec.ts' },
+        result: 'The file checkout/guest-checkout.spec.ts has been updated successfully.',
+      },
+      {
+        name: 'Bash',
+        input: { command: 'npx vitest run checkout --repeat 20' },
+        result: 'Test Files  3 passed (3)\nTests  20 passed (20)\nDuration  86.9s',
+      },
+    ],
+    closingText: 'Twenty clean runs in a row. The settle wait holds the submit until the payment iframe reports ready, which is the race the 1-in-5 failures were losing.',
+    followUps: [
+      {
+        userText: 'Are other specs racing the same iframe?',
+        thinkingText:
+          'Any spec that fills the card form and submits crosses the same iframe load. A quick sweep for the frame locator will show which ones, and whether they already wait on the ready marker.',
+        toolCells: [
+          {
+            name: 'Grep',
+            input: { pattern: 'paymentFrame', path: 'checkout/', output_mode: 'files_with_matches' },
+            result: 'checkout/guest-checkout.spec.ts\ncheckout/saved-card.spec.ts\ncheckout/gift-card.spec.ts',
+          },
+        ],
+        closingText:
+          'Two more specs reference the same iframe - saved-card and gift-card - and both already wait on the settle helper before submitting. Guest checkout was the only one racing it.',
+      },
+      {
+        // The in-flight ask the Thinking spinner is answering right now.
+        userText: 'Fold the settle wait into the shared checkout helper so new specs get it for free.',
+      },
+    ],
+    diff: {
+      files: [{ path: 'checkout/guest-checkout.spec.ts', status: 'M', insertions: 6, deletions: 1, binary: false }],
+      contents: {
+        'checkout/guest-checkout.spec.ts': {
+          original: [
+            'await page.fill("#card-number", TEST_CARD);',
+            'await page.click("#submit-order");',
+            'await expect(page.locator("#confirmation")).toBeVisible();',
+            '',
+          ].join('\n'),
+          modified: [
+            'await page.fill("#card-number", TEST_CARD);',
+            '// The payment iframe loads async; submitting before it settles',
+            '// loses the click 1 run in 5 on CI.',
+            'await expect(paymentFrame.locator("[data-ready]")).toBeVisible({',
+            '  timeout: 10_000,',
+            '});',
+            'await page.click("#submit-order");',
+            'await expect(page.locator("#confirmation")).toBeVisible();',
+            '',
+          ].join('\n'),
+          language: 'typescript',
+        },
+      },
+    },
   },
   {
     sessionId: 'mock-session-thinking-4',
@@ -218,9 +681,40 @@ export const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
     title: 'Write the storefront self-host deployment guide',
     userText: 'Draft a guide for someone standing up their own storefront - Docker, env vars, the works.',
     assistantText: 'First draft covers Docker Compose and bare-metal; adding the reverse-proxy/TLS section now.',
-    scrollback: '$ claude\r\n> Drafting docs/self-host-storefront.md...\r\n',
+    replyText: 'Adding that to the deployment guide now.',
+    scrollback: claudeTuiFrame([
+      '> Draft the self-host guide - Docker,',
+      '  env vars, the works.',
+      '',
+      TUI_TOOL_BULLET + 'Write(docs/self-host-storefront.md)',
+      '  ⎿ 182 lines',
+      '',
+      TUI_TEXT_BULLET + 'First draft covers Docker Compose',
+      '  and bare metal. Adding the reverse',
+      '  proxy and TLS section now.',
+      '',
+      TUI_TOOL_BULLET + 'Bash(npx markdownlint docs)',
+      '  ⎿ 0 errors',
+      '',
+    ], { branchTag: 'docs/self-host-guide', working: 'Drafting… (1m 48s · ↓ 5.2k tokens)' }),
     model: MOCK_MODEL_FABLE,
     usedTokens: 33_000,
+    activityState: 'thinking',
+    toolCells: [
+      {
+        name: 'Write',
+        input: { file_path: 'docs/self-host-storefront.md', content: SELF_HOST_GUIDE_DOC },
+        result: 'The file docs/self-host-storefront.md has been created successfully.',
+      },
+      { name: 'Bash', input: { command: 'npx markdownlint docs' }, result: '0 errors' },
+    ],
+    closingText: 'First draft is committed: Docker Compose and bare metal are covered. Writing the reverse proxy and TLS section now.',
+    diff: {
+      files: [{ path: 'docs/self-host-storefront.md', status: 'A', insertions: 182, deletions: 0, binary: false }],
+      contents: {
+        'docs/self-host-storefront.md': { original: '', modified: SELF_HOST_GUIDE_DOC, language: 'markdown' },
+      },
+    },
   },
   {
     sessionId: 'mock-session-thinking-5',
@@ -230,34 +724,984 @@ export const MOCK_EXTRA_THINKING_SESSIONS: MockExtraThinkingSessionSpec[] = [
     title: 'Tune the product-grid density heuristic for tablet screens',
     userText: 'On a tablet the product grid ends up cramped - can you adjust the density heuristic?',
     assistantText: 'Adding a width-aware floor so a card never drops below 180px regardless of the column count.',
-    scrollback: 'Codex CLI · tuning the grid-density heuristic...\r\n',
+    replyText: 'Applying that to the density heuristic.',
+    scrollback: [
+      '› Tune the product-grid density',
+      '  heuristic for tablet widths.',
+      '',
+      '* Editing src/grid/density.ts',
+      '* Running the affected tests',
+      '  12 passed',
+      '* A width-aware floor keeps cards at',
+      '  180px or wider at any column count.',
+      '',
+      '› Run the tablet snapshot suite',
+      '  before closing this out.',
+      '',
+      TUI_GRAY + '* Running the tablet snapshots' + TUI_RESET,
+      '',
+      TUI_DARK + '╭' + '─'.repeat(activeGrid().cols - 2) + '╮' + TUI_RESET,
+      TUI_DARK + '│' + TUI_RESET + ' Running the tablet snapshots'.padEnd(activeGrid().cols - 2, ' ') + TUI_DARK + '│' + TUI_RESET,
+      TUI_DARK + '╰' + '─'.repeat(activeGrid().cols - 2) + '╯' + TUI_RESET,
+      TUI_GRAY + 'Codex CLI · GPT-5 Codex · ↑6.3k ↓318' + TUI_RESET,
+    ].join('\r\n'),
     model: MOCK_MODEL_CODEX,
     usedTokens: 12_000,
+    activityState: 'thinking',
+    // Codex-native tool shapes, not Claude ones: a Codex rollout's
+    // function_calls are `shell` (an argv array) and `apply_patch` (the
+    // patch envelope), and the desktop parser passes both through verbatim.
+    toolCells: [
+      {
+        name: 'shell',
+        input: { command: ['bash', '-lc', 'sed -n "1,20p" src/grid/density.ts'], workdir: '/work/storefront-web' },
+        result: 'export function columnsFor(widthPx: number): number {\n  return Math.max(2, Math.floor(widthPx / 150));\n}',
+      },
+      {
+        name: 'apply_patch',
+        input: {
+          input:
+            '*** Begin Patch\n*** Update File: src/grid/density.ts\n@@\n-export function columnsFor(widthPx: number): number {\n-  return Math.max(2, Math.floor(widthPx / 150));\n-}\n+const MIN_CARD_PX = 180;\n+\n+export function columnsFor(widthPx: number): number {\n+  // Fewer, readable columns beat cramped ones on wide screens:\n+  // the card width floors at MIN_CARD_PX and the count follows.\n+  const byDensity = Math.floor(widthPx / 150);\n+  const byFloor = Math.floor(widthPx / MIN_CARD_PX);\n+  return Math.max(2, Math.min(byDensity, byFloor));\n+}\n*** End Patch',
+        },
+        result: 'Success. Updated the following files:\nM src/grid/density.ts',
+      },
+      {
+        name: 'shell',
+        input: { command: ['bash', '-lc', 'npx vitest run grid'], workdir: '/work/storefront-web' },
+        result: ' Test Files  1 passed (1)\n      Tests  12 passed (12)\n   Duration  0.84s',
+      },
+    ],
+    closingText: 'Width-aware floor is in: a card clamps at 180px before the column count drops, so tablets get fewer, readable columns.',
+    followUps: [
+      {
+        // The in-flight ask the Thinking spinner is answering right now.
+        userText: 'Run the tablet snapshot suite before closing this out.',
+      },
+    ],
+    diff: {
+      files: [{ path: 'src/grid/density.ts', status: 'M', insertions: 9, deletions: 3, binary: false }],
+      contents: {
+        'src/grid/density.ts': {
+          original: [
+            'export function columnsFor(widthPx: number): number {',
+            '  return Math.max(2, Math.floor(widthPx / 150));',
+            '}',
+            '',
+          ].join('\n'),
+          modified: [
+            'const MIN_CARD_PX = 180;',
+            '',
+            'export function columnsFor(widthPx: number): number {',
+            '  // Fewer, readable columns beat cramped ones on wide screens:',
+            '  // the card width floors at MIN_CARD_PX and the count follows.',
+            '  const byDensity = Math.floor(widthPx / 150);',
+            '  const byFloor = Math.floor(widthPx / MIN_CARD_PX);',
+            '  return Math.max(2, Math.min(byDensity, byFloor));',
+            '}',
+            '',
+          ].join('\n'),
+          language: 'typescript',
+        },
+      },
+    },
   },
 ];
 
-function extraThinkingSnapshot(spec: MockExtraThinkingSessionSpec): ReadStreamResponsePayload {
+/**
+ * The idle and paused sessions' static content, previously inlined in the
+ * read-stream handler where the fixture-vocabulary guard could not reach it.
+ * Hoisted for the same two reasons as archivedTasksFor: the guard must be able
+ * to collect every string these render, and the session registry needs one
+ * list of everything that answers.
+ */
+export const MOCK_IDLE_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: MOCK_IDLE_SESSION_ID,
+  taskId: MOCK_IDLE_TASK_ID,
+  userText: 'Summarize the checkout load-test results.',
+  assistantText: 'Done. p50 checkout latency held at 0.79ms across 50 concurrent carts; summary written to the task notes.',
+  replyText: 'Noted - I will pick that up with the follow-ups.',
+  scrollback: claudeTuiFrame([
+    '> Summarize the checkout load-test',
+    '  results.',
+    '',
+    TUI_TOOL_BULLET + 'Read(perf/load-test-results.json)',
+    '  ⎿ 50 carts, 4 regions',
+    '',
+    TUI_TEXT_BULLET + 'p50 checkout latency held at 0.79ms',
+    '  across 50 concurrent carts. Wrote',
+    '  the summary to the task notes.',
+    '',
+    TUI_TOOL_BULLET + 'Bash(git push origin perf/load-test)',
+    '  ⎿ pushed',
+    '',
+    TUI_TEXT_BULLET + 'Done. Session is idle.',
+    '',
+  ], { branchTag: 'perf/load-test', done: 'Simmered for 9m 12s · done 4:18 PM', footerExtra: '1 shell' }),
+  model: MOCK_MODEL_OPUS,
+  usedTokens: 28_000,
+  activityState: 'idle',
+  toolCells: [
+    { name: 'Read', input: { file_path: 'perf/load-test-results.json' }, result: '50 carts, 4 regions, 20 minute soak' },
+    {
+      name: 'Write',
+      input: { file_path: 'perf/load-test-summary.md', content: LOAD_TEST_SUMMARY_DOC },
+      result: 'The file perf/load-test-summary.md has been created successfully.',
+    },
+  ],
+  closingText: 'Summary written to the task notes, and the two slowest cases have their own follow-up issues. Nothing else outstanding.',
+  diff: {
+    files: [{ path: 'perf/load-test-summary.md', status: 'A', insertions: 38, deletions: 0, binary: false }],
+    contents: {
+      'perf/load-test-summary.md': { original: '', modified: LOAD_TEST_SUMMARY_DOC, language: 'markdown' },
+    },
+  },
+};
+
+/**
+ * The vault-token module, referenced by BOTH the paused session's Write tool
+ * card and its Changes lens - one constant for the same anti-drift reason as
+ * SELF_HOST_GUIDE_DOC above.
+ */
+const VAULT_TOKEN_MODULE = [
+  'export interface VaultToken {',
+  '  scopedId: string;',
+  '  apiVersion: "current" | "legacy";',
+  '  legacyCardToken: string;',
+  '}',
+  '',
+  'export async function forCustomer(customerId: string): Promise<VaultToken> {',
+  '  return vaultClient.tokenFor(customerId);',
+  '}',
+  '',
+].join('\n');
+
+export const MOCK_PAUSED_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: MOCK_PAUSED_SESSION_ID,
+  taskId: MOCK_PAUSED_TASK_ID,
+  userText: 'Migrate card-on-file billing to the vault-scoped payment tokens, keeping the legacy API subscriptions billing through the rollout.',
+  thinkingText:
+    'The charge path reads the stored card straight from the legacy vault, so the token swap touches every charge call. Safest order: introduce the vault token type, convert chargeStored behind a version check, and only then change the schema - the schema change is the irreversible step.',
+  assistantText:
+    'Starting with the charge path: converting chargeStored to resolve a vault-scoped token, with a legacy branch so subscriptions on the previous API version keep billing during the rollout.',
+  replyText: 'Still paused here. I will fold that in when the migration resumes.',
+  scrollback: claudeTuiFrame([
+    '> Migrate card-on-file billing to',
+    '  vault-scoped payment tokens.',
+    '',
+    TUI_TOOL_BULLET + 'Read(src/billing/chargeStored.ts)',
+    '  ⎿ 41 lines',
+    '',
+    TUI_TEXT_BULLET + 'Converting the charge path behind',
+    '  a version check so legacy',
+    '  subscriptions keep billing.',
+    '',
+    TUI_TOOL_BULLET + 'Write(src/billing/vaultToken.ts)',
+    '  ⎿ 28 lines',
+    '',
+    TUI_TOOL_BULLET + 'Update(src/billing/chargeStored.ts)',
+    '  ⎿ 64 insertions, 22 deletions',
+    '',
+    TUI_TOOL_BULLET + 'Bash(npm run test:unit -- billing)',
+    '  ⎿ 38 passed',
+    '',
+    '> Pause here - I want to review the',
+    '  token schema first.',
+    '',
+    TUI_TEXT_BULLET + 'Paused before the token-schema',
+    '  change - resume from the terminal',
+    '  when ready.',
+    '',
+  ], { branchTag: 'feature/vault-token-migration', done: 'Churned for 22m 51s · done 5:03 PM' }),
+  model: MOCK_MODEL_FABLE,
+  usedTokens: 61_000,
+  // The protocol has no paused ActivityStateWire, so this reports 'idle' (the
+  // closest real state) and communicates "paused" only through the text.
+  activityState: 'idle',
+  toolCells: [
+    { name: 'Read', input: { file_path: 'src/billing/chargeStored.ts' }, result: '41 lines' },
+    {
+      name: 'Write',
+      input: { file_path: 'src/billing/vaultToken.ts', content: VAULT_TOKEN_MODULE },
+      result: 'The file src/billing/vaultToken.ts has been created successfully.',
+    },
+    {
+      name: 'Edit',
+      input: { file_path: 'src/billing/chargeStored.ts' },
+      result: 'The file src/billing/chargeStored.ts has been updated successfully.',
+    },
+    { name: 'Bash', input: { command: 'npm run test:unit -- billing' }, result: 'Tests  38 passed (38)' },
+  ],
+  closingText: 'The charge path and its unit tests are green on the new token shape. The next edit is the token schema itself.',
+  followUps: [
+    {
+      userText: 'Pause here - I want to review the token schema before you continue.',
+      assistantText:
+        'Paused midway through the migration, right before the token-schema change. The converted charge path is committed and tested; resume from the terminal when you have reviewed the schema.',
+    },
+  ],
+  diff: {
+    files: [
+      { path: 'src/billing/chargeStored.ts', status: 'M', insertions: 64, deletions: 22, binary: false },
+      { path: 'src/billing/vaultToken.ts', status: 'A', insertions: 28, deletions: 0, binary: false },
+    ],
+    contents: {
+      'src/billing/chargeStored.ts': {
+        original: [
+          'export async function chargeStored(customerId: string, amount: Money): Promise<ChargeResult> {',
+          '  const card = await legacyVault.cardFor(customerId);',
+          '  return gateway.charge(card.token, amount);',
+          '}',
+          '',
+        ].join('\n'),
+        modified: [
+          'export async function chargeStored(customerId: string, amount: Money): Promise<ChargeResult> {',
+          '  // Vault-scoped tokens replace raw card tokens: one token per',
+          '  // (customer, vault) pair, revocable without reissuing the card.',
+          '  const token = await vaultToken.forCustomer(customerId);',
+          '  if (token.apiVersion === "legacy") {',
+          '    // Subscriptions still billing on the previous API version keep',
+          '    // working until the rollout completes across both regions.',
+          '    return gateway.charge(token.legacyCardToken, amount);',
+          '  }',
+          '  return gateway.chargeScoped(token.scopedId, amount);',
+          '}',
+          '',
+        ].join('\n'),
+        language: 'typescript',
+      },
+      'src/billing/vaultToken.ts': {
+        original: '',
+        // The same constant the chat lens's Write card renders, so the two
+        // lenses cannot drift.
+        modified: VAULT_TOKEN_MODULE,
+        language: 'typescript',
+      },
+    },
+  },
+};
+
+/**
+ * The storefront project's archived session (checkout-api has its own,
+ * MOCK_CHECKOUT_ARCHIVED_SESSION below - distinct stories per Done column on
+ * purpose). The Done column's completed-task screen anchors its transcript
+ * on the ARCHIVED summary's sessionId, and until these existed that read
+ * failed "No such session" - a broken screen one tap into the Done column,
+ * which a reviewer told to poke every task will take. Settled and idle by
+ * definition; the completed screen renders no composer, so replyText is a
+ * formality the registry requires.
+ */
+function archivedStaticSession(projectId: string): MockStaticSessionSpec {
   return {
-    scrollback: spec.scrollback,
-    activity: { state: 'thinking', reason: { kind: 'turn-active' } },
+    sessionId: `${projectId}-archived-session-1`,
+    taskId: `${projectId}-archived-1`,
+    userText: 'Cache the product-grid query on the home page - it is our hottest read.',
+    assistantText: 'Profiling first: the grid query runs on every home hit and never changes between catalog writes, so a write-purged cache should carry almost all of it.',
+    replyText: 'This task is finished - open a new one if the cache needs tuning.',
+    scrollback: claudeTuiFrame([
+      '> Cache the product-grid query on the',
+      '  home page.',
+      '',
+      TUI_TOOL_BULLET + 'Read(src/home/productGrid.ts)',
+      '  ⎿ 96 lines',
+      '',
+      TUI_TOOL_BULLET + 'Update(src/home/productGrid.ts)',
+      '  ⎿ 23 insertions, 4 deletions',
+      '',
+      TUI_TOOL_BULLET + 'Bash(npm run bench -- home-grid)',
+      '  ⎿ cold 240ms -> cached 11ms',
+      '',
+      TUI_TEXT_BULLET + 'Cache is in with a 60s TTL and a',
+      '  purge on catalog writes. Shipped.',
+      '',
+      '> What invalidates it when the',
+      '  catalog changes?',
+      '',
+      TUI_TOOL_BULLET + 'Grep(purgeHomeGrid)',
+      '  ⎿ 2 call sites',
+      '',
+      TUI_TEXT_BULLET + 'Product edits and price changes',
+      '  both purge after commit. The TTL',
+      '  is only the backstop.',
+      '',
+    ], { branchTag: 'perf/home-grid-cache', done: 'Percolated for 1h 2m · done 6:02 PM' }),
+    model: MOCK_MODEL_SONNET,
+    usedTokens: 42_000,
+    activityState: 'idle',
+    toolCells: [
+      { name: 'Read', input: { file_path: 'src/home/productGrid.ts' }, result: '96 lines' },
+      {
+        name: 'Edit',
+        input: { file_path: 'src/home/productGrid.ts' },
+        result: 'The file src/home/productGrid.ts has been updated successfully.',
+      },
+      { name: 'Bash', input: { command: 'npm run bench -- home-grid' }, result: 'cold 240ms -> cached 11ms' },
+    ],
+    closingText: 'Cache is in with a 60s TTL and a purge on catalog writes. Cold render 240ms, cached 11ms. Shipped.',
+    followUps: [
+      {
+        userText: 'What invalidates the cache when the catalog changes?',
+        toolCells: [
+          {
+            name: 'Grep',
+            input: { pattern: 'purgeHomeGrid', output_mode: 'content' },
+            result: 'src/catalog/writeProduct.ts:88:  await purgeHomeGrid();\nsrc/catalog/writePrice.ts:41:  await purgeHomeGrid();',
+          },
+        ],
+        closingText:
+          'Every catalog write path calls purgeHomeGrid after commit - product edits and price changes both. The 60s TTL is only the backstop for writes that bypass the app, like a manual database fix.',
+      },
+    ],
+  };
+}
+
+/**
+ * The checkout-api project's OWN archived session. It used to reuse the
+ * storefront cache story verbatim, which put an identical task on both Done
+ * columns - and a storefront story on the API board - exactly the kind of
+ * copy-paste tell a reviewer poking both projects would notice.
+ */
+const MOCK_CHECKOUT_ARCHIVED_SESSION: MockStaticSessionSpec = {
+  sessionId: `${MOCK_PROJECT_2.id}-archived-session-1`,
+  taskId: `${MOCK_PROJECT_2.id}-archived-1`,
+  userText: 'Checkout totals call the tax service once per line item - batch it.',
+  assistantText:
+    'Confirming the fan-out first: a 12-item cart makes 12 sequential tax calls, so the win is one batched request per checkout with the per-item breakdown coming back in the response.',
+  replyText: 'This task is finished - open a new one if the tax batching needs tuning.',
+  scrollback: claudeTuiFrame([
+    '> Batch the tax lookup in checkout',
+    '  totals.',
+    '',
+    TUI_TOOL_BULLET + 'Read(src/totals/tax.ts)',
+    '  ⎿ 72 lines',
+    '',
+    TUI_TOOL_BULLET + 'Update(src/totals/tax.ts)',
+    '  ⎿ 58 insertions, 19 deletions',
+    '',
+    TUI_TOOL_BULLET + 'Bash(npm run bench -- totals)',
+    '  ⎿ p95 84ms -> 31ms',
+    '',
+    TUI_TEXT_BULLET + 'One batched tax call per checkout',
+    '  now, with the per-item breakdown',
+    '  from the response. Shipped.',
+    '',
+    '> What happens if the batch call',
+    '  fails?',
+    '',
+    TUI_TEXT_BULLET + 'One retry, then it falls back to',
+    '  the per-item path so a checkout',
+    '  never blocks on the batch.',
+    '',
+  ], { branchTag: 'perf/tax-lookup-batching', done: 'Brewed for 34m 10s · done 3:34 PM' }),
+  model: MOCK_MODEL_FABLE,
+  usedTokens: 36_000,
+  activityState: 'idle',
+  toolCells: [
+    { name: 'Read', input: { file_path: 'src/totals/tax.ts' }, result: '72 lines' },
+    {
+      name: 'Edit',
+      input: { file_path: 'src/totals/tax.ts' },
+      result: 'The file src/totals/tax.ts has been updated successfully.',
+    },
+    { name: 'Bash', input: { command: 'npm run bench -- totals' }, result: 'p95 84ms -> 31ms over 5 runs' },
+  ],
+  closingText:
+    'Totals make one batched tax call per checkout now, with the per-item breakdown taken from the batch response. Bench p95 dropped from 84ms to 31ms. Shipped.',
+  followUps: [
+    {
+      userText: 'What happens if the batch call fails?',
+      closingText:
+        'One retry, then it falls back to the per-item path, so a checkout never blocks on the batch endpoint. The fallback is covered by its own test.',
+    },
+  ],
+};
+
+export const MOCK_ARCHIVED_STATIC_SESSIONS: MockStaticSessionSpec[] = [
+  archivedStaticSession(MOCK_PROJECT.id),
+  MOCK_CHECKOUT_ARCHIVED_SESSION,
+];
+
+/**
+ * The codex session's Changes lens, and the anchor its transcript's
+ * apply_patch envelopes are BUILT from (codexAddFilePatch below), so the
+ * chat's patch cards and the diff lens cannot drift apart.
+ */
+export const MOCK_CODEX_SESSION_DIFF: MockStaticSessionDiff = {
+  files: [
+    { path: 'src/http/retryPolicy.ts', status: 'A', insertions: 52, deletions: 0, binary: false },
+    { path: 'src/http/client.ts', status: 'M', insertions: 8, deletions: 31, binary: false },
+  ],
+  contents: {
+    'src/http/retryPolicy.ts': {
+      original: '',
+      modified: [
+        'export interface RetryPolicy {',
+        '  attempts: number;',
+        '  baseDelayMs: number;',
+        '  retryOn: (status: number) => boolean;',
+        '}',
+        '',
+        'export const DEFAULT_POLICY: RetryPolicy = {',
+        '  attempts: 3,',
+        '  baseDelayMs: 200,',
+        '  retryOn: (status) => status >= 500 || status === 429,',
+        '};',
+        '',
+        'export async function withRetry<T>(policy: RetryPolicy, run: () => Promise<T>): Promise<T> {',
+        '  let lastError: unknown;',
+        '  for (let attempt = 0; attempt < policy.attempts; attempt += 1) {',
+        '    try {',
+        '      return await run();',
+        '    } catch (error) {',
+        '      lastError = error;',
+        '      await delay(policy.baseDelayMs * 2 ** attempt);',
+        '    }',
+        '  }',
+        '  throw lastError;',
+        '}',
+        '',
+      ].join('\n'),
+      language: 'typescript',
+    },
+    'src/http/client.ts': {
+      original: [
+        'async function request(url: string, init: RequestInit): Promise<Response> {',
+        '  for (let attempt = 0; attempt < 3; attempt += 1) {',
+        '    const response = await fetch(url, init);',
+        '    if (response.ok) return response;',
+        '  }',
+        '  throw new Error("request failed");',
+        '}',
+        '',
+      ].join('\n'),
+      modified: [
+        'import { DEFAULT_POLICY, withRetry } from "./retryPolicy";',
+        '',
+        'async function request(url: string, init: RequestInit): Promise<Response> {',
+        '  return withRetry(DEFAULT_POLICY, () => fetchOrThrow(url, init));',
+        '}',
+        '',
+      ].join('\n'),
+      language: 'typescript',
+    },
+  },
+};
+
+/** Codex's apply_patch envelope for a NEW file, built from the same contents the Changes lens serves. */
+function codexAddFilePatch(path: string, content: string): string {
+  const body = content
+    .replace(/\n$/, '')
+    .split('\n')
+    .map((line) => `+${line}`)
+    .join('\n');
+  return `*** Begin Patch\n*** Add File: ${path}\n${body}\n*** End Patch`;
+}
+
+/** Codex's apply_patch envelope rewriting an existing file, from the same before/after the Changes lens serves. */
+function codexUpdateFilePatch(path: string, original: string, modified: string): string {
+  const removed = original
+    .replace(/\n$/, '')
+    .split('\n')
+    .map((line) => `-${line}`)
+    .join('\n');
+  const added = modified
+    .replace(/\n$/, '')
+    .split('\n')
+    .map((line) => `+${line}`)
+    .join('\n');
+  return `*** Begin Patch\n*** Update File: ${path}\n@@\n${removed}\n${added}\n*** End Patch`;
+}
+
+/**
+ * The codex session's structured transcript. Steady-state Codex parses a
+ * transcript like every other adapter, so this session demonstrates the other
+ * chat flavor: Codex-native function calls (`shell` argv arrays,
+ * `update_plan`, `apply_patch` envelopes) exactly as the desktop's rollout
+ * parser passes them through, stamped 'Codex CLI' the way transcript-service
+ * stamps every assistant entry with the adapter displayName. No thinking
+ * blocks on purpose - real rollouts carry encrypted reasoning with empty
+ * summaries, so a parsed Codex transcript almost never shows one.
+ *
+ * The final turn is a user message ALONE: that is the turn the terminal's
+ * working spinner (codexTuiFrame) is streaming right now, so the chat lens
+ * ends the way a genuinely in-flight session does - last prompt, then the
+ * live tail.
+ */
+export const MOCK_CODEX_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: MOCK_CODEX_SESSION_ID,
+  taskId: MOCK_CODEX_TASK_ID,
+  userText: 'Extract the retry policy out of the HTTP client - three call sites have drifted apart on backoff.',
+  assistantText: 'Mapping the drift first: I want all three retry loops side by side before choosing the policy shape.',
+  replyText: 'Adding that to the http sweep in this pass.',
+  toolCells: [
+    {
+      name: 'update_plan',
+      input: {
+        plan: [
+          { step: 'Map the three retry loops in src/http', status: 'in_progress' },
+          { step: 'Add retryPolicy.ts with one shared backoff', status: 'pending' },
+          { step: 'Point request() at withRetry', status: 'pending' },
+          { step: 'Run the http suite', status: 'pending' },
+        ],
+      },
+      result: 'Plan updated',
+    },
+    {
+      name: 'shell',
+      input: { command: ['bash', '-lc', 'rg -n "attempt" src/http'], workdir: '/work/storefront-web' },
+      result:
+        'src/http/client.ts:14:  for (let attempt = 0; attempt < 3; attempt += 1) {\nsrc/http/uploads.ts:52:  let attempt = 0; // linear 500ms backoff\nsrc/http/webhooks.ts:31:  let tries = 0; // caps at 5, no backoff',
+    },
+    {
+      name: 'shell',
+      input: { command: ['bash', '-lc', 'sed -n "1,20p" src/http/client.ts'], workdir: '/work/storefront-web' },
+      result: MOCK_CODEX_SESSION_DIFF.contents['src/http/client.ts'].original,
+    },
+    {
+      name: 'apply_patch',
+      input: {
+        input: codexAddFilePatch('src/http/retryPolicy.ts', MOCK_CODEX_SESSION_DIFF.contents['src/http/retryPolicy.ts'].modified),
+      },
+      result: 'Success. Updated the following files:\nA src/http/retryPolicy.ts',
+    },
+    {
+      name: 'apply_patch',
+      input: {
+        input: codexUpdateFilePatch(
+          'src/http/client.ts',
+          MOCK_CODEX_SESSION_DIFF.contents['src/http/client.ts'].original,
+          MOCK_CODEX_SESSION_DIFF.contents['src/http/client.ts'].modified,
+        ),
+      },
+      result: 'Success. Updated the following files:\nM src/http/client.ts',
+    },
+    {
+      name: 'shell',
+      input: { command: ['bash', '-lc', 'npx vitest run http'], workdir: '/work/storefront-web' },
+      result: ' Test Files  3 passed (3)\n      Tests  12 passed (12)\n   Duration  1.94s',
+    },
+  ],
+  closingText:
+    'The policy object is extracted: DEFAULT_POLICY retries three times with 200ms exponential backoff on 5xx and 429, and request() now delegates to withRetry. All 12 http tests pass.',
+  followUps: [
+    {
+      userText: 'Do the upload and webhook paths use the shared policy now too?',
+      toolCells: [
+        {
+          name: 'shell',
+          input: { command: ['bash', '-lc', 'rg -n "withRetry" src/http'], workdir: '/work/storefront-web' },
+          result:
+            'src/http/client.ts:4:  return withRetry(DEFAULT_POLICY, () => fetchOrThrow(url, init));\nsrc/http/uploads.ts:57:  return withRetry(UPLOAD_POLICY, () => putChunk(chunk));\nsrc/http/webhooks.ts:33:  return withRetry(DEFAULT_POLICY, () => deliver(event));',
+        },
+      ],
+      closingText:
+        'Yes - uploads keep their own UPLOAD_POLICY (five attempts, linear 500ms, sized for large bodies) and webhooks share DEFAULT_POLICY. The hand-rolled loops are gone.',
+    },
+    {
+      // The in-flight turn: a prompt with no reply yet, because the reply is
+      // what the terminal's spinner is producing as the reviewer watches.
+      userText: 'Sweep the rest of src/http for leftover hand-rolled backoff and tidy what you find.',
+    },
+  ],
+  // The terminal never serves this string (the read-stream handler serves the
+  // live codexTuiFrame), but if that special case were ever removed the lens
+  // would still show the same TUI rather than going blank.
+  scrollback: codexTuiFrame(0),
+  model: MOCK_MODEL_CODEX,
+  usedTokens: 15_000,
+  activityState: 'thinking',
+  diff: MOCK_CODEX_SESSION_DIFF,
+};
+
+/**
+ * The idempotency middleware, referenced by BOTH the opencode session's write
+ * tool card and its Changes lens - one constant, same anti-drift reasoning as
+ * SELF_HOST_GUIDE_DOC.
+ */
+const IDEMPOTENCY_MODULE = [
+  'import type { RequestHandler } from "express";',
+  '',
+  'import { findByKey, reserveKey } from "../db/idempotency";',
+  '',
+  '// A retried charge replays the stored result instead of charging again.',
+  'export function idempotent(): RequestHandler {',
+  '  return async (request, response, next) => {',
+  '    const key = request.header("Idempotency-Key");',
+  '    if (!key) return next();',
+  '    const existing = await findByKey(key);',
+  '    if (existing) return response.status(existing.status).json(existing.body);',
+  '    await reserveKey(key);',
+  '    next();',
+  '  };',
+  '}',
+  '',
+].join('\n');
+
+/**
+ * A deep OpenCode session on the second project. Agent variety is now
+ * legitimate to demonstrate (every adapter parses a transcript), and OpenCode
+ * is the flavor whose tool names are lowercase (`read`, `edit`, `write`,
+ * `bash`) - a different ToolCallCard rendering path than Claude's capitalized
+ * names or Codex's function envelopes.
+ */
+export const MOCK_OPENCODE_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: 'mock-session-opencode',
+  taskId: 'mock-task-opencode',
+  agentName: 'OpenCode',
+  userText: 'Make the charge endpoint idempotent - clients that retry on timeout are double charging.',
+  replyText: 'Noted - I will fold that into the idempotency pass before it ships.',
+  thinkingText:
+    'A retried POST /charges is the same request twice, so the fix is a reservation keyed on the Idempotency-Key header: first request reserves the key and charges, the retry finds the reservation and replays the stored result. The insert has to be race-safe, which means a unique index, not a read-then-write.',
+  assistantText:
+    'Reproducing first: firing the same charge twice with one Idempotency-Key should return one charge, and today it inserts two rows.',
+  toolCells: [
+    { name: 'read', input: { filePath: 'src/routes/charges.ts' }, result: '88 lines' },
+    {
+      name: 'bash',
+      input: { command: 'rg -n "INSERT INTO charges" src', description: 'Find the charge insert' },
+      result: 'src/db/charges.ts:41:    INSERT INTO charges (id, cart_id, amount_cents)',
+    },
+    {
+      name: 'write',
+      input: { filePath: 'src/middleware/idempotency.ts', content: IDEMPOTENCY_MODULE },
+      result: 'Created src/middleware/idempotency.ts',
+    },
+    {
+      name: 'edit',
+      input: {
+        filePath: 'src/routes/charges.ts',
+        oldString: 'router.post("/charges", createCharge);',
+        newString: 'router.post("/charges", idempotent(), createCharge);',
+      },
+      result: 'Edited src/routes/charges.ts',
+    },
+    {
+      name: 'bash',
+      input: { command: 'npm test -- charges', description: 'Run the charge suite' },
+      result: '14 passed, 0 failed',
+    },
+  ],
+  closingText:
+    'Charges are idempotent: a repeated Idempotency-Key replays the stored result instead of inserting a second charge. The suite covers the replay and the fresh-key path.',
+  followUps: [
+    {
+      userText: 'What happens when two requests race on the same key?',
+      toolCells: [
+        {
+          name: 'bash',
+          input: { command: 'npm test -- idempotency.race', description: 'Race two charges on one key' },
+          result: '2 passed, 0 failed',
+        },
+      ],
+      closingText:
+        'The reservation insert is guarded by the unique index on the key, so the loser of the race gets a conflict and replays the winner once it lands. The race test pins both orderings.',
+    },
+    {
+      // The in-flight ask the working spinner is answering right now.
+      userText: 'Write the race behavior into the payments runbook.',
+    },
+  ],
+  scrollback: [
+    'opencode 1.4 · checkout-api',
+    '',
+    '> Make the charge endpoint idempotent',
+    '  - retrying clients double charge.',
+    '',
+    TUI_TOOL_BULLET + 'read src/routes/charges.ts',
+    '  88 lines',
+    '',
+    TUI_TOOL_BULLET + 'bash rg -n "INSERT INTO charges"',
+    '  src/db/charges.ts:41',
+    '',
+    TUI_TEXT_BULLET + 'Reproduced: two identical charges',
+    '  insert two rows. Reserving the',
+    '  idempotency key before the insert.',
+    '',
+    TUI_TOOL_BULLET + 'write src/middleware/idempotency.ts',
+    '  17 lines',
+    '',
+    TUI_TOOL_BULLET + 'edit src/routes/charges.ts',
+    '  +2 -1',
+    '',
+    TUI_TOOL_BULLET + 'bash npm test -- charges',
+    '  14 passed, 0 failed',
+    '',
+    '> What happens when two requests race',
+    '  on the same key?',
+    '',
+    TUI_TOOL_BULLET + 'bash npm test -- idempotency.race',
+    '  2 passed, 0 failed',
+    '',
+    TUI_TEXT_BULLET + 'The unique index on key settles',
+    '  the race: the loser replays the',
+    '  winner once it lands.',
+    '',
+    '> Write the race behavior into the',
+    '  payments runbook.',
+    '',
+    TUI_GRAY + '∴ working' + TUI_RESET,
+    '',
+    TUI_DARK + '╭' + '─'.repeat(activeGrid().cols - 2) + '╮' + TUI_RESET,
+    TUI_DARK + '│' + TUI_RESET + ' >'.padEnd(activeGrid().cols - 2, ' ') + TUI_DARK + '│' + TUI_RESET,
+    TUI_DARK + '╰' + '─'.repeat(activeGrid().cols - 2) + '╯' + TUI_RESET,
+    TUI_GRAY + '  opencode 1.4 · sonnet-5 · 47k tokens' + TUI_RESET,
+  ].join('\r\n'),
+  model: MOCK_MODEL_SONNET,
+  usedTokens: 47_000,
+  activityState: 'thinking',
+  diff: {
+    files: [
+      { path: 'src/middleware/idempotency.ts', status: 'A', insertions: 17, deletions: 0, binary: false },
+      { path: 'src/routes/charges.ts', status: 'M', insertions: 2, deletions: 1, binary: false },
+    ],
+    contents: {
+      'src/middleware/idempotency.ts': { original: '', modified: IDEMPOTENCY_MODULE, language: 'typescript' },
+      'src/routes/charges.ts': {
+        original: [
+          'import { createCharge } from "../billing/createCharge";',
+          '',
+          'router.post("/charges", createCharge);',
+          '',
+        ].join('\n'),
+        modified: [
+          'import { createCharge } from "../billing/createCharge";',
+          'import { idempotent } from "../middleware/idempotency";',
+          '',
+          'router.post("/charges", idempotent(), createCharge);',
+          '',
+        ].join('\n'),
+        language: 'typescript',
+      },
+    },
+  },
+};
+
+/**
+ * The gemini session's structured transcript: reminder-email dedupe on the
+ * storefront. Tool shapes are Gemini-native, exactly as the desktop's parser
+ * passes them through from the CLI's message log: snake_case function names
+ * (`read_file`, `search_file_content`, `replace`, `run_shell_command`) with
+ * their real argument keys, and a thinking block in the parser's
+ * `subject: description` shape (Gemini thoughts carry both). The final turn
+ * is the in-flight regression-test ask the TUI's spinner is working on.
+ */
+export const MOCK_GEMINI_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: MOCK_GEMINI_SESSION_ID,
+  taskId: MOCK_GEMINI_TASK_ID,
+  agentName: 'Gemini CLI',
+  userText: 'Dedupe the abandoned-cart reminder emails - some customers get three copies in one evening.',
+  thinkingText:
+    'Reminder fan-out: each open cart enqueues its own reminder job, so a customer with three carts gets three emails. The enqueue side is behaving as designed, which means the fix belongs at send time - one send per customer per evening, listing every open cart.',
+  assistantText:
+    'Mapping where reminder jobs are enqueued before touching the scheduler. If every cart enqueues its own job, the dedupe belongs at send time, not enqueue time.',
+  replyText: 'Folding that into the reminder dedupe before it ships.',
+  toolCells: [
+    {
+      name: 'read_file',
+      input: { absolute_path: '/work/storefront-web/src/email/reminders.ts' },
+      result: '164 lines. sendReminders() drains the queue and sends one email per job with no grouping.',
+    },
+    {
+      name: 'search_file_content',
+      input: { pattern: 'enqueueReminder', path: 'src' },
+      result: 'src/cart/abandon.ts:71:  enqueueReminder(cart.id);\nsrc/checkout/timeout.ts:39:  enqueueReminder(cart.id);',
+    },
+    {
+      name: 'replace',
+      input: {
+        file_path: 'src/email/reminders.ts',
+        // The same hunk the Changes lens shows for this file, so the chat's
+        // tool card and the diff describe one edit.
+        old_string: '  for (const job of jobs) {\n    await sendCartReminder(job.cartId);\n  }',
+        new_string:
+          '  // One email per customer per evening, however many carts are open:\n  // each open cart enqueues its own job, so group before sending.\n  const byCustomer = new Map<string, ReminderJob[]>();\n  for (const job of jobs) {\n    const group = byCustomer.get(job.customerId) ?? [];\n    group.push(job);\n    byCustomer.set(job.customerId, group);\n  }\n  for (const [customerId, group] of byCustomer) {\n    await sendCartReminder(customerId, group.map((job) => job.cartId));\n  }',
+      },
+      result: 'Successfully modified file: /work/storefront-web/src/email/reminders.ts (1 replacements).',
+    },
+    {
+      name: 'run_shell_command',
+      input: { command: 'npx vitest run email', description: 'Run the email suite' },
+      result: ' Test Files  2 passed (2)\n      Tests  11 passed (11)\n   Duration  1.12s',
+    },
+  ],
+  closingText:
+    'Sends are grouped per customer per evening now: the drain collects every job for a customer and sends one email listing all of their open carts. The email suite passes.',
+  followUps: [
+    {
+      userText: 'How many customers were actually getting duplicates?',
+      toolCells: [
+        {
+          name: 'run_shell_command',
+          input: { command: 'node scripts/reminderStats.mjs --since 7d', description: 'Count duplicate reminder sends' },
+          result: 'last 7 days: 18,204 reminders · 412 customers received 2+ in one evening (2.3%)',
+        },
+      ],
+      closingText:
+        'About 2.3% of reminded customers - 412 in the last week - got two or more in one evening, every one of them with multiple open carts. The grouping removes all of those.',
+    },
+    {
+      // The in-flight turn the TUI's spinner is answering.
+      userText: 'Add a regression test that a customer with two carts gets exactly one email.',
+    },
+  ],
+  // The terminal serves the live geminiTuiFrame; this keeps the lens whole if
+  // that special case were ever removed, same reasoning as the codex spec.
+  scrollback: geminiTuiFrame(0),
+  model: MOCK_MODEL_GEMINI,
+  usedTokens: 21_000,
+  activityState: 'thinking',
+  diff: {
+    files: [{ path: 'src/email/reminders.ts', status: 'M', insertions: 11, deletions: 3, binary: false }],
+    contents: {
+      'src/email/reminders.ts': {
+        original: [
+          'export async function sendReminders(): Promise<void> {',
+          '  const jobs = await reminderQueue.drain();',
+          '  for (const job of jobs) {',
+          '    await sendCartReminder(job.cartId);',
+          '  }',
+          '}',
+          '',
+        ].join('\n'),
+        modified: [
+          'export async function sendReminders(): Promise<void> {',
+          '  const jobs = await reminderQueue.drain();',
+          '  // One email per customer per evening, however many carts are open:',
+          '  // each open cart enqueues its own job, so group before sending.',
+          '  const byCustomer = new Map<string, ReminderJob[]>();',
+          '  for (const job of jobs) {',
+          '    const group = byCustomer.get(job.customerId) ?? [];',
+          '    group.push(job);',
+          '    byCustomer.set(job.customerId, group);',
+          '  }',
+          '  for (const [customerId, group] of byCustomer) {',
+          '    await sendCartReminder(customerId, group.map((job) => job.cartId));',
+          '  }',
+          '}',
+          '',
+        ].join('\n'),
+        language: 'typescript',
+      },
+    },
+  },
+};
+
+/** Every session that answers from static content: the extras, codex, opencode, gemini, idle, paused, and the archived pair. */
+export const MOCK_STATIC_SESSIONS: MockStaticSessionSpec[] = [
+  ...MOCK_EXTRA_THINKING_SESSIONS,
+  MOCK_CODEX_STATIC_SESSION,
+  MOCK_OPENCODE_STATIC_SESSION,
+  MOCK_GEMINI_STATIC_SESSION,
+  MOCK_IDLE_STATIC_SESSION,
+  MOCK_PAUSED_STATIC_SESSION,
+  ...MOCK_ARCHIVED_STATIC_SESSIONS,
+];
+
+/**
+ * The desktop stamps every assistant entry with the adapter's displayName
+ * (transcript-service attaches `agentName: adapter.displayName` at serve
+ * time), so these are the real strings: 'Codex CLI', never a bare 'Codex'.
+ */
+function staticSessionAgentName(spec: MockStaticSessionSpec): string {
+  if (spec.agentName) return spec.agentName;
+  return spec.model === MOCK_MODEL_CODEX ? 'Codex CLI' : 'Claude Code';
+}
+
+function staticSessionSnapshot(spec: MockStaticSessionSpec, wantsTerminal: boolean): ReadStreamResponsePayload {
+  return {
+    scrollback: wantsTerminal ? spec.scrollback : '',
+    activity:
+      spec.activityState === 'idle' ? { state: 'idle', reason: { kind: 'idle' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
     usage: mockUsage(spec.usedTokens, spec.model),
     awaitedPromptId: null,
     ptyDimensions: activeGrid(),
   };
 }
 
-function extraThinkingTranscript(spec: MockExtraThinkingSessionSpec): TranscriptEntryWire[] {
-  return [
-    { kind: 'user', uuid: `${spec.sessionId}-user-1`, ts: Date.now() - 600_000, text: spec.userText },
+interface MockStaticSessionState {
+  spec: MockStaticSessionSpec;
+  transcript: TranscriptEntryWire[];
+  revision: number;
+}
+
+/** The seed a static session's MUTABLE transcript starts from; sent messages append after it. */
+function staticSessionSeedTranscript(spec: MockStaticSessionSpec): TranscriptEntryWire[] {
+  const agentName = staticSessionAgentName(spec);
+  const model = spec.model.displayName;
+  // The spec's top-level fields ARE the first turn; followUps continue it.
+  const turns: MockStaticSessionTurn[] = [
     {
-      kind: 'assistant',
-      uuid: `${spec.sessionId}-assistant-1`,
-      ts: Date.now() - 540_000,
-      agentName: spec.model === MOCK_MODEL_CODEX ? 'Codex' : 'Claude Code',
-      model: spec.model.displayName,
-      blocks: [{ type: 'text', text: spec.assistantText }],
+      userText: spec.userText,
+      thinkingText: spec.thinkingText,
+      assistantText: spec.assistantText,
+      toolCells: spec.toolCells,
+      closingText: spec.closingText,
     },
+    ...(spec.followUps ?? []),
   ];
+  const stepsFor = (turn: MockStaticSessionTurn): number =>
+    1 +
+    (turn.assistantText || turn.thinkingText ? 1 : 0) +
+    (turn.toolCells?.length ?? 0) * 2 +
+    (turn.closingText ? 1 : 0);
+  // Oldest first, ~30s apart, ending in the recent past - the cadence of a
+  // session that worked and settled, not a burst stamped at load time.
+  const cells: TranscriptEntryWire[] = [];
+  const stepMs = 30_000;
+  const totalSteps = turns.reduce((sum, turn) => sum + stepsFor(turn), 0);
+  let step = 0;
+  const nextTs = (): number => Date.now() - (totalSteps - step++) * stepMs - 120_000;
+  turns.forEach((turn, turnIndex) => {
+    const turnNumber = turnIndex + 1;
+    cells.push({ kind: 'user', uuid: `${spec.sessionId}-user-${turnNumber}`, ts: nextTs(), text: turn.userText });
+    if (turn.assistantText || turn.thinkingText) {
+      cells.push({
+        kind: 'assistant',
+        uuid: `${spec.sessionId}-assistant-${turnNumber}`,
+        ts: nextTs(),
+        agentName,
+        model,
+        blocks: [
+          ...(turn.thinkingText ? [{ type: 'thinking' as const, text: turn.thinkingText }] : []),
+          ...(turn.assistantText ? [{ type: 'text' as const, text: turn.assistantText }] : []),
+        ],
+      });
+    }
+    (turn.toolCells ?? []).forEach((toolCell, index) => {
+      const toolUseId = `${spec.sessionId}-tooluse-${turnNumber}-${index + 1}`;
+      cells.push({
+        kind: 'assistant',
+        uuid: `${spec.sessionId}-tool-${turnNumber}-${index + 1}`,
+        ts: nextTs(),
+        agentName,
+        model,
+        blocks: [{ type: 'tool_use', id: toolUseId, name: toolCell.name, input: toolCell.input }],
+      });
+      cells.push({
+        kind: 'tool_result',
+        uuid: `${spec.sessionId}-result-${turnNumber}-${index + 1}`,
+        ts: nextTs(),
+        toolUseId,
+        ...(toolCell.isError ? { isError: true } : {}),
+        content: toolCell.result,
+      });
+    });
+    if (turn.closingText) {
+      cells.push({
+        kind: 'assistant',
+        uuid: `${spec.sessionId}-closing-${turnNumber}`,
+        ts: nextTs(),
+        agentName,
+        model,
+        blocks: [{ type: 'text', text: turn.closingText }],
+      });
+    }
+  });
+  return cells;
+}
+
+/** The seed builder, for tests that need a session's pre-mutation length or shape. */
+export function staticSessionSeedTranscriptForTest(spec: MockStaticSessionSpec): TranscriptEntryWire[] {
+  return staticSessionSeedTranscript(spec);
 }
 
 /**
@@ -394,8 +1838,9 @@ export function initialTasks(): BoardTaskWire[] {
     boardTaskFixture({
       id: MOCK_CODEX_TASK_ID,
       display_id: 3,
-      // Agent 'codex' and no structured transcript: this is the card that
-      // exercises the chat reading-view fallback.
+      // Agent 'codex' with a structured transcript AND a live fullscreen TUI:
+      // the second agent flavor a reviewer meets, one card over from the
+      // streaming Claude session.
       title: 'Extract the retry policy out of the HTTP client',
       description: 'Backoff and retry are tangled into the request path. Pull them into a policy object that can be tested on its own.',
       swimlane_id: 'lane-executing',
@@ -439,6 +1884,47 @@ export function initialTasks(): BoardTaskWire[] {
       created_at: nowIso,
       updated_at: nowIso,
     }),
+    boardTaskFixture({
+      id: MOCK_GEMINI_TASK_ID,
+      display_id: 10,
+      // The Gemini CLI session - the third agent flavor with a structured
+      // transcript, see MOCK_GEMINI_STATIC_SESSION.
+      title: 'Dedupe the abandoned-cart reminder emails',
+      description: 'A customer with two open carts gets a reminder for each. Collapse the sends to one per customer per evening.',
+      swimlane_id: 'lane-executing',
+      position: 3,
+      agent: 'gemini',
+      session_id: MOCK_GEMINI_SESSION_ID,
+      branch_name: 'fix/reminder-dedupe',
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    boardTaskFixture({
+      id: 'mock-task-planning-1',
+      display_id: 11,
+      // A quiet Planning card: the board reads staged, not empty, without
+      // implying an agent is running there.
+      title: 'Plan the multi-currency pricing rollout',
+      description: 'Sketch how prices, carts and invoices carry currency, and where conversion happens.',
+      swimlane_id: 'lane-planning',
+      labels: ['pricing'],
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    boardTaskFixture({
+      id: 'mock-task-merge-1',
+      display_id: 12,
+      // A session-less card waiting in Merge, PR open: fills the one column
+      // that otherwise sat empty on the board a reviewer scrolls.
+      title: 'Keep the newer item set when carts merge on sign-in',
+      description: 'Signing in with a saved cart currently discards whichever cart is older, even when it was edited seconds ago.',
+      swimlane_id: 'lane-merge',
+      branch_name: 'fix/cart-merge-priority',
+      pr_number: 63,
+      pr_state: 'open',
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
     // Volume for the Thinking section - see MOCK_EXTRA_THINKING_SESSIONS.
     ...MOCK_EXTRA_THINKING_SESSIONS.map((spec) =>
       boardTaskFixture({
@@ -466,9 +1952,10 @@ export function initialTasks(): BoardTaskWire[] {
 function codexTuiFrame(paintTick: number): string {
   const spinnerGlyphs = ['|', '/', '-', '\\'];
   const spinner = spinnerGlyphs[paintTick % spinnerGlyphs.length];
-  // Names the file this session's task actually claims to be changing: the
+  // Names the work the transcript's in-flight turn asked for (the backoff
+  // sweep), so the spinner and the chat lens describe the same moment. The
   // bar is the frame's last readable line, so it becomes the card snippet.
-  const statusLine = paintTick % 2 === 0 ? 'Refactoring src/http/retryPolicy.ts' : 'Running the affected tests';
+  const statusLine = paintTick % 2 === 0 ? 'Scanning src/http for backoff loops' : 'Tidying src/http/uploads.ts';
   const upTokens = (8.2 + paintTick * 0.1).toFixed(1);
   // Every row is padded to the SAME width as the reported grid. The previous
   // frame hardcoded a 38-glyph border while its two status strings were 35 and
@@ -477,15 +1964,54 @@ function codexTuiFrame(paintTick: number): string {
   // streaming session's fixture.
   const width = activeGrid().cols;
   const inner = width - 2;
-  const boxed = (text: string): string => `│${text.slice(0, inner).padEnd(inner, ' ')}│`;
+  // Chrome carries the same dark-border/gray-text palette the recorded
+  // Claude frame uses; text is sliced to width BEFORE coloring so the
+  // escape bytes never count against the column budget.
+  const boxed = (text: string): string =>
+    TUI_DARK + '│' + TUI_RESET + text.slice(0, inner).padEnd(inner, ' ') + TUI_DARK + '│' + TUI_RESET;
+  // The session's work so far, above the working spinner the way the real
+  // Codex CLI keeps its transcript. Static across paints (only the spinner,
+  // status and token lines move). Tells the same story as this session's
+  // structured transcript (MOCK_CODEX_STATIC_SESSION) and its Changes lens
+  // (MOCK_CODEX_SESSION_DIFF), one swipe away in either direction - the TUI
+  // just shows less of the history than the chat, exactly like a real
+  // fullscreen terminal window.
+  const historyRows = [
+    '› Extract the retry policy out of the',
+    '  HTTP client - three call sites have',
+    '  drifted apart.',
+    '',
+    '• Read src/http/client.ts',
+    '  3 retry loops, no shared backoff',
+    '',
+    '• Added src/http/retryPolicy.ts',
+    '  DEFAULT_POLICY: 3 attempts, 200ms',
+    '  exponential backoff, retry on 5xx',
+    '  and 429',
+    '',
+    '• Edited src/http/client.ts',
+    '  request() now delegates to',
+    '  withRetry(DEFAULT_POLICY, ...)',
+    '',
+    '$ npx vitest run http',
+    '  12 passed (12)',
+    '',
+    '› Sweep the rest of src/http for',
+    '  leftover hand-rolled backoff.',
+    '',
+  ]
+    .map((row) => row.slice(0, width))
+    .join('\r\n');
   return (
     '\x1b[H\x1b[2J' +
-    `${spinner} Working (${paintTick}s · esc to interrupt)`.slice(0, width) +
+    historyRows +
     '\r\n' +
-    `╭${'─'.repeat(inner)}╮\r\n` +
+    TUI_GRAY + `${spinner} Working (${paintTick}s · esc to interrupt)`.slice(0, width) + TUI_RESET +
+    '\r\n' +
+    TUI_DARK + `╭${'─'.repeat(inner)}╮` + TUI_RESET + '\r\n' +
     `${boxed(` ${statusLine}`)}\r\n` +
-    `╰${'─'.repeat(inner)}╯\r\n` +
-    `Codex CLI · GPT-5 Codex · ↑${upTokens}k ↓${420 + paintTick}`.slice(0, width) +
+    TUI_DARK + `╰${'─'.repeat(inner)}╯` + TUI_RESET + '\r\n' +
+    TUI_GRAY + `Codex CLI · GPT-5 Codex · ↑${upTokens}k ↓${420 + paintTick}`.slice(0, width) + TUI_RESET +
     '\r\n'
   );
 }
@@ -493,6 +2019,63 @@ function codexTuiFrame(paintTick: number): string {
 /** The frame above, for the fixture-coverage tests. */
 export function codexTuiFrameForTest(paintTick: number): string {
   return codexTuiFrame(paintTick);
+}
+
+/**
+ * The gemini session's fullscreen TUI frame: the session's work so far above
+ * a working spinner, the way the real Gemini CLI keeps its transcript on
+ * screen (✦ response bullets, ✔ completed tool cards by their display names,
+ * the model/context status bar). Static across paints except the spinner,
+ * the alternating status line, and the elapsed seconds. Tells the same story
+ * as MOCK_GEMINI_STATIC_SESSION's transcript, whose final turn is the
+ * regression-test ask this spinner is working on.
+ */
+function geminiTuiFrame(paintTick: number): string {
+  const spinnerGlyphs = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
+  const spinner = spinnerGlyphs[paintTick % spinnerGlyphs.length];
+  const seconds = 14 + paintTick * 2;
+  const statusLine = paintTick % 2 === 0 ? 'Writing the two-cart regression test' : 'Running the email suite';
+  const width = activeGrid().cols;
+  const rows = [
+    'Gemini CLI',
+    '',
+    '> Dedupe the abandoned-cart reminder',
+    '  emails - some customers get three',
+    '  copies in one evening.',
+    '',
+    '✦ Mapping where reminder jobs are',
+    '  enqueued before touching the',
+    '  scheduler.',
+    '',
+    '✔ ReadFile src/email/reminders.ts',
+    '✔ SearchText enqueueReminder in src',
+    '✔ Edit src/email/reminders.ts',
+    '✔ Shell npx vitest run email',
+    '  11 passed',
+    '',
+    '✦ Sends are grouped per customer per',
+    '  evening now - one email lists every',
+    '  open cart.',
+    '',
+    '> Add a regression test that a',
+    '  customer with two carts gets',
+    '  exactly one email.',
+    '',
+    TUI_GRAY + `${spinner} ${statusLine}`.slice(0, width) + TUI_RESET,
+    TUI_GRAY + `  (esc to cancel, ${seconds}s)` + TUI_RESET,
+    '',
+    TUI_GRAY + 'gemini-3-pro · 96% context left' + TUI_RESET,
+  ]
+    // Colored rows are already width-sliced above; slicing an escape-bearing
+    // row here would count SGR bytes against the column budget.
+    .map((row) => (row.includes(ESC) ? row : row.slice(0, width)))
+    .join('\r\n');
+  return '\x1b[H\x1b[2J' + rows + '\r\n';
+}
+
+/** The frame above, for the fixture-coverage tests. */
+export function geminiTuiFrameForTest(paintTick: number): string {
+  return geminiTuiFrame(paintTick);
 }
 
 // Mirrors the real Kangentic default board so mock mode exercises the
@@ -532,6 +2115,21 @@ export function initialTasks2(): BoardTaskWire[] {
       swimlane_id: 'lane2-progress',
       session_id: MOCK_IDLE_SESSION_ID,
       branch_name: 'perf/load-test',
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    boardTaskFixture({
+      id: MOCK_OPENCODE_STATIC_SESSION.taskId,
+      display_id: 3,
+      // The deep OpenCode session - see MOCK_OPENCODE_STATIC_SESSION.
+      title: 'Make the charge endpoint idempotent',
+      description: 'Clients that retry a timed-out charge double bill. Reserve an idempotency key before the insert and replay the stored result.',
+      swimlane_id: 'lane2-progress',
+      position: 1,
+      agent: 'opencode',
+      session_id: MOCK_OPENCODE_STATIC_SESSION.sessionId,
+      branch_name: 'feature/idempotency-keys',
+      labels: ['payments'],
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -1020,10 +2618,83 @@ export function diffFileContent(filePath: string): DiffFileContentWire {
   return { original: '', modified: '', language: 'typescript' };
 }
 
-export function createMockDesktop(): MockDesktop {
+export interface CreateMockDesktopOptions {
+  /**
+   * The phone identity and desktop static key this peer should run under.
+   *
+   * Omitted (the dev rig's mock mode), both are generated per connection and
+   * the synthesized anchor simply reports whatever was generated. The demo
+   * pairing supplies both, because its anchor is PERSISTED: the session
+   * handshake uses the anchor's desktop key as `remoteStatic`, so a peer that
+   * generated a fresh key would never authenticate against the key the
+   * ceremony pinned. Passing the real device identity also keeps the Devices
+   * screen's "This phone" fingerprint agreeing with the session actually
+   * running.
+   */
+  identity?: X25519KeyPair;
+  desktopStatic?: X25519KeyPair;
+}
+
+/**
+ * The Done column's rows for a project.
+ *
+ * At module scope rather than inside the factory so the fixture-vocabulary
+ * guard can reach it. That is not a testability nicety: these two titles render
+ * on the Done column, which is one navigation from where a reviewer lands since
+ * the demo pairing shipped, and they previously read "Shipped: the completed
+ * mock task" and "Closed without an agent" precisely because nothing collected
+ * them.
+ */
+export function archivedTasksFor(projectId: string): BoardTaskWire[] {
+  // Distinct rows per project: identical Done columns (and a storefront
+  // story on the API board) read as copy-pasted fixtures to anyone who
+  // opens both, which since the demo pairing shipped includes App Review.
+  if (projectId === MOCK_PROJECT_2.id) {
+    return [
+      boardTaskFixture({
+        id: `${projectId}-archived-1`,
+        display_id: 901,
+        title: 'Batch the tax lookup in checkout totals',
+        swimlane_id: 'lane2-shipped',
+        session_id: `${projectId}-archived-session-1`,
+        archived_at: '2026-07-22T15:45:00.000Z',
+      }),
+      boardTaskFixture({
+        id: `${projectId}-archived-2`,
+        display_id: 902,
+        title: 'Rotate the payment-gateway sandbox keys',
+        swimlane_id: 'lane2-shipped',
+        position: 1,
+        session_id: null,
+        archived_at: '2026-07-18T10:05:00.000Z',
+      }),
+    ];
+  }
+  return [
+    boardTaskFixture({
+      id: `${projectId}-archived-1`,
+      display_id: 901,
+      title: 'Cache the product-grid query on the storefront home',
+      swimlane_id: 'lane-done',
+      session_id: `${projectId}-archived-session-1`,
+      archived_at: '2026-07-20T18:30:00.000Z',
+    }),
+    boardTaskFixture({
+      id: `${projectId}-archived-2`,
+      display_id: 902,
+      title: 'Bump the design tokens package to 4.2',
+      swimlane_id: 'lane-done',
+      position: 1,
+      session_id: null,
+      archived_at: '2026-07-19T09:15:00.000Z',
+    }),
+  ];
+}
+
+export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockDesktop {
   const [phoneTransport, desktopTransport] = createLoopbackPair();
-  const identity = generateX25519KeyPair();
-  const desktopStatic = generateX25519KeyPair();
+  const identity = options.identity ?? generateX25519KeyPair();
+  const desktopStatic = options.desktopStatic ?? generateX25519KeyPair();
   const peer = new StubSessionInitiator(desktopTransport, {
     desktopStatic,
     phoneStaticPublicKey: identity.publicKey,
@@ -1035,6 +2706,22 @@ export function createMockDesktop(): MockDesktop {
   const tasks2 = initialTasks2();
   let transcript = baseTranscript();
   let transcriptRevision = 1;
+  /**
+   * Every static session's LIVE state. The transcripts are mutable so a chat
+   * message SENT into one of these sessions actually lands and draws a reply,
+   * instead of vanishing against a fixed two-entry window - which is exactly
+   * what a reviewer poking a second session would hit. Reset per connection
+   * with the rest of the scenario.
+   */
+  const staticSessionStates = new Map<string, MockStaticSessionState>(
+    MOCK_STATIC_SESSIONS.map((spec) => [spec.sessionId, { spec, transcript: staticSessionSeedTranscript(spec), revision: 1 }]),
+  );
+  /**
+   * Tasks archived DURING this connection (a move into the done-role column),
+   * per project. archivedPage serves these ahead of the fixed fixtures, so an
+   * archived card lands in the Done column instead of vanishing entirely.
+   */
+  const archivedDuringSession = new Map<string, BoardTaskWire[]>();
   /**
    * Whether ANY read-stream subscription is attached. Gates the whole
    * simulated agent: usage growth, transcript entries, the permission prompt.
@@ -1092,6 +2779,7 @@ export function createMockDesktop(): MockDesktop {
   let activeSessionId: string | null = MOCK_SESSION_ID;
   let respawnCounter = 1;
   let codexStreamSubscribed = false;
+  let geminiStreamSubscribed = false;
 
   function emit(event: BridgeEvent): void {
     if (!peer.isEstablished) return;
@@ -1127,6 +2815,28 @@ export function createMockDesktop(): MockDesktop {
         upserts: [{ index: transcript.length - 1, entry }],
       },
     });
+  }
+
+  /** appendTranscriptEntry's static-session sibling: same wire shape, that session's ids and revision. */
+  function appendStaticSessionEntry(state: MockStaticSessionState, entry: TranscriptEntryWire): void {
+    state.transcript.push(entry);
+    state.revision += 1;
+    emit({
+      kind: 'transcript',
+      sessionId: state.spec.sessionId,
+      taskId: state.spec.taskId,
+      payload: {
+        mode: 'delta',
+        revision: state.revision,
+        totalEntries: state.transcript.length,
+        upserts: [{ index: state.transcript.length - 1, entry }],
+      },
+    });
+  }
+
+  function emitStaticSessionActivity(spec: MockStaticSessionSpec, state: 'thinking' | 'idle'): void {
+    const reason = state === 'idle' ? { kind: 'idle' as const } : { kind: 'turn-active' as const };
+    emit({ kind: 'activity', sessionId: spec.sessionId, taskId: spec.taskId, payload: { type: 'activity', state, reason } });
   }
 
   function emitActivity(state: 'thinking' | 'idle' | 'permission'): void {
@@ -1244,7 +2954,10 @@ export function createMockDesktop(): MockDesktop {
         ts: Date.now(),
         agentName: 'Claude Code',
         model: MOCK_MODEL_SONNET.displayName,
-        blocks: [{ type: 'text', text: `Respawned session online (${successorSessionId}).` }],
+        // The successor's id is deliberately NOT rendered: these fixtures reach
+        // published screenshots and, since the demo pairing shipped, an App
+        // Review device, and the internal ids read as scaffolding.
+        blocks: [{ type: 'text', text: 'Session restarted. Picking up where the previous run left off.' }],
       },
     ];
     transcriptRevision = 1;
@@ -1331,14 +3044,23 @@ export function createMockDesktop(): MockDesktop {
     feedTimer = setInterval(() => {
       if (!peer.isEstablished) return;
       feedTick += 1;
-      // The codex session repaints its fullscreen TUI every other tick - the
-      // reading-view fallback's demo source.
+      // The codex and gemini sessions repaint their fullscreen TUIs every
+      // other tick - live terminals for live agents, alongside their
+      // structured transcripts.
       if (codexStreamSubscribed && feedTick % 2 === 0) {
         emit({
           kind: 'terminal',
           sessionId: MOCK_CODEX_SESSION_ID,
           taskId: MOCK_CODEX_TASK_ID,
           payload: { data: codexTuiFrame(feedTick / 2) },
+        });
+      }
+      if (geminiStreamSubscribed && feedTick % 2 === 0) {
+        emit({
+          kind: 'terminal',
+          sessionId: MOCK_GEMINI_SESSION_ID,
+          taskId: MOCK_GEMINI_TASK_ID,
+          payload: { data: geminiTuiFrame(feedTick / 2) },
         });
       }
       if (!streamSubscribed || activeSessionId === null) return;
@@ -1460,27 +3182,9 @@ export function createMockDesktop(): MockDesktop {
    * unreachable completed-task screen.
    */
   function archivedPage(projectId: string, limit: number | undefined, offset: number | undefined): JsonValue {
-    const isSecondProject = projectId === MOCK_PROJECT_2.id;
-    const doneColumnId = isSecondProject ? 'lane2-shipped' : 'lane-done';
-    const archivedTasks = [
-      boardTaskFixture({
-        id: `${projectId}-archived-1`,
-        display_id: 901,
-        title: 'Shipped: the completed mock task',
-        swimlane_id: doneColumnId,
-        session_id: `${projectId}-archived-session-1`,
-        archived_at: '2026-07-20T18:30:00.000Z',
-      }),
-      boardTaskFixture({
-        id: `${projectId}-archived-2`,
-        display_id: 902,
-        title: 'Closed without an agent',
-        swimlane_id: doneColumnId,
-        position: 1,
-        session_id: null,
-        archived_at: '2026-07-19T09:15:00.000Z',
-      }),
-    ];
+    // Tasks the reviewer archived just now page ahead of the fixed fixtures,
+    // newest first - the same order the desktop serves.
+    const archivedTasks = [...(archivedDuringSession.get(projectId) ?? []), ...archivedTasksFor(projectId)];
     const pageOffset = offset ?? 0;
     const pageLimit = limit ?? ARCHIVED_MOCK_PAGE_SIZE;
     return {
@@ -1488,25 +3192,46 @@ export function createMockDesktop(): MockDesktop {
       archivedTasks: archivedTasks.slice(pageOffset, pageOffset + pageLimit),
       archivedTotalCount: archivedTasks.length,
       // Only the session-bearing task carries a summary, so the screen's
-      // no-summary branch stays reachable in mock mode too.
+      // no-summary branch stays reachable in mock mode too. Distinct numbers
+      // per project for the same reason the rows differ: two completed-task
+      // screens reporting identical cost and duration read as fixtures.
       summariesByTaskId: {
-        [`${projectId}-archived-1`]: {
-          sessionId: `${projectId}-archived-session-1`,
-          totalCostUsd: 1.2345,
-          totalInputTokens: 120_000,
-          totalOutputTokens: 8_400,
-          modelDisplayName: 'Sonnet 5',
-          durationMs: 3_720_000,
-          toolCallCount: 42,
-          compactionCount: 1,
-          linesAdded: 210,
-          linesRemoved: 18,
-          filesChanged: 7,
-          taskCreatedAt: '2026-07-19T12:00:00.000Z',
-          startedAt: '2026-07-20T17:00:00.000Z',
-          exitedAt: '2026-07-20T18:02:00.000Z',
-          exitCode: 0,
-        },
+        [`${projectId}-archived-1`]:
+          projectId === MOCK_PROJECT_2.id
+            ? {
+                sessionId: `${projectId}-archived-session-1`,
+                totalCostUsd: 0.8712,
+                totalInputTokens: 84_000,
+                totalOutputTokens: 5_100,
+                modelDisplayName: 'Fable 5',
+                durationMs: 2_040_000,
+                toolCallCount: 23,
+                compactionCount: 0,
+                linesAdded: 96,
+                linesRemoved: 31,
+                filesChanged: 3,
+                taskCreatedAt: '2026-07-21T09:30:00.000Z',
+                startedAt: '2026-07-22T15:00:00.000Z',
+                exitedAt: '2026-07-22T15:34:00.000Z',
+                exitCode: 0,
+              }
+            : {
+                sessionId: `${projectId}-archived-session-1`,
+                totalCostUsd: 1.2345,
+                totalInputTokens: 120_000,
+                totalOutputTokens: 8_400,
+                modelDisplayName: 'Sonnet 5',
+                durationMs: 3_720_000,
+                toolCallCount: 42,
+                compactionCount: 1,
+                linesAdded: 210,
+                linesRemoved: 18,
+                filesChanged: 7,
+                taskCreatedAt: '2026-07-19T12:00:00.000Z',
+                startedAt: '2026-07-20T17:00:00.000Z',
+                exitedAt: '2026-07-20T18:02:00.000Z',
+                exitCode: 0,
+              },
       },
     } as unknown as JsonValue;
   }
@@ -1533,104 +3258,58 @@ export function createMockDesktop(): MockDesktop {
         const payload = parseCapabilityRequestPayload('read-stream', request.payload);
         if (payload.action === 'unsubscribe') {
           if (payload.sessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
-          else if (
-            payload.sessionId !== MOCK_IDLE_SESSION_ID &&
-            payload.sessionId !== MOCK_PAUSED_SESSION_ID &&
-            !MOCK_EXTRA_THINKING_SESSIONS.some((spec) => spec.sessionId === payload.sessionId)
-          ) {
+          else if (payload.sessionId === MOCK_GEMINI_SESSION_ID) geminiStreamSubscribed = false;
+          else if (!staticSessionStates.has(payload.sessionId)) {
             streamSubscribed = false;
             stopTerminalPlayback();
           }
           return ok(request);
         }
-        const extraThinkingSpec = MOCK_EXTRA_THINKING_SESSIONS.find((spec) => spec.sessionId === payload.sessionId);
-        if (extraThinkingSpec) {
+        // Mirrors the desktop: a list-only subscription (`terminal: false`)
+        // attaches no PTY tap and returns an empty scrollback. Omitted means
+        // true, per the protocol. Without this the mock streamed terminal
+        // bytes to every subscriber and no dev run could ever show that a
+        // caller had re-armed PTY streaming by accident.
+        const wantsTerminal = payload.terminal ?? true;
+        // The codex, opencode, gemini, idle, paused, and extra-thinking
+        // sessions, all answered from the one registry: snapshot from the
+        // spec, transcript from LIVE state (so a message sent into any of
+        // them shows up and stays). The codex and gemini TERMINALS are the
+        // registry overrides: their scrollbacks are the live fullscreen
+        // TUIs, repainted by the tick.
+        const staticState = staticSessionStates.get(payload.sessionId);
+        if (staticState) {
           if (payload.action === 'transcript-window') {
-            const entries = extraThinkingTranscript(extraThinkingSpec);
-            return ok(request, { revision: 1, totalEntries: entries.length, startIndex: 0, entries } as unknown as JsonValue);
-          }
-          return ok(request, extraThinkingSnapshot(extraThinkingSpec) as unknown as JsonValue);
-        }
-        if (payload.sessionId === MOCK_PAUSED_SESSION_ID) {
-          // "Paused": the protocol has no paused ActivityStateWire, so this
-          // reports 'idle' (the closest real state) and communicates
-          // "paused" only through the transcript/scrollback text. Static
-          // like the idle session - nothing ever streams from it.
-          if (payload.action === 'transcript-window') {
-            const pausedTranscript: TranscriptEntryWire[] = [
-              { kind: 'user', uuid: 'mock-paused-user-1', ts: Date.now() - 900_000, text: 'Pause here - I want to review the token schema before you continue.' },
-              {
-                kind: 'assistant',
-                uuid: 'mock-paused-assistant-1',
-                ts: Date.now() - 840_000,
-                agentName: 'Claude Code',
-                model: MOCK_MODEL_FABLE.displayName,
-                blocks: [{ type: 'text', text: 'Paused midway through the migration, right before the token-schema change - resume from the terminal when ready.' }],
-              },
-            ];
             return ok(request, {
-              revision: 1,
-              totalEntries: pausedTranscript.length,
+              revision: staticState.revision,
+              totalEntries: staticState.transcript.length,
               startIndex: 0,
-              entries: pausedTranscript,
+              entries: staticState.transcript,
             } as unknown as JsonValue);
           }
-          const pausedSnapshot: ReadStreamResponsePayload = {
-            scrollback: 'vault-token migration worktree\r\n$ claude\r\n> Paused - resume from the terminal when ready.\r\n',
-            activity: { state: 'idle', reason: { kind: 'idle' } },
-            usage: mockUsage(61_000, MOCK_MODEL_FABLE),
-            awaitedPromptId: null,
-            ptyDimensions: activeGrid(),
-          };
-          return ok(request, pausedSnapshot as unknown as JsonValue);
-        }
-        if (payload.sessionId === MOCK_IDLE_SESSION_ID) {
-          // A finished, quiet session: static scrollback, idle activity, a
-          // small settled transcript. Nothing ever streams from it.
-          if (payload.action === 'transcript-window') {
-            const idleTranscript: TranscriptEntryWire[] = [
-              { kind: 'user', uuid: 'mock-idle-user-1', ts: Date.now() - 3_600_000, text: 'Summarize the checkout load-test results.' },
-              {
-                kind: 'assistant',
-                uuid: 'mock-idle-assistant-1',
-                ts: Date.now() - 3_540_000,
-                agentName: 'Claude Code',
-                model: MOCK_MODEL_OPUS.displayName,
-                blocks: [{ type: 'text', text: 'Done. p50 checkout latency held at 0.79ms across 50 concurrent carts; summary written to the task notes.' }],
-              },
-            ];
-            return ok(request, {
-              revision: 1,
-              totalEntries: idleTranscript.length,
-              startIndex: 0,
-              entries: idleTranscript,
-            } as unknown as JsonValue);
+          // Assignment, not `= true`: a list-only re-subscribe (the
+          // subscription manager re-subscribes rather than unsubscribing when
+          // a session screen closes) must also DISARM the repaint, or the 1 Hz
+          // feed keeps encrypting TUI frames for a session nobody is viewing.
+          if (payload.sessionId === MOCK_CODEX_SESSION_ID) {
+            codexStreamSubscribed = wantsTerminal;
+            if (wantsTerminal) startFeed();
+            const codexSnapshot: ReadStreamResponsePayload = {
+              ...staticSessionSnapshot(staticState.spec, wantsTerminal),
+              scrollback: wantsTerminal ? codexTuiFrame(0) : '',
+            };
+            return ok(request, codexSnapshot as unknown as JsonValue);
           }
-          const idleSnapshot: ReadStreamResponsePayload = {
-            scrollback: 'checkout perf worktree\r\n$ claude\r\n> Load-test summary written. Session is idle.\r\n',
-            activity: { state: 'idle', reason: { kind: 'idle' } },
-            usage: mockUsage(28_000, MOCK_MODEL_OPUS),
-            awaitedPromptId: null,
-            ptyDimensions: activeGrid(),
-          };
-          return ok(request, idleSnapshot as unknown as JsonValue);
-        }
-        if (payload.sessionId === MOCK_CODEX_SESSION_ID) {
-          if (payload.action === 'transcript-window') {
-            // No structured transcript: the loaded-but-empty window is what
-            // flips the phone's chat lens to the reading view.
-            return ok(request, { revision: 1, totalEntries: 0, startIndex: 0, entries: [] } as unknown as JsonValue);
+          if (payload.sessionId === MOCK_GEMINI_SESSION_ID) {
+            geminiStreamSubscribed = wantsTerminal;
+            if (wantsTerminal) startFeed();
+            const geminiSnapshot: ReadStreamResponsePayload = {
+              ...staticSessionSnapshot(staticState.spec, wantsTerminal),
+              scrollback: wantsTerminal ? geminiTuiFrame(0) : '',
+            };
+            return ok(request, geminiSnapshot as unknown as JsonValue);
           }
-          codexStreamSubscribed = true;
-          startFeed();
-          const codexSnapshot: ReadStreamResponsePayload = {
-            scrollback: codexTuiFrame(0),
-            activity: { state: 'thinking', reason: { kind: 'turn-active' } },
-            usage: mockUsage(15_000, MOCK_MODEL_CODEX),
-            awaitedPromptId: null,
-            ptyDimensions: activeGrid(),
-          };
-          return ok(request, codexSnapshot as unknown as JsonValue);
+          return ok(request, staticSessionSnapshot(staticState.spec, wantsTerminal) as unknown as JsonValue);
         }
         if (activeSessionId === null || payload.sessionId !== activeSessionId) {
           return failWith(request, `No such session: ${payload.sessionId}`);
@@ -1646,12 +3325,6 @@ export function createMockDesktop(): MockDesktop {
           };
           return ok(request, window as unknown as JsonValue);
         }
-        // Mirrors the desktop: a list-only subscription (`terminal: false`)
-        // attaches no PTY tap and returns an empty scrollback. Omitted means
-        // true, per the protocol. Without this the mock streamed terminal
-        // bytes to every subscriber and no dev run could ever show that a
-        // caller had re-armed PTY streaming by accident.
-        const wantsTerminal = payload.terminal ?? true;
         streamSubscribed = true;
         startFeed();
         startTerminalPlayback(wantsTerminal);
@@ -1668,11 +3341,63 @@ export function createMockDesktop(): MockDesktop {
       case 'read-diff': {
         const payload = parseCapabilityRequestPayload('read-diff', request.payload);
         if (payload.action === 'unsubscribe') return ok(request);
-        if (payload.filePath) return ok(request, diffFileContent(payload.filePath) as unknown as JsonValue);
-        return ok(request, diffFileList() as unknown as JsonValue);
+        // Routed by the TASK, because a reviewer can open any of them. This
+        // used to serve the streaming session's sign-in diff to every task,
+        // so seven of eight Changes tabs contradicted their own session's
+        // terminal and chat one swipe away.
+        if (payload.taskId === MOCK_TASK_ID) {
+          if (payload.filePath) return ok(request, diffFileContent(payload.filePath) as unknown as JsonValue);
+          return ok(request, diffFileList() as unknown as JsonValue);
+        }
+        const sessionDiff = MOCK_STATIC_SESSIONS.find((candidate) => candidate.taskId === payload.taskId)?.diff ?? null;
+        if (sessionDiff) {
+          if (payload.filePath) {
+            // The empty-content shape for a path outside the list, matching
+            // diffFileContent's own fallthrough reasoning: visibly wrong
+            // beats another file's changes under the requested name.
+            return ok(request, (sessionDiff.contents[payload.filePath] ?? { original: '', modified: '', language: 'typescript' }) as unknown as JsonValue);
+          }
+          return ok(request, {
+            files: sessionDiff.files,
+            totalInsertions: sessionDiff.files.reduce((sum, file) => sum + file.insertions, 0),
+            totalDeletions: sessionDiff.files.reduce((sum, file) => sum + file.deletions, 0),
+          } as unknown as JsonValue);
+        }
+        // A task with no diff story (a card the reviewer just created): an
+        // EMPTY list, never a borrowed one.
+        return ok(request, { files: [], totalInsertions: 0, totalDeletions: 0 } as unknown as JsonValue);
       }
       case 'send-user-message': {
         const payload = parseCapabilityRequestPayload('send-user-message', request.payload);
+        // Route by the session the composer actually sent into. Ignoring
+        // payload.sessionId and appending to the active transcript - what this
+        // handler did before the demo pairing shipped - made chat a dead end
+        // in every session but the streaming one: the message went to a feed
+        // the sender was not looking at.
+        const staticChatState = staticSessionStates.get(payload.sessionId);
+        if (staticChatState) {
+          entryCounter += 1;
+          appendStaticSessionEntry(staticChatState, { kind: 'user', uuid: `${payload.sessionId}-sent-${entryCounter}`, ts: Date.now(), text: payload.text });
+          emitStaticSessionActivity(staticChatState.spec, 'thinking');
+          const staticReplyCounter = entryCounter;
+          later(2500, () => {
+            appendStaticSessionEntry(staticChatState, {
+              kind: 'assistant',
+              uuid: `${payload.sessionId}-reply-${staticReplyCounter}`,
+              ts: Date.now(),
+              agentName: staticSessionAgentName(staticChatState.spec),
+              model: staticChatState.spec.model.displayName,
+              blocks: [{ type: 'text', text: staticChatState.spec.replyText }],
+            });
+            // An idle or paused session settles back to quiet after replying,
+            // so its Agents-feed row does not stay "Thinking" forever.
+            if (staticChatState.spec.activityState === 'idle') emitStaticSessionActivity(staticChatState.spec, 'idle');
+          });
+          return ok(request, { delivered: true });
+        }
+        if (activeSessionId === null || payload.sessionId !== activeSessionId) {
+          return failWith(request, `No such session: ${payload.sessionId}`);
+        }
         // Magic dev commands for exercising session-lifecycle paths that a
         // real desktop only hits on a model switch or process exit.
         if (payload.text.trim() === '/respawn') {
@@ -1706,9 +3431,27 @@ export function createMockDesktop(): MockDesktop {
         const payload = parseCapabilityRequestPayload('move-task', request.payload);
         const located = locateTask(payload.taskId);
         if (!located) return failWith(request, `No such task: ${payload.taskId}`);
-        located.task.swimlane_id = payload.targetSwimlaneId;
-        located.task.position = payload.targetPosition;
-        located.task.updated_at = new Date().toISOString();
+        // A move into the done-role column IS the archive (the phone's
+        // archiveTask and the desktop's cross-column move handler both work
+        // this way). Mirror the desktop's semantics: the task leaves the board
+        // projection and joins the archived page, so the card lands in the
+        // Done column instead of vanishing from every screen at once.
+        const targetColumns = located.projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
+        const targetColumn = targetColumns.find((candidate) => candidate.id === payload.targetSwimlaneId);
+        if (targetColumn?.role === 'done') {
+          const taskIndex = located.taskList.findIndex((candidate) => candidate.id === located.task.id);
+          if (taskIndex >= 0) located.taskList.splice(taskIndex, 1);
+          located.task.swimlane_id = payload.targetSwimlaneId;
+          located.task.archived_at = new Date().toISOString();
+          located.task.updated_at = located.task.archived_at;
+          const archivedList = archivedDuringSession.get(located.projectId) ?? [];
+          archivedList.unshift(located.task);
+          archivedDuringSession.set(located.projectId, archivedList);
+        } else {
+          located.task.swimlane_id = payload.targetSwimlaneId;
+          located.task.position = payload.targetPosition;
+          located.task.updated_at = new Date().toISOString();
+        }
         later(50, () => {
           emit({ kind: 'board', projectId: located.projectId, taskId: located.task.id, payload: { change: 'task-updated', ids: [located.task.id] } });
         });
@@ -1774,65 +3517,97 @@ export function createMockDesktop(): MockDesktop {
           emitPtyResize();
           return ok(request, { released: true });
         }
-        if (activeSessionId === null) return failWith(request, 'No active session');
+        // Echo into the session the keystrokes were TYPED IN, not blindly into
+        // the active one. The pre-demo version emitted to activeSessionId for
+        // every write, so typing in any other session's terminal returned
+        // `written: true` while the echo landed in a feed the typist could not
+        // see - a keyboard that looks simply dead, on the screen App Review is
+        // told to try.
+        const terminalTarget =
+          payload.sessionId === activeSessionId && activeSessionId !== null
+            ? { sessionId: activeSessionId, taskId: MOCK_TASK_ID }
+            : (() => {
+                const targetState = staticSessionStates.get(payload.sessionId);
+                return targetState ? { sessionId: targetState.spec.sessionId, taskId: targetState.spec.taskId } : null;
+              })();
+        if (!terminalTarget) return failWith(request, `No such session: ${payload.sessionId}`);
         emit({
           kind: 'terminal',
-          sessionId: activeSessionId,
-          taskId: MOCK_TASK_ID,
+          sessionId: terminalTarget.sessionId,
+          taskId: terminalTarget.taskId,
           payload: { data: payload.data.replace(/\r/g, '\r\n') },
         });
         return ok(request, { written: true });
       }
       case 'board-tool-read': {
         const payload = parseCapabilityRequestPayload('board-tool-read', request.payload);
-        return ok(request, { result: { note: `mock answered ${payload.tool}` } });
+        return ok(request, { result: { note: `${payload.tool} completed.` } });
       }
       case 'board-tool-write': {
         const payload = parseCapabilityRequestPayload('board-tool-write', request.payload);
+        // Every branch resolves WHICH project's board it is writing, because
+        // the app has two. The pre-demo version hardcoded the first: editing
+        // or deleting a checkout-api task failed "No such task", and a task
+        // created while browsing checkout-api landed on the other board.
         if (payload.tool === 'create_task') {
-          const params = (payload.params ?? {}) as { title?: string; description?: string; column?: string };
-          const column = mockColumns().find((candidate) => candidate.name.toLowerCase() === params.column?.toLowerCase()) ?? mockColumns()[0];
+          const params = (payload.params ?? {}) as { project?: string; title?: string; description?: string; column?: string };
+          const isSecondProject = params.project === MOCK_PROJECT_2.id;
+          const projectTasks = isSecondProject ? tasks2 : tasks;
+          const projectColumns = isSecondProject ? mockColumns2() : mockColumns();
+          const column = projectColumns.find((candidate) => candidate.name.toLowerCase() === params.column?.toLowerCase()) ?? projectColumns[0];
           entryCounter += 1;
           const created = boardTaskFixture({
             id: `mock-created-${entryCounter}`,
             display_id: 100 + entryCounter,
-            title: params.title ?? 'Untitled mock task',
+            title: params.title ?? 'Untitled task',
             description: params.description ?? '',
             swimlane_id: column.id,
-            position: tasks.filter((candidate) => candidate.swimlane_id === column.id).length,
+            position: projectTasks.filter((candidate) => candidate.swimlane_id === column.id).length,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           });
-          tasks.push(created);
+          projectTasks.push(created);
+          const createdProjectId = isSecondProject ? MOCK_PROJECT_2.id : MOCK_PROJECT.id;
           later(50, () => {
-            emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: created.id, payload: { change: 'task-created', ids: [created.id] } });
+            emit({ kind: 'board', projectId: createdProjectId, taskId: created.id, payload: { change: 'task-created', ids: [created.id] } });
           });
           return ok(request, { result: { created: created.id } });
         }
         if (payload.tool === 'update_task') {
           const params = (payload.params ?? {}) as { taskId?: string; title?: string; description?: string };
-          const task = tasks.find((candidate) => candidate.id === params.taskId);
-          if (!task) return failWith(request, `No such task: ${params.taskId}`);
-          if (typeof params.title === 'string') task.title = params.title;
-          if (typeof params.description === 'string') task.description = params.description;
-          task.updated_at = new Date().toISOString();
+          const located = locateTask(params.taskId);
+          if (!located) return failWith(request, `No such task: ${params.taskId}`);
+          if (typeof params.title === 'string') located.task.title = params.title;
+          if (typeof params.description === 'string') located.task.description = params.description;
+          located.task.updated_at = new Date().toISOString();
           later(50, () => {
-            emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: task.id, payload: { change: 'task-updated', ids: [task.id] } });
+            emit({ kind: 'board', projectId: located.projectId, taskId: located.task.id, payload: { change: 'task-updated', ids: [located.task.id] } });
           });
-          return ok(request, { result: { updated: task.id } });
+          return ok(request, { result: { updated: located.task.id } });
         }
         if (payload.tool === 'delete_task') {
           const params = (payload.params ?? {}) as { taskId?: string };
-          const taskIndex = tasks.findIndex((candidate) => candidate.id === params.taskId);
-          if (taskIndex < 0) return failWith(request, `No such task: ${params.taskId}`);
-          const [removed] = tasks.splice(taskIndex, 1);
+          const located = locateTask(params.taskId);
+          if (!located) return failWith(request, `No such task: ${params.taskId}`);
+          const taskIndex = located.taskList.findIndex((candidate) => candidate.id === located.task.id);
+          const [removed] = located.taskList.splice(taskIndex, 1);
           if (removed.session_id !== null && removed.session_id === activeSessionId) endActiveSession();
           later(50, () => {
-            emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: removed.id, payload: { change: 'task-deleted', ids: [removed.id] } });
+            emit({ kind: 'board', projectId: located.projectId, taskId: removed.id, payload: { change: 'task-deleted', ids: [removed.id] } });
           });
           return ok(request, { result: { deleted: removed.id } });
         }
-        return ok(request, { result: { note: `mock answered ${payload.tool}` } });
+        return ok(request, { result: { note: `${payload.tool} completed.` } });
+      }
+      case 'register-push': {
+        // Nothing to deliver to - there is no push infrastructure behind the
+        // in-process peer - but the request must SUCCEED: registration fires
+        // on every established handshake, and in a release build a failure
+        // here surfaces in Settings as a push-registration error on a screen
+        // App Review will read. Acknowledging is also honest: the desktop's
+        // answer means "registration recorded", not "a push was proven".
+        const payload = parseCapabilityRequestPayload('register-push', request.payload);
+        return ok(request, { registered: payload.action === 'register' });
       }
       default:
         return failWith(request, `Mock desktop has no handler for ${request.verb}`);

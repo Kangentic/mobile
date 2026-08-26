@@ -29,7 +29,13 @@
       traceHeightFit('bail-zero-measure', generation, passesLeft, screenHeight);
       return;
     }
-    var viewportHeight = window.innerHeight - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
+    // fitViewportHeight, NOT window.innerHeight, for the same reason as
+    // autoFitFontToScreen: measuring against the keyboard-shrunken window
+    // would walk the font down a step per pass until the whole grid fit the
+    // strip above the keyboard. (centerGridVertically and the vertical follow
+    // keep reading the CURRENT innerHeight deliberately - centring and
+    // keeping the cursor visible are questions about what is on screen NOW.)
+    var viewportHeight = fitViewportHeight() - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
     var currentLineHeight = terminal.options.lineHeight || 1;
     if (passesLeft <= 1) {
       // Out of passes. One correction is still safe without a re-measure: an

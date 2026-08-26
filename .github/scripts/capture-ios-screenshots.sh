@@ -43,6 +43,17 @@
 #      content. This weakens a deliberate guard and needs an explicit decision,
 #      not a convenience - do not reach for it to save a CI cycle.
 #
+# UPDATE: option 3 happened, for an unrelated reason, and it is now the most
+# promising route. The reviewer/demo pairing (src/demo/, shipped for App Review
+# Guideline 2.1(a)) reaches the SAME createMockDesktop() from a persisted trust
+# anchor with no __DEV__ gate at all. So a plain Release build shows full mock
+# content once `kangentic-pair://demo` has been entered - no FORCE_BUNDLING, no
+# debug configuration, no dev launcher, and therefore none of attempts 1 to 3's
+# failures. What is still needed is a UI driver to type the code (or to tap
+# through the deep link's "Open in Kangentic?" dialog), which is the same
+# Maestro-on-iOS question as option 1 - but now against an ordinary Release
+# build, which is also what the shelf is supposed to depict.
+#
 # Note this is NOT on the critical path for an App Store submission: that shelf
 # is also blocked on the privacy questionnaire, the age rating and export
 # compliance (see .claude/skills/release/SKILL.md).

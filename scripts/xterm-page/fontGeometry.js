@@ -6,7 +6,9 @@
   // matches (no jump on the first pinch).
   function autoFitFontToScreen() {
     if (knownRows === null || knownRows < 1 || knownCols < 1) return;
-    var forHeight = window.innerHeight / (knownRows * CELL_HEIGHT_RATIO);
+    // fitViewportHeight, NOT window.innerHeight: the soft keyboard must not
+    // shrink the fit (see the tracker in state.js).
+    var forHeight = fitViewportHeight() / (knownRows * CELL_HEIGHT_RATIO);
     var fitted = Math.floor(forHeight);
     // AUTO-fit gets a far lower ceiling than pinch: a SHORT desktop grid
     // (a fresh session with ten rows) would otherwise blow up to poster

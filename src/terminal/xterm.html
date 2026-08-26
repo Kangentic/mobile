@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build f565ac5cef79) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build d61e2658bc08) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -374,6 +374,28 @@ return exports; })();
   // screen. Open pinned to column 0 at the newest output instead, and hand
   // control over the moment the user actually touches or types.
   var pinnedToStart = true;
+  // The viewport height the FIT is computed against: the largest this
+  // orientation has shown, not whatever the window measures right now. The
+  // soft keyboard shrinks the window, and fitting against that shrunken
+  // height re-fit the whole grid to the strip above the keyboard - the font
+  // collapsed toward MIN_AUTO_FONT_PX on every keyboard open and sprang back
+  // on close, so typing made the terminal unreadable at exactly the moment it
+  // was being used. Keyed by innerWidth so a rotation (a REAL viewport
+  // change) starts its own maximum; within one orientation the only shrink is
+  // the keyboard, which must not change the fit - the grid keeps its size,
+  // the keyboard covers its lower rows, and follow-the-cursor (which reads
+  // the CURRENT innerHeight on purpose) pans the typing back into view.
+  var maxFitHeightByWidth = {};
+  function fitViewportHeight() {
+    var width = window.innerWidth;
+    var height = window.innerHeight;
+    var best = maxFitHeightByWidth[width] || 0;
+    if (height > best) {
+      maxFitHeightByWidth[width] = height;
+      best = height;
+    }
+    return best;
+  }
   var MIN_AUTO_FONT_PX = 6;
   // Cap the auto-fit font so a very short grid does not produce absurd glyphs;
   // pinch zoom goes higher or lower on demand, bounded by the host's own
@@ -596,7 +618,9 @@ return exports; })();
   // matches (no jump on the first pinch).
   function autoFitFontToScreen() {
     if (knownRows === null || knownRows < 1 || knownCols < 1) return;
-    var forHeight = window.innerHeight / (knownRows * CELL_HEIGHT_RATIO);
+    // fitViewportHeight, NOT window.innerHeight: the soft keyboard must not
+    // shrink the fit (see the tracker in state.js).
+    var forHeight = fitViewportHeight() / (knownRows * CELL_HEIGHT_RATIO);
     var fitted = Math.floor(forHeight);
     // AUTO-fit gets a far lower ceiling than pinch: a SHORT desktop grid
     // (a fresh session with ten rows) would otherwise blow up to poster
@@ -1467,7 +1491,13 @@ return exports; })();
       traceHeightFit('bail-zero-measure', generation, passesLeft, screenHeight);
       return;
     }
-    var viewportHeight = window.innerHeight - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
+    // fitViewportHeight, NOT window.innerHeight, for the same reason as
+    // autoFitFontToScreen: measuring against the keyboard-shrunken window
+    // would walk the font down a step per pass until the whole grid fit the
+    // strip above the keyboard. (centerGridVertically and the vertical follow
+    // keep reading the CURRENT innerHeight deliberately - centring and
+    // keeping the cursor visible are questions about what is on screen NOW.)
+    var viewportHeight = fitViewportHeight() - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
     var currentLineHeight = terminal.options.lineHeight || 1;
     if (passesLeft <= 1) {
       // Out of passes. One correction is still safe without a re-measure: an
@@ -1816,7 +1846,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: 'f565ac5cef79',
+      buildId: 'd61e2658bc08',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
