@@ -11,14 +11,18 @@ name: Build Android
 # Speed: native compilation dominates. The first unrestricted run spent 1665 of
 # 1770 seconds inside Gradle, nearly all of it compiling C++ for four ABIs. So
 # each profile builds only the ABI its target actually runs
-# (scripts/androidAbis.mjs), and selecting several profiles fans them out across
-# runners instead of building them back to back.
+# (scripts/androidAbis.mjs). One dispatch builds ONE profile; wanting several
+# means several dispatches, each its own run (the concurrency group is keyed
+# per profile, so they do not cancel each other). A `profile=all` matrix
+# fan-out existed for a while, "implemented but unmeasured": it was never once
+# used, could never submit, and its one-element matrix wrapped every real
+# build in a "Matrix:" group in the Actions UI that read as a broken fan-out.
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Build profile, or "all" to build every profile in parallel'
+        description: 'Build profile'
         type: choice
         default: preview
         options:
@@ -26,7 +30,6 @@ on:
           - preview
           - e2e
           - production
-          - all
       artifact:
         description: 'Artifact type (auto follows the eas.json profile)'
         type: choice
@@ -80,19 +83,20 @@ jobs:
   # check: both are dispatch or tag triggered, and requiring a check that never
   # runs on a PR would deadlock every PR.
   plan:
-    name: Plan (resolve build matrix)
+    name: Plan (preflight)
     runs-on: ubuntu-latest
     # Was 5. The version-code preflight below needs node_modules to run
     # `expo config`, and a cold node_modules cache pays an npm ci here.
     timeout-minutes: 15
     outputs:
-      profiles: ${{ steps.matrix.outputs.profiles }}
+      profile: ${{ steps.profile.outputs.profile }}
     steps:
       - uses: actions/checkout@v7
 
       # Node pinned from .nvmrc, plus the shared node_modules cache, because the
       # version-code preflight below reads the resolved Expo config. This job
-      # decides the matrix, so if it breaks nothing builds at all.
+      # decides the profile and gates the build, so if it breaks nothing
+      # builds at all.
       #
       # The composite action is also where the Node 24 bump lives, so this picks
       # it up without naming a version here.
@@ -159,37 +163,28 @@ jobs:
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           node scripts/checkPlayVersionCode.mjs --key "$RUNNER_TEMP/play-service-account.json" --package com.kangentic.mobile --version-code "$version_code"
 
-      - name: Resolve the profile matrix
-        id: matrix
+      - name: Resolve the profile
+        id: profile
         env:
           # A tag build is always the store artifact.
           SELECTED: ${{ github.event_name == 'push' && 'production' || inputs.profile }}
         run: |
           set -euo pipefail
-          if [ "$SELECTED" = "all" ]; then
-            profiles="$(node --input-type=module -e "import {readEasProfileNames} from './scripts/androidAbis.mjs'; process.stdout.write(JSON.stringify(readEasProfileNames()))")"
-          else
-            profiles="$(node -e "process.stdout.write(JSON.stringify([process.argv[1]]))" "$SELECTED")"
-          fi
-          echo "profiles=$profiles" >> "$GITHUB_OUTPUT"
-          echo "Building: $profiles"
+          echo "profile=$SELECTED" >> "$GITHUB_OUTPUT"
+          echo "Building: $SELECTED"
 
   build-android:
-    # Named after the profile, so a `profile=all` fan-out reads as four
-    # distinguishable jobs rather than four identical rows. Same pattern as
-    # ci.yml's shard names.
-    name: Build (${{ matrix.profile }})
+    # Named after the profile so the Actions UI says what a run built without
+    # expanding it. Deliberately NOT a matrix job: the only matrix use was the
+    # never-exercised `profile=all` fan-out, and a one-element matrix wrapped
+    # this job in a "Matrix:" group that read as a broken fan-out on every
+    # real run.
+    name: Build (${{ needs.plan.outputs.profile }})
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      # One profile failing must not cancel the others: a matrix run is often
-      # "give me every artifact", and a partial set still has value.
-      fail-fast: false
-      matrix:
-        profile: ${{ fromJSON(needs.plan.outputs.profiles) }}
     env:
-      BUILD_PROFILE: ${{ matrix.profile }}
+      BUILD_PROFILE: ${{ needs.plan.outputs.profile }}
       REQUESTED_ARTIFACT: ${{ github.event_name == 'push' && 'aab' || inputs.artifact }}
       ABI_OVERRIDE: ${{ github.event_name == 'push' && '' || inputs.abis }}
       # Secrets cannot be referenced from an `if:` condition, so presence is
@@ -580,9 +575,9 @@ jobs:
   # AAB for this package has to be uploaded by hand through the Play Console
   # UI: the Play Developer API only works once an app has at least one release.
   #
-  # It re-verifies the downloaded artifact rather than trusting a job output,
-  # which also keeps it correct with a matrix build (matrix job outputs are not
-  # per-instance addressable).
+  # It re-verifies the downloaded artifact rather than trusting a job output:
+  # the artifact on disk is what actually uploads, so the artifact on disk is
+  # what gets checked.
   submit-play:
     name: Submit (Google Play)
     needs: build-android
@@ -591,7 +586,7 @@ jobs:
     # unreachable. It stays because this is the last gate before a real Play
     # upload, and a skipped submit is a recoverable mistake where a submitted
     # crash-test build is not.
-    if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.profile != 'all' && inputs.crash_test != true
+    if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.crash_test != true
     runs-on: ubuntu-latest
     environment: google-play
     # Narrower than it looks: the workflow is `contents: read` at the top level,

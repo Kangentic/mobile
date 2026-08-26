@@ -113,12 +113,13 @@ function runEasProfileScript(scriptArguments: string[]): string {
 }
 
 describe('build-android workflow and eas.json parity', () => {
-  it('offers exactly the build profiles eas.json declares, plus "all"', () => {
+  it('offers exactly the build profiles eas.json declares', () => {
+    // No extra selection modes: the "all" fan-out was removed 2026-08-26 as
+    // never-exercised (it could not submit, and its one-element matrix
+    // wrapped every real build in a misleading "Matrix:" group). A profile
+    // choice is an eas.json profile, nothing else.
     const choices = readWorkflowProfileChoices();
-    // "all" fans every profile out across runners in parallel; it is a
-    // selection mode, not an eas.json profile.
-    expect(choices).toContain('all');
-    expect(choices.filter((choice) => choice !== 'all').sort()).toEqual(Object.keys(easConfig.build).sort());
+    expect(choices.sort()).toEqual(Object.keys(easConfig.build).sort());
   });
 
   it('gives every eas.json profile a default ABI list', () => {

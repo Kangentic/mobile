@@ -769,7 +769,10 @@ the workflow and runs it through the same `grep -qvE` the job uses, over 17 repr
 Gradle cache and the E2E build pays a cold one. Consolidating them behind `workflow_call` would fix
 it; that was deferred so a change to the E2E path could not break the release path, and the hazard
 to watch when doing it is the reusable workflow's concurrency group colliding with a direct
-dispatch. Separately, `profile=all` is implemented but unmeasured.
+dispatch. (`profile=all` used to be the second entry here, "implemented but unmeasured"; it was
+removed 2026-08-26 without ever being run - it could not submit, and its one-element matrix
+wrapped every real build in a misleading "Matrix:" group in the Actions UI. Building several
+profiles is now several dispatches, which the per-profile concurrency group already supports.)
 
 ### What is pinned, and what is deliberately not
 
@@ -1084,10 +1087,10 @@ from any path".
 
 | Input | Meaning |
 |---|---|
-| `profile` | An `eas.json` build profile, or `all` to build every profile in parallel on its own runner. Decides the artifact type, the Gradle task, and the `env` block. |
+| `profile` | An `eas.json` build profile. Decides the artifact type, the Gradle task, and the `env` block. One dispatch builds one profile; run several dispatches for several profiles. |
 | `artifact` | `auto` follows the profile; override to force `apk` or `aab`. |
 | `abis` | Comma-separated ABI override. Leave empty to use the per-profile default below. |
-| `submit_track` | `none` (default) builds only. Any other value queues a Play upload behind an approval gate. Not available with `profile=all`. |
+| `submit_track` | `none` (default) builds only. Any other value queues a Play upload behind an approval gate. |
 
 A `v*` tag build always produces a production AAB with every ABI.
 
