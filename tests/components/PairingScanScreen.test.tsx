@@ -40,7 +40,7 @@ jest.mock('@/demo/demoPairing', () => {
   };
 });
 
-const { beginDemoPairing, AlreadyPairedError } = jest.requireMock<{
+const { beginDemoPairing, AlreadyPairedError, PairingInProgressError } = jest.requireMock<{
   beginDemoPairing: jest.Mock;
   AlreadyPairedError: new () => Error;
   PairingInProgressError: new () => Error;
@@ -745,6 +745,28 @@ describe('PairingScanScreen', () => {
 
       expect(screen.getByTestId('pairing-scan-error')).toHaveTextContent(
         'This phone is already paired. Unpair first to use the demo.',
+      );
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the pairing-in-progress refusal by name, and does not navigate', async () => {
+      // The other named refusal. Both AlreadyPairedError and
+      // PairingInProgressError share one branch in the screen
+      // (`error instanceof AlreadyPairedError || error instanceof
+      // PairingInProgressError`), and the AlreadyPairedError case above
+      // cannot tell the two apart from a mutation that dropped just this
+      // second check - only its own error type. Asserted here by its own
+      // distinct message so a regression names which refusal broke.
+      beginDemoPairing.mockRejectedValueOnce(new PairingInProgressError());
+      render(<PairingScanScreen />);
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      });
+
+      expect(screen.getByTestId('pairing-scan-error')).toHaveTextContent(
+        'A pairing is already in progress. Finish or cancel it first.',
       );
       expect(mockNavigate).not.toHaveBeenCalled();
     });

@@ -103,11 +103,15 @@ export async function beginDemoPairing(deviceName: string): Promise<void> {
   const responder = new StubPairingResponder(desktopTransport, {
     desktopStatic: DEMO_DESKTOP_STATIC,
     pairingToken: DEMO_PAIRING_TOKEN,
-    // Both sides bind the same version into the Noise prologue. Passing it
-    // here is not optional dressing: the initiator always passes one (it comes
-    // off the payload), so leaving the responder on the default would give the
-    // two sides different prologues and the handshake would fail to
-    // authenticate, surfacing as an opaque 'handshake-failed'.
+    // Both sides bind the same version into the Noise prologue. Today this is
+    // technically redundant: the initiator reads the version off the payload,
+    // and demoPairingPayload() sets that from the same build-time
+    // PROTOCOL_VERSION constant, so the responder's default would match too.
+    // It is passed explicitly anyway because the coincidence is the fragile
+    // part: if the payload's version ever diverges from the responder default,
+    // the two prologues differ and the handshake fails to authenticate as an
+    // opaque 'handshake-failed'. tests/unit/pairingMachine.test.ts pins the
+    // wiring in both directions.
     protocolVersion: PROTOCOL_VERSION,
   });
   activeResponder = responder;

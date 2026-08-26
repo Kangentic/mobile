@@ -29,6 +29,13 @@ const pushKeysMocks = vi.hoisted(() => ({
 vi.mock('@/notifications/pushRegistration', () => ({
   unregisterPushWithDesktop: pushRegistrationMocks.unregisterPushWithDesktop,
   registerPushWithDesktop: pushRegistrationMocks.registerPushWithDesktop,
+  // Added alongside the hoisted mock above (resetPushRegistrationProcessState
+  // was declared there but never exported here): openConnection's push-key
+  // change check dynamically imports this export whenever
+  // pushRegistrationDesktopKeyHex disagrees with the freshly loaded anchor, and
+  // without this the call would resolve to undefined and throw
+  // "not a function" instead of a clean assertion failure.
+  resetPushRegistrationProcessState: pushRegistrationMocks.resetPushRegistrationProcessState,
 }));
 vi.mock('@/notifications/pushKeys', () => ({
   clearPushRegistration: pushKeysMocks.clearPushRegistration,
