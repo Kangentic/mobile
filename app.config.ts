@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.6.1',
+  version: '0.6.2',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -122,7 +122,13 @@ const config: ExpoConfig = {
     // is this project's standing rule. Numbers stay globally increasing, so
     // 11 follows 10 across the 0.6.0 -> 0.6.1 bump even though Apple would
     // have allowed restarting under a new version string.
-    buildNumber: '11',
+    //
+    // 12 is the v0.6.2 release cut 2026-08-26, and it is THE App Review build:
+    // it carries the permanent reviewer/demo pairing (type "demo" on the pair
+    // screen) that answers the three Guideline 2.1(a) rejections, with the
+    // review-ready mock desktop behind it. The reviewer notes in
+    // docs/store-listing.md describe the demo this build ships.
+    buildNumber: '12',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -290,13 +296,18 @@ const config: ExpoConfig = {
     // memoized promise, the foreground gate no longer swallows a push while
     // disconnected, and a dead receive task is surfaced in Settings.
     //
+    // 10 is the v0.6.2 internal release cut 2026-08-26: the permanent
+    // reviewer/demo pairing and the review-ready mock desktop. The change is
+    // aimed at iOS App Review, but both platforms cut per the standing
+    // no-drift rule, and the demo ships identically on Android.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 9,
+    versionCode: 10,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
