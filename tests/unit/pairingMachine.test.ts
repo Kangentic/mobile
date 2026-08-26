@@ -104,6 +104,84 @@ describe('PairingMachine', () => {
     expect(finalState.errorKind).toBe('desktop-absent');
   });
 
+  /**
+   * StubPairingResponderOptions.protocolVersion is bound into the Noise
+   * prologue the same way the initiator's payload.protocolVersion is (see
+   * pairingMachine.ts's `createPairingInitiatorHandshake({ protocolVersion:
+   * this.payload.protocolVersion })`). A mismatched prologue must fail the
+   * handshake exactly like a mismatched pre-shared key does above - if the
+   * option were silently dropped (a typo in the spread that builds it), the
+   * two sides would bind DIFFERENT prologues and this test would still pass
+   * for the wrong reason, so it also proves the MATCHING case succeeds.
+   */
+  it('fails the handshake when the responder is bound to a different protocol version than the payload', async () => {
+    const phoneIdentity = generateX25519KeyPair();
+    const desktopStatic = generateX25519KeyPair();
+    const pairingToken = randomBytes(32);
+    const [phoneTransport, desktopTransport] = createLoopbackPair();
+
+    new StubPairingResponder(desktopTransport, { desktopStatic, pairingToken, protocolVersion: '1' });
+    await desktopTransport.connect();
+
+    const payload: PairingQrPayload = {
+      desktopStaticPublicKey: desktopStatic.publicKey,
+      pairingToken,
+      relayAddress: 'wss://relay.example.com',
+      expiresAt: futureIsoTimestamp(600),
+      // Deliberately NOT '1': the initiator's own protocol version, bound
+      // into ITS prologue.
+      protocolVersion: '2',
+    };
+
+    const machine = new PairingMachine({
+      identity: phoneIdentity,
+      payload,
+      transport: phoneTransport,
+      deviceName: 'test-phone',
+      timeoutMs: 2_000,
+    });
+
+    void machine.start();
+    const finalState = await waitForState(machine, (state) => state.status === 'error');
+    expect(finalState.status).toBe('error');
+    if (finalState.status !== 'error') throw new Error('unreachable');
+    expect(finalState.errorKind).toBe('desktop-absent');
+  });
+
+  it('reaches awaiting-sas when both sides bind the SAME explicit protocol version to the responder', async () => {
+    // The non-vacuity half: a StubPairingResponder given a MATCHING
+    // protocolVersion must still succeed, or the mismatch case above could
+    // be passing merely because any explicit protocolVersion breaks the
+    // handshake.
+    const phoneIdentity = generateX25519KeyPair();
+    const desktopStatic = generateX25519KeyPair();
+    const pairingToken = randomBytes(32);
+    const [phoneTransport, desktopTransport] = createLoopbackPair();
+
+    new StubPairingResponder(desktopTransport, { desktopStatic, pairingToken, protocolVersion: '7' });
+    await desktopTransport.connect();
+
+    const payload: PairingQrPayload = {
+      desktopStaticPublicKey: desktopStatic.publicKey,
+      pairingToken,
+      relayAddress: 'wss://relay.example.com',
+      expiresAt: futureIsoTimestamp(600),
+      protocolVersion: '7',
+    };
+
+    const machine = new PairingMachine({
+      identity: phoneIdentity,
+      payload,
+      transport: phoneTransport,
+      deviceName: 'test-phone',
+      timeoutMs: 2_000,
+    });
+
+    void machine.start();
+    const finalState = await waitForState(machine, (state) => state.status === 'awaiting-sas' || state.status === 'error');
+    expect(finalState.status).toBe('awaiting-sas');
+  });
+
   it('times out when no desktop ever responds', async () => {
     const phoneIdentity = generateX25519KeyPair();
     const desktopStatic = generateX25519KeyPair();

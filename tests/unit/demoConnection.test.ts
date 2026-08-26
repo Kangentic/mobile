@@ -18,7 +18,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bytesToHex } from '@kangentic/protocol';
 
-import { startConnectionLifecycle, stopConnectionLifecycle } from '@/connection/connectionManager';
+import { reconnectNow, startConnectionLifecycle, stopConnectionLifecycle } from '@/connection/connectionManager';
 import { DEMO_DESKTOP_STATIC, DEMO_RELAY_ADDRESS } from '@/demo/demoIdentity';
 import { useChannelStore } from '@/state/channelStore';
 import { useBoardStore } from '@/state/boardStore';
@@ -199,5 +199,78 @@ describe('a demo trust anchor, in a production-shaped build', () => {
     expect(requestNotificationPermission).not.toHaveBeenCalled();
 
     useSettingsStore.setState({ hydrated: false, backgroundNotificationsMode: 'foreground-service', hasRequestedNotificationPermission: false });
+  });
+});
+
+/**
+ * connectionManager.ts's pushRegistrationDesktopKeyHex cache: the unpair flow
+ * resets pushRegistration's process-global idempotence bookkeeping explicitly,
+ * but a re-pair that never goes through unpair (reconnectNow(), the exact call
+ * a completed pairing makes) does not - so this module has to notice the
+ * desktop key changed and drop that cache itself, or the new desktop never
+ * receives this device's push key until the next app restart.
+ *
+ * Exercised through the demo anchor (a real, working connection with no relay
+ * to dial) and a real anchor (whose FakeRelayTransport rejects immediately,
+ * which is fine: the key-hex check runs BEFORE the transport is even
+ * constructed).
+ *
+ * RESIDUE WARNING: pushRegistrationDesktopKeyHex is connectionManager.ts's own
+ * module-level variable, not exported and not reset by beforeEach here, so it
+ * carries across every test in this file. The second case below deliberately
+ * leaves it pointed at a non-demo key (Uint8Array(32).fill(9)) - harmless
+ * today because this is the last describe block in the file, but a test
+ * appended AFTER it that opens the demo anchor and asserts
+ * resetPushRegistrationProcessState was NOT called would see a spurious reset
+ * from that leftover key, with no exported state to explain why. Keep this
+ * block last, or have a new test open the demo anchor once (unasserted)
+ * before relying on "same key as last time".
+ */
+describe('the push-registration desktop-key cache, across a reconnect that never goes through unpair', () => {
+  it('does not reset when a reconnect brings back the SAME desktop key', async () => {
+    writeDemoAnchor();
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established, {
+      label: 'first demo session establishes',
+      timeoutMs: 5000,
+    });
+
+    const { resetPushRegistrationProcessState } = await import('@/notifications/pushRegistration');
+    vi.mocked(resetPushRegistrationProcessState).mockClear();
+
+    // Still the demo anchor: same desktop key as the open above.
+    reconnectNow();
+    await waitUntil(() => useChannelStore.getState().established, {
+      label: 'reconnect re-establishes against the same desktop',
+      timeoutMs: 5000,
+    });
+
+    expect(resetPushRegistrationProcessState).not.toHaveBeenCalled();
+  });
+
+  it('resets when a reconnect picks up a CHANGED desktop key, the re-pair-without-unpair shape', async () => {
+    writeDemoAnchor();
+    startConnectionLifecycle();
+    await waitUntil(() => useChannelStore.getState().established, {
+      label: 'first demo session establishes',
+      timeoutMs: 5000,
+    });
+
+    const { resetPushRegistrationProcessState } = await import('@/notifications/pushRegistration');
+    vi.mocked(resetPushRegistrationProcessState).mockClear();
+
+    // A different desktop key, written the way a completed re-pairing
+    // ceremony leaves the trust anchor - never touching unpair's own reset.
+    secureStoreMocks.items.set('trust.desktopStaticPublicKey', bytesToHex(new Uint8Array(32).fill(9)));
+    secureStoreMocks.items.set('trust.relayAddress', 'wss://relay.example.com');
+    secureStoreMocks.items.set('trust.pairedAt', '2026-08-25T12:05:00.000Z');
+
+    reconnectNow();
+    await waitUntil(() => relayTransportMocks.constructions > 0, {
+      label: 'the new (non-demo) desktop key dials the relay',
+      timeoutMs: 5000,
+    });
+
+    expect(resetPushRegistrationProcessState).toHaveBeenCalledTimes(1);
   });
 });
