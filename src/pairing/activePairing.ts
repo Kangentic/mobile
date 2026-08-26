@@ -1,4 +1,4 @@
-import type { PairingQrPayload } from '@kangentic/protocol';
+import type { PairingQrPayload, Transport } from '@kangentic/protocol';
 import { RelayTransport, deriveSlotId } from '@/channel';
 import { DeviceIdentityManager } from './deviceIdentity';
 import { PairingMachine, type PairingMachineState } from './pairingMachine';
@@ -18,12 +18,30 @@ let activePayload: PairingQrPayload | null = null;
  * pairingStore mirrors its `PairingMachineState` for screens to read;
  * this module is the only thing that ever calls its methods.
  */
-export async function beginPairing(payload: PairingQrPayload, deviceName: string): Promise<void> {
+export interface BeginPairingOptions {
+  /**
+   * Runs the ceremony over this transport instead of dialing the payload's
+   * relay. The ONLY caller is `@/demo/demoPairing`, which supplies a loopback
+   * pair so the reviewer/demo code can pair against an in-process peer with no
+   * relay and no network (see `src/demo/demoIdentity.ts` for why that exists).
+   *
+   * Absent, this function behaves exactly as it did before the option existed:
+   * derive the slot, dial the relay. The injection point mirrors the one
+   * `ChannelController` already accepts for the same purpose, rather than
+   * introducing a new pattern.
+   */
+  transport?: Transport;
+}
+
+export async function beginPairing(payload: PairingQrPayload, deviceName: string, options: BeginPairingOptions = {}): Promise<void> {
   activeMachine?.reject();
 
   const identity = await deviceIdentityManager.getIdentity();
-  const slotId = deriveSlotId({ kind: 'pairing', pairingToken: payload.pairingToken });
-  const transport = new RelayTransport({ relayUrl: payload.relayAddress, slotId });
+  // No slot is derived for an injected transport: a slot is a relay rendezvous
+  // label, and there is no relay in that path. Deriving one anyway would be
+  // dead work that reads as if the demo touches relay routing.
+  const transport =
+    options.transport ?? new RelayTransport({ relayUrl: payload.relayAddress, slotId: deriveSlotId({ kind: 'pairing', pairingToken: payload.pairingToken }) });
 
   const machine = new PairingMachine({ identity, payload, transport, deviceName });
   activeMachine = machine;

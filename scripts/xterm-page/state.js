@@ -31,6 +31,28 @@
   // screen. Open pinned to column 0 at the newest output instead, and hand
   // control over the moment the user actually touches or types.
   var pinnedToStart = true;
+  // The viewport height the FIT is computed against: the largest this
+  // orientation has shown, not whatever the window measures right now. The
+  // soft keyboard shrinks the window, and fitting against that shrunken
+  // height re-fit the whole grid to the strip above the keyboard - the font
+  // collapsed toward MIN_AUTO_FONT_PX on every keyboard open and sprang back
+  // on close, so typing made the terminal unreadable at exactly the moment it
+  // was being used. Keyed by innerWidth so a rotation (a REAL viewport
+  // change) starts its own maximum; within one orientation the only shrink is
+  // the keyboard, which must not change the fit - the grid keeps its size,
+  // the keyboard covers its lower rows, and follow-the-cursor (which reads
+  // the CURRENT innerHeight on purpose) pans the typing back into view.
+  var maxFitHeightByWidth = {};
+  function fitViewportHeight() {
+    var width = window.innerWidth;
+    var height = window.innerHeight;
+    var best = maxFitHeightByWidth[width] || 0;
+    if (height > best) {
+      maxFitHeightByWidth[width] = height;
+      best = height;
+    }
+    return best;
+  }
   var MIN_AUTO_FONT_PX = 6;
   // Cap the auto-fit font so a very short grid does not produce absurd glyphs;
   // pinch zoom goes higher or lower on demand, bounded by the host's own

@@ -3,7 +3,10 @@ paths:
   - "src/observability/**"
   - "src/pairing/**"
   - "src/channel/**"
+  - "src/demo/**"
+  - "src/devsupport/**"
   - "src/notifications/**"
+  - "app/+native-intent.ts"
 ---
 # Rule: crash reporting reports crashes, never content
 
@@ -25,9 +28,12 @@ scrubber is therefore a second line of defence, never the control itself.
   Everywhere else, crash reporting is automatic through the global handler. This exists so that
   no other module can re-enable a default the init deliberately turned off, or capture an event
   that bypasses the configured scrubber.
-- **`src/pairing/**`, `src/channel/**`, and `src/notifications/**` must not report to Sentry at
-  all**, neither the SDK nor the `src/observability/` wrapper. Their error messages can carry
-  ciphertext, key material, or attacker-controlled bytes:
+- **`src/pairing/**`, `src/channel/**`, `src/demo/**`, `src/devsupport/**`,
+  `src/notifications/**`, and `app/+native-intent.ts` must not report
+  to Sentry at all**, neither the SDK nor the `src/observability/` wrapper. Their error messages can carry
+  ciphertext, key material, or attacker-controlled bytes (`src/devsupport/` holds the loopback
+  transport and stub peer the shipped demo runs its handshake against, and `app/+native-intent.ts`
+  receives raw deep-link URLs before any error boundary exists):
   `src/notifications/pushDecrypt.ts` states it directly, and swallows without logging for
   exactly this reason (see `e2e-notification-privacy.md`). The global handler still reports a
   genuine crash originating in these directories; what is banned is a hand-written
@@ -138,7 +144,8 @@ ever matters; until then it is a named gap, not an unbroken invariant.
 - **Lint (live now):** `eslint.config.mjs` declares three `no-restricted-imports` zones - two
   confining `@sentry/*` to `src/observability/` (one for `.ts`/`.tsx` with `allowTypeImports`,
   one for `.js`/`.mjs`/`.cjs`), and one banning both the SDK and the wrapper from the pairing,
-  channel, and notification directories. `Lint (ESLint)` is a required status check on `main`,
+  channel, demo, devsupport, and notification directories plus `app/+native-intent.ts`.
+  `Lint (ESLint)` is a required status check on `main`,
   so this is mechanical rather than review-only. Each zone was verified to fire by probe file,
   not merely assumed. **Know its one hole:** `no-restricted-imports` matches `import` syntax
   only, never `require()`. `metro.config.js` legitimately does
@@ -152,5 +159,5 @@ ever matters; until then it is a named gap, not an unbroken invariant.
 
 ## Scope
 
-`src/observability/**` and the three directories banned from reporting. Does not govern what the
-desktop or relay log about themselves.
+`src/observability/**` and the directories (plus `app/+native-intent.ts`) banned from reporting.
+Does not govern what the desktop or relay log about themselves.

@@ -20,6 +20,7 @@ import { useChannelStore } from '@/state/channelStore';
 const pushRegistrationMocks = vi.hoisted(() => ({
   unregisterPushWithDesktop: vi.fn<(verbs: unknown) => Promise<void>>(),
   registerPushWithDesktop: vi.fn<(verbs: unknown) => Promise<void>>(),
+  resetPushRegistrationProcessState: vi.fn<() => void>(),
 }));
 const pushKeysMocks = vi.hoisted(() => ({
   clearPushRegistration: vi.fn<() => Promise<void>>(),

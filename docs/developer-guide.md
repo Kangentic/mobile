@@ -254,9 +254,18 @@ which is where the page's own state is exposed.
 
 `scripts/storeScreenshots.mjs` captures the Play listing images. It needs the MOCK rig
 (`npm run dev:mock`) against a **dev build**, because `isMockDesktopEnabled()` is
-`__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'` - a release APK shows an unpaired
-"Connecting to your desktop..." screen instead, and does so silently. Check the install before
-trusting the screen:
+`__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'` - a release APK started with that env var shows
+an unpaired "Connecting to your desktop..." screen instead, and does so silently. Check the
+install before trusting the screen:
+
+> **A release build CAN now show mock content, by a different door.** The reviewer/demo pairing
+> (`src/demo/`) reaches the same `createMockDesktop()` from a persisted trust anchor with no
+> `__DEV__` gate, so entering `kangentic-pair://demo` on a production build lands in the same
+> fixtures. That is a supported path for verifying a release binary and for capturing
+> release-shaped screenshots, which `.github/scripts/capture-ios-screenshots.sh` documents three
+> failed attempts at. It does NOT change the paragraph above: the env-var route is still
+> dev-only, so a release build with `EXPO_PUBLIC_KANGENTIC_MOCK=1` and no demo anchor still shows
+> the unpaired screen.
 
 ```
 adb shell "dumpsys package com.kangentic.mobile | grep flags="   # wants DEBUGGABLE

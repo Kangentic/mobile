@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import type { TranscriptBlockWire, TranscriptEntryWire } from '@kangentic/protocol';
 import { parseTranscriptEntriesWire } from '@kangentic/protocol';
 
-import { baseTranscriptForTest } from '@/connection/mockDesktop';
+import { baseTranscriptForTest, MOCK_STATIC_SESSIONS, staticSessionSeedTranscriptForTest } from '@/connection/mockDesktop';
 import { buildConversationCells } from '@/conversation/transcriptCells';
 
 const entries: TranscriptEntryWire[] = baseTranscriptForTest();
@@ -34,6 +34,24 @@ describe('the mock transcript is a valid wire payload', () => {
     // hand-authored entry that drifts from the wire contract fails here.
     expect(() => parseTranscriptEntriesWire(JSON.parse(JSON.stringify(entries)))).not.toThrow();
   });
+});
+
+describe('every static session seed is a valid wire payload', () => {
+  // The static sessions are hand-authored per agent flavor (Claude names,
+  // Codex function envelopes, OpenCode lowercase tools), and each one is a
+  // full chat screen a reviewer can open - so each seed has to survive the
+  // same parser a real desktop frame does, and each must flatten with no
+  // orphaned tool results.
+  it.each(MOCK_STATIC_SESSIONS.map((spec) => [spec.sessionId, spec] as const))(
+    'parses and flattens %s',
+    (_sessionId, spec) => {
+      const seed = staticSessionSeedTranscriptForTest(spec);
+      expect(seed.length).toBeGreaterThan(0);
+      expect(() => parseTranscriptEntriesWire(JSON.parse(JSON.stringify(seed)))).not.toThrow();
+      const seedCells = buildConversationCells(seed, { liveTailLines: null, pendingPrompt: null });
+      expect(seedCells.filter((cell) => cell.kind === 'tool-result-orphan')).toEqual([]);
+    },
+  );
 });
 
 describe('the mock transcript covers every wire shape', () => {

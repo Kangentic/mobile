@@ -55,6 +55,7 @@ vi.mock('@/connection/bootstrap', () => ({ runBootstrap: mockRunBootstrap }));
 const pushRegistrationMocks = vi.hoisted(() => ({
   registerPushWithDesktop: vi.fn(async () => undefined),
   unregisterPushWithDesktop: vi.fn(async () => undefined),
+  resetPushRegistrationProcessState: vi.fn(),
 }));
 vi.mock('@/notifications/pushRegistration', () => pushRegistrationMocks);
 

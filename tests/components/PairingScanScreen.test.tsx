@@ -3,6 +3,7 @@ import { AppState, Linking, type AppStateStatus, type NativeEventSubscription } 
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react-native';
 import { encodePairingQrPayload, PROTOCOL_VERSION } from '@kangentic/protocol';
 import { PairingScanScreen } from '@/screens/PairingScanScreen';
+import { DEMO_PAIRING_SHORTCUT, DEMO_PAIRING_URI, DEMO_PAIRING_WORD } from '@/demo/demoIdentity';
 
 jest.mock('@/pairing/activePairing', () => ({
   beginPairing: jest.fn().mockResolvedValue(undefined),
@@ -13,6 +14,49 @@ jest.mock('@/pairing/activePairing', () => ({
 // in place rather than swapping in a new fn, so the reference never goes
 // stale across tests.
 const { beginPairing } = jest.requireMock<{ beginPairing: jest.Mock }>('@/pairing/activePairing');
+
+// The demo ceremony is mocked here for the same reason beginPairing is: this
+// tier's job is to prove the screen ROUTES a demo code to it and never into
+// real pairing validation. That the ceremony itself is a genuine handshake is
+// proved in tests/unit/demoPairingHandshake.test.ts, where a real loopback peer
+// is available and expo-secure-store can be faked.
+jest.mock('@/demo/demoPairing', () => {
+  class FakeAlreadyPairedError extends Error {
+    constructor() {
+      super('This phone is already paired. Unpair first to use the demo.');
+      this.name = 'AlreadyPairedError';
+    }
+  }
+  class FakePairingInProgressError extends Error {
+    constructor() {
+      super('A pairing is already in progress. Finish or cancel it first.');
+      this.name = 'PairingInProgressError';
+    }
+  }
+  return {
+    beginDemoPairing: jest.fn().mockResolvedValue(undefined),
+    AlreadyPairedError: FakeAlreadyPairedError,
+    PairingInProgressError: FakePairingInProgressError,
+  };
+});
+
+const { beginDemoPairing, AlreadyPairedError } = jest.requireMock<{
+  beginDemoPairing: jest.Mock;
+  AlreadyPairedError: new () => Error;
+  PairingInProgressError: new () => Error;
+}>('@/demo/demoPairing');
+
+// A DELEGATING mock, not a stub: it records calls while still running the real
+// validator, so the sixteen tests below that depend on genuine QR validation
+// are unaffected, and the demo tests can additionally assert the validator was
+// never reached. A plain jest.spyOn cannot do this - the screen holds a direct
+// binding to the imported function, and ES module exports are not writable.
+jest.mock('@/pairing/qr', () => {
+  const actual = jest.requireActual<typeof import('@/pairing/qr')>('@/pairing/qr');
+  return { ...actual, validateScannedQr: jest.fn(actual.validateScannedQr) };
+});
+
+const { validateScannedQr } = jest.requireMock<{ validateScannedQr: jest.Mock }>('@/pairing/qr');
 
 // Separate mocks per verb: the screen's choice of navigate over push is
 // load-bearing (navigate dedupes onto an existing route; push would stack a
@@ -41,8 +85,14 @@ function trackSpy<Spy extends { mockRestore: () => void }>(spy: Spy): Spy {
 // confirm screen after a failed ceremony).
 const mockLatestFocusEffect: { current: (() => void | (() => void)) | null } = { current: null };
 
+// The route params the screen reads for the demo deep link. Mutated by the
+// deep-link tests; reset to empty in beforeEach so every other test renders the
+// ordinary /pair route.
+const mockSearchParams: { current: Record<string, string> } = { current: {} };
+
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: mockPush, navigate: mockNavigate, back: jest.fn(), replace: jest.fn() }),
+  useLocalSearchParams: () => mockSearchParams.current,
   useFocusEffect: (effect: () => void | (() => void)) => {
     mockLatestFocusEffect.current = effect;
     // This approximates real focus-regain by re-running the effect whenever
@@ -142,6 +192,8 @@ describe('PairingScanScreen', () => {
     // mockReturnValueOnce), so a test that queued one and never consumed it
     // could otherwise leak into the next test. Re-assert the baseline here.
     beginPairing.mockResolvedValue(undefined);
+    beginDemoPairing.mockResolvedValue(undefined);
+    mockSearchParams.current = {};
     mockRefreshCameraPermission.mockResolvedValue(undefined);
     mockCameraPermission.granted = false;
     mockCameraPermission.canAskAgain = true;
@@ -603,6 +655,166 @@ describe('PairingScanScreen', () => {
       });
       expect(beginPairing).toHaveBeenCalledTimes(1);
       expect(mockNavigate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The reviewer/demo code. The isolation assertions here are the point: this
+   * code ships in production and is refused by nothing, so "it never enters
+   * real pairing" has to be pinned at the screen, not just reasoned about.
+   */
+  describe('demo code', () => {
+    it.each([
+      ['the bare word the review notes ask for', DEMO_PAIRING_WORD],
+      ['the bare word in caps', DEMO_PAIRING_WORD.toUpperCase()],
+      ['the bare word with pasted whitespace', `  ${DEMO_PAIRING_WORD} `],
+      ['the typed shortcut', DEMO_PAIRING_SHORTCUT],
+      ['the encoded URI a reviewer scans', DEMO_PAIRING_URI],
+      ['a shortcut with pasted whitespace', `  ${DEMO_PAIRING_SHORTCUT}\n`],
+      ['a shortcut typed in caps', DEMO_PAIRING_SHORTCUT.toUpperCase()],
+    ])('routes %s to the demo ceremony and into confirm', async (_label, code) => {
+      render(<PairingScanScreen />);
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), code);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      });
+
+      expect(beginDemoPairing).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith('/pair-confirm');
+      // The two isolation invariants, asserted at the screen where the branch
+      // actually lives. validateScannedQr in particular would reject the frozen
+      // URI as version-incompatible the first time PROTOCOL_VERSION moved, so a
+      // regression here is a demo that dies silently in App Review.
+      expect(validateScannedQr).not.toHaveBeenCalled();
+      expect(beginPairing).not.toHaveBeenCalled();
+    });
+
+    it('routes a scanned demo QR the same way as a pasted one', async () => {
+      mockCameraPermission.granted = true;
+      render(<PairingScanScreen />);
+
+      await act(async () => {
+        mockLatestCameraViewProps.current?.onBarcodeScanned?.({ data: DEMO_PAIRING_URI });
+      });
+
+      expect(beginDemoPairing).toHaveBeenCalledTimes(1);
+      expect(validateScannedQr).not.toHaveBeenCalled();
+      expect(beginPairing).not.toHaveBeenCalled();
+    });
+
+    it('still sends a real pairing URI down the real path', async () => {
+      // The other half of the branch. Without this, deleting the demo check's
+      // `return` would leave every test above passing.
+      render(<PairingScanScreen />);
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      });
+
+      expect(validateScannedQr).toHaveBeenCalledTimes(1);
+      expect(beginPairing).toHaveBeenCalledTimes(1);
+      expect(beginDemoPairing).not.toHaveBeenCalled();
+    });
+
+    it('a same-tick double tap starts the demo exactly once', async () => {
+      render(<PairingScanScreen />);
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      const submitButton = screen.getByTestId('pairing-paste-link-submit');
+      await act(async () => {
+        fireEvent.press(submitButton);
+        fireEvent.press(submitButton);
+      });
+
+      expect(beginDemoPairing).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+    });
+
+    it('surfaces the already-paired refusal by name, and does not navigate', async () => {
+      // "Could not start pairing" on a phone that is working perfectly reads as
+      // a broken app, so the refusal has to say which refusal it is.
+      beginDemoPairing.mockRejectedValueOnce(new AlreadyPairedError());
+      render(<PairingScanScreen />);
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      });
+
+      expect(screen.getByTestId('pairing-scan-error')).toHaveTextContent(
+        'This phone is already paired. Unpair first to use the demo.',
+      );
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('releases the guard after a refusal so a real code still works', async () => {
+      beginDemoPairing.mockRejectedValueOnce(new AlreadyPairedError());
+      render(<PairingScanScreen />);
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      });
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      });
+
+      expect(beginPairing).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith('/pair-confirm');
+    });
+
+    it('reports an unexpected ceremony failure with the generic message', async () => {
+      beginDemoPairing.mockRejectedValueOnce(new Error('loopback exploded'));
+      render(<PairingScanScreen />);
+
+      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      });
+
+      expect(screen.getByTestId('pairing-scan-error')).toHaveTextContent('Could not start pairing. Try again.');
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('starts the demo from the deep-link route param', async () => {
+      // app/+native-intent.ts turns kangentic-pair://demo into /pair?demo=1.
+      mockSearchParams.current = { demo: '1' };
+
+      render(<PairingScanScreen />);
+      // render() already acts; this empty act flushes the mount effect's own
+      // async continuation (beginDemoPairing resolves, then navigate fires).
+      await act(async () => {});
+
+      expect(beginDemoPairing).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith('/pair-confirm');
+      expect(validateScannedQr).not.toHaveBeenCalled();
+    });
+
+    it('does not start the demo on an ordinary visit to the pairing screen', async () => {
+      render(<PairingScanScreen />);
+      await act(async () => {});
+
+      expect(beginDemoPairing).not.toHaveBeenCalled();
+    });
+
+    it('does not restart the demo when the screen regains focus', async () => {
+      // The focus effect re-arms the in-flight latch on every focus regain, so
+      // without the once-per-mount ref, backing out of the confirm screen would
+      // immediately restart the ceremony the user just left.
+      mockSearchParams.current = { demo: '1' };
+      render(<PairingScanScreen />);
+      await act(async () => {});
+      expect(beginDemoPairing).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        mockLatestFocusEffect.current?.();
+      });
+
+      expect(beginDemoPairing).toHaveBeenCalledTimes(1);
     });
   });
 });

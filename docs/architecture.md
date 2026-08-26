@@ -157,10 +157,19 @@ Route files under `app/` are thin wrappers that render the matching `src/screens
 (e.g. `app/pair.tsx` renders `PairingScanScreen`); this keeps the documented `src/` layout as the
 place screen logic actually lives while still getting expo-router's file-based routing. In Phase 1
 the pairing on-ramp is the in-app camera scan (or the paste-link fallback) inside
-`PairingScanScreen`; OS-level deep-link routing of a `kangentic-pair://` URI is not wired yet.
-The pairing payload is a base64url blob in the URI authority (not a `/pair` path), so routing it
-needs a dedicated `expo-linking` handler that feeds the captured URL through the same
-`validateScannedQr` then `beginPairing` path; that lands in a later phase.
+`PairingScanScreen`. OS-level deep-link routing of a REAL `kangentic-pair://` URI is still not
+wired. The pairing payload is a base64url blob in the URI authority (not a `/pair` path), so
+routing it needs a handler that feeds the captured URL through the same `validateScannedQr` then
+`beginPairing` path; that lands in a later phase, and deliberately so - a real payload carries an
+attacker-chosen desktop key and relay address, both of which pairing pins for every later session,
+so honouring one from an arbitrary web page or message is a capability that needs its own threat
+model rather than a few lines of plumbing.
+
+`app/+native-intent.ts` DOES exist and handles exactly one URL: the reviewer/demo code
+`kangentic-pair://demo`, which it rewrites to `/pair?demo=1`. That is safe under the paragraph
+above precisely because it carries no attacker-controlled data - it is a compile-time constant,
+it is refused when the phone is already paired, and it can only ever show on-device fixture
+content. See `src/demo/demoIdentity.ts`.
 
 Navigation: an activity-triage home (Needs you / Working / Idle) plus a swipeable Board tab,
 both live off the channel feeds. Opening a task is full-screen with a bottom tab bar

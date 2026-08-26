@@ -1,0 +1,117 @@
+appId: com.kangentic.mobile
+---
+# The reviewer/demo pairing, walked exactly as App Store Review is told to walk
+# it in docs/store-listing.md.
+#
+# NO RIG. This is the only flow in the repo that needs no relay, no
+# scripts/stubDesktopPeer.mjs and no pre-completed pairing: the demo pairs
+# against an in-process peer over a loopback transport, which is the entire
+# point of it. It belongs beside smoke.yaml (fresh, unpaired install), not
+# under paired/.
+#
+# It is also SELF-CLEANING, and that is load-bearing rather than tidy: the demo
+# writes a REAL trust anchor that survives app restarts by design, so a run that
+# stopped at "look, content" would leave the install paired and every later
+# smoke.yaml run would fail on the missing pair CTA. Unpairing at the end both
+# restores the precondition and asserts the one exit route the reviewer is
+# given.
+- launchApp
+# App-ready gate, same reasoning as smoke.yaml: a bare assertVisible gets only
+# Maestro's short implicit wait, which races a cold CI emulator. Tab labels are
+# the selector because NativeTabs buttons carry no testID of ours (see
+# .claude/rules/e2e-maestro-runs.md).
+- extendedWaitUntil:
+    visible:
+      text: "Agents"
+    timeout: 45000
+- assertVisible:
+    id: "triage-pair-cta"
+- tapOn:
+    id: "triage-pair-cta"
+- extendedWaitUntil:
+    visible:
+      id: "pairing-scan-screen"
+    timeout: 20000
+# The typed code, not the QR: Maestro cannot point a camera at anything, and
+# this is the fallback the review notes give a reviewer who declines camera
+# access. Testing the path that works without a camera is the right choice
+# anyway, since it is the one most likely to be used.
+- tapOn:
+    id: "pairing-paste-link-input"
+# The bare word, which is exactly what docs/store-listing.md tells App Review to
+# type. Covering the reviewer's literal keystrokes rather than a longer form
+# they will never enter is the point of this flow.
+- inputText: "demo"
+- hideKeyboard
+- tapOn:
+    id: "pairing-paste-link-submit"
+# A REAL Noise IKpsk0 ceremony runs here, against the in-process responder, so
+# the SAS screen is genuine and the digits are derived from a real transcript
+# hash. Nothing is stubbed out; it is simply fast, because there is no network.
+- extendedWaitUntil:
+    visible:
+      id: "sas-digits"
+    timeout: 30000
+- tapOn:
+    id: "sas-accept"
+# Back on the home feed, now populated by the in-process desktop. 60s because
+# this covers the confirm animation hold, the reconnect, the KK handshake and
+# the first bootstrap round.
+#
+# This id is a CONTENT assertion, not just a render one: TriageHomeScreen only
+# reaches the branch that renders it when `rows.length > 0 && feedReady`, so
+# anything short of real content arriving lands on ConnectingEmptyState or
+# AllQuietEmptyState instead and this times out. Deliberately preferred over
+# asserting a specific `activity-row-<id>`, which would additionally depend on
+# which section the mock session sorts into and on the PERSISTED section-collapse
+# state that leaks between flows.
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 60000
+# The board tab, the other half of what the review notes promise. Asserting the
+# fixture title by text is the point here - it is the actual thing a reviewer has
+# to be able to see, and it is the assertion that would fail if the board arrived
+# empty. (Content by text, not a control by label: the testID rule governs
+# selecting things to tap.)
+- tapOn:
+    text: "Board"
+- extendedWaitUntil:
+    visible:
+      id: "board-screen"
+    timeout: 20000
+- assertVisible: "Fix the sign-in redirect dropping the return path"
+# Survives a restart. The reviewer is told it will, and a demo that quietly
+# dropped its pairing on relaunch would read as the app being broken - which is
+# the exact impression this whole feature exists to prevent.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 60000
+- assertNotVisible:
+    id: "triage-pair-cta"
+# The documented exit: Settings -> Paired desktop -> Unpair, twice (the second
+# tap is the confirm; there is deliberately no timer on the arming).
+- tapOn:
+    id: "header-settings-button"
+- extendedWaitUntil:
+    visible:
+      id: "settings-screen"
+    timeout: 20000
+- tapOn:
+    id: "settings-devices-row"
+- extendedWaitUntil:
+    visible:
+      id: "devices-desktop-card"
+    timeout: 20000
+- tapOn:
+    id: "devices-unpair"
+- tapOn:
+    id: "devices-unpair-confirm"
+# Back to a fresh, unpaired install: the pair CTA is the proof, and it is also
+# the precondition smoke.yaml needs to still hold after this flow has run.
+- extendedWaitUntil:
+    visible:
+      id: "triage-pair-cta"
+    timeout: 30000

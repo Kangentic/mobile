@@ -34,7 +34,11 @@ app/                           # expo-router route wrappers (thin - render the s
   completed-task.tsx            # a finished task's transcript + run summary
   create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx
                                 #   native form-sheet routes (they replaced the custom board sheets)
-  pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen (OS deep-link routing of kangentic-pair:// is a later phase)
+  pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen
+  +native-intent.ts             # deep links; routes ONLY the demo code (kangentic-pair://demo).
+                                #   OS routing of a REAL kangentic-pair:// payload is still a later
+                                #   phase, deliberately: an arbitrary link must not be able to start
+                                #   a ceremony against an attacker-chosen relay
   settings.tsx, devices.tsx
 assets/brand/                 # Synced identity rasters (icon/splash/adaptive, the iOS Board tab
                               #   glyph) - scripts/syncBranding.mjs owns them
@@ -68,13 +72,19 @@ src/
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
   connection/     # Lifecycle composer: AppState connect/background policy, bootstrap, store feed glue,
-                  #   the actions API screens call (accountless-core scoped), dev-only
-                  #   mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
+                  #   the actions API screens call (accountless-core scoped), the
+                  #   mockDesktop peer (dev rig via EXPO_PUBLIC_KANGENTIC_MOCK, and - since the
+                  #   reviewer demo - also in PRODUCTION via a demo trust anchor, see src/demo/)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
+  demo/           # The permanent reviewer/demo pairing: fixed non-expiring code, in-process
+                  #   IKpsk0 ceremony against StubPairingResponder, the isDemoAnchor
+                  #   discriminator. Ships in release builds by design (App Review 2.1(a))
   devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures, the
                   #   dev-only inspect bridge (EXPO_PUBLIC_KANGENTIC_INSPECT) - shared by tests +
                   #   rigs - plus claudeCapture*.ts: RECORDED real Claude Code PTY output the mock
-                  #   terminal replays (generated, never hand-edited; see scripts/ below)
+                  #   terminal replays (generated, never hand-edited; see scripts/ below).
+                  #   NOTE: no longer dev-only in the bundling sense - the demo pulls the
+                  #   loopback transport, stub peer and fixtures into release builds
   terminal/       # Pure liveTail PTY cleaner, clean-feed differ, key sequences, WebView bridge,
                   #   generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
@@ -346,13 +356,14 @@ names its enforcement (live now, or planned where mechanical coverage does not e
 - `protocol-types-from-package.md` - wire/crypto/capability types come only from
   `@kangentic/protocol`, never redeclared (`src/**`).
 - `accountless-core.md` - pairing/transport/capability code has no account/entitlement imports
-  (`src/pairing/`, `src/channel/`, `src/connection/`, `src/notifications/`).
+  (`src/pairing/`, `src/channel/`, `src/connection/`, `src/demo/`, `src/devsupport/`,
+  `src/notifications/`, `app/+native-intent.ts`).
 - `e2e-notification-privacy.md` - push payloads are ciphertext plus placeholder only
   (`src/notifications/`, `plugins/`, `targets/`).
 - `crash-reporting-scope.md` - Sentry imports confined to `src/observability/` and banned outright
-  from the pairing/channel/notification paths; privacy controls set at the source because a JS
-  `beforeSend` cannot filter native crashes (`src/observability/`, `src/pairing/`, `src/channel/`,
-  `src/notifications/`).
+  from the pairing/channel/demo/devsupport/notification paths; privacy controls set at the source
+  because a JS `beforeSend` cannot filter native crashes (`src/observability/`, `src/pairing/`,
+  `src/channel/`, `src/demo/`, `src/devsupport/`, `src/notifications/`, `app/+native-intent.ts`).
 - `expo-cng.md` - no hand-edited `ios/`/`android/`; native config via config plugins; SDK-resolved
   dependency installs via `expo install` (`app.json`, `app.config.*`, `eas.json`, `plugins/`,
   `ios/`, `android/`, `package.json`, `package-lock.json`).
