@@ -34,6 +34,18 @@ import { waitUntil } from '../helpers/async';
 const mockRunBootstrap = vi.hoisted(() => vi.fn<() => Promise<void>>());
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: mockRunBootstrap }));
 
+// The open path lazy-imports pushRegistration (the desktop-key-change reset,
+// and the fire-and-forget registration on establish). The REAL module's import
+// chain reaches expo-constants, which throws outside a react-native runtime -
+// and each test here opens with a fresh random anchor, so from the second test
+// on the key-change branch fires. Stubbed inert; this file asserts nothing
+// about push registration.
+vi.mock('@/notifications/pushRegistration', () => ({
+  registerPushWithDesktop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  unregisterPushWithDesktop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  resetPushRegistrationProcessState: vi.fn<() => void>(),
+}));
+
 // The seam the test uses to reach into the mock desktop's own stub
 // initiator (to drive a SECOND handshake later) - vi.mock factories can
 // only close over vi.hoisted state, never a plain outer-scope variable.

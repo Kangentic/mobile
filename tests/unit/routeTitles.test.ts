@@ -78,6 +78,12 @@ function deriveExpectedRouteNames(directoryPath: string, relativeRoutePath = '')
     if (directoryEntry.name === '_layout.tsx') {
       continue;
     }
+    // +native-intent is expo-router's deep-link redirect hook (it exports
+    // redirectSystemPath), not a route: the router never mounts it as a
+    // screen, so no <Stack.Screen> can or should register it.
+    if (/^\+native-intent\.tsx?$/.test(directoryEntry.name)) {
+      continue;
+    }
     const groupDirectoryMatch = entryRelativePath.match(/^(\([^)]+\))\//);
     if (groupDirectoryMatch) {
       expectedRouteNames.add(groupDirectoryMatch[1]);

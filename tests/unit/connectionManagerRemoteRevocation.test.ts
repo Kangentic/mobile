@@ -82,6 +82,17 @@ vi.mock('expo-secure-store', () => ({
 
 const mockClearPushRegistration = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@/notifications/pushKeys', () => ({ clearPushRegistration: mockClearPushRegistration }));
+// The open path lazy-imports pushRegistration (the desktop-key-change reset,
+// and the fire-and-forget registration on establish). The REAL module's import
+// chain reaches expo-constants, which throws outside a react-native runtime -
+// and each test here opens with a fresh random anchor, so from the second test
+// on the key-change branch fires. Stubbed inert; this file asserts nothing
+// about push registration.
+vi.mock('@/notifications/pushRegistration', () => ({
+  registerPushWithDesktop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  unregisterPushWithDesktop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  resetPushRegistrationProcessState: vi.fn<() => void>(),
+}));
 
 const mockRouter = vi.hoisted(() => ({
   canDismiss: vi.fn(() => true),

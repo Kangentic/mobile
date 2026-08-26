@@ -334,8 +334,17 @@ async function performOpenConnection(): Promise<void> {
 
   const anchorDesktopKeyHex = bytesToHex(anchor.desktopStaticPublicKey);
   if (pushRegistrationDesktopKeyHex !== null && pushRegistrationDesktopKeyHex !== anchorDesktopKeyHex) {
-    const { resetPushRegistrationProcessState } = await import('@/notifications/pushRegistration');
-    resetPushRegistrationProcessState();
+    // Best-effort like every other pushRegistration import in this file: a
+    // failure here must degrade to the stale-registration behavior the cache
+    // exists to fix, never kill the whole open. Unguarded, it was the ONLY
+    // dynamic import in the open path without a catch, and it did kill the
+    // open under vitest, where the real import chain reaches expo-constants.
+    try {
+      const { resetPushRegistrationProcessState } = await import('@/notifications/pushRegistration');
+      resetPushRegistrationProcessState();
+    } catch {
+      // The process cache clears on the next app restart anyway.
+    }
   }
   pushRegistrationDesktopKeyHex = anchorDesktopKeyHex;
 
