@@ -1,0 +1,33 @@
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
+index 241fa64..dd9eb03 100644
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
+@@ -336,6 +336,7 @@ class EnrichedMarkdownText
+ 
+     override fun onDetachedFromWindow() {
+       stopSpoilerAnimations()
++      accessibilityHelper.cleanup()
+       super.onDetachedFromWindow()
+     }
+ 
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/MarkdownAccessibilityHelper.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/MarkdownAccessibilityHelper.kt
+index b709380..23883f7 100644
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/MarkdownAccessibilityHelper.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/MarkdownAccessibilityHelper.kt
+@@ -91,6 +91,16 @@ class MarkdownAccessibilityHelper(
+     observer.addOnGlobalLayoutListener(listener)
+   }
+ 
++  /**
++   * Drops the pending global-layout listener. MUST be called while the view is
++   * still attached: once detached, `textView.viewTreeObserver` is the view's
++   * own floating observer, not the window's, so the removal would target the
++   * wrong observer and the listener would stay on the window forever.
++   */
++  fun cleanup() {
++    removePendingLayoutListener()
++  }
++
+   private fun removePendingLayoutListener() {
+     val listener = pendingLayoutListener ?: return
+     pendingLayoutListener = null

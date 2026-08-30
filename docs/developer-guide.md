@@ -2211,9 +2211,91 @@ reference therefore accounts for a whole ~225-view screen.
   and an idle pool holds `Thread -> Worker -> ThreadPoolExecutor -> (empty queue)`. The view holds
   the executor; nothing on that chain holds the view. A leaked thread is a leaked thread.
 
-**The thread leak is a separate, confirmed bug**, worth reporting upstream on its own: one
-never-dying core thread per rendered markdown view, ~4 per session open here, flat the moment
-markdown rendering is removed.
+### The cause: an accessibility listener left on the window's ViewTreeObserver
+
+**Fixed, and the fix is verified to the plan's bar: `Views` returns exactly to baseline and
+`WebViews` to zero after six cycles.** It is one line of Kotlin, carried as a `patch-package`
+patch (`patches/react-native-enriched-markdown+0.7.4.patch`, applied by the `postinstall` script).
+
+`MarkdownAccessibilityHelper.invalidateAccessibilityItems()` rebuilds its TalkBack items
+immediately when the view already has a `Layout`, and otherwise defers via
+`schedulePostLayoutRebuild()`, which registers a `ViewTreeObserver.OnGlobalLayoutListener` that
+removes itself in its own callback. Three things turn that into a per-instance leak:
+
+1. **The deferred path is the normal path, not the edge case.** The JS wrapper always sends
+   `accessibilityLabels` (resolved defaults), so the `labels` setter always runs and always calls
+   `invalidateAccessibilityItems()` - at prop time, before the view has ever been laid out.
+2. **The listener is registered on the WINDOW.** Before attach, `View.getViewTreeObserver()`
+   hands back the view's own floating observer; on attach the framework MERGES that observer's
+   listeners into `ViewRootImpl`'s. `ViewRootImpl` outlives every route and is a GC root.
+3. **In Fabric the callback need not ever fire.** React Native lays views out by calling
+   `View.layout()` directly from mount items; `onGlobalLayout` is dispatched by
+   `ViewRootImpl.performLayout`, which a mounted subtree does not require. A listener that never
+   fires never removes itself.
+
+The result is one strong chain per markdown view that outlives the route:
+`ViewRootImpl.mTreeObserver -> listener -> MarkdownAccessibilityHelper -> the TextView -> mParent
+-> the whole session screen`, the xterm WebView in a different pane included. That is why a leaf
+component in the Chat pane retained the Terminal pane's WebView, and why three separate
+investigations found the WebView "leaking" while removing it changed nothing.
+
+**The fix**: remove the listener in `onDetachedFromWindow()`, which is the last moment
+`getViewTreeObserver()` still returns the window's observer rather than the view's floating one.
+Doing it in `onDropViewInstance` would be too late and would silently remove from the wrong
+observer.
+
+```kotlin
+override fun onDetachedFromWindow() {
+  stopSpoilerAnimations()
+  accessibilityHelper.cleanup()   // -> removePendingLayoutListener()
+  super.onDetachedFromWindow()
+}
+```
+
+**A minimal reproduction exists and is the thing to hand upstream.** With the probe's
+`single-markdown` variant the whole chat pane is one `MarkdownBlock` - no list, no cells, no
+recycling - and one open/close cycle still retains a whole screen:
+
+| Six cycles, baseline 327 views / 0 WebViews | Views | WebViews | Threads |
+|---|---|---|---|
+| One markdown view, unpatched | 807 (+80/cycle) | 6 (+1/cycle) | 51 -> 95 |
+| One markdown view, **never rendered** (`markdown=""`) | 1287 (+80/cycle) | +1/cycle | flat |
+| One markdown view, patched | **327** | **0** | 51 -> 89 |
+| Full app, patched | **327** | **0** | flat |
+
+The second row is the one that named the cause: an `EnrichedMarkdownText` that is created and
+never renders anything still leaks at the identical rate. That eliminated parsing, spans,
+`MeasurementStore`, the render executor and every span-held reference in one reading, and left
+only what happens when the view is constructed and its props are set.
+
+**The never-shut-down `ExecutorService` was a SYMPTOM, not a second bug.**
+`Executors.newSingleThreadExecutor()` returns a `FinalizableDelegatedExecutorService` whose
+`finalize()` shuts the pool down, so the thread dies once the view becomes collectable. The
+thread column above shows it: threads climb while views are retained and go flat the moment the
+retention is fixed. Relying on a finalizer is still poor practice worth raising upstream, but
+there is nothing here to patch.
+
+**Upgrading does not fix it.** The library is at 0.7.4 here and 1.0.2 is current;
+`MarkdownAccessibilityHelper.kt` and `EnrichedMarkdownText.kt` are byte-identical on that point
+in 1.0.2. The patch filename pins 0.7.4, so **re-run the probe after any bump of
+`react-native-enriched-markdown`** - a version bump silently drops the patch and `patch-package`
+will warn, but only the probe proves the leak is still fixed.
+
+### Two dead ends worth not repeating
+
+**Reanimated's `synchronouslyUpdateUIProps failed for tag` storm is not this leak.** Six hundred
+of them per two cycles (`RetryableMountingLayerException: Unable to find SurfaceMountingManager`)
+fire from inside the react-native-screens exit animation, and they correlate perfectly with
+markdown being rendered - the tempting conclusion is that the transition races surface teardown.
+It is not the retainer: disabling system animations entirely
+(`settings put global window_animation_scale 0`, plus `transition_` and `animator_duration_`)
+silences every one of those warnings and the leak continues at its exact 225 views per cycle.
+Correlation, no causation. Restore the three settings afterwards - they are the user's phone.
+
+**One `dumpsys` sample is not a reading.** A plain settings push looked like +220 retained views
+until a second sample eight seconds later showed 327, the baseline exactly. Take two samples per
+checkpoint and trust the second; a gap between them is GC lag, not retention. The probe driver
+prints both.
 
 **Take the control on the SAME pairing before removing anything.** The first attempt at this bisect
 compared a `ChatPane`-dropped build on a real desktop against a full-app number from the demo, and
