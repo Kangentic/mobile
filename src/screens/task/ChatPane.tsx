@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { MarkdownBlock, Stack, Text } from '@/components';
 import { ReadingViewFeed } from '@/components/conversation/ReadingViewFeed';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
-import { useTranscriptStore } from '@/state/transcriptStore';
+import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
 import { ConversationTab } from './ConversationTab';
 
 export interface ChatPaneProps {
@@ -23,20 +23,9 @@ export interface ChatPaneProps {
  * model: Terminal = exact, Chat = readable.
  */
 export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneProps): React.JSX.Element {
-  /**
-   * `hasWindow`, not the mere presence of a store entry, is what says a
-   * transcript window has actually landed: a delta can arrive before the
-   * window request resolves and create the entry with `totalEntries > 0` and
-   * no entries at all. Routing on `totalEntries` alone rendered the
-   * conversation feed with zero cells and no loading state there - a blank
-   * screen, observed live.
-   */
-  const hasTranscriptWindow = useTranscriptStore((state) =>
-    sessionId !== null ? (state.bySessionId[sessionId]?.hasWindow ?? false) : false,
-  );
-  const totalEntries = useTranscriptStore((state) =>
-    sessionId !== null ? (state.bySessionId[sessionId]?.totalEntries ?? 0) : 0,
-  );
+  // Shared with SessionScreen, which gates the terminal's clean feed on the
+  // same answer. See `selectChatLens` for why they must not be two predicates.
+  const chatLens = useTranscriptStore((state) => selectChatLens(state, sessionId));
 
   // Retention bisect: the floor. Reproduces the "ChatPane not rendered" arm.
   const probeVariant = getRetentionProbeVariant();
@@ -62,7 +51,7 @@ export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneP
     // ConversationTab owns the no-session empty state.
     return <ConversationTab taskId={taskId} sessionId={sessionId} projectId={projectId} />;
   }
-  if (!hasTranscriptWindow) {
+  if (chatLens === 'loading') {
     return (
       <Stack gap="sm" style={styles.loading}>
         <Text variant="body" color="secondary" testID="chat-pane-loading">
@@ -71,7 +60,7 @@ export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneP
       </Stack>
     );
   }
-  if (totalEntries === 0) {
+  if (chatLens === 'reading-view') {
     return <ReadingViewFeed sessionId={sessionId} agentLabel={agentLabel} />;
   }
   return <ConversationTab key={sessionId} taskId={taskId} sessionId={sessionId} projectId={projectId} />;
