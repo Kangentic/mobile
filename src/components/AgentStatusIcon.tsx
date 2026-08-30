@@ -20,6 +20,7 @@ import {
   type ActivityMark,
   type ActivityMarkName,
 } from '@/brand/activityMarks.generated';
+import { useScreenMotionActive } from './motion/ScreenMotion';
 import { useTheme } from './theme/ThemeProvider';
 
 /** One full turn, so `spinTurns` (0..1 per pass) reads as degrees for the view transform. */
@@ -108,8 +109,32 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
   // cannot, since hooks run before it, and an infinite timing loop driving a
   // value nothing reads is pure cost on a list of recycled rows.
   const belowFloor = size < mark.minPx;
-  const marching = !reducedMotion && !belowFloor && march !== undefined;
-  const spinning = !reducedMotion && !belowFloor && spin !== undefined;
+  /**
+   * Blur drops the MOUNT, not just the driver, and the honest reason is
+   * correctness rather than a measured saving.
+   *
+   * WHAT IS MEASURED. Forcing this gate closed on a FOCUSED screen (the
+   * probe's `no-motion` variant) takes idle CPU from ~49% to ~40% on a release
+   * build, so the loop is worth roughly 9 points while it runs. What the gate
+   * actually does, though, is stop it on a BLURRED screen, and there the
+   * direct before/after was 50% against 47.5% - inside the run-to-run spread,
+   * so not resolvable. A far larger cost dominates that reading; see the
+   * REACT-NATIVE-5 section of docs/developer-guide.md.
+   *
+   * WHY THE MOUNT ANYWAY. Cancelling the driver while leaving the
+   * `Animated.View` mounted leaves a Reanimated node registered with the UI
+   * runtime for a view nobody can see, and the per-frame flush walks the
+   * registered nodes. Dropping it is the form that cannot be paying for
+   * something invisible, and it strengthens rather than weakens the
+   * conditional-mount property the tilted-envelope bug (e4e5524) depends on:
+   * the wrapper exists only on the working branch AND only while the screen is
+   * live, so a rebind and a blur both leave nothing holding a stale rotation.
+   */
+  const screenMotionActive = useScreenMotionActive();
+  const marching = !reducedMotion && screenMotionActive && !belowFloor && march !== undefined;
+  const spinning = !reducedMotion && screenMotionActive && !belowFloor && spin !== undefined;
+  const marchRunning = marching;
+  const spinRunning = spinning;
 
   // NOTE: there is no per-mark spin origin any more. The turn is a transform on
   // the wrapping view (see spinStyle below), so it pivots about the view's
@@ -121,7 +146,7 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
   // must fail the build instead of shipping a wobbling ring.
 
   useEffect(() => {
-    if (!marching || march === undefined) {
+    if (!marchRunning || march === undefined) {
       cancelAnimation(dashOffset);
       dashOffset.set(0);
       return;
@@ -144,10 +169,10 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
     return () => {
       cancelAnimation(dashOffset);
     };
-  }, [dashOffset, march, marching]);
+  }, [dashOffset, march, marchRunning]);
 
   useEffect(() => {
-    if (!spinning || spin === undefined) {
+    if (!spinRunning || spin === undefined) {
       cancelAnimation(spinTurns);
       spinTurns.set(0);
       return;
@@ -170,7 +195,7 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
     return () => {
       cancelAnimation(spinTurns);
     };
-  }, [spinTurns, spin, spinning]);
+  }, [spinTurns, spin, spinRunning]);
 
   const marchProps = useAnimatedProps(() => ({ strokeDashoffset: dashOffset.get() }));
   /**

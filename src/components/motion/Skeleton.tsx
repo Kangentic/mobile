@@ -11,6 +11,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeProvider';
+import { useScreenMotionActive } from './ScreenMotion';
 
 export interface SkeletonProps {
   width?: DimensionValue;
@@ -32,12 +33,17 @@ export interface SkeletonProps {
 export function Skeleton({ width = '100%', height = 14, borderRadius, style, testID }: SkeletonProps): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
+  const screenMotionActive = useScreenMotionActive();
   const { durationMs, opacityMin, opacityMax } = theme.motion.skeletonPulse;
   const restingOpacity = (opacityMin + opacityMax) / 2;
   const pulseOpacity = useSharedValue(reducedMotion ? restingOpacity : opacityMax);
 
   useEffect(() => {
-    if (reducedMotion) {
+    // Same gate as the activity mark: a pulse nobody can see costs the same as
+    // one they can. Resting at the mid opacity is exactly what reduced motion
+    // does, so a blurred skeleton still reads as "loading".
+    if (reducedMotion || !screenMotionActive) {
+      cancelAnimation(pulseOpacity);
       pulseOpacity.value = restingOpacity;
       return;
     }
@@ -59,7 +65,16 @@ export function Skeleton({ width = '100%', height = 14, borderRadius, style, tes
     return () => {
       cancelAnimation(pulseOpacity);
     };
-  }, [reducedMotion, restingOpacity, opacityMin, opacityMax, durationMs, pulseOpacity, theme.motion.easing.standard]);
+  }, [
+    reducedMotion,
+    screenMotionActive,
+    restingOpacity,
+    opacityMin,
+    opacityMax,
+    durationMs,
+    pulseOpacity,
+    theme.motion.easing.standard,
+  ]);
 
   const animatedStyle = useAnimatedStyle(() => ({ opacity: pulseOpacity.value }));
 

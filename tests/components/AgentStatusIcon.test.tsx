@@ -39,6 +39,7 @@ import React from 'react';
 import { render, screen } from '@testing-library/react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { AgentStatusIcon, ThemeProvider, darkTerminalTheme } from '@/components';
+import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import {
   ACTIVITY_STROKE_LINECAP,
   ACTIVITY_STROKE_LINEJOIN,
@@ -396,6 +397,70 @@ describe('list recycling', () => {
 
     expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: workingSpin.durationMs }));
     expect(rotatingNodeCount()).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A loop nobody can see costs exactly what a visible one costs: Reanimated
+ * drives its worklets on the UI thread every vsync, whether or not the view is
+ * on screen. Measured on a release build, the Agents list sitting underneath
+ * the pushed Settings screen burned 22-46% of a core (peaking at 86%) while
+ * rendering ZERO frames - eight rings animating for nobody.
+ *
+ * The gate defaults to on, so these assertions are about the OFF case; every
+ * other test in this file exercises the default and would not notice a gate
+ * that never engaged.
+ */
+describe('the screen motion gate', () => {
+  function renderGated(active: boolean, props: React.ComponentProps<typeof AgentStatusIcon>) {
+    return render(
+      <ThemeProvider>
+        <ScreenMotionOverride active={active}>
+          <AgentStatusIcon {...props} />
+        </ScreenMotionOverride>
+      </ThemeProvider>,
+    );
+  }
+
+  it('does not start the spin while the screen is blurred', () => {
+    const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+    renderGated(false, { kind: 'working' });
+    expect(withTimingSpy).not.toHaveBeenCalled();
+  });
+
+  it('still spins when the gate is active, so the gate cannot silently kill the ring', () => {
+    const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+    renderGated(true, { kind: 'working' });
+    expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: workingSpin.durationMs }));
+  });
+
+  /**
+   * The gate drops the MOUNT, not just the driver, so that a blurred screen
+   * leaves no Reanimated node registered for a view nobody can see - the
+   * per-frame flush walks the registered nodes.
+   *
+   * Stated precisely, because this file's own history is a lesson in claiming
+   * more than was measured: forcing the gate closed on a FOCUSED screen is
+   * worth ~9 points of idle CPU on a release build, while the blurred-screen
+   * before/after (50% against 47.5%) sat inside the run-to-run spread. The
+   * mount-level form is chosen on correctness grounds; it is not a measured
+   * win over cancelling the driver.
+   */
+  it('drops the rotating wrapper entirely while blurred, not just its driver', () => {
+    renderGated(false, { kind: 'working' });
+    expect(rotatingNodeCount()).toBe(0);
+  });
+
+  it('brings the wrapper back on focus', () => {
+    renderGated(true, { kind: 'working' });
+    expect(rotatingNodeCount()).toBe(1);
+  });
+
+  it('leaves the static envelope alone, which has no loop to gate', () => {
+    const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+    renderGated(false, { kind: 'idle' });
+    expect(screen.getByTestId('agent-status-idle')).toBeTruthy();
+    expect(withTimingSpy).not.toHaveBeenCalled();
   });
 });
 

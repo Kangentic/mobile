@@ -28,7 +28,8 @@ export type RetentionProbeVariant =
   | 'plain-markdown'
   | 'markdown-not-selectable'
   | 'single-markdown'
-  | 'markdown-empty';
+  | 'markdown-empty'
+  | 'no-motion';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -53,6 +54,11 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'markdown-empty',
     label: 'One markdown, no content',
     description: 'The view exists but never renders',
+  },
+  {
+    variant: 'no-motion',
+    label: 'No looping motion',
+    description: 'Forces every motion gate closed',
   },
 ];
 

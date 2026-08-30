@@ -2401,6 +2401,70 @@ that ordinary foreground accumulation never got reset by an OS kill. The five-mi
 therefore does fix the OOM, but by making the process reapable again, not by stopping a background
 leak. Fixing the unmount is the real repair; the ceiling only buys back the safety net.
 
+### Idle CPU: the app costs half a core doing nothing, and it is Reanimated's per-frame flush
+
+**Open finding, measured but not fixed.** An idle Agents list on a release build costs **~50% of a
+core** while rendering ~84 frames per second that nobody asked for. Jank is 0.11%, the GPU is at
+1 ms, and `dumpsys gfxinfo` calls it perfectly smooth - which is exactly the blind spot the
+frequency gate in `.claude/rules/motion-conventions.md` warns about.
+
+The tool that named it is `simpleperf` against a **profileable release build**
+(`plugins/withAndroidProfileable.ts`, and the `/profile` skill for the procedure). 99% of the
+app's cycles sit under one call chain:
+
+```
+Looper.loop -> Choreographer.doFrame -> ReactChoreographer
+  -> worklets.AnimationFrameQueue.executeQueue        (94% of frame callbacks)
+    -> worklets::AnimationFrameCallback::onAnimationFrame
+      -> Hermes (the UI-thread worklet runtime)
+        -> reanimated::NativeProxy.maybeFlushUIUpdatesQueue
+          -> NodesManager.performOperationsRespectingDrawPass
+            -> a deep recursive walk, then Fabric's RawPropsParser
+```
+
+**The cost is not the animation math.** `libreanimated.so` is 1.87% of the profile. The expensive
+part is what the frame loop drags behind it: Fabric parsing and applying props (`RawPropsKey`
+comparisons, `RawPropsParser::at`), `libhwui` redrawing (16.5%), and the ioctl traffic to submit
+frames. One never-ending animation keeps that entire pipeline running at display rate.
+
+**It scales with how many Reanimated nodes are MOUNTED, not with how many are animating.** That is
+the part worth internalising, and it is measured. Same install, same content, toggled at runtime
+through the probe:
+
+| Idle Agents list, release build | Median CPU | Range |
+|---|---|---|
+| As shipped | **54.5%** | 45-57 |
+| Activity rings + skeletons inert | 40% | 26.5-47.5 |
+| Rings + skeletons + **`PressScale`** inert | **26.5%** | 25.5-30.5 |
+| OS reduced motion (nothing animates at all) | **6%** | 5-11 |
+
+`PressScale` is roughly **19 of those points**, and it does not animate at rest at all: it wraps
+every `Card`, so every task row mounts an `AnimatedPressable` with a `useAnimatedStyle`, and the
+per-frame flush walks all of them. An idle list pays for press feedback nobody is triggering.
+
+**Things that are NOT the cause**, each eliminated by measurement rather than argument:
+
+- **Not the count of visible spinners.** Collapsing the Thinking section (seven rows, three visible
+  rings) moved 50.5% to 43%; collapsing *every* section, leaving no rows on screen at all, measured
+  54% - higher, not lower.
+- **Not screen identity.** Home 50%, Home fully collapsed 54%, Settings on top 50%, Board 66%.
+- **Not the leak, and not fixed by fixing it.** This is orthogonal to the retention bug above.
+- **Not the JS thread.** 96.8% of cycles are on the main thread; `mqt_v_js` is 1-3%.
+
+**Where a fix has to start.** Reanimated is not the thing to remove - it is the thing to stop
+mounting per row. `PressScale`'s own docstring calls itself "the ONLY per-item animation permitted
+inside FlashList rows", which is true of the rules it was written against and expensive under this
+one. Whether press feedback on every card is worth ~19 points of idle CPU is a design decision,
+not a refactor, and it is the highest-value question left open here.
+
+Two smaller notes for whoever picks this up. The activity-ring gate
+(`src/components/motion/ScreenMotion.tsx`) stops looping motion on a blurred screen: worth ~9
+points when it fires, but its direct blurred-screen delta (50% against 47.5%) sits inside the
+run-to-run spread, so treat it as correctness rather than a measured saving. And the Reanimated
+`synchronouslyUpdateUIProps failed` storm during screen exits - ~385 warnings per close, each
+building a 75-frame stack trace - was a **consequence of the retention leak** and disappeared when
+that was fixed.
+
 ### Frame timing: the app is smooth on release, and only on release
 
 Measured 2026-08-29 on a Pixel 11 Pro with `adb shell dumpsys gfxinfo com.kangentic.mobile`, same
