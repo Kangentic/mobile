@@ -1,15 +1,23 @@
-diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
-index 241fa64..dd9eb03 100644
---- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
-+++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/EnrichedMarkdownText.kt
-@@ -336,6 +336,7 @@ class EnrichedMarkdownText
- 
-     override fun onDetachedFromWindow() {
-       stopSpoilerAnimations()
-+      accessibilityHelper.cleanup()
-       super.onDetachedFromWindow()
+diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
+index bf9ffc0..3de8999 100644
+--- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
++++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/AccessibleMarkdownTextView.kt
+@@ -30,4 +30,15 @@ abstract class AccessibleMarkdownTextView
+       super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+       accessibilityHelper.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
      }
- 
++
++    override fun onDetachedFromWindow() {
++      // Before super, and here rather than in a ViewManager's
++      // onDropViewInstance: getViewTreeObserver() only returns the WINDOW's
++      // observer while the view is still attached. Once detached it hands back
++      // the view's own floating observer, so a removal then would target the
++      // wrong observer and leave the listener on the window forever - holding
++      // this view, and through mParent the whole hierarchy above it.
++      accessibilityHelper.cleanup()
++      super.onDetachedFromWindow()
++    }
+   }
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/MarkdownAccessibilityHelper.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/MarkdownAccessibilityHelper.kt
 index b709380..23883f7 100644
 --- a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/accessibility/MarkdownAccessibilityHelper.kt
