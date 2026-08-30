@@ -18,10 +18,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  NSE_TARGET_NAME as SIGNING_SIDE_NSE_TARGET_NAME,
   applyManualSigningToTarget,
   readSigningInputsFromEnvironment,
   type XcodeBuildSettingsWriter,
 } from '../../plugins/withIosManualSigning';
+import { NSE_TARGET_NAME } from '../../plugins/withIosNotificationServiceExtension';
 
 const INPUTS = {
   teamId: 'AF8KY83RAF',
@@ -47,6 +49,17 @@ function createRecordingProject(): { project: XcodeBuildSettingsWriter; writes: 
     },
   };
 }
+
+describe('the extension target name', () => {
+  it('matches the plugin that actually creates the target', () => {
+    // The two plugins hold this string separately because Expo transpiles each
+    // plugin file on its own, so a relative import of a sibling .ts resolves to
+    // a .js that was never emitted. That was not theoretical: it failed prebuild
+    // with "Cannot find module" on ANDROID as well as iOS, because the plugin
+    // file loads whatever the platform. Duplicated deliberately, pinned here.
+    expect(SIGNING_SIDE_NSE_TARGET_NAME).toBe(NSE_TARGET_NAME);
+  });
+});
 
 describe('readSigningInputsFromEnvironment', () => {
   it('reads all three variables', () => {
