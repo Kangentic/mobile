@@ -156,6 +156,11 @@ ever matters; until then it is a named gap, not an unbroken invariant.
   pre-prebuild ordering of the Sentry env export and asserts no DSN is committed.
 - **Review (live now):** the `crypto-pairing-auditor` agent should treat any new Sentry call
   site, or any relaxation of an init option above, as in scope during `/code-review`.
+- **Skill (live now):** `/sentry` (`.claude/skills/sentry/SKILL.md`) reads arriving issues and
+  defers to this rule for the privacy controls and their known limitations rather than
+  restating them. Its no-raw-payload boundary (never paste an event payload or a `user.id` into
+  a task, PR, or reply) is this rule's "Known limitations" section applied at retrieval time, so
+  the two move together.
 
 ## Scope
 
