@@ -58,7 +58,7 @@ export const RETENTION_PROBE_VARIANTS: {
   {
     variant: 'no-motion',
     label: 'No looping motion',
-    description: 'Forces every motion gate closed',
+    description: 'Closes the gate on a focused screen too',
   },
 ];
 
