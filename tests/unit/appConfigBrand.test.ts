@@ -130,6 +130,25 @@ describe('app.config.ts brand parity', () => {
   });
 });
 
+describe('app.config.ts iOS plugin order', () => {
+  // withIosManualSigning is inert without the KANGENTIC_IOS_* variables, which
+  // only build-ios.yml's device job sets, and ci.yml's prebuild jobs hold no
+  // secrets at all - so a reversed order produces a byte-identical generated
+  // project on every PR, and CI stays green. The break surfaces only on a real
+  // `build-ios.yml -f target=device` dispatch: withIosManualSigning scopes its
+  // writes to a target it finds BY NAME, so if it runs first there is no
+  // KangenticNSE target yet, it silently signs nothing for the extension, and
+  // the archive fails deep in xcodebuild with a message naming neither plugin.
+  it('registers the Notification Service Extension plugin before manual signing', () => {
+    const entryNames = (appConfig.plugins ?? []).map((plugin) => (Array.isArray(plugin) ? plugin[0] : plugin));
+    const nseIndex = entryNames.indexOf('./plugins/withIosNotificationServiceExtension.ts');
+    const signingIndex = entryNames.indexOf('./plugins/withIosManualSigning.ts');
+    expect(nseIndex).toBeGreaterThan(-1);
+    expect(signingIndex).toBeGreaterThan(-1);
+    expect(nseIndex).toBeLessThan(signingIndex);
+  });
+});
+
 describe('app.config.ts iOS privacy manifest', () => {
   // Declares what Sentry's SDK collects, required because React Native links
   // sentry-cocoa statically, so Apple does not auto-process the pod's own
