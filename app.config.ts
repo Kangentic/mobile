@@ -468,6 +468,12 @@ const config: ExpoConfig = {
     // crashed the app 838ms after launch on a CI emulator, inside its own
     // backtrace bookkeeping on a Hermes fcontext stack. See the plugin.
     './plugins/withAndroidE2eGwpAsanOff.ts',
+    // Inert unless EXPO_PUBLIC_KANGENTIC_PROFILEABLE=1, which no eas.json
+    // profile sets. Adds <profileable android:shell="true"/> so simpleperf can
+    // sample a RELEASE build - without it the kernel denies perf events on a
+    // non-rooted device, which is how "measure on release" and "profile it"
+    // ended up mutually exclusive. See the plugin.
+    './plugins/withAndroidProfileable.ts',
     // Always writes its block into android/settings.gradle; the block itself
     // no-ops on anything but Windows. Relocates each module's CMake staging
     // directory to a short absolute root so a local Android build works from

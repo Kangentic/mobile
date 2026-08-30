@@ -33,7 +33,8 @@ modify any files.
 ## First Step: Load Context
 
 Read `.claude/rules/expo-cng.md`, `.claude/rules/ui-conventions.md`,
-`.claude/rules/motion-conventions.md`, and `.claude/rules/text-formatting.md` before reviewing. If the diff adds a dependency, check its
+`.claude/rules/motion-conventions.md`, `.claude/rules/performance-claims-are-measured.md`, and
+`.claude/rules/text-formatting.md` before reviewing. If the diff adds a dependency, check its
 README or changelog for New Architecture / Expo SDK compatibility statements.
 
 ## Audit Checklist
@@ -72,6 +73,14 @@ README or changelog for New Architecture / Expo SDK compatibility statements.
    **Flag any performance claim in a PR description sourced from a dev client.** Dev-client numbers
    are not a weaker signal but a misleading one (24.73% jank against 0.11% on release, same commit),
    so a "this feels faster" with no release-build measurement behind it is a finding, not evidence.
+
+   **Unmeasured performance claims, per `performance-claims-are-measured.md`.** A comment, commit
+   message or doc line asserting a cost, a saving or a cause with no measurement behind it is a
+   finding wherever it appears - and so is a measured claim with no control, or one whose two arms
+   differ in process state (a flag needing a restart means force-stopping BOTH arms). Three causes
+   in the REACT-NATIVE-5 investigation were plausible, documented, and wrong. Prose that does not
+   separate what was **measured** from what was **read out of the source** from what was
+   **inferred** is the shape to flag.
 8. **Em-dash / double-dash scan.** Any authored em-dash (U+2014) or `--` used as punctuation, in
    code, comments, docs, or markdown (this repo's `tests/`/`docs/` trees have no mechanical
    scanner, so this review is the only coverage there).
