@@ -15,6 +15,12 @@ import {
   type NotificationPermissionStatus,
   type PushRegistrationStatus,
 } from '@/notifications';
+import {
+  RETENTION_PROBE_VARIANTS,
+  retentionProbeEnabled,
+  setRetentionProbeVariant,
+  useRetentionProbeVariant,
+} from '@/devsupport/retentionProbe';
 import { crashNatively, crashTestEnabled, throwTestError } from '@/observability/crashReporting';
 import { useChannelStore } from '@/state/channelStore';
 import {
@@ -186,6 +192,7 @@ export function SettingsScreen(): React.JSX.Element {
   const established = useChannelStore((state) => state.established);
   const relayUrl = useChannelStore((state) => state.relayUrl);
   const pairedState = useChannelStore((state) => state.pairedState);
+  const retentionProbeVariant = useRetentionProbeVariant();
 
   const connectionLabel =
     pairedState === 'unpaired'
@@ -356,6 +363,28 @@ export function SettingsScreen(): React.JSX.Element {
                   </Text>
                   <Icon name="chevron-forward" color="muted" size={16} />
                 </Pressable>
+              </Stack>
+            </Card>
+          </Stack>
+        ) : null}
+
+        {retentionProbeEnabled() ? (
+          <Stack gap="xs">
+            <SectionHeader title="Retention probe" testID="settings-section-retention-probe" />
+            <Card>
+              <Stack gap="xs">
+                {RETENTION_PROBE_VARIANTS.map((option, optionIndex) => (
+                  <React.Fragment key={option.variant}>
+                    {optionIndex > 0 ? <RowDivider /> : null}
+                    <RadioRow
+                      label={option.label}
+                      description={option.description}
+                      selected={option.variant === retentionProbeVariant}
+                      testID={`settings-retention-probe-${option.variant}`}
+                      onPress={() => setRetentionProbeVariant(option.variant)}
+                    />
+                  </React.Fragment>
+                ))}
               </Stack>
             </Card>
           </Stack>

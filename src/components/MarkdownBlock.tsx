@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { EnrichedMarkdownText, type MarkdownStyle } from 'react-native-enriched-markdown';
+import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { useTheme } from './theme/ThemeProvider';
 import type { Theme } from './theme/tokens';
 
@@ -28,7 +29,17 @@ export function MarkdownBlock({ markdown, testID }: MarkdownBlockProps): React.J
   const theme = useTheme();
   const markdownStyle = useMemo(() => markdownStyleFromTheme(theme), [theme]);
 
-  return <EnrichedMarkdownText testID={testID} markdown={markdown} markdownStyle={markdownStyle} />;
+  // Retention bisect: keeps the native view, drops the selectable TextView.
+  const selectable = getRetentionProbeVariant() !== 'markdown-not-selectable';
+
+  return (
+    <EnrichedMarkdownText
+      testID={testID}
+      markdown={markdown}
+      markdownStyle={markdownStyle}
+      selectable={selectable}
+    />
+  );
 }
 
 function markdownStyleFromTheme(theme: Theme): MarkdownStyle {
