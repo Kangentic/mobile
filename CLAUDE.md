@@ -59,7 +59,10 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   withIosNotificationServiceExtension: creates the NSE target from
                               #   targets/nse/ and adds the shared keychain-access-group to the
                               #   app, so the extension can read the push key. Must be registered
-                              #   BEFORE withIosManualSigning, which signs the target it creates)
+                              #   BEFORE withIosManualSigning, which signs the target it creates;
+                              #   withAndroidProfileable: adds <profileable android:shell="true"/>
+                              #   so simpleperf can sample a RELEASE build, inert unless
+                              #   EXPO_PUBLIC_KANGENTIC_PROFILEABLE=1 - see the /profile skill)
 patches/                      # patch-package patches, applied by the `postinstall` script.
                               #   react-native-enriched-markdown+0.7.4.patch removes an
                               #   accessibility OnGlobalLayoutListener the library leaves on the
@@ -436,6 +439,9 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   descriptions; a11y labels exempt (`src/screens/`, `src/components/`).
 - `e2e-maestro-runs.md` - Maestro through the CLI, one rig mode, testID selectors, the dev-client
   constraints (`.maestro/`, `scripts/stubDesktopPeer.mjs`, `scripts/dev.mjs`).
+- `performance-claims-are-measured.md` - release build or it is not known; label measured vs read
+  vs inferred; a control taken the same way; two meminfo samples; bisect from one build
+  (`src/**`, `plugins/**`, `docs/developer-guide.md`).
 - `docs-stay-in-sync.md` - update docs when changing anchor source files.
 
 **Local overrides:** there is no per-rule local file. Put machine-specific instruction overrides
