@@ -2155,8 +2155,65 @@ compared against it):
 
 Dropping `ChatPane` removes roughly 90% of the retained views and three of the four WebViews.
 `ChangesTab` leaves a real but much smaller residual, so it is a second, lesser retainer rather
-than innocent. Search `ChatPane` and what it composes (`ConversationTab`, the conversation cells,
-`ReadingViewFeed`) for something that outlives a clean React unmount.
+than innocent.
+
+### Narrowed to the native markdown view, by runtime bisect
+
+**The retainer is `EnrichedMarkdownText` as rendered by `MarkdownCell`.** Replacing that one
+component with a plain `<Text>` holds every counter flat over six open/close cycles.
+
+The bisect was run from a **single release APK** carrying every variant behind a runtime switch
+(`src/devsupport/retentionProbe.ts`, an `EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE` build, variants
+chosen from Settings). That matters for more than convenience: a release build embeds its JS
+bundle, so the obvious method - edit a component, rebuild, measure - spends one APK per hypothesis
+AND compares different installs against different session content, which is exactly the confound
+that spoiled the first `ChatPane` bisect. Retention is additive, so each variant is a DELTA over a
+fresh GC-forced baseline taken immediately before its own cycles; views retained by an earlier
+variant are a constant offset, not an error.
+
+Pixel 11 Pro, release build, demo pairing (so control and variants share one install and one
+board), six cycles per variant, GC forced by backgrounding for ~9s before every reading:
+
+| Variant | Baseline | After 1 | After 3 | After 6 | Views/cycle | WebViews | Threads |
+|---|---|---|---|---|---|---|---|
+| Off (control) | 557 | 784 | 1232 | 1907 | **+225** | 1 -> 7 | 95 -> 121 |
+| No conversation feed | 1907 | 1968 | 1966 | 1966 | **0** | 7 -> 8, flat | 124, flat |
+| Plain cells | 2015 | 1992 | 1990 | 1992 | **0** | flat | 124, flat |
+| Plain markdown | 1887 | 1887 | 1887 | 1887 | **0** | 7, flat | 124, flat |
+| Markdown, not selectable | 1887 | 1890 | 2340 | 3015 | **+225** | 7 -> 12 | 124 -> 142 |
+
+Read the rows in order and the search collapses in four steps: the whole chat pane leaks; the list
+itself does not (plain cells is flat, so `FlashList`, `ConversationFeed` and the pane chrome are
+innocent); of the cells, only the markdown one matters; and the leak is NOT selection.
+
+**Three counters move together, which is what identifies a single retainer.** Views, WebViews and
+THREADS all grow at a fixed rate per cycle in the leaking rows and are all flat in the fixed ones.
+The WebView is confirmed a passenger for the third time: it stops leaking when a component in a
+completely different pane is swapped out. And the thread column is the tell for a per-instance
+native resource, because a retained leaf pins its parent, the parent pins every sibling, and one
+reference therefore accounts for a whole ~225-view screen.
+
+**The plan's two hypotheses were both wrong, and the disproofs are worth keeping.**
+
+- *Selection / the `InputMethodManager.mServedView` leak.* `TextViewSetup.kt:14` calls
+  `setTextIsSelectable(true)` unconditionally and the JS wrapper defaults `selectable = true`, so
+  every markdown cell is a focusable, selectable `TextView` - the textbook IMM leak shape. It is
+  not this one. Passing `selectable={false}` (verified to reach native: `@ReactProp defaultBoolean
+  = true` -> `setIsSelectable` -> `applySelectableState` -> `setTextIsSelectable(false)`) leaks at
+  the control's exact rate. The arithmetic said so in advance and is the cheaper check: **IMM holds
+  ONE served view**, so a single-slot field cannot retain six independent subtrees. Linear growth
+  per cycle means per-instance accumulation, which rules out every single-slot mechanism without
+  building anything.
+- *The per-view `ExecutorService` that is never shut down.* `EnrichedMarkdownText.kt:58` creates
+  one and nothing in that file shuts it down, while the sibling component has
+  `cleanup() { executor.shutdownNow() }` (`EnrichedMarkdown.kt:608`). The asymmetry is real and the
+  thread column above measures its cost, but it cannot be the view retainer: follow the references
+  and an idle pool holds `Thread -> Worker -> ThreadPoolExecutor -> (empty queue)`. The view holds
+  the executor; nothing on that chain holds the view. A leaked thread is a leaked thread.
+
+**The thread leak is a separate, confirmed bug**, worth reporting upstream on its own: one
+never-dying core thread per rendered markdown view, ~4 per session open here, flat the moment
+markdown rendering is removed.
 
 **Take the control on the SAME pairing before removing anything.** The first attempt at this bisect
 compared a `ChatPane`-dropped build on a real desktop against a full-app number from the demo, and

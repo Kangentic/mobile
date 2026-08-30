@@ -25,6 +25,7 @@ import {
   type PendingPromptDescriptor,
 } from '@/conversation/transcriptCells';
 import { loadOlderTranscript, loadTranscriptTail } from '@/connection/actions';
+import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { getBufferedData, subscribeChunks } from '@/state/terminalFeed';
 import { useActivityStore } from '@/state/activityStore';
 import { useChannelStore } from '@/state/channelStore';
@@ -343,6 +344,10 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
 }
 
 function renderConversationCell(cell: ConversationCell, sessionId: string): React.JSX.Element {
+  // Retention bisect: keeps the list, drops every cell's own view tree.
+  if (getRetentionProbeVariant() === 'plain-cells') {
+    return <Text variant="body">{cell.kind}</Text>;
+  }
   switch (cell.kind) {
     case 'user-message':
       return <UserMessageCell cell={cell} />;

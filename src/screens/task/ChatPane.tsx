@@ -1,7 +1,8 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { Stack, Text } from '@/components';
 import { ReadingViewFeed } from '@/components/conversation/ReadingViewFeed';
+import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { ConversationTab } from './ConversationTab';
 
@@ -36,6 +37,11 @@ export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneP
   const totalEntries = useTranscriptStore((state) =>
     sessionId !== null ? (state.bySessionId[sessionId]?.totalEntries ?? 0) : 0,
   );
+
+  // Retention bisect: the floor. Reproduces the "ChatPane not rendered" arm.
+  if (getRetentionProbeVariant() === 'no-conversation') {
+    return <View style={styles.loading} testID="chat-pane-retention-probe-empty" />;
+  }
 
   if (sessionId === null) {
     // ConversationTab owns the no-session empty state.
