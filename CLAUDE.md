@@ -445,8 +445,12 @@ names its enforcement (live now, or planned where mechanical coverage does not e
 - `e2e-maestro-runs.md` - Maestro through the CLI, one rig mode, testID selectors, the dev-client
   constraints (`.maestro/`, `scripts/stubDesktopPeer.mjs`, `scripts/dev.mjs`).
 - `performance-claims-are-measured.md` - release build or it is not known; label measured vs read
-  vs inferred; a control taken the same way; two meminfo samples; bisect from one build
-  (`src/**`, `plugins/**`, `docs/developer-guide.md`).
+  vs inferred; a control taken the same way; two meminfo samples; an A/B in ONE process; a delta
+  smaller than the run-to-run spread is not a result (`src/**`, `plugins/**`,
+  `docs/developer-guide.md`).
+- `regression-tests-fail-first.md` - watch a regression test fail against the unfixed code (mutate,
+  run, restore) before trusting it; assert the mechanism when the bug is invisible in output
+  (`tests/**`).
 - `docs-stay-in-sync.md` - update docs when changing anchor source files.
 
 **Local overrides:** there is no per-rule local file. Put machine-specific instruction overrides
