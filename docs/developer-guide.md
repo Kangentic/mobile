@@ -1889,7 +1889,9 @@ every conclusion above.
 
 Like Firebase above, this is optional infrastructure that degrades to inert rather than breaking a
 build. It is configured in exactly one place, `src/observability/crashReporting.ts`, and governed
-by `.claude/rules/crash-reporting-scope.md`.
+by `.claude/rules/crash-reporting-scope.md`. **Investigating an arriving issue** goes through
+`/sentry` (`.claude/skills/sentry/SKILL.md`), which retrieves and diagnoses issues from the
+`mobile` project and can file a follow-up board task.
 
 **Two secrets, two different jobs.** They are deliberately separate:
 
@@ -2203,6 +2205,7 @@ Expo's servers.
 | App Store Connect API key (`.p8`) | `~/kangentic-secrets/apple/` once created | GitHub secrets `ASC_*` | Revoke in App Store Connect and mint a new one |
 | Sentry org auth token | `~/.sentryclirc` (written by `sentry-cli login`, outside the repo) | GitHub secret `SENTRY_AUTH_TOKEN` | Revoke and mint a new one in Sentry settings; nothing else breaks |
 | Sentry DSN | GitHub **variable** `SENTRY_DSN` (readable back) | The Sentry Client Keys page, and every published app bundle | Re-copy from Sentry. Not a credential: write-only, and public by design |
+| Sentry **read** token (`KANGENTIC_SENTRY_TOKEN`) | A User-level environment variable on the maintainer's machine, set with `[Environment]::SetEnvironmentVariable(..., 'User')` | Nothing. Local only, never in CI and never in the repo | Mint a new User Auth Token (`event:read` + `project:read` + `org:read`) in Sentry settings. Only `/sentry` breaks |
 
 **The Apple certificate is recoverable but not free.** Reissuing the distribution certificate
 invalidates the provisioning profile built against it, so both have to be regenerated together. The

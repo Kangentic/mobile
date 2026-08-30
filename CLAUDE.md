@@ -236,7 +236,9 @@ see `.claude/rules/e2e-maestro-runs.md`.
   blast radius and drops the org-wide discovery tools from context. Note that crash events
   themselves are app data; treat anything read out of them as covered by
   `.claude/rules/crash-reporting-scope.md` and never paste an event payload into a public
-  artifact.
+  artifact. To actually investigate an issue, reach for `/sentry` rather than this MCP: it hits
+  the REST API by numeric project id, so a project rename cannot silently point it at nothing,
+  and it carries the diagnosis and duplicate-guard steps this bullet does not.
 
 ## Architecture
 
@@ -400,6 +402,8 @@ in a gitignored `CLAUDE.local.md` at the project root.
   Run it whenever the captured screens, the mock content, or the tab bar change - the copy is IN
   the frames, so all four shelves drift together. It sequences the platforms deliberately: iOS
   costs ~45 minutes on a macOS runner per attempt, Android ~6 minutes each locally.
+- `/sentry` retrieves and diagnoses issues from the `mobile` Sentry project, and files a
+  follow-up board task when asked.
 
 ### Authoring a rule
 
