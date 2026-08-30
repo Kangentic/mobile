@@ -226,7 +226,7 @@ see `.claude/rules/e2e-maestro-runs.md`.
   for FCM. Widen that list only when a feature is actually adopted. Note `firebase_init` writes
   a `firebase.json` into the repo, which this project deliberately does not have.
 - **Reads are fine, writes need an explicit request - mutates a shared issue tracker:** the
-  Sentry MCP (remote HTTP, `https://mcp.sentry.dev/mcp/kangentic/react-native`, OAuth as the
+  Sentry MCP (remote HTTP, `https://mcp.sentry.dev/mcp/kangentic/mobile`, OAuth as the
   individual developer's personal Sentry account). Querying issues, events, and stack traces is
   ordinary read-only debugging and needs no ceremony. Anything that WRITES - resolving or
   ignoring an issue, assigning it, editing alert rules, creating or deleting a project or team,

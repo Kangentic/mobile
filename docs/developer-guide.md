@@ -329,7 +329,7 @@ which needs a booted simulator and so cannot be captured from Windows.
 Agent sessions in this repo get MCP tools from two different mechanisms. `.mcp.json` wires three
 servers: `context7` (library documentation lookup, no setup needed), `firebase` (the Firebase
 CLI's built-in `firebase mcp` server), and `sentry` (a remote HTTP server at
-`https://mcp.sentry.dev/mcp/kangentic/react-native`, scoped to the one project rather than the
+`https://mcp.sentry.dev/mcp/kangentic/mobile`, scoped to the one project rather than the
 org so it brings fewer discovery tools into context; needs a one-time OAuth via `/mcp`).
 Separately, `.claude/settings.json`'s `enabledPlugins` turns on the official Expo plugin, enabled
 in this repo only. `firebase`, `sentry`, and the Expo plugin each need one-time setup on a fresh
@@ -660,7 +660,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
-| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, the CMake staging block reaching `settings.gradle` and not stacking on a repeat prebuild, and `android`/`ios` staying untracked | 25-33s |
+| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping, and both generated `sentry.properties` files pinning `defaults.org=kangentic` / `defaults.project=mobile`, since a stale slug 404s the upload during a real release), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, the CMake staging block reaching `settings.gradle` and not stacking on a repeat prebuild, and `android`/`ios` staying untracked | 25-33s |
 | `Release counters (stores)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (Smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
@@ -1900,7 +1900,7 @@ by `.claude/rules/crash-reporting-scope.md`. **Investigating an arriving issue**
 | `SENTRY_DSN` | repository **variable** | Exported to the bundle as `EXPO_PUBLIC_SENTRY_DSN`. Decides whether the app reports at runtime. | `Sentry.init()` is never called; the native SDK never starts; nothing is collected |
 | `SENTRY_AUTH_TOKEN` | repository **secret** | Uploads source maps and debug symbols at build time, and is what makes `app.config.ts` include the Sentry config plugin at all. | The plugin entry is omitted, so if a DSN is set the reports still arrive, with every stack trace minified. With no DSN either, nothing is reported at all |
 
-Both live on the GitHub repo, for the Sentry org `kangentic`, project `react-native`. **Neither
+Both live on the GitHub repo, for the Sentry org `kangentic`, project `mobile`. **Neither
 goes in `eas.json`**, which is the one deviation from "eas.json is the single source of truth for
 build-time env": that file is committed to a public repo, and a DSN in it would route every
 fork's crashes into this project's 5k/month quota. `build-android.yml` and `build-ios.yml` each

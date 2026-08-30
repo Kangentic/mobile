@@ -504,7 +504,7 @@ const config: ExpoConfig = {
             '@sentry/react-native/expo',
             {
               organization: 'kangentic',
-              project: 'react-native',
+              project: 'mobile',
               // R8 (enabled in the expo-build-properties block above) renames the
               // Java/Kotlin layer, so the ProGuard mapping has to reach Sentry or
               // every Android frame below the JS bridge arrives as a.b.c(). This
