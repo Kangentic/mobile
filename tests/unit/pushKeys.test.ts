@@ -196,6 +196,42 @@ describe('pushKeys', () => {
     const nextKey = await pushKeys.getOrCreatePushKey();
     expect(Array.from(nextKey)).not.toEqual(Array.from(originalKey));
   });
+
+  it('a read already in flight when clearPushRegistration runs cannot resurrect the wiped key through getPushKeyIfExists', async () => {
+    // Same interleaving as the getOrCreatePushKey test above, driven through the
+    // decrypt path's loader instead. This one matters more: getPushKeyIfExists is
+    // what a real push decrypt calls, so handing back the wiped key here would
+    // let a notification sealed by the just-unpaired desktop still open.
+    const seedingModule = await loadPushKeys();
+    const originalKey = await seedingModule.getOrCreatePushKey();
+    const originalKeyHex = legacyValue('push.decrypt.key') ?? null;
+
+    vi.resetModules();
+    const SecureStore = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    // Hold the read open so the load is still in flight when the wipe lands.
+    let releaseLoad: () => void = () => {};
+    vi.mocked(SecureStore.getItemAsync).mockImplementationOnce(
+      () =>
+        new Promise<string | null>((resolve) => {
+          releaseLoad = () => resolve(originalKeyHex);
+        }),
+    );
+
+    const inFlightRead = pushKeys.getPushKeyIfExists();
+    await pushKeys.clearPushRegistration();
+    releaseLoad();
+
+    // Without the generation guard this would resolve to the just-wiped key
+    // instead of degrading the caller to the generic placeholder.
+    expect(await inFlightRead).toBeNull();
+
+    // And the cache must not have latched onto it either: the next
+    // getOrCreatePushKey call generates a fresh key rather than the wiped one.
+    const nextKey = await pushKeys.getOrCreatePushKey();
+    expect(Array.from(nextKey)).not.toEqual(Array.from(originalKey));
+  });
 });
 
 describe('pushKeys - shared Keychain migration for the iOS NSE', () => {
@@ -246,6 +282,42 @@ describe('pushKeys - shared Keychain migration for the iOS NSE', () => {
     expect(legacyValue('push.decrypt.key')).toBe(existingKeyHex);
   });
 
+  it('retries the migration on the next call once the transient write failure clears', async () => {
+    // Complements the swallowed-write test above: that one proves a failed
+    // attempt leaves the legacy copy intact; this one proves the "the next
+    // call simply retries the migration" doc comment on readStoredPushKeyHex
+    // actually holds rather than the migration being permanently stuck once
+    // one write is swallowed.
+    const existingKeyHex = 'b'.repeat(64);
+    secureStoreState.storedValues.set(secureStoreState.locationOf('push.decrypt.key'), existingKeyHex);
+    configureSharedKeychain();
+
+    const firstAttemptPushKeys = await loadPushKeys();
+    secureStoreState.swallowWrites = true;
+    const firstAttemptKey = await firstAttemptPushKeys.getPushKeyIfExists();
+
+    // Same starting point the swallowed-write test above asserts: the
+    // migration attempt failed, so the legacy copy is still the only
+    // readable one.
+    expect(bytesToHex(firstAttemptKey as Uint8Array)).toBe(existingKeyHex);
+    expect(legacyValue('push.decrypt.key')).toBe(existingKeyHex);
+    expect(sharedValue('push.decrypt.key')).toBeUndefined();
+
+    // The transient failure clears. A fresh module instance stands in for
+    // the next call: getPushKeyIfExists caches the key it already recovered
+    // in memory, so the SAME instance would short-circuit on that cache and
+    // never touch SecureStore again - a real retry needs a call that has not
+    // cached yet, which in the app is simply the next process start.
+    secureStoreState.swallowWrites = false;
+    vi.resetModules();
+    const secondAttemptPushKeys = await loadPushKeys();
+    const secondAttemptKey = await secondAttemptPushKeys.getPushKeyIfExists();
+
+    expect(bytesToHex(secondAttemptKey as Uint8Array)).toBe(existingKeyHex);
+    expect(sharedValue('push.decrypt.key')).toBe(existingKeyHex);
+    expect(legacyValue('push.decrypt.key')).toBeUndefined();
+  });
+
   it('does not re-migrate once the key already lives in the shared location', async () => {
     const existingKeyHex = 'c'.repeat(64);
     secureStoreState.storedValues.set(secureStoreState.locationOf('push.decrypt.key'), existingKeyHex);
@@ -288,6 +360,90 @@ describe('pushKeys - shared Keychain migration for the iOS NSE', () => {
 
     expect(legacyValue('push.decrypt.key')).toBe(existingKeyHex);
     expect(SecureStore.setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it('a clearPushRegistration landing during the legacy read skips the migration write entirely', async () => {
+    // The earlier half of the interruption window: the wipe can land before the
+    // migration write is even attempted, not only while it is in flight (the next
+    // test). Migrating anyway here would write the just-deleted key straight back
+    // into the shared location clearPushRegistration just cleared.
+    const legacyKeyHex = 'f'.repeat(64);
+    secureStoreState.storedValues.set(secureStoreState.locationOf('push.decrypt.key'), legacyKeyHex);
+    configureSharedKeychain();
+
+    const pushKeys = await loadPushKeys();
+    const SecureStore = await import('expo-secure-store');
+
+    // Hold the LEGACY read open. Two chained one-time overrides, not a
+    // persistent mockImplementation: clearAllMocks() in beforeEach does not
+    // undo a persistent override, so one would leak into every later test in
+    // this file and hang them on their own legacy read.
+    let releaseLegacyRead: (value: string | null) => void = () => {};
+    let legacyReadStarted: () => void = () => {};
+    const legacyReadStartedPromise = new Promise<void>((resolve) => {
+      legacyReadStarted = resolve;
+    });
+    // Call 1: the shared-location read, resolved exactly like the default mock.
+    vi.mocked(SecureStore.getItemAsync).mockImplementationOnce(
+      async (key: string, options?: MockSecureStoreOptions) =>
+        secureStoreState.storedValues.get(secureStoreState.locationOf(key, options)) ?? null,
+    );
+    // Call 2: the legacy read, held open.
+    vi.mocked(SecureStore.getItemAsync).mockImplementationOnce(() => {
+      legacyReadStarted();
+      return new Promise<string | null>((resolve) => {
+        releaseLegacyRead = resolve;
+      });
+    });
+
+    const inFlightRead = pushKeys.getPushKeyIfExists();
+    await legacyReadStartedPromise;
+    await pushKeys.clearPushRegistration();
+    releaseLegacyRead(legacyKeyHex);
+
+    expect(await inFlightRead).toBeNull();
+    // No write attempted at all, not even one a later check has to undo.
+    expect(SecureStore.setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it('a migration write landing after clearPushRegistration does not leave the wiped key on disk', async () => {
+    // The narrower half of the window: the wipe's deletes can run WHILE the
+    // migration's setItemAsync is in flight, so the write lands after the wipe
+    // and puts a revoked key back on disk, where it survives a restart.
+    const legacyKeyHex = 'a1'.repeat(32);
+    secureStoreState.storedValues.set(secureStoreState.locationOf('push.decrypt.key'), legacyKeyHex);
+    configureSharedKeychain();
+
+    const pushKeys = await loadPushKeys();
+    const SecureStore = await import('expo-secure-store');
+
+    // Hold the migration write open until the wipe has run past it.
+    let releaseWrite: () => void = () => {};
+    let writeStarted: () => void = () => {};
+    const writeStartedPromise = new Promise<void>((resolve) => {
+      writeStarted = resolve;
+    });
+    vi.mocked(SecureStore.setItemAsync).mockImplementationOnce(
+      (key: string, value: string, options?: MockSecureStoreOptions) =>
+        new Promise<void>((resolve) => {
+          writeStarted();
+          releaseWrite = () => {
+            secureStoreState.storedValues.set(secureStoreState.locationOf(key, options), value);
+            resolve();
+          };
+        }),
+    );
+
+    const inFlightRead = pushKeys.getPushKeyIfExists();
+    await writeStartedPromise;
+    await pushKeys.clearPushRegistration();
+    releaseWrite();
+
+    expect(await inFlightRead).toBeNull();
+    // The load-bearing assertion: the write DID land (releaseWrite ran it), so
+    // without the post-write recheck the key would still be readable from disk
+    // after a restart, even though this one caller degraded to the placeholder.
+    expect(sharedValue('push.decrypt.key')).toBeUndefined();
   });
 
   it('persists the identity public key for the NSE, hex, in the shared location', async () => {

@@ -16,6 +16,8 @@
  * array silently relocates the device identity key, the trust anchor, and the
  * settings store, and the app reads as unpaired on next launch.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -30,6 +32,8 @@ import {
 
 const APP_BUNDLE_IDENTIFIER = 'com.kangentic.mobile';
 const APP_TARGET_NAME = 'Kangentic';
+
+const entitlementsPath = join(__dirname, '..', '..', 'targets', 'nse', 'Kangentic-NSE.entitlements');
 
 interface RecordedBuildPhase {
   files: string[];
@@ -166,6 +170,40 @@ describe('appKeychainAccessGroups', () => {
       '$(AppIdentifierPrefix)com.kangentic.mobile.shared',
       '$(AppIdentifierPrefix)com.other.group',
     ]);
+  });
+});
+
+describe('the checked-in entitlements file matches appKeychainAccessGroups', () => {
+  // targets/nse/Kangentic-NSE.entitlements hardcodes the shared group as a
+  // literal string, because it is a plist copied verbatim into the generated
+  // project rather than written by this plugin. appKeychainAccessGroups derives
+  // the same string from the app's bundle identifier. Nothing compares the two
+  // outside this test, so a bundle-identifier rename would desync them silently:
+  // the extension would still build and sign, and the only symptom would be
+  // every push degrading to the placeholder, indistinguishable from an NSE that
+  // never ran at all.
+  it('carries exactly the shared group appKeychainAccessGroups derives for the real app bundle id, and only that group', () => {
+    const entitlementsXml = readFileSync(entitlementsPath, 'utf8');
+
+    const keychainGroupsSection = entitlementsXml.match(
+      /<key>keychain-access-groups<\/key>\s*<array>([\s\S]*?)<\/array>/,
+    );
+    expect(keychainGroupsSection).not.toBeNull();
+
+    const groupEntries = Array.from(
+      (keychainGroupsSection?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g),
+      (match) => match[1],
+    );
+
+    // ONE GROUP, deliberately: the file's own header says the extension must
+    // never carry the app-identifier group, so it cannot reach the identity
+    // secret key, the trust anchor, or the settings store. That containment
+    // argument depends on this list never growing a second entry.
+    expect(groupEntries).toHaveLength(1);
+
+    // The derived value, not a restated literal: if this hardcoded the expected
+    // string too, a rename that moved both literals together would still pass.
+    expect(groupEntries[0]).toBe(appKeychainAccessGroups(APP_BUNDLE_IDENTIFIER)[1]);
   });
 });
 

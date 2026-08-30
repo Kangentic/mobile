@@ -28,9 +28,14 @@ import { join } from 'node:path';
  *   - and it calls addTargetDependency(firstTarget, [newTarget]).
  *
  * What it DOES have to work around is a real bug in the same function: it reads
- * `hash.project.objects.PBXTargetDependency` and assigns into it without
- * creating the section first, so on a project that has never had a dependency
- * the call throws. Both sections are pre-created below.
+ * `hash.project.objects.PBXTargetDependency` and `PBXContainerItemProxy`
+ * without creating either section first, and then guards the whole write on
+ * `if (pbxContainerItemProxySection && pbxTargetDependencySection)`
+ * (node_modules/xcode/lib/pbxProject.js). On a project that has never carried a
+ * dependency both are undefined, so the call does NOT throw - it silently
+ * writes nothing, including the `nativeTargets[target].dependencies.push(...)`
+ * that records the app's dependency on the extension. Expect a missing
+ * dependency, never an exception. Both sections are pre-created below.
  *
  * `tsc` cannot check any of this: the `xcode` package ships no type
  * declarations, so `XcodeProject` degrades to `any`. The narrow interfaces
@@ -158,6 +163,16 @@ export function readAppDeploymentTarget(project: XcodeProjectLike, appTargetName
  * Creates the extension target and writes its build settings. Returns false
  * when the target already exists, which makes a repeat prebuild a no-op rather
  * than adding a second target.
+ *
+ * KNOWN ASYMMETRY, harmless in CI and confusing locally: withNseSourceFiles
+ * copies targets/nse/ on EVERY prebuild, while this early-return skips the
+ * build-settings write and the Sources phase. On a clean prebuild (what CI and
+ * every real build do) the two agree. On a repeat local `expo prebuild` without
+ * `--clean`, a bumped version/buildNumber never reaches MARKETING_VERSION and a
+ * newly added Swift file lands on disk without joining the Sources phase, until
+ * the next clean prebuild. Nothing ships wrong: verify-ios-signature.sh fails
+ * the archive on a version pair that disagrees with the app's. Run
+ * `expo prebuild --clean` after changing either.
  */
 export function addNotificationServiceExtensionTarget(
   project: XcodeProjectLike,
@@ -172,8 +187,9 @@ export function addNotificationServiceExtensionTarget(
   );
   project.addToPbxGroup(group.uuid, project.getFirstProject().firstProject.mainGroup);
 
-  // See the header: addTarget assigns into these two sections without creating
-  // them, so it throws on a project that has never carried a dependency.
+  // See the header: addTarget's dependency write is guarded on both sections
+  // already existing, so without this the app target silently ends up with no
+  // dependency on the extension. It fails quietly, not with an exception.
   const projectObjects = project.hash.project.objects;
   projectObjects.PBXTargetDependency = projectObjects.PBXTargetDependency ?? {};
   projectObjects.PBXContainerItemProxy = projectObjects.PBXContainerItemProxy ?? {};

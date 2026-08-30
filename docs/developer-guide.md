@@ -653,7 +653,7 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 ### What each check on a PR means
 
-A PR to `main` reports **14 check runs**, of which **8 are required**. GitHub prints a
+A PR to `main` reports **15 check runs**, of which **9 are required**. GitHub prints a
 "Required" badge on those and nothing on the rest, so the badge is the authority; this table is
 what each one actually proves and roughly what it costs. Durations are measured, not estimated.
 
@@ -662,7 +662,7 @@ day: twice from renames, and once when `Release counters (stores)` was promoted 
 required while an unrelated PR was in flight. `gh api repos/Kangentic/mobile/branches/main/protection/required_status_checks --jq '.contexts'`
 is the only authority, which is why `/pull-request` reads it rather than trusting a list.
 
-**The 8 required checks** (these, and only these, block a merge):
+**The 9 required checks** (these, and only these, block a merge):
 
 | Check | Workflow | What a green result proves | Typical |
 |---|---|---|---|

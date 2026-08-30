@@ -1,5 +1,5 @@
 /**
- * Regenerates targets/nse/fixtures/pushEnvelopeFixtures.json.
+ * Regenerates tests/swift/pushEnvelopeFixtures.json.
  *
  * The iOS Notification Service Extension re-implements XChaCha20-Poly1305 in
  * Swift, because CryptoKit ships only the 96-bit-nonce IETF variant. Nothing on

@@ -12,6 +12,12 @@ const secureStoreState = vi.hoisted(() => ({ storedValues: new Map<string, strin
 const expoNotificationsState = vi.hoisted(() => ({
   getExpoPushTokenAsync: vi.fn<(options?: { projectId?: string }) => Promise<{ type: 'expo'; data: string }>>(),
 }));
+const pushIdentityState = vi.hoisted(() => ({
+  getPushIdentityPublicKey: vi.fn<() => Promise<Uint8Array | null>>(),
+}));
+const pushKeysState = vi.hoisted(() => ({
+  persistNsePushIdentityPublicKey: vi.fn<(identityPublicKey: Uint8Array) => Promise<void>>(),
+}));
 
 vi.mock('expo-secure-store', () => ({
   getItemAsync: vi.fn(async (key: string) => secureStoreState.storedValues.get(key) ?? null),
@@ -35,6 +41,25 @@ vi.mock('expo-constants', () => ({
 vi.mock('expo-notifications', () => ({
   getExpoPushTokenAsync: expoNotificationsState.getExpoPushTokenAsync,
 }));
+
+// The NSE identity-key hand-off (registerPushWithDesktop calling
+// getPushIdentityPublicKey then persistNsePushIdentityPublicKey) is asserted
+// as a mock call, so pushIdentity is mocked outright and pushKeys is
+// partially mocked: every other pushKeys export (getOrCreatePushKey,
+// base64UrlEncode, get/setLastRegisteredExpoToken) stays real, backed by the
+// secureStoreState fake above, so the existing tests in this file keep
+// exercising the real key round trip.
+vi.mock('@/notifications/pushIdentity', () => ({
+  getPushIdentityPublicKey: pushIdentityState.getPushIdentityPublicKey,
+}));
+
+vi.mock('@/notifications/pushKeys', async (importOriginal) => {
+  const actualPushKeys = await importOriginal<typeof import('@/notifications/pushKeys')>();
+  return {
+    ...actualPushKeys,
+    persistNsePushIdentityPublicKey: pushKeysState.persistNsePushIdentityPublicKey,
+  };
+});
 
 type PushRegistrationModule = typeof import('@/notifications/pushRegistration');
 type VerbClientModule = typeof import('@/channel/verbClient');
@@ -64,6 +89,8 @@ describe('registerPushWithDesktop', () => {
     vi.resetModules();
     secureStoreState.storedValues.clear();
     expoNotificationsState.getExpoPushTokenAsync.mockReset();
+    pushIdentityState.getPushIdentityPublicKey.mockReset();
+    pushKeysState.persistNsePushIdentityPublicKey.mockReset();
   });
 
   it('starts pending and reports not-connected without a verb client', async () => {
@@ -189,11 +216,71 @@ describe('registerPushWithDesktop', () => {
   });
 });
 
+describe('registerPushWithDesktop - NSE identity key hand-off', () => {
+  // That stored public key is the AAD the Notification Service Extension
+  // needs to open every push envelope: if this call silently stops firing,
+  // every iOS notification degrades to the generic placeholder while every
+  // OTHER part of registration still reports success, so nothing else in
+  // this file would catch the regression.
+  beforeEach(() => {
+    vi.resetModules();
+    secureStoreState.storedValues.clear();
+    expoNotificationsState.getExpoPushTokenAsync.mockReset();
+    pushIdentityState.getPushIdentityPublicKey.mockReset();
+    pushKeysState.persistNsePushIdentityPublicKey.mockReset();
+  });
+
+  it('persists the identity public key getPushIdentityPublicKey resolved after a successful registration', async () => {
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: true });
+    const resolvedIdentityPublicKey = new Uint8Array(32).fill(0x42);
+    pushIdentityState.getPushIdentityPublicKey.mockResolvedValue(resolvedIdentityPublicKey);
+    pushKeysState.persistNsePushIdentityPublicKey.mockResolvedValue(undefined);
+
+    await pushRegistration.registerPushWithDesktop(verbs);
+
+    expect(pushKeysState.persistNsePushIdentityPublicKey).toHaveBeenCalledTimes(1);
+    // The exact object getPushIdentityPublicKey resolved, not a re-derived
+    // copy: this is the key the ACTIVE registration used, and persisting a
+    // different one would pin the NSE's AAD to the wrong identity.
+    expect(pushKeysState.persistNsePushIdentityPublicKey).toHaveBeenCalledWith(resolvedIdentityPublicKey);
+  });
+
+  it('does not persist when getPushIdentityPublicKey resolves null (SecureStore unavailable)', async () => {
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: true });
+    pushIdentityState.getPushIdentityPublicKey.mockResolvedValue(null);
+
+    await pushRegistration.registerPushWithDesktop(verbs);
+
+    expect(pushKeysState.persistNsePushIdentityPublicKey).not.toHaveBeenCalled();
+  });
+
+  it('does not persist when the desktop denies registration (registered: false)', async () => {
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: false });
+    // A key IS available; the assertion below must fail for the registered:false
+    // gate, not merely because nothing was there to persist.
+    pushIdentityState.getPushIdentityPublicKey.mockResolvedValue(new Uint8Array(32).fill(0x99));
+
+    await pushRegistration.registerPushWithDesktop(verbs);
+
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('capability-denied');
+    expect(pushIdentityState.getPushIdentityPublicKey).not.toHaveBeenCalled();
+    expect(pushKeysState.persistNsePushIdentityPublicKey).not.toHaveBeenCalled();
+  });
+});
+
 describe('unregisterPushWithDesktop', () => {
   beforeEach(() => {
     vi.resetModules();
     secureStoreState.storedValues.clear();
     expoNotificationsState.getExpoPushTokenAsync.mockReset();
+    pushIdentityState.getPushIdentityPublicKey.mockReset();
+    pushKeysState.persistNsePushIdentityPublicKey.mockReset();
   });
 
   it('sends the unregister action and resets local status to pending', async () => {

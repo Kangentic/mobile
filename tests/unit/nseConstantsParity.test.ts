@@ -19,6 +19,17 @@ const targetsDir = join(__dirname, '..', '..', 'targets', 'nse');
 const categoryCopySwift = readFileSync(join(targetsDir, 'CategoryCopy.swift'), 'utf8');
 const pushEnvelopeSwift = readFileSync(join(targetsDir, 'PushEnvelope.swift'), 'utf8');
 
+/**
+ * Read as text rather than imported: decryptPushBlob composes the body inline
+ * and reaches SecureStore on the way, so importing it would drag the React
+ * Native runtime into this plain-Node tier. Same technique, and same reason, as
+ * secureStoreKeychainLayout.test.ts reading the vendored Swift.
+ */
+const pushDecryptTypeScript = readFileSync(
+  join(__dirname, '..', '..', 'src', 'notifications', 'pushDecrypt.ts'),
+  'utf8',
+);
+
 /** Pulls `case "<category>": return "<title>"` pairs out of the Swift switch. */
 function swiftCategoryTitles(): Map<string, string> {
   const titles = new Map<string, string>();
@@ -51,6 +62,13 @@ describe('NSE category copy parity', () => {
     // same "Agent session" fallback for an empty task title.
     expect(categoryCopySwift).toContain('taskTitle.isEmpty ? "Agent session" : taskTitle');
     expect(categoryCopySwift).toContain('detail.isEmpty ? resolvedTitle : "\\(resolvedTitle) - \\(detail)"');
+
+    // BOTH sides, or this proves nothing. Asserting only the Swift literals
+    // makes this a Swift self-check that still passes after the TypeScript
+    // changes its separator or its empty-title fallback, which is precisely the
+    // drift the header claims this file catches.
+    expect(pushDecryptTypeScript).toContain("plaintext.taskTitle.length > 0 ? plaintext.taskTitle : 'Agent session'");
+    expect(pushDecryptTypeScript).toContain('`${taskTitle} - ${plaintext.detail}`');
   });
 });
 

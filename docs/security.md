@@ -202,19 +202,24 @@ per-device key expiry, so a lost phone is not trusted forever even if revocation
 - **Device-bound, not backup-portable.** The identity key (`src/pairing/deviceIdentity.ts`),
   the pinned trust anchor (`src/pairing/trustAnchor.ts` - the desktop's static key, the relay
   address under `trust.relayAddress`, and the paired-at timestamp), and the push secrets
-  (`src/notifications/pushKeys.ts` - the 32-byte push-decrypt key under `push.decrypt.key` and
-  the last-registered Expo push token, itself a per-device bearer secret, under
-  `push.expoToken.lastRegistered`) are all `THIS_DEVICE_ONLY`, so none of it is included in an
+  (`src/notifications/pushKeys.ts` and `src/notifications/sharedKeychain.ts` - the 32-byte
+  push-decrypt key under `push.decrypt.key`, the last-registered Expo push token, itself a
+  per-device bearer secret, under `push.expoToken.lastRegistered`, and `push.identity.pk`, a copy
+  of this phone's static PUBLIC key that the Notification Service Extension needs as the
+  envelope's AAD) are all `THIS_DEVICE_ONLY`, so none of it is included in an
   encrypted iOS device backup or restorable onto different hardware. Restoring a backup onto a
   new phone cannot reconstitute a working paired client; the device must re-pair. The only other
   secure-store values are the non-secret user preferences (`src/state/settingsStore.ts`),
-  stored there because AsyncStorage is banned in `src/state/**`.
+  stored there because AsyncStorage is banned in `src/state/**`. Those preferences are the one
+  exception to the sentence above: they pass no options at all, so they take
+  expo-secure-store's default `WHEN_UNLOCKED` and ARE backup-portable. That is deliberate -
+  they hold no secret - but it means "device-bound" describes the keys, not the whole store.
 
 - **Two accessibility classes, and the difference is deliberate.** The identity key, the trust
-  anchor and the settings store use `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`: nothing outside
+  anchor and the last-registered Expo push token use
+  `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`: nothing outside
   the app reads them, so they can require an unlocked device. The two items the iOS Notification
-  Service Extension reads - the push-decrypt key and `push.identity.pk`, a copy of this phone's
-  static PUBLIC key kept as the envelope's AAD - use
+  Service Extension reads - the push-decrypt key and `push.identity.pk` - use
   `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY` instead (`src/notifications/sharedKeychain.ts`).
   **This is a real trade-off, stated rather than buried:** those two items are readable by the
   extension process while the phone is locked. The alternative was not a more secure app but a
