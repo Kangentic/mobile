@@ -551,6 +551,25 @@ describe('build-ios workflow', () => {
     expect(exportIndex).toBeLessThan(prebuildIndex);
   });
 
+  it('exports the shared Keychain group before the archive bundles JS', () => {
+    // src/notifications/sharedKeychain.ts reads
+    // EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP at BUNDLE time (Metro inlines
+    // it), unlike the three KANGENTIC_IOS_* exports alongside it in the same
+    // step, which prebuild reads. Both need it before `xcodebuild archive`,
+    // which is what actually invokes the "Bundle React Native code and
+    // images" phase. If this one line moved to a later step, the shipped
+    // bundle would carry no access group: the app would write the push key
+    // into its own private Keychain group, the correctly-entitled extension
+    // would find nothing there, and every push would degrade to the generic
+    // placeholder - with the archive, signing, and every other check green.
+    const deviceJob = readIosJob('device');
+    const exportIndex = deviceJob.indexOf('EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP=$KEYCHAIN_ACCESS_GROUP');
+    const archiveIndex = deviceJob.indexOf('xcodebuild archive');
+    expect(exportIndex).toBeGreaterThan(-1);
+    expect(archiveIndex).toBeGreaterThan(-1);
+    expect(exportIndex).toBeLessThan(archiveIndex);
+  });
+
   it('gates native config on BOTH platforms, not just Android', () => {
     // Prebuilding only Android is what let a broken config-plugin import reach an
     // iOS build while every PR check stayed green.
