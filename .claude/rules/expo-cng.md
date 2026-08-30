@@ -25,6 +25,14 @@ unreproducible for any other contributor or CI machine.
   plugin at prebuild time, not checked into `ios/` directly; its source lives under `targets/`.
 - If a change seems to require a hand edit to the native project, write or extend a config
   plugin instead.
+- **A plugin change does NOT take effect through `npx expo run:android` alone.** It skips prebuild
+  when `android/` already looks current, so the plugin never runs and the APK silently lacks it -
+  no error, no warning, and a green build. Run `npx expo prebuild --platform android` first (with
+  whatever env var gates the plugin), then build, and **verify the generated manifest or Gradle
+  file rather than assuming**. This cost a full build cycle when `withAndroidProfileable` appeared
+  to do nothing. The same trap has a second half: a prebuild run WITH a gate env var leaves that
+  output in `android/` afterwards, so the next ungated build still carries it until you prebuild
+  again without it.
 - **Install Expo-ecosystem dependencies with `npx expo install <pkg>`** (or the Expo MCP's
   `add_library`), never a raw `npm install <pkg>`. `expo install` resolves the version compatible
   with the pinned SDK (the `expo` entry in `package.json`, currently the 57 line); a raw

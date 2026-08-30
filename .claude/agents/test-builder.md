@@ -79,7 +79,15 @@ expected result. This is **self-review bias**. Two non-negotiable rules counter 
    If ambiguous, ask rather than reverse-engineer from the code.
 2. **Red-green every new test.** Confirm it fails when the behavior is wrong, then passes once
    the behavior is right. Stability runs catch flake; red-green catches self-review bias. Do
-   both.
+   both. `.claude/rules/regression-tests-fail-first.md` is the full statement, including the
+   mutate-run-restore recipe and how to read the failure: a test that fails for the WRONG reason
+   ("received undefined", a crash, a missing testID) never reached the behaviour, and is not
+   red-green.
+
+   Reach for an assertion that cannot pass by accident when the bug is invisible in output - the
+   rule lists the cases this repo has actually hit (a spin that never starts still draws a
+   correct static arc; a reintroduced `PressScale` renders identically; a fresh `data` array looks
+   perfect). Report WHICH mutation you used and what it printed, not just "red-green done".
 
 ## Test Tiers
 

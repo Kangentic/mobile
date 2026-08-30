@@ -87,10 +87,26 @@ gathered on a dev client is not evidence about the shipped app, and acting on on
 the REACT-NATIVE-5 section of [docs/developer-guide.md](../../docs/developer-guide.md) for the
 measurement commands.
 
-**An animation that never stops keeps the whole app at full frame rate.** Check what an idle screen
-costs, not just what it looks like: the idle release build rendered 6131 frames in 51 seconds
-(continuous 120 Hz) because per-row spinners never end. That is a battery and thermal cost that no
-jank metric reports - `dumpsys gfxinfo` will call it perfectly smooth.
+**An animation that never stops keeps the whole app DRAWING at full frame rate.** Check what an
+idle screen costs, not just what it looks like: the idle release build rendered 6131 frames in 51
+seconds (continuous 120 Hz) because per-row spinners never end. That is a battery and thermal cost
+no jank metric reports - `dumpsys gfxinfo` will call it perfectly smooth.
+
+**But do not read that as "Reanimated is idle when nothing animates".** It is not, and the
+difference matters when you go looking for a cost. `scheduledMapperRun` in
+`react-native-reanimated/src/mappers.ts` re-arms itself EVERY FRAME for the life of the process on
+native - the comment says so outright ("We always run mappers on native") - starting at init, not
+when an animation begins. `useAnimatedStyle` registers one mapper per mounted component
+(`useAnimatedStyle.ts` -> `startMapper`); `mapperRun()` skips clean mappers, but calls
+`updateMappersOrder()`, a recursive topological sort over ALL of them, whenever the mapper count
+changes - which FlashList recycling does constantly.
+
+So the frame loop cannot be "stopped", and the useful question is **which mappers are dirty every
+frame**, not which components are mounted. Two attempts to cut idle CPU by removing mounted
+animated components (the activity-ring focus gate, and swapping `Card`'s `PressScale` for
+`Pressable`'s own pressed state) were measured: the first is worth ~9 points, the second worth
+nothing at all - the old implementation measured LOWER on the cleanest sample, and the swap was
+reverted. Do not repeat either by argument; see `performance-claims-are-measured.md` and `/profile`.
 
 ## Enforcement (self-maintaining)
 
