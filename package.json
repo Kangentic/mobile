@@ -17,6 +17,11 @@
       ]
     }
   },
+  "reanimated": {
+    "staticFeatureFlags": {
+      "ANDROID_SYNCHRONOUSLY_UPDATE_UI_PROPS": true
+    }
+  },
   "scripts": {
     "postinstall": "patch-package",
     "start": "expo start --dev-client",

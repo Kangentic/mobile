@@ -2476,8 +2476,48 @@ motion gate, and reduced motion's 6% floor.
 - **Not the leak, and not fixed by fixing it.** This is orthogonal to the retention bug above.
 - **Not the JS thread.** 96.8% of cycles are on the main thread; `mqt_v_js` is 1-3%.
 
-**Where a fix has to start, honestly.** Not with a component swap chosen by argument - two have
-now been tried and neither moved the number. The unattributed ~44 points is worth finding, and the
+### It is a known New Architecture regression, and one documented flag helps
+
+This is not this app's invention. Reanimated's own
+[Performance guide](https://docs.swmansion.com/react-native-reanimated/docs/guides/performance/)
+carries a "Performance Regressions on New Architecture" section, and two open issues match this
+app's shape closely: [#6853](https://github.com/software-mansion/react-native-reanimated/issues/6853)
+reports a `withRepeat` + `withTiming` spinner taking Android from ~20% to 100% CPU with **iOS
+unaffected** (that is our activity ring, almost line for line), and
+[#7435](https://github.com/software-mansion/react-native-reanimated/issues/7435) reports Android
+degradation after the New Architecture migration persisting from 3.16 through 4.0.
+
+Of the three static feature flags that guide recommends, `USE_COMMIT_HOOK_ONLY_FOR_REACT_COMMITS`
+is already on by default in 4.5.1 and the other two were off. **`package.json` now enables the one
+that targets this path:**
+
+```json
+"reanimated": { "staticFeatureFlags": { "ANDROID_SYNCHRONOUSLY_UPDATE_UI_PROPS": true } }
+```
+
+It is a native build-time flag, so it needs a rebuild and cannot be A/B'd in one process - which
+means this is a cross-build comparison, the shape this section warns about everywhere else. It is
+reported anyway because two independent signals agree and one of them is qualitative:
+
+| Idle Agents list | Flag off | Flag on |
+|---|---|---|
+| CPU median, two 40s samples each | 51%, 49.5% | **45.5%, 47.5%** |
+| Cycles sampled over 12s | 7.58B | **3.51B** |
+| `libreactnative.so` share | 19.2% | **1.2%** |
+| `RawPropsKey ==` / `RawPropsParser::at` | top symbols | **absent** |
+
+The CPU delta (~4 points, ~8%) is inside a single sample's spread and would not be reportable
+alone. What makes it credible is the composition change: the Fabric prop-parsing path that
+dominated every earlier profile is simply gone, which is exactly what a flag named "synchronously
+update UI props" claims to do. Retention is unaffected (327 -> 327 views, 0 WebViews over six
+cycles), and the screen renders identically.
+
+`DISABLE_COMMIT_PAUSING_MECHANISM` was NOT enabled: it is only useful alongside React Native's
+`preventShadowTreeCommitExhaustion`, which requires building RN from source (patching a C++ header
+and substituting the Gradle module). Disproportionate here, and recorded so nobody re-derives it.
+
+**Where the rest of it has to start, honestly.** Not with a component swap chosen by argument - two
+have now been tried and neither moved the number. The unattributed ~44 points is worth finding, and the
 next step is attribution the profiler can settle rather than elimination by rebuild: the call
 graph already puts 94% of frame callbacks under `worklets.AnimationFrameQueue.executeQueue`, so
 the question is which mappers are DIRTY every frame, not which components exist. Reanimated has no
