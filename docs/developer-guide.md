@@ -2228,10 +2228,18 @@ removes itself in its own callback. Three things turn that into a per-instance l
 2. **The listener is registered on the WINDOW.** Before attach, `View.getViewTreeObserver()`
    hands back the view's own floating observer; on attach the framework MERGES that observer's
    listeners into `ViewRootImpl`'s. `ViewRootImpl` outlives every route and is a GC root.
-3. **In Fabric the callback need not ever fire.** React Native lays views out by calling
-   `View.layout()` directly from mount items; `onGlobalLayout` is dispatched by
-   `ViewRootImpl.performLayout`, which a mounted subtree does not require. A listener that never
-   fires never removes itself.
+3. **Only the listener's own callback ever removes it.** `removePendingLayoutListener()` is
+   called from exactly one place: inside the listener. `invalidateAccessibilityItems()`'s other
+   branch - the one taken once the view HAS a layout - rebuilds immediately and never clears a
+   listener registered earlier, and nothing clears one on detach or drop.
+
+**What is measured and what is inferred.** Measured: removing the listener on detach takes six
+cycles from +225 views and 6 WebViews to 327 views and 0 WebViews, and a view that never renders
+leaks identically. Read straight out of the source: points 1-3 above. NOT established: exactly
+which sequence leaves the callback unfired in this app. A plausible one is that Fabric lays views
+out by calling `View.layout()` from mount items while `onGlobalLayout` is dispatched by
+`ViewRootImpl.performLayout`, which a mounted subtree need not trigger - but that was never
+measured, and the fix does not depend on it. Point 3 is sufficient on its own.
 
 The result is one strong chain per markdown view that outlives the route:
 `ViewRootImpl.mTreeObserver -> listener -> MarkdownAccessibilityHelper -> the TextView -> mParent
@@ -2263,6 +2271,11 @@ recycling - and one open/close cycle still retains a whole screen:
 | One markdown view, patched | **327** | **0** | 51 -> 89 |
 | Full app, patched | **327** | **0** | flat |
 
+Re-verified on the SHIPPING bundle - the patch applied by `postinstall`, no probe code compiled
+in at all - six cycles from a 464-view baseline: 464, 464, 464, and `WebViews` 0 throughout. The
+pre-collection samples on that run read 676, 690 and 694, which is the two-sample rule earning its
+place: every one of those would have been reported as a leak.
+
 The second row is the one that named the cause: an `EnrichedMarkdownText` that is created and
 never renders anything still leaks at the identical rate. That eliminated parsing, spans,
 `MeasurementStore`, the render executor and every span-held reference in one reading, and left
@@ -2274,6 +2287,13 @@ only what happens when the view is constructed and its props are set.
 thread column above shows it: threads climb while views are retained and go flat the moment the
 retention is fixed. Relying on a finalizer is still poor practice worth raising upstream, but
 there is nothing here to patch.
+
+**The fix is Android-only, by construction.** `ViewTreeObserver` is an Android API and the patch
+touches `android/src/main/java/**` and nothing else. iOS renders markdown through a separate
+`NSAttributedString` implementation that has NOT been examined and for which this repo has no
+retention measurement path at all (there is no iOS equivalent of `dumpsys meminfo` wired up here,
+and no iOS E2E suite). So: the Android leak is fixed and measured to the bar; whether iOS has an
+analogous one is unknown, and any claim that this unblocks App Review should say so.
 
 **Upgrading does not fix it.** The library is at 0.7.4 here and 1.0.2 is current;
 `MarkdownAccessibilityHelper.kt` and `EnrichedMarkdownText.kt` are byte-identical on that point
