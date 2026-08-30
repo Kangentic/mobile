@@ -721,6 +721,20 @@ describe('ci.yml Native config (prebuild) R8 checks', () => {
     expect(step?.run).toContain('autoUploadProguardMapping = shouldSentryAutoUpload()');
   });
 
+  it('confirms android/sentry.properties actually exists, not merely mentioned', () => {
+    // withSentryAndroid writes this file inside a try/catch that only
+    // warnOnce()s on failure, so a broken writer leaves prebuild green with no
+    // properties file on disk. The org/project-slug test below also contains
+    // the bare string "android/sentry.properties" (it names the file in the
+    // for-loop's iteration list), so that substring alone would pass even if
+    // this existence guard were deleted outright. Match the actual `[ ! -f ... ]`
+    // guard text, which only this check emits.
+    const step = readCiJobs()['native-config'].steps?.find(
+      (candidate) => candidate.name === 'Confirm the Sentry plugin actually wired itself in'
+    );
+    expect(step?.run).toContain('[ ! -f android/sentry.properties ]');
+  });
+
   it('pins the Sentry org and project slug in BOTH generated properties files', () => {
     // The slug is what sentry-cli's --org/--project are built from, and a wrong
     // one 404s the upload during a real release rather than failing here. Both
