@@ -26,7 +26,9 @@ export type RetentionProbeVariant =
   | 'no-conversation'
   | 'plain-cells'
   | 'plain-markdown'
-  | 'markdown-not-selectable';
+  | 'markdown-not-selectable'
+  | 'single-markdown'
+  | 'markdown-empty';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -41,6 +43,16 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'markdown-not-selectable',
     label: 'Markdown not selectable',
     description: 'Keeps the native view, drops selection',
+  },
+  {
+    variant: 'single-markdown',
+    label: 'One markdown, no list',
+    description: 'ChatPane is one markdown block',
+  },
+  {
+    variant: 'markdown-empty',
+    label: 'One markdown, no content',
+    description: 'The view exists but never renders',
   },
 ];
 

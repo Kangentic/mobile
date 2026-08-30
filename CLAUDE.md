@@ -60,6 +60,12 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   targets/nse/ and adds the shared keychain-access-group to the
                               #   app, so the extension can read the push key. Must be registered
                               #   BEFORE withIosManualSigning, which signs the target it creates)
+patches/                      # patch-package patches, applied by the `postinstall` script.
+                              #   react-native-enriched-markdown+0.7.4.patch removes an
+                              #   accessibility OnGlobalLayoutListener the library leaves on the
+                              #   WINDOW's ViewTreeObserver, which retained a whole session screen
+                              #   per open. The filename pins the version, so a bump drops the
+                              #   patch: re-measure with the retention probe before accepting one
 targets/nse/                  # iOS Notification Service Extension source (Swift), copied into the
                               #   generated Xcode project by the plugin above, never into ios/.
                               #   Decrypts the push envelope before iOS renders the alert; vendors
@@ -357,12 +363,17 @@ them up is how the last investigation chased the wrong cause for two weeks:
   `Heap Alloc` from the **Dalvik Heap** row, never `Java Heap` from App Summary (that is PSS).
   **Force a GC before reading any delta**: `Views` climbing right after a pop is the normal state
   of a freshly popped screen, and only what survives collection counts. `am dumpheap` forces one on
-  a debuggable build; backgrounding the app and waiting works on release.
+  a debuggable build; backgrounding the app and waiting works on release. **Take TWO samples and
+  trust the second** - one reading called a clean screen a +220-view leak that the next reading
+  showed fully reclaimed.
 
 Isolate with an A/B on the same screen (collapse a section, drop a subtree) rather than reasoning
 about which component "looks expensive" - that is what turned a two-week-old wrong diagnosis into a
-measured one. Full worked examples in the REACT-NATIVE-5 section of
-[docs/developer-guide.md](docs/developer-guide.md).
+measured one. **Bisect from ONE build, not one build per hypothesis**: a release APK embeds its JS
+bundle, so rebuilding per variant costs an APK each AND compares different installs against
+different content. `src/devsupport/retentionProbe.ts` puts the variants behind a Settings switch
+(`EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1`); extend it rather than editing components. Full worked
+examples in the REACT-NATIVE-5 section of [docs/developer-guide.md](docs/developer-guide.md).
 
 **Local Android builds work from any path**, including a task worktree.
 `plugins/withAndroidCmakeBuildStaging.ts` relocates each module's CMake staging directory to a
