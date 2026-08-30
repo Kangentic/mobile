@@ -2,6 +2,7 @@
 // exist in SDK 57; see the comment in withAndroidPushService.ts for what that
 // cost.
 import { withXcodeProject, type ConfigPlugin } from '@expo/config-plugins';
+import { NSE_TARGET_NAME } from './withIosNotificationServiceExtension';
 
 /**
  * Applies manual App Store signing to the **app target only**.
@@ -53,6 +54,22 @@ export function readSigningInputsFromEnvironment(
     return null;
   }
   return { teamId, profileUuid, signingIdentity };
+}
+
+/**
+ * The Notification Service Extension's own provisioning profile.
+ *
+ * An app extension is a separate bundle id, so it cannot share the app's
+ * profile. Read separately from the three above so a missing value degrades to
+ * "do not touch that target" rather than turning off signing everywhere: the
+ * archive then fails on the extension with Xcode's own message instead of
+ * producing a differently-broken build.
+ */
+export function readNseProfileUuidFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env
+): string | null {
+  const nseProfileUuid = environment.KANGENTIC_IOS_NSE_PROFILE_UUID;
+  return nseProfileUuid ? nseProfileUuid : null;
 }
 
 /**
@@ -111,6 +128,18 @@ const withIosManualSigning: ConfigPlugin = (config) => {
 
     const project: XcodeBuildSettingsWriter = xcodeConfig.modResults;
     applyManualSigningToTarget(project, targetName, inputs);
+
+    // The extension target, when one has been created. It carries its own
+    // bundle id and therefore its own profile; everything else (team,
+    // certificate, manual style) is shared with the app.
+    //
+    // This runs after withIosNotificationServiceExtension by registration order
+    // in app.config.ts. Reversed, updateBuildProperty would find no target by
+    // that name and quietly write nothing.
+    const nseProfileUuid = readNseProfileUuidFromEnvironment();
+    if (nseProfileUuid) {
+      applyManualSigningToTarget(project, NSE_TARGET_NAME, { ...inputs, profileUuid: nseProfileUuid });
+    }
 
     return xcodeConfig;
   });

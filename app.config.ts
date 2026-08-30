@@ -480,6 +480,18 @@ const config: ExpoConfig = {
     // production build, taking the concurrent CMake configure down with it.
     // See the plugin for why this is project config, not a CI env var.
     './plugins/withAndroidGradleHeap.ts',
+    // Injects the Notification Service Extension target from targets/nse/, and
+    // adds the shared keychain-access-group to the app's entitlements so the
+    // extension can read the push decrypt key. Without it every iOS push shows
+    // the generic placeholder, because nothing on the device can open the
+    // envelope before iOS renders the alert (e2e-notification-privacy.md).
+    //
+    // MUST come before withIosManualSigning. Xcode-project mods run in
+    // registration order, and the signing plugin scopes its writes by target
+    // name: with the order reversed it would run before this target existed and
+    // silently sign nothing, leaving the extension on automatic signing and
+    // failing the archive.
+    './plugins/withIosNotificationServiceExtension.ts',
     // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
     // .github/workflows/build-ios.yml does. See the plugin for why signing has
     // to be scoped to the app target instead of passed to xcodebuild.

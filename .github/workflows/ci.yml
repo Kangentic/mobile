@@ -262,6 +262,94 @@ jobs:
       - name: Generate the native iOS project
         run: npx expo prebuild --platform ios --no-install
 
+      # The first iOS-side assertions in this job, and they exist because the
+      # Notification Service Extension fails SILENTLY. If the target is missing,
+      # or the shared Keychain group never reaches the app's entitlements, the
+      # app still builds, still installs, and still shows notifications - just
+      # always the generic placeholder, which is indistinguishable from an
+      # extension that was never installed. There is no crash to catch and no
+      # iOS test tier to catch it in.
+      - name: Confirm the Notification Service Extension target was injected
+        run: |
+          set -euo pipefail
+          pbxproj="$(find ios -maxdepth 2 -name 'project.pbxproj' | head -n 1)"
+          if [ -z "$pbxproj" ]; then
+            echo "::error::No ios/*.xcodeproj/project.pbxproj after prebuild."
+            exit 1
+          fi
+
+          if ! grep -q "KangenticNSE" "$pbxproj"; then
+            echo "::error::No KangenticNSE target in the generated Xcode project."
+            echo "::error::plugins/withIosNotificationServiceExtension.ts did not apply, so every iOS push would show the placeholder."
+            exit 1
+          fi
+          if ! grep -q 'com.apple.product-type.app-extension' "$pbxproj"; then
+            echo "::error::The KangenticNSE target is not an app-extension product type, so it would not be embedded or invoked."
+            exit 1
+          fi
+
+          # Exactly one target: prebuild runs more than once in this workflow
+          # (the Sentry-enabled pass below re-runs it), and a plugin that is not
+          # idempotent would add a second target with a duplicate bundle id,
+          # which App Store Connect rejects at upload.
+          nse_target_count="$(grep -c 'PRODUCT_BUNDLE_IDENTIFIER = "com.kangentic.mobile.nse"' "$pbxproj" || true)"
+          if [ "$nse_target_count" -ne 2 ]; then
+            echo "::error::Expected the extension bundle id in exactly 2 build configurations (Debug and Release), found $nse_target_count."
+            echo "::error::More than 2 means the plugin is not idempotent across repeated prebuilds."
+            exit 1
+          fi
+
+          for source_file in NotificationService.swift HChaCha20.swift PushEnvelope.swift SharedKeychain.swift CategoryCopy.swift; do
+            if [ ! -f "ios/KangenticNSE/$source_file" ]; then
+              echo "::error::targets/nse/$source_file was not copied into the generated project."
+              exit 1
+            fi
+          done
+          if [ ! -f ios/KangenticNSE/Info.plist ] || [ ! -f ios/KangenticNSE/Kangentic-NSE.entitlements ]; then
+            echo "::error::The extension's Info.plist or entitlements did not reach the generated project."
+            exit 1
+          fi
+          if ! grep -q "com.apple.usernotifications.service" ios/KangenticNSE/Info.plist; then
+            echo "::error::The extension's Info.plist has the wrong NSExtensionPointIdentifier, so iOS would never invoke it."
+            exit 1
+          fi
+          echo "Notification Service Extension target, sources and Info.plist all present."
+
+      - name: Confirm the app entitlements carry the shared Keychain group
+        run: |
+          set -euo pipefail
+          entitlements="$(find ios -maxdepth 2 -name '*.entitlements' -not -path '*/KangenticNSE/*' | head -n 1)"
+          if [ -z "$entitlements" ]; then
+            echo "::error::No app entitlements file after prebuild."
+            exit 1
+          fi
+
+          # Parsed as text, not with plutil: this job runs on ubuntu-latest and
+          # plutil is macOS-only. The generated entitlements are an XML plist,
+          # so the array order is the document order.
+          if ! grep -q 'com.kangentic.mobile.shared' "$entitlements"; then
+            echo "::error::The app entitlements do not carry the shared Keychain group."
+            echo "::error::Without it the app writes the push key where the extension cannot read it."
+            exit 1
+          fi
+
+          # ORDER IS LOAD BEARING. Once keychain-access-groups exists, an
+          # unqualified SecItemAdd lands in the FIRST entry rather than the
+          # implicit application-identifier group. The app-identifier group is
+          # first precisely so device.identity.sk, the trust anchor and the
+          # settings store keep their existing home; reversing it relocates all
+          # three and the app reads as unpaired on next launch.
+          first_group="$(sed -n '/<key>keychain-access-groups<\/key>/,/<\/array>/p' "$entitlements" \
+            | grep -o '<string>[^<]*</string>' \
+            | head -n 1 \
+            | sed 's/<[^>]*>//g')"
+          if [ "$first_group" != '$(AppIdentifierPrefix)com.kangentic.mobile' ]; then
+            echo "::error::The first keychain-access-group is '$first_group', expected the application-identifier group."
+            echo "::error::Every unqualified SecureStore write would silently move, and the app would read as unpaired."
+            exit 1
+          fi
+          echo "App entitlements carry the shared Keychain group, application-identifier group first."
+
       # The two prebuilds above exercise only the INERT Sentry path. app.config.ts
       # omits the Sentry plugin entirely when SENTRY_AUTH_TOKEN is absent, and this
       # workflow deliberately holds no secrets, so without this step the plugin's
@@ -502,6 +590,55 @@ jobs:
   # would leave main permanently red until somebody bumped it. A release PR is
   # the one moment the assertion is both meaningful and free.
   #
+  # The only gate that checks the Notification Service Extension's crypto is
+  # correct rather than merely compiling.
+  #
+  # The extension re-implements XChaCha20-Poly1305 in Swift because CryptoKit
+  # ships only the 96-bit-nonce IETF variant. Nothing else in this repository
+  # can catch a mistake in it: there is no iOS test tier, the developer machine
+  # is Windows, and build-ios.yml's simulator job proves only that the target
+  # compiles. A wrong subkey derivation produces a clean decrypt failure, not a
+  # crash, so the sole symptom would be every iPhone notification silently
+  # showing the generic placeholder.
+  #
+  # This job opens envelopes sealed by the protocol package's own
+  # sealPushEnvelope, and checks the tamper, wrong-key, wrong-AAD and staleness
+  # paths reject. It runs on ci.yml rather than build-ios.yml deliberately:
+  # build-ios.yml is dispatch-only, so a broken crypto change would merge green.
+  #
+  # THIS IS A REQUIRED STATUS CHECK on main, so its `name:` is a protection
+  # context and cannot be renamed without updating protection in the same
+  # change. See the job-name note at the top of this file.
+  #
+  # macOS minutes are billable on private repositories; this one is public, so
+  # they are free. It compiles three small files with swiftc and needs no Xcode
+  # project, no simulator, and no signing.
+  nse-crypto:
+    name: NSE crypto (swiftc)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # NotificationService.swift and SharedKeychain.swift are deliberately not
+      # compiled here: UNNotificationServiceExtension is iOS-only, and the
+      # Keychain needs a signed, entitled process. Neither is available to a
+      # macOS command-line binary, and neither is what this job is testing.
+      - name: Compile the extension crypto
+        run: |
+          set -euo pipefail
+          swiftc -O \
+            -o "$RUNNER_TEMP/nseCryptoHarness" \
+            targets/nse/HChaCha20.swift \
+            targets/nse/PushEnvelope.swift \
+            targets/nse/CategoryCopy.swift \
+            tests/swift/nseCryptoHarness.swift
+
+      - name: Open envelopes sealed by @kangentic/protocol
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/nseCryptoHarness" tests/swift/pushEnvelopeFixtures.json
+
   # Change detection compares the RESOLVED VALUE at the base against the value
   # at HEAD, rather than looking for the field in the diff text. Those are not
   # the same test: editing a comment next to `versionCode:` shows up in the

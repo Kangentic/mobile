@@ -129,7 +129,67 @@ else
   echo "Embedded profile: get-task-allow=$embedded_task_allow, aps-environment=$embedded_aps."
 fi
 
-# 5. The bundle id in Info.plist, independent of the signature.
+# 5. The Notification Service Extension.
+#
+#    --deep above validates the extension's SIGNATURE but reads entitlements
+#    only from the top-level app bundle, so nothing so far would notice an
+#    extension signed with the wrong profile or missing the shared Keychain
+#    group. That matters more here than for most entitlements, because the
+#    failure is silent at runtime: the extension runs, the Keychain read finds
+#    nothing, and every notification shows the generic placeholder, which is
+#    exactly what an uninstalled extension looks like.
+#
+#    Absence is fatal. Once this app ships an extension, an .ipa without one is
+#    a build that lost it, not a build that never had it.
+expected_nse_bundle_id="$expected_bundle_id.nse"
+nse_path="$(find "$app_path/PlugIns" -maxdepth 1 -name '*.appex' -type d 2>/dev/null | head -n 1)"
+[ -n "$nse_path" ] \
+  || fail "No .appex in PlugIns. The Notification Service Extension did not make it into the .ipa, so every iOS notification would show the placeholder."
+
+nse_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$nse_path/Info.plist")"
+[ "$nse_bundle_id" = "$expected_nse_bundle_id" ] \
+  || fail "The extension's bundle id is $nse_bundle_id but expected $expected_nse_bundle_id."
+
+# App Store Connect rejects an extension whose version pair disagrees with its
+# host app, and that rejection lands at upload, long after every gate is green.
+nse_build_number="$(plutil -extract CFBundleVersion raw -o - "$nse_path/Info.plist")"
+nse_short_version="$(plutil -extract CFBundleShortVersionString raw -o - "$nse_path/Info.plist")"
+
+nse_signing_info="$(codesign -dvv "$nse_path" 2>&1 || true)"
+if ! contains "$nse_signing_info" "Apple Distribution" && ! contains "$nse_signing_info" "iPhone Distribution"; then
+  fail "The extension is not signed by an App Store distribution certificate."
+fi
+if contains "$nse_signing_info" "iPhone Developer" || contains "$nse_signing_info" "Apple Development"; then
+  fail "The extension is signed by a development certificate, not a distribution one."
+fi
+
+if codesign -d --entitlements :- "$nse_path" > "$work_dir/nse-entitlements.plist" 2>/dev/null; then
+  plutil -convert xml1 "$work_dir/nse-entitlements.plist" -o "$work_dir/nse-entitlements.xml" 2>/dev/null || true
+  nse_entitlements_file="$work_dir/nse-entitlements.xml"
+  [ -f "$nse_entitlements_file" ] || nse_entitlements_file="$work_dir/nse-entitlements.plist"
+
+  nse_keychain_groups="$(plutil -extract keychain-access-groups json -o - "$nse_entitlements_file" 2>/dev/null || echo '[]')"
+  if ! contains "$nse_keychain_groups" "$expected_bundle_id.shared"; then
+    fail "The extension's signed entitlements do not carry the $expected_bundle_id.shared Keychain group, so it could not read the push key and every notification would show the placeholder."
+  fi
+  echo "Extension entitlements carry the shared Keychain group."
+else
+  echo "::warning::Could not read entitlements from the signed extension; the Keychain group could not be verified."
+fi
+
+# The app half of the same pair. Without it the app writes the push key into its
+# own private group and the extension, however correctly entitled, finds nothing.
+if [ -f "$work_dir/entitlements.xml" ] || [ -f "$work_dir/entitlements.plist" ]; then
+  app_entitlements_file="$work_dir/entitlements.xml"
+  [ -f "$app_entitlements_file" ] || app_entitlements_file="$work_dir/entitlements.plist"
+  app_keychain_groups="$(plutil -extract keychain-access-groups json -o - "$app_entitlements_file" 2>/dev/null || echo '[]')"
+  if ! contains "$app_keychain_groups" "$expected_bundle_id.shared"; then
+    fail "The app's signed entitlements do not carry the $expected_bundle_id.shared Keychain group, so the extension could never read the push key."
+  fi
+  echo "App entitlements carry the shared Keychain group."
+fi
+
+# 6. The bundle id in Info.plist, independent of the signature.
 info_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app_path/Info.plist")"
 [ "$info_bundle_id" = "$expected_bundle_id" ] \
   || fail "Info.plist bundle id is $info_bundle_id but expected $expected_bundle_id."
@@ -137,9 +197,14 @@ info_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app_path/Info.pl
 build_number="$(plutil -extract CFBundleVersion raw -o - "$app_path/Info.plist")"
 short_version="$(plutil -extract CFBundleShortVersionString raw -o - "$app_path/Info.plist")"
 
+if [ "$nse_short_version" != "$short_version" ] || [ "$nse_build_number" != "$build_number" ]; then
+  fail "The extension is $nse_short_version ($nse_build_number) but the app is $short_version ($build_number). App Store Connect rejects a mismatched pair at upload."
+fi
+
 echo "Verified a distribution-signed .ipa:"
 echo "  bundle id     $info_bundle_id"
 echo "  version       $short_version (build $build_number)"
+echo "  extension     $nse_bundle_id $nse_short_version (build $nse_build_number)"
 echo "  size          $(du -h "$ipa_path" | cut -f1)"
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then

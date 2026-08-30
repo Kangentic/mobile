@@ -1,0 +1,100 @@
+{
+  "generatedBy": "scripts/generateNseCryptoFixtures.mjs",
+  "pushKeyHex": "9167542a37a84c5de4c45be4afb8aac532153dc5955bff41bb40745049a6aa99",
+  "identityPublicKeyHex": "d2ee7484b36cbe8622c01390d13089a399f9b7177f9532bfd92ad798c22eccd5",
+  "nowMilliseconds": 1787278093809,
+  "hchacha20Vector": {
+    "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "nonceHeadHex": "000000090000004a0000000031415927",
+    "subkeyHex": "82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc"
+  },
+  "cases": [
+    {
+      "name": "good",
+      "blob": "84wcWh18d4sCGmS1WcdoG6VK27YZL0fffRhDqCgIVlURNRi9qNmTKNdbu_LgtuzGMc92ytVclqX85XncZp0P0jovQI7FGJUIH753vLDq2_SYj7itz-PO76vqQw7qsVP4NoDrnyGqn_F9sR_zbE_-TC2O_UJsvYY9fAaf5H_V5fpVhVqRPgpLd5eQGJE-6FsHAgVeAQ_hOOzWNGXGzlgCwvjWKLF5lMQbiT1mhhoQ15oDS9hJ2uKFEuGTvjOHjKKoSBVneUfDZFvr3fzrFhb1ThYoa8mmuJjWkJ-FxIqsvKeUXBL1Lv0nK2ZM-Lv1UWVwoxPBeR_-em9tP3eVutg",
+      "expected": {
+        "category": "input-required",
+        "projectId": "project-alpha",
+        "taskId": "task-42",
+        "sessionId": "session-7",
+        "taskTitle": "Wire the relay reconnect",
+        "detail": "Needs your approval to run the migration",
+        "sentAt": 1787278063809
+      }
+    },
+    {
+      "name": "empty-detail-falls-back-to-the-bare-task-title",
+      "blob": "OQ60aoJyGJQpUu8__G-gD5ubeZICSAisgtqQT09PJlNOuKtBG5Riz7MzbfeG1JmgAlzJIP-zYXIMZ7pfXTE6FxJJku8KCgSEVXn56dkEZTdv0BC3JkntBIZCd1N4dw5Z6WSU90LF2ZjolPJrrbUmF6giXcac-WqRafZ5zgBg-iGwb6QEIXPo3Y11G2u_VY1HlyGWcT0aeSwwjtbDtUXUerhRt1jt12iTJgj4gPQJ_5ODPYHC6x6Kv9cHLMoPGud05sHpOBKz4hvlc8MstP4aTtPdqeMG7A",
+      "expected": {
+        "category": "input-required",
+        "projectId": "project-alpha",
+        "taskId": "task-42",
+        "sessionId": "session-7",
+        "taskTitle": "Wire the relay reconnect",
+        "detail": "",
+        "sentAt": 1787278063809
+      }
+    },
+    {
+      "name": "empty-task-title-uses-the-agent-session-fallback",
+      "blob": "HPiuHiZnRPtcMs1fxl5hPIw5-xTPhb86-3T7eWuyEvWpFi0YKdNnqO3FTUTpB7IfHKNaTN8AsT1TCHcEnhry3KGOcWVX9qXVMBye6-OKxPDhPhuKuBE626Frgr4NAv9qWAmemvEImYdhIe0ZPpN4O2FdLXnGwuoKJfPZhMUCeUgZiscbuLdMiLwP7eYWl8uIWjdll06wwgDc6g5GiETgRcx2ss7kL9a29c7nyxqN8FVZoWblKR0uTJ4rR1TKXA",
+      "expected": {
+        "category": "input-required",
+        "projectId": "project-alpha",
+        "taskId": "task-42",
+        "sessionId": "session-7",
+        "taskTitle": "",
+        "detail": "",
+        "sentAt": 1787278063809
+      }
+    },
+    {
+      "name": "every-category-opens",
+      "blob": "kW8wQ6ZvuptKQEot5z_wk0KyH24_ODgot9XWhq55dQhE_MCXVIp4bNrVpDSKBzBvgJtqJczB7Ryqa2Oe1CY4edvdzojEbQMuUFXKn7_ofGgzBB6166s1XUyucWwOWqSDjxgDgQcMp_Jg4Xw0IFGYmzkqiqQfZLE5IqZQNgZeVZ2UuB4wWvL6gerS21zHwuZ36etYsCaZcCpl-TGujlMh_CiYW2ubsZUYbc86mLnV2VWZ9ULZcSY73ySn7_giY9klaG5bvArIhXGo2v5947Pej7DjY-J702fiE7d-Bncn6J9cBxJnGn8e5ePDicaEYySGDc1hTIMEMeAAF8Ww6w",
+      "expected": {
+        "category": "spawn-stalled",
+        "projectId": "project-alpha",
+        "taskId": "task-42",
+        "sessionId": "session-7",
+        "taskTitle": "Wire the relay reconnect",
+        "detail": "Needs your approval to run the migration",
+        "sentAt": 1787278063809
+      }
+    },
+    {
+      "name": "tampered-tag",
+      "blob": "tG2Npu6ELTEFERpCAbJhH-aWCW15CIsPXpVo98PT7L6l14qIaV4cM3HegI-WS-4OEffKEHjHlBZj1MLZbDTx3I36jxlQ-yqxgDnwi0yYYaiiI6g9EPQEn58-scsWu-8ZKcJeaqnbIiRL-yIZrPbyTO36ufeFN__BxAox2aXecBdg5-FH2dQMgL2Hdk4wnfN4_qdi9J229TsdIjfus5nW2mvfRaPT2Odw9SkjbgFYI4Dled6vPtbwjjHDZuCQi_d7jCgFIc0js1Y7H4-3TbESwtu0YtGebm_HO5WFFp4B1vtG-DdwmMJo5BtmSnk9DoGpwA9r3Q3lHBxIwsRsb3k",
+      "expected": null
+    },
+    {
+      "name": "sealed-with-a-different-push-key",
+      "blob": "0yShPkXAz_tg_UDgk2Sb9FeH1aFWdwn-rISHK31pldmga_U1Wgna08fr4CPJptiRnF4REPTBG3q7ZW7Vn1kyZl3OmLlg5E6dUdVlOq30WZwK2INr3Q_gKaMR2O-GN_7a0_W4XtxMZHhjJl8iffRUuCqHKqEfGEunHt-2sGp1XldOzVk4iuTMZPkMTTO9PHe3Hdglh6DzaFgMTy3iHQudEhU7EAtXOsCcQt1bN4EuEQJu4M9Kh0iVq3hKvfAZ8CnwF-YJOETWRPNxeKYeVX5n1OFDWhhOjJqImwyyNS-3_aEBv3muYyN-hFASwWGQoymu3VyAwklnalJPEJmQEIY",
+      "expected": null
+    },
+    {
+      "name": "sealed-for-a-different-recipient-aad-mismatch",
+      "blob": "Hy0dDbA_IcWJ4vr7AStgElOr9MkBUVYfeSlRP4Ln6yj_bGyCyQ7oOaNNNAy3paDKIhfhNtqBB96kZ5otM4ocqWKfTkzid_ghetQVoRPNIyP179-maFvoyfuyALmlXqlja2lrz5x3TpVfgWJKCq5f_ea7bggWEBd8eTAS4sPLwD51BTYfTGzvk--fNHcdXyMi784CniLSkEKauPvU06mC0YhEB1drrEjgJxJyazPuYh9GbLNDxOLm5m1cSiNoP_FIRPTCpuRKWD6GtAdE847TQdZ8nvQuJ6GA6R5vfeu4lj0wq9ygTVWvvTEeL_XQ-rcJSGK98nKdpazFuy8DCIo",
+      "expected": null
+    },
+    {
+      "name": "stale-sent-at",
+      "blob": "ErlWm-4ClFa18a3jBuYxAG49Qlmr0S7v_D9V-oMiBjd_w5RdUBu4tTVX8AdpMx2KLRIYQwiBREY2o5sLSjTKGvcrDGZ728B5q0uOmg0nF237L_A3gOIQPJmi0-hgpkfj95SsBob2J57Se5WIjfYYsYhKBHAkIrxMnIsyj8yzEt45sZVCLbV-KX1MZGNhHi3S6XiRXiZAaig9xud6cDYmiDW5_skoC3ZROXL-QpsO8sA9J3dMJ-VoAOk1LVfhvX-5_ewZtaasTVlFWd7sTX8GVqjbZhFfb64QHjRgXxSFALB03hUqgQJTvKANVfcOYcXaIGs1qq1qCN53kIpiYUg",
+      "expected": null
+    },
+    {
+      "name": "sent-at-too-far-in-the-future",
+      "blob": "gVv62UAiQ5TwNHFGHFU8VU1fN37X1YNe-2ffDpUx2J6npvkc84qlebpSarX1Wn4nuBMOoemh36MimGfp_qcch7pXnKaiPzE3hujQH2RAm8PpPTHQlQ7WaHXRQn1hgOVRl7lzM7iNjuuyxGGi4kxHQMwcp-dh3jgJ06OT-cP5lo5wIhlAybBct1RrCBV--5HMNqQChctOgT_iQUL3KO4KyeKRHVU3r7mMWAGjUfkh1Jk7xf-ZtfTyR1c8O3zGMp0yAsCDt7RS7Dld9aLbE9lG5mG6wKnepHc81NWWz-q6svrYNAZMBn9aURS0hyFbEBL5iM_SrzIP4gh88yyNIHE",
+      "expected": null
+    },
+    {
+      "name": "too-short-to-hold-a-nonce-and-tag",
+      "blob": "AAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expected": null
+    },
+    {
+      "name": "not-a-blob-at-all",
+      "blob": "not-a-blob",
+      "expected": null
+    }
+  ]
+}

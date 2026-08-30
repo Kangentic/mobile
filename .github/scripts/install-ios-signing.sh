@@ -5,9 +5,16 @@
 # team has to be committed.
 #
 # Usage: install-ios-signing.sh <cert.p12> <cert-password> <profile.mobileprovision>
+#                               [<nse-profile.mobileprovision>]
+#
+# The fourth argument is the Notification Service Extension's own profile. An
+# app extension is a separate bundle id and needs its own; without it the
+# archive fails on the extension target rather than producing an app that
+# merely lacks the feature.
 #
 # Writes to $GITHUB_OUTPUT when set: keychain-path, profile-uuid, profile-name,
-# team-id, bundle-id.
+# team-id, bundle-id, keychain-access-group, and nse-profile-uuid / nse-bundle-id
+# when a fourth argument is given.
 #
 # ---------------------------------------------------------------------------
 # LOGGING RULE, load bearing: this repository is public, so every Actions log
@@ -22,6 +29,7 @@ set -euo pipefail
 certificate_path="${1:?usage: install-ios-signing.sh <cert.p12> <cert-password> <profile.mobileprovision>}"
 certificate_password="${2:?missing certificate password}"
 profile_path="${3:?missing provisioning profile path}"
+nse_profile_path="${4:-}"
 
 work_dir="${RUNNER_TEMP:-/tmp}"
 
@@ -126,6 +134,34 @@ read_profile_field() {
   plutil -extract "$1" raw -o - "$profile_plist"
 }
 
+read_field_from() {
+  plutil -extract "$2" raw -o - "$1"
+}
+
+# --- Shared Keychain group guard -------------------------------------------
+#
+# The app writes the push decrypt key into a shared Keychain access group and
+# the Notification Service Extension reads it back out. BOTH profiles have to
+# authorise that group, and a profile minted before the group was added to the
+# App ID does not.
+#
+# This is checked rather than assumed because the runtime failure is silent:
+# the extension launches, the Keychain query returns errSecItemNotFound, and
+# every notification falls back to the generic placeholder - which is
+# indistinguishable from an extension that was never installed at all. There is
+# no crash, no log, and no failing gate anywhere downstream.
+profile_authorises_shared_group() {
+  groups_json="$(plutil -extract Entitlements.keychain-access-groups json -o - "$1" 2>/dev/null || echo '[]')"
+  # An exact grant, or the "<team id>.*" wildcard a wildcard App ID carries.
+  if contains "$groups_json" "$2"; then
+    return 0
+  fi
+  if contains "$groups_json" "$3.*"; then
+    return 0
+  fi
+  return 1
+}
+
 profile_uuid="$(read_profile_field UUID)"
 profile_name="$(read_profile_field Name)"
 team_id="$(read_profile_field TeamIdentifier.0)"
@@ -154,6 +190,72 @@ for profiles_dir in \
   cp "$profile_path" "$profiles_dir/$profile_uuid.mobileprovision"
 done
 
+shared_keychain_group="$team_id.$bundle_id.shared"
+
+if ! profile_authorises_shared_group "$profile_plist" "$shared_keychain_group" "$team_id"; then
+  echo "::error::The app provisioning profile does not authorise the shared Keychain group $shared_keychain_group."
+  echo "::error::Add the Keychain Sharing group \"$bundle_id.shared\" to the $bundle_id App ID, regenerate the"
+  echo "::error::distribution profile, and update IOS_PROVISIONING_PROFILE_BASE64."
+  echo "::error::Without it the app cannot write the push key where the Notification Service Extension can read it,"
+  echo "::error::and every iOS notification silently shows the generic placeholder."
+  exit 1
+fi
+echo "The app profile authorises the shared Keychain group."
+
+# --- Notification Service Extension profile --------------------------------
+#
+# Optional argument, but not optional in practice for a device build: the
+# extension is its own bundle id, and withIosManualSigning leaves its target on
+# automatic signing without this, which fails the archive.
+nse_profile_uuid=""
+nse_bundle_id=""
+if [ -n "$nse_profile_path" ]; then
+  nse_profile_plist="$work_dir/nse-profile.plist"
+  security cms -D -i "$nse_profile_path" > "$nse_profile_plist"
+
+  nse_profile_uuid="$(read_field_from "$nse_profile_plist" UUID)"
+  nse_team_id="$(read_field_from "$nse_profile_plist" TeamIdentifier.0)"
+  nse_application_identifier="$(read_field_from "$nse_profile_plist" Entitlements.application-identifier)"
+  nse_bundle_id="${nse_application_identifier#"$nse_team_id".}"
+
+  if [ "$nse_team_id" != "$team_id" ]; then
+    echo "::error::The extension profile belongs to team $nse_team_id but the app profile belongs to $team_id."
+    echo "::error::A shared Keychain group only works within one team."
+    exit 1
+  fi
+
+  # Guard against the two profiles being swapped, which would otherwise archive
+  # and then fail at export with a confusing bundle-id mismatch.
+  if [ "$nse_bundle_id" != "$bundle_id.nse" ]; then
+    echo "::error::Expected the extension profile to be for $bundle_id.nse but it is for $nse_bundle_id."
+    echo "::error::IOS_NSE_PROVISIONING_PROFILE_BASE64 is probably the app profile, or the wrong App ID."
+    exit 1
+  fi
+
+  nse_task_allow="$(read_field_from "$nse_profile_plist" Entitlements.get-task-allow 2>/dev/null || echo absent)"
+  if [ "$nse_task_allow" = "true" ]; then
+    echo "::error::The extension provisioning profile has get-task-allow=true, so it is a development profile."
+    exit 1
+  fi
+
+  if ! profile_authorises_shared_group "$nse_profile_plist" "$shared_keychain_group" "$team_id"; then
+    echo "::error::The extension provisioning profile does not authorise the shared Keychain group $shared_keychain_group."
+    echo "::error::Add the Keychain Sharing group \"$bundle_id.shared\" to the $nse_bundle_id App ID and regenerate it."
+    exit 1
+  fi
+
+  for profiles_dir in \
+    "$HOME/Library/MobileDevice/Provisioning Profiles" \
+    "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+    mkdir -p "$profiles_dir"
+    cp "$nse_profile_path" "$profiles_dir/$nse_profile_uuid.mobileprovision"
+  done
+
+  echo "Installed extension profile $nse_profile_uuid for $nse_bundle_id."
+else
+  echo "::warning::No Notification Service Extension profile was supplied. The archive will fail on the extension target."
+fi
+
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "keychain-path=$keychain_path"
@@ -163,6 +265,9 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "profile-name=$profile_name"
     echo "team-id=$team_id"
     echo "bundle-id=$bundle_id"
+    echo "keychain-access-group=$shared_keychain_group"
+    echo "nse-profile-uuid=$nse_profile_uuid"
+    echo "nse-bundle-id=$nse_bundle_id"
   } >> "$GITHUB_OUTPUT"
 fi
 

@@ -52,7 +52,11 @@ relay at `ws://127.0.0.1:8080` via USB `adb reverse`.
   evidence). What that does NOT cover is every iOS-specific runtime risk that matters here. The
   largest is the terminal, a `WKWebView` running xterm.js with WebGL, still entirely untested on
   the platform. Notifications remain Android-only by design (`src/notifications/index.ts` returns
-  early off Android; the iOS Notification Service Extension is a later phase). No iOS device has
+  early off Android only for the genuinely Android-only pieces: the foreground service, the
+  Notifee background task, and the channel definitions. The iOS Notification Service Extension
+  (`targets/nse/`) has since shipped, so on-device decrypt now covers both platforms - though the
+  extension has never run on a physical iPhone. Its crypto is proven against
+  `@kangentic/protocol` in CI; delivery is not. No iOS device has
   ever paired, connected to a relay, or rendered a real session.
 - **`expo-router/unstable-native-tabs`** carries a vendor warning that its API may change in a
   minor version. Adopted deliberately for iOS native feel.

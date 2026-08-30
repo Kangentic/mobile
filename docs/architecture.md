@@ -144,7 +144,8 @@ src/
   diff/            # Pure unified-diff line computation (jsdiff) + path display helpers
   notifications/   # Push registration, E2E blob decrypt, notifee channels, local notifier,
                   #   foreground service, background push task, tap routing (tap routing
-                  #   is cross-platform; rich display is Android until the iOS NSE ships)
+                  #   and rich display are cross-platform; the iOS half decrypts in
+                  #   the Notification Service Extension under targets/nse/)
   state/           # Zustand stores (activity/board/transcript/diff/channel/settings) +
                   #   the non-Zustand terminalFeed PTY ring buffers
   voice/           # Dictation hook over the OS speech engines
@@ -277,9 +278,9 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
 2. The phone's `ExponentPushToken` is exchanged over the paired E2E channel and treated as a
    per-device bearer secret.
 3. The payload is ciphertext plus a generic placeholder (see `.claude/rules/e2e-notification-privacy.md`).
-   On iOS, a Notification Service Extension (added via an Expo config plugin, no eject) decrypts
-   and rewrites the notification on-device. **The NSE is not built yet**, so an iOS push currently
-   renders as the placeholder only. On Android, a high-priority data-only FCM message is received
+   On iOS, a Notification Service Extension (`targets/nse/`, injected at prebuild by
+   `plugins/withIosNotificationServiceExtension.ts`, no eject) decrypts and rewrites the
+   notification on-device. On Android, a high-priority data-only FCM message is received
    by a headless `expo-task-manager` task (registered through `Notifications.registerTaskAsync`),
    which decrypts it and hands the rich local notification to Notifee to display. Notifee owns
    display and press events, not receipt.
@@ -287,8 +288,10 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
    registration's `platform`: Android gets a data-only message, because expo-notifications
    presents any push carrying a title or body itself, natively, ON TOP of the decrypted one the
    background task posts - which showed every Android alert twice. Omitting both suppresses the
-   native render while the task still runs. iOS keeps them, since without the NSE that placeholder
-   is the only visible content an iOS push can have.
+   native render while the task still runs. **iOS keeps them, and that is now load bearing rather
+   than a fallback:** APNs invokes a service extension only for a push carrying
+   `mutable-content: 1` AND an alert, so making iOS data-only to match Android would silently
+   stop the extension running and leave iOS permanently on the placeholder.
 
    **`channelId` counts as visible content and must be omitted too**, which is the sharp edge of
    the rule above. Expo attaches an FCM `android.notification` block to any message carrying it,
@@ -334,16 +337,17 @@ review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictat
    carry, and a foregrounded user already has the connection banner telling them the link is down,
    so this is accepted rather than fixed.
 
-Phone side (`src/notifications/`; RICH DISPLAY is Android-only in this phase, while registration,
-the permission request, tap routing, and the permission-state surface in Settings are all
-cross-platform - an iOS device registers its key/token ahead of the NSE shipping, and its pushes
-safely degrade to the generic placeholder until then): the 32-byte push key is
+Phone side (`src/notifications/`; rich display, registration, the permission request, tap
+routing, and the permission-state surface in Settings are all cross-platform now that the iOS
+Notification Service Extension has shipped, though the two platforms decrypt in different
+processes - Notifee's background handler on Android, a separate extension process on iOS): the
+32-byte push key is
 generated on-device and exchanged via the `register-push` verb on every established bootstrap,
 alongside the device's enabled `categories` (`pushRegistration.ts` - idempotent, re-sent on Expo
 token rotation or a category-preference change, and non-fatal without FCM credentials or against
 an older desktop; `getPushRegistrationStatus()` feeds the Settings UI). Preferences are enforced
 **desktop-side**: the desktop filters outgoing notifications to the device's registered set
-before sealing, so a future iOS Notification Service Extension never needs to know about them.
+before sealing, so the iOS Notification Service Extension never needs to know about them.
 `pushDecrypt.ts` opens envelopes with the phone's static public key as the AAD and maps the five
 categories (`categoryCopy.ts` - `input-required` / `turn-complete` / `session-failed` /
 `plan-complete` / `spawn-stalled`, named for cross-vendor task-lifecycle vocabulary rather than
@@ -403,8 +407,10 @@ foregrounded, and gated by the same per-category Settings toggle as remote push)
 
 Taps route to the task screen via `tapRouter.ts`, differently per platform because the two carry
 task identity differently. Android reads `{ taskId, projectId, sessionId }` straight off the
-notification, which Notifee posted after decrypting. iOS has no NSE, so the tapped notification
-carries only the sealed blob: the router decrypts it **on tap**, when the app is running and the
+notification, which Notifee posted after decrypting. On iOS the tapped notification carries only
+the sealed blob, and deliberately still does: the Notification Service Extension rewrites the
+title and body but never touches `userInfo`, so no task identity is stored in the OS-visible
+object. The router decrypts it **on tap**, when the app is running and the
 push key is reachable, and routes from the plaintext (`addNotificationResponseReceivedListener`
 for a warm tap, `getLastNotificationResponseAsync()` for a cold start). That is what keeps
 `taskId` out of the OS-visible payload; a plaintext routing id in `data` would be the easy version
@@ -462,9 +468,6 @@ placeholder, on the same failure path as a tampered or wrong-key blob.
   over the already-secure channel and DTLS fingerprints pinned at pairing time. The relay
   remains the permanent fallback.
 - **Tailscale "bring your own network"** detection for users who already run a tailnet.
-- **iOS Notification Service Extension**: the on-device decrypt path for APNs pushes (the
-  Android half of the pipeline above is built; iOS cannot hold a background socket, so it
-  relies entirely on remote push).
 
 ## See Also
 
