@@ -2247,6 +2247,13 @@ The result is one strong chain per markdown view that outlives the route:
 component in the Chat pane retained the Terminal pane's WebView, and why three separate
 investigations found the WebView "leaking" while removing it changed nothing.
 
+**TalkBack is unaffected, and that is checkable rather than assumed.** `cleanup()` clears the
+listener but leaves `needsRebuild` set, so the obvious worry is a view that re-attaches wanting a
+rebuild with nothing left to service it. It cannot get stuck: `rebuildIfNeeded()` is the first
+statement of `getVirtualViewAt`, `getVisibleVirtualViews` and `onPopulateNodeForHost`, so items
+are built lazily whenever accessibility queries the view. The listener is a proactive optimisation
+(it rebuilds early and calls `invalidateRoot()`), not the only path.
+
 **The fix**: remove the listener in `onDetachedFromWindow()`, which is the last moment
 `getViewTreeObserver()` still returns the window's observer rather than the view's floating one.
 Doing it in `onDropViewInstance` would be too late and would silently remove from the wrong
@@ -2271,6 +2278,7 @@ recycling - and one open/close cycle still retains a whole screen:
 | One markdown view, unpatched | 807 (+80/cycle) | 6 (+1/cycle) | 51 -> 95 |
 | One markdown view, **never rendered** (`markdown=""`) | 1287 (+80/cycle) | +1/cycle | flat |
 | One markdown view, patched | **327** | **0** | 51 -> 89 |
+| One markdown view, never rendered, **patched** | **327** | **0** | flat |
 | Full app, patched | **327** | **0** | flat |
 
 Re-verified on the SHIPPING bundle - the patch applied by `postinstall`, no probe code compiled
@@ -2278,10 +2286,15 @@ in at all - six cycles from a 464-view baseline: 464, 464, 464, and `WebViews` 0
 pre-collection samples on that run read 676, 690 and 694, which is the two-sample rule earning its
 place: every one of those would have been reported as a leak.
 
-The second row is the one that named the cause: an `EnrichedMarkdownText` that is created and
-never renders anything still leaks at the identical rate. That eliminated parsing, spans,
-`MeasurementStore`, the render executor and every span-held reference in one reading, and left
-only what happens when the view is constructed and its props are set.
+The never-rendered rows are the pair that named the cause. An `EnrichedMarkdownText` created with
+`markdown=""`, which returns from `setMarkdownContent` before `scheduleRender`, still leaks at the
+identical rate - eliminating parsing, spans, `MeasurementStore`, the render executor and every
+span-held reference in one reading. And the SAME variant is fixed by the accessibility patch,
+which is what makes the argument tight: a component that renders nothing leaks, and removing the
+listener stops it, so registration at prop-set time is the whole mechanism. It also settles by
+measurement something that was otherwise an inference from the JS wrapper's defaults -
+`invalidateAccessibilityItems()` does run on the prop path even for empty markdown, or there would
+have been no listener for the patch to remove.
 
 **The never-shut-down `ExecutorService` was a SYMPTOM, not a second bug.**
 `Executors.newSingleThreadExecutor()` returns a `FinalizableDelegatedExecutorService` whose
