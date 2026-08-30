@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import PagerView from 'react-native-pager-view';
 import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
 import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
@@ -18,8 +17,6 @@ import { SessionInputBar } from './SessionInputBar';
 import { ModeToggleHint } from './ModeToggleHint';
 import { resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
-
-const MODE_PAGE_INDEX: Record<SessionMode, number> = { terminal: 0, chat: 1, changes: 2 };
 
 /**
  * How long a 'rejected' stream feed must persist before the screen declares
@@ -72,7 +69,6 @@ export function SessionScreen(): React.JSX.Element {
     if (params.mode === 'chat' || params.mode === 'changes') return params.mode;
     return useSettingsStore.getState().preferredSessionLensByTaskId[taskId] ?? 'terminal';
   });
-  const pagerRef = useRef<PagerView>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -167,14 +163,12 @@ export function SessionScreen(): React.JSX.Element {
       if (requested === undefined) return;
       useTerminalUiStore.getState().consumeRequestedMode(boundSessionId);
       setMode(requested);
-      pagerRef.current?.setPage(MODE_PAGE_INDEX[requested]);
     });
   }, [sessionId]);
 
   const onModeChange = useCallback(
     (nextMode: SessionMode) => {
       setMode(nextMode);
-      pagerRef.current?.setPage(MODE_PAGE_INDEX[nextMode]);
       dismissModeHint();
       // Remember the task's lens (terminal/chat only: Changes is a
       // destination the user visits, not a preferred way to watch the
@@ -207,23 +201,49 @@ export function SessionScreen(): React.JSX.Element {
           unreachable while typing). */}
       <KeyboardAvoidingView style={styles.flex} behavior="padding">
         <View style={styles.flex}>
-          <PagerView
-            ref={pagerRef}
-            style={styles.flex}
-            initialPage={MODE_PAGE_INDEX[mode]}
-            scrollEnabled={false}
-            offscreenPageLimit={2}
-          >
-            <View key="terminal" style={styles.flex} testID="session-pane-terminal">
+          {/* All three panes stay mounted (the xterm WebView must never reload
+              and the conversation keeps its scroll position), so they are
+              absolutely-positioned siblings with only the active one visible
+              rather than pages of a pager. This replaced a PagerView that was
+              configured scrollEnabled={false}, so it contributed no scrolling
+              at all - only page management, which `mode` already does. The
+              pager also retained its ViewPager2 through a static
+              Choreographer callback in PagerViewViewManagerImpl, which is the
+              session-screen retention this change was made to fix. */}
+          <View style={styles.flex}>
+            <View
+              style={[styles.pane, mode === 'terminal' ? styles.paneVisible : styles.paneHidden]}
+              pointerEvents={mode === 'terminal' ? 'auto' : 'none'}
+              // A hidden pane is still in the view tree, so it has to be taken
+              // out of the accessibility tree explicitly - otherwise a screen
+              // reader walks all three surfaces and reads the terminal while
+              // the user is looking at Chat. Both platforms need their own
+              // prop; neither one covers the other.
+              accessibilityElementsHidden={mode !== 'terminal'}
+              importantForAccessibility={mode === 'terminal' ? 'auto' : 'no-hide-descendants'}
+              testID="session-pane-terminal"
+            >
               <TerminalTab sessionId={sessionId} active={mode === 'terminal'} cleanFeedEnabled={chatFallbackActive} />
             </View>
-            <View key="chat" style={styles.flex} testID="session-pane-chat">
+            <View
+              style={[styles.pane, mode === 'chat' ? styles.paneVisible : styles.paneHidden]}
+              pointerEvents={mode === 'chat' ? 'auto' : 'none'}
+              accessibilityElementsHidden={mode !== 'chat'}
+              importantForAccessibility={mode === 'chat' ? 'auto' : 'no-hide-descendants'}
+              testID="session-pane-chat"
+            >
               <ChatPane taskId={taskId} sessionId={sessionId} projectId={projectId} agentLabel={agentLabel} />
             </View>
-            <View key="changes" style={styles.flex} testID="session-pane-changes">
+            <View
+              style={[styles.pane, mode === 'changes' ? styles.paneVisible : styles.paneHidden]}
+              pointerEvents={mode === 'changes' ? 'auto' : 'none'}
+              accessibilityElementsHidden={mode !== 'changes'}
+              importantForAccessibility={mode === 'changes' ? 'auto' : 'no-hide-descendants'}
+              testID="session-pane-changes"
+            >
               <ChangesTab taskId={taskId} projectId={projectId} isActive={mode === 'changes'} />
             </View>
-          </PagerView>
+          </View>
 
           {sessionEnded ? (
             <SessionEndedState
@@ -250,5 +270,24 @@ export function SessionScreen(): React.JSX.Element {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  // Absolutely positioned so all three panes occupy the same box and stay
+  // mounted. Visibility is opacity + zIndex rather than `display: 'none'`,
+  // which would drop the WebView's surface and force the terminal to
+  // re-create its GL context on every lens switch.
+  pane: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  paneVisible: {
+    opacity: 1,
+    zIndex: 1,
+  },
+  paneHidden: {
+    opacity: 0,
+    zIndex: 0,
   },
 });

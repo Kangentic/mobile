@@ -2107,18 +2107,161 @@ They survive a forced GC (`Views` and `WebViews` unchanged after collection, whi
 of cycling between agents - and the ~4 MB of native heap per leak also explains the crash event's
 `free_memory` of 740 MB against 2.2-2.8 GB in the REACT-NATIVE-3 events on the same phone.
 
-**Where it is NOT.** `react-native-webview`'s `onDropViewInstance` does call
-`cleanupCallbacksAndDestroy()` (`RNCWebViewManagerImpl.kt`), so the library releases the WebView
-correctly when Fabric drops the view. Twenty surviving WebViews after twenty pops means the drop
-never happens - React is not unmounting the SessionScreen subtree when the route is popped. Start
-at the expo-router / react-native-screens boundary, not inside `TerminalPane`, whose own effects
-all have cleanups.
+**Where it is NOT - CORRECTED 2026-08-29, this section previously named the wrong cause.** The
+earlier text reasoned that because `react-native-webview`'s `onDropViewInstance` calls
+`cleanupCallbacksAndDestroy()` (`RNCWebViewManagerImpl.kt`), a surviving WebView proves the drop
+never happened, and therefore "React is not unmounting the SessionScreen subtree". That was an
+inference from reading library source, never a measurement, and **it is wrong twice over.**
+
+The inference has a hole: the Objects-block `WebViews` counter decrements when the Java object is
+**garbage collected**, not when `destroy()` is called. A correctly dropped and destroyed WebView
+still counts for as long as anything retains the Java instance. So a surviving WebView proves
+retention, not a missing drop.
+
+Measured directly, with a mount/unmount counter in `TerminalPane`'s unmount effect and
+`SessionScreen`'s open/close effect, on a Pixel 11 Pro against versionCode 10:
+
+- **React unmounts every time.** Six pops produced six mounts and six unmounts, the live count
+  returning to zero on each one. No Fabric mount-transaction abort appears in logcat either
+  (`ReactNoCrashSoftException`, `Unable to find view for tag`, `Cannot remove child`,
+  `SurfaceMountingManager` all absent).
+- The native view tree is retained **after** that clean unmount. `dumpsys gfxinfo` shows the split
+  from a second, independent counter: 308 views actually attached to the window against 922 live
+  `View` objects.
+
+Three suspects are eliminated by experiment rather than by argument, each by removing it and
+re-running the same six cycles:
+
+| Removed | Result |
+|---|---|
+| `PagerView` from the session screen | Views 334 -> 922, WebViews 3. No change. |
+| The xterm WebView entirely | Views 334 -> **832**, WebViews 0. **Still leaks.** |
+| (`TerminalPane` was already cleared in the 2026-08-09 pass) | - |
+
+The second row is the load-bearing one: roughly 83 views leak per pop with no WebView in the tree
+at all. **The WebView is a passenger, not the cause** - an expensive one, worth ~40 MB of GL
+surface each, which is why it dominated the symptom and misdirected the first investigation.
+
+A heap histogram diffed between two dumps of the same process names where it does live. Fabric's
+mount-item machinery grows in lockstep, about 47 objects per cycle:
+`FabricUIManager$2` +282, `MountItemDispatcher` lambdas +281, `IntBufferBatchMountItem` +280,
+`EventEmitterWrapper` +280, `SurfaceMountingManager$ViewState` +279. An `IntBufferBatchMountItem`
+is a mount transaction that should execute and be discarded; 280 of them alive, each holding
+`ViewState` entries and therefore views, is the leak. `react-native-screens` is clean by the same
+measurement (`Screen` +3, `ScreenStackFragment` +3 - steady state, not per-cycle), so the original
+"start at the expo-router / react-native-screens boundary" pointed at the wrong library too.
+
+**It is WORSE on a release build, not better.** A 2026-08-27 re-measurement on a dev client saw
+only 3 of 6 pops retain a WebView and recorded the leak as having improved to "intermittent". That
+was a dev-client artifact. No dependency in the retention path changed between the two dates
+(`react-native-pager-view` has been pinned at 8.0.2 since App Phase 1; `react-native-screens` last
+moved on 2026-07-27, before both). Measured on a release build of the same commit:
+
+| | Release baseline | After 6 open/close cycles |
+|---|---|---|
+| Views | 327 | 1219 (+892) |
+| WebViews | 0 | **5 of 6 pops** |
+| GL mtrack | 115 MB | 172 MB |
+| TOTAL PSS | 483 MB | 621 MB |
+
+Those survive a GC (confirmed by backgrounding the app: Java Heap fell 65.7 MB -> 33.5 MB while
+`Views` and `WebViews` did not move). Roughly 23 MB of PSS per session open is the number that
+matters for the App Review path, where a reviewer opens many sessions in a row.
+
+**A plain route is the control, and it does NOT leak.** Six push/pops of `settings` - no WebView,
+no panes, no session - grow `Views` by ~101, and every one of them is reclaimed by a GC, returning
+to the baseline 327 exactly. The same six cycles on the session screen leave +892 views and 5
+WebViews that a GC does not touch. Same app, same procedure, opposite outcomes: this is not
+"expo-router leaks every route", and any future theory has to explain why one route's subtree
+survives collection and another's does not.
+
+That control also shows why the pre-GC number is worthless on its own. `Views` climbing after a pop
+is the NORMAL state of a freshly popped screen; only what survives a forced collection counts. Force
+one (`am dumpheap` on a debuggable build, or background the app and wait) before reading anything
+into a delta.
+
+**Judge nothing about this leak, or about smoothness, on a dev client.** The same commit measured
+1003 MB PSS on the dev build and 483 MB on release, and the jank figures differ by more than two
+orders of magnitude (see the frame-timing note below).
 
 **This reframes the keepalive's role in REACT-NATIVE-5.** The keepalive never leaked - the
 background path is flat four ways (below). What it did was hold the process resident for 5h31m so
 that ordinary foreground accumulation never got reset by an OS kill. The five-minute ceiling
 therefore does fix the OOM, but by making the process reapable again, not by stopping a background
 leak. Fixing the unmount is the real repair; the ceiling only buys back the safety net.
+
+### Frame timing: the app is smooth on release, and only on release
+
+Measured 2026-08-29 on a Pixel 11 Pro with `adb shell dumpsys gfxinfo com.kangentic.mobile`, same
+commit, same screen (the Agents list with eight spinning activity marks):
+
+| | Dev client | Release |
+|---|---|---|
+| Janky frames | 24.73% | **0.11%** |
+| 50th percentile frame | 21 ms | **7 ms** |
+| 99th percentile | 48 ms | **12 ms** |
+| Slow UI thread | 2984 | **4** |
+| Missed Vsync | 1469 | **1** |
+
+GPU time is 1 ms at every percentile in both, so nothing here is GPU-bound: the dev-client cost is
+entirely UI/JS thread, and it is the dev runtime rather than the app. **A "feels laggy" report
+gathered on a dev client is not evidence about the shipped app.** Sitting idle on release measures
+0.05% jank.
+
+One real finding survives that comparison, and it is about **battery, not smoothness**: the idle
+release build rendered 6131 frames in a 51-second window, which is continuous 120 Hz compositing
+while nothing is happening. The app never goes idle.
+
+### The activity spinners cost more than half a CPU core
+
+Measured with `adb shell top -b -n 4 -d 2 -q -o CMD,%CPU -p $(pidof com.kangentic.mobile)` on the
+release build, idle, no interaction, against the demo pairing:
+
+| State | CPU |
+|---|---|
+| Backgrounded | ~24% |
+| Agents list, Thinking section collapsed (no spinners rendered) | ~43% |
+| Settings pushed over a collapsed Agents list | ~46% |
+| **Settings pushed over an EXPANDED one (8 spinners animating, invisible)** | **~72%** |
+| **Agents list, 8 spinners visible** | **~106%** |
+
+Two independent wastes, both isolated by A/B on the same screen (collapsing the Thinking section
+removes the spinners and changes nothing else):
+
+1. **~63 points for eight visible spinners** - roughly 8 points per icon. **FIXED 2026-08-29.**
+   `AgentStatusIcon` drove the spin through `useAnimatedProps` into an SVG `<G>`'s `matrix` prop,
+   so every spinner re-rendered react-native-svg on every frame. The turn is now a
+   `transform: [{ rotate }]` on the wrapping `Animated.View`, composited natively, with a static
+   `<Svg>` inside. Measured on release, Agents list, eight spinners, idle:
+
+   | | Before | After |
+   |---|---|---|
+   | CPU | ~106% | **~56%** |
+   | Spinner-attributable cost | ~63 points | **~13 points** |
+   | Janky frames | 0.11% | 0.06% |
+   | GPU memory | 92.26 MB | **52.18 MB** |
+
+   Rotating the whole `<Svg>` is exact rather than approximate because the only animated mark is a
+   single circle at its viewBox centre; `tests/unit/activityMarks.test.ts` asserts that for every
+   spinning mark so a future off-centre one fails the build. The wrapper is rendered ONLY on the
+   spinning branch, which is what keeps the e4e5524 tilted-envelope bug fixed - a transform on a
+   node that survives a working-to-idle rebind keeps whatever angle Reanimated last wrote, because
+   Reanimated writes to the native view and React's prop diff never clears it.
+
+2. **~26 points animating a screen nobody can see. STILL OPEN.** `freezeOnBlur` is not set
+   anywhere, so a covered Agents list keeps its spinners running while Settings, a session, or a
+   sheet sits on top (measured: Settings costs ~72% over an expanded list against ~46% over a
+   collapsed one). Gating the animation on screen focus would be a pure win with no visual change.
+   Be aware `freezeOnBlur` alone may not fix it - it suspends React rendering, while this cost is
+   Reanimated driving a native transform, which continues regardless. Measure rather than assume.
+
+Neither is a leak: the effects call `cancelAnimation` on unmount and the gating already covers
+reduced motion and the mark's legibility floor.
+
+**Caveat on the baseline.** These numbers were taken against the demo pairing, so the in-process
+mock desktop (a 1-second feed tick plus a PTY capture replaying on its own recorded timing) is part
+of the ~24% background and ~43% floor. A real paired user does not run it - but App Review does, so
+the reviewer path pays this.
 
 Reproduce with `adb shell dumpsys meminfo com.kangentic.mobile`, reading `Views` and `WebViews`
 from the Objects block and `Heap Alloc` from the **Dalvik Heap** row. Do not read `Java Heap` out

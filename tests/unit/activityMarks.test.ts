@@ -361,29 +361,43 @@ describe('the working ring (agent-working)', () => {
   });
 
   /**
-   * A PREMISE PIN, not a wiring proof. AgentStatusIcon derives the spin's
-   * rotation origin from this dashed circle's own cx/cy rather than from a
-   * fixed grid centre, and its docblock is explicit that the two agree only
-   * because every spin mark upstream happens to be drawn at the grid centre
-   * (activity.css's `.kng-spin { transform-origin: 12px 12px }`) - "those two
-   * rules would only part company on an off-centre spinning ring". This
-   * assertion is what would notice the marks parting company.
+   * A PREMISE PIN, and since 2026-08-29 a load-bearing one.
    *
-   * It cannot prove the component actually WIRES cx/cy into the rotation
-   * correctly: under jest.setup.ts's Reanimated mock, useAnimatedProps's
-   * factory runs synchronously during render, before the spin's useEffect has
-   * set spinTurns off its initial 0, and a rotation of exactly 0 turns is the
-   * identity transform for ANY centre - so a swapped or hardcoded origin
-   * would render an identical matrix and every AgentStatusIcon.test.tsx
-   * assertion would stay green. That failure mode is only reachable by
-   * exercising spinMatrixAboutPoint directly (tests/unit/activitySpin.test.ts
-   * already does, with an explicit off-centre case) or on a real device.
+   * AgentStatusIcon no longer rotates an <G> about a per-mark origin. The spin
+   * is a transform on the wrapping native view, which pivots about the VIEW's
+   * centre - that is, the viewBox centre - because driving an SVG `matrix` prop
+   * per frame cost roughly 8 percentage points of CPU per icon (see the
+   * REACT-NATIVE-5 section of docs/developer-guide.md). Rotating the whole
+   * <Svg> is exact only while every spinning mark is drawn at the grid centre,
+   * which is also upstream's own rule (activity.css's
+   * `.kng-spin { transform-origin: 12px 12px }`).
+   *
+   * So this is the assertion that stops an off-centre spinning mark from
+   * shipping a visibly wobbling ring. It is checked for EVERY mark carrying a
+   * spin rather than for agent-working alone, because the cost of the check is
+   * nil and a new mark is exactly the change that would break the premise.
+   *
+   * It still cannot prove the component WIRES the transform correctly - a
+   * rotation of 0 turns is the identity for any origin, and the Reanimated mock
+   * renders at 0. That half is only observable on a real device.
    */
-  it('centres its dashed ring on the grid centre, the premise the spin origin fallback relies on', () => {
+  it('draws every spinning mark on the grid centre, the premise the view transform relies on', () => {
     const [, , gridWidth, gridHeight] = ACTIVITY_VIEW_BOX.split(' ').map(Number);
-    const circle = dashedCircle('agent-working');
+    const spinningMarkNames = (Object.keys(activityMarks) as ActivityMarkName[]).filter(
+      (markName) => activityMarks[markName].spin !== undefined,
+    );
 
-    expect(circle.cx).toBe(gridWidth / 2);
-    expect(circle.cy).toBe(gridHeight / 2);
+    // Guards the guard: a filter that silently matched nothing would pass this
+    // test forever while asserting about no marks at all.
+    expect(spinningMarkNames).toContain('agent-working');
+
+    for (const markName of spinningMarkNames) {
+      const circle = dashedCircle(markName);
+      expect({ mark: markName, cx: circle.cx, cy: circle.cy }).toEqual({
+        mark: markName,
+        cx: gridWidth / 2,
+        cy: gridHeight / 2,
+      });
+    }
   });
 });

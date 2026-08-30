@@ -4,24 +4,26 @@ import Animated, {
   ReduceMotion,
   cancelAnimation,
   useAnimatedProps,
+  useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withRepeat,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle, G, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import {
   ACTIVITY_STROKE_LINECAP,
   ACTIVITY_STROKE_LINEJOIN,
   ACTIVITY_STROKE_WIDTH,
   ACTIVITY_VIEW_BOX,
   activityMarks,
-  type ActivityCircleShape,
   type ActivityMark,
   type ActivityMarkName,
 } from '@/brand/activityMarks.generated';
-import { spinMatrixAboutPoint } from '@/lib/activitySpin';
 import { useTheme } from './theme/ThemeProvider';
+
+/** One full turn, so `spinTurns` (0..1 per pass) reads as degrees for the view transform. */
+const FULL_TURN_DEGREES = 360;
 
 export type AgentStatusKind = 'working' | 'idle-unread' | 'idle';
 
@@ -38,27 +40,6 @@ export interface AgentStatusIconProps {
  * prop cannot be animated inside an XML blob.
  */
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-
-/**
- * The spin drives the GROUP rather than the circle, because react-native-svg's
- * Fabric group takes its transform as a `matrix` prop and Reanimated writes
- * straight to the shadow node. See src/lib/activitySpin.ts for why a `rotation`
- * prop would silently do nothing.
- *
- * `matrix` is the group's NATIVE transform prop on the New Architecture, but
- * react-native-svg's public GProps exposes only the JS-side conveniences
- * (`rotation`, `originX`, ...) that it folds into that matrix AT RENDER TIME.
- * Reanimated writes animated props straight to the shadow node, so the native
- * name is the one that has to be declared here for the ring to move at all.
- *
- * The alternative is createAnimatedComponent's `jsProps` option, which routes
- * every frame back through setNativeProps on the JS thread. That is exactly the
- * hop a composited transform exists to avoid, so this widening is the cheap
- * path rather than the clever one.
- */
-type SpinningGroupProps = React.ComponentProps<typeof G> & { matrix?: readonly number[] };
-const SpinningGroup: React.ComponentType<SpinningGroupProps> = G;
-const AnimatedGroup = Animated.createAnimatedComponent(SpinningGroup);
 
 /**
  * The below-floor dot, in the marks' own viewBox units. Its centre is derived
@@ -130,26 +111,14 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
   const marching = !reducedMotion && !belowFloor && march !== undefined;
   const spinning = !reducedMotion && !belowFloor && spin !== undefined;
 
-  // The origin, in user units, because react-native-svg has no CSS
-  // transform-origin to inherit. Upstream's rule is a FIXED grid centre
-  // (activity.css: `.kng-spin { transform-origin: 12px 12px }`), not a
-  // per-mark value; this derives it from the dashed circle's own centre
-  // instead, which every spin mark in the package agrees with because every one
-  // of them is drawn at 12,12. Those two rules would only part company on an
-  // off-centre spinning ring, which does not exist upstream - if one ever
-  // ships, decide deliberately which rule wins rather than letting the mobile
-  // ring drift from the web one.
-  //
-  // The fallback is the agent-idle path, not defensive dead code: the envelope
-  // carries no circle at all, so `spinOrigin` is undefined there and the matrix
-  // below is computed and then never rendered. Resolved out here because
-  // useAnimatedProps runs before the shape map, which is the only other place
-  // cx/cy is in scope.
-  const spinOrigin = mark.shapes.find(
-    (shape): shape is ActivityCircleShape => shape.kind === 'circle' && shape.dash !== undefined,
-  );
-  const spinCenterX = spinOrigin?.cx ?? DOT_CENTER_X;
-  const spinCenterY = spinOrigin?.cy ?? DOT_CENTER_Y;
+  // NOTE: there is no per-mark spin origin any more. The turn is a transform on
+  // the wrapping view (see spinStyle below), so it pivots about the view's
+  // centre, which is the viewBox centre. Upstream's rule is that same fixed
+  // grid centre (activity.css: `.kng-spin { transform-origin: 12px 12px }`), and
+  // every spinning mark is drawn there, so the two agree exactly.
+  // tests/unit/activityMarks.test.ts asserts that agreement rather than
+  // trusting this comment: an off-centre spinning mark would pivot wrongly and
+  // must fail the build instead of shipping a wobbling ring.
 
   useEffect(() => {
     if (!marching || march === undefined) {
@@ -204,8 +173,25 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
   }, [spinTurns, spin, spinning]);
 
   const marchProps = useAnimatedProps(() => ({ strokeDashoffset: dashOffset.get() }));
-  const spinProps = useAnimatedProps(() => ({
-    matrix: spinMatrixAboutPoint(spinTurns.get(), spinCenterX, spinCenterY),
+  /**
+   * The spin is a TRANSFORM ON A NATIVE VIEW, not an animated SVG prop.
+   *
+   * It used to drive the `matrix` prop of an <G> through useAnimatedProps,
+   * which re-renders react-native-svg on every frame. That was measured at
+   * roughly 8 percentage points of CPU per icon: eight spinning rows on the
+   * Agents list cost ~63 points, and the app never dropped to an idle frame
+   * rate. A view transform is composited natively and costs none of that.
+   * `.claude/rules/motion-conventions.md` asks for exactly this.
+   *
+   * Rotating the whole <Svg> is EXACT here rather than an approximation: the
+   * only animated mark, agent-working, is a single circle at the centre of its
+   * own viewBox (cx/cy 12 in a 24 grid), so the view's centre and the old
+   * per-mark spin origin are the same point. That equivalence is asserted in
+   * tests/unit/activityMarks.test.ts. A future off-centre spinning mark would
+   * break it, which is why the assertion exists rather than a comment alone.
+   */
+  const spinStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${spinTurns.get() * FULL_TURN_DEGREES}deg` }],
   }));
 
   const color = kind === 'working' ? theme.colors.statusWorking : theme.colors.warning;
@@ -224,7 +210,7 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
     );
   }
 
-  return (
+  const markSvg = (
     // `color` is what resolves the marks' `currentColor`, so the tone stays a
     // theme token and no hex ever reaches this file. The manifest labels
     // agent-idle's tone "attention" (this app's needs-you token is brand
@@ -263,15 +249,9 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
           return <Circle key={key} cx={shape.cx} cy={shape.cy} r={shape.r} strokeDasharray={dashArray} />;
         }
         if (spinning) {
-          // The group turns; the circle inside it is plain, because the dash
-          // itself never changes. Rendered ONLY on this branch, so a rebind to
-          // the envelope unmounts the transform rather than freezing it - see
-          // the docblock, this is the tilted-envelope bug's exact shape.
-          return (
-            <AnimatedGroup key={key} animatedProps={spinProps}>
-              <Circle cx={shape.cx} cy={shape.cy} r={shape.r} strokeDasharray={dashArray} />
-            </AnimatedGroup>
-          );
+          // Plain: the turn belongs to the wrapping Animated.View now, and the
+          // dash itself never changes.
+          return <Circle key={key} cx={shape.cx} cy={shape.cy} r={shape.r} strokeDasharray={dashArray} />;
         }
         return (
           <AnimatedCircle
@@ -285,5 +265,21 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
         );
       })}
     </Svg>
+  );
+
+  if (!spinning) return markSvg;
+
+  // Keyed by mark name and rendered ONLY on the spinning branch, so a row
+  // rebinding from working to idle UNMOUNTS the transform instead of leaving a
+  // stale one behind. That is the tilted-envelope bug of commit e4e5524: the
+  // transform there lived on a wrapper shared by both branches, and because
+  // Reanimated writes straight to the native node, React's prop diff never
+  // cleared it - a cancelled spin froze mid-rotation and the envelope rendered
+  // tilted. The protection is the CONDITIONAL MOUNT, not the transform's shape,
+  // so keep this branch exclusive if the animation ever changes again.
+  return (
+    <Animated.View key={markName} style={[{ width: size, height: size }, spinStyle]}>
+      {markSvg}
+    </Animated.View>
   );
 }

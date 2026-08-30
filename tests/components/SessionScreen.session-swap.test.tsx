@@ -289,17 +289,52 @@ describe('SessionScreen session binding', () => {
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
   });
 
-  it('changes is an inline pager pane, not a header chip or pushed route', () => {
+  it('changes is an inline pane, not a header chip or pushed route', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
     seedTaskWithSession('sess-a');
     renderSessionScreen();
-    // No header chip anymore; the pane is mounted in the pager (the footer
-    // switcher, stubbed in this suite, switches to it in place). The header's
-    // COLUMN chip is different in kind - a command, not a surface - and only
-    // navigates on press, so nothing here has pushed.
+    // No header chip anymore; the pane is mounted alongside the others (the
+    // footer switcher, stubbed in this suite, switches to it in place). The
+    // header's COLUMN chip is different in kind - a command, not a surface -
+    // and only navigates on press, so nothing here has pushed.
     expect(screen.queryByTestId('task-header-changes')).toBeNull();
-    expect(screen.getByTestId('session-pane-changes')).toBeTruthy();
+    // includeHiddenElements because an inactive pane is deliberately removed
+    // from the accessibility tree (asserted below). The default query honours
+    // that the way a screen reader would, so the structural check has to opt
+    // in explicitly - it is asking "is it mounted", not "is it readable".
+    expect(screen.getByTestId('session-pane-changes', { includeHiddenElements: true })).toBeTruthy();
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('keeps every pane mounted but hides the inactive ones from accessibility', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    // All three surfaces stay mounted so the xterm WebView never reloads and
+    // the conversation keeps its scroll position. That makes hiding the
+    // inactive two from the accessibility tree load-bearing: without it a
+    // screen reader walks all three and reads the terminal while the user is
+    // looking at Chat. Terminal is the default lens here.
+    const paneVisibility = (testID: string) => {
+      const pane = screen.getByTestId(testID, { includeHiddenElements: true });
+      return {
+        hidden: pane.props.accessibilityElementsHidden,
+        android: pane.props.importantForAccessibility,
+        pointerEvents: pane.props.pointerEvents,
+      };
+    };
+    expect(paneVisibility('session-pane-terminal')).toEqual({
+      hidden: false,
+      android: 'auto',
+      pointerEvents: 'auto',
+    });
+    for (const hiddenPane of ['session-pane-chat', 'session-pane-changes']) {
+      expect(paneVisibility(hiddenPane)).toEqual({
+        hidden: true,
+        android: 'no-hide-descendants',
+        pointerEvents: 'none',
+      });
+    }
   });
 
   /**
