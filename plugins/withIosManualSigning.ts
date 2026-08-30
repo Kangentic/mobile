@@ -2,7 +2,24 @@
 // exist in SDK 57; see the comment in withAndroidPushService.ts for what that
 // cost.
 import { withXcodeProject, type ConfigPlugin } from '@expo/config-plugins';
-import { NSE_TARGET_NAME } from './withIosNotificationServiceExtension';
+
+/**
+ * Duplicated from withIosNotificationServiceExtension.ts rather than imported,
+ * and that is not laziness.
+ *
+ * Expo's plugin loader transpiles each plugin file on its own and `require`s
+ * the result, so a relative import of a sibling `.ts` resolves to a `.js` that
+ * was never emitted. `import { NSE_TARGET_NAME } from
+ * './withIosNotificationServiceExtension'` was tried and failed prebuild with
+ * "Cannot find module" - on ANDROID as well as iOS, because the plugin file is
+ * loaded whatever the platform. An iOS-only feature took the Android build down
+ * with it. Same family as the `expo/config-plugins` import documented in
+ * withAndroidPushService.ts.
+ *
+ * tests/unit/iosManualSigning.test.ts asserts this equals the exported constant
+ * so the two cannot drift.
+ */
+export const NSE_TARGET_NAME = 'KangenticNSE';
 
 /**
  * Applies manual App Store signing to the **app target only**.
