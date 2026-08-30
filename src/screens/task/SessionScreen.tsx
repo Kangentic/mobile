@@ -5,7 +5,7 @@ import { Screen } from '@/components';
 import { findTaskById, useBoardStore } from '@/state/boardStore';
 import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { useTranscriptStore } from '@/state/transcriptStore';
+import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { closeSessionScreen, openSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
@@ -136,11 +136,12 @@ export function SessionScreen(): React.JSX.Element {
   // means this agent has no structured feed, so the chat lens shows the
   // cleaned reading view and the WebView runs its clean-feed parser. A
   // structured session flips over automatically when its first entry lands.
-  const chatFallbackActive = useTranscriptStore((state) => {
-    if (sessionId === null) return false;
-    const transcriptWindow = state.bySessionId[sessionId];
-    return transcriptWindow !== undefined && transcriptWindow.totalEntries === 0;
-  });
+  // ONE predicate, shared with ChatPane: the parser has to be on exactly when
+  // the reading view is on, and computing it twice put them out of step while
+  // the window was still loading, re-initialising the WebView for nothing.
+  const chatFallbackActive = useTranscriptStore(
+    (state) => selectChatLens(state, sessionId) === 'reading-view',
+  );
   const agentLabel = useBoardStore((state) => findTaskById(state, taskId)?.task.agent ?? null);
 
   const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);

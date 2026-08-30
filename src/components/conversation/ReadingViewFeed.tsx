@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Pressable,
   StyleSheet,
@@ -22,6 +22,10 @@ const JUMP_TO_LATEST_THRESHOLD_PX = 600;
 // every render, and this feed re-renders on every cleaned-output revision.
 const MAINTAIN_VISIBLE_CONTENT_POSITION = { autoscrollToBottomThreshold: 0.2 } as const;
 
+// A stable empty identity, so a session with no cleaned output yet does not
+// hand the memo below a new array on every render.
+const EMPTY_LINES: readonly string[] = [];
+
 interface ReadingViewRow {
   key: string;
   text: string;
@@ -37,14 +41,22 @@ interface ReadingViewRow {
 export function ReadingViewFeed({ sessionId, agentLabel }: ReadingViewFeedProps): React.JSX.Element {
   const theme = useTheme();
   const readingState = useReadingViewStore((state) => state.bySessionId[sessionId] ?? null);
-  const lines = readingState?.lines ?? [];
+  const lines = readingState?.lines ?? EMPTY_LINES;
 
-  const rows: ReadingViewRow[] = lines.map((text, index) => ({
-    // Keys are positional within a revisioned buffer: a reset renumbers, which
-    // is correct (the frame REPLACED the content).
-    key: `line-${index}`,
-    text,
-  }));
+  // Memoised for the same reason MAINTAIN_VISIBLE_CONTENT_POSITION is a
+  // constant: a fresh `data` identity re-triggers FlashList layout. Rebuilt
+  // inline, this ran on every render of a component that re-renders on every
+  // cleaned-output revision - the streaming path, so constantly.
+  const rows = useMemo<ReadingViewRow[]>(
+    () =>
+      lines.map((text, index) => ({
+        // Keys are positional within a revisioned buffer: a reset renumbers,
+        // which is correct (the frame REPLACED the content).
+        key: `line-${index}`,
+        text,
+      })),
+    [lines],
+  );
 
   const listRef = useRef<FlashListRef<ReadingViewRow>>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);

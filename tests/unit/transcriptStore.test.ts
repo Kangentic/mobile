@@ -8,7 +8,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { TranscriptEventPayload, TranscriptUpsertWire, TranscriptWindowResponsePayload } from '@kangentic/protocol';
-import { selectHasMoreHistory, useTranscriptStore } from '@/state/transcriptStore';
+import { selectChatLens, selectHasMoreHistory, useTranscriptStore } from '@/state/transcriptStore';
 import { assistantEntryFixture, userEntryFixture } from '@/devsupport/desktopFixtures';
 
 function deltaEvent(sessionId: string, revision: number, totalEntries: number, upserts: TranscriptUpsertWire[]): { kind: 'transcript'; sessionId: string; taskId: string; payload: TranscriptEventPayload } {
@@ -227,5 +227,57 @@ describe('transcriptStore', () => {
     const state = useTranscriptStore.getState();
     expect(state.retainedSessionIds).toEqual([]);
     expect(state.bySessionId['sess-1']).toBeUndefined();
+  });
+});
+
+/**
+ * The Chat lens has TWO readers - ChatPane renders it, SessionScreen gates the
+ * terminal's clean-feed parser on it - and they must never disagree, because
+ * the reading view is derived from that parser's output.
+ */
+describe('selectChatLens', () => {
+  beforeEach(() => {
+    useTranscriptStore.getState().reset();
+  });
+
+  it('loads until a window has actually landed', () => {
+    const { retainSession } = useTranscriptStore.getState();
+    retainSession('sess-1');
+    expect(selectChatLens(useTranscriptStore.getState(), 'sess-1')).toBe('loading');
+  });
+
+  /**
+   * THE REGRESSION. SessionScreen used to call any store entry reporting
+   * `totalEntries === 0` the fallback, while ChatPane waited for `hasWindow`.
+   * In that gap the terminal was told to run its clean feed while the pane
+   * still showed "Loading conversation...", which re-keys TerminalPane's init
+   * and re-initialises the WebView for nothing.
+   */
+  it('does not call an unlanded window the reading-view fallback', () => {
+    useTranscriptStore.setState({
+      bySessionId: {
+        'sess-1': { hasWindow: false, entries: [], startIndex: 0, totalEntries: 0, revision: -1, tailRevision: 0, needsTailFetch: true },
+      },
+      retainedSessionIds: ['sess-1'],
+    });
+    expect(selectChatLens(useTranscriptStore.getState(), 'sess-1')).toBe('loading');
+  });
+
+  it('picks the reading view for a landed but empty transcript', () => {
+    const { retainSession, applyWindow } = useTranscriptStore.getState();
+    retainSession('sess-1');
+    applyWindow('sess-1', windowPayload(1, 0, 0, []));
+    expect(selectChatLens(useTranscriptStore.getState(), 'sess-1')).toBe('reading-view');
+  });
+
+  it('picks the conversation feed once the window carries entries', () => {
+    const { retainSession, applyWindow } = useTranscriptStore.getState();
+    retainSession('sess-1');
+    applyWindow('sess-1', windowPayload(1, 1, 0, [userEntryFixture()]));
+    expect(selectChatLens(useTranscriptStore.getState(), 'sess-1')).toBe('conversation');
+  });
+
+  it('routes a task with no session to the conversation feed, which owns that empty state', () => {
+    expect(selectChatLens(useTranscriptStore.getState(), null)).toBe('conversation');
   });
 });

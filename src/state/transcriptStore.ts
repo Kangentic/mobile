@@ -250,3 +250,33 @@ export function selectHasMoreHistory(state: TranscriptStoreState, sessionId: str
   const session = state.bySessionId[sessionId];
   return session ? session.startIndex > 0 : false;
 }
+
+/** Which surface the Chat lens shows for a session. */
+export type ChatLens = 'loading' | 'reading-view' | 'conversation';
+
+/**
+ * THE single answer to "what is the Chat lens showing", because two callers
+ * need it and they must never disagree.
+ *
+ * `ChatPane` renders it, and `SessionScreen` reads it to decide whether the
+ * terminal runs its clean-feed parser - the reading view is derived from that
+ * feed, so the parser must be on exactly when the reading view is on. They
+ * were computed separately and by different rules: the screen treated any
+ * store entry with `totalEntries === 0` as the fallback, while the pane waited
+ * for `hasWindow`. In the gap the terminal was told to start its clean feed
+ * while the pane still showed "Loading conversation...", which re-keys
+ * `TerminalPane`'s init and re-initialises the WebView for nothing.
+ *
+ * `hasWindow`, not the presence of an entry, is what says a window has landed:
+ * a delta can arrive before the window request resolves and create the entry
+ * with `totalEntries > 0` and no entries at all. Routing on `totalEntries`
+ * alone rendered the conversation feed with zero cells and no loading state -
+ * a blank screen, observed live.
+ */
+export function selectChatLens(state: TranscriptStoreState, sessionId: string | null): ChatLens {
+  // ConversationTab owns the no-session empty state, so it is what renders.
+  if (sessionId === null) return 'conversation';
+  const session = state.bySessionId[sessionId];
+  if (session === undefined || !session.hasWindow) return 'loading';
+  return session.totalEntries === 0 ? 'reading-view' : 'conversation';
+}
