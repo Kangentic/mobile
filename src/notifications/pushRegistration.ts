@@ -4,7 +4,14 @@ import * as Notifications from 'expo-notifications';
 import { PUSH_CATEGORIES, type PushCategory, type RegisterPushRequestPayload } from '@kangentic/protocol';
 import { CapabilityError, type VerbClient } from '@/channel/verbClient';
 import { useSettingsStore } from '@/state/settingsStore';
-import { base64UrlEncode, getLastRegisteredExpoToken, getOrCreatePushKey, setLastRegisteredExpoToken } from './pushKeys';
+import {
+  base64UrlEncode,
+  getLastRegisteredExpoToken,
+  getOrCreatePushKey,
+  persistNsePushIdentityPublicKey,
+  setLastRegisteredExpoToken,
+} from './pushKeys';
+import { getPushIdentityPublicKey } from './pushIdentity';
 
 /**
  * Registers this device for E2E-encrypted remote push with the desktop:
@@ -110,6 +117,12 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
         registeredThisProcess = true;
         lastRegisteredCategories = categories;
         await setLastRegisteredExpoToken(expoPushToken);
+        // Hand the iOS Notification Service Extension the AAD it cannot derive
+        // for itself, pinned to the identity this registration actually used.
+        // No-op off iOS. Done here rather than earlier so the stored public key
+        // and the registered token always describe the same live registration.
+        const identityPublicKey = await getPushIdentityPublicKey();
+        if (identityPublicKey) await persistNsePushIdentityPublicKey(identityPublicKey);
       } else {
         registrationStatus = 'capability-denied';
       }

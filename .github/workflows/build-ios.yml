@@ -621,7 +621,11 @@ jobs:
     env:
       # Secrets cannot be referenced from an `if:` condition, so presence is
       # resolved once here as a plain boolean and the steps branch on that.
-      HAS_SIGNING: ${{ secrets.IOS_DIST_CERT_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+      # IOS_NSE_PROVISIONING_PROFILE_BASE64 is required, not optional: the app
+      # now ships a Notification Service Extension, and an extension target with
+      # no profile fails the archive. Failing here names the missing secret;
+      # failing in xcodebuild does not.
+      HAS_SIGNING: ${{ secrets.IOS_DIST_CERT_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' && secrets.IOS_NSE_PROVISIONING_PROFILE_BASE64 != '' }}
       # Two upload auth paths, deliberately. An App Store Connect API key is the
       # better one, but minting it requires App Store Connect's Users and Access
       # page to be up, and that is exactly the surface that fails during an ASC
@@ -643,7 +647,10 @@ jobs:
       - name: Require signing material
         if: env.HAS_SIGNING != 'true'
         run: |
-          echo "::error::A device build needs IOS_DIST_CERT_BASE64, IOS_DIST_CERT_PASSWORD and IOS_PROVISIONING_PROFILE_BASE64."
+          echo "::error::A device build needs IOS_DIST_CERT_BASE64, IOS_DIST_CERT_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64"
+          echo "::error::and IOS_NSE_PROVISIONING_PROFILE_BASE64 (the Notification Service Extension's own profile, for"
+          echo "::error::the com.kangentic.mobile.nse App ID; both App IDs also need the Keychain Sharing group"
+          echo "::error::com.kangentic.mobile.shared)."
           echo "::error::See the credential inventory in docs/developer-guide.md. Dispatch with target=simulator for an unsigned check."
           exit 1
 
@@ -656,14 +663,24 @@ jobs:
           IOS_DIST_CERT_BASE64: ${{ secrets.IOS_DIST_CERT_BASE64 }}
           IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          # The Notification Service Extension's own profile. An app extension is
+          # a separate bundle id (com.kangentic.mobile.nse) and cannot share the
+          # app's. Both App IDs must also carry the shared Keychain Sharing
+          # group; install-ios-signing.sh fails loudly if either does not,
+          # because the runtime symptom is a silent placeholder.
+          IOS_NSE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_NSE_PROVISIONING_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
           printf '%s' "$IOS_DIST_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/dist-cert.p12"
           printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          if [ -n "$IOS_NSE_PROVISIONING_PROFILE_BASE64" ]; then
+            printf '%s' "$IOS_NSE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/nse-profile.mobileprovision"
+          fi
           bash .github/scripts/install-ios-signing.sh \
             "$RUNNER_TEMP/dist-cert.p12" \
             "$IOS_DIST_CERT_PASSWORD" \
-            "$RUNNER_TEMP/profile.mobileprovision"
+            "$RUNNER_TEMP/profile.mobileprovision" \
+            "${IOS_NSE_PROVISIONING_PROFILE_BASE64:+$RUNNER_TEMP/nse-profile.mobileprovision}"
 
       # eas.json stays the source of truth for per-profile env on BOTH platforms.
       # Without this, an EXPO_PUBLIC_* value added to a profile would reach an
@@ -686,12 +703,21 @@ jobs:
           TEAM_ID: ${{ steps.signing.outputs.team-id }}
           PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
           SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
+          NSE_PROFILE_UUID: ${{ steps.signing.outputs.nse-profile-uuid }}
+          KEYCHAIN_ACCESS_GROUP: ${{ steps.signing.outputs.keychain-access-group }}
         run: |
           set -euo pipefail
           {
             echo "KANGENTIC_IOS_TEAM_ID=$TEAM_ID"
             echo "KANGENTIC_IOS_PROFILE_UUID=$PROFILE_UUID"
             echo "KANGENTIC_IOS_SIGNING_IDENTITY=$SIGNING_IDENTITY"
+            echo "KANGENTIC_IOS_NSE_PROFILE_UUID=$NSE_PROFILE_UUID"
+            # Read at BUNDLE time by src/notifications/sharedKeychain.ts, not at
+            # prebuild time like the three above. kSecAttrAccessGroup needs the
+            # team-prefixed literal and the team id must not be committed
+            # (no-personal-info.md), so it is composed here from the
+            # profile-derived team id and inlined by Metro.
+            echo "EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP=$KEYCHAIN_ACCESS_GROUP"
           } >> "$GITHUB_ENV"
 
       # Same pre-prebuild requirement, and the same reason it is a secret
@@ -809,6 +835,28 @@ jobs:
           fi
           echo "App target is on manual signing with the installed profile."
 
+          # The extension target, checked separately. It is created by
+          # withIosNotificationServiceExtension and signed by
+          # withIosManualSigning, which run in that order during prebuild; if
+          # the order ever reverses, the signing plugin finds no target by that
+          # name and writes nothing, and the archive fails with a message that
+          # names neither plugin.
+          if [ -n "${KANGENTIC_IOS_NSE_PROFILE_UUID:-}" ]; then
+            nse_settings_path="$RUNNER_TEMP/nse-build-settings.txt"
+            xcodebuild -showBuildSettings \
+              -workspace "ios/$SCHEME.xcworkspace" \
+              -scheme "$SCHEME" \
+              -target KangenticNSE \
+              -configuration Release > "$nse_settings_path" 2>/dev/null || true
+
+            if ! grep -q "PROVISIONING_PROFILE_SPECIFIER = $KANGENTIC_IOS_NSE_PROFILE_UUID" "$nse_settings_path"; then
+              echo "::error::The Notification Service Extension target is not set to its provisioning profile."
+              echo "::error::Check the plugin order in app.config.ts: withIosNotificationServiceExtension must come BEFORE withIosManualSigning."
+              exit 1
+            fi
+            echo "Extension target is on manual signing with its own profile."
+          fi
+
       # Its own step rather than an append to the signing guard above: the two
       # fail for unrelated reasons and are fixed in different places (missing
       # KANGENTIC_IOS_* variables vs. a build-setting override), and the Actions
@@ -876,12 +924,14 @@ jobs:
           # throwaway keychain is harmless for targets that never sign.
           #
           # If a "does not support provisioning profiles" error returns, the
-          # cause is a target the plugin did not cover. Once the Notification
-          # Service Extension lands it will need its own profile, added both to
-          # the plugin and to the provisioningProfiles dict in
-          # .github/scripts/export-ios-ipa.sh. Do not "fix" it by archiving
-          # unsigned: an unsigned archive can silently lose aps-environment at
-          # export, which ships an app that never receives a push.
+          # cause is a target the plugin did not cover. The Notification Service
+          # Extension has since landed and is handled: withIosManualSigning
+          # signs its target from KANGENTIC_IOS_NSE_PROFILE_UUID, and
+          # .github/scripts/export-ios-ipa.sh carries its bundle id in the
+          # provisioningProfiles dict. A NEW target would need the same two
+          # additions. Do not "fix" it by archiving unsigned: an unsigned
+          # archive can silently lose aps-environment at export, which ships an
+          # app that never receives a push.
           xcodebuild archive \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -899,6 +949,10 @@ jobs:
           PROFILE_UUID: ${{ steps.signing.outputs.profile-uuid }}
           BUNDLE_ID: ${{ steps.signing.outputs.bundle-id }}
           SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
+          # Every embedded bundle needs its own provisioningProfiles entry, or
+          # -exportArchive fails on the extension.
+          NSE_BUNDLE_ID: ${{ steps.signing.outputs.nse-bundle-id }}
+          NSE_PROFILE_UUID: ${{ steps.signing.outputs.nse-profile-uuid }}
         run: bash .github/scripts/export-ios-ipa.sh
 
       # An .ipa that is unsigned, development-signed, or missing the push

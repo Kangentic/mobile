@@ -8,6 +8,13 @@
 # because the team id must not be committed (.claude/rules/no-personal-info.md)
 # and the EAS-issued profile name embeds a timestamp that changes on every
 # reissue.
+#
+# NSE_BUNDLE_ID and NSE_PROFILE_UUID are optional and cover the Notification
+# Service Extension. EVERY embedded bundle needs its own entry in
+# provisioningProfiles: -exportArchive re-signs the whole app, and an extension
+# missing from the dict fails the export with a profile error naming only the
+# bundle id. This is the case build-ios.yml's archive step predicted would need
+# closing when the extension landed.
 
 set -euo pipefail
 
@@ -25,6 +32,19 @@ work_dir="${RUNNER_TEMP:-/tmp}"
 archive_path="$work_dir/$SCHEME.xcarchive"
 export_path="$work_dir/export"
 options_path="$work_dir/ExportOptions.plist"
+
+nse_bundle_id="${NSE_BUNDLE_ID:-}"
+nse_profile_uuid="${NSE_PROFILE_UUID:-}"
+
+# Emitted as an extra <key>/<string> pair inside provisioningProfiles, or as
+# nothing at all when the extension is not being signed.
+nse_profile_entry=""
+if [ -n "$nse_bundle_id" ] && [ -n "$nse_profile_uuid" ]; then
+  nse_profile_entry="    <key>$nse_bundle_id</key>
+    <string>$nse_profile_uuid</string>"
+else
+  echo "::warning::No extension profile supplied to the export. If the archive contains an .appex, this will fail."
+fi
 
 write_export_options() {
   local method="$1"
@@ -45,6 +65,7 @@ write_export_options() {
   <dict>
     <key>$BUNDLE_ID</key>
     <string>$PROFILE_UUID</string>
+$nse_profile_entry
   </dict>
   <key>uploadSymbols</key>
   <true/>

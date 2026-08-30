@@ -55,8 +55,17 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   withIosPodsUuidCollisionGuard: injects a collision-safe UUID
                               #   generator into the generated Podfile's post_install hook so an
                               #   SPM object cannot take the Pods root object's UUID, droppable
-                              #   when Expo or CocoaPods fixes the generator upstream)
-targets/nse/                  # iOS Notification Service Extension source, injected via plugin - later phase
+                              #   when Expo or CocoaPods fixes the generator upstream;
+                              #   withIosNotificationServiceExtension: creates the NSE target from
+                              #   targets/nse/ and adds the shared keychain-access-group to the
+                              #   app, so the extension can read the push key. Must be registered
+                              #   BEFORE withIosManualSigning, which signs the target it creates)
+targets/nse/                  # iOS Notification Service Extension source (Swift), copied into the
+                              #   generated Xcode project by the plugin above, never into ios/.
+                              #   Decrypts the push envelope before iOS renders the alert; vendors
+                              #   no crypto (HChaCha20 by hand, then CryptoKit's ChaChaPoly), so it
+                              #   needs no Pods entry. Cross-checked against @kangentic/protocol by
+                              #   the NSE crypto (swiftc) job in ci.yml
 src/
   screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
                   #   input bar, ChatPane, ChangesTab), CompletedTask, the form-sheet screens
@@ -89,9 +98,9 @@ src/
                   #   generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
-                  #   local notifier, foreground service (permission, registration, tap routing
-                  #   and Settings status are cross-platform; RICH display is Android-only
-                  #   until the iOS NSE ships)
+                  #   local notifier, foreground service, sharedKeychain (permission, registration,
+                  #   tap routing, Settings status and RICH display are all cross-platform; iOS
+                  #   decrypts in the targets/nse/ extension, Android in the Notifee handler)
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory) + the non-Zustand terminalFeed PTY ring buffers
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
@@ -112,6 +121,9 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   Code PTY output and pack it into src/devsupport/claudeCapture*.ts; dev
                   #   utilities, not run in CI),
                   #   cmakeStaging.mjs (prune/verify the relocated CMake staging root),
+                  #   generateNseCryptoFixtures.mjs (seals push envelopes with the protocol
+                  #   package so the Swift NSE crypto can be cross-checked by swiftc in CI;
+                  #   regenerate with `node scripts/generateNseCryptoFixtures.mjs`),
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
                   #   pretypecheck stale-node_modules guard), the store preflights
@@ -372,8 +384,9 @@ names its enforcement (live now, or planned where mechanical coverage does not e
 - `expo-cng.md` - no hand-edited `ios/`/`android/`; native config via config plugins; SDK-resolved
   dependency installs via `expo install` (`app.json`, `app.config.*`, `eas.json`, `plugins/`,
   `ios/`, `android/`, `package.json`, `package-lock.json`).
-- `secure-storage.md` - long-lived secrets in `expo-secure-store`, never AsyncStorage
-  (`src/pairing/`, `src/channel/`, `src/notifications/`, `src/state/`).
+- `secure-storage.md` - long-lived secrets in `expo-secure-store`, never AsyncStorage; the NSE's
+  shared Keychain group, its entitlement ORDER, and the per-item accessibility split
+  (`src/pairing/`, `src/channel/`, `src/notifications/`, `src/state/`, `plugins/`, `targets/`).
 - `ui-conventions.md` - shared primitives, font floor, FlashList, testIDs (`src/screens/`,
   `src/components/`).
 - `motion-conventions.md` - the frequency gate, `MotionTokens`/`useMotionPresets` vocabulary,
@@ -439,7 +452,8 @@ ones:
 
 **Linting:** live. `.github/workflows/ci.yml` runs each check as its own parallel job, and each
 job name is a required status check on the protected `main`: `Lint (ESLint)`, `Type check (tsc)`,
-`Unit Tests (Vitest)`, `Component Tests (Jest)`, `Native config (prebuild)`, and
+`Unit Tests (Vitest)`, `Component Tests (Jest)`, `Native config (prebuild)`,
+`NSE crypto (swiftc)`, and
 `Release counters (stores)` (pull requests only). Renaming a job
 renames the required check, so main's branch protection must be updated in the same change.
 Conventions with no mechanical check of their own (shorthand names, em-dashes, personal info, UI

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The extension's entitlements.
+
+  ONE GROUP, DELIBERATELY. This lists only the shared group, never the app's own
+  application-identifier group, so the extension can reach the push decrypt key
+  and the identity PUBLIC key and nothing else. The identity SECRET key, the
+  trust anchor, and the settings store stay in the app's default group, out of
+  reach of a process that has no reason to read them. That containment is the
+  whole argument for storing a separate copy of the public key rather than
+  handing the extension the secret and letting it derive one.
+
+  $(AppIdentifierPrefix) is expanded by Xcode at build time from the
+  provisioning profile, which is what keeps the Apple team id out of a public
+  repository (.claude/rules/no-personal-info.md).
+
+  The group must also be authorised by the App ID and present in the extension's
+  provisioning profile. A profile minted before it was added does not grant it,
+  and the failure is silent: the extension runs, the Keychain read returns
+  nothing, and every notification shows the placeholder.
+-->
+<plist version="1.0">
+<dict>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.kangentic.mobile.shared</string>
+	</array>
+</dict>
+</plist>

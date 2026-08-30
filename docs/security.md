@@ -204,12 +204,36 @@ per-device key expiry, so a lost phone is not trusted forever even if revocation
   address under `trust.relayAddress`, and the paired-at timestamp), and the push secrets
   (`src/notifications/pushKeys.ts` - the 32-byte push-decrypt key under `push.decrypt.key` and
   the last-registered Expo push token, itself a per-device bearer secret, under
-  `push.expoToken.lastRegistered`) are written with
-  `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`, so none of it is included in an encrypted iOS
-  device backup or restorable onto different hardware. Restoring a backup onto a new phone
-  cannot reconstitute a working paired client; the device must re-pair. The only other
+  `push.expoToken.lastRegistered`) are all `THIS_DEVICE_ONLY`, so none of it is included in an
+  encrypted iOS device backup or restorable onto different hardware. Restoring a backup onto a
+  new phone cannot reconstitute a working paired client; the device must re-pair. The only other
   secure-store values are the non-secret user preferences (`src/state/settingsStore.ts`),
   stored there because AsyncStorage is banned in `src/state/**`.
+
+- **Two accessibility classes, and the difference is deliberate.** The identity key, the trust
+  anchor and the settings store use `SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY`: nothing outside
+  the app reads them, so they can require an unlocked device. The two items the iOS Notification
+  Service Extension reads - the push-decrypt key and `push.identity.pk`, a copy of this phone's
+  static PUBLIC key kept as the envelope's AAD - use
+  `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY` instead (`src/notifications/sharedKeychain.ts`).
+  **This is a real trade-off, stated rather than buried:** those two items are readable by the
+  extension process while the phone is locked. The alternative was not a more secure app but a
+  non-functional feature, because an NSE runs at delivery time, which is usually while the phone
+  is locked, and iOS never re-renders an already-delivered notification. Under `WHEN_UNLOCKED`
+  the decrypted title would essentially never appear. Both items remain `THIS_DEVICE_ONLY`, so
+  the backup-portability property above is unchanged, and the identity SECRET key is deliberately
+  NOT among them.
+
+- **The extension reads through a shared Keychain access group, never a copy of the key.**
+  The app declares `keychain-access-groups` with its own application-identifier group **first**
+  and `<bundle id>.shared` second; the extension declares only the shared group
+  (`plugins/withIosNotificationServiceExtension.ts`, `targets/nse/Kangentic-NSE.entitlements`).
+  The order is load bearing: once that entitlement exists, an unqualified Keychain write lands in
+  the first entry rather than the implicit application-identifier group, and the identity key,
+  trust anchor and settings store all write unqualified. The extension can therefore reach the
+  push-decrypt key and the identity public key and nothing else. The group string is composed at
+  build time from the provisioning profile's team id and injected as
+  `EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP`, so no Apple team identifier is committed.
 
 ## Relay metadata honesty statement
 
@@ -240,6 +264,31 @@ treatment. On-device decrypt lives in
 this phone's static public key as the AAD, opened with a 24h staleness / 5min future-skew
 window, and any failure (missing key, wrong key, wrong recipient, tamper, malformed, stale)
 returns the placeholder. Decrypted content is never logged.
+
+Both platforms decrypt before display now. Android does it in a headless `expo-task-manager`
+task that hands the result to Notifee to display, Notifee owning display rather than receipt
+(`src/notifications/backgroundPushTask.ts`); iOS does it in a Notification Service Extension
+(`targets/nse/`, injected at prebuild by `plugins/withIosNotificationServiceExtension.ts`). The
+extension re-implements XChaCha20-Poly1305 in Swift because CryptoKit ships only the
+96-bit-nonce IETF variant: XChaCha20-Poly1305 is HChaCha20 for a subkey followed by that
+variant, so only HChaCha20 is hand-written and the AEAD itself is CryptoKit's. No third-party
+crypto is vendored. Agreement with `@kangentic/protocol` is not assumed: the `NSE crypto
+(swiftc)` job in `ci.yml` opens envelopes sealed by the protocol package's own
+`sealPushEnvelope` and checks that the tamper, wrong-key, wrong-AAD and staleness paths all
+reject.
+
+The extension mutates only the notification's title and body. It never writes to `userInfo`,
+and in particular never puts the decrypted `taskId` there: tap routing re-derives it by
+decrypting on tap (`src/notifications/tapRouter.ts`), so task identity never enters the
+OS-visible object. It logs nothing, on any path. Every failure - a missing key, a Keychain read
+that returns nothing because the device is locked or the entitlement is absent, a decrypt
+failure, an unknown category, or simply running out of execution time - delivers the placeholder
+exactly as it arrived.
+
+One dependency worth naming: **APNs invokes a service extension only for a push that carries
+`mutable-content: 1` AND an alert.** The desktop deliberately sends iOS a placeholder title and
+body for that reason, while sending Android a data-only message. Making iOS data-only to match
+Android would silently disable on-device decryption there.
 
 Unpairing revokes push, not just trust: `DevicesScreen` calls
 `connectionManager.revokePushRegistrationForUnpair()` while the channel is still up, which sends

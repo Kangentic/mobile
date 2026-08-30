@@ -470,8 +470,12 @@ plugins/                     # Local Expo config plugins: withAndroidPushService
                              #   template's 2048m so R8 survives a four-ABI production build),
                              #   withIosPodsUuidCollisionGuard (guards pod install against
                              #   CocoaPods' sequential-UUID collision corrupting Pods.xcodeproj;
-                             #   droppable once fixed upstream)
-targets/nse/                 # iOS Notification Service Extension source, injected via plugin - later phase
+                             #   droppable once fixed upstream),
+                             #   withIosNotificationServiceExtension (creates the NSE target and
+                             #   grants the app the shared keychain-access-group; must be
+                             #   registered BEFORE withIosManualSigning, which signs that target)
+targets/nse/                 # iOS Notification Service Extension source (Swift), copied into the
+                             #   generated Xcode project at prebuild, never committed under ios/
 app/                          # expo-router route wrappers (thin - render the src/screens/ implementation)
   task/[taskId].tsx           # full-screen task view; file-diff.tsx hosts the per-file diff
 src/
@@ -492,8 +496,9 @@ src/
   terminal/       # Pure liveTail cleaner, key sequences, WebView bridge, generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
   notifications/  # Push key + registration, E2E blob decrypt, notifee channels, background task,
-                  #   local notifier, foreground service, tap routing, permission cache
-                  #   (rich Android display ships; the iOS NSE is the later-phase part)
+                  #   local notifier, foreground service, tap routing, permission cache,
+                  #   sharedKeychain (rich display on both platforms: Notifee's background
+                  #   handler on Android, the targets/nse/ extension on iOS)
   state/          # Zustand stores + the non-Zustand terminalFeed PTY ring buffers
   voice/          # Dictation hook over the OS speech engines
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
@@ -665,7 +670,8 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
-| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping, and both generated `sentry.properties` files pinning `defaults.org=kangentic` / `defaults.project=mobile`, since a stale slug 404s the upload during a real release), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, the CMake staging block reaching `settings.gradle` and not stacking on a repeat prebuild, and `android`/`ios` staying untracked | 25-33s |
+| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping, and both generated `sentry.properties` files pinning `defaults.org=kangentic` / `defaults.project=mobile`, since a stale slug 404s the upload during a real release), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, the CMake staging block reaching `settings.gradle` and not stacking on a repeat prebuild, the Notification Service Extension target being injected exactly once with its sources and `NSExtensionPointIdentifier`, the app entitlements carrying the shared Keychain group with the application-identifier group **first**, and `android`/`ios` staying untracked | 25-33s |
+| `NSE crypto (swiftc)` | `ci.yml` | Compiles the extension's Swift crypto on a macOS runner and opens push envelopes sealed by `@kangentic/protocol`'s own `sealPushEnvelope`, including the published HChaCha20 vector and the tamper / wrong-key / wrong-AAD / stale rejections. The only gate that proves the Swift XChaCha20-Poly1305 is *correct* rather than merely compiling | ~1-2 min |
 | `Release counters (stores)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (Smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
 | `cla` | `cla.yml` | The contributor has signed the CLA | 7s |
@@ -1164,7 +1170,8 @@ smoke build and says so.
 | `PLAY_SERVICE_ACCOUNT_JSON` | submitting to Play | full JSON text of the `play-publisher` key |
 | `IOS_DIST_CERT_BASE64` | a signed `.ipa` | base64 of the Apple Distribution `.p12` |
 | `IOS_DIST_CERT_PASSWORD` | same | the `.p12` export password |
-| `IOS_PROVISIONING_PROFILE_BASE64` | same | base64 of the App Store `.mobileprovision` |
+| `IOS_PROVISIONING_PROFILE_BASE64` | same | base64 of the App Store `.mobileprovision`. Must carry the `com.kangentic.mobile.shared` Keychain group |
+| `IOS_NSE_PROVISIONING_PROFILE_BASE64` | same | base64 of the App Store `.mobileprovision` for `com.kangentic.mobile.nse`, the Notification Service Extension. Must carry the same Keychain group |
 | `ASC_API_KEY_BASE64` | uploading to App Store Connect | base64 of the `AuthKey_*.p8` |
 | `ASC_KEY_ID` | same | the key's 10-character id |
 | `ASC_ISSUER_ID` | same | the team's issuer UUID |
@@ -1260,10 +1267,19 @@ classic source of "target does not support provisioning profiles". The usual dod
 unsigned and let `-exportArchive` do all the signing. This workflow does not, because an unsigned
 archive carries no `archived-expanded-entitlements.xcent`, and the re-sign at export can then
 silently drop custom entitlements - including `aps-environment`. A loud archive failure beats a
-silent one. If that error ever appears (most likely once the Notification Service Extension lands,
-since an app extension needs its own profile), add the extension's bundle id to the
-`provisioningProfiles` dict in `.github/scripts/export-ios-ipa.sh`. Do not fix it by archiving
-unsigned.
+silent one. The Notification Service Extension has since landed and is handled: it has its own
+App ID and profile, `withIosManualSigning` signs its target from `KANGENTIC_IOS_NSE_PROFILE_UUID`,
+and its bundle id is in the `provisioningProfiles` dict in
+`.github/scripts/export-ios-ipa.sh`. If that error appears for a NEW target, make the same two
+additions. Do not fix it by archiving unsigned.
+
+**The extension needs Apple-portal work that no amount of CI can substitute for.** Before a
+device build can succeed there must be an App ID for `com.kangentic.mobile.nse`, a Keychain
+Sharing group `com.kangentic.mobile.shared` on **both** App IDs, and regenerated distribution
+profiles for both. `install-ios-signing.sh` fails the build with a named remediation if either
+profile lacks the group, because the alternative is the worst failure mode this feature has: the
+extension runs, the Keychain read returns nothing, and every notification shows the generic
+placeholder, which looks exactly like an extension that was never installed.
 
 **Build number preflight.** `scripts/checkAppStoreBuild.mjs` asks App Store Connect whether
 `ios.buildNumber` is already used and fails before the archive starts, so a duplicate costs seconds
@@ -2206,6 +2222,7 @@ Expo's servers.
 | `google-services.json` (+ base64) | `~/kangentic-secrets/firebase/`, plus repo root (gitignored) | GitHub secret `GOOGLE_SERVICES_JSON` | Re-download from Firebase console |
 | Apple distribution cert `.p12` (+ base64, + password) | `~/kangentic-secrets/apple/` | GitHub secrets `IOS_DIST_CERT_*`, Expo project credentials | Revoke and reissue via `eas credentials`; the profile must be regenerated with it |
 | App Store provisioning profile (+ base64) | `~/kangentic-secrets/apple/` | GitHub secret `IOS_PROVISIONING_PROFILE_BASE64` | Regenerate via `eas credentials`. Expires 2027-07-26 regardless |
+| Extension provisioning profile (+ base64) | `~/kangentic-secrets/apple/` | GitHub secret `IOS_NSE_PROVISIONING_PROFILE_BASE64` | Regenerate for the `com.kangentic.mobile.nse` App ID. Both profiles must carry the `com.kangentic.mobile.shared` Keychain group |
 | APNs key (`.p8`) | Expo project credentials only | - | Revoke in the Apple portal and mint a new one |
 | App Store Connect API key (`.p8`) | `~/kangentic-secrets/apple/` once created | GitHub secrets `ASC_*` | Revoke in App Store Connect and mint a new one |
 | Sentry org auth token | `~/.sentryclirc` (written by `sentry-cli login`, outside the repo) | GitHub secret `SENTRY_AUTH_TOKEN` | Revoke and mint a new one in Sentry settings; nothing else breaks |
@@ -2329,9 +2346,13 @@ Two things to settle before anything leaves internal testing:
   usual basis for treating an app as exempt, but that is a reasoned default rather than a legal
   conclusion. TestFlight internal testing does not act on the value. See the comment in
   `app.config.ts`.
-- **The iOS runtime is still unproven.** The app compiles for iOS and now signs, but no iOS build has
-  ever been run. The WKWebView terminal and the notification stack (Android uses Notifee; iOS needs
-  the Notification Service Extension, a later phase) are untested on the platform.
+- **Remote push on iOS is unproven on hardware.** The Notification Service Extension now exists
+  (`targets/nse/`) and its crypto is checked against `@kangentic/protocol` by the `NSE crypto
+  (swiftc)` job, but that proves the decrypt, not the delivery. Nothing has yet confirmed that
+  APNs invokes the extension on a real device, that the shared Keychain group resolves at
+  runtime, or that the entitlement survived signing. Verify with a good blob FIRST - a changed
+  title is self-evident proof the extension ran - and only then with a deliberately corrupt one,
+  because a corrupt blob and an extension that never ran produce identical output.
 
 ## Environment Variables
 
