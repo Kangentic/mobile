@@ -473,7 +473,11 @@ plugins/                     # Local Expo config plugins: withAndroidPushService
                              #   droppable once fixed upstream),
                              #   withIosNotificationServiceExtension (creates the NSE target and
                              #   grants the app the shared keychain-access-group; must be
-                             #   registered BEFORE withIosManualSigning, which signs that target)
+                             #   registered BEFORE withIosManualSigning, which signs that target),
+                             #   withAndroidProfileable (adds
+                             #   <profileable android:shell="true"/> so simpleperf can sample a
+                             #   RELEASE build, gated on EXPO_PUBLIC_KANGENTIC_PROFILEABLE)
+patches/                     # patch-package patches, applied by the postinstall script
 targets/nse/                 # iOS Notification Service Extension source (Swift), copied into the
                              #   generated Xcode project at prebuild, never committed under ios/
 app/                          # expo-router route wrappers (thin - render the src/screens/ implementation)

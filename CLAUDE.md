@@ -466,6 +466,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   costs ~45 minutes on a macOS runner per attempt, Android ~6 minutes each locally.
 - `/sentry` retrieves and diagnoses issues from the `mobile` Sentry project, and files a
   follow-up board task when asked.
+- `/profile` measures Android runtime performance on a release build: idle CPU, frame timing,
+  view retention, and the `simpleperf` sample that names the hot code. Reach for it on any lag,
+  jank, battery or leak report - it carries the measurement discipline (two meminfo samples,
+  matched process state across an A/B, bisect from one build) that this repo learned expensively.
 
 ### Authoring a rule
 
