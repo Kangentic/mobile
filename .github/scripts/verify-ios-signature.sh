@@ -189,7 +189,31 @@ if [ -f "$work_dir/entitlements.xml" ] || [ -f "$work_dir/entitlements.plist" ];
   echo "App entitlements carry the shared Keychain group."
 fi
 
-# 6. The bundle id in Info.plist, independent of the signature.
+# 6. The RUNTIME half of the shared Keychain group.
+#
+#    Checks 5 above prove both bundles are ENTITLED to the group. They say
+#    nothing about whether the app actually writes there, which depends on
+#    EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP being set before Metro bundles and
+#    inlined into the JS. That is a separate step in a separate part of the
+#    workflow, and if it is missed the app writes the push key into its own
+#    private group, the correctly-entitled extension finds nothing, and every
+#    notification shows the placeholder with every gate green.
+#
+#    Grepping the shipped bundle is the only check that covers the whole chain
+#    from the provisioning profile's team id to the string the app runs with.
+#    -a because the bundle is not guaranteed to be valid text throughout.
+bundle_js="$(find "$app_path" -maxdepth 1 -name 'main.jsbundle' | head -n 1)"
+if [ -n "$bundle_js" ]; then
+  if grep -qa "$expected_bundle_id.shared" "$bundle_js"; then
+    echo "The JS bundle carries the shared Keychain group, so the app will write where the extension reads."
+  else
+    fail "The JS bundle does not carry the $expected_bundle_id.shared Keychain group. EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP was not set before bundling, so the app would write the push key where the extension cannot read it and every notification would show the placeholder."
+  fi
+else
+  echo "::warning::No main.jsbundle in the app bundle; could not verify the runtime Keychain group."
+fi
+
+# 7. The bundle id in Info.plist, independent of the signature.
 info_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app_path/Info.plist")"
 [ "$info_bundle_id" = "$expected_bundle_id" ] \
   || fail "Info.plist bundle id is $info_bundle_id but expected $expected_bundle_id."
