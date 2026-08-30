@@ -2142,8 +2142,26 @@ re-running the same six cycles:
 **The third row localises it.** With the two list-bearing panes dropped, six cycles retain nothing
 at all, and the WebView - still mounted in that build, because only Chat and Changes were removed -
 tears down cleanly. That is the direct proof that the WebView was a passenger: it survives only
-while something else holds the subtree. **The retainer is inside `ChatPane` or `ChangesTab`**, and
-the next bisect is simply to drop one and then the other.
+while something else holds the subtree.
+
+**Bisected to `ChatPane`.** Run against a REAL paired desktop (so all three rows share a board,
+content and baseline - the demo's heavier sessions exaggerate the per-open cost and cannot be
+compared against it):
+
+| Session screen, 6 cycles, GC-forced, baseline 222 | Views | WebViews |
+|---|---|---|
+| Full app (control) | **+774** | **4** |
+| `ChatPane` dropped, `ChangesTab` kept | +78 | 1 |
+
+Dropping `ChatPane` removes roughly 90% of the retained views and three of the four WebViews.
+`ChangesTab` leaves a real but much smaller residual, so it is a second, lesser retainer rather
+than innocent. Search `ChatPane` and what it composes (`ConversationTab`, the conversation cells,
+`ReadingViewFeed`) for something that outlives a clean React unmount.
+
+**Take the control on the SAME pairing before removing anything.** The first attempt at this bisect
+compared a `ChatPane`-dropped build on a real desktop against a full-app number from the demo, and
+`+78 vs +892` looked like near-total elimination when the honest comparison was `+78 vs +774`. The
+conclusion happened to survive; the reasoning did not deserve to.
 
 Worth knowing before that bisect: FlashList is at 2.0.2, and **v2 ships no Android sources at all**
 (there is no `android/` directory in the package), so there is no native ViewManager of its own to
