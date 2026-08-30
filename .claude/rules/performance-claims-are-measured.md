@@ -34,9 +34,17 @@ same navigation. An A/B whose two arms differ in anything else measures that ins
 that needs a restart (reduced motion, an `EXPO_PUBLIC_*` flag) means force-stopping and relaunching
 BOTH arms, not just the one that needed it.
 
-**Sample long enough to quote a range.** This app streams continuously under the demo peer, so its
-load swings. The same condition read 22-46% and 65-86% from short samples and 48-51% from 20
-samples over 40s. Report a median with its range; a wide range means the number is not ready.
+**Sample long enough to quote a range, and never conclude inside it.** This app streams
+continuously under the demo peer, so its load swings. The same condition read 22-46% and 65-86%
+from short samples and 48-51% from 20 samples over 40s. Report a median with its range, and treat
+any delta smaller than that spread as no result: on the Agents list the spread is 45-57%, so
+nothing under ~12 points can be concluded from one pair of runs.
+
+**An A/B belongs in ONE process, switched at runtime.** Subtracting across two builds is not
+measurement, and it has produced a confidently wrong number here more than once - most recently
+"PressScale costs ~19 points", which an in-process swap put at zero (the old implementation
+measured LOWER on the cleanest sample). If a hypothesis cannot be toggled without rebuilding, add
+the toggle before drawing the conclusion.
 
 **Two `dumpsys meminfo` samples, and trust the second.** Retention is what survives collection.
 Single samples read 676, 690 and 694 views on a run whose settled value was 464.

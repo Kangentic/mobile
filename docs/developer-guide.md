@@ -2431,20 +2431,41 @@ part is what the frame loop drags behind it: Fabric parsing and applying props (
 comparisons, `RawPropsParser::at`), `libhwui` redrawing (16.5%), and the ioctl traffic to submit
 frames. One never-ending animation keeps that entire pipeline running at display rate.
 
-**It scales with how many Reanimated nodes are MOUNTED, not with how many are animating.** That is
-the part worth internalising, and it is measured. Same install, same content, toggled at runtime
-through the probe:
+**The mapper pass is unconditional, which is why "what is animating" is the wrong question.**
+Read `react-native-reanimated/src/mappers.ts`: `scheduledMapperRun` re-arms itself every frame
+for the life of the process on native ("We always run mappers on native"), starting at init.
+`useAnimatedStyle` registers one mapper per mounted component (`useAnimatedStyle.ts` ->
+`startMapper`), `mapperRun()` skips clean mappers but calls `updateMappersOrder()` - a recursive
+topological sort over ALL of them - whenever the mapper count changes, which FlashList recycling
+does constantly.
 
 | Idle Agents list, release build | Median CPU | Range |
 |---|---|---|
-| As shipped | **54.5%** | 45-57 |
-| Activity rings + skeletons inert | 40% | 26.5-47.5 |
-| Rings + skeletons + **`PressScale`** inert | **26.5%** | 25.5-30.5 |
+| As shipped | ~50% | 45-57 |
+| Activity rings + skeletons inert (in-process A/B) | 40% | 26.5-47.5 |
 | OS reduced motion (nothing animates at all) | **6%** | 5-11 |
 
-`PressScale` is roughly **19 of those points**, and it does not animate at rest at all: it wraps
-every `Card`, so every task row mounts an `AnimatedPressable` with a `useAnimatedStyle`, and the
-per-frame flush walks all of them. An idle list pays for press feedback nobody is triggering.
+**RETRACTED, and the retraction is the useful part.** An earlier revision of this section put
+`PressScale` at "roughly 19 of those points" and called press feedback on every card the
+highest-value question left open. That number came from subtracting across two DIFFERENT builds.
+Measured properly - one APK, one process, the card implementation swapped at runtime through the
+probe - it does not reproduce:
+
+| Idle Agents list, same process | Median | Range |
+|---|---|---|
+| Card on `Pressable`'s own pressed state (no mapper) | 51% | 48.5-56.5 |
+| Card on `PressScale` (a mapper per row) | 53.5% | 48.5-60 |
+| Card on `PressScale`, after forcing every row to re-render | **49.5%** | 45.5-57 |
+
+The old implementation measured LOWER on the cleanest sample. `PressScale` on `Card` costs
+nothing resolvable, the swap was reverted, and cards keep the eased press. **Cross-build
+subtraction is not measurement**, and this is the fourth mechanism in this investigation that
+looked obvious and did not survive an A/B (see also the render executor, the `InputMethodManager`
+served view, and the Reanimated warning storm).
+
+Note what that leaves: the ~44 points between "as shipped" and OS reduced motion is still
+**unattributed**. Only two numbers here are in-process and trustworthy - the ~9 points from the
+motion gate, and reduced motion's 6% floor.
 
 **Things that are NOT the cause**, each eliminated by measurement rather than argument:
 
@@ -2455,11 +2476,18 @@ per-frame flush walks all of them. An idle list pays for press feedback nobody i
 - **Not the leak, and not fixed by fixing it.** This is orthogonal to the retention bug above.
 - **Not the JS thread.** 96.8% of cycles are on the main thread; `mqt_v_js` is 1-3%.
 
-**Where a fix has to start.** Reanimated is not the thing to remove - it is the thing to stop
-mounting per row. `PressScale`'s own docstring calls itself "the ONLY per-item animation permitted
-inside FlashList rows", which is true of the rules it was written against and expensive under this
-one. Whether press feedback on every card is worth ~19 points of idle CPU is a design decision,
-not a refactor, and it is the highest-value question left open here.
+**Where a fix has to start, honestly.** Not with a component swap chosen by argument - two have
+now been tried and neither moved the number. The unattributed ~44 points is worth finding, and the
+next step is attribution the profiler can settle rather than elimination by rebuild: the call
+graph already puts 94% of frame callbacks under `worklets.AnimationFrameQueue.executeQueue`, so
+the question is which mappers are DIRTY every frame, not which components exist. Reanimated has no
+release-build introspection for that, so it likely needs either a patched build that counts dirty
+mappers per pass, or a `simpleperf` run with the unstripped `libreanimated.so` symbolised far
+enough to name the worklet.
+
+Two rules earned the hard way, both now in `performance-claims-are-measured.md`: an A/B belongs in
+ONE process, and a delta smaller than the run-to-run spread is not a result. The spread on this
+screen is 45-57%, so nothing under ~12 points can be concluded from a single pair of runs.
 
 Two smaller notes for whoever picks this up. The activity-ring gate
 (`src/components/motion/ScreenMotion.tsx`) stops looping motion on a blurred screen: worth ~9
