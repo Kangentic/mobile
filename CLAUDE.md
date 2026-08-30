@@ -64,8 +64,11 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   react-native-enriched-markdown+0.7.4.patch removes an
                               #   accessibility OnGlobalLayoutListener the library leaves on the
                               #   WINDOW's ViewTreeObserver, which retained a whole session screen
-                              #   per open. The filename pins the version, so a bump drops the
-                              #   patch: re-measure with the retention probe before accepting one
+                              #   per open. Filed upstream as software-mansion/enriched-markdown
+                              #   issue #730 and PR #731; drop the patch once that ships in a
+                              #   release we depend on. The filename pins the version, so a bump
+                              #   drops the patch silently: re-measure with the retention probe
+                              #   (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1) before accepting one
 targets/nse/                  # iOS Notification Service Extension source (Swift), copied into the
                               #   generated Xcode project by the plugin above, never into ios/.
                               #   Decrypts the push envelope before iOS renders the alert; vendors

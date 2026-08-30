@@ -2298,10 +2298,15 @@ and no iOS E2E suite). So: the Android leak is fixed and measured to the bar; wh
 analogous one is unknown, and any claim that this unblocks App Review should say so.
 
 **Upgrading does not fix it.** The library is at 0.7.4 here and 1.0.2 is current;
-`MarkdownAccessibilityHelper.kt` and `EnrichedMarkdownText.kt` are byte-identical on that point
-in 1.0.2. The patch filename pins 0.7.4, so **re-run the probe after any bump of
-`react-native-enriched-markdown`** - a version bump silently drops the patch and `patch-package`
-will warn, but only the probe proves the leak is still fixed.
+`MarkdownAccessibilityHelper.kt` is **byte-identical** between the two, and the same code is on
+their `main`. Filed upstream with the measurements and the minimal reproduction as
+[issue #730](https://github.com/software-mansion/enriched-markdown/issues/730) and
+[PR #731](https://github.com/software-mansion/enriched-markdown/pull/731); drop
+`patches/react-native-enriched-markdown+0.7.4.patch` once that ships in a version we depend on.
+
+Until then the patch filename pins 0.7.4, so **re-run the probe after any bump of
+`react-native-enriched-markdown`** - a version bump silently drops the patch. `patch-package` will
+warn, but only the probe proves the leak is still fixed.
 
 ### Two dead ends worth not repeating
 
