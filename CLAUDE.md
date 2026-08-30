@@ -71,7 +71,12 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   issue #730 and PR #731; drop the patch once that ships in a
                               #   release we depend on. The filename pins the version, so a bump
                               #   drops the patch silently: re-measure with the retention probe
-                              #   (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1) before accepting one
+                              #   (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1) before accepting one.
+                              #   CI's node_modules cache is keyed on package-lock.json ALONE and
+                              #   `npm ci` (so `postinstall`, so patch-package) runs only on a
+                              #   miss, so editing a .patch without touching the lockfile restores
+                              #   a cache holding the OLD patch. Bump something in the lockfile, or
+                              #   clear the cache, whenever a patch changes on its own
 targets/nse/                  # iOS Notification Service Extension source (Swift), copied into the
                               #   generated Xcode project by the plugin above, never into ios/.
                               #   Decrypts the push envelope before iOS renders the alert; vendors
