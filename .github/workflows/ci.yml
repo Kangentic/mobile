@@ -296,6 +296,10 @@ jobs:
             echo "::error::The Sentry Expo plugin did not add its Gradle integration. Release source maps would not upload, so every production Android stack trace would arrive minified."
             exit 1
           fi
+          if [ ! -f android/sentry.properties ]; then
+            echo "::error::The Sentry Expo plugin did not write android/sentry.properties, so sentry.gradle's upload task has no project to upload to."
+            exit 1
+          fi
           echo "Sentry plugin wired into the Android build."
           if ! grep -q "Upload Debug Symbols to Sentry" ios/*.xcodeproj/project.pbxproj; then
             echo "::error::The Sentry Expo plugin did not add its Xcode debug-symbol upload phase. Release dSYMs would not upload, so every production iOS crash would arrive unsymbolicated."
@@ -306,6 +310,25 @@ jobs:
             exit 1
           fi
           echo "Sentry plugin wired into the iOS build."
+
+          # Pin the org/project slug baked into both generated properties files.
+          # app.config.ts's organization/project options are the only source for
+          # this - sentry.gradle reads android/sentry.properties's defaults.org
+          # and defaults.project straight into sentry-cli's --org/--project, so a
+          # stale or partially renamed slug here 404s the upload and fails a real
+          # release build outright rather than degrading quietly. Check BOTH
+          # generated files: Android is the one that actually feeds sentry.gradle.
+          for propertiesFile in android/sentry.properties ios/sentry.properties; do
+            if ! grep -q "^defaults.org=kangentic$" "$propertiesFile"; then
+              echo "::error::$propertiesFile does not set defaults.org=kangentic. The Sentry upload would 404 against the wrong org."
+              exit 1
+            fi
+            if ! grep -q "^defaults.project=mobile$" "$propertiesFile"; then
+              echo "::error::$propertiesFile does not set defaults.project=mobile. The Sentry upload would 404 against the old/wrong project slug."
+              exit 1
+            fi
+          done
+          echo "Sentry project slug (kangentic/mobile) wired into both generated properties files."
 
           # The Android Gradle Plugin half, which is what uploads the R8 mapping
           # file. It is enabled by app.config.ts's experimental_android block and

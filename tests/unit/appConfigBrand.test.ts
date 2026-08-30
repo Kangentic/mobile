@@ -297,4 +297,15 @@ describe('app.config.ts Sentry Android Gradle Plugin', () => {
     );
     expect(entryNames).not.toContain('@sentry/react-native/expo');
   });
+
+  // This is what sentry.gradle's --org/--project args and the generated
+  // sentry.properties defaults.project value are built from. Nothing else in
+  // this file reads organization/project, so a partial rename of the Sentry
+  // project slug would leave every other assertion here green.
+  it('names the renamed Sentry project, whose slug the upload URL is built from', async () => {
+    const config = await loadAppConfigWithEnv({ SENTRY_AUTH_TOKEN: 'test-token' });
+    const options = pluginOptions<SentryPluginOptions>(config, '@sentry/react-native/expo');
+    expect(options.organization).toBe('kangentic');
+    expect(options.project).toBe('mobile');
+  });
 });

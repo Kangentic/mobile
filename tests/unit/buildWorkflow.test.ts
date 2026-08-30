@@ -720,6 +720,32 @@ describe('ci.yml Native config (prebuild) R8 checks', () => {
     expect(step?.run).toContain('io.sentry.android.gradle');
     expect(step?.run).toContain('autoUploadProguardMapping = shouldSentryAutoUpload()');
   });
+
+  it('pins the Sentry org and project slug in BOTH generated properties files', () => {
+    // The slug is what sentry-cli's --org/--project are built from, and a wrong
+    // one 404s the upload during a real release rather than failing here. Both
+    // files are named deliberately: android/sentry.properties is the one
+    // sentry.gradle reads, and it is written inside a try/catch that only
+    // warnOnce()s, so its absence would otherwise leave prebuild green.
+    //
+    // The literal slug is pinned in two places on purpose. This test pins what
+    // ci.yml asserts; tests/unit/appConfigBrand.test.ts pins the
+    // app.config.ts option the generator reads. A future rename has to update
+    // both, which is precisely the partial-rename failure being guarded.
+    //
+    // Match the ANCHORED grep pattern, quotes included, not the bare slug. Each
+    // slug also appears in the neighbouring `::error::` message, so a bare
+    // `defaults.project=mobile` match passes against a step whose actual grep
+    // has been changed to something else entirely. That vacuous pass is not
+    // hypothetical: this test had it until a mutation run caught it.
+    const step = readCiJobs()['native-config'].steps?.find(
+      (candidate) => candidate.name === 'Confirm the Sentry plugin actually wired itself in'
+    );
+    expect(step?.run).toContain('android/sentry.properties');
+    expect(step?.run).toContain('ios/sentry.properties');
+    expect(step?.run).toContain('"^defaults.org=kangentic$"');
+    expect(step?.run).toContain('"^defaults.project=mobile$"');
+  });
 });
 
 describe('workflow env-gated steps are defined in their own job', () => {
