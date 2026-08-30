@@ -159,10 +159,11 @@ registered yet, so re-poll before concluding it is genuinely the only one.
 whole poll on a red check that blocks nothing. Measured on PR #28: the required gate went green at
 04:06:15 and paired at 04:12:40, so an unfiltered watch spends **6m25 of dead wait on every PR**.
 
-**14 check runs report** on a PR to `main` (8 from `ci.yml`, 5 from `e2e.yml`, 1 from
-`cla.yml`). **Eight** of them are required as of this writing and are the only ones this watch
+**15 check runs report** on a PR to `main` (9 from `ci.yml`, 5 from `e2e.yml`, 1 from
+`cla.yml`). **Nine** of them are required as of this writing and are the only ones this watch
 sees: `Lint (ESLint)`, `Type check (tsc)`, `Unit Tests (Vitest)`, `Component Tests (Jest)`,
-`Native config (prebuild)`, `Release counters (stores)`, `E2E Tests (Maestro)`, and `cla`.
+`Native config (prebuild)`, `NSE crypto (swiftc)`, `Release counters (stores)`,
+`E2E Tests (Maestro)`, and `cla`.
 The rest are shard jobs and intermediate jobs that the thin gate checks already aggregate.
 
 **Do not trust that list.** It is a sanity check for a human reading this file, nothing more. It

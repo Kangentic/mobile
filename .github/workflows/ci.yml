@@ -367,6 +367,33 @@ jobs:
           SENTRY_AUTH_TOKEN: dummy-token-for-ci-plugin-check
         run: npx expo prebuild --platform all --no-install
 
+      # The prebuild above is the SECOND one to generate ios/ in this job, so it
+      # is the only point where a non-idempotent plugin can actually show itself.
+      # The count assertion earlier runs before it and therefore proves only that
+      # one prebuild produces one target; without this step the "not idempotent
+      # across repeated prebuilds" claim it makes is untested.
+      #
+      # That a repeat prebuild re-applies mods over an existing native directory
+      # rather than regenerating from the template is not an assumption: it is
+      # why "Confirm the CMake staging block did not stack on a repeat prebuild"
+      # below exists, and why withIosNotificationServiceExtension.ts guards on
+      # pbxTargetByName at all. This is the iOS half of the same check.
+      - name: Confirm a repeated prebuild did not duplicate the extension target
+        run: |
+          set -euo pipefail
+          pbxproj="$(find ios -maxdepth 2 -name 'project.pbxproj' | head -n 1)"
+          if [ -z "$pbxproj" ]; then
+            echo "::error::No ios/*.xcodeproj/project.pbxproj after the second prebuild."
+            exit 1
+          fi
+          nse_target_count="$(grep -c 'PRODUCT_BUNDLE_IDENTIFIER = "com.kangentic.mobile.nse"' "$pbxproj" || true)"
+          if [ "$nse_target_count" -ne 2 ]; then
+            echo "::error::After a second prebuild the extension bundle id appears in $nse_target_count build configurations, expected 2 (Debug and Release)."
+            echo "::error::withIosNotificationServiceExtension is not idempotent: a duplicate target ships a duplicate bundle id, which App Store Connect rejects at upload."
+            exit 1
+          fi
+          echo "A repeated prebuild left exactly one extension target."
+
       - name: Confirm the Sentry plugin actually wired itself in
         # Guards against the plugin silently no-opping: if a future SDK version
         # changes how it injects, this fails loudly here instead of shipping a

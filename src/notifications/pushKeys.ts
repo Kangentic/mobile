@@ -92,10 +92,16 @@ export async function getOrCreatePushKey(): Promise<Uint8Array> {
  */
 export async function getPushKeyIfExists(): Promise<Uint8Array | null> {
   if (cachedPushKey) return cachedPushKey;
+  const generationAtLoadStart = pushKeyGeneration;
   const storedKeyHex = await readStoredPushKeyHex();
   if (!storedKeyHex) return null;
   const pushKey = hexToBytes(storedKeyHex);
   if (pushKey.length !== PUSH_KEY_LENGTH) return null;
+  // The same unpair-wins rule getOrCreatePushKey applies, and it matters more
+  // here: this is the DECRYPT path, so handing back a key the wipe already
+  // removed would let a push sealed by the just-unpaired desktop still open.
+  // Returning null degrades that notification to the generic placeholder.
+  if (generationAtLoadStart !== pushKeyGeneration) return null;
   cachedPushKey = pushKey;
   return pushKey;
 }
@@ -116,6 +122,7 @@ export async function getPushKeyIfExists(): Promise<Uint8Array | null> {
  * the legacy read would be a pointless second round trip.
  */
 async function readStoredPushKeyHex(): Promise<string | null> {
+  const generationAtReadStart = pushKeyGeneration;
   const storageOptions = sharedPushStorageOptions();
   const currentKeyHex = await SecureStore.getItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, storageOptions);
   if (currentKeyHex) return currentKeyHex;
@@ -124,7 +131,38 @@ async function readStoredPushKeyHex(): Promise<string | null> {
   const legacyKeyHex = await SecureStore.getItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, LEGACY_PUSH_STORAGE_OPTIONS);
   if (!legacyKeyHex) return null;
 
+  // An unpair that landed while the reads above were in flight wins. Migrating
+  // now would WRITE the just-wiped key back into the shared group that
+  // clearPushRegistration has already deleted from, resurrecting it in storage
+  // rather than merely in memory, and leaving the old desktop able to push.
+  if (generationAtReadStart !== pushKeyGeneration) return null;
+
   await SecureStore.setItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, legacyKeyHex, storageOptions);
+
+  // The check above narrows the window but cannot close it: clearPushRegistration
+  // can run its deletes WHILE the write is in flight, so the write lands after
+  // the wipe has already been and gone and the revoked key is back on disk,
+  // where it survives a process restart. Undo it rather than leave it there.
+  // Checked after the await, which is the only place that can observe it.
+  //
+  // The delete is guarded on the VALUE, not just on the item existing. A re-pair
+  // in the same process can already have persisted a fresh key to this location
+  // by now, and deleting that one would strand the desktop sealing against a key
+  // the phone can no longer produce - a permanent placeholder, which is worse
+  // than the resurrection this is undoing.
+  //
+  // One sub-case is deliberately left open: if the stale write CLOBBERED a newer
+  // key, this cannot tell that from its own write and leaves it. Closing that
+  // needs a lock shared with clearPushRegistration, which is more machinery than
+  // a migration that runs once per install warrants.
+  if (generationAtReadStart !== pushKeyGeneration) {
+    const strayKeyHex = await SecureStore.getItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, storageOptions);
+    if (strayKeyHex === legacyKeyHex) {
+      await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, storageOptions);
+    }
+    return null;
+  }
+
   const readBackKeyHex = await SecureStore.getItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, storageOptions);
   if (readBackKeyHex === legacyKeyHex) {
     await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, LEGACY_PUSH_STORAGE_OPTIONS);

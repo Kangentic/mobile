@@ -90,13 +90,21 @@ final class NotificationService: UNNotificationServiceExtension {
     return PushEnvelope.open(blob: blob, pushKey: pushKey, recipientStaticPublicKey: identityPublicKey)
   }
 
-  /// Mirrors `extractBlobFromTaskData` in src/notifications/pushDecrypt.ts.
+  /// Mirrors `extractBlobFromTaskData` in src/notifications/pushDecrypt.ts, as
+  /// a deliberate SUPERSET rather than a line-for-line copy.
   ///
   /// The Expo push service does not put the message's `data` object at the top
   /// level of the APNs payload: it nests it under `body`, which arrives either
   /// as a dictionary or as a JSON string depending on the delivery path. Reading
   /// only `userInfo["blob"]` would work in a hand-crafted test push and never in
   /// production.
+  ///
+  /// The nested-DICTIONARY branch is the half the TypeScript does not have, and
+  /// that is correct rather than drift: this reads the raw APNs `userInfo`,
+  /// while expo-notifications hands JS an already-unwrapped `data` (it assigns
+  /// `userInfo["body"] as? [String: Any]` before JS ever sees it), so the JS
+  /// side never encounters the dictionary form. Do not "reconcile" the two by
+  /// deleting this branch.
   static func extractBlob(from userInfo: [AnyHashable: Any]) -> String? {
     if let blob = userInfo["blob"] as? String { return blob }
 

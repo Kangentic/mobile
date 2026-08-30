@@ -179,14 +179,23 @@ fi
 
 # The app half of the same pair. Without it the app writes the push key into its
 # own private group and the extension, however correctly entitled, finds nothing.
-if [ -f "$work_dir/entitlements.xml" ] || [ -f "$work_dir/entitlements.plist" ]; then
-  app_entitlements_file="$work_dir/entitlements.xml"
-  [ -f "$app_entitlements_file" ] || app_entitlements_file="$work_dir/entitlements.plist"
-  app_keychain_groups="$(plutil -extract keychain-access-groups json -o - "$app_entitlements_file" 2>/dev/null || echo '[]')"
+#
+# Gated on the entitlements read having SUCCEEDED, not on the file existing. The
+# `>` redirection at step 4 creates entitlements.plist before codesign runs, so
+# the file is there even on the fallback path - testing for it would run this
+# block against an empty plist, extract nothing, and fail with a wrong reason
+# exactly when the deliberate embedded.mobileprovision fallback had kicked in.
+if [ -n "${entitlements_file:-}" ]; then
+  app_keychain_groups="$(plutil -extract keychain-access-groups json -o - "$entitlements_file" 2>/dev/null || echo '[]')"
   if ! contains "$app_keychain_groups" "$expected_bundle_id.shared"; then
     fail "The app's signed entitlements do not carry the $expected_bundle_id.shared Keychain group, so the extension could never read the push key."
   fi
   echo "App entitlements carry the shared Keychain group."
+else
+  # The embedded profile grants the group to the App ID; it does not prove the
+  # binary was signed with it. A warning rather than a fail, matching how step 4
+  # already degrades on this path.
+  echo "::warning::Could not read the app's signed entitlements; the shared Keychain group could not be verified."
 fi
 
 # 6. The RUNTIME half of the shared Keychain group.
