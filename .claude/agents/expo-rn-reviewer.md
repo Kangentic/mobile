@@ -57,6 +57,21 @@ README or changelog for New Architecture / Expo SDK compatibility statements.
    element, a literal duration or bezier value instead of `theme.motion`, an accelerating curve
    on an entrance, a hand-rolled animation with no `ReduceMotion.System`, or a raw `expo-haptics`
    call outside `src/lib/haptics.ts`.
+
+   **Treat `useAnimatedProps` into a third-party component as HIGH.** Driving another library's
+   props per frame (react-native-svg's `matrix`, `strokeDashoffset`, `d`, `cx`; a chart library's
+   geometry) re-runs that library's rendering every frame and was measured at ~8 percentage points
+   of CPU per spinning icon on a release build - the single most expensive motion mistake in this
+   codebase, and one that reads as ordinary Reanimated code. The fix is a `transform` on a wrapping
+   native `Animated.View` around a static child. `useAnimatedStyle` is the shape to expect;
+   `useAnimatedProps` on anything that is not a plain RN primitive needs an argument in the diff.
+   Also flag an animated wrapper that is rendered UNCONDITIONALLY on a recycled row: Reanimated
+   writes straight to the native node, so a transform that survives a rebind keeps its last angle
+   (the e4e5524 tilted-envelope bug). The wrapper must be mounted only on the animating branch.
+
+   **Flag any performance claim in a PR description sourced from a dev client.** Dev-client numbers
+   are not a weaker signal but a misleading one (24.73% jank against 0.11% on release, same commit),
+   so a "this feels faster" with no release-build measurement behind it is a finding, not evidence.
 8. **Em-dash / double-dash scan.** Any authored em-dash (U+2014) or `--` used as punctuation, in
    code, comments, docs, or markdown (this repo's `tests/`/`docs/` trees have no mechanical
    scanner, so this review is the only coverage there).

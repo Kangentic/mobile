@@ -2136,7 +2136,19 @@ re-running the same six cycles:
 |---|---|
 | `PagerView` from the session screen | Views 334 -> 922, WebViews 3. No change. |
 | The xterm WebView entirely | Views 334 -> **832**, WebViews 0. **Still leaks.** |
+| **`ChatPane` + `ChangesTab`** (release build) | Views 327 -> **327**, WebViews 0. **Leak gone.** |
 | (`TerminalPane` was already cleared in the 2026-08-09 pass) | - |
+
+**The third row localises it.** With the two list-bearing panes dropped, six cycles retain nothing
+at all, and the WebView - still mounted in that build, because only Chat and Changes were removed -
+tears down cleanly. That is the direct proof that the WebView was a passenger: it survives only
+while something else holds the subtree. **The retainer is inside `ChatPane` or `ChangesTab`**, and
+the next bisect is simply to drop one and then the other.
+
+Worth knowing before that bisect: FlashList is at 2.0.2, and **v2 ships no Android sources at all**
+(there is no `android/` directory in the package), so there is no native ViewManager of its own to
+retain anything. Whatever holds the subtree is either JS-side or in the RN views these panes
+compose.
 
 The second row is the load-bearing one: roughly 83 views leak per pop with no WebView in the tree
 at all. **The WebView is a passenger, not the cause** - an expensive one, worth ~40 MB of GL

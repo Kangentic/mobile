@@ -341,6 +341,29 @@ the Maestro suite locally before opening a pull request. Two reasons: E2E is sin
 emulator, one relay port, one paired identity), so it serialises every task on the board; and it
 duplicates the gate that actually cannot be bypassed.
 
+**Performance is MEASURED, on a release build, or it is not known.** The dev client is not a
+weaker signal, it is a misleading one: the same commit measures 24.73% janky frames on dev and
+0.11% on release, 1003 MB PSS against 483 MB. Never accept, report, or act on a performance claim
+sourced from a dev client, including your own impressions of one. Build a real one with
+`npx expo run:android --variant release --no-bundler` (a few minutes, no signing setup, installs as
+an upgrade so the pairing survives). Three commands answer three different questions, and mixing
+them up is how the last investigation chased the wrong cause for two weeks:
+
+- **Frames:** `adb shell dumpsys gfxinfo <pkg> reset`, exercise, read back. Janky %, percentiles.
+  GPU at 1 ms with high jank means the UI/JS thread, never the GPU.
+- **CPU:** `adb shell top -b -n 4 -d 2 -q -o CMD,%CPU -p $(pidof <pkg>)`. An idle screen should not
+  cost a core. `dumpsys gfxinfo` will call an app perfectly smooth while it burns one.
+- **Memory:** `adb shell dumpsys meminfo <pkg>` - `Views`/`WebViews` from the **Objects** block,
+  `Heap Alloc` from the **Dalvik Heap** row, never `Java Heap` from App Summary (that is PSS).
+  **Force a GC before reading any delta**: `Views` climbing right after a pop is the normal state
+  of a freshly popped screen, and only what survives collection counts. `am dumpheap` forces one on
+  a debuggable build; backgrounding the app and waiting works on release.
+
+Isolate with an A/B on the same screen (collapse a section, drop a subtree) rather than reasoning
+about which component "looks expensive" - that is what turned a two-week-old wrong diagnosis into a
+measured one. Full worked examples in the REACT-NATIVE-5 section of
+[docs/developer-guide.md](docs/developer-guide.md).
+
 **Local Android builds work from any path**, including a task worktree.
 `plugins/withAndroidCmakeBuildStaging.ts` relocates each module's CMake staging directory to a
 short absolute root (`%SystemDrive%\kangentic\android`), which removes checkout depth from the
@@ -390,8 +413,11 @@ names its enforcement (live now, or planned where mechanical coverage does not e
 - `ui-conventions.md` - shared primitives, font floor, FlashList, testIDs (`src/screens/`,
   `src/components/`).
 - `motion-conventions.md` - the frequency gate, `MotionTokens`/`useMotionPresets` vocabulary,
-  transform-and-opacity only, no `entering` on a FlashList item root, reduced motion ships with
-  the animation, haptics through the `HapticCue` union (`src/components/`, `src/screens/`).
+  transform-and-opacity only, **never `useAnimatedProps` into another library's props** (measured
+  at ~8 points of CPU per spinning icon), a conditional mount is what makes a transform safe on a
+  recycled row, no `entering` on a FlashList item root, an animation that never stops holds the app
+  at full frame rate, reduced motion ships with the animation, haptics through the `HapticCue`
+  union (`src/components/`, `src/screens/`).
 - `ui-copy-brevity.md` - labels name the action, context names the object; one-line
   descriptions; a11y labels exempt (`src/screens/`, `src/components/`).
 - `e2e-maestro-runs.md` - Maestro through the CLI, one rig mode, testID selectors, the dev-client
