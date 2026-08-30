@@ -40,6 +40,21 @@ Tab switches never slide: peers are not a hierarchy.
 - Animate `transform` and `opacity`. Animating `width`, `height`, `margin`, `padding`, `flex`,
   `top` or `left` re-runs layout every frame for that node and its siblings. The one exception is
   an absolutely positioned element with no children.
+- **Animate a NATIVE VIEW's transform, never another library's props.** `useAnimatedProps` into a
+  third-party component (react-native-svg's `matrix`, `strokeDashoffset`, `d`, `cx`; a chart
+  library's geometry) re-runs that library's rendering on every frame. It is the single most
+  expensive motion mistake available in this codebase, and it does not look expensive in review.
+  Measured on a release build, Pixel 11 Pro, the Agents list idle with eight spinning marks:
+  driving an SVG group's `matrix` through `useAnimatedProps` cost **~8 percentage points of CPU
+  per icon** - ~106% total, more than a full core, with the GPU idle at 1 ms. Moving the same turn
+  to a `transform: [{ rotate }]` on a wrapping `Animated.View` around a STATIC `<Svg>` took it to
+  ~56% and dropped GPU memory from 92 MB to 52 MB. If a shape genuinely has to change (a dash
+  marching, a path morphing), that is a deliberate cost to argue for, not a default.
+- **A conditional mount is what makes a transform safe on a recycled row.** Render the animated
+  wrapper ONLY on the branch that animates, so a rebind unmounts it. Reanimated writes straight to
+  the native node, so React's prop diff never clears a transform on a node that survives the
+  rebind: the row keeps whatever angle was last written. That is the tilted-envelope bug
+  (e4e5524), and it is a property of the mount, not of the transform's shape.
 - Never `setState` from a gesture or scroll handler. Use a shared value plus `useAnimatedStyle`.
 - Never read or write a shared value during render. It fires mid-reconciliation, and a re-render
   you did not cause replays the write. Touch shared values only in worklets, handlers and effects.
@@ -65,11 +80,28 @@ system-wide for many users and silent on much Android hardware, so the visual ha
 
 **Feel is judged on a release build on the slowest supported device.** A dev build's JS thread is
 slow enough to hide the problems you are looking for, and fast enough elsewhere to hide the rest.
+This is not a nuance, it is two orders of magnitude: the same commit measured **24.73% janky frames
+on the dev client and 0.11% on release** (median frame 21 ms against 7 ms). A "feels laggy" report
+gathered on a dev client is not evidence about the shipped app, and acting on one wastes the fix.
+`npx expo run:android --variant release --no-bundler` builds and installs one in a few minutes; see
+the REACT-NATIVE-5 section of [docs/developer-guide.md](../../docs/developer-guide.md) for the
+measurement commands.
+
+**An animation that never stops keeps the whole app at full frame rate.** Check what an idle screen
+costs, not just what it looks like: the idle release build rendered 6131 frames in 51 seconds
+(continuous 120 Hz) because per-row spinners never end. That is a battery and thermal cost that no
+jank metric reports - `dumpsys gfxinfo` will call it perfectly smooth.
 
 ## Enforcement (self-maintaining)
 
 - **Review (live now):** `expo-rn-reviewer` covers the FlashList and list-performance conventions
-  during `/code-review`; `/design-pass` cites this rule as the motion bar for a screen pass.
+  during `/code-review`, and treats `useAnimatedProps` into a third-party component as a HIGH
+  finding; `/design-pass` cites this rule as the motion bar for a screen pass.
+- **Lint (planned, and the strongest upgrade available here):** a `no-restricted-syntax` rule
+  banning `useAnimatedProps` outside an allowlist would make the expensive mistake mechanical
+  rather than review-only. The codebase currently has ONE call site left
+  (`AgentStatusIcon`'s inert march), so such a rule would land green today - which is exactly when
+  a rule is cheap to add and never afterwards.
 - **Type system (live now):** the `HapticCue` union makes an unlisted cue a compile error
   (`npm run typecheck`, gated in `.github/workflows/ci.yml`).
 - **Lint (planned):** two `no-restricted-imports` / `no-restricted-syntax` rules are mechanizable

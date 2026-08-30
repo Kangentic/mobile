@@ -29,12 +29,13 @@ const REJECTED_FEED_GRACE_MS = 1500;
 /**
  * The task's SESSION view: one live session, three surfaces. Terminal (the
  * raw 1:1 desktop mirror, the default), Chat (the readable feed), and
- * Changes (the diff) share a non-swipe pager - all stay mounted so the
- * xterm WebView never reloads and the conversation keeps scroll position;
- * switching is tap-only via the mode pill in the footer (swipe belongs to
- * the terminal's pan). The footer is mode-aware: quick keys + dictation in
- * Terminal (typing happens directly in the terminal - tap it for the
- * keyboard), the composer in Chat, nothing extra in Changes.
+ * Changes (the diff) are absolutely-positioned siblings with only the active
+ * one visible - all stay mounted so the xterm WebView never reloads and the
+ * conversation keeps scroll position; switching is tap-only via the mode pill
+ * in the footer (swipe belongs to the terminal's pan). The footer is
+ * mode-aware: quick keys + dictation in Terminal (typing happens directly in
+ * the terminal - tap it for the keyboard), the composer in Chat, nothing
+ * extra in Changes.
  */
 export function SessionScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ taskId: string; sessionId?: string; projectId?: string; mode?: string }>();

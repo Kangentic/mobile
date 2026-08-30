@@ -31,6 +31,15 @@ The failure mode to avoid is picking CI once for a good reason and then not re-e
 the work changes shape. If you are on your second rebuild of a pure-JS change, stop and set up
 the dev client instead; it pays for itself immediately.
 
+**This skill CANNOT answer a performance question.** What it boots is a dev client, and a dev
+client is not a slower version of the app, it is a different one: the same commit measures 24.73%
+janky frames here against 0.11% on release, and 1003 MB PSS against 483 MB. Anything that looks
+laggy, heavy or janky in a preview has to be re-measured on a release build before it is believed,
+let alone fixed - `npx expo run:android --variant release --no-bundler` (a few minutes, no signing
+setup, installs as an upgrade so the pairing survives). Use this skill to judge whether something
+LOOKS right; never to judge whether it FEELS fast. See the performance paragraph in `CLAUDE.md`'s
+Testing section for the three measurement commands and which question each one answers.
+
 ## Instructions
 
 0a. **If `ios` was given, or the user asks how it looks on iOS / iPhone**, jump to the "iOS preview"
