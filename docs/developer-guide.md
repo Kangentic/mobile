@@ -2270,10 +2270,38 @@ removes the spinners and changes nothing else):
 Neither is a leak: the effects call `cancelAnimation` on unmount and the gating already covers
 reduced motion and the mark's legibility floor.
 
-**Caveat on the baseline.** These numbers were taken against the demo pairing, so the in-process
-mock desktop (a 1-second feed tick plus a PTY capture replaying on its own recorded timing) is part
-of the ~24% background and ~43% floor. A real paired user does not run it - but App Review does, so
-the reviewer path pays this.
+**The demo is NOT what makes those numbers big - measured against a real desktop.** The obvious
+suspicion is that the in-process mock desktop (a 1-second feed tick plus a PTY capture replaying on
+its own recorded timing) inflates everything and a real user pays less. It does not. Same release
+build, same handset, paired to a real desktop over the hosted relay:
+
+| State | Demo pairing | Real desktop |
+|---|---|---|
+| Agents list, idle | ~54% (8 spinners) | ~57% (**1** spinner) |
+| Backgrounded, nothing rendering | ~24% | **~36%** |
+| Session screen, Chat (terminal paused) | - | ~54% |
+| Session screen, Terminal streaming | - | ~100% |
+
+Real is slightly WORSE than the demo while showing seven fewer spinning marks, so the live channel
+costs at least what the simulator did. **The ~36% background floor is the number that matters**: it
+is measured with zero rendering, so it is the connection and feed path alone - decrypt, parse,
+store updates - and every paired user pays it continuously. `@kangentic/protocol` is pure-TS
+`@noble` ChaCha20-Poly1305 on Hermes by design (no native crypto module), which is a plausible but
+UNPROVEN explanation; correlating CPU against feed volume is the experiment that would settle it.
+
+**Two traps that cost measurements in the session that produced this table**, both of which
+silently produce plausible numbers:
+
+- **`top -p <app pid>` does not see the WebView.** Android runs WebView in a sandboxed renderer
+  process (`com.google.android.webview:sandboxed_process*`), so any xterm rendering cost is
+  invisible to a measurement scoped to the app. Sample the renderer too, and identify WHICH one is
+  yours - several apps have their own.
+- **Check the screen is actually on.** A locked phone reads as a low, believable foreground number.
+  Two readings here had to be discarded for exactly that. Screenshot alongside the sample.
+
+Also mind that a real desktop is an UNCONTROLLED load: these foreground figures move with whatever
+the agents are doing. For a marginal cost (does the Terminal segment cost more than Chat?), A/B on
+the DEMO, whose PTY capture replays on fixed timing; use the real pairing for the absolute floor.
 
 Reproduce with `adb shell dumpsys meminfo com.kangentic.mobile`, reading `Views` and `WebViews`
 from the Objects block and `Heap Alloc` from the **Dalvik Heap** row. Do not read `Java Heap` out
