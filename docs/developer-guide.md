@@ -2277,17 +2277,37 @@ build, same handset, paired to a real desktop over the hosted relay:
 
 | State | Demo pairing | Real desktop |
 |---|---|---|
-| Agents list, idle | ~54% (8 spinners) | ~57% (**1** spinner) |
-| Backgrounded, nothing rendering | ~24% | **~36%** |
-| Session screen, Chat (terminal paused) | - | ~54% |
-| Session screen, Terminal streaming | - | ~100% |
+| Agents list, screen on | ~54% (8 spinners) | ~50-57% (**1** spinner) |
+| Static Settings screen, screen on | ~46% | ~46% |
+| **Screen OFF** | - | **0.0%, every thread** |
+| Session screen, Terminal, streaming hard | - | ~100% |
+
+Read that table with the correction below: only the screen-off row is a clean measurement.
 
 Real is slightly WORSE than the demo while showing seven fewer spinning marks, so the live channel
-costs at least what the simulator did. **The ~36% background floor is the number that matters**: it
-is measured with zero rendering, so it is the connection and feed path alone - decrypt, parse,
-store updates - and every paired user pays it continuously. `@kangentic/protocol` is pure-TS
-`@noble` ChaCha20-Poly1305 on Hermes by design (no native crypto module), which is a plausible but
-UNPROVEN explanation; correlating CPU against feed volume is the experiment that would settle it.
+costs at least what the simulator did.
+
+**CORRECTION: there is no background CPU floor. The row above saying ~36% is wrong.** It was
+measured seconds after pressing HOME, with the screen still on and the desktop actively streaming.
+Measured properly - screen off, `top -H` per thread - **every thread reads 0.0% and the process
+totals zero**, and it stays there through a deliberate 150-line burst of terminal output. The app
+is well behaved at rest. Any earlier reading of a "floor" was load, not idle.
+
+**What the screen-on numbers actually measure is the observer.** With the screen on, the app ranges
+43-69%, and that range is NOT explained by what is displayed: a static Settings screen costs ~46%
+against the Agents list's ~50%, and collapsing the only spinning mark made CPU go UP, not down. The
+variable is how hard the desktop is streaming - which, when an agent session is the thing doing the
+measuring, is the measurement itself. Every adb command run during a session streams its output to
+the phone.
+
+So a live pairing can answer exactly one question well: **does the app idle at zero when nothing is
+happening?** It does. It cannot answer "what does surface X cost", because the load moves under the
+comparison. For any marginal cost, use the DEMO, whose PTY capture replays on fixed timing - that is
+what the demo is good for, and it is the opposite of the conclusion the previous revision of this
+section drew.
+
+The pure-TS `@noble` ChaCha20-Poly1305 hypothesis (no native crypto module, by design) is neither
+supported nor refuted by any of this and remains untested.
 
 **Two traps that cost measurements in the session that produced this table**, both of which
 silently produce plausible numbers:
