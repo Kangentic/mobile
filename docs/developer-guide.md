@@ -2153,9 +2153,11 @@ compared against it):
 | Full app (control) | **+774** | **4** |
 | `ChatPane` dropped, `ChangesTab` kept | +78 | 1 |
 
-Dropping `ChatPane` removes roughly 90% of the retained views and three of the four WebViews.
-`ChangesTab` leaves a real but much smaller residual, so it is a second, lesser retainer rather
-than innocent.
+Dropping `ChatPane` removes roughly 90% of the retained views and three of the four WebViews. At
+the time this read as `ChangesTab` being a second, lesser retainer. **It was not** - the fix below
+takes the full app to zero retained views and zero WebViews, `ChangesTab` mounted and all. That
++78 was the one markdown view `PermissionPromptCard` renders, plus reading noise from single
+`dumpsys` samples. Same component, same mechanism, no second bug.
 
 ### Narrowed to the native markdown view, by runtime bisect
 
