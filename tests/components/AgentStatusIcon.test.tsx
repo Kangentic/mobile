@@ -110,6 +110,36 @@ function renderIcon(props: React.ComponentProps<typeof AgentStatusIcon>): Return
   );
 }
 
+/**
+ * How many nodes in the CURRENTLY rendered tree carry a rotation, by any
+ * mechanism: a `transform` in a style (the view-transform the spin uses now) or
+ * a `matrix` prop (the SVG group it used before).
+ *
+ * Deliberately mechanism-agnostic. The recycling tests below are about a
+ * rotation OUTLIVING the working branch, and naming whichever node happens to
+ * carry it today is exactly how the next mechanism change would slip past them.
+ */
+function rotatingNodeCount(): number {
+  let count = 0;
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    const element = node as { props?: Record<string, unknown>; children?: unknown };
+    const props = element.props ?? {};
+    if (props.matrix !== undefined) count += 1;
+    const styles = Array.isArray(props.style) ? props.style : [props.style];
+    for (const style of styles) {
+      if (style !== null && typeof style === 'object' && 'transform' in style) count += 1;
+    }
+    visit(element.children);
+  };
+  visit(screen.toJSON());
+  return count;
+}
+
 // Top level, NOT inside the first describe: a describe-scoped afterEach would
 // leave the reduced-motion mock and the withTiming spy in place for every later
 // block, so those tests would silently run against reducedMotion = true and
@@ -218,35 +248,30 @@ describe('the working ring', () => {
   });
 
   /**
-   * WHICH node carries the transform is the whole safety argument. On the group
-   * it unmounts with the working branch; on the shared <Svg> root it would
-   * survive a rebind and tilt the envelope (e4e5524). And react-native-svg's
-   * Fabric group reads `matrix` alone - `rotation` is a render-time convenience
-   * Reanimated never routes through, so a mark animating it would sit still.
+   * WHICH node carries the transform is still the whole safety argument, but
+   * the node changed on 2026-08-29: the turn moved OFF the SVG <G>'s `matrix`
+   * prop and onto a transform on the wrapping native view, because driving an
+   * SVG prop per frame cost ~8 percentage points of CPU per icon (see the
+   * REACT-NATIVE-5 section of docs/developer-guide.md).
+   *
+   * The safety property is unchanged and is asserted by the rebind test below:
+   * the wrapper is rendered ONLY on the working branch, so it unmounts on a
+   * rebind rather than leaving a stale rotation behind and tilting the envelope
+   * (e4e5524). Nothing inside the SVG is animated any more.
    */
-  it('hands the animated matrix to the group around the ring, not to the ring', () => {
+  it('turns the wrapping view, leaving every SVG node unanimated', () => {
     renderIcon({ kind: 'working' });
 
-    const group = screen.getByTestId('svg-g');
-    expect(group.props.animatedProps).toEqual(
-      expect.objectContaining({ matrix: expect.any(Array) }),
-    );
-    // Six finite numbers: SVG's matrix(a, b, c, d, e, f).
-    const { matrix } = group.props.animatedProps;
-    expect(matrix).toHaveLength(6);
-    for (const component of matrix) {
-      expect(Number.isFinite(component)).toBe(true);
-    }
-    // The circle inside is plain - the dash never changes, only the group turns.
-    expect(screen.getByTestId('svg-circle').props.animatedProps).toBeUndefined();
-    // And the root is untouched, which is what keeps a rebind clean.
+    // The SVG itself and everything in it is static: no animatedProps anywhere.
     expect(screen.getByTestId('agent-status-working').props.animatedProps).toBeUndefined();
+    expect(screen.getByTestId('svg-circle').props.animatedProps).toBeUndefined();
+    // The rotating <G> is gone entirely - the dash sits on a plain circle.
+    expect(screen.queryByTestId('svg-g')).toBeNull();
   });
 
-  it('keeps the dash on the circle, not on the group that turns it', () => {
+  it('keeps the dash on the circle itself now that no group wraps it', () => {
     renderIcon({ kind: 'working' });
     expect(screen.getByTestId('svg-circle').props.strokeDasharray).toEqual([...workingDash]);
-    expect(screen.getByTestId('svg-g').props.strokeDasharray).toBeUndefined();
   });
 });
 
@@ -320,9 +345,15 @@ describe('list recycling', () => {
    * So the assertion is about survival, not about pixels: after rebinding, no
    * rotating group may exist and no node in the envelope may carry a matrix.
    */
-  it('leaves no rotating group, matrix or dash behind when a row rebinds working to idle', () => {
+  it('leaves no rotating node, matrix or dash behind when a row rebinds working to idle', () => {
     const { rerender } = renderIcon({ kind: 'working', testID: 'row-status' });
-    expect(screen.getByTestId('svg-g').props.animatedProps).toBeDefined();
+    // The rotation now lives on a wrapping view's transform rather than on an
+    // SVG group's matrix, so the survival check reads the whole tree for a
+    // transform instead of naming one node. Written this way deliberately: the
+    // bug is about a rotation OUTLIVING the working branch, whichever node
+    // happens to carry it, and naming a node is what would let the next
+    // mechanism change slip past this test.
+    expect(rotatingNodeCount()).toBeGreaterThan(0);
 
     rerender(
       <ThemeProvider>
@@ -330,7 +361,8 @@ describe('list recycling', () => {
       </ThemeProvider>,
     );
 
-    // The group that carried the rotation is gone, not merely stopped.
+    // Nothing anywhere in the envelope is rotating - not merely stopped, gone.
+    expect(rotatingNodeCount()).toBe(0);
     expect(screen.queryByTestId('svg-g')).toBeNull();
     expect(screen.queryByTestId('svg-circle')).toBeNull();
 
@@ -363,7 +395,7 @@ describe('list recycling', () => {
     );
 
     expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: workingSpin.durationMs }));
-    expect(screen.getByTestId('svg-g').props.animatedProps).toBeDefined();
+    expect(rotatingNodeCount()).toBeGreaterThan(0);
   });
 });
 

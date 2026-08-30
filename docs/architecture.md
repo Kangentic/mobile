@@ -176,8 +176,13 @@ Navigation: an activity-triage home (Needs you / Working / Idle) plus a swipeabl
 both live off the channel feeds. Opening a task is full-screen with a bottom tab bar
 (Conversation-terminal / Terminal / Changes) and the active tab's input pinned at the bottom
 (the composer on Conversation, the quick-key bar + terminal input row on Terminal). All three
-tab pages stay mounted on a non-swipe pager so the terminal WebView never reloads and the
-conversation keeps scroll position; tab switching is tap-only.
+tab pages stay mounted as absolutely-positioned siblings, only the active one visible, so the
+terminal WebView never reloads and the conversation keeps scroll position; tab switching is
+tap-only. This replaced a `PagerView` that was configured `scrollEnabled={false}` and so
+contributed no scrolling at all, only page management that the screen's `mode` state already
+does. Visibility is opacity plus zIndex rather than `display: 'none'`, which would drop the
+WebView's surface and force the terminal to re-create its GL context on every lens switch, and
+each hidden pane is taken out of the accessibility tree explicitly.
 
 The connection lifecycle (`src/connection/connectionManager.ts`) connects while the app is
 foregrounded and paired, and disposes on background: iOS suspends sockets within seconds
@@ -194,9 +199,17 @@ exposes no `Service.onTimeout` hook, so there is no signal to react to and a JS 
 bound available; and an unbounded service held the process resident for hours at a time, which is
 how it bears on the REACT-NATIVE-5 OOM. Note what that third reason is NOT: the background path
 does not leak, and four measured probes in the developer guide say so. The leak is in the
-FOREGROUND path (a session screen retains a WebView per open), and an always-resident process is
-simply what stopped an OS kill from ever resetting that accumulation. The ceiling makes the
-process reapable again; fixing the unmount is the real repair.
+FOREGROUND path (a session screen retains its native view subtree per open), and an
+always-resident process is simply what stopped an OS kill from ever resetting that accumulation.
+The ceiling makes the process reapable again.
+
+**Not "fixing the unmount": React unmounts correctly.** This sentence used to end "fixing the
+unmount is the real repair", which named the wrong cause. Measured on 2026-08-29, six pops produce
+six clean React unmounts and the native views are retained anyway - by Fabric's mount-item
+machinery, not by `TerminalPane`, the WebView, `PagerView`, or `react-native-screens`, each of
+which is eliminated by experiment. The WebView is the expensive passenger, not the cause: the
+subtree still leaks with no WebView in the tree. See the REACT-NATIVE-5 section of
+[docs/developer-guide.md](developer-guide.md) for the measurements.
 Nothing is lost by the handover on a build that HAS remote push: the desktop suppresses its own
 push only while this phone's channel is established, so the same alert categories keep firing
 through push instead.
