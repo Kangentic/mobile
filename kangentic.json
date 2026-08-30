@@ -33,7 +33,7 @@
       "icon": "code",
       "color": "#f59e0b",
       "autoSpawn": true,
-      "autoCommand": "/code-review",
+      "autoCommand": "/code-review {{baseBranch}}",
       "modelOverride": "claude-opus-5",
       "effortOverride": "high",
       "sessionTarget": "isolated",

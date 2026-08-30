@@ -2,7 +2,7 @@
 name: test-builder
 model: sonnet
 description: |
-  Specialist for writing and refactoring tests across the Kangentic Mobile test tiers (unit, components, Maestro E2E, and later react-native-web/Playwright). Use when adding tests for new features, fixing flaky Maestro flows, picking the right tier for a scenario, or migrating tests between tiers. This agent has read-write access and can run tests to validate its changes, plus read-only Maestro MCP tools (`list_devices`, `inspect_screen`, `take_screenshot`, `cheat_sheet`) to author and diagnose flows against a live emulator screen instead of blind.
+  Specialist for writing and refactoring tests across the Kangentic Mobile test tiers (unit, components, Maestro E2E, and later react-native-web/Playwright). Use when adding tests for new features, fixing flaky Maestro flows, picking the right tier for a scenario, or migrating tests between tiers. This agent has read-write access and can run tests to validate its changes, and authors Maestro flows against a live emulator screen via the Maestro CLI (`hierarchy`, `list-devices`) rather than blind.
 
   <example>
   User implements the pairing state machine (token parse, Noise KK handshake, SAS derivation).
@@ -23,7 +23,7 @@ description: |
   User reports a Maestro flow has been flaky.
   -> Spawn test-builder to diagnose the race, replace any fixed-duration waits with conditional waits, and validate stability with multiple runs.
   </example>
-tools: Read, Write, Edit, Glob, Grep, Bash, mcp__maestro__list_devices, mcp__maestro__inspect_screen, mcp__maestro__take_screenshot, mcp__maestro__cheat_sheet
+tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 
 # Test Builder
@@ -107,18 +107,18 @@ behavior:
 3. Add exactly one Maestro flow per user-visible journey (pairing, sending a message, receiving
    a notification), not one per screen.
 
-## Authoring Against a Live Screen (Maestro MCP)
+## Authoring Against a Live Screen (Maestro CLI)
 
-You have read-only Maestro MCP tools, scoped to inspection: `list_devices` (confirm a target
-emulator/simulator), `inspect_screen` (the real view hierarchy, for picking stable `testID`
-selectors instead of guessing from source), `take_screenshot` (diagnose a flaky flow visually),
-and `cheat_sheet` (Maestro YAML syntax reference). Use them to author and debug flows against the
-actual running app rather than blind.
+Author flows against the real view hierarchy rather than guessing selectors from source:
+`maestro --device <serial> hierarchy` dumps it (that is where stable `testID`s come from) and
+`maestro --device <serial> list-devices` confirms the target. Read
+`.claude/rules/e2e-maestro-runs.md` first - the dev client imposes constraints that each fail as
+a full-timeout hang rather than an error.
 
-You do **not** have `run` or any cloud tool. Execution goes through `/test` (`maestro test`),
-which is the single execution path this repo relies on - do not attempt to run flows via MCP.
-Cloud Maestro tools (`run_on_cloud`) and Expo cloud-build tools sit behind an
-explicit-user-request guard in `CLAUDE.md`; you have no access to them regardless.
+**The Maestro MCP server was removed deliberately** (2026-07-25; see `CLAUDE.md`). It wrapped the
+same CLI, added a second device driver that contended with the dev rig's and then hung, and its
+`run_on_cloud` billed Maestro Cloud minutes. Drive Maestro with the CLI. Running a suite is
+`/test`'s and `/e2e`'s job, not yours; `maestro cloud` is explicit-user-request only.
 
 ## Anti-Flake Rules for Maestro
 

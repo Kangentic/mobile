@@ -116,7 +116,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
                   #   pretypecheck stale-node_modules guard), the store preflights
                   #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs, storeScreenshots.mjs
-                  #   (listing captures, driven by /store-screenshots)
+                  #   (listing captures, driven by /store-screenshots),
+                  #   build-review-pack.mjs (gathers the /code-review diff once into a
+                  #   gitignored pack every finder reads instead of re-gathering; kept in
+                  #   step with the desktop repo's copy, which owns the divergence list)
                   #   + repo scripts
 store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 ```

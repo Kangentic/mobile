@@ -13,9 +13,10 @@ Windows-first: this project develops without a Mac in the loop.
 - **`eas-cli`** (`npm install -g eas-cli`), optional. Builds run on GitHub Actions
   (`.github/workflows/build-android.yml` and `build-ios.yml`), so `eas-cli` is needed only for
   managing Apple and Google credentials and as the cloud-build fallback.
-- **Maestro CLI**, installable on Windows, for E2E flows against the emulator and for the
-  Maestro MCP server; see "Agent tooling (MCP servers)" below for the PATH setup and a gotcha
-  worth reading before you hit it.
+- **Maestro CLI**, installable on Windows, for E2E flows against the emulator. See "Agent
+  tooling (MCP servers)" below for the PATH setup and a gotcha worth reading before you hit it.
+  The CLI is the only Maestro path: the Maestro MCP server was removed deliberately (see
+  `CLAUDE.md`), so nothing drives Maestro but this binary.
 - No Mac, no Xcode, no local iOS Simulator. Every iOS build runs on a free GitHub-hosted macOS
   runner, including the signed ones (see "iOS without a Mac" below). Note `expo prebuild --platform
   ios` refuses to run on Windows at all, so anything that inspects the generated iOS project has to
@@ -390,8 +391,9 @@ tools on each server are gated behind an explicit user request.
   credential at all.
 
 - **Cost and public-write guard.** The Expo MCP's `build_run`/`build_submit`/`workflow_run` spend
-  EAS cloud build credits, and its store-review-reply tools post publicly and irreversibly; the
-  Maestro MCP's `run_on_cloud` bills Maestro Cloud minutes. See `CLAUDE.md`'s "Cloud-spend and
+  EAS cloud build credits, and its store-review-reply tools post publicly and irreversibly; on
+  the CLI, `maestro cloud` bills Maestro Cloud minutes and carries the same bar (the Maestro
+  MCP that used to expose it is gone). See `CLAUDE.md`'s "Cloud-spend and
   public-write MCP tools" section for the full list; it is backed by `permissions.ask` in
   `.claude/settings.json`, which prompts for confirmation on every call in every normal
   permission mode (a bypass mode skips the prompt, so the written policy is the real guard).
@@ -513,7 +515,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   brand rasters, the Board tab glyph and the activity marks out of
                   #   @kangentic/branding; --check gates drift in CI),
                   #   cmakeStaging.mjs (npm run clean:staging prunes CMake staging trees whose
-                  #   checkout is gone; --verify proves the object-path flag reached CMake)
+                  #   checkout is gone; --verify proves the object-path flag reached CMake),
+                  #   build-review-pack.mjs (gathers the /code-review diff once into a
+                  #   gitignored pack every finder reads instead of re-gathering; kept in step
+                  #   with the desktop repo's copy)
                   #   + repo scripts
 ```
 

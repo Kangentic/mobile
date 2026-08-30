@@ -1,6 +1,7 @@
 ---
 name: expo-rn-reviewer
 model: sonnet
+effort: medium
 description: |
   Expo / React Native platform reviewer. Checks Continuous Native Generation discipline (no hand-edited ios/android; native config flows through app.config.ts + config plugins), New Architecture compatibility of native dependencies, FlashList and list-performance conventions, the font floor and testID coverage from `.claude/rules/ui-conventions.md`, the motion and haptics bar from `.claude/rules/motion-conventions.md`, and the repo-wide em-dash and no-personal-info review that has no mechanical test yet.
 

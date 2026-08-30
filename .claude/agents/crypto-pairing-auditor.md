@@ -1,6 +1,7 @@
 ---
 name: crypto-pairing-auditor
 model: sonnet
+effort: medium
 description: |
   Security auditor for pairing, transport crypto, key storage, and push privacy. Reviews Noise KK handshake code, the token-bound-Noise-PSK + SAS pairing ceremony, device roster handling, capability-allowlist client code, secure-store usage, and E2E push payload construction against `.claude/rules/protocol-types-from-package.md`, `accountless-core.md`, `secure-storage.md`, `e2e-notification-privacy.md`, and `docs/security.md`.
 
@@ -34,6 +35,10 @@ blast radius.
 
 Read `docs/security.md` (the threat model and the chosen pairing design) and
 `docs/architecture.md` (the secure-channel and capability-allowlist sections) before auditing.
+Then read the four rules you enforce: `.claude/rules/protocol-types-from-package.md`,
+`accountless-core.md`, `secure-storage.md`, and `e2e-notification-privacy.md` (all under
+`.claude/rules/`). Read them explicitly - a path-scoped rule does NOT auto-load into a subagent
+context, so an unread rule is an audit you silently skip rather than one that comes back clean.
 If the diff cites the desktop repo's `docs/research/mobile-companion-app.md`, treat it as
 background, not a normative source: the local `docs/security.md` is authoritative when the two
 disagree (notably: pairing is a token-bound Noise PSK, deliberately NOT a PAKE).
