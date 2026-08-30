@@ -2250,11 +2250,13 @@ investigations found the WebView "leaking" while removing it changed nothing.
 **The fix**: remove the listener in `onDetachedFromWindow()`, which is the last moment
 `getViewTreeObserver()` still returns the window's observer rather than the view's floating one.
 Doing it in `onDropViewInstance` would be too late and would silently remove from the wrong
-observer.
+observer. It goes in the shared base class, `AccessibleMarkdownTextView`, because that is where
+the helper is created - so `EnrichedMarkdownInternalText` (and with it the `EnrichedMarkdown`
+component) is covered by the same change rather than left to leak on its own.
 
 ```kotlin
+// AccessibleMarkdownTextView.kt
 override fun onDetachedFromWindow() {
-  stopSpoilerAnimations()
   accessibilityHelper.cleanup()   // -> removePendingLayoutListener()
   super.onDetachedFromWindow()
 }
