@@ -126,21 +126,17 @@ Do not re-derive any of this by argument; see `performance-claims-are-measured.m
 - **Review (live now):** `expo-rn-reviewer` covers the FlashList and list-performance conventions
   during `/code-review`, and treats `useAnimatedProps` into a third-party component as a HIGH
   finding; `/design-pass` cites this rule as the motion bar for a screen pass.
-- **Lint (planned, and the strongest upgrade available here):** a `no-restricted-syntax` rule
-  banning `useAnimatedProps` outside an allowlist would make the expensive mistake mechanical
-  rather than review-only. The codebase currently has ONE call site left
-  (`AgentStatusIcon`'s inert march), so such a rule would land green today - which is exactly when
-  a rule is cheap to add and never afterwards.
+- **Lint (live now):** `eslint.config.mjs` bans a `useAnimatedProps(` call outside an explicit
+  allowlist (`no-restricted-syntax`; the sole entry is `src/components/AgentStatusIcon.tsx`,
+  whose inert march genuinely moves a dash). Widening the allowlist is the mechanical prompt to
+  argue the cost in review. `Lint (ESLint)` is a required check on `main`, so this is CI-gated.
 - **Type system (live now):** the `HapticCue` union makes an unlisted cue a compile error
   (`npm run typecheck`, gated in `.github/workflows/ci.yml`).
-- **Lint (planned):** two `no-restricted-imports` / `no-restricted-syntax` rules are mechanizable
-  today and are the strongest available upgrade here. One bans importing `expo-haptics` outside
-  `src/lib/haptics.ts` (the boundary already holds, so it would land green and stay that way).
-  The other bans a raw `Easing.bezier(` call outside `src/components/motion/`, which is the
-  duplication that actually exists: `presets.ts` has a `bezierEasing` helper, and
-  `SegmentedSwitcher.tsx` and `Skeleton.tsx` each inline the same four-argument spread instead of
-  importing it. Both pass token values, so neither is a correctness bug today, but the third copy
-  is where a literal creeps in.
+- **Lint (live now):** `eslint.config.mjs` also bans importing `expo-haptics` outside
+  `src/lib/haptics.ts` (`no-restricted-imports`) and a raw `Easing.bezier(` call outside
+  `src/components/motion/` (`no-restricted-syntax`). `presets.ts` exports `bezierEasing` as the
+  one place the four-argument spread is spelled; the two inline copies that used to exist
+  (`SegmentedSwitcher.tsx`, `Skeleton.tsx`) were converged onto it when the lint landed.
 - **Test (planned):** a scan for `entering=` / `exiting=` inside a `renderItem` body would catch
   the one failure here that is silent at runtime and invisible in review.
 

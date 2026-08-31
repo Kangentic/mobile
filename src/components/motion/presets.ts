@@ -31,7 +31,14 @@ export interface MotionPresets {
   crossfadeIn: ComplexAnimationBuilder;
 }
 
-function bezierEasing(controlPoints: MotionEasingBezier): EasingFunctionFactory {
+/**
+ * The one place a theme bezier token becomes a Reanimated easing. Exported so
+ * call sites outside this directory never spell the four-argument
+ * `Easing.bezier(...)` spread themselves - that duplication is where a literal
+ * control point eventually creeps in, and `eslint.config.mjs` now bans the raw
+ * call outside `src/components/motion/` (see motion-conventions.md).
+ */
+export function bezierEasing(controlPoints: MotionEasingBezier): EasingFunctionFactory {
   return Easing.bezier(controlPoints.x1, controlPoints.y1, controlPoints.x2, controlPoints.y2);
 }
 

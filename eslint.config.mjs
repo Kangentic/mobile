@@ -115,4 +115,90 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // Haptics go through the HapticCue union in src/lib/haptics.ts, never the
+    // SDK directly: the union is what keeps every cue enumerable (and the
+    // settings toggle able to silence all of them). The boundary already held
+    // by convention; this makes it mechanical.
+    // See .claude/rules/motion-conventions.md.
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'app/**/*.ts', 'app/**/*.tsx'],
+    ignores: ['src/lib/haptics.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'expo-haptics',
+              message:
+                "Call triggerHaptic(cue) from '@/lib/haptics' instead of expo-haptics directly - the HapticCue union is the app's closed vocabulary. See .claude/rules/motion-conventions.md.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // Two motion bans share the `no-restricted-syntax` rule, and flat config's
+  // last-match-wins REPLACES a rule's options wholesale rather than merging
+  // them - two separate entries left whichever came second as the only one
+  // live (caught by the probe-file check, not assumed). So: one combined
+  // entry carrying both selectors, then a narrow override per exception file
+  // re-stating ONLY the selector that still applies there.
+  //
+  // The bans themselves (see .claude/rules/motion-conventions.md):
+  // - useAnimatedProps into another library's props re-runs that library's
+  //   rendering every frame - measured at ~8 CPU points per icon on a release
+  //   build. Animate a native view's transform/opacity via useAnimatedStyle.
+  // - a raw Easing.bezier() spread outside src/components/motion/ is where a
+  //   literal control point eventually creeps in; bezierEasing() in presets.ts
+  //   is the one place the four-argument spread is spelled.
+  {
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'app/**/*.ts', 'app/**/*.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.name='useAnimatedProps']",
+          message:
+            "useAnimatedProps re-renders the target library every frame (~8 CPU points per icon, measured). Animate a native view's transform/opacity via useAnimatedStyle instead, or add a narrow override for this file with the argument for the cost. See .claude/rules/motion-conventions.md.",
+        },
+        {
+          selector: "CallExpression[callee.object.name='Easing'][callee.property.name='bezier']",
+          message:
+            "Use bezierEasing(theme token) from '@/components/motion/presets' instead of a raw Easing.bezier() spread - literals creep into hand-spelled control points. See .claude/rules/motion-conventions.md.",
+        },
+      ],
+    },
+  },
+  {
+    // The single allowlisted useAnimatedProps call site: the inert march
+    // genuinely moves a dash, a shape change a transform cannot express. The
+    // bezier ban still applies here, so only that selector is re-stated.
+    files: ['src/components/AgentStatusIcon.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.object.name='Easing'][callee.property.name='bezier']",
+          message:
+            "Use bezierEasing(theme token) from '@/components/motion/presets' instead of a raw Easing.bezier() spread - literals creep into hand-spelled control points. See .claude/rules/motion-conventions.md.",
+        },
+      ],
+    },
+  },
+  {
+    // The motion directory owns bezierEasing, so the raw spread is legal here;
+    // the useAnimatedProps ban still applies, so only that selector remains.
+    files: ['src/components/motion/**/*.ts', 'src/components/motion/**/*.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.name='useAnimatedProps']",
+          message:
+            "useAnimatedProps re-renders the target library every frame (~8 CPU points per icon, measured). Animate a native view's transform/opacity via useAnimatedStyle instead, or add a narrow override for this file with the argument for the cost. See .claude/rules/motion-conventions.md.",
+        },
+      ],
+    },
+  },
 ]);

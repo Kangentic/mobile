@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import type { LucideIcon } from 'lucide-react-native';
+import { bezierEasing } from './motion/presets';
 import { StatusDot } from './StatusDot';
 import { Text } from './Text';
 import { useTheme } from './theme/ThemeProvider';
@@ -90,7 +91,7 @@ export function SegmentedSwitcher<Mode extends string>({
     indicatorOffset.set(
       withTiming(target, {
         duration: durations.base,
-        easing: Easing.bezier(easing.decelerate.x1, easing.decelerate.y1, easing.decelerate.x2, easing.decelerate.y2),
+        easing: bezierEasing(easing.decelerate),
         reduceMotion: ReduceMotion.System,
       }),
     );

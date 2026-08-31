@@ -1,7 +1,6 @@
 import React, { useEffect } from 'react';
 import { StyleSheet, View, type DimensionValue, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
-  Easing,
   ReduceMotion,
   cancelAnimation,
   useAnimatedStyle,
@@ -11,6 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeProvider';
+import { bezierEasing } from './presets';
 import { useScreenMotionActive } from './ScreenMotion';
 
 export interface SkeletonProps {
@@ -51,12 +51,7 @@ export function Skeleton({ width = '100%', height = 14, borderRadius, style, tes
     pulseOpacity.value = withRepeat(
       withTiming(opacityMin, {
         duration: durationMs,
-        easing: Easing.bezier(
-          theme.motion.easing.standard.x1,
-          theme.motion.easing.standard.y1,
-          theme.motion.easing.standard.x2,
-          theme.motion.easing.standard.y2,
-        ),
+        easing: bezierEasing(theme.motion.easing.standard),
         reduceMotion: ReduceMotion.System,
       }),
       -1,
