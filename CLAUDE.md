@@ -369,7 +369,11 @@ them up is how the last investigation chased the wrong cause for two weeks:
 - **Frames:** `adb shell dumpsys gfxinfo <pkg> reset`, exercise, read back. Janky %, percentiles.
   GPU at 1 ms with high jank means the UI/JS thread, never the GPU.
 - **CPU:** `adb shell top -b -n 4 -d 2 -q -o CMD,%CPU -p $(pidof <pkg>)`. An idle screen should not
-  cost a core. `dumpsys gfxinfo` will call an app perfectly smooth while it burns one.
+  cost a core. `dumpsys gfxinfo` will call an app perfectly smooth while it burns one. **Pair every
+  CPU sample with a frame count over the same window** (reset gfxinfo first): high CPU at ZERO
+  frames is non-drawing work - on this app that is Reanimated's per-vsync mapper walk, which costs
+  ~0.5 CPU points per REGISTERED mapper, dirty or not. Count mounted animated hooks before blaming
+  anything else; `/profile` carries the procedure.
 - **Memory:** `adb shell dumpsys meminfo <pkg>` - `Views`/`WebViews` from the **Objects** block,
   `Heap Alloc` from the **Dalvik Heap** row, never `Java Heap` from App Summary (that is PSS).
   **Force a GC before reading any delta**: `Views` climbing right after a pop is the normal state
@@ -436,10 +440,13 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   `src/components/`).
 - `motion-conventions.md` - the frequency gate, `MotionTokens`/`useMotionPresets` vocabulary,
   transform-and-opacity only, **never `useAnimatedProps` into another library's props** (measured
-  at ~8 points of CPU per spinning icon), a conditional mount is what makes a transform safe on a
-  recycled row, no `entering` on a FlashList item root, an animation that never stops holds the app
-  at full frame rate, reduced motion ships with the animation, haptics through the `HapticCue`
-  union (`src/components/`, `src/screens/`).
+  at ~8 points of CPU per spinning icon; now lint-gated to an allowlist), **register animated hooks
+  only on the branch that animates** (a hook above an early return registers a mapper on EVERY
+  branch, and idle CPU scales with registered mappers at ~0.5 points each, dirty or not), a
+  conditional mount is what makes a transform safe on a recycled row, no `entering` on a FlashList
+  item root, an animation that never stops holds the app at full frame rate, reduced motion ships
+  with the animation, haptics through the `HapticCue` union (lint-gated to `src/lib/haptics.ts`)
+  (`src/components/`, `src/screens/`).
 - `ui-copy-brevity.md` - labels name the action, context names the object; one-line
   descriptions; a11y labels exempt (`src/screens/`, `src/components/`).
 - `e2e-maestro-runs.md` - Maestro through the CLI, one rig mode, testID selectors, the dev-client
