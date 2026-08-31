@@ -5,7 +5,8 @@ import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { useTranscriptStore } from '@/state/transcriptStore';
+import { boardColumnFixture, boardTaskFixture, userEntryFixture } from '@/devsupport/desktopFixtures';
 import { closeSessionScreen, openSessionScreen } from '@/connection/actions';
 
 jest.mock('react-native-safe-area-context', () =>
@@ -48,8 +49,15 @@ jest.mock('@/screens/task/TerminalTab', () => {
   const { View } = require('react-native');
   return {
     __esModule: true,
-    TerminalTab: (props: { sessionId: string | null }) =>
-      ReactModule.createElement(View, { testID: 'stub-terminal-tab', accessibilityLabel: props.sessionId ?? 'none' }),
+    // accessibilityState.selected carries cleanFeedEnabled: selectChatLens is
+    // the ONE answer both this screen and ChatPane read, so this mock exposes
+    // exactly what SessionScreen forwards rather than ignoring it.
+    TerminalTab: (props: { sessionId: string | null; cleanFeedEnabled?: boolean }) =>
+      ReactModule.createElement(View, {
+        testID: 'stub-terminal-tab',
+        accessibilityLabel: props.sessionId ?? 'none',
+        accessibilityState: { selected: props.cleanFeedEnabled === true },
+      }),
   };
 });
 
@@ -133,6 +141,7 @@ describe('SessionScreen session binding', () => {
     mockParams = { taskId: 'task-1' };
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
+    useTranscriptStore.getState().reset();
     useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
   });
 
@@ -410,4 +419,55 @@ describe('SessionScreen session binding', () => {
     expect(screen.getByTestId('session-ended-view-changes')).toBeTruthy();
   });
 
+});
+
+/**
+ * selectChatLens (src/state/transcriptStore.ts) exists because this screen and
+ * ChatPane used to compute the chat lens with two different inline rules and
+ * diverged: the terminal was told to start its clean-feed parser while the
+ * pane still showed "Loading conversation...", which re-keys TerminalPane's
+ * init and re-initialises the WebView for nothing. tests/unit/transcriptStore
+ * .test.ts pins the pure selector; these pin that SessionScreen actually
+ * forwards its answer to TerminalTab as `cleanFeedEnabled`, so a reintroduced
+ * second inline predicate here fails a test instead of nothing.
+ */
+describe('SessionScreen terminal clean-feed forwarding', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    useTranscriptStore.getState().reset();
+    useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
+  });
+
+  it('does not enable the clean feed before a transcript window has landed', () => {
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+
+    expect(screen.getByTestId('stub-terminal-tab').props.accessibilityState).toEqual({ selected: false });
+  });
+
+  it('enables the clean feed once the window lands empty (the reading-view lens)', () => {
+    seedTaskWithSession('sess-a');
+    useTranscriptStore.getState().retainSession('sess-a');
+    useTranscriptStore.getState().applyWindow('sess-a', { revision: 1, totalEntries: 0, startIndex: 0, entries: [] });
+    renderSessionScreen();
+
+    expect(screen.getByTestId('stub-terminal-tab').props.accessibilityState).toEqual({ selected: true });
+  });
+
+  it('disables the clean feed once the window carries real entries (a structured transcript)', () => {
+    seedTaskWithSession('sess-a');
+    useTranscriptStore.getState().retainSession('sess-a');
+    useTranscriptStore.getState().applyWindow('sess-a', {
+      revision: 1,
+      totalEntries: 1,
+      startIndex: 0,
+      entries: [userEntryFixture()],
+    });
+    renderSessionScreen();
+
+    expect(screen.getByTestId('stub-terminal-tab').props.accessibilityState).toEqual({ selected: false });
+  });
 });

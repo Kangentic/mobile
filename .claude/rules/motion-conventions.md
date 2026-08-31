@@ -61,7 +61,7 @@ Tab switches never slide: peers are not a hierarchy.
 - Prefer `.get()` and `.set()` over direct `.value` access. On Reanimated 4 (this project pins
   4.5.1) they are the documented compiler-safe form; direct `.value` is the shape the React
   Compiler cannot see through. Existing code predates this and still uses `.value` in
-  `Skeleton.tsx`, `PressScale.tsx` and `TriageHomeScreen.tsx`. Convert those when you touch the
+  `PressScale.tsx` and `TriageHomeScreen.tsx`. Convert those when you touch the
   file rather than in a sweep, the same way `typescript-style.md` handles existing `any` casts.
 - Reach for a shared value only when the value is continuous or interruptible. A two-state toggle
   is a preset or a transition, not a worklet.
@@ -130,6 +130,17 @@ Do not re-derive any of this by argument; see `performance-claims-are-measured.m
   allowlist (`no-restricted-syntax`; the sole entry is `src/components/AgentStatusIcon.tsx`,
   whose inert march genuinely moves a dash). Widening the allowlist is the mechanical prompt to
   argue the cost in review. `Lint (ESLint)` is a required check on `main`, so this is CI-gated.
+  Two selectors, not one: `CallExpression[callee.name=...]` matches only an unqualified call, so
+  a namespace import (`import * as Reanimated` then `Reanimated.useAnimatedProps(...)`, already
+  the house style in this repo's test files) needs the `callee.property.name` selector as well.
+  `tests/unit/eslintConfig.test.ts` pins both forms, and pins the ordering hazard below.
+- **Flat config replaces rule options, it does not merge them.** Two entries setting the same
+  rule leave the LAST matching one as the only live configuration for a file. That is why the
+  `expo-haptics` ban is restated inside the crypto/push directory entry in `eslint.config.mjs`,
+  and why the per-file allowlists re-state the selector that still applies rather than adding to
+  a base. Getting this wrong is silent: no error, no warning, and a green CI on a ban that stopped
+  matching. It has already happened once here (the haptics entry, ordered after the
+  `crash-reporting-scope.md` directory ban, disabled it for every file in those directories).
 - **Type system (live now):** the `HapticCue` union makes an unlisted cue a compile error
   (`npm run typecheck`, gated in `.github/workflows/ci.yml`).
 - **Lint (live now):** `eslint.config.mjs` also bans importing `expo-haptics` outside

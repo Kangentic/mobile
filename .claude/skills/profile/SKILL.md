@@ -88,6 +88,17 @@ libraries are stripped, so symbol names are often useless - but the library name
 `libreanimated.so 45%` or `libhermes.so 45%` names the subsystem in one line, which is usually
 the whole answer.
 
+**A capture off a paired device is app data. Treat it that way.** This app's crypto is pure
+TypeScript on Hermes (`@kangentic/protocol`), so Noise keys and decrypted transcript content live
+in the JS heap, not behind a native module: a heap dump, a Perfetto heap profile, or a bugreport
+taken from a paired build can contain both, and `logcat` can carry transcript text. Keep every
+capture local, never attach one to a public issue, a PR, or an artifact, and clean up after
+yourself when the run is done:
+
+```sh
+adb shell rm -f /data/local/tmp/perf.data
+```
+
 ## Measurement discipline, learned the hard way
 
 **Take two `dumpsys meminfo` samples and trust the second.** One reading called a clean screen a

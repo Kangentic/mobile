@@ -1,6 +1,45 @@
 import expoConfig from 'eslint-config-expo/flat.js';
 import { defineConfig } from 'eslint/config';
 
+// Hoisted because it has to appear in TWO config entries. Flat config's
+// last-match-wins REPLACES a rule's options wholesale rather than merging them,
+// so any later entry that sets `no-restricted-imports` for a file silently drops
+// every earlier ban on it - and the crypto/push directory entry below overlaps
+// the haptics glob. Restating it there keeps both live; sharing one array keeps
+// the two copies from drifting.
+const restrictedHapticsImportPaths = [
+  {
+    name: 'expo-haptics',
+    message:
+      "Call triggerHaptic(cue) from '@/lib/haptics' instead of expo-haptics directly - the HapticCue union is the app's closed vocabulary. See .claude/rules/motion-conventions.md.",
+  },
+];
+
+// The two motion `no-restricted-syntax` bans, hoisted for the same reason as
+// the haptics paths above: each appears in more than one entry, and a copy that
+// drifts is a ban that quietly stops matching.
+//
+// Two selectors per ban, not one. `CallExpression[callee.name=...]` matches only
+// an unqualified call, so a namespace import - `import * as Reanimated` then
+// `Reanimated.useAnimatedProps(...)` - has a MemberExpression callee and slips
+// straight through. That form is already the house style in this repo's test
+// files, so it is a plausible thing to write in `src/` next. Verified with a
+// probe file: the unqualified call errors, the namespaced one did not until the
+// second selector was added.
+const restrictedAnimatedPropsMessage =
+  "useAnimatedProps re-renders the target library every frame (~8 CPU points per icon, measured). Animate a native view's transform/opacity via useAnimatedStyle instead, or add a narrow override for this file with the argument for the cost. See .claude/rules/motion-conventions.md.";
+const restrictedAnimatedPropsSyntax = [
+  { selector: "CallExpression[callee.name='useAnimatedProps']", message: restrictedAnimatedPropsMessage },
+  { selector: "CallExpression[callee.property.name='useAnimatedProps']", message: restrictedAnimatedPropsMessage },
+];
+const restrictedBezierSyntax = [
+  {
+    selector: "CallExpression[callee.object.name='Easing'][callee.property.name='bezier']",
+    message:
+      "Use bezierEasing(theme token) from '@/components/motion/presets' instead of a raw Easing.bezier() spread - literals creep into hand-spelled control points. See .claude/rules/motion-conventions.md.",
+  },
+];
+
 export default defineConfig([
   {
     // .kangentic/ holds the desktop app's live session state for this project
@@ -83,6 +122,28 @@ export default defineConfig([
     },
   },
   {
+    // Haptics go through the HapticCue union in src/lib/haptics.ts, never the
+    // SDK directly: the union is what keeps every cue enumerable (and the
+    // settings toggle able to silence all of them). The boundary already held
+    // by convention; this makes it mechanical.
+    // See .claude/rules/motion-conventions.md.
+    //
+    // This entry sits BEFORE the crypto/push directory ban below, not after.
+    // Its glob (`src/**`, `app/**`) is a superset of that entry's directories,
+    // and flat config's last-match-wins REPLACES a rule's options rather than
+    // merging them - the same trap documented on the `no-restricted-syntax`
+    // entries further down. Ordered the other way round, this block was the
+    // last `no-restricted-imports` match for every file under src/pairing,
+    // src/channel, src/demo, src/devsupport, src/notifications and
+    // app/+native-intent.ts, and silently disabled the observability ban there.
+    // tests/unit/eslintConfig.test.ts pins both directions.
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'app/**/*.ts', 'app/**/*.tsx'],
+    ignores: ['src/lib/haptics.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { paths: restrictedHapticsImportPaths }],
+    },
+  },
+  {
     // The crypto and push paths must never hand content to a third party.
     // src/notifications/pushDecrypt.ts states why the error MESSAGE itself
     // is unsafe there: it can echo attacker-controlled bytes. These
@@ -99,39 +160,21 @@ export default defineConfig([
     // into release builds, where they run the same handshake frames; and
     // app/+native-intent.ts because it feeds raw, attacker-typeable deep-link
     // URLs into the demo predicate before any error boundary exists.
+    //
+    // This is the LAST `no-restricted-imports` match for these directories, so
+    // it carries the haptics ban too: options replace rather than merge, and
+    // dropping `paths` here would exempt these directories from it.
     files: ['src/pairing/**', 'src/channel/**', 'src/demo/**', 'src/devsupport/**', 'src/notifications/**', 'app/+native-intent.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
+          paths: restrictedHapticsImportPaths,
           patterns: [
             {
               group: ['@sentry/*', '**/observability/*', '@/observability/*'],
               message:
                 'src/pairing, src/channel, src/demo, src/devsupport, src/notifications and app/+native-intent.ts must not report to Sentry: their error messages can carry ciphertext, key material, or attacker-controlled bytes. See .claude/rules/crash-reporting-scope.md.',
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    // Haptics go through the HapticCue union in src/lib/haptics.ts, never the
-    // SDK directly: the union is what keeps every cue enumerable (and the
-    // settings toggle able to silence all of them). The boundary already held
-    // by convention; this makes it mechanical.
-    // See .claude/rules/motion-conventions.md.
-    files: ['src/**/*.ts', 'src/**/*.tsx', 'app/**/*.ts', 'app/**/*.tsx'],
-    ignores: ['src/lib/haptics.ts'],
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          paths: [
-            {
-              name: 'expo-haptics',
-              message:
-                "Call triggerHaptic(cue) from '@/lib/haptics' instead of expo-haptics directly - the HapticCue union is the app's closed vocabulary. See .claude/rules/motion-conventions.md.",
             },
           ],
         },
@@ -155,19 +198,7 @@ export default defineConfig([
   {
     files: ['src/**/*.ts', 'src/**/*.tsx', 'app/**/*.ts', 'app/**/*.tsx'],
     rules: {
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: "CallExpression[callee.name='useAnimatedProps']",
-          message:
-            "useAnimatedProps re-renders the target library every frame (~8 CPU points per icon, measured). Animate a native view's transform/opacity via useAnimatedStyle instead, or add a narrow override for this file with the argument for the cost. See .claude/rules/motion-conventions.md.",
-        },
-        {
-          selector: "CallExpression[callee.object.name='Easing'][callee.property.name='bezier']",
-          message:
-            "Use bezierEasing(theme token) from '@/components/motion/presets' instead of a raw Easing.bezier() spread - literals creep into hand-spelled control points. See .claude/rules/motion-conventions.md.",
-        },
-      ],
+      'no-restricted-syntax': ['error', ...restrictedAnimatedPropsSyntax, ...restrictedBezierSyntax],
     },
   },
   {
@@ -176,14 +207,7 @@ export default defineConfig([
     // bezier ban still applies here, so only that selector is re-stated.
     files: ['src/components/AgentStatusIcon.tsx'],
     rules: {
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: "CallExpression[callee.object.name='Easing'][callee.property.name='bezier']",
-          message:
-            "Use bezierEasing(theme token) from '@/components/motion/presets' instead of a raw Easing.bezier() spread - literals creep into hand-spelled control points. See .claude/rules/motion-conventions.md.",
-        },
-      ],
+      'no-restricted-syntax': ['error', ...restrictedBezierSyntax],
     },
   },
   {
@@ -191,14 +215,7 @@ export default defineConfig([
     // the useAnimatedProps ban still applies, so only that selector remains.
     files: ['src/components/motion/**/*.ts', 'src/components/motion/**/*.tsx'],
     rules: {
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: "CallExpression[callee.name='useAnimatedProps']",
-          message:
-            "useAnimatedProps re-renders the target library every frame (~8 CPU points per icon, measured). Animate a native view's transform/opacity via useAnimatedStyle instead, or add a narrow override for this file with the argument for the cost. See .claude/rules/motion-conventions.md.",
-        },
-      ],
+      'no-restricted-syntax': ['error', ...restrictedAnimatedPropsSyntax],
     },
   },
 ]);

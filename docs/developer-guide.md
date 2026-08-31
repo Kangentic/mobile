@@ -2403,7 +2403,11 @@ orders of magnitude (see the frame-timing note below).
 background path is flat four ways (below). What it did was hold the process resident for 5h31m so
 that ordinary foreground accumulation never got reset by an OS kill. The five-minute ceiling
 therefore does fix the OOM, but by making the process reapable again, not by stopping a background
-leak. Fixing the unmount is the real repair; the ceiling only buys back the safety net.
+leak. Detaching the markdown library's window-level accessibility listener is the real repair (see
+"The cause: an accessibility listener left on the window's ViewTreeObserver" above); the ceiling
+only buys back the safety net. This sentence used to end "fixing the unmount is the real repair",
+which named the wrong cause: React unmounts correctly, and six pops produce six clean unmounts
+while the native views are retained anyway.
 
 ### Idle CPU: the app costs half a core doing nothing, and it is Reanimated's per-frame flush
 
@@ -2777,6 +2781,13 @@ never a hand edit under `android/`.
 5. `adb pull` both, convert with `hprof-conv` if Android Studio asks, and diff the **dominators**
    in the Memory Profiler. The question is which retained set grew, not which class has the most
    instances.
+
+**These dumps are app data, not just diagnostics.** This app's crypto is pure TypeScript on
+Hermes, so Noise keys and decrypted transcript content live in the JS heap rather than behind a
+native module. An `.hprof`, a Perfetto heap profile, or a bugreport taken from a paired build can
+carry both, and `logcat` can carry transcript text. Keep captures local, never attach one to an
+issue, a PR, or a CI artifact (the repo is public), and delete them from the device and the host
+when the investigation is done.
 
 Candidates considered and left open, none confirmed: OkHttp / `WebSocketModule` frames queueing
 on the Java side while the JS thread is throttled; notifee notification objects; retained Fabric

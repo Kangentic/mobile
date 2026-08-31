@@ -16,12 +16,17 @@ import { AndroidConfig, withAndroidManifest, type ConfigPlugin } from '@expo/con
  *
  * because on a non-rooted device the kernel only exposes perf events for an app
  * that has opted in. `<profileable android:shell="true"/>` is that opt-in, and
- * Google designed it precisely for release builds: the shell can read stack
- * traces, and nothing else - no memory contents are exposed to the host tools.
+ * Google designed it precisely for release builds. Note what it actually opens:
+ * `simpleperf` CPU sampling AND Perfetto's heap profiling (heapprofd, the Java
+ * heap graph), not stack traces alone. It is narrower than `debuggable`, which
+ * would also allow a debugger to attach and the JS heap to be dumped on demand,
+ * but "stack traces and nothing else" would understate it.
  *
  * WHY IT IS GATED RATHER THAN ALWAYS ON. The exposure is small but it is not
- * zero: symbolicated-enough stack traces from a paired, end-to-end encrypted
- * client are more than a store build needs to hand to any local shell. The
+ * zero: this app's crypto is pure TypeScript on Hermes, so Noise keys and
+ * decrypted transcript content live in the JS heap rather than behind a native
+ * module, and heap profiling on a paired, end-to-end encrypted client is more
+ * than a store build needs to hand to any local shell. The
  * gate keeps it off `production` by construction while making a profileable
  * build one env var away:
  *

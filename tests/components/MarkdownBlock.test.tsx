@@ -25,6 +25,9 @@ describe('MarkdownBlock', () => {
     );
 
     expect(screen.getByTestId('turn-markdown').props.markdown).toBe('# Hello **world**');
+    // Real shipped behavior, not probe-only: native text selection on every
+    // markdown block by default (the probe only flips it off in a dev build).
+    expect(screen.getByTestId('turn-markdown').props.selectable).toBe(true);
   });
 
   it('derives the markdown styles from theme tokens', () => {

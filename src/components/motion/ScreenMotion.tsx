@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 
@@ -72,6 +72,5 @@ export function ScreenMotionOverride({
   active: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const value = useMemo(() => active, [active]);
-  return <ScreenMotionContext.Provider value={value}>{children}</ScreenMotionContext.Provider>;
+  return <ScreenMotionContext.Provider value={active}>{children}</ScreenMotionContext.Provider>;
 }

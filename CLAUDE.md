@@ -123,7 +123,7 @@ src/
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
                   #   pure event/breadcrumb scrubber (see crash-reporting-scope.md)
-  lib/            # Shared pure utilities (crypto polyfills, haptics, the activity spin matrix)
+  lib/            # Shared pure utilities (crypto polyfills, haptics)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library
@@ -299,8 +299,8 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   **There is no shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**
 - **Session view (three surfaces):** a task's screen is one SESSION with a full-width segmented
   switcher as its primary navigation - Terminal (the raw mirror, the default), Chat (the
-  readable feed), and Changes - all three pager pages of the one screen, not pushed
-  destinations. Chat renders the structured transcript when the agent
+  readable feed), and Changes - all three absolutely-positioned siblings of the one screen with
+  only the active one visible, not pushed destinations. Chat renders the structured transcript when the agent
   has one, and degrades agent-agnostically to a cleaned live reading view derived from the
   terminal (a headless xterm in the WebView) when it does not.
 - **Transcript-terminal rendering:** the chat lens renders the transcript styled as a
@@ -454,7 +454,7 @@ names its enforcement (live now, or planned where mechanical coverage does not e
 - `performance-claims-are-measured.md` - release build or it is not known; label measured vs read
   vs inferred; a control taken the same way; two meminfo samples; an A/B in ONE process; a delta
   smaller than the run-to-run spread is not a result (`src/**`, `plugins/**`,
-  `docs/developer-guide.md`).
+  `docs/developer-guide.md`, `docs/architecture.md`).
 - `regression-tests-fail-first.md` - watch a regression test fail against the unfixed code (mutate,
   run, restore) before trusting it; assert the mechanism when the bug is invisible in output
   (`tests/**`).

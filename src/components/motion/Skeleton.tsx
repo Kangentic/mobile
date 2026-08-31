@@ -10,6 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeProvider';
+import type { MotionEasingBezier } from '../theme/tokens';
 import { bezierEasing } from './presets';
 import { useScreenMotionActive } from './ScreenMotion';
 
@@ -21,11 +22,69 @@ export interface SkeletonProps {
   testID?: string;
 }
 
+interface PulsingBlockProps {
+  baseStyle: ViewStyle;
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+  durationMs: number;
+  opacityMin: number;
+  opacityMax: number;
+  easing: MotionEasingBezier;
+}
+
+/**
+ * The pulsing block. Owns the shared value, its driver effect, and the animated
+ * style, and is rendered ONLY on the branch that actually animates.
+ *
+ * That split is the point, and it is the same one `SpinningMark` makes in
+ * AgentStatusIcon.tsx. Cancelling the driver is not enough: a registered
+ * Reanimated mapper is walked every vsync whether or not it is dirty, at
+ * roughly half a CPU point each, so a `useAnimatedStyle` sitting above the gate
+ * keeps costing a blurred or reduced-motion screen the walk for an animation
+ * that is not running. A loading container renders a fixed set of these, so the
+ * count is not one.
+ */
+function PulsingBlock({
+  baseStyle,
+  style,
+  testID,
+  durationMs,
+  opacityMin,
+  opacityMax,
+  easing,
+}: PulsingBlockProps): React.JSX.Element {
+  const pulseOpacity = useSharedValue(opacityMax);
+
+  useEffect(() => {
+    pulseOpacity.set(opacityMax);
+    pulseOpacity.set(
+      withRepeat(
+        withTiming(opacityMin, {
+          duration: durationMs,
+          easing: bezierEasing(easing),
+          reduceMotion: ReduceMotion.System,
+        }),
+        -1,
+        true,
+      ),
+    );
+    return () => {
+      cancelAnimation(pulseOpacity);
+    };
+  }, [pulseOpacity, opacityMin, opacityMax, durationMs, easing]);
+
+  const animatedStyle = useAnimatedStyle(() => ({ opacity: pulseOpacity.get() }));
+
+  return <Animated.View testID={testID} style={[baseStyle, animatedStyle, style]} />;
+}
+
 /**
  * A loading placeholder block with a slow opacity pulse (the theme's
- * skeletonPulse timing). Under OS reduced motion the pulse is skipped and the
- * block rests at the pulse's mid opacity, so it still reads as "loading"
- * without movement.
+ * skeletonPulse timing). Under OS reduced motion, or while the screen is
+ * blurred, the pulse is skipped and the block rests at the pulse's mid opacity,
+ * so it still reads as "loading" without movement - and registers no Reanimated
+ * mapper at all, because the animating half is a separate component mounted
+ * only on that branch.
  *
  * FlashList hard rule: skeletons never render inside a recycled renderItem;
  * loading branches render a fixed set of them at the container level.
@@ -36,56 +95,29 @@ export function Skeleton({ width = '100%', height = 14, borderRadius, style, tes
   const screenMotionActive = useScreenMotionActive();
   const { durationMs, opacityMin, opacityMax } = theme.motion.skeletonPulse;
   const restingOpacity = (opacityMin + opacityMax) / 2;
-  const pulseOpacity = useSharedValue(reducedMotion ? restingOpacity : opacityMax);
+  const baseStyle: ViewStyle = {
+    width,
+    height,
+    borderRadius: borderRadius ?? theme.radii.sm,
+    backgroundColor: theme.colors.surfaceRaised,
+  };
 
-  useEffect(() => {
-    // Same gate as the activity mark: a pulse nobody can see costs the same as
-    // one they can. Resting at the mid opacity is exactly what reduced motion
-    // does, so a blurred skeleton still reads as "loading".
-    if (reducedMotion || !screenMotionActive) {
-      cancelAnimation(pulseOpacity);
-      pulseOpacity.value = restingOpacity;
-      return;
-    }
-    pulseOpacity.value = opacityMax;
-    pulseOpacity.value = withRepeat(
-      withTiming(opacityMin, {
-        duration: durationMs,
-        easing: bezierEasing(theme.motion.easing.standard),
-        reduceMotion: ReduceMotion.System,
-      }),
-      -1,
-      true,
-    );
-    return () => {
-      cancelAnimation(pulseOpacity);
-    };
-  }, [
-    reducedMotion,
-    screenMotionActive,
-    restingOpacity,
-    opacityMin,
-    opacityMax,
-    durationMs,
-    pulseOpacity,
-    theme.motion.easing.standard,
-  ]);
-
-  const animatedStyle = useAnimatedStyle(() => ({ opacity: pulseOpacity.value }));
+  // A pulse nobody can see costs the same as one they can. Resting at the mid
+  // opacity is exactly what reduced motion does, so a blurred skeleton still
+  // reads as "loading".
+  if (reducedMotion || !screenMotionActive) {
+    return <View testID={testID} style={[baseStyle, { opacity: restingOpacity }, style]} />;
+  }
 
   return (
-    <Animated.View
+    <PulsingBlock
+      baseStyle={baseStyle}
+      style={style}
       testID={testID}
-      style={[
-        {
-          width,
-          height,
-          borderRadius: borderRadius ?? theme.radii.sm,
-          backgroundColor: theme.colors.surfaceRaised,
-        },
-        animatedStyle,
-        style,
-      ]}
+      durationMs={durationMs}
+      opacityMin={opacityMin}
+      opacityMax={opacityMax}
+      easing={theme.motion.easing.standard}
     />
   );
 }
