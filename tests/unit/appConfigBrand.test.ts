@@ -131,21 +131,41 @@ describe('app.config.ts brand parity', () => {
 });
 
 describe('app.config.ts iOS plugin order', () => {
-  // withIosManualSigning is inert without the KANGENTIC_IOS_* variables, which
-  // only build-ios.yml's device job sets, and ci.yml's prebuild jobs hold no
-  // secrets at all - so a reversed order produces a byte-identical generated
-  // project on every PR, and CI stays green. The break surfaces only on a real
-  // `build-ios.yml -f target=device` dispatch: withIosManualSigning scopes its
-  // writes to a target it finds BY NAME, so if it runs first there is no
-  // KangenticNSE target yet, it silently signs nothing for the extension, and
-  // the archive fails deep in xcodebuild with a message naming neither plugin.
-  it('registers the Notification Service Extension plugin before manual signing', () => {
+  /**
+   * REGISTRATION ORDER IS THE REVERSE OF EXECUTION ORDER, and an earlier version
+   * of this very test asserted the opposite - which is precisely why the wrong
+   * order survived into the v0.6.3 iOS release.
+   *
+   * Mods registered against the same key run LAST-REGISTERED-FIRST. From
+   * @expo/config-plugins/build/plugins/withMod.js:189-202, each registration
+   * wraps the previous one and runs the NEW action before delegating:
+   *
+   *     const results = await action({ ... });   // the newly registered action
+   *     return nextMod(results);                 // then the previous one
+   *
+   * So withIosManualSigning must be registered FIRST in order to RUN SECOND,
+   * after withIosNotificationServiceExtension has created the KangenticNSE
+   * target for it to write onto.
+   *
+   * The old assertion's comment described the failure accurately (signing runs
+   * first, finds no target, silently signs nothing) and then required the
+   * ordering that CAUSES it. The release archived an extension carrying the
+   * app's provisioning profile, with this test green.
+   *
+   * It stays green either way on a PR, which is the other half of why this hid:
+   * withIosManualSigning is inert without the KANGENTIC_IOS_* variables, and
+   * only build-ios.yml's device job sets them. ci.yml's prebuild jobs hold no
+   * secrets, so both orderings generate a byte-identical project there. Only a
+   * real `-f target=device` dispatch can tell them apart, and none ran between
+   * the extension landing and the release.
+   */
+  it('registers manual signing BEFORE the extension plugin, so the extension target is created first', () => {
     const entryNames = (appConfig.plugins ?? []).map((plugin) => (Array.isArray(plugin) ? plugin[0] : plugin));
     const nseIndex = entryNames.indexOf('./plugins/withIosNotificationServiceExtension.ts');
     const signingIndex = entryNames.indexOf('./plugins/withIosManualSigning.ts');
     expect(nseIndex).toBeGreaterThan(-1);
     expect(signingIndex).toBeGreaterThan(-1);
-    expect(nseIndex).toBeLessThan(signingIndex);
+    expect(signingIndex).toBeLessThan(nseIndex);
   });
 });
 

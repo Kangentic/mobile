@@ -509,22 +509,36 @@ const config: ExpoConfig = {
     // production build, taking the concurrent CMake configure down with it.
     // See the plugin for why this is project config, not a CI env var.
     './plugins/withAndroidGradleHeap.ts',
+    // THE ORDER OF THESE TWO IS LOAD BEARING, AND IT IS THE REVERSE OF WHAT IT
+    // READS LIKE. The extension target must EXIST before the signing plugin can
+    // write a profile onto it, and mods registered against the same key run
+    // LAST-REGISTERED-FIRST: each `withMod` call replaces the mod with a wrapper
+    // that invokes the NEW action and passes the previous one down as
+    // `modRequest.nextMod`
+    // (node_modules/@expo/config-plugins/build/plugins/withMod.js:94-113).
+    //
+    // So signing is listed FIRST here in order to RUN SECOND, after
+    // withIosNotificationServiceExtension has created KangenticNSE.
+    //
+    // An earlier revision had them the other way round, with a comment asserting
+    // "Xcode-project mods run in registration order". They do not, and it cost
+    // the v0.6.3 iOS release: withIosManualSigning ran BEFORE the extension
+    // target existed, had nothing to write to, and silently signed nothing -
+    // producing an archive whose extension carried the APP's provisioning
+    // profile. Every check was green. The plugin now throws on an unresolvable
+    // target instead of skipping, which is how the true order was finally
+    // observed rather than assumed.
+    //
+    // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
+    // .github/workflows/build-ios.yml does. See the plugin for why signing has
+    // to be scoped to the app target instead of passed to xcodebuild.
+    './plugins/withIosManualSigning.ts',
     // Injects the Notification Service Extension target from targets/nse/, and
     // adds the shared keychain-access-group to the app's entitlements so the
     // extension can read the push decrypt key. Without it every iOS push shows
     // the generic placeholder, because nothing on the device can open the
     // envelope before iOS renders the alert (e2e-notification-privacy.md).
-    //
-    // MUST come before withIosManualSigning. Xcode-project mods run in
-    // registration order, and the signing plugin scopes its writes by target
-    // name: with the order reversed it would run before this target existed and
-    // silently sign nothing, leaving the extension on automatic signing and
-    // failing the archive.
     './plugins/withIosNotificationServiceExtension.ts',
-    // Inert unless the KANGENTIC_IOS_* signing variables are set, which only
-    // .github/workflows/build-ios.yml does. See the plugin for why signing has
-    // to be scoped to the app target instead of passed to xcodebuild.
-    './plugins/withIosManualSigning.ts',
     // Injects a collision-safe UUID generator at the top of the Podfile's
     // post_install hook. Without it, CocoaPods' sequential UUID counter can
     // hand an SPM object the Pods project root object's own UUID, which saves
