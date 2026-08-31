@@ -60,6 +60,27 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
+    /**
+     * Strictly above SessionScreen's panes, which carry `zIndex: 1` when
+     * visible. Without this the overlay lost the stacking contest and the
+     * chat pane sat ON TOP of it: "Session ended" bled through the gaps
+     * between transcript cards while `View changes` and `Move task` were
+     * dead, because React Native hands a tap to the topmost view rather
+     * than falling through to an occluded sibling.
+     *
+     * That regression shipped green through every required check - a Jest
+     * `fireEvent.press` calls the handler directly and never consults hit
+     * testing, so no JS tier can see a stacking-order bug. The paired
+     * Maestro flow `session-ended-state.yaml` is what caught it, and
+     * `SessionScreen.session-swap.test.tsx` now pins the ordering itself as
+     * the closest mechanical guard available.
+     *
+     * The panes only acquired a zIndex when the pager became absolutely
+     * positioned siblings, so this file was correct until that change and
+     * the coupling is easy to miss: raising a pane's zIndex without raising
+     * this one reintroduces the bug.
+     */
+    zIndex: 2,
   },
   content: {
     alignItems: 'center',
