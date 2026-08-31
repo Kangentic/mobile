@@ -14,13 +14,17 @@
  *   never starts its animation renders a correct-looking static arc. The test
  *   asserts on the timing call, not on the drawn output.
  *
- *   THE MATRIX ON THE WRONG NODE. react-native-svg's Fabric group takes its
- *   transform as `matrix`; a `rotation` prop, or a matrix handed to the circle
- *   instead of the group, sets something nothing reads and the ring sits still
- *   while every other assertion here stays green. Note this tier can only prove
- *   WHICH node got the prop - whether the matrix is the right rotation is
- *   tests/unit/activitySpin.test.ts's job, and whether it runs on the UI thread
- *   nothing but a device can answer.
+ *   THE TURN ON THE WRONG NODE. The turn is a `transform` on SpinningMark's
+ *   wrapping Animated.View, not an animated SVG prop: driving a group's
+ *   `matrix` through useAnimatedProps re-renders react-native-svg every frame
+ *   (~8 CPU points per icon, measured), so the wrapper is the point. Put the
+ *   transform on a node the mark does not sit inside and the ring stands still
+ *   while every other assertion here stays green, which is what
+ *   rotatingNodeCount() exists to catch. This tier can only prove WHICH node
+ *   got the transform. That rotating the whole <Svg> is exact rather than
+ *   approximate rests on agent-working being a single circle at its viewBox
+ *   centre, which tests/unit/activityMarks.test.ts pins; whether it runs on the
+ *   UI thread nothing but a device can answer.
  *
  *   REDUCED MOTION CLOSING THE RING. agent-working rests 'keep-dash', holding
  *   its 3/4 arc. An earlier rotation rested on a SOLID ring, which read as a
@@ -32,8 +36,9 @@
  *   "tilted envelope", commit e4e5524), which needed an explicit reset. The
  *   marks are disjoint element trees, so the animated node unmounts on rebind
  *   and no reset is needed. That property matters MORE now, not less: the
- *   rotation is back, and it is only safe because it lives on a <G> inside the
- *   working branch. Hoist it to the shared <Svg> root and the bug returns.
+ *   rotation is back, and it is only safe because SpinningMark is mounted on
+ *   the spinning branch alone. Hoist the wrapper above the branch, so it
+ *   survives a rebind, and the bug returns.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react-native';
@@ -232,8 +237,10 @@ describe('the working ring', () => {
     renderIcon({ kind: 'working' });
 
     expect(withTimingSpy).toHaveBeenCalledWith(
-      // One TURN, not one degree count: the matrix helper takes turns, so the
-      // 360 lives in src/lib/activitySpin.ts and is proven there.
+      // One TURN, not one degree count: the shared value counts turns, and the
+      // 360 lives in AgentStatusIcon.tsx's FULL_TURN_DEGREES, applied where the
+      // rotate string is built. This file is the only remaining check of that
+      // conversion - src/lib/activitySpin.ts, which used to prove it, is gone.
       1,
       expect.objectContaining({
         duration: workingSpin.durationMs,

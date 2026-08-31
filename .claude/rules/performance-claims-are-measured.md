@@ -3,6 +3,7 @@ paths:
   - "src/**"
   - "plugins/**"
   - "docs/developer-guide.md"
+  - "docs/architecture.md"
 ---
 
 # Rule: a performance claim is measured, on a release build, or it is not made
