@@ -841,17 +841,34 @@ jobs:
           # the order ever reverses, the signing plugin finds no target by that
           # name and writes nothing, and the archive fails with a message that
           # names neither plugin.
+          #
+          # READ THE PBXPROJ, NOT xcodebuild. The first version of this check ran
+          # `xcodebuild -showBuildSettings -workspace ... -scheme ... -target
+          # KangenticNSE`, and `-target` is not valid with `-workspace` (it pairs
+          # with `-project`). Worse, it sent that error to /dev/null under
+          # `|| true`, so the settings file came back EMPTY, the grep below found
+          # nothing, and the step failed every signed build while blaming a plugin
+          # order that was correct all along. It also had never run before: no
+          # target=device build was dispatched between the extension landing and
+          # the v0.6.3 release, so the bug shipped green through every simulator
+          # build. Grepping the generated project is direct evidence that the
+          # plugin wrote the setting, needs no scheme or workspace resolution, and
+          # cannot fail for flag reasons.
+          #
+          # The UUID is unique to the extension (an app extension has its own
+          # bundle id and therefore its own profile), so finding it at all proves
+          # it was written to the extension target and not the app's.
           if [ -n "${KANGENTIC_IOS_NSE_PROFILE_UUID:-}" ]; then
-            nse_settings_path="$RUNNER_TEMP/nse-build-settings.txt"
-            xcodebuild -showBuildSettings \
-              -workspace "ios/$SCHEME.xcworkspace" \
-              -scheme "$SCHEME" \
-              -target KangenticNSE \
-              -configuration Release > "$nse_settings_path" 2>/dev/null || true
+            pbxproj_path="ios/$SCHEME.xcodeproj/project.pbxproj"
+            if [ ! -f "$pbxproj_path" ]; then
+              echo "::error::No generated Xcode project at $pbxproj_path, so the extension's signing cannot be verified."
+              exit 1
+            fi
 
-            if ! grep -q "PROVISIONING_PROFILE_SPECIFIER = $KANGENTIC_IOS_NSE_PROFILE_UUID" "$nse_settings_path"; then
+            if ! grep -q "PROVISIONING_PROFILE_SPECIFIER = \"$KANGENTIC_IOS_NSE_PROFILE_UUID\"" "$pbxproj_path"; then
               echo "::error::The Notification Service Extension target is not set to its provisioning profile."
-              echo "::error::Check the plugin order in app.config.ts: withIosNotificationServiceExtension must come BEFORE withIosManualSigning."
+              echo "::error::plugins/withIosManualSigning.ts writes it only when a target named KangenticNSE already exists, so check that withIosNotificationServiceExtension created one and still runs BEFORE it in app.config.ts."
+              grep -E "PROVISIONING_PROFILE_SPECIFIER|PRODUCT_NAME = \"?KangenticNSE" "$pbxproj_path" || true
               exit 1
             fi
             echo "Extension target is on manual signing with its own profile."
