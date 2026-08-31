@@ -29,6 +29,7 @@ import {
   refreshSnapshots,
 } from '@/connection/actions';
 import { buildPendingPromptSummary, collapseToSnippetText } from '@/conversation/pendingPromptSummary';
+import { MapperLoad } from '@/devsupport/MapperLoad';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
 
@@ -500,6 +501,16 @@ const ActivityRow = React.memo(function ActivityRow({
   // One subtle tint fade when the row lands in a new section. The cleanup
   // zeroes the shared value: FlashList recycles row instances, and a
   // reused card must never inherit a mid-flight pulse.
+  //
+  // NOTE (idle-CPU lever, deferred): this registers one always-on
+  // `useAnimatedStyle` mapper per row even when no pulse is playing, and the
+  // per-vsync Reanimated flush walks every registered mapper (measured: ~0.47
+  // CPU points each on a release build - see AgentStatusIcon). Gating it to
+  // mount only while pulsing is a real saving but fights the strict
+  // react-hooks purity / set-state-in-effect rules (a time-window mount needs a
+  // clock, which is impure in render and cascades as setState in an effect), so
+  // it is left as a documented follow-up rather than forced. The higher-leverage
+  // reduction - AgentStatusIcon's two dead mappers per idle row - already landed.
   const sectionChangedAt = entry.sectionChangedAt;
   const pulseOpacity = useSharedValue(0);
   useEffect(() => {
@@ -619,26 +630,31 @@ const ActivityRow = React.memo(function ActivityRow({
   const bodyText = (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
 
   return (
-    <TaskCard
-      testID={testID}
-      task={task}
-      statusKind={statusKind}
-      showTicketNumbers={false}
-      usage={entry.usage}
-      projectName={projectName}
-      bodyText={bodyText}
-      bodyNumberOfLines={SNIPPET_LINES}
-      bodyMinHeight={snippetSlotHeight}
-      onPress={openTask}
-      onLongPress={onLongPress}
-      overlay={
-        <Animated.View
-          pointerEvents="none"
-          testID={`${testID}-pulse`}
-          style={[styles.pulseOverlay, { backgroundColor: theme.colors.accent, borderRadius: theme.radii.md }, pulseStyle]}
-        />
-      }
-    />
+    <>
+      <TaskCard
+        testID={testID}
+        task={task}
+        statusKind={statusKind}
+        showTicketNumbers={false}
+        usage={entry.usage}
+        projectName={projectName}
+        bodyText={bodyText}
+        bodyNumberOfLines={SNIPPET_LINES}
+        bodyMinHeight={snippetSlotHeight}
+        onPress={openTask}
+        onLongPress={onLongPress}
+        overlay={
+          <Animated.View
+            pointerEvents="none"
+            testID={`${testID}-pulse`}
+            style={[styles.pulseOverlay, { backgroundColor: theme.colors.accent, borderRadius: theme.radii.md }, pulseStyle]}
+          />
+        }
+      />
+      {/* Inert in every shipped build (the probe flag is off): the idle-CPU
+          mapper-count experiment only. See src/devsupport/MapperLoad.tsx. */}
+      <MapperLoad />
+    </>
   );
 });
 

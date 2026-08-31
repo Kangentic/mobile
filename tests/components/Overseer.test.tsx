@@ -3,6 +3,7 @@ import { act, render, screen } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider, Overseer, type OverseerAnimation } from '@/components';
+import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { overseerSequences } from '@/brand/overseerFrames.generated';
 
 const blinkLoop = overseerSequences['blink-loop'];
@@ -187,5 +188,46 @@ describe('Overseer', () => {
     const flattenedStyle = StyleSheet.flatten(screen.getByTestId('overseer', HIDDEN).props.style);
     expect(flattenedStyle.width).toBe(90);
     expect(flattenedStyle.height).toBe(60);
+  });
+
+  /**
+   * The mascot is the one looping-motion component that was missing the screen
+   * focus gate `AgentStatusIcon` and `Skeleton` already use, so it kept
+   * re-rendering its ~35-View grid while a pushed route covered it. Gated now
+   * on `useScreenMotionActive()`.
+   *
+   * `waiting-loop` is used because it has no idle gap: a running mascot ALWAYS
+   * has a clip timer pending, so the pending-timer count is the mechanism
+   * assertion. The frame alone cannot prove it - waiting-loop's first frame is
+   * not the rest frame, so a wrongly-running mascot and a correctly-rested one
+   * differ in frame immediately, but a test that only sampled a frame at one
+   * instant could still be fooled by timing; the timer count cannot.
+   */
+  describe('the screen motion gate', () => {
+    function renderGated(active: boolean, animate: OverseerAnimation): void {
+      render(
+        <ThemeProvider>
+          <ScreenMotionOverride active={active}>
+            <Overseer size={90} animate={animate} testID="overseer" />
+          </ScreenMotionOverride>
+        </ThemeProvider>,
+      );
+    }
+
+    it('rests on the rest frame and schedules no timer while the screen is blurred', () => {
+      renderGated(false, 'waiting-loop');
+      expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
+      expect(jest.getTimerCount()).toBe(0);
+
+      // And it stays rested however long the loop would otherwise run for.
+      act(() => jest.advanceTimersByTime(waitingLoop.clip[0].durationMs * 4));
+      expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
+    });
+
+    it('animates when the gate is active, so the gate cannot silently freeze the mascot', () => {
+      renderGated(true, 'waiting-loop');
+      expect(screen.getByTestId(`overseer-frame-${waitingLoop.clip[0].frame}`, HIDDEN)).toBeTruthy();
+      expect(jest.getTimerCount()).toBeGreaterThan(0);
+    });
   });
 });

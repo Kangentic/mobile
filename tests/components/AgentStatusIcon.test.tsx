@@ -464,6 +464,62 @@ describe('the screen motion gate', () => {
   });
 });
 
+/**
+ * The idle-CPU lever, asserted at the source. The per-vsync Reanimated flush
+ * walks every REGISTERED mapper, dirty or not, so an idle-envelope row that
+ * registered a dead `useAnimatedProps` and a dead `useAnimatedStyle` was paying
+ * for both on every frame - measured at ~0.47 CPU points per registered mapper
+ * on a release build (see the REACT-NATIVE-5 section of docs/developer-guide.md).
+ * The split moved those hooks into children mounted only on the animating
+ * branch, so these assert the hooks are NOT called at all on a non-animating
+ * row. A row rendered identically but with the hooks back at the top (the old
+ * shape) passes every OTHER test in this file, which is exactly why the rule
+ * asks for a mechanism assertion here.
+ */
+describe('registered mappers (the idle-CPU lever)', () => {
+  it('registers no animated mapper for an idle envelope', () => {
+    const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+    const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
+    renderIcon({ kind: 'idle' });
+    expect(animatedStyleSpy).not.toHaveBeenCalled();
+    expect(animatedPropsSpy).not.toHaveBeenCalled();
+  });
+
+  it('registers no animated mapper under reduced motion', () => {
+    jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
+    const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+    const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
+    renderIcon({ kind: 'working' });
+    expect(animatedStyleSpy).not.toHaveBeenCalled();
+    expect(animatedPropsSpy).not.toHaveBeenCalled();
+  });
+
+  it('registers no animated mapper while the screen is blurred, not just no driver', () => {
+    const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+    const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
+    render(
+      <ThemeProvider>
+        <ScreenMotionOverride active={false}>
+          <AgentStatusIcon kind="working" />
+        </ScreenMotionOverride>
+      </ThemeProvider>,
+    );
+    expect(animatedStyleSpy).not.toHaveBeenCalled();
+    expect(animatedPropsSpy).not.toHaveBeenCalled();
+  });
+
+  it('registers exactly one animated style (the spin transform) for a working ring, and no animated props', () => {
+    const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+    const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
+    renderIcon({ kind: 'working' });
+    // The turn is a view transform, so exactly one useAnimatedStyle and - since
+    // no mark marches today - zero useAnimatedProps. If a future change hoists
+    // the march hook back onto every spinning row, this fails.
+    expect(animatedStyleSpy).toHaveBeenCalledTimes(1);
+    expect(animatedPropsSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('the legibility floor', () => {
   /**
    * Below the floor a 2px stroke on a 24 grid falls under one device pixel and

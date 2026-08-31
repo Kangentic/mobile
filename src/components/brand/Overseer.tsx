@@ -11,6 +11,7 @@ import {
   type OverseerFrameName,
   type OverseerRectRole,
 } from '@/brand/overseerFrames.generated';
+import { useScreenMotionActive } from '../motion/ScreenMotion';
 import { useTheme } from '../theme/ThemeProvider';
 import type { BrandTokens } from '../theme/tokens';
 
@@ -49,14 +50,24 @@ function colorForRole(role: OverseerRectRole, brand: BrandTokens): string {
  * an optional `repeat` is a same-pass reroll (a double blink) gated to fire
  * at most once per pass. Adding a sequence upstream needs no code here. When
  * the OS requests reduced motion the mascot rests on the rest frame.
+ *
+ * The same focus gate `AgentStatusIcon` and `Skeleton` use applies here:
+ * `useScreenMotionActive()` is false while another route covers this screen, so
+ * the mascot rests on the rest frame instead of re-rendering its ~35-View grid
+ * for nobody. `waiting-loop` in particular is 2.5 setStates/second; running it
+ * behind a pushed route is the exact waste `ScreenMotion` exists to stop, and
+ * this component was the one that was missing the gate. Outside a
+ * `ScreenMotionProvider` the hook returns true, so a bare render (every
+ * component test) animates exactly as before.
  */
 export function Overseer({ size, animate = 'none', testID = 'overseer' }: OverseerProps): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
+  const screenMotionActive = useScreenMotionActive();
   const [frameName, setFrameName] = useState<OverseerFrameName>(OVERSEER_REST_FRAME);
   const sequence = overseerSequences[animate];
 
-  const animationActive = !reducedMotion && sequence.clip.length > 0;
+  const animationActive = !reducedMotion && screenMotionActive && sequence.clip.length > 0;
   const animationKey = animationActive ? animate : 'none';
 
   // Reset to the rest frame when the animation mode changes (render-time
