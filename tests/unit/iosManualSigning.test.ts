@@ -21,6 +21,7 @@ import {
   NSE_TARGET_NAME as SIGNING_SIDE_NSE_TARGET_NAME,
   applyManualSigningToTarget,
   readSigningInputsFromEnvironment,
+  resolveStoredTargetName,
   type XcodeBuildSettingsWriter,
 } from '../../plugins/withIosManualSigning';
 import { NSE_TARGET_NAME } from '../../plugins/withIosNotificationServiceExtension';
@@ -145,5 +146,54 @@ describe('applyManualSigningToTarget', () => {
     // The certificate SHA-1, never its common name: on an individual Apple
     // account that name is a person's legal name, and CI logs here are public.
     expect(byProperty.get('CODE_SIGN_IDENTITY')).toBe(`"${INPUTS.signingIdentity}"`);
+  });
+});
+
+/**
+ * The defect that shipped a broken v0.6.3 iOS build, pinned against the real
+ * library's storage rather than against what the plugin wished were true.
+ *
+ * `xcode`'s `addTarget` stores a target's name QUOTED (pbxProject.js:1489) and
+ * writes that verbatim as the section comment (:574), while `pbxTargetByName`
+ * compares the comment to the raw string (:1031). So a target created by
+ * `addTarget` cannot be found by its own unquoted name - and
+ * `updateBuildProperty` responds to an unfound target by writing NOTHING and
+ * returning normally, which is why the extension reached an archive carrying
+ * the app's provisioning profile with every check green.
+ *
+ * The fakes below reproduce BOTH storage shapes deliberately. Modelling only
+ * one is what the previous version of this file did (it never modelled
+ * pbxTargetByName at all, only the write call's argument shape), and a test
+ * that mirrors the plugin's assumption instead of the library's behaviour
+ * cannot catch a mismatch between them.
+ */
+describe('resolveStoredTargetName', () => {
+  function lookupOver(storedNames: string[]) {
+    return {
+      pbxTargetByName(name: string) {
+        return storedNames.includes(name) ? { isa: 'PBXNativeTarget' } : null;
+      },
+    };
+  }
+
+  it('finds a prebuild-created target, whose name is stored unquoted', () => {
+    // The app target. This is the path that always worked, and its working is
+    // exactly what hid the extension being broken.
+    expect(resolveStoredTargetName(lookupOver(['Kangentic']), 'Kangentic')).toBe('Kangentic');
+  });
+
+  it('finds an addTarget-created target, whose name is stored QUOTED', () => {
+    // The extension. Without this the lookup returns null and the signing write
+    // silently no-ops.
+    expect(resolveStoredTargetName(lookupOver(['"KangenticNSE"']), 'KangenticNSE')).toBe('"KangenticNSE"');
+  });
+
+  it('returns null when no target matches either spelling, so the caller can refuse rather than no-op', () => {
+    expect(resolveStoredTargetName(lookupOver(['SomethingElse']), 'KangenticNSE')).toBeNull();
+  });
+
+  it('prefers the unquoted spelling when both somehow exist', () => {
+    const resolved = resolveStoredTargetName(lookupOver(['Kangentic', '"Kangentic"']), 'Kangentic');
+    expect(resolved).toBe('Kangentic');
   });
 });
