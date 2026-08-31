@@ -2463,9 +2463,10 @@ subtraction is not measurement**, and this is the fourth mechanism in this inves
 looked obvious and did not survive an A/B (see also the render executor, the `InputMethodManager`
 served view, and the Reanimated warning storm).
 
-Note what that leaves: the ~44 points between "as shipped" and OS reduced motion is still
-**unattributed**. Only two numbers here are in-process and trustworthy - the ~9 points from the
-motion gate, and reduced motion's 6% floor.
+Note what that leaves: the ~44 points between "as shipped" and OS reduced motion was
+**unattributed** when this paragraph was first written. It is now attributed - see "The residual
+is the mapper walk" below: it is non-drawing main-thread work that scales almost linearly with the
+number of REGISTERED Reanimated mappers, dirty or not.
 
 **Things that are NOT the cause**, each eliminated by measurement rather than argument:
 
@@ -2512,18 +2513,68 @@ dominated every earlier profile is simply gone, which is exactly what a flag nam
 update UI props" claims to do. Retention is unaffected (327 -> 327 views, 0 WebViews over six
 cycles), and the screen renders identically.
 
+**Do not read the flag-on percentages as "hwui became the new bottleneck."** With the flag on,
+`libhwui.so` rose to 25.5% *of the profile* - but the profile's denominator halved, so in absolute
+cycles hwui went DOWN ~30%. Nothing became a new bottleneck; the whole pie shrank. A shared-object
+percentage table silently renormalises after any real win, and this one misled a reader of this
+section into a compositing-cost diagnosis the next measurement disproved. Compare cycles/second
+across runs, never bare percentages.
+
 `DISABLE_COMMIT_PAUSING_MECHANISM` was NOT enabled: it is only useful alongside React Native's
 `preventShadowTreeCommitExhaustion`, which requires building RN from source (patching a C++ header
 and substituting the Gradle module). Disproportionate here, and recorded so nobody re-derives it.
 
-**Where the rest of it has to start, honestly.** Not with a component swap chosen by argument - two
-have now been tried and neither moved the number. The unattributed ~44 points is worth finding, and the
-next step is attribution the profiler can settle rather than elimination by rebuild: the call
-graph already puts 94% of frame callbacks under `worklets.AnimationFrameQueue.executeQueue`, so
-the question is which mappers are DIRTY every frame, not which components exist. Reanimated has no
-release-build introspection for that, so it likely needs either a patched build that counts dirty
-mappers per pass, or a `simpleperf` run with the unstripped `libreanimated.so` symbolised far
-enough to name the worklet.
+### The residual is the mapper walk: idle CPU scales with REGISTERED mappers
+
+**Attributed 2026-08-30, by two in-process experiments the earlier rounds never ran** - reading
+frames alongside every CPU number, and varying registered-mapper count at runtime (the probe's
+`extra-mappers` variant, `src/devsupport/MapperLoad.tsx`). Release build, Pixel 11 Pro, demo
+pairing, Agents list, 40s samples:
+
+| Arm (one process, toggled at runtime) | CPU median (range) | Frames / 40s |
+|---|---|---|
+| As shipped, visible, 7 spinners | 41% (34-50) | 3590 (~90fps) |
+| Covered by Settings (spinners gated off by ScreenMotion) | **23% (22-25)** | **0** |
+| +64 clean never-animating mappers, visible | **70% (59-76)** | ~display rate |
+| Extra mappers removed again (drift control) | 39% (36-48) | - |
+
+Two conclusions, each carried by one row:
+
+1. **The residual is non-drawing main-thread work.** 23% of a core with ZERO frames rendered and
+   the GPU histogram empty - compositing cannot be the cost when nothing composites. This is the
+   measurement the "hwui share rose" percentage table appeared to contradict (see the
+   denominator note above).
+2. **Idle CPU scales almost linearly with the number of REGISTERED Reanimated mappers, dirty or
+   not: ~0.47 points each.** 64 permanently-clean mappers (a shared value nothing ever changes)
+   added ~30 points and removing them took it straight back. The per-vsync flush walks the
+   registered set; "mapperRun skips clean mappers" is true of the callback body and false of the
+   walk's cost. The jump landed mid-sample exactly as the FlashList rows re-rendered and mounted
+   the mappers, which is as close to a signature as `top` gives.
+
+**The fix that follows: register animated hooks only on the branch that animates.**
+`AgentStatusIcon` used to call `useAnimatedProps` (an inert march) and `useAnimatedStyle` (the
+spin) above its early returns, so every idle-envelope row registered two dead mappers. The hooks
+now live in `SpinningMark`/`MarchingMark`, children mounted only while animating: an idle row
+registers zero, a working row registers one. The mechanism is locked by the "registered mappers"
+block in `tests/components/AgentStatusIcon.test.tsx` (red-green verified: restoring the
+unconditional hooks fails all four). The remaining per-row mappers on the feed are `PressScale`
+(one per card; measured unresolvable in the earlier swap A/B, consistent with ~0.5 points) and
+the section-pulse overlay (one per row; gating it to mount only while pulsing fights the strict
+react-hooks purity/set-state-in-effect lints and is left as a documented follow-up).
+
+**What the fix is worth is NOT settled by a before/after of the shipped screen, and this section
+does not claim one.** The post-fix build measured 46-47% (36-53) against the pre-fix 41% (34-50) -
+a CROSS-BUILD pair, taken while the demo showed eight spinners against seven, on a screen whose
+run-to-run spread is wider than the expected ~5-7 point saving (idle rows on screen x 2 mappers x
+~0.47). Per `performance-claims-are-measured.md` that pair resolves nothing, and quoting it as a
+win (or a regression) would repeat the exact mistake this section keeps correcting. The claim that
+IS made: the mechanism is measured (the extra-mappers A/B), the reduction is proven (the test
+block), and the arithmetic follows. A same-process probe variant toggling the split is the
+experiment that would put a number on it, if one is ever needed.
+
+The old "next step" here - patching Reanimated to count DIRTY mappers per pass - is superseded:
+dirtiness was the wrong axis. The open upstream question is why walking clean mappers costs what
+it does (issues #6853 / #7435 territory), which no app-side change answers.
 
 Two rules earned the hard way, both now in `performance-claims-are-measured.md`: an A/B belongs in
 ONE process, and a delta smaller than the run-to-run spread is not a result. The spread on this

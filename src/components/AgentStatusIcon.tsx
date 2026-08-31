@@ -60,188 +60,39 @@ const MARK_BY_KIND: Record<AgentStatusKind, ActivityMarkName> = {
 };
 
 /**
- * Desktop-parity session status, drawn from @kangentic/branding's activity
- * marks: a green ring that SPINS while the agent thinks, and the yellow
- * envelope for an idle session (the turn ended, the user's move). All idle
- * sessions carry the SAME static envelope: they are equal priority, first come
- * first served ('idle-unread' is kept as a semantic kind for testing/telemetry
- * but renders identically).
- *
- * The geometry, the 1400ms period and the reduced-motion rendering all arrive
- * as generated data, so none of them can drift from the assets the desktop and
- * the website draw. Do not hardcode a duration or a dash here.
- *
- * BOTH primitives are implemented because both are allowlisted upstream in
- * scripts/syncBranding.mjs: a mark declares either a `march` (its dash offset
- * travels) or a `spin` (a transform turns), never both, and the generator's
- * whole contract is that a motion it accepts is one this component draws. The
- * two synced marks select spin and nothing today, so the march branch is
- * currently unexercised - kept rather than deleted so re-selecting it upstream
- * is a data change instead of a broken build.
- *
- * NO RECYCLING RESET IS NEEDED, and that is a property of the shapes rather
- * than luck. The working ring and the idle envelope are DISJOINT element trees,
- * so when FlashList rebinds a row from working to idle the animated node
- * unmounts and there is nothing left behind to reset.
- *
- * Read that carefully, because a rotation is exactly what broke here once. The
- * spin below is NOT the transform of commit e4e5524: that one lived on the
- * wrapper view SHARED by both branches, and because Reanimated writes straight
- * to the native node, React's prop diff never cleared it - a cancelled spin
- * froze mid-rotation and the envelope rendered tilted. This transform lives on
- * a <G> rendered only inside the working branch, keyed by mark name, so it has
- * no existence at all once the row rebinds. Keep it there. If a future change
- * ever hoists it to the shared <Svg> root, or morphs ONE shared element between
- * the two states, that bug comes back and the reset has to come back with it.
+ * Everything the mark's <Svg> needs to draw itself, independent of whether it
+ * animates. Passed to `renderMarkSvg` by the static branch and by the marching
+ * child alike, so the two paths cannot diverge.
  */
-export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProps): React.JSX.Element {
-  const theme = useTheme();
-  const reducedMotion = useReducedMotion();
-  const dashOffset = useSharedValue(0);
-  const spinTurns = useSharedValue(0);
+interface MarkSvgParams {
+  mark: ActivityMark;
+  markName: ActivityMarkName;
+  size: number;
+  color: string;
+  testID: string;
+  /** True on the spinning branch, so the dashed ring draws plain (the turn is a wrapper transform). */
+  spinning: boolean;
+  /** True on the marching branch, so the dashed ring takes the animated dash-offset props below. */
+  marching: boolean;
+  /** The animated `strokeDashoffset` props, only supplied by the marching child. */
+  marchAnimatedProps?: ReturnType<typeof useAnimatedProps>;
+}
 
-  const markName = MARK_BY_KIND[kind];
-  const mark: ActivityMark = activityMarks[markName];
-  const march = mark.march;
-  const spin = mark.spin;
-  // Below the mark's legibility floor this renders a dot, which has no outline
-  // to move. Gate the animation on that too: the early return further down
-  // cannot, since hooks run before it, and an infinite timing loop driving a
-  // value nothing reads is pure cost on a list of recycled rows.
-  const belowFloor = size < mark.minPx;
-  /**
-   * Blur drops the MOUNT, not just the driver, and the honest reason is
-   * correctness rather than a measured saving.
-   *
-   * WHAT IS MEASURED. Forcing this gate closed on a FOCUSED screen (the
-   * probe's `no-motion` variant) takes idle CPU from ~49% to ~40% on a release
-   * build, so the loop is worth roughly 9 points while it runs. What the gate
-   * actually does, though, is stop it on a BLURRED screen, and there the
-   * direct before/after was 50% against 47.5% - inside the run-to-run spread,
-   * so not resolvable. A far larger cost dominates that reading; see the
-   * REACT-NATIVE-5 section of docs/developer-guide.md.
-   *
-   * WHY THE MOUNT ANYWAY. Cancelling the driver while leaving the
-   * `Animated.View` mounted leaves a Reanimated node registered with the UI
-   * runtime for a view nobody can see, and the per-frame flush walks the
-   * registered nodes. Dropping it is the form that cannot be paying for
-   * something invisible, and it strengthens rather than weakens the
-   * conditional-mount property the tilted-envelope bug (e4e5524) depends on:
-   * the wrapper exists only on the working branch AND only while the screen is
-   * live, so a rebind and a blur both leave nothing holding a stale rotation.
-   */
-  const screenMotionActive = useScreenMotionActive();
-  const marching = !reducedMotion && screenMotionActive && !belowFloor && march !== undefined;
-  const spinning = !reducedMotion && screenMotionActive && !belowFloor && spin !== undefined;
-  const marchRunning = marching;
-  const spinRunning = spinning;
-
-  // NOTE: there is no per-mark spin origin any more. The turn is a transform on
-  // the wrapping view (see spinStyle below), so it pivots about the view's
-  // centre, which is the viewBox centre. Upstream's rule is that same fixed
-  // grid centre (activity.css: `.kng-spin { transform-origin: 12px 12px }`), and
-  // every spinning mark is drawn there, so the two agree exactly.
-  // tests/unit/activityMarks.test.ts asserts that agreement rather than
-  // trusting this comment: an off-centre spinning mark would pivot wrongly and
-  // must fail the build instead of shipping a wobbling ring.
-
-  useEffect(() => {
-    if (!marchRunning || march === undefined) {
-      cancelAnimation(dashOffset);
-      dashOffset.set(0);
-      return;
-    }
-    // One pass walks the dash a full cycle, so the outline lands back where it
-    // started and the loop is seamless. The period is the user-unit dash sum,
-    // not the pathLength ratio: react-native-svg ignores pathLength.
-    dashOffset.set(0);
-    dashOffset.set(
-      withRepeat(
-        withTiming(-march.periodUserUnits, {
-          duration: march.durationMs,
-          easing: Easing.linear,
-          reduceMotion: ReduceMotion.System,
-        }),
-        -1,
-        false,
-      ),
-    );
-    return () => {
-      cancelAnimation(dashOffset);
-    };
-  }, [dashOffset, march, marchRunning]);
-
-  useEffect(() => {
-    if (!spinRunning || spin === undefined) {
-      cancelAnimation(spinTurns);
-      spinTurns.set(0);
-      return;
-    }
-    // One pass is one full turn, so the ring lands back where it started and
-    // the loop is seamless - the same closure property the march gets from
-    // travelling exactly one dash cycle.
-    spinTurns.set(0);
-    spinTurns.set(
-      withRepeat(
-        withTiming(1, {
-          duration: spin.durationMs,
-          easing: Easing.linear,
-          reduceMotion: ReduceMotion.System,
-        }),
-        -1,
-        false,
-      ),
-    );
-    return () => {
-      cancelAnimation(spinTurns);
-    };
-  }, [spinTurns, spin, spinRunning]);
-
-  const marchProps = useAnimatedProps(() => ({ strokeDashoffset: dashOffset.get() }));
-  /**
-   * The spin is a TRANSFORM ON A NATIVE VIEW, not an animated SVG prop.
-   *
-   * It used to drive the `matrix` prop of an <G> through useAnimatedProps,
-   * which re-renders react-native-svg on every frame. That was measured at
-   * roughly 8 percentage points of CPU per icon: eight spinning rows on the
-   * Agents list cost ~63 points, and the app never dropped to an idle frame
-   * rate. A view transform is composited natively and costs none of that.
-   * `.claude/rules/motion-conventions.md` asks for exactly this.
-   *
-   * Rotating the whole <Svg> is EXACT here rather than an approximation: the
-   * only animated mark, agent-working, is a single circle at the centre of its
-   * own viewBox (cx/cy 12 in a 24 grid), so the view's centre and the old
-   * per-mark spin origin are the same point. That equivalence is asserted in
-   * tests/unit/activityMarks.test.ts. A future off-centre spinning mark would
-   * break it, which is why the assertion exists rather than a comment alone.
-   */
-  const spinStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${spinTurns.get() * FULL_TURN_DEGREES}deg` }],
-  }));
-
-  const color = kind === 'working' ? theme.colors.statusWorking : theme.colors.warning;
-  const fallbackTestID =
-    kind === 'working' ? 'agent-status-working' : kind === 'idle-unread' ? 'agent-status-idle-unread' : 'agent-status-idle';
-  const resolvedTestID = testID ?? fallbackTestID;
-
-  // Below the mark's legibility floor a 2px stroke on a 24 grid falls under one
-  // device pixel and the glyph turns to mush, so the contract says draw a dot
-  // instead. No caller is below the floor today (they render at 15 and 16).
-  if (belowFloor) {
-    return (
-      <Svg width={size} height={size} viewBox={ACTIVITY_VIEW_BOX} color={color} testID={resolvedTestID}>
-        <Circle cx={DOT_CENTER_X} cy={DOT_CENTER_Y} r={DOT_RADIUS_UNITS} fill="currentColor" />
-      </Svg>
-    );
-  }
-
-  const markSvg = (
+/**
+ * Pure renderer for a mark's <Svg>. No Reanimated hooks live here, so the
+ * common branch (idle envelope, reduced motion, a blurred screen) renders the
+ * mark with ZERO animated mappers registered - which matters because the
+ * per-vsync mapper flush walks every registered mapper whether or not it is
+ * dirty. Measured on a release build, Pixel 11 Pro: adding 64 clean, never-
+ * animating mappers to the Agents list took idle CPU from ~41% to ~70% (~0.47
+ * points per registered mapper), so an idle row that used to register a dead
+ * `useAnimatedProps` and a dead `useAnimatedStyle` was paying for both. The
+ * animated variants below mount their hooks ONLY on the branch that animates.
+ */
+function renderMarkSvg({ mark, markName, size, color, testID, spinning, marching, marchAnimatedProps }: MarkSvgParams): React.JSX.Element {
+  return (
     // `color` is what resolves the marks' `currentColor`, so the tone stays a
-    // theme token and no hex ever reaches this file. The manifest labels
-    // agent-idle's tone "attention" (this app's needs-you token is brand
-    // amber), but that is advisory: the package publishes #3ddc84/#d9b83f as
-    // the mobile pair, and tokens.ts's two-hue rule forbids pointing a warning
-    // role back at amber. So the working/warning pair below is deliberate.
+    // theme token and no hex ever reaches this file.
     <Svg
       width={size}
       height={size}
@@ -252,7 +103,7 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
       strokeWidth={ACTIVITY_STROKE_WIDTH}
       strokeLinecap={ACTIVITY_STROKE_LINECAP}
       strokeLinejoin={ACTIVITY_STROKE_LINEJOIN}
-      testID={resolvedTestID}
+      testID={testID}
     >
       {mark.shapes.map((shape, shapeIndex) => {
         const key = `${markName}-${shapeIndex}`;
@@ -274,8 +125,8 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
           return <Circle key={key} cx={shape.cx} cy={shape.cy} r={shape.r} strokeDasharray={dashArray} />;
         }
         if (spinning) {
-          // Plain: the turn belongs to the wrapping Animated.View now, and the
-          // dash itself never changes.
+          // Plain: the turn belongs to the wrapping Animated.View, and the dash
+          // itself never changes.
           return <Circle key={key} cx={shape.cx} cy={shape.cy} r={shape.r} strokeDasharray={dashArray} />;
         }
         return (
@@ -285,26 +136,205 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
             cy={shape.cy}
             r={shape.r}
             strokeDasharray={dashArray}
-            animatedProps={marchProps}
+            animatedProps={marchAnimatedProps}
           />
         );
       })}
     </Svg>
   );
+}
 
-  if (!spinning) return markSvg;
+/**
+ * The spinning wrapper. Owns the spin shared value, its driver effect, and the
+ * transform - and is rendered ONLY on the spinning branch, so:
+ *
+ *   1. an idle-envelope row registers ZERO animated mappers (the whole point of
+ *      the split - see renderMarkSvg's note), and
+ *   2. a FlashList rebind from working to idle UNMOUNTS this wrapper rather than
+ *      leaving a stale rotation behind. Reanimated writes straight to the native
+ *      node, so React's prop diff never clears a transform on a node that
+ *      survives the rebind - the row would keep whatever angle was last written
+ *      and the envelope would render tilted. That is the tilted-envelope bug of
+ *      commit e4e5524, and the CONDITIONAL MOUNT is what fixes it, not the
+ *      transform's shape. Keep this mounted only while spinning.
+ *
+ * The turn is a transform on this native view, NOT an animated SVG prop. Driving
+ * an SVG group's `matrix` through useAnimatedProps re-renders react-native-svg
+ * every frame and was measured at ~8 CPU points per icon; a view transform is
+ * composited natively. Rotating the whole <Svg> is exact rather than approximate
+ * because agent-working is a single circle at its viewBox centre, asserted in
+ * tests/unit/activityMarks.test.ts.
+ */
+function SpinningMark({ size, durationMs, children }: { size: number; durationMs: number; children: React.ReactNode }): React.JSX.Element {
+  const spinTurns = useSharedValue(0);
+  useEffect(() => {
+    // One pass is one full turn, so the ring lands back where it started and the
+    // loop is seamless.
+    spinTurns.set(0);
+    spinTurns.set(
+      withRepeat(
+        withTiming(1, {
+          duration: durationMs,
+          easing: Easing.linear,
+          reduceMotion: ReduceMotion.System,
+        }),
+        -1,
+        false,
+      ),
+    );
+    return () => {
+      cancelAnimation(spinTurns);
+    };
+  }, [spinTurns, durationMs]);
+  const spinStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${spinTurns.get() * FULL_TURN_DEGREES}deg` }],
+  }));
+  return <Animated.View style={[{ width: size, height: size }, spinStyle]}>{children}</Animated.View>;
+}
 
-  // Keyed by mark name and rendered ONLY on the spinning branch, so a row
-  // rebinding from working to idle UNMOUNTS the transform instead of leaving a
-  // stale one behind. That is the tilted-envelope bug of commit e4e5524: the
-  // transform there lived on a wrapper shared by both branches, and because
-  // Reanimated writes straight to the native node, React's prop diff never
-  // cleared it - a cancelled spin froze mid-rotation and the envelope rendered
-  // tilted. The protection is the CONDITIONAL MOUNT, not the transform's shape,
-  // so keep this branch exclusive if the animation ever changes again.
-  return (
-    <Animated.View key={markName} style={[{ width: size, height: size }, spinStyle]}>
-      {markSvg}
-    </Animated.View>
-  );
+/**
+ * The marching wrapper. Owns the dash-offset shared value, its driver effect,
+ * and the animated `strokeDashoffset` props, and builds its own <Svg> so the
+ * animated circle lives inside it. Rendered ONLY on the marching branch, so a
+ * non-marching row registers none of this.
+ *
+ * Currently unexercised: neither synced mark declares a `march`
+ * (activityMarks.generated selects `spin` for agent-working and nothing for
+ * agent-idle). Kept correct rather than deleted so re-selecting a march upstream
+ * is a data change, not a broken build. A shape that genuinely changes per frame
+ * (a dash marching) is the deliberate exception to the transform-only rule - it
+ * has to re-run the SVG, and that cost is argued for, not a default.
+ */
+function MarchingMark({
+  mark,
+  markName,
+  size,
+  color,
+  testID,
+  periodUserUnits,
+  durationMs,
+}: {
+  mark: ActivityMark;
+  markName: ActivityMarkName;
+  size: number;
+  color: string;
+  testID: string;
+  periodUserUnits: number;
+  durationMs: number;
+}): React.JSX.Element {
+  const dashOffset = useSharedValue(0);
+  useEffect(() => {
+    // One pass walks the dash a full cycle, so the outline lands back where it
+    // started. The period is the user-unit dash sum, not the pathLength ratio:
+    // react-native-svg ignores pathLength.
+    dashOffset.set(0);
+    dashOffset.set(
+      withRepeat(
+        withTiming(-periodUserUnits, {
+          duration: durationMs,
+          easing: Easing.linear,
+          reduceMotion: ReduceMotion.System,
+        }),
+        -1,
+        false,
+      ),
+    );
+    return () => {
+      cancelAnimation(dashOffset);
+    };
+  }, [dashOffset, periodUserUnits, durationMs]);
+  const marchProps = useAnimatedProps(() => ({ strokeDashoffset: dashOffset.get() }));
+  return renderMarkSvg({ mark, markName, size, color, testID, spinning: false, marching: true, marchAnimatedProps: marchProps });
+}
+
+/**
+ * Desktop-parity session status, drawn from @kangentic/branding's activity
+ * marks: a green ring that SPINS while the agent thinks, and the yellow
+ * envelope for an idle session (the turn ended, the user's move). All idle
+ * sessions carry the SAME static envelope: they are equal priority, first come
+ * first served ('idle-unread' is kept as a semantic kind for testing/telemetry
+ * but renders identically).
+ *
+ * The geometry, the 1400ms period and the reduced-motion rendering all arrive
+ * as generated data, so none of them can drift from the assets the desktop and
+ * the website draw. Do not hardcode a duration or a dash here.
+ *
+ * The animation, when there is one, lives in a CHILD component
+ * (`SpinningMark` / `MarchingMark`) rendered only on the branch that animates.
+ * This component itself registers NO Reanimated mappers, so an idle-envelope row
+ * - the common case in the feed - costs nothing on the per-vsync mapper flush.
+ * That is a measured lever, not a tidy-up: registered-mapper count drives idle
+ * CPU on this screen almost linearly (see renderMarkSvg's note and the
+ * REACT-NATIVE-5 section of docs/developer-guide.md).
+ */
+export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProps): React.JSX.Element {
+  const theme = useTheme();
+  const reducedMotion = useReducedMotion();
+  const screenMotionActive = useScreenMotionActive();
+
+  const markName = MARK_BY_KIND[kind];
+  const mark: ActivityMark = activityMarks[markName];
+  const march = mark.march;
+  const spin = mark.spin;
+  // Below the mark's legibility floor this renders a dot, which has no outline
+  // to move. Gate the animation on that too: an infinite timing loop driving a
+  // value nothing reads is pure cost on a list of recycled rows.
+  const belowFloor = size < mark.minPx;
+  /**
+   * Blur drops the MOUNT, not just the driver, and the honest reason is
+   * correctness rather than a measured saving on the blurred screen itself.
+   * Forcing this gate closed on a FOCUSED screen (the probe's `no-motion`
+   * variant) takes idle CPU from ~49% to ~40% on a release build, so the loop is
+   * worth roughly 9 points while it runs; the blurred-screen before/after (50%
+   * vs 47.5%) sat inside the run-to-run spread. Either way, a gated-off row now
+   * renders through the hookless static path, so it holds no registered mapper
+   * for a view nobody can see.
+   */
+  const marching = !reducedMotion && screenMotionActive && !belowFloor && march !== undefined;
+  const spinning = !reducedMotion && screenMotionActive && !belowFloor && spin !== undefined;
+
+  const color = kind === 'working' ? theme.colors.statusWorking : theme.colors.warning;
+  const fallbackTestID =
+    kind === 'working' ? 'agent-status-working' : kind === 'idle-unread' ? 'agent-status-idle-unread' : 'agent-status-idle';
+  const resolvedTestID = testID ?? fallbackTestID;
+
+  // Below the mark's legibility floor a 2px stroke on a 24 grid falls under one
+  // device pixel and the glyph turns to mush, so the contract says draw a dot
+  // instead. No caller is below the floor today (they render at 15 and 16).
+  if (belowFloor) {
+    return (
+      <Svg width={size} height={size} viewBox={ACTIVITY_VIEW_BOX} color={color} testID={resolvedTestID}>
+        <Circle cx={DOT_CENTER_X} cy={DOT_CENTER_Y} r={DOT_RADIUS_UNITS} fill="currentColor" />
+      </Svg>
+    );
+  }
+
+  if (spinning && spin !== undefined) {
+    // Keyed by mark name so a rebind from one spinning mark to another remounts
+    // the wrapper (there is only one spinning mark today, but the key keeps the
+    // conditional-mount guarantee explicit). The <Svg> inside is fully static -
+    // its dashed ring draws plain and the turn is the wrapper's transform.
+    return (
+      <SpinningMark key={markName} size={size} durationMs={spin.durationMs}>
+        {renderMarkSvg({ mark, markName, size, color, testID: resolvedTestID, spinning: true, marching: false })}
+      </SpinningMark>
+    );
+  }
+
+  if (marching && march !== undefined) {
+    return (
+      <MarchingMark
+        mark={mark}
+        markName={markName}
+        size={size}
+        color={color}
+        testID={resolvedTestID}
+        periodUserUnits={march.periodUserUnits}
+        durationMs={march.durationMs}
+      />
+    );
+  }
+
+  // Idle envelope, reduced motion, a blurred screen: static, no animated hooks.
+  return renderMarkSvg({ mark, markName, size, color, testID: resolvedTestID, spinning: false, marching: false });
 }

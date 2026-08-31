@@ -101,12 +101,25 @@ when an animation begins. `useAnimatedStyle` registers one mapper per mounted co
 `updateMappersOrder()`, a recursive topological sort over ALL of them, whenever the mapper count
 changes - which FlashList recycling does constantly.
 
-So the frame loop cannot be "stopped", and the useful question is **which mappers are dirty every
-frame**, not which components are mounted. Two attempts to cut idle CPU by removing mounted
-animated components (the activity-ring focus gate, and swapping `Card`'s `PressScale` for
-`Pressable`'s own pressed state) were measured: the first is worth ~9 points, the second worth
-nothing at all - the old implementation measured LOWER on the cleanest sample, and the swap was
-reverted. Do not repeat either by argument; see `performance-claims-are-measured.md` and `/profile`.
+So the frame loop cannot be "stopped" - and, corrected by measurement (2026-08-30): the useful
+question is **how many mappers are REGISTERED**, not only which are dirty. An in-process A/B on a
+release build (the `extra-mappers` probe variant) added 64 clean, never-animating mappers to the
+Agents list and idle CPU went from ~41% to ~70%, back to ~39% when removed - **~0.47 CPU points
+per registered mapper, dirty or not**. An earlier revision of this paragraph claimed clean mappers
+were skipped for free; that was read out of `mapperRun()`'s early-continue and did not survive the
+experiment. Practical consequences, all load-bearing:
+
+- **Register an animated hook only on the branch that animates.** A `useAnimatedStyle` /
+  `useAnimatedProps` above an early return runs (and registers) on EVERY branch - an idle row
+  paying for a spin it never shows. Put the hooks in a child component mounted only while
+  animating (`AgentStatusIcon`'s `SpinningMark`/`MarchingMark` are the pattern, and its
+  "registered mappers" test block is the mechanism assertion to copy).
+- The two component-swap attempts stand as cautions against ARGUED swaps, with the corrected read:
+  the activity-ring focus gate is worth ~9 points (measured); `Card`'s `PressScale`-to-`Pressable`
+  swap moved nothing resolvable and was reverted - one mapper per row was under that experiment's
+  noise floor, which is consistent with ~0.47 points each, not proof mappers are free.
+
+Do not re-derive any of this by argument; see `performance-claims-are-measured.md` and `/profile`.
 
 ## Enforcement (self-maintaining)
 

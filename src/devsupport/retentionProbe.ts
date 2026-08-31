@@ -29,7 +29,8 @@ export type RetentionProbeVariant =
   | 'markdown-not-selectable'
   | 'single-markdown'
   | 'markdown-empty'
-  | 'no-motion';
+  | 'no-motion'
+  | 'extra-mappers';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -59,6 +60,11 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'no-motion',
     label: 'No looping motion',
     description: 'Closes the gate on a focused screen too',
+  },
+  {
+    variant: 'extra-mappers',
+    label: 'Extra idle mappers',
+    description: 'Mounts N clean animated mappers per feed row',
   },
 ];
 
