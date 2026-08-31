@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.6.2',
+  version: '0.6.3',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -128,7 +128,18 @@ const config: ExpoConfig = {
     // screen) that answers the three Guideline 2.1(a) rejections, with the
     // review-ready mock desktop behind it. The reviewer notes in
     // docs/store-listing.md describe the demo this build ships.
-    buildNumber: '12',
+    //
+    // 13 is the v0.6.3 release cut 2026-08-31, destined for the App Store (12
+    // is spent, tagged ios-b12). It is a performance and stability release with
+    // no new capability: the session screen no longer leaks its whole native
+    // view tree on pop (the REACT-NATIVE-5 OOM, fixed in the markdown library
+    // and upstreamed as software-mansion/enriched-markdown #730/#731), and idle
+    // CPU on the Agents list roughly halved. Two of those three fixes are
+    // Android-measured but NOT Android-only: the retained view tree and the
+    // Reanimated mapper walk are both cross-platform, so iOS gets the leak fix
+    // and the mapper reduction even though the CPU numbers were taken on a
+    // Pixel. The synchronous-UI-props flag is the one Android-only piece.
+    buildNumber: '13',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -301,13 +312,25 @@ const config: ExpoConfig = {
     // aimed at iOS App Review, but both platforms cut per the standing
     // no-drift rule, and the demo ships identically on Android.
     //
+    // 11 is the v0.6.3 release cut 2026-08-31, going to the CLOSED (alpha)
+    // track as a staged rollout, since Android is still in closed testing while
+    // iOS is live. 10 is spent, tagged android-vc10. This is the performance
+    // and stability release: the session-screen view-tree leak fixed at its
+    // cause, and idle CPU on the Agents list roughly halved (~106% of a core
+    // down to ~41-47%) across three stacked fixes - the activity ring moved off
+    // an animated SVG prop onto a native view transform, Reanimated's
+    // ANDROID_SYNCHRONOUSLY_UPDATE_UI_PROPS flag, and registering animated
+    // hooks only on the branch that animates. Measured on a release build on a
+    // Pixel 11 Pro; docs/developer-guide.md carries the numbers and the scope
+    // of each claim.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 10,
+    versionCode: 11,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
