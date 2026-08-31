@@ -46,11 +46,28 @@ Do not mix them up. Each answers something the others cannot.
 | What retains memory? | `adb shell dumpsys meminfo <pkg>`, Objects block |
 | **What code is hot?** | `simpleperf`, below |
 
-**Frames and CPU are independent, and the pair is diagnostic.** A screen can burn half a core
-while rendering **zero** frames - that is non-drawing main-thread work (animation worklets,
-mount items), and it means no jank metric will ever show it. `dumpsys gfxinfo` will call such an
-app perfectly smooth. Conversely ~84fps sustained on a screen nobody is touching means something
-invalidates the tree every frame.
+**Frames and CPU are independent, and the pair is diagnostic - so read them TOGETHER, always.**
+A screen can burn half a core while rendering **zero** frames - that is non-drawing main-thread
+work (animation worklets, mount items), and it means no jank metric will ever show it. `dumpsys
+gfxinfo` will call such an app perfectly smooth. Conversely ~84fps sustained on a screen nobody
+is touching means something invalidates the tree every frame. This is not hypothetical: the
+Agents-list residual sat unattributed for weeks of CPU-only sampling, and the first run that
+reset gfxinfo before each `top` sample settled it in one afternoon (23% CPU at literally 0
+frames = non-drawing work, compositing exonerated). Reset gfxinfo at the start of every CPU
+sample window and read `Total frames rendered` at its end.
+
+**Idle CPU scales with REGISTERED Reanimated mappers, dirty or not (~0.47 points each).**
+Measured with the probe's `extra-mappers` variant (`src/devsupport/MapperLoad.tsx`): +64 clean,
+never-animating mappers took the idle Agents list 41% -> 70%, back to 39% when toggled off in
+the same process. So when hunting idle CPU, count mounted `useAnimatedStyle`/`useAnimatedProps`
+call sites (hooks above an early return register on EVERY branch), and use that variant to test
+whether a screen's number tracks mapper count before blaming anything else.
+
+**Percentages from `simpleperf report` renormalise after any win - compare cycles/second, not
+shares.** After the sync-ui-props flag halved total cycles, `libhwui.so` "rose" from 16.5% to
+25.5% while falling ~30% in absolute cycles; the share table read as "hwui is the new
+bottleneck" and sent the investigation toward compositing, wrongly. Divide `Event count` by the
+recorded duration and compare THAT across runs.
 
 ## simpleperf: the only tool that names the code
 
