@@ -1,4 +1,5 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
@@ -417,6 +418,43 @@ describe('SessionScreen session binding', () => {
     expect(screen.getByTestId('session-ended-state')).toBeTruthy();
     expect(screen.queryByTestId('session-ended-move-task')).toBeNull();
     expect(screen.getByTestId('session-ended-view-changes')).toBeTruthy();
+  });
+
+  /**
+   * The regression the paired `session-ended-state` flow caught and every
+   * required check missed.
+   *
+   * When the pager became absolutely-positioned siblings, the panes gained
+   * `zIndex: 1` while this overlay had none - so the visible pane stacked
+   * ABOVE it. On device, "Session ended" bled through the gaps between
+   * transcript cards and BOTH overlay buttons were dead, because React Native
+   * hands a tap to the topmost view rather than letting it fall through to an
+   * occluded sibling.
+   *
+   * No `fireEvent.press` test can see this. `fireEvent` invokes the handler
+   * directly and never consults hit testing, which is exactly why the two
+   * press tests above stayed green all the way through the bug. The closest a
+   * JS tier can get is asserting the MECHANISM - that the overlay outranks the
+   * visible pane - so that is what this does. The real proof stays the paired
+   * Maestro flow.
+   */
+  it('stacks the ended-state overlay above the visible pane, so its buttons can be tapped', () => {
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    act(() => {
+      seedTaskWithSession(null);
+    });
+
+    const overlayZIndex = StyleSheet.flatten(screen.getByTestId('session-ended-state').props.style)?.zIndex;
+    // Terminal is the default mode, so that is the pane carrying paneVisible.
+    const visiblePaneZIndex = StyleSheet.flatten(screen.getByTestId('session-pane-terminal').props.style)?.zIndex;
+
+    // Both must be real numbers: an undefined zIndex on either side is the bug
+    // (an implicit auto lost the contest), not a passing comparison.
+    expect(typeof overlayZIndex).toBe('number');
+    expect(typeof visiblePaneZIndex).toBe('number');
+    expect(overlayZIndex).toBeGreaterThan(visiblePaneZIndex);
   });
 
 });

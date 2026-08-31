@@ -212,7 +212,15 @@ export function SessionScreen(): React.JSX.Element {
               pager also retained its ViewPager2 through a static
               Choreographer callback in PagerViewViewManagerImpl, which is the
               session-screen retention this change was made to fix. */}
-          <View style={styles.flex}>
+          {/* collapsable={false} keeps this wrapper as a real native view.
+              Android view flattening would otherwise dissolve a plain flex
+              View, promoting the three panes into the parent alongside the
+              SessionEndedState overlay - one stacking context, where a
+              pane's zIndex: 1 outranks the overlay and swallows its taps.
+              The overlay now sets zIndex: 2 as well, so the fix holds under
+              either reading; this keeps the next overlay added over these
+              panes out of the same trap. */}
+          <View style={styles.flex} collapsable={false}>
             <View
               style={[styles.pane, mode === 'terminal' ? styles.paneVisible : styles.paneHidden]}
               pointerEvents={mode === 'terminal' ? 'auto' : 'none'}
