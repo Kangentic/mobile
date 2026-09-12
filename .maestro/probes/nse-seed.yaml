@@ -32,28 +32,20 @@ appId: com.kangentic.mobile
     timeout: 30000
 - tapOn:
     id: "settings-nse-probe-seed"
-# The OS permission alert is platform chrome we do not render, so its button
-# is selected by label (the documented carve-out in
-# .claude/rules/e2e-maestro-runs.md). It appears a beat after the tap, hence
-# the wait. A plain wait-then-tap, not a polling loop: run 34709809847's
-# `repeat` of a guarded tap answered the alert on its first pass and then
-# saw "Allow" again while the alert was animating out, tapped nothing, and
-# failed a seed that had already succeeded ("Seeded, permission granted"
-# was on screen in the failure frame). A CI simulator is fresh per job, so
-# the alert always appears; a reused simulator that already decided would
-# time out here, and that is the right answer for a probe.
-- extendedWaitUntil:
-    visible:
-      text: "Allow"
-    timeout: 15000
-- tapOn:
-    text: "Allow"
-# The seeded label renders only when both the Keychain writes and the
-# permission request resolved. A seed failure renders
-# settings-nse-probe-seed-error with the message instead, and this times out
-# with that text in the failure screenshot - which is how an
-# errSecMissingEntitlement is told apart from a decrypt failure.
+# THE OS PERMISSION ALERT IS NOT TAPPED HERE, deliberately. Maestro's iOS
+# driver runs on XCTest, whose interruption handling accepts a system alert
+# the moment the driver queries the hierarchy - and a wait IS a hierarchy
+# query. Two runs proved it: 34709809847 answered the alert on a guarded
+# tap's first pass and then failed re-tapping the vanished alert;
+# 34711341847 saw "Allow" in a 3-second wait and then could not find it to
+# tap 14 seconds later, with "Seeded, permission granted" already on screen.
+# So the seeded label below is the only assertion: it renders only when
+# both the Keychain writes AND the permission request resolved, so the
+# alert being answered (by whoever) is part of what it proves. A seed
+# failure renders settings-nse-probe-seed-error with the message instead
+# and this times out with that text in the failure screenshot, which is how
+# an errSecMissingEntitlement is told apart from a decrypt failure.
 - extendedWaitUntil:
     visible:
       id: "settings-nse-probe-seeded"
-    timeout: 20000
+    timeout: 45000
