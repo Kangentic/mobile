@@ -121,6 +121,13 @@ describe('SettingsScreen', () => {
     });
     useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true, relayUrl: 'ws://127.0.0.1:8080' });
     setCrashTestFlag(undefined);
+    // Reset HERE, not at the end of each probe test: a failing assertion would
+    // skip a trailing reset and leave the NSE section rendering for every
+    // later test in the file.
+    mockNseProbeEnabled.mockReturnValue(false);
+    mockSeedNseProbe.mockClear();
+    mockSeedNseProbe.mockResolvedValue({ permissionGranted: true });
+    mockReadNseProbeResult.mockClear();
     mockThrowTestError.mockClear();
     mockCrashNatively.mockClear();
     mockOpenSystemNotificationSettings.mockClear();
@@ -410,7 +417,6 @@ describe('SettingsScreen', () => {
 
   it('seeds the probe keys and shows the outcome, including the permission answer', async () => {
     mockNseProbeEnabled.mockReturnValue(true);
-    mockSeedNseProbe.mockClear();
     renderSettings();
 
     fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
@@ -418,7 +424,30 @@ describe('SettingsScreen', () => {
     expect(await screen.findByTestId('settings-nse-probe-seeded')).toBeTruthy();
     expect(screen.getByText(/permission granted/)).toBeTruthy();
     expect(mockSeedNseProbe).toHaveBeenCalledTimes(1);
-    mockNseProbeEnabled.mockReturnValue(false);
+  });
+
+  it('ignores a second tap while a seed is in flight, so a double tap cannot clear the seeded marker the flow waits on', async () => {
+    mockNseProbeEnabled.mockReturnValue(true);
+    let resolveSeed: (outcome: { permissionGranted: boolean }) => void = () => undefined;
+    mockSeedNseProbe.mockImplementationOnce(
+      () => new Promise<{ permissionGranted: boolean }>((resolve) => { resolveSeed = resolve; }),
+    );
+    renderSettings();
+
+    fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+    fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+    expect(mockSeedNseProbe).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveSeed({ permissionGranted: true });
+    });
+    expect(await screen.findByTestId('settings-nse-probe-seeded')).toBeTruthy();
+
+    // Released once the first seed settles: a deliberate re-seed still works.
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+    });
+    expect(mockSeedNseProbe).toHaveBeenCalledTimes(2);
   });
 
   it('shows a seed failure by its message, so an entitlement error is readable on the screenshot', async () => {
@@ -434,7 +463,6 @@ describe('SettingsScreen', () => {
     expect(await screen.findByTestId('settings-nse-probe-seed-error')).toBeTruthy();
     expect(screen.getByText(/errSecMissingEntitlement/)).toBeTruthy();
     expect(screen.queryByTestId('settings-nse-probe-seeded')).toBeNull();
-    mockNseProbeEnabled.mockReturnValue(false);
   });
 
   it('reads the delivered notification into the result row', async () => {
@@ -445,7 +473,6 @@ describe('SettingsScreen', () => {
 
     expect(await screen.findByTestId('settings-nse-probe-result')).toBeTruthy();
     expect(screen.getByText('Agent needs your input | NSE probe - decrypted on device')).toBeTruthy();
-    mockNseProbeEnabled.mockReturnValue(false);
   });
 
   /**

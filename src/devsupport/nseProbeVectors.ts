@@ -20,6 +20,14 @@
  * Gated exactly like the crash-test rig: `EXPO_PUBLIC_*` is inlined at bundle
  * time, so the probe is inert in every build not dispatched with the flag on,
  * and build-ios.yml refuses the flag together with a TestFlight submission.
+ * The stakes are higher than the crash-test flag's, though: a real install
+ * running with this flag on would have a push channel keyed by a PUBLIC
+ * value, so every one of the four gates is load-bearing on its own - the
+ * bundle-time inlining, the flag being exported only by the simulator job
+ * (the device job has no probe branch), the refusal steps at the top of both
+ * build jobs and in submit-testflight, and seedSharedPushKeysForProbe
+ * refusing to write without a shared group. Loosening any one of them is a
+ * security change, not a convenience.
  */
 export const NSE_PROBE_PUSH_KEY_HEX = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
 export const NSE_PROBE_IDENTITY_PUBLIC_KEY_HEX = 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100';

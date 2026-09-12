@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as SentryReactNative from '@sentry/react-native';
 
@@ -573,6 +575,27 @@ describe('reportHandledError', () => {
 
     crashReporting.reportHandledError('composer-send', Object.assign(new Error('x'), { name: 'NotConnectedError' }));
     crashReporting.reportHandledError('composer-send', Object.assign(new Error('x'), { name: 'ChannelDisconnectedError' }));
+
+    expect(sentryState.captureException).not.toHaveBeenCalled();
+  });
+
+  it('keeps the excluded names in step with what the real classes assign', async () => {
+    // The door matches by a literal that another module owns. Each side has
+    // its own test, and both stay green when one is renamed without the
+    // other; this is the test that goes red. ChannelDisconnectedError is
+    // pure and constructed for real; NotConnectedError's module pulls in
+    // react-native, so its literal is read out of the source text instead.
+    const { ChannelDisconnectedError } = await import('@/channel/capabilityClient');
+    const connectionManagerSource = readFileSync(
+      join(__dirname, '..', '..', 'src', 'connection', 'connectionManager.ts'),
+      'utf8'
+    );
+    const notConnectedName = /class NotConnectedError extends Error \{[^}]*this\.name = '([^']+)'/s.exec(connectionManagerSource)?.[1];
+    expect(notConnectedName).toBeDefined();
+
+    const crashReporting = await loadInitialisedCrashReporting();
+    crashReporting.reportHandledError('composer-send', new ChannelDisconnectedError('socket closed'));
+    crashReporting.reportHandledError('composer-send', Object.assign(new Error('x'), { name: notConnectedName }));
 
     expect(sentryState.captureException).not.toHaveBeenCalled();
   });

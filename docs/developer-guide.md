@@ -1219,7 +1219,7 @@ signature. A green build that quietly produced an unsignable artifact is the exp
 mode, because Play only rejects it after a human has spent the upload.
 
 **Triggering an iOS build.** Actions -> Build iOS -> Run workflow, or
-`gh workflow run build-ios.yml -f target=device -f submit=testflight`. Five inputs:
+`gh workflow run build-ios.yml -f target=device -f submit=testflight`. Six inputs:
 
 | Input | Meaning |
 |---|---|
@@ -1228,6 +1228,7 @@ mode, because Play only rejects it after a human has spent the upload.
 | `maestro` | `none` (default). `smoke` installs Maestro's iOS driver and runs `.maestro/smoke.yaml` against the simulator the launch step booted. EXPERIMENTAL, see the job comment. |
 | `screenshots` | `'false'` (default). `'true'` captures the App Store 6.9-inch listing frames instead of the launch check (`/store-screenshots`). Refused together with `crash_test`. |
 | `crash_test` | `false` (default). `true` turns the simulator job into the crash-test probe: an ad-hoc-signed Release build carrying the DSN and `EXPO_PUBLIC_KANGENTIC_CRASHTEST=1`, two Maestro-driven crashes from Settings with a relaunch after each, evidence uploaded as `ios-probe-evidence-*`. Refused together with `submit=testflight` or `screenshots=true`. See the crash reporting section. |
+| `nse_probe` | `false` (default). `true` turns the simulator job into the Notification Service Extension probe: an ad-hoc-signed Release build carrying `EXPO_PUBLIC_KANGENTIC_NSE_PROBE=1` and a `FAKETEAMID.`-prefixed shared Keychain group, a Maestro-driven seed of known push vectors, a `simctl push` of an envelope sealed with the same vectors, and a read-back of what the OS displayed. Combinable with `crash_test` (one simulator, both questions); refused together with `submit=testflight` or `screenshots=true`. EXPERIMENTAL, see the iOS deployment paragraph in the notifications section. |
 
 The two build jobs are deliberately independent rather than one matrix. The simulator check needs no
 Apple account, so it is the only iOS signal available when a certificate has expired or a profile has
