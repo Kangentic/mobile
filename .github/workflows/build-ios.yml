@@ -986,6 +986,14 @@ jobs:
           # launched for the push, which separates "the extension never ran"
           # (SpringBoard / usernotificationsd never mention it) from "it ran
           # and fell back to the placeholder".
+          #
+          # Run 34723855933 answered it: never launched. On this simulator
+          # `simctl push` is added as a LOCAL request on the app's behalf
+          # (CoreSimulatorBridge "Forwarding addRequest"), the local pipeline
+          # has no service-extension step, and the only KangenticNSE lines are
+          # PlugInKit's install-time registration. The placeholder below is the
+          # expected simulator outcome; the extension's execution is a hardware
+          # (TestFlight) question. The probe stays for everything up to the push.
           xcrun simctl spawn "$MAESTRO_DEVICE" log show --last 10m --info --style compact \
             > "$EVIDENCE/simulator-log.txt" 2>&1 || true
           grep -iE 'KangenticNSE|com\.kangentic\.mobile\.nse|usernotifications.*kangentic|kangentic.*(extension|appex)' \
@@ -995,7 +1003,7 @@ jobs:
           if ! maestro --device "$MAESTRO_DEVICE" test .maestro/probes/nse-read.yaml \
             --format JUNIT --output "$EVIDENCE/read.xml" \
             --debug-output "$EVIDENCE/read-debug" --flatten-debug-output; then
-            echo "::error::The delivered title is not the extension's. Read banner.png: the placeholder means the extension did not run or could not read the shared group (see unified-log.txt for KangenticNSE lines); nothing means the push was never rendered (permission). The read flow's failure screenshot shows what the app read back."
+            echo "::error::The delivered title is not the extension's. On a simulator this is EXPECTED: simctl push is delivered as a local request that never invokes a service extension (run 34723855933), so the extension's execution needs a real APNs push on hardware. Read banner.png to confirm the push rendered (nothing means permission was not granted) and unified-log.txt to confirm the pipeline stayed local; the read flow's failure screenshot shows what the app read back."
             exit 1
           fi
           echo "The Notification Service Extension decrypted the probe push on the simulator."

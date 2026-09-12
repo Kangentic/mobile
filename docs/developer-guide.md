@@ -2119,8 +2119,19 @@ had little to say, every deliberate catch swallowed, and iOS had never delivered
 - *How a handled event looks, and how to verify one:* dispatch a `crash_test` build, tap "Report
   handled error" in Settings, and read the event back via `/sentry`: `mechanism.handled: true`,
   tags `site=crash-test errorName=CapabilityError verb=read-board`, title
-  `CapabilityError: handled at crash-test`, frames present, and the canary text absent. Verified
-  on iOS (MOBILE-6, below); the Android canary has not been dispatched yet.
+  `CapabilityError: handled at crash-test`, frames present, and the canary text absent from every
+  device-sent field (exception values, message, breadcrumbs, tags, extra). Check those fields,
+  not the whole payload: the symbolicated top frame's `context` carries the source line that
+  builds the canary, added server-side from the uploaded source map, so a whole-payload grep
+  reports a hit that never left the device. Verified on iOS (MOBILE-6, below) and on Android,
+  2026-09-12: `build-android.yml -f profile=preview -f abis=x86_64 -f crash_test=true` (run
+  34724734469, `0.6.3+11`; the `preview` profile builds arm64 only, so the emulator needs the
+  ABI override) installed on the API 35 x86_64 emulator and driven by the same
+  `crash-test-js.yaml` flow delivered MOBILE-6's first Android event (`mechanism.handled: true`,
+  the three tags, top in-app frame `crashReporting.ts:277`, canary absent from device data) and a
+  fresh MOBILE-1 event under `crash-test`, both with `errors` empty. The Android JS throw arrived
+  two seconds after the canary, before any relaunch: sentry-android's two-second flush ships it
+  live, where sentry-cocoa stores it for the next launch.
 - *Finding 1, iOS delivery: proven on the CI simulator, 2026-09-12.* `build-ios.yml -f
   crash_test=true` (runs 34672597979 and 34674085719: an ad-hoc-signed Release simulator build of
   `0.6.3+13`, iOS 26.5, iPhone18,1) delivered the first iOS events the project ever received, all
@@ -2138,14 +2149,18 @@ had little to say, every deliberate catch swallowed, and iOS had never delivered
   ingest IP, while the native event carries `user.id` exactly as on Android; and the simulator's
   `.ips` crash reports land in `~/Library/Logs/DiagnosticReports` late or not at all, so the probe
   gates on the process table rather than on a report.
-- *The NSE decrypt proof (folded in from #12): mechanism proven, verdict open.* Six `nse_probe`
-  dispatches: three spent on the entitlement check itself (Xcode's `FAKETEAMID.` prefix, then the
-  `__entitlements` section a simulator build keeps its entitlements in, then the word order
-  `otool -s` prints it in), two on the flow's handling of the permission alert (XCTest's
-  interruption handling answers it during any hierarchy query, so the flow must not tap it), and
-  the sixth ran the probe end to end: seeded, permission granted, sealed, delivered, rendered as
-  the placeholder, read back as the placeholder. Whether the extension process launched at all
-  is the open question; see the iOS deployment section for the next step.
+- *The NSE decrypt proof (folded in from #12): mechanism proven, verdict "not provable on a
+  simulator".* Seven `nse_probe` dispatches: three spent on the entitlement check itself (Xcode's
+  `FAKETEAMID.` prefix, then the `__entitlements` section a simulator build keeps its
+  entitlements in, then the word order `otool -s` prints it in), two on the flow's handling of
+  the permission alert (XCTest's interruption handling answers it during any hierarchy query, so
+  the flow must not tap it), the sixth ran the probe end to end (seeded, permission granted,
+  sealed, delivered, rendered as the placeholder, read back as the placeholder), and the seventh
+  (run 34723855933) captured the simulator's own log and closed the question: `simctl push` is
+  added as a local notification request and the local pipeline has no service-extension step,
+  so the extension process is never launched and the placeholder is the expected simulator
+  outcome. The extension's execution is a hardware question for a TestFlight tester; the iOS
+  deployment section carries the log lines.
 
 **The `eas build` fallback is NOT wired for Sentry.** Both values are exported by
 `build-android.yml` and `build-ios.yml` only. `eas.json` deliberately holds neither (that is the
@@ -3052,25 +3067,35 @@ Two things to settle before anything leaves internal testing:
   usual basis for treating an app as exempt, but that is a reasoned default rather than a legal
   conclusion. TestFlight internal testing does not act on the value. See the comment in
   `app.config.ts`.
-- **Remote push on iOS is unproven on hardware, and the extension's execution is the one thing
-  the simulator could not settle either.** The Notification Service Extension exists
-  (`targets/nse/`) and its crypto is checked against `@kangentic/protocol` by the `NSE crypto
-  (swiftc)` job, but that proves the decrypt, not the delivery. `build-ios.yml -f nse_probe=true`
-  (the capture-audit probe, 2026-09-12, six dispatches) proved most of the rest on the CI
-  simulator: an ad-hoc-signed build embeds the extension; both bundles carry the shared Keychain
-  group (`FAKETEAMID.`-prefixed, in the executable's `__entitlements` section rather than the
+- **Remote push on iOS is unproven on hardware, and a simulator cannot prove the extension's
+  execution at all.** The Notification Service Extension exists (`targets/nse/`) and its crypto
+  is checked against `@kangentic/protocol` by the `NSE crypto (swiftc)` job, but that proves the
+  decrypt, not the delivery. `build-ios.yml -f nse_probe=true` (the capture-audit probe,
+  2026-09-12, seven dispatches) proved most of the rest on the CI simulator: an ad-hoc-signed
+  build embeds the extension and PlugInKit registers it (`plugin INSTALLED` for
+  `com.kangentic.mobile.nse`); both bundles carry the shared Keychain group
+  (`FAKETEAMID.`-prefixed, in the executable's `__entitlements` section rather than the
   signature); the app writes both push items into that group through the production path with
   no entitlement error; notification permission is granted; a sealed envelope pushed with
-  `xcrun simctl push` is delivered and rendered. What it did NOT prove: the rendered alert was the
-  placeholder, in the banner and when the app read the delivered notification back (run
-  34712940754), so the extension either never ran for the simulator push or ran and found no key.
-  No log route has captured a simulator process yet; the next dispatch greps the simulator's
-  whole log window for the `KangenticNSE` process, which is the discriminator, and a probe-only
-  reason branch in the Swift (a compile condition the plugin sets under the flag) is the step
-  after that. Until then the two claims stand as before on hardware: verify with a good blob
-  FIRST - a changed title is self-evident proof the extension ran - and only then with a
+  `xcrun simctl push` is delivered and rendered. The rendered alert stayed the placeholder every
+  time, and run 34723855933's unfiltered simulator log (2.5 million lines, captured with
+  `simctl spawn <sim> log show --last 10m --info`, the only log route that ever returned the
+  simulator's own processes) says why: `simctl push` is not a remote notification on this
+  simulator (iOS 26.5). CoreSimulatorBridge adds it as a LOCAL request on the app's behalf
+  (`Creating a user notification center`, `Adding notification request ... to destinations:
+  Default`, usernotificationsd `Forwarding addRequest: com.kangentic.mobile`), SpringBoard runs
+  the three-step local pipeline (OneTimeCodeActor, IntelligenceActor, BehaviorResolutionActor)
+  and posts it, and no service-extension step, no `mutable-content` handling and no
+  `KangenticNSE` process launch appear anywhere in the window (the twelve `KangenticNSE` lines
+  are all install-time registrations from seven minutes earlier). The app never registers for
+  remote notifications on a simulator either (`Ignore becoming background for application
+  without push registration`), so there is no remote path for the extension to sit on. The
+  extension's execution is therefore a hardware question only: a TestFlight tester with a good
+  blob FIRST - a changed title is self-evident proof the extension ran - and only then a
   deliberately corrupt one, because a corrupt blob and an extension that never ran produce
-  identical output.
+  identical output. The `nse_probe` input stays (free when off, labelled EXPERIMENTAL) because
+  everything up to the push is still worth re-proving after a signing, entitlement or plugin
+  change; its read-back failure is the expected simulator outcome, not a regression.
 
 ## Environment Variables
 
