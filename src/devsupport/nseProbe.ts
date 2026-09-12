@@ -1,4 +1,4 @@
-import notifee from '@notifee/react-native';
+import notifee, { type DisplayedNotification } from '@notifee/react-native';
 import { hexToBytes } from '@kangentic/protocol';
 import { requestNotificationPermission } from '@/notifications';
 import { seedSharedPushKeysForProbe } from '@/notifications/pushKeys';
@@ -42,9 +42,32 @@ export async function seedNseProbe(): Promise<NseProbeSeedOutcome> {
  */
 export async function readNseProbeResult(): Promise<string> {
   const displayed = await notifee.getDisplayedNotifications();
-  const newest = displayed[displayed.length - 1];
+  const newest = newestDisplayed(displayed);
   if (newest === undefined) return 'no notification delivered';
   const title = newest.notification.title ?? '(no title)';
   const body = newest.notification.body ?? '(no body)';
   return `${title} | ${body}`;
+}
+
+/**
+ * notifee promises nothing about the order of the list, so the newest entry
+ * is the greatest `date`, with list order as the tie-break (a stable sort
+ * keeps undated entries where the OS put them). The field is typed as a
+ * string but the iOS bridge sends epoch milliseconds as a number
+ * (NotifeeCoreUtil convertToTimestamp), so both are accepted.
+ */
+function newestDisplayed(displayed: readonly DisplayedNotification[]): DisplayedNotification | undefined {
+  const ordered = [...displayed].sort((first, second) => {
+    const firstAt = displayedAtMs(first);
+    const secondAt = displayedAtMs(second);
+    if (firstAt === secondAt) return 0;
+    return firstAt < secondAt ? -1 : 1;
+  });
+  return ordered[ordered.length - 1];
+}
+
+function displayedAtMs(entry: DisplayedNotification): number {
+  const raw: unknown = entry.date;
+  const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Date.parse(raw) : Number.NaN;
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
 }

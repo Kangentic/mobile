@@ -749,6 +749,26 @@ describe('build-ios crash-test probe', () => {
     expect(refusal.if).toBe("env.CRASH_TEST == 'true' && env.HAS_SENTRY != 'true'");
   });
 
+  it('prints the release string the delivered events carry, read from the same config the build used', () => {
+    // The desk-side recipe in docs/developer-guide.md finds the events by
+    // `com.kangentic.mobile@<version>+<buildNumber>`. Read from
+    // `expo config --json` after prebuild, never typed into the summary, so
+    // it cannot drift from what the Info.plist and the Sentry release carry.
+    // Probe-only: the plain compile check has no reason to evaluate the config.
+    const versionStep = requireStep('simulator', 'Read the app version');
+    expect(versionStep.if).toBe("env.CRASH_TEST == 'true'");
+    expect(versionStep.run).toContain('npx expo config --json');
+    expect(versionStep.run).toContain("read_config_field 'c.version'");
+    expect(versionStep.run).toContain("read_config_field 'c.ios.buildNumber'");
+
+    const summaryStep = iosWorkflow.jobs.simulator?.steps?.find(
+      (candidate) => candidate.run?.includes('com.kangentic.mobile@${RELEASE_VERSION') === true
+    );
+    expect(summaryStep, 'no simulator step interpolates the release string into the summary').toBeDefined();
+    expect(summaryStep?.env?.RELEASE_VERSION).toBe('${{ steps.version.outputs.version-name }}');
+    expect(summaryStep?.env?.RELEASE_BUILD).toBe('${{ steps.version.outputs.build-number }}');
+  });
+
   it('refuses a probe build that is also a TestFlight submission, in both build jobs', () => {
     // iOS has no plan job, so the refusal is the first step of both build
     // jobs: at least one of them runs on any dispatch, whatever `target` says.
@@ -876,6 +896,17 @@ describe('build-ios crash-test probe', () => {
       expect(exportStep.run).toContain('EXPO_PUBLIC_KANGENTIC_NSE_PROBE=1');
       expect(exportStep.run).toContain('EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP=FAKETEAMID.com.kangentic.mobile.shared');
       expect(simulatorJob.replace(/FAKETEAMID\./g, '')).not.toMatch(/[A-Z0-9]{10}\.com\.kangentic/);
+    });
+
+    it('never lets the probe flag near the device job, whose output is what testers install', () => {
+      // The probe seeds a PUBLIC key into the push channel. The refusal step
+      // is one gate; this is the other: the only job that produces an
+      // installable .ipa has no probe branch at all, so no combination of
+      // inputs can bundle the flag into something a person could run.
+      const deviceJob = withoutComments(readIosJob('device'));
+      expect(deviceJob).not.toContain('EXPO_PUBLIC_KANGENTIC_NSE_PROBE');
+      expect(deviceJob).not.toContain('NSE_PROBE');
+      expect(deviceJob).not.toContain('FAKETEAMID');
     });
 
     it('refuses a probe build that is also a TestFlight submission or a screenshot capture', () => {
