@@ -2137,6 +2137,14 @@ had little to say, every deliberate catch swallowed, and iOS had never delivered
   ingest IP, while the native event carries `user.id` exactly as on Android; and the simulator's
   `.ips` crash reports land in `~/Library/Logs/DiagnosticReports` late or not at all, so the probe
   gates on the process table rather than on a report.
+- *The NSE decrypt proof (folded in from #12): mechanism proven, verdict open.* Six `nse_probe`
+  dispatches: three spent on the entitlement check itself (Xcode's `FAKETEAMID.` prefix, then the
+  `__entitlements` section a simulator build keeps its entitlements in, then the word order
+  `otool -s` prints it in), two on the flow's handling of the permission alert (XCTest's
+  interruption handling answers it during any hierarchy query, so the flow must not tap it), and
+  the sixth ran the probe end to end: seeded, permission granted, sealed, delivered, rendered as
+  the placeholder, read back as the placeholder. Whether the extension process launched at all
+  is the open question; see the iOS deployment section for the next step.
 
 **The `eas build` fallback is NOT wired for Sentry.** Both values are exported by
 `build-android.yml` and `build-ios.yml` only. `eas.json` deliberately holds neither (that is the
@@ -3043,13 +3051,25 @@ Two things to settle before anything leaves internal testing:
   usual basis for treating an app as exempt, but that is a reasoned default rather than a legal
   conclusion. TestFlight internal testing does not act on the value. See the comment in
   `app.config.ts`.
-- **Remote push on iOS is unproven on hardware.** The Notification Service Extension now exists
+- **Remote push on iOS is unproven on hardware, and the extension's execution is the one thing
+  the simulator could not settle either.** The Notification Service Extension exists
   (`targets/nse/`) and its crypto is checked against `@kangentic/protocol` by the `NSE crypto
-  (swiftc)` job, but that proves the decrypt, not the delivery. Nothing has yet confirmed that
-  APNs invokes the extension on a real device, that the shared Keychain group resolves at
-  runtime, or that the entitlement survived signing. Verify with a good blob FIRST - a changed
-  title is self-evident proof the extension ran - and only then with a deliberately corrupt one,
-  because a corrupt blob and an extension that never ran produce identical output.
+  (swiftc)` job, but that proves the decrypt, not the delivery. `build-ios.yml -f nse_probe=true`
+  (the capture-audit probe, 2026-09-12, six dispatches) proved most of the rest on the CI
+  simulator: an ad-hoc-signed build embeds the extension; both bundles carry the shared Keychain
+  group (`FAKETEAMID.`-prefixed, in the executable's `__entitlements` section rather than the
+  signature); the app writes both push items into that group through the production path with
+  no entitlement error; notification permission is granted; a sealed envelope pushed with
+  `xcrun simctl push` is delivered and rendered. What it did NOT prove: the rendered alert was the
+  placeholder, in the banner and when the app read the delivered notification back (run
+  34712940754), so the extension either never ran for the simulator push or ran and found no key.
+  No log route has captured a simulator process yet; the next dispatch greps the simulator's
+  whole log window for the `KangenticNSE` process, which is the discriminator, and a probe-only
+  reason branch in the Swift (a compile condition the plugin sets under the flag) is the step
+  after that. Until then the two claims stand as before on hardware: verify with a good blob
+  FIRST - a changed title is self-evident proof the extension ran - and only then with a
+  deliberately corrupt one, because a corrupt blob and an extension that never ran produce
+  identical output.
 
 ## Environment Variables
 
