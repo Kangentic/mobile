@@ -201,23 +201,32 @@ export function SettingsScreen(): React.JSX.Element {
     { kind: 'seeded'; permissionGranted: boolean } | { kind: 'failed'; message: string } | null
   >(null);
   const [nseProbeResult, setNseProbeResult] = useState<string | null>(null);
+  // One probe action at a time: a second tap mid-seed would clear the seeded
+  // marker the nse-seed flow waits on and re-enter the Keychain write.
+  const [nseProbeInFlight, setNseProbeInFlight] = useState(false);
 
   const runNseProbeSeed = (): void => {
+    if (nseProbeInFlight) return;
+    setNseProbeInFlight(true);
     setNseProbeSeedOutcome(null);
     seedNseProbe()
       .then((outcome) => setNseProbeSeedOutcome({ kind: 'seeded', permissionGranted: outcome.permissionGranted }))
       .catch((error: unknown) =>
         setNseProbeSeedOutcome({ kind: 'failed', message: error instanceof Error ? error.message : String(error) }),
-      );
+      )
+      .finally(() => setNseProbeInFlight(false));
   };
 
   const runNseProbeRead = (): void => {
+    if (nseProbeInFlight) return;
+    setNseProbeInFlight(true);
     setNseProbeResult(null);
     readNseProbeResult()
       .then(setNseProbeResult)
       .catch((error: unknown) =>
         setNseProbeResult(error instanceof Error ? `read failed: ${error.message}` : 'read failed'),
-      );
+      )
+      .finally(() => setNseProbeInFlight(false));
   };
 
   const connectionLabel =
@@ -415,7 +424,8 @@ export function SettingsScreen(): React.JSX.Element {
                   accessibilityRole="button"
                   testID="settings-nse-probe-seed"
                   onPress={runNseProbeSeed}
-                  style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
+                  disabled={nseProbeInFlight}
+                  style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed || nseProbeInFlight ? 0.7 : 1 }]}
                 >
                   <Text variant="body" color="primary">
                     Seed probe keys
@@ -437,7 +447,8 @@ export function SettingsScreen(): React.JSX.Element {
                   accessibilityRole="button"
                   testID="settings-nse-probe-read"
                   onPress={runNseProbeRead}
-                  style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed ? 0.7 : 1 }]}
+                  disabled={nseProbeInFlight}
+                  style={({ pressed }) => [styles.linkRow, { minHeight: theme.minTouchSize, opacity: pressed || nseProbeInFlight ? 0.7 : 1 }]}
                 >
                   <Text variant="body" color="primary">
                     Read delivered notification
