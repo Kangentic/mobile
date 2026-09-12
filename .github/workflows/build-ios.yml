@@ -974,12 +974,23 @@ jobs:
           xcrun simctl push "$MAESTRO_DEVICE" com.kangentic.mobile "$EVIDENCE/payload.json"
           sleep 4
           xcrun simctl io "$MAESTRO_DEVICE" screenshot "$EVIDENCE/banner.png" || true
-          # The HOST's unified log, for the same reason as the crash evidence
-          # step: `simctl spawn <sim> log show` ignores the predicate.
-          log show --last 5m --style compact \
-            --predicate "processImagePath CONTAINS \"KangenticNSE\" OR (subsystem == \"com.apple.usernotifications\" AND eventMessage CONTAINS[c] \"kangentic\")" \
-            > "$EVIDENCE/unified-log.txt" 2>&1 || true
-          echo "Unified-log lines from the extension process: $(grep -c KangenticNSE "$EVIDENCE/unified-log.txt" || true)"
+          # THE SIMULATOR'S OWN LOG, UNFILTERED, THEN GREPPED. Every predicate
+          # tried so far returned nothing useful: `simctl spawn <sim> log show`
+          # ignored its predicate and dumped the simulator's daemons, and the
+          # host's `log show` with an image-path predicate returned nothing at
+          # all (runs 34674085719 and 34712940754). The daemon dump proves the
+          # simulator's store IS readable through simctl spawn, so take the
+          # whole window with --info (extension launches log at info level)
+          # and grep it here. What this answers is the one thing run
+          # 34712940754 could not: whether the KangenticNSE process was ever
+          # launched for the push, which separates "the extension never ran"
+          # (SpringBoard / usernotificationsd never mention it) from "it ran
+          # and fell back to the placeholder".
+          xcrun simctl spawn "$MAESTRO_DEVICE" log show --last 10m --info --style compact \
+            > "$EVIDENCE/simulator-log.txt" 2>&1 || true
+          grep -iE 'KangenticNSE|com\.kangentic\.mobile\.nse|usernotifications.*kangentic|kangentic.*(extension|appex)' \
+            "$EVIDENCE/simulator-log.txt" > "$EVIDENCE/unified-log.txt" || true
+          echo "Simulator-log lines in the window: $(wc -l < "$EVIDENCE/simulator-log.txt" | tr -d ' '), mentioning the extension: $(wc -l < "$EVIDENCE/unified-log.txt" | tr -d ' ')"
           # The mechanical verdict: the app reads back what the OS displayed.
           if ! maestro --device "$MAESTRO_DEVICE" test .maestro/probes/nse-read.yaml \
             --format JUNIT --output "$EVIDENCE/read.xml" \
