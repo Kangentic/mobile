@@ -240,6 +240,23 @@ per-device key expiry, so a lost phone is not trusted forever even if revocation
   build time from the provisioning profile's team id and injected as
   `EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP`, so no Apple team identifier is committed.
 
+- **One function can overwrite the push-decrypt key with a PUBLIC constant, and it is gated
+  twice.** `seedSharedPushKeysForProbe` (`src/notifications/pushKeys.ts`) exists so
+  `build-ios.yml -f nse_probe=true` can prove on a CI simulator that the extension decrypts a
+  real push: the app seeds two known test vectors through the production write path and the
+  runner seals an envelope with the same vectors. Those vectors are committed and public, so a
+  build running with the flag on would have a push channel keyed by a value anyone can read. It
+  is disclosed here rather than left to the code because the module ships INERT, not absent: it
+  carries no `__DEV__` guard and no dynamic-import boundary, both deliberate so the probe can
+  build Release, so Metro strips none of it from a store binary. Two runtime refusals stand in
+  front of it, both keyed on `EXPO_PUBLIC_KANGENTIC_NSE_PROBE`, which is exported only by the
+  simulator job: one on the seeding path (`seedNseProbe`) and one at the write itself, so the
+  overwrite refuses whoever reaches it rather than trusting its single present caller. The
+  missing-shared-group throw in the same function is NOT a third gate and should not be read as
+  one: the Keychain group is exported on the signed device path too, because the extension needs
+  it, so that check is true in exactly the build where a gate would matter. It guards against
+  writing somewhere the extension cannot read, which is a different failure.
+
 ## Relay metadata honesty statement
 
 A blind relay forwards ciphertext only, but it still sees source and destination IP addresses,
