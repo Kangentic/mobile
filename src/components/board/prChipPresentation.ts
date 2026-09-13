@@ -122,14 +122,32 @@ const PLAIN_OPEN: PrChipPresentation = { label: null, color: 'success' };
 const MERGED_PRESENTATION: PrChipPresentation = { label: null, color: 'info' };
 const CLOSED_PRESENTATION: PrChipPresentation = { label: null, color: 'danger' };
 
+/**
+ * The one place the wire's three-state readiness becomes a table lookup.
+ *
+ * `BoardTaskWire.pr_merge_readiness` is OPTIONAL since protocol 0.13.1, so a
+ * desktop may omit the field entirely. Absent (`undefined`) and
+ * present-but-never-judged (`null`) mean the same thing here - no verdict - and
+ * collapsing them once keeps all three exported functions total for the wire
+ * type instead of each restating the distinction.
+ *
+ * Returns `undefined` for a miss as well as for no verdict, which is what lets
+ * every caller spell the fallback as a single `??`.
+ */
+function readinessPresentation(
+  prMergeReadiness: string | null | undefined,
+): ReadinessPresentation | undefined {
+  if (prMergeReadiness === null || prMergeReadiness === undefined) return undefined;
+  return READINESS_PRESENTATION.get(prMergeReadiness);
+}
+
 export function prChipPresentation(
   prState: string | null,
-  prMergeReadiness: string | null,
+  prMergeReadiness: string | null | undefined,
 ): PrChipPresentation {
   switch (prState) {
     case 'open':
-      if (prMergeReadiness === null) return PLAIN_OPEN;
-      return READINESS_PRESENTATION.get(prMergeReadiness)?.chip ?? PLAIN_OPEN;
+      return readinessPresentation(prMergeReadiness)?.chip ?? PLAIN_OPEN;
     case 'merged':
       return MERGED_PRESENTATION;
     case 'closed':
@@ -151,10 +169,12 @@ export function prChipPresentation(
  * through here, so the three stay consistent by sharing a source, not by
  * calling each other.
  */
-export function prStateSummary(prState: string | null, prMergeReadiness: string | null): string {
+export function prStateSummary(
+  prState: string | null,
+  prMergeReadiness: string | null | undefined,
+): string {
   if (prState === 'open') {
-    const readiness = prMergeReadiness === null ? undefined : READINESS_PRESENTATION.get(prMergeReadiness);
-    return readiness?.chip.label ?? 'open';
+    return readinessPresentation(prMergeReadiness)?.chip.label ?? 'open';
   }
   if (prState === 'draft' || prState === 'merged' || prState === 'closed') return prState;
   return 'open';
@@ -175,9 +195,12 @@ export function prStateSummary(prState: string | null, prMergeReadiness: string 
  * verdict added to that table cannot render a visible chip label while falling
  * through to a spoken "open" here.
  */
-export function prChipAccessibilityLabel(prState: string | null, prMergeReadiness: string | null): string {
+export function prChipAccessibilityLabel(
+  prState: string | null,
+  prMergeReadiness: string | null | undefined,
+): string {
   if (prState === 'open') {
-    const readiness = prMergeReadiness === null ? undefined : READINESS_PRESENTATION.get(prMergeReadiness);
+    const readiness = readinessPresentation(prMergeReadiness);
     // No verdict, or one this client does not know: there is nothing to be
     // stale about, so the caveat would be a claim rather than a hedge.
     if (readiness === undefined) return 'Pull request open';

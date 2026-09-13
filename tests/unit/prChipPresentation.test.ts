@@ -47,7 +47,7 @@ describe('prChipPresentation', () => {
       );
     });
 
-    it.each([[null], ['unknown']])('%s spends no width: plain open, no label', (readiness) => {
+    it.each([[null], [undefined], ['unknown']])('%s spends no width: plain open, no label', (readiness) => {
       expect(prChipPresentation('open', readiness)).toEqual({ label: null, color: 'success' });
     });
 
@@ -67,7 +67,7 @@ describe('prChipPresentation', () => {
       ['closed', 'danger'],
       [null, 'success'],
     ])('%s renders a bare glyph whatever the verdict says', (state, color) => {
-      for (const readiness of ['ready', 'blocked', 'conflicting', 'queued', 'running', 'unknown', null]) {
+      for (const readiness of ['ready', 'blocked', 'conflicting', 'queued', 'running', 'unknown', null, undefined]) {
         expect(prChipPresentation(state, readiness)).toEqual({ label: null, color });
       }
     });
@@ -75,6 +75,49 @@ describe('prChipPresentation', () => {
     it('an unrecognised state falls back to plain open rather than vanishing', () => {
       expect(prChipPresentation('rebasing', 'ready')).toEqual({ label: null, color: 'success' });
     });
+  });
+});
+
+describe('an absent readiness field reads exactly like a null one', () => {
+  // `BoardTaskWire.pr_merge_readiness` became OPTIONAL in protocol 0.13.1, so a
+  // desktop may omit the field rather than send null, and `undefined` reaches
+  // these three functions at runtime.
+  //
+  // Be clear about what this block is and is not, because
+  // .claude/rules/regression-tests-fail-first.md asks for the mutation that
+  // makes a test red and this one does not have one. Both mutations were run:
+  //
+  // - Dropping the `undefined` arm of `readinessPresentation` (leaving only
+  //   `=== null`, so `undefined` reaches `Map.get`) left all 38 tests in this
+  //   file GREEN. `Map.get(undefined)` misses, and a miss lands on the same
+  //   plain-open path an absent verdict already takes, so the behaviour is
+  //   genuinely indistinguishable. Narrowing the parameter back to
+  //   `string | null` is a COMPILE error, not a red test.
+  // - Making the helper always miss DID turn 13 tests red, which is what
+  //   confirms the rest of this file guards the lookup itself.
+  //
+  // So `tsc` is the enforcement for the optional field, and these cases exist
+  // to pin the intended READING of an absent verdict, so a future change
+  // cannot quietly decide it means something else (a distinct "never judged"
+  // chip, say) without editing this block.
+  it('treats undefined as no verdict across all three functions', () => {
+    expect(prChipPresentation('open', undefined)).toEqual(prChipPresentation('open', null));
+    expect(prStateSummary('open', undefined)).toBe(prStateSummary('open', null));
+    expect(prChipAccessibilityLabel('open', undefined)).toBe(prChipAccessibilityLabel('open', null));
+  });
+
+  it('states the absent-field reading outright, so the shared expectation above cannot drift as a pair', () => {
+    // The assertions above compare undefined against null, which would stay
+    // green if BOTH moved together. These pin the actual values.
+    expect(prChipPresentation('open', undefined)).toEqual({ label: null, color: 'success' });
+    expect(prStateSummary('open', undefined)).toBe('open');
+    expect(prChipAccessibilityLabel('open', undefined)).toBe('Pull request open');
+  });
+
+  it('ignores an absent verdict on a non-open PR, same as every other readiness value', () => {
+    expect(prChipPresentation('merged', undefined)).toEqual({ label: null, color: 'info' });
+    expect(prStateSummary('merged', undefined)).toBe('merged');
+    expect(prChipAccessibilityLabel('merged', undefined)).toBe('Pull request merged');
   });
 });
 
