@@ -63,6 +63,16 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   withAndroidProfileable: adds <profileable android:shell="true"/>
                               #   so simpleperf can sample a RELEASE build, inert unless
                               #   EXPO_PUBLIC_KANGENTIC_PROFILEABLE=1 - see the /profile skill)
+modules/                      # LOCAL Expo modules, autolinked by CNG (no ios/ or android/ edit).
+                              #   memory-pressure: surfaces Android's ComponentCallbacks2
+                              #   onTrimMemory, which React Native does not expose at all, so the
+                              #   app can see memory pressure on the one platform this project can
+                              #   actually measure. Android-only by design - iOS already has
+                              #   AppState's memoryWarning and a second source would double-count.
+                              #   Forwards only the RUNNING_*/MODERATE/COMPLETE levels;
+                              #   TRIM_MEMORY_UI_HIDDEN and _BACKGROUND arrive on every ordinary
+                              #   backgrounding and are excluded, or the breadcrumb's count would
+                              #   record app switching rather than pressure
 patches/                      # patch-package patches, applied by the `postinstall` script.
                               #   react-native-enriched-markdown+0.7.4.patch removes an
                               #   accessibility OnGlobalLayoutListener the library leaves on the

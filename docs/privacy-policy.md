@@ -43,11 +43,13 @@ doing in the app:
   background, battery level and charging state, the screen turning on or off, and network
   conditions such as connection type, whether a VPN is active, signal strength, and approximate
   data throughput. These describe the app's and device's technical state, never yours
-- on iPhone and iPad, a note that the system warned the app it was running low on memory, and how
-  many such warnings there had been since the app started. It is a count and nothing more. The
-  app records this itself because the system can shut it down for using too much memory without
-  producing a crash report at all, and without the note there is no way to tell that apart from
-  the app freezing or you closing it by hand
+- a note that the system warned the app it was running low on memory, and how many such warnings
+  there had been since the app started. It is a count and nothing more. The app records this
+  itself because the system can shut it down for using too much memory without producing a crash
+  report at all, and without the note there is no way to tell that apart from the app freezing or
+  you closing it by hand. On Android the app deliberately ignores the similar notice the system
+  sends every time you switch away from it, so this count reflects genuine memory pressure rather
+  than how often you moved between apps
 
 It deliberately does **not** contain your session content. No screenshots, no screen recording,
 no on-screen text, no keystrokes, no console output, no network request details, no transcripts,

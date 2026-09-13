@@ -373,13 +373,17 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   them ON by default in the SDK. The one deliberate exception is a render throw caught by the
   app's root error boundary, which keeps its message: that text is written by this app, not by
   a peer or a user, and it is what makes the crash diagnosable.
-  The one thing the app deliberately ADDS is a single diagnostic breadcrumb, recorded when iOS
+  The one thing the app deliberately ADDS is a single diagnostic breadcrumb, recorded when the OS
   reports memory pressure: category `app.memory`, carrying a count of warnings seen this launch
   and nothing else - no byte figure, no free text, no session content. It exists because the OS
   kills a foreground app for memory without producing a crash report, and sentry-cocoa does not
   breadcrumb the warning itself, so without it there is no way to tell an out-of-memory kill from
-  a hang or a force-quit (see `src/observability/memoryPressure.ts`). It is iOS-only in effect:
-  React Native does not surface the Android equivalent.
+  a hang or a force-quit (see `src/observability/memoryPressure.ts`). Both platforms report it,
+  from different sources: iOS from React Native's `AppState` `memoryWarning` event, Android from
+  the local Expo module in `modules/memory-pressure`, which forwards `onTrimMemory`. The Android
+  side deliberately ignores the trim levels that arrive on every ordinary backgrounding
+  (`TRIM_MEMORY_UI_HIDDEN`, `TRIM_MEMORY_BACKGROUND`), so the count records memory pressure and
+  not how often the app was switched away from. The payload is identical on both platforms.
   Screenshots and view hierarchy are the two that reach native, and both are off there too.
   Transcripts, terminal output, diff content, board data, pairing material and notification
   payloads are never collected, and `src/pairing/`, `src/channel/`, `src/demo/`,

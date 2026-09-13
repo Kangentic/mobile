@@ -33,6 +33,38 @@ vi.mock('react-native', () => ({
   AppState: { addEventListener: appStateState.addEventListener },
 }));
 
+/**
+ * The Android source. Resolves to the same module the source imports: both this
+ * file and `src/observability/memoryPressure.ts` sit two directories below the
+ * repo root, so the specifier is identical from either.
+ *
+ * Mocked rather than loaded because the real `modules/memory-pressure/index.ts`
+ * reads `Platform.OS` and calls into `expo-modules-core`, neither of which
+ * exists under the minimal `react-native` mock above. What it CANNOT cover is
+ * the trim-level filter, which is Kotlin: `TRIM_MEMORY_UI_HIDDEN` being
+ * excluded is the load-bearing decision in this whole feature and no JS tier
+ * can assert it. That one is verified on device with `am send-trim-memory`; see
+ * the developer guide.
+ */
+const androidPressureState = vi.hoisted(() => {
+  const listeners = new Set<(level: number) => void>();
+  return {
+    listeners,
+    removeCount: 0,
+    addAndroidMemoryPressureListener: vi.fn((listener: (level: number) => void) => {
+      listeners.add(listener);
+      return () => {
+        androidPressureState.removeCount += 1;
+        listeners.delete(listener);
+      };
+    }),
+  };
+});
+vi.mock('../../modules/memory-pressure', () => ({
+  addAndroidMemoryPressureListener: androidPressureState.addAndroidMemoryPressureListener,
+  isAndroidMemoryPressureAvailable: () => true,
+}));
+
 const crashReportingState = vi.hoisted(() => ({ initialized: true }));
 vi.mock('@/observability/crashReporting', () => ({
   isCrashReportingInitialized: () => crashReportingState.initialized,
@@ -62,7 +94,17 @@ beforeEach(() => {
   appStateState.remove.mockClear();
   sentryState.addBreadcrumb.mockClear();
   crashReportingState.initialized = true;
+  androidPressureState.listeners.clear();
+  androidPressureState.removeCount = 0;
+  androidPressureState.addAndroidMemoryPressureListener.mockClear();
 });
+
+function fireAndroidMemoryPressure(level: number): void {
+  if (androidPressureState.listeners.size === 0) {
+    throw new Error('the Android memory-pressure listener was never registered');
+  }
+  for (const listener of [...androidPressureState.listeners]) listener(level);
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -76,6 +118,64 @@ describe('initializeMemoryPressure', () => {
 
     expect(appStateState.addEventListener).toHaveBeenCalledTimes(1);
     expect(appStateState.addEventListener).toHaveBeenCalledWith('memoryWarning', expect.any(Function));
+  });
+
+  /**
+   * Android used to get nothing from this module at all: React Native's
+   * `AppStateModule` never emits `memoryWarning`, so the whole feature was iOS
+   * only. That mattered beyond coverage - Android is the only platform whose
+   * memory behaviour this project can actually measure.
+   */
+  it('subscribes to the Android trim-memory source as well as the iOS one', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+    module.initializeMemoryPressure();
+
+    expect(androidPressureState.addAndroidMemoryPressureListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an Android trim as the same signal as an iOS warning', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+    const shed = vi.fn();
+    module.subscribeToMemoryPressure(shed);
+
+    // 15 is TRIM_MEMORY_RUNNING_CRITICAL, the foreground analogue of the iOS
+    // warning. The level is not carried into the breadcrumb: the payload stays
+    // a bare count, so the two platforms produce indistinguishable evidence.
+    fireAndroidMemoryPressure(15);
+
+    expect(shed).toHaveBeenCalledTimes(1);
+    expect(sentryState.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const breadcrumb = sentryState.addBreadcrumb.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(breadcrumb.category).toBe(MEMORY_PRESSURE_BREADCRUMB_CATEGORY);
+    expect(breadcrumb.data).toEqual({ count: 1 });
+  });
+
+  it('counts both sources into one running tally, never two', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+
+    fireMemoryWarning();
+    vi.advanceTimersByTime(60_000);
+    fireAndroidMemoryPressure(15);
+
+    expect(sentryState.addBreadcrumb).toHaveBeenCalledTimes(2);
+    const second = sentryState.addBreadcrumb.mock.calls[1]?.[0] as Record<string, unknown>;
+    // 2, not 1: one shared counter, so a build that somehow saw both sources
+    // reports a single coherent episode count rather than two half-tallies.
+    expect(second.data).toEqual({ count: 2 });
+  });
+
+  it('tears both sources down together', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+
+    module.shutdownMemoryPressure();
+
+    expect(appStateState.remove).toHaveBeenCalledTimes(1);
+    expect(androidPressureState.removeCount).toBe(1);
+    expect(androidPressureState.listeners.size).toBe(0);
   });
 
   it('records a breadcrumb in the allowlisted category, carrying a count and no content', async () => {
