@@ -132,6 +132,21 @@ function parseArgs(argv) {
     projects: readCount('--scale-projects', 0),
     sessions: readCount('--scale-sessions', 8),
     payloadKb: readCount('--scale-payload-kb', 64),
+    // --scale-latency-ms K: hold each transcript-window response for K ms.
+    //
+    // Load-bearing for the concurrency measurement, and its absence produced a
+    // false null the first time. Concurrency only costs memory while requests
+    // are SIMULTANEOUSLY in flight, and this stub answers a local relay
+    // instantly - so requests complete before the next is issued and a depth-8
+    // arm never actually holds eight windows at once. Measured: depth 1 against
+    // depth 8 at 48 sessions differed by 0.7 MB against a 1.7 MB run-to-run
+    // spread, which says nothing about the bound and everything about the rig.
+    //
+    // A real desktop is the opposite: transcript-window reads are
+    // desktop-bound and measured at 0.7-3.8 s against a LOCAL relay, so in
+    // production the requests genuinely overlap. Set this to something in that
+    // range to reproduce the condition the Sentry MOBILE-8 device was in.
+    latencyMs: readCount('--scale-latency-ms', 0),
   };
   return { relayUrl, autoConfirm, phoneKeyHex, identityFile, advertiseRelayUrl, scale };
 }
@@ -820,7 +835,15 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
             // being measured. No feed is started for these - they are a load
             // shape for cold start, not live sessions to interact with.
             if (payload.action === 'transcript-window') {
-              return ok(scaleTranscriptWindow(payload.sessionId, payload.limit ?? 8, scale));
+              const window = scaleTranscriptWindow(payload.sessionId, payload.limit ?? 8, scale);
+              // Held, not dropped: the phone's concurrency cap only bounds
+              // anything while requests OVERLAP, and an instant answer means
+              // they never do. See --scale-latency-ms.
+              if (scale.latencyMs > 0) {
+                setTimeout(() => ok(window), scale.latencyMs);
+                return undefined;
+              }
+              return ok(window);
             }
             return ok({
               scrollback: '',
