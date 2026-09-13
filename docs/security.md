@@ -383,7 +383,9 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   the local Expo module in `modules/memory-pressure`, which forwards `onTrimMemory`. The Android
   side deliberately ignores the trim levels that arrive on every ordinary backgrounding
   (`TRIM_MEMORY_UI_HIDDEN`, `TRIM_MEMORY_BACKGROUND`), so the count records memory pressure and
-  not how often the app was switched away from. The payload is identical on both platforms.
+  not how often the app was switched away from. The payload is identical on both platforms: a
+  bare count, with no severity and no level, even though the app distinguishes a mild Android
+  warning from a serious one internally to decide how much to release.
   Screenshots and view hierarchy are the two that reach native, and both are off there too.
   Transcripts, terminal output, diff content, board data, pairing material and notification
   payloads are never collected, and `src/pairing/`, `src/channel/`, `src/demo/`,

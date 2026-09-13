@@ -2098,6 +2098,38 @@ noticing it was the whole of the effect. **The allocation is bounded at the call
 which is what the two queues above do. Do not re-derive this: read
 `src/channel/sessionManager.ts`'s `handleApplicationFrame` and the ordering is plain.
 
+**Does memory grow over time as sessions stream? An audit, 2026-09-13.** The MOBILE-8 work is
+about a cold-start SPIKE; this is the separate question of steady-state growth, and the answer is
+that per-session state is bounded and cleaned up, with one real exception. All **Read**:
+
+- **A finished agent is cleaned up, and it is keyed on the SESSION ending rather than the task's
+  column.** When a session ends the desktop clears the task's `session_id`, the task leaves the
+  board's `view: 'sessions'` projection, and `reconcileSessionsFromBoards`
+  (`src/connection/storeFeed.ts`) deletes the activity entry for any session no board claims. So
+  moving a task to Done does not by itself release anything, and should not: an agent can still be
+  running on a task somebody has already filed as done. The release happens when the agent
+  actually stops. `selectLiveSessionIds` keys on `archived_at === null` plus a non-null
+  `session_id`, and it is that second half that does the work.
+- **An active-but-unopened session is already lean**, which is the phone-versus-desktop concern
+  handled: it costs one `SessionActivityEntry` of scalars, its stream is subscribed
+  `terminal: false` so PTY bytes are never sent, and `applyTranscript` early-returns for a session
+  nothing retains. Transcript and terminal memory are spent only on screens actually open.
+- **An opened session is capped at both ends.** `transcriptStore` holds an LRU of
+  `RETAINED_SESSION_CAP` sessions and deletes on eviction and release; `terminalFeed` rings are
+  capped at `TERMINAL_RING_CAPACITY_BYTES` (128 KiB) each and exist only for retained sessions.
+- **The one unbounded structure is the ARCHIVE.** `boardStore.archivedByProjectId` appends each
+  page the user scrolls and is cleared only by a full `reset()`, so browsing deep into a project's
+  archive accumulates every archived task plus its session summary for the life of the app run.
+  User-driven and per-project rather than a background leak, but it is the one place where memory
+  grows with use and never comes back, and it is a candidate for an LRU or a drop-on-leave.
+- `activityStore.endedSessionIds` also grows monotonically, by one short string per session ended
+  per app run. Deliberate (the fact has to outlive the pruned entry) and small enough to leave.
+
+**The demo peer cannot activate in production by accident.** `isMockDesktopEnabled()` is
+`__DEV__ && EXPO_PUBLIC_KANGENTIC_MOCK === '1'`, which cannot be true in a release build; the
+production route is the persisted demo trust anchor alone, and the fixtures sit behind a dynamic
+import so a launch that never reaches the demo never parses them.
+
 **Android memory pressure is observable now, and `am send-trim-memory` is the way to drive it.**
 `modules/memory-pressure` is a local Expo module (autolinked, no `android/` edit) that forwards
 `ComponentCallbacks2.onTrimMemory`, which React Native surfaces nowhere. **Measured** end to end on
@@ -2142,15 +2174,33 @@ Two things that took a wrong turn to learn, recorded so nobody repeats them:
   arm never actually held eight windows at once. `--scale-latency-ms` exists for this; a real
   desktop's transcript-window reads are desktop-bound at 0.7-3.8 s. Adding 1500 ms did raise peak
   heap by ~4 MB across both arms, which is the knob working, but did not separate them.
-- **The A/B cannot currently express the arm that matters.** `CONCURRENCY_PROBE_DEPTHS` tops out at
-  8, while the pre-fix behaviour was one request PER SESSION, i.e. 48 here. So what has been
-  measured is bounded-against-bounded. The fix's claim is not "depth 8 costs more than depth 1"; it
-  is that peak allocation stopped being a function of fleet size, and testing that needs a depth at
-  or above the session count.
+- **The first A/B could not express the arm that matters.** `CONCURRENCY_PROBE_DEPTHS` topped out
+  at 8, while the pre-fix behaviour was one request PER SESSION, i.e. 48 here, so the comparison
+  was bounded-against-bounded. `CONCURRENCY_PROBE_UNBOUNDED_DEPTH` (64) closes that: above the
+  drivable fleet it reproduces the old behaviour exactly, every warm starting at once.
 
-What this does and does not license: the bound remains justified on structure (**Read**, and
-O(1)-in-fleet-size rather than O(sessions)), the specific value 3 remains **CHOSEN**, and no claim
-that the fix saves N megabytes has been earned.
+**With the unbounded arm, the bound IS measurable.** Same rig, 1500 ms stub latency, three runs per
+arm:
+
+| Arm | Peak native heap, median (KB) | Peak PSS, median (KB) |
+|---|---|---|
+| Depth 1 (serial) | 76570 | 193918 |
+| **Shipped (3)** | **77423** | **195426** |
+| Depth 8 | 77902 | 196144 |
+| **Unbounded (64)** | **81805** | **201980** |
+
+Shipped against unbounded is **4.4 MB** of peak native heap and **6.6 MB** of peak PSS at 48
+sessions. Read the pairwise deltas cautiously: the run-to-run spread reaches 3.9 MB, so any single
+pair is close to the noise floor. **The load-bearing evidence is the ORDERING**, which is monotonic
+across all four arms in both metrics. Noise does not produce a monotonic ranking of four arms twice
+over, and rising-with-concurrency is exactly what the mechanism predicts.
+
+What this licenses, stated precisely: the bound is now **Measured** to reduce peak cold-start
+memory, by roughly 4 to 7 MB at 48 live sessions on this device. It does NOT license a figure for
+any other fleet size, and it must not be read as a fixed saving: the mechanism is linear in session
+count, so the number grows with the fleet and shrinks to nothing on a small one. The specific
+value 3 remains **CHOSEN** rather than optimised, since 1, 3 and 8 are separated by less than the
+spread.
 
 **Both queue depths are CHOSEN, not measured**, and the fix does not depend on either value: what
 makes it a fix is that peak allocation stopped being a function of fleet size. To measure the

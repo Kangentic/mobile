@@ -152,6 +152,54 @@ describe('initializeMemoryPressure', () => {
     expect(breadcrumb.data).toEqual({ count: 1 });
   });
 
+  /**
+   * The Android source carries a trim LEVEL and the JS boundary used to discard
+   * it, so a mild "beginning to run low" drove the same aggressive shed as a
+   * critical shortage. Invisible on iOS, which has no gradations; on Android it
+   * means dropping a transcript the user is reading on a device that is merely
+   * busy. These pin the mapping, since nothing downstream can tell the
+   * difference once it is lost.
+   */
+  it('reports Android RUNNING_MODERATE as moderate, and everything else as serious', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+    const seen: string[] = [];
+    module.subscribeToMemoryPressure((severity) => seen.push(severity));
+
+    fireAndroidMemoryPressure(5); // TRIM_MEMORY_RUNNING_MODERATE
+    fireAndroidMemoryPressure(10); // TRIM_MEMORY_RUNNING_LOW
+    fireAndroidMemoryPressure(15); // TRIM_MEMORY_RUNNING_CRITICAL
+    fireAndroidMemoryPressure(60); // TRIM_MEMORY_MODERATE
+    fireAndroidMemoryPressure(80); // TRIM_MEMORY_COMPLETE
+
+    expect(seen).toEqual(['moderate', 'serious', 'serious', 'serious', 'serious']);
+  });
+
+  it('reports an iOS warning as serious, because iOS sends no milder one', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+    const seen: string[] = [];
+    module.subscribeToMemoryPressure((severity) => seen.push(severity));
+
+    fireMemoryWarning();
+
+    expect(seen).toEqual(['serious']);
+  });
+
+  it('breadcrumbs a moderate warning too, because pressure is pressure for the diagnostic', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+
+    fireAndroidMemoryPressure(5);
+
+    // The question the breadcrumb answers is "was this launch under memory
+    // pressure before the OS killed it", and a moderate warning is evidence.
+    expect(sentryState.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const breadcrumb = sentryState.addBreadcrumb.mock.calls[0]?.[0] as Record<string, unknown>;
+    // Still a bare count: the severity gates the shed, never the payload.
+    expect(breadcrumb.data).toEqual({ count: 1 });
+  });
+
   it('counts both sources into one running tally, never two', async () => {
     const module = await loadFreshModule();
     module.initializeMemoryPressure();

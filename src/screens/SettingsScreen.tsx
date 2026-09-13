@@ -23,6 +23,7 @@ import {
 } from '@/devsupport/retentionProbe';
 import {
   CONCURRENCY_PROBE_DEPTHS,
+  CONCURRENCY_PROBE_UNBOUNDED_DEPTH,
   concurrencyProbeEnabled,
   setConcurrencyProbeDepth,
   useConcurrencyProbeDepth,
@@ -534,7 +535,13 @@ export function SettingsScreen(): React.JSX.Element {
                     <RowDivider />
                     <RadioRow
                       label={`${depth} at a time`}
-                      description={depth === 1 ? 'Fully serial' : `Up to ${depth} peeks in flight`}
+                      description={
+                        depth === 1
+                          ? 'Fully serial'
+                          : depth >= CONCURRENCY_PROBE_UNBOUNDED_DEPTH
+                            ? 'Effectively unbounded: the pre-fix behaviour'
+                            : `Up to ${depth} peeks in flight`
+                      }
                       selected={depth === concurrencyProbeDepth}
                       testID={`settings-concurrency-probe-${depth}`}
                       onPress={() => setConcurrencyProbeDepth(depth)}

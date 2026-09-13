@@ -72,7 +72,10 @@ modules/                      # LOCAL Expo modules, autolinked by CNG (no ios/ o
                               #   Forwards only the RUNNING_*/MODERATE/COMPLETE levels;
                               #   TRIM_MEMORY_UI_HIDDEN and _BACKGROUND arrive on every ordinary
                               #   backgrounding and are excluded, or the breadcrumb's count would
-                              #   record app switching rather than pressure
+                              #   record app switching rather than pressure. RUNNING_MODERATE maps
+                              #   to 'moderate' severity and the rest to 'serious'; the store
+                              #   shedders act only on 'serious', so a merely busy device does not
+                              #   refetch a transcript the user is reading
 patches/                      # patch-package patches, applied by the `postinstall` script.
                               #   react-native-enriched-markdown+0.7.4.patch removes an
                               #   accessibility OnGlobalLayoutListener the library leaves on the
