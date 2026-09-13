@@ -17,7 +17,7 @@
  *    release build fires on establish.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { BridgeEvent } from '@kangentic/protocol';
+import type { ActivityEventPayload, BridgeEvent } from '@kangentic/protocol';
 import { ChannelController } from '@/channel';
 import {
   createMockDesktop,
@@ -330,4 +330,79 @@ describe('register-push', () => {
     });
     expect(response.registered).toBe(true);
   });
+});
+
+/**
+ * Reads a `session-ended` payload's `spawnProgressLabel` (kangentic board
+ * #639) without declaring a local parallel type - the SAME composition guard
+ * as `extractSpawnProgressLabel` in `src/state/activityStore.ts` and
+ * `sessionEndedWithLabel` in `tests/unit/activityStore.test.ts`, since the
+ * field does not exist in `ActivityEventPayload` until the protocol package
+ * ships it.
+ */
+function readSpawnProgressLabel(payload: ActivityEventPayload): string | null {
+  if (payload.type !== 'session-ended') return null;
+  return 'spawnProgressLabel' in payload && typeof payload.spawnProgressLabel === 'string'
+    ? payload.spawnProgressLabel
+    : null;
+}
+
+/**
+ * The `/respawn` rig fix (mockDesktop.ts's `respawnActiveSession`,
+ * kangentic board #639): the outgoing session's `session-ended` push MUST
+ * carry a non-empty `spawnProgressLabel`, because this mock's OWN
+ * `boardSnapshot()` applies the same `view: 'sessions'` filter a real
+ * desktop's board does - so during the respawn gap the sessionless task
+ * leaves the board entirely and the session screen's COLUMN-keyed swap
+ * window (SessionScreen.tsx) can never fire off it. Without the label,
+ * dev:mock would render "Session ended" for the whole multi-second gap: the
+ * exact regression the screen's session-keyed swap window exists to
+ * prevent, reintroduced into the rig meant to demonstrate the fix.
+ */
+describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
+  it(
+    'sends a non-empty spawnProgressLabel on the outgoing session-ended, and the task is sessionless before the successor lands',
+    async () => {
+      await controller.verbs.sendUserMessage(MOCK_STREAMING_SESSION_ID, '/respawn');
+
+      await waitUntil(
+        () =>
+          eventsFor('activity', MOCK_STREAMING_SESSION_ID).some(
+            (event) => event.kind === 'activity' && event.payload.type === 'session-ended',
+          ),
+        { label: 'the outgoing session receives session-ended' },
+      );
+      const endedEvent = eventsFor('activity', MOCK_STREAMING_SESSION_ID).find(
+        (event) => event.kind === 'activity' && event.payload.type === 'session-ended',
+      );
+      if (!endedEvent || endedEvent.kind !== 'activity') {
+        throw new Error('expected a session-ended activity event for the outgoing session');
+      }
+      const spawnProgressLabel = readSpawnProgressLabel(endedEvent.payload);
+      expect(typeof spawnProgressLabel).toBe('string');
+      expect(spawnProgressLabel?.length ?? 0).toBeGreaterThan(0);
+
+      // Sessionless BEFORE the successor lands: read the board well inside
+      // the gap (the mock's MOCK_RESPAWN_GAP_MS is several seconds), while
+      // the ended push above is the only thing that has happened so far.
+      const midGapSnapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+      const midGapTask = midGapSnapshot.tasks.find((task) => task.id === 'mock-task-1');
+      expect(midGapTask?.session_id ?? null).toBeNull();
+
+      // The successor eventually lands with a DIFFERENT session id, proving
+      // the sessionless read above genuinely preceded it rather than merely
+      // racing a same-tick swap.
+      const deadline = Date.now() + 8000;
+      let successorSessionId: string | null = null;
+      while (Date.now() < deadline && successorSessionId === null) {
+        const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+        const task = snapshot.tasks.find((candidate) => candidate.id === 'mock-task-1');
+        if (task?.session_id) successorSessionId = task.session_id;
+        else await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(successorSessionId).not.toBeNull();
+      expect(successorSessionId).not.toBe(MOCK_STREAMING_SESSION_ID);
+    },
+    12_000,
+  );
 });

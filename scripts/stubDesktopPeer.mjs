@@ -280,6 +280,23 @@ const STUB_PROMPT_ID = `${STUB_SESSION_ID}:stub-tool-2`;
 const STUB_CODEX_SESSION_ID = 'stub-session-codex';
 const STUB_CODEX_TASK_ID = 'stub-task-codex';
 
+/**
+ * How long /respawn leaves the task sessionless before the successor lands,
+ * mirroring the real desktop's suspend-to-respawn window. A rig choice, not
+ * a product timing claim - long enough for a Maestro assertion to land
+ * inside it, comfortably short of the phone's session-swap grace window.
+ * Matches src/connection/mockDesktop.ts's MOCK_RESPAWN_GAP_MS by convention
+ * (the two rigs share no code), so dev:mock and E2E feel the same.
+ *
+ * Two other numbers are coupled to this one with nothing to enforce it:
+ * .maestro/paired/session-respawn-recovery.yaml's 10000ms wait for the
+ * switching overlay must stay ABOVE this gap, and this gap must stay well
+ * below SESSION_SWAP_GRACE_MS (20s) in src/screens/task/SessionScreen.tsx,
+ * or the phone gives up before the successor lands. Raising it means
+ * checking both.
+ */
+const STUB_RESPAWN_GAP_MS = 6000;
+
 /** A codex-style fullscreen TUI frame: cursor-home + full rewrite each paint. */
 function codexTuiFrame(paintTick) {
   const spinnerGlyphs = ['|', '/', '-', '\\'];
@@ -594,6 +611,12 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     let permissionPending = false;
     let feedTimer = null;
     let feedTick = 0;
+    // The /respawn magic command's pending successor-install timer. Tracked
+    // (not a bare setTimeout) so a flow that ends mid-gap - launchApp force-
+    // stopping the app, or the socket closing - cannot let a stray fire
+    // install a session id into the NEXT flow's fresh fixture. See the close
+    // handler and resetStubFixture below.
+    let respawnGapTimer = null;
     // The stub's PTY grid: reported in the subscribe snapshot, overridden by
     // a fit-mode resize, restored by release-size. A scripted desktop-origin
     // refit fires at tick 30 so Maestro can exercise mirror-mode re-layout.
@@ -637,6 +660,19 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
       activeSessionId = STUB_SESSION_ID;
       respawnCounter = 1;
       codexStreamSubscribed = false;
+      // A prompt left pending by a flow that ends without resolving it
+      // (launchApp force-stops rather than answering) must not carry into
+      // the next flow's fixture - same cross-flow-contamination class as the
+      // board and lifecycle resets above. Every flow that raises the stub's
+      // prompt currently answers it before finishing, so this has not yet
+      // bitten a real run; closed here so it cannot start to.
+      permissionPending = false;
+      // A respawn gap left running from a PRIOR flow must not install its
+      // successor into this fresh fixture - see respawnGapTimer's comment.
+      if (respawnGapTimer) {
+        clearTimeout(respawnGapTimer);
+        respawnGapTimer = null;
+      }
     }
 
     function applyBoardMutations(snapshot) {
@@ -732,25 +768,60 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     }
 
     // The /respawn magic command: the desktop restarts the task's agent
-    // under a FRESH session id (a model switch). The transcript resets with
-    // a marker entry Maestro can assert on.
+    // under a FRESH session id (a same-column respawn - a model or agent
+    // switch, an effort change). Mirrors the real desktop's suspend-then-
+    // respawn shape (task-move.ts's suspendLiveSessionForRespawn): the
+    // outgoing session gets its own session-ended push, carrying the
+    // in-flight spawn-progress label the real desktop's onExit handler
+    // attaches (see the kangentic board's spawnProgressLabel task), the task
+    // goes sessionless for a real gap, and only then does the successor
+    // land. Without the gap this never exercised the bug the phone actually
+    // has: assigning the successor id in the same tick as the board update
+    // meant the task was never sessionless, so the session screen always
+    // found a live successor and no overlay ever showed.
+    //
+    // The outgoing session id MUST be captured and pushed before anything
+    // else touches activeSessionId - reversing that order records the
+    // SUCCESSOR as ended and wedges the phone on the ended state forever.
+    //
+    // The ended push carries spawnProgressLabel ahead of the protocol
+    // package publishing the field (kangentic board #639). This is a plain
+    // .mjs file, so the literal needs nothing; mockDesktop.ts emits the same
+    // label through a checked intersection, so BOTH rigs open the phone's
+    // switching window and dev:mock and E2E show the same thing.
     function respawnActiveSession() {
-      respawnCounter += 1;
-      const successorSessionId = `stub-session-${respawnCounter}`;
+      const endedSessionId = activeSessionId;
       permissionPending = false;
-      activeSessionId = successorSessionId;
+      if (endedSessionId !== null) {
+        sendEvent({
+          kind: 'activity',
+          sessionId: endedSessionId,
+          taskId: STUB_TASK_ID,
+          payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+        });
+      }
+      activeSessionId = null;
       streamSubscribed = false;
-      transcriptEntries = [
-        {
-          kind: 'assistant',
-          uuid: `stub-respawn-marker-${respawnCounter}`,
-          ts: Date.now(),
-          blocks: [{ type: 'text', text: `Respawned session online (${successorSessionId}).` }],
-        },
-      ];
-      transcriptRevision = 1;
-      console.log(`[lifecycle] /respawn: task now runs ${successorSessionId}`);
+      console.log('[lifecycle] /respawn: task now sessionless, successor pending');
       emitBoardTaskUpdated();
+      respawnGapTimer = setTimeout(() => {
+        respawnGapTimer = null;
+        respawnCounter += 1;
+        const successorSessionId = `stub-session-${respawnCounter}`;
+        activeSessionId = successorSessionId;
+        streamSubscribed = false;
+        transcriptEntries = [
+          {
+            kind: 'assistant',
+            uuid: `stub-respawn-marker-${respawnCounter}`,
+            ts: Date.now(),
+            blocks: [{ type: 'text', text: `Respawned session online (${successorSessionId}).` }],
+          },
+        ];
+        transcriptRevision = 1;
+        console.log(`[lifecycle] /respawn: task now runs ${successorSessionId}`);
+        emitBoardTaskUpdated();
+      }, STUB_RESPAWN_GAP_MS);
     }
 
     // A little agent-life simulator: terminal chunks stream continuously;
@@ -1057,6 +1128,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     socket.addEventListener('close', () => {
       clearInterval(rehandshakeTimer);
       if (feedTimer) clearInterval(feedTimer);
+      if (respawnGapTimer) clearTimeout(respawnGapTimer);
     });
     return { send, socket };
   });

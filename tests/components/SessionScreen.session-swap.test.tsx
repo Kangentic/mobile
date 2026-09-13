@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import type { ActivityEventPayload } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -144,12 +145,28 @@ function seedBoardWithoutTask(): void {
   });
 }
 
-function pushSessionEnded(sessionId: string): void {
+/**
+ * `spawnProgressLabel` (kangentic board #639) does not exist in
+ * `ActivityEventPayload` until the protocol package ships it.
+ *
+ * Built by INTERSECTION, the one local extension protocol-types-from-package.md
+ * permits ("extend or narrow a protocol type locally only by composition"), and
+ * matching `sessionEndedWithLabel` in activityStore.test.ts and
+ * `sessionEndedWithSpawnProgress` in mockDesktop.ts. A blanket
+ * `as unknown as ActivityEventPayload` would accept any object shape at all;
+ * this keeps the base payload checked and widens only the one new field.
+ */
+function pushSessionEnded(sessionId: string, options: { spawnProgressLabel?: string } = {}): void {
+  const payload: ActivityEventPayload & { spawnProgressLabel?: string } = {
+    type: 'session-ended',
+    intentional: true,
+    ...options,
+  };
   useActivityStore.getState().applyActivityEvent({
     kind: 'activity',
     sessionId,
     taskId: 'task-1',
-    payload: { type: 'session-ended', intentional: true },
+    payload,
   });
 }
 
@@ -1000,6 +1017,343 @@ describe('SessionScreen across a column move', () => {
 
     expect(mockReplace).not.toHaveBeenCalled();
     expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+  });
+
+  /**
+   * The bug this task exists for: a SAME-COLUMN respawn (a model/agent/effort
+   * change, an isolated-session-track switch) has no column move to key the
+   * existing swap window off, so before this the screen fell straight through
+   * to the ended state for the whole desktop-side respawn gap. The desktop's
+   * `session-ended` push can now carry an in-flight spawnProgressLabel
+   * (kangentic board #639) naming the phase, and this opens a second,
+   * session-keyed swap window off that signal alone.
+   *
+   * All tasks below stay in 'lane-doing' (role null, from seedRoledBoard) and
+   * never call moveTaskToColumn - the column path is pinned above and must
+   * stay byte-for-byte unchanged by this addition.
+   */
+  describe('a same-column respawn (spawnProgressLabel, no column move)', () => {
+    it('shows the switching state, not the ended state, while a label is in flight', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+      });
+
+      // The ended assertion runs FIRST, deliberately - same reasoning as the
+      // column-move version of this test: the reported bug IS the ended
+      // state appearing here, so a missing switching testID must not be
+      // allowed to read as "not there" rather than "declared dead".
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
+    });
+
+    it('renders the label text on the overlay, not just the generic caption', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+      });
+
+      expect(screen.getByText('Switching model...')).toBeTruthy();
+    });
+
+    /**
+     * Must stay green through this whole change: a desktop that predates
+     * spawnProgressLabel (or a genuine park with no successor coming) sends
+     * no label, and the screen's only signal is the plain session-ended push
+     * - so it falls through to the ended state exactly as it always did.
+     */
+    it('falls straight to the ended state when the desktop sends no label', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+    });
+
+    it('falls back to the ended state when no successor arrives within the grace window', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching agent...' });
+        });
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+
+        act(() => {
+          jest.advanceTimersByTime(20_001);
+        });
+
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * The spent marker is mandatory, not defensive: nothing ever changes the
+     * label read after it expires, so without a spent marker the window
+     * re-arms on the very next render and the screen never reaches the ended
+     * state at all.
+     */
+    it('does not re-arm the switching state on a render well after the grace window expires', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Applying new settings...' });
+        });
+        act(() => {
+          jest.advanceTimersByTime(20_001);
+        });
+        expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+
+        // Advance well past expiry again and force a render (a board
+        // re-snapshot at the same shape) - the label is still sitting in the
+        // store (session-ended-state's entry survives until removeSession),
+        // so a missing spent marker would re-open the window right here.
+        act(() => {
+          jest.advanceTimersByTime(20_000);
+          seedRoledBoard('sess-a', 'lane-doing');
+        });
+
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('clears the switching state when the successor session binds', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'Starting new session...' });
+      });
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+
+      // The desktop spawned the successor and the settled snapshot carries
+      // it, still in the same column - no move involved.
+      act(() => {
+        seedRoledBoard('sess-b', 'lane-doing');
+      });
+
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      expect(openSessionScreenMock).toHaveBeenCalledWith('sess-b');
+    });
+
+    it('replaces itself with the completed-task view rather than showing the switching scrim, for an archived task', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+        seedBoardWithoutTask();
+        useBoardStore.setState({
+          archivedByProjectId: {
+            'project-1': {
+              tasks: [
+                boardTaskFixture({
+                  id: 'task-1',
+                  session_id: null,
+                  archived_at: '2026-09-11T00:00:00.000Z',
+                }),
+              ],
+              totalCount: 1,
+              summariesByTaskId: {},
+              nextOffset: 1,
+              loading: false,
+            },
+          },
+        });
+      });
+
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(mockReplace).toHaveBeenCalledWith({
+        pathname: '/completed-task',
+        params: { taskId: 'task-1', projectId: 'project-1' },
+      });
+    });
+
+    /**
+     * Entered from the board rather than a triage row (no sessionId param),
+     * so the label has to be resolved off lastBoundSessionId - the same
+     * fallback the ended-state signal itself relies on once the task is off
+     * the board.
+     */
+    it('opens the switching state off lastBoundSessionId with no sessionId param', () => {
+      mockParams = { taskId: 'task-1', projectId: 'project-1' };
+      seedRoledBoard('sess-a', 'lane-doing');
+      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+      renderSessionScreen();
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+      });
+
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+    });
+  });
+
+  /**
+   * The two openers are independent latches on the SAME `swapWindowOpen`
+   * boolean, and the render-phase ladder only evaluates one branch per
+   * render: once the column branch (3) has already opened
+   * `swapWindowSwimlaneId`, its own guard `swapWindowSwimlaneId === null`
+   * goes false, so the NEXT render falls through to the label branch (4) and
+   * opens `spawnLabelWindowSessionId` too - both latches end up open at
+   * once, each carrying its OWN independent SESSION_SWAP_GRACE_MS timer.
+   * Neither existing describe block exercises this: the column-move block
+   * above never pushes a label, and the same-column-respawn block never
+   * calls moveTaskToColumn.
+   */
+  describe('the two swap-window openers interacting', () => {
+    /**
+     * Both latches open at effectively the SAME simulated instant under fake
+     * timers (the column move and the labelled ended push are two separate
+     * `act()` calls with no time advance between them), so both 20s timers
+     * are armed at the same tick and fire together.
+     *
+     * EMPIRICAL RESULT (verified by running this test with the assertions
+     * flipped before settling on these): the combined window closes at
+     * ~20s, not ~40s. The two openers do not compose additively - they are
+     * two independent latches racing to the SAME expiry point, not a
+     * chained wait.
+     */
+    it('closes at ~20s (not ~40s) when a column move and a labelled session-ended land for the same session', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a');
+        renderSessionScreen();
+
+        act(() => {
+          moveTaskToColumn('lane-doing');
+        });
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+        });
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+
+        // Still open just under 20s from the (effectively simultaneous)
+        // opening instant.
+        act(() => {
+          jest.advanceTimersByTime(19_999);
+        });
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+
+        // Both timers were armed at the same tick, so both expire together
+        // here - NOT at 40s, which is what a naive "two windows stack"
+        // reading would predict.
+        act(() => {
+          jest.advanceTimersByTime(2);
+        });
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * A label arriving only AFTER the column window has already expired and
+     * been marked spent. `spentSwapSwimlaneId` and `spentSpawnLabelSessionId`
+     * are separate variables, so the column branch staying spent does not
+     * block the label branch: `spawnLabelWindowSessionId` has never been
+     * opened before, so branch 4's own guard (`spawnLabelWindowSessionId ===
+     * null`) is still true and it opens a FRESH window off the label alone.
+     *
+     * EMPIRICAL RESULT: the label opens its own window even though the
+     * column window already expired - the switching overlay appears again,
+     * it is not treated as "this session already used its one swap window".
+     */
+    it('opens a fresh spawn-label window when the label arrives after the column window already expired', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a');
+        renderSessionScreen();
+
+        // Column move only: opens the column-keyed window, but nothing is
+        // shown yet because sessionEnded is still false (no ended push).
+        act(() => {
+          moveTaskToColumn('lane-doing');
+        });
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+
+        // Let the column window run out unused.
+        act(() => {
+          jest.advanceTimersByTime(20_001);
+        });
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+
+        // Only NOW does the labelled ended push arrive.
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+        });
+
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  /**
+   * The label branch's own `!isTodoRole` / `!isDoneRole` exclusions,
+   * mirroring the column branch's equivalent tests above
+   * ('shows the ended state immediately for a move to the To Do/Done
+   * column'). Neither test below calls moveTaskToColumn: the task is seeded
+   * directly into the excluded column so only the label branch is in play.
+   */
+  describe('the spawn-label window respects the To Do / Done exclusions', () => {
+    it('does not open the spawn-label window for a task sitting in a To Do role column', () => {
+      // Default swimlaneId is 'lane-todo' (role 'todo').
+      seedRoledBoard('sess-a');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+      });
+
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+    });
+
+    /**
+     * Done deletes the worktree and archives the task, so the mirror case
+     * has nowhere good to stand either - but with no archived page seeded
+     * here, the archive fetch resolves without finding the task (the mocked
+     * loadArchivedTasks writes nothing), so this settles on the ended
+     * overlay rather than redirecting. Asserting what the code actually
+     * does, per the task brief, not what "should" happen.
+     */
+    it('does not open the spawn-label window for a task sitting in a Done role column', () => {
+      seedRoledBoard('sess-a', 'lane-done');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+      });
+
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
   });
 });
 

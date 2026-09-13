@@ -4,11 +4,64 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
-import { sectionForEntry, selectSessionEnded, selectTriageRows, useActivityStore } from '@/state/activityStore';
+import { sectionForEntry, selectSessionEnded, selectSessionSpawnProgressLabel, selectTriageRows, useActivityStore } from '@/state/activityStore';
 import { streamSnapshotFixture, usageFixture } from '@/devsupport/desktopFixtures';
 
 function activityEvent(sessionId: string, payload: ActivityEventPayload): ActivityEvent {
   return { kind: 'activity', sessionId, taskId: 'task-1', payload };
+}
+
+/**
+ * A `session-ended` payload carrying the desktop's proposed `spawnProgressLabel`
+ * field (kangentic board #639), which does not exist in `ActivityEventPayload`
+ * until the protocol package ships it.
+ *
+ * Built by INTERSECTION, the one local extension protocol-types-from-package.md
+ * permits ("extend or narrow a protocol type locally only by composition"), and
+ * matching `sessionEndedWithSpawnProgress` in mockDesktop.ts. A blanket
+ * `as unknown as ActivityEventPayload` would accept any object shape at all;
+ * this keeps the base payload checked and widens only the one new field.
+ */
+function sessionEndedWithLabel(intentional: boolean, spawnProgressLabel: string): ActivityEventPayload {
+  const payload: ActivityEventPayload & { spawnProgressLabel?: string } = {
+    type: 'session-ended',
+    intentional,
+    spawnProgressLabel,
+  };
+  return payload;
+}
+
+/**
+ * A `session-ended` payload whose `spawnProgressLabel` is NOT a string - a
+ * real desktop never sends this, but `extractSpawnProgressLabel`'s
+ * `typeof === 'string'` guard has to hold anyway: a non-string reaching
+ * `SessionSwitchingState`'s `renderableLabel` would call `.trim()` on it and
+ * throw at render. Same composition pattern as `sessionEndedWithLabel`.
+ */
+function sessionEndedWithNonStringLabel(spawnProgressLabel: number | Record<string, unknown>): ActivityEventPayload {
+  const payload: ActivityEventPayload & { spawnProgressLabel?: number | Record<string, unknown> } = {
+    type: 'session-ended',
+    intentional: true,
+    spawnProgressLabel,
+  };
+  return payload;
+}
+
+/**
+ * A payload of a DIFFERENT type carrying a stray `spawnProgressLabel` field -
+ * exercises `extractSpawnProgressLabel`'s `payload.type !== 'session-ended'`
+ * early return, which a real desktop would never trigger (the field is
+ * documented as riding only on `session-ended`) but the guard still has to
+ * hold.
+ */
+function activityPayloadWithStraySpawnLabel(spawnProgressLabel: string): ActivityEventPayload {
+  const payload: ActivityEventPayload & { spawnProgressLabel?: string } = {
+    type: 'activity',
+    state: 'thinking',
+    reason: { kind: 'turn-active' },
+    spawnProgressLabel,
+  };
+  return payload;
 }
 
 describe('activityStore', () => {
@@ -114,6 +167,110 @@ describe('activityStore', () => {
     useActivityStore.getState().applyActivityEvent(activityEvent('sess-ghost', { type: 'session-ended', intentional: false }));
     expect(useActivityStore.getState().bySessionId['sess-ghost']).toBeUndefined();
     expect(selectSessionEnded(useActivityStore.getState(), 'sess-ghost')).toBe(true);
+  });
+
+  /**
+   * The mid-handoff respawn signal (kangentic board #639): a session-ended
+   * push can carry the desktop's in-flight spawn-progress label, meaning a
+   * successor is expected rather than this being a genuine park.
+   */
+  describe('spawnProgressLabel on session-ended', () => {
+    it('is absent when the desktop sends no label (a genuine park, or a pre-field desktop)', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBeNull();
+    });
+
+    it('is recorded when the desktop sends one', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', sessionEndedWithLabel(true, 'Switching model...')));
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBe('Switching model...');
+    });
+
+    /**
+     * A deep link or push tap can land on a session this phone never
+     * registered - the same case `endedSessionIds` covers for the ended fact
+     * itself.
+     */
+    it('is recorded even with no entry to update', () => {
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-ghost', sessionEndedWithLabel(true, 'Applying new settings...')));
+      expect(useActivityStore.getState().bySessionId['sess-ghost']).toBeUndefined();
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-ghost')).toBe('Applying new settings...');
+    });
+
+    /**
+     * The same pruning `endedSessionIds` survives (reconcileSessionsFromBoards
+     * deletes the entry a few hundred ms after the session ends, once the
+     * board drops the now-sessionless task). A label on SessionActivityEntry
+     * itself would be pruned with it - this is why the label lives in its own
+     * sibling map instead.
+     */
+    it('survives the entry being pruned', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', sessionEndedWithLabel(true, 'Switching agent...')));
+
+      useActivityStore.getState().removeSession('sess-1');
+
+      expect(useActivityStore.getState().bySessionId['sess-1']).toBeUndefined();
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBe('Switching agent...');
+    });
+
+    it('clears on reset', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', sessionEndedWithLabel(true, 'Starting new session...')));
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBe('Starting new session...');
+
+      useActivityStore.getState().reset();
+
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBeNull();
+    });
+
+    it('selectSessionSpawnProgressLabel returns null for a null sessionId', () => {
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), null)).toBeNull();
+    });
+
+    /**
+     * The runtime guard's `typeof` half. Without it a non-string label would
+     * sail through to `SessionSwitchingState`'s `renderableLabel`, which
+     * calls `.trim()` unconditionally and throws at render.
+     */
+    it('rejects a non-string spawnProgressLabel (a number), leaving the selector null', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', sessionEndedWithNonStringLabel(42)));
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBeNull();
+    });
+
+    it('rejects a non-string spawnProgressLabel (an object), leaving the selector null', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-1', sessionEndedWithNonStringLabel({ phase: 'switching' })));
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBeNull();
+    });
+
+    /** The `payload.type !== 'session-ended'` early return's own coverage. */
+    it('ignores a spawnProgressLabel riding a payload type other than session-ended', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-1', activityPayloadWithStraySpawnLabel('Switching model...')));
+      expect(selectSessionSpawnProgressLabel(useActivityStore.getState(), 'sess-1')).toBeNull();
+    });
+
+    /**
+     * Identity matters here the same way it does elsewhere in this store: a
+     * screen selecting `spawnProgressLabelBySessionId` re-renders on every
+     * object identity change, so an event that carries no label must not
+     * manufacture a new (value-equal) map on every activity tick.
+     */
+    it('leaves spawnProgressLabelBySessionId referentially unchanged when session-ended carries no label', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      const before = useActivityStore.getState().spawnProgressLabelBySessionId;
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
+
+      expect(useActivityStore.getState().spawnProgressLabelBySessionId).toBe(before);
+    });
   });
 
   it('applyActivityEvent dispatches on payload type', () => {
