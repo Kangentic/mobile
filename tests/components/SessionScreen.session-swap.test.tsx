@@ -1207,6 +1207,33 @@ describe('SessionScreen across a column move', () => {
       expect(screen.queryByTestId('session-ended-state')).toBeNull();
       expect(screen.getByTestId('session-switching-state')).toBeTruthy();
     });
+
+    /**
+     * The composed path, not just either half in isolation. activityStore
+     * records ANY non-empty string spawnProgressLabel with no shape check
+     * (see activityStore.test.ts); SessionScreen opens the switching window
+     * off presence alone (`boundSpawnProgressLabel !== null`); and only
+     * SessionSwitchingState's own `renderableLabel` rejects a malformed one
+     * and substitutes the generic caption (see SessionSwitchingState.test.tsx,
+     * which drives that fallback via a directly-passed prop). Nothing before
+     * this test exercises the three wired together: a real desktop-shaped
+     * over-cap label flowing through the store into the mounted screen. What
+     * matters most here is the failure this closes - a malformed label must
+     * still open the SWITCHING overlay, never fall through to the ended one.
+     */
+    it('opens the switching state (with the generic caption, not the raw text) for an over-cap label from the desktop', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a', { spawnProgressLabel: 'A'.repeat(46) });
+      });
+
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      expect(screen.getByText('The desktop is starting a new session.')).toBeTruthy();
+      expect(screen.queryByText('A'.repeat(46))).toBeNull();
+    });
   });
 
   /**
