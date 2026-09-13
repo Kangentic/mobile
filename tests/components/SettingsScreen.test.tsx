@@ -71,6 +71,27 @@ jest.mock('@/devsupport/nseProbe', () => ({
   readNseProbeResult: () => mockReadNseProbeResult(),
 }));
 
+// The connection-trace row is a measurement instrument (board task #70): it
+// exists so the foreground-reconnect fix can be A/B'd in one process on one
+// install, per performance-claims-are-measured.md. If its switch were wired
+// to nothing, both arms of that A/B would run the identical code path and
+// the run would report "no difference" - a wrong number with no visible
+// symptom, since the switch still renders and animates either way. Stubbed
+// whole, like nseProbe above: the module's own gating logic is covered by
+// tests/unit/connectionTrace.test.ts (the OFF path every shipped build ships
+// in), and unlike that module's `traceEnabled` const, jest.mock here needs no
+// vi.resetModules() gymnastics.
+const mockConnectionTraceEnabled = jest.fn().mockReturnValue(false);
+const mockForegroundKickEnabled = jest.fn().mockReturnValue(true);
+const mockSetForegroundKickEnabled = jest.fn();
+const mockSubscribeForegroundKick = jest.fn((_listener: () => void) => () => undefined);
+jest.mock('@/devsupport/connectionTrace', () => ({
+  connectionTraceEnabled: () => mockConnectionTraceEnabled(),
+  foregroundKickEnabled: () => mockForegroundKickEnabled(),
+  setForegroundKickEnabled: (enabled: boolean) => mockSetForegroundKickEnabled(enabled),
+  subscribeForegroundKick: (listener: () => void) => mockSubscribeForegroundKick(listener),
+}));
+
 const mockThrowTestError = jest.fn();
 const mockCrashNatively = jest.fn();
 const mockReportHandledTestError = jest.fn();
@@ -128,6 +149,13 @@ describe('SettingsScreen', () => {
     mockSeedNseProbe.mockClear();
     mockSeedNseProbe.mockResolvedValue({ permissionGranted: true });
     mockReadNseProbeResult.mockClear();
+    // Same reset-in-beforeEach reasoning as mockNseProbeEnabled above: a
+    // failing assertion mid-test must not leave the section rendering for
+    // every later test in the file.
+    mockConnectionTraceEnabled.mockReturnValue(false);
+    mockForegroundKickEnabled.mockReturnValue(true);
+    mockSetForegroundKickEnabled.mockClear();
+    mockSubscribeForegroundKick.mockClear();
     mockThrowTestError.mockClear();
     mockCrashNatively.mockClear();
     mockOpenSystemNotificationSettings.mockClear();
@@ -473,6 +501,51 @@ describe('SettingsScreen', () => {
 
     expect(await screen.findByTestId('settings-nse-probe-result')).toBeTruthy();
     expect(screen.getByText('Agent needs your input | NSE probe - decrypted on device')).toBeTruthy();
+  });
+
+  /**
+   * Board task #70. Same gating shape as the NSE probe section above (a
+   * build-time flag hides dev-only instrumentation from every shipped
+   * build), pinned separately because it is a different flag with a
+   * different failure mode: this one hides an A/B switch, not a diagnostic
+   * button.
+   *
+   * Mutation seen failing: replacing the
+   * `{connectionTraceEnabled() ? (...) : null}` guard around the section with
+   * an unconditional render - "expected element with testID
+   * settings-section-connection-trace to not exist" (it existed).
+   */
+  it('hides the connection-trace section by default', () => {
+    renderSettings();
+    expect(screen.queryByTestId('settings-section-connection-trace')).toBeNull();
+    expect(screen.queryByTestId('settings-connection-trace-foreground-kick')).toBeNull();
+  });
+
+  /**
+   * Board task #70. The switch is the only control that flips the A/B arm
+   * performance-claims-are-measured.md requires for the foreground-reconnect
+   * fix (RelayTransport.redialNow / connectionManager's kick and probe). If
+   * `onValueChange` were wired to nothing, the switch would still render and
+   * still animate on tap - `checked` comes from `foregroundKickEnabled()`,
+   * a function this test holds constant - so a rendered-output assertion
+   * cannot catch the break; only asserting the setter call can.
+   *
+   * Mutation seen failing: replacing `onValueChange={setForegroundKickEnabled}`
+   * with `onValueChange={() => {}}` - "Expected: false / Number of calls: 0"
+   * against `expect(mockSetForegroundKickEnabled).toHaveBeenCalledWith(false)`.
+   */
+  it('reveals the foreground-recovery switch when the trace flag is on, and wires it to setForegroundKickEnabled', () => {
+    mockConnectionTraceEnabled.mockReturnValue(true);
+    mockForegroundKickEnabled.mockReturnValue(true);
+    renderSettings();
+
+    expect(screen.getByTestId('settings-section-connection-trace')).toBeTruthy();
+    const row = screen.getByTestId('settings-connection-trace-foreground-kick');
+    expect(row.props.accessibilityState.checked).toBe(true);
+
+    fireEvent.press(row);
+
+    expect(mockSetForegroundKickEnabled).toHaveBeenCalledWith(false);
   });
 
   /**
