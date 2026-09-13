@@ -50,12 +50,24 @@ runs:
     # exactly the drift scripts/checkInstallDrift.mjs exists to catch and which
     # presents as a wall of "has no exported member" errors in untouched files.
     # An exact-match-or-install cache is the correct shape here.
+    # The key covers patches/ as well as the lockfile, and that second input is
+    # load-bearing. patch-package runs from `postinstall`, `postinstall` runs
+    # from `npm ci`, and `npm ci` runs only on a cache MISS - so a key over the
+    # lockfile alone means adding or editing a .patch restores a node_modules
+    # built from the OLD patches and the change silently never applies. The
+    # failure has no error: CI goes green against unpatched dependencies.
+    #
+    # This bit for real: the commit that added
+    # patches/expo-task-manager+57.0.17.patch touched no dependency, so the
+    # lockfile hash was unchanged and the new patch would have been a no-op in
+    # every CI build. Keying on the patches too fixes the class rather than
+    # requiring a remembered lockfile bump per patch.
     - name: Cache node_modules
       id: cache-node-modules
       uses: actions/cache@v6
       with:
         path: node_modules
-        key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+        key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json', 'patches/**') }}
 
     - name: Install dependencies (npm ci)
       if: steps.cache-node-modules.outputs.cache-hit != 'true'
