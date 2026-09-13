@@ -38,6 +38,13 @@ expo-env.d.ts
 /ios/
 /android/
 
+# Gradle output for LOCAL Expo modules under modules/. Their SOURCE is
+# committed (that is the point of a local module), but building the app
+# compiles each one in place and drops a build/ tree beside it, which the
+# /android/ rule above does not reach because it is anchored at the root.
+modules/*/android/build/
+modules/*/android/.cxx/
+
 # EAS / secrets - never commit credentials or environment files
 .env
 .env.*

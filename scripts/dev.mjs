@@ -249,6 +249,11 @@ function parseRigArgs(argv) {
       all: { type: 'boolean', default: false },
       // mock mode only: build the bundle the store capture runs against.
       shots: { type: 'boolean', default: false },
+      // stub mode only: drive the stub peer's synthetic fleet, for measuring
+      // the Agents feed's cold start under a realistic session count.
+      'scale-projects': { type: 'string' },
+      'scale-sessions': { type: 'string' },
+      'scale-payload-kb': { type: 'string' },
     },
   });
   const mode = positionals[0] ?? 'live';
@@ -1209,6 +1214,17 @@ async function runPairingBootstrap(serial) {
 
 function startStub(state, flags, restartCount = 0) {
   const args = ['scripts/stubDesktopPeer.mjs', '--relay', RELAY_URL];
+  // Synthetic-fleet passthrough. Off unless asked for, so every Maestro flow
+  // still sees exactly the hand-built board. It exists because the MOBILE-8
+  // defect scales with live-session count and the hand-built stub is one
+  // project and three sessions, so the rig could not produce the condition at
+  // all: a three-session control against a three-session arm yields a delta
+  // smaller than the run-to-run spread. See the MOBILE-8 section of
+  // docs/developer-guide.md for the measurement this feeds.
+  for (const knob of ['scale-projects', 'scale-sessions', 'scale-payload-kb']) {
+    const value = flags[knob];
+    if (value !== undefined) args.push(`--${knob}`, String(value));
+  }
   const phoneKey = flags.fresh ? null : state.stubPhoneKey;
   if (phoneKey) {
     log('stub: session-only mode with the saved phone key (use --fresh to force a re-pair)');
