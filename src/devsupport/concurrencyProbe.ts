@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import * as SecureStore from 'expo-secure-store';
 
 /**
  * A RUNTIME switch for the Agents feed's snippet pre-warm depth.
@@ -44,7 +45,47 @@ export const CONCURRENCY_PROBE_DEPTHS = [1, 2, 3, 5, 8] as const;
 
 export type ConcurrencyProbeDepth = (typeof CONCURRENCY_PROBE_DEPTHS)[number];
 
-let activeDepth: ConcurrencyProbeDepth | null = null;
+/**
+ * PERSISTED, and that is not a convenience.
+ *
+ * The quantity this probe measures is a COLD START: the Agents feed pre-warms
+ * its snippets once, as sessions register, and `warmedSessionIdsRef` then stops
+ * it running again for the life of the process. So an arm has to be chosen
+ * BEFORE the launch it is measuring. An in-memory depth resets to null on every
+ * force-stop, which means the shipped constant is the only value that could
+ * ever be measured at cold start and every arm would silently read the same
+ * number. That is worse than no probe: it produces a clean-looking A/B where
+ * both arms are the control.
+ *
+ * Read SYNCHRONOUSLY at module load (`SecureStore.getItem`, not the async
+ * variant) for the same reason. The queue is constructed on the feed's first
+ * render, and an async hydrate can resolve after the pre-warm has already
+ * drained at the default depth - the arm would then be right on screen and
+ * wrong in the measurement.
+ *
+ * SecureStore rather than AsyncStorage because `src/state/**` bans the latter
+ * and there is no reason for this to differ; the value is a single digit and
+ * not a secret.
+ */
+const DEPTH_STORAGE_KEY = 'kangentic.probe.snippetWarmDepth';
+
+function readPersistedDepth(): ConcurrencyProbeDepth | null {
+  if (!probeEnabled) return null;
+  try {
+    const stored = SecureStore.getItem(DEPTH_STORAGE_KEY);
+    if (stored === null) return null;
+    const parsed = Number.parseInt(stored, 10);
+    return (CONCURRENCY_PROBE_DEPTHS as readonly number[]).includes(parsed)
+      ? (parsed as ConcurrencyProbeDepth)
+      : null;
+  } catch {
+    // A probe that cannot read its own setting falls back to the shipped
+    // constant rather than taking the app down.
+    return null;
+  }
+}
+
+let activeDepth: ConcurrencyProbeDepth | null = readPersistedDepth();
 const listeners = new Set<() => void>();
 
 /** True only in a build dispatched with the probe flag on. */
@@ -63,6 +104,12 @@ export function getConcurrencyProbeDepth(): ConcurrencyProbeDepth | null {
 export function setConcurrencyProbeDepth(depth: ConcurrencyProbeDepth | null): void {
   if (!probeEnabled || activeDepth === depth) return;
   activeDepth = depth;
+  try {
+    if (depth === null) SecureStore.deleteItemAsync(DEPTH_STORAGE_KEY).catch(() => undefined);
+    else SecureStore.setItem(DEPTH_STORAGE_KEY, String(depth));
+  } catch {
+    // The in-memory change still stands; only the next launch loses it.
+  }
   for (const listener of listeners) listener();
 }
 
