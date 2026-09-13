@@ -14,7 +14,7 @@ import {
 import { SessionManager } from '@/channel/sessionManager';
 import { CapabilityClient } from '@/channel/capabilityClient';
 import { VerbClient, type CapabilityError } from '@/channel/verbClient';
-import { SubscriptionManager, type SubscriptionSnapshotSinks } from '@/channel/subscriptionManager';
+import { SUBSCRIBE_FAN_OUT_CONCURRENCY, SubscriptionManager, type SubscriptionSnapshotSinks } from '@/channel/subscriptionManager';
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
@@ -139,6 +139,106 @@ describe('SubscriptionManager', () => {
 
     expect(requests.filter((request) => request.verb === 'read-board')).toHaveLength(2);
     expect(sinkCalls.boardSnapshots).toEqual(['project-1']);
+  });
+
+  /**
+   * The cold-start fan-out, which used to issue one request per project plus
+   * one per live session all at once. Sentry MOBILE-8's fix bounded the Agents
+   * feed's snippet pre-warm; this is the same defect one layer up, and at the
+   * fleet size that made that report plausible it is the larger of the two.
+   *
+   * Every assertion here is on the WIRE (what actually left) rather than on a
+   * rendered result, because a queue that silently degraded to unbounded would
+   * produce identical snapshots and identical sink calls.
+   */
+  describe('the subscribe fan-out is bounded', () => {
+    const manySessionIds = Array.from({ length: 12 }, (_, index) => `fan-sess-${index}`);
+
+    /** Holds every subscribe unanswered, so what is in flight stays in flight. */
+    function holdEverything(): (request: CapabilityRequestMessage) => CapabilityResponseMessage | null {
+      return (request) => (request.verb === 'read-stream' || request.verb === 'read-board' ? null : defaultResponder(request));
+    }
+
+    it('issues at most the cap at once, not one per session', async () => {
+      const { stub, manager, requests } = await harness(holdEverything());
+      stub.beginHandshake();
+      await flushLoopback();
+
+      manager.setDesiredStreams(new Set(manySessionIds));
+      await flushLoopback();
+
+      // Exactly the cap, not merely "fewer than twelve": nothing is ever
+      // answered, so no slot is freed and this count IS the concurrency.
+      expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+      expect(SUBSCRIBE_FAN_OUT_CONCURRENCY).toBeLessThan(manySessionIds.length);
+    });
+
+    it('reconciling the same sessions twice does not double up the queue', async () => {
+      const { stub, manager, requests } = await harness(holdEverything());
+      stub.beginHandshake();
+      await flushLoopback();
+
+      // `activeStreamIds` is only written when a response LANDS, so during the
+      // in-flight window the guard in setDesiredStreams does not stop a second
+      // reconcile re-issuing. Unqueued that was a harmless refresh; behind a
+      // cap the duplicates would occupy the slots the unsubscribed sessions
+      // are waiting for.
+      manager.setDesiredStreams(new Set(manySessionIds));
+      manager.setDesiredStreams(new Set(manySessionIds));
+      await flushLoopback();
+
+      const subscribed = requests.filter((request) => request.verb === 'read-stream');
+      expect(subscribed).toHaveLength(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+      const subscribedIds = subscribed.map((request) => (request.payload as { sessionId: string }).sessionId);
+      expect(new Set(subscribedIds).size).toBe(subscribed.length);
+    });
+
+    it('never subscribes a session dropped while its subscribe was still queued', async () => {
+      const { stub, manager, requests } = await harness(holdEverything());
+      stub.beginHandshake();
+      await flushLoopback();
+
+      manager.setDesiredStreams(new Set(manySessionIds));
+      await flushLoopback();
+      // Still queued behind the cap, never sent.
+      const queuedSessionId = manySessionIds[manySessionIds.length - 1];
+      expect(requests.some((request) => (request.payload as { sessionId?: string }).sessionId === queuedSessionId)).toBe(false);
+
+      manager.setDesiredStreams(new Set(manySessionIds.filter((sessionId) => sessionId !== queuedSessionId)));
+      await flushLoopback();
+
+      // The drain-time re-check is the whole point: trusting the closure would
+      // re-establish a stream whose drop already ran, so nothing would ever
+      // tear it down again.
+      expect(requests.some((request) => (request.payload as { sessionId?: string }).sessionId === queuedSessionId)).toBe(false);
+    });
+
+    /**
+     * Pins the OUTCOME, not one line. Mutating away the drain-time
+     * `isEstablished` re-check does NOT redden this, because
+     * `SessionManager.send` throws on a dead session and the request never
+     * reaches the wire either way - so this is honest about being
+     * defence-in-depth coverage rather than a guard on that check. It still
+     * earns its place: a backlog draining across a transport drop is exactly
+     * the arrangement the cap introduced, and "nothing leaks onto the wire"
+     * is the property that has to hold however it is enforced.
+     */
+    it('puts nothing on the wire when the backlog drains after a transport drop', async () => {
+      const { session, stub, manager, requests } = await harness(holdEverything());
+      stub.beginHandshake();
+      await flushLoopback();
+
+      manager.setDesiredStreams(new Set(manySessionIds));
+      await flushLoopback();
+      const sentWhileEstablished = requests.length;
+
+      session.reset();
+      await flushLoopback();
+
+      // The backlog drains against a dead session; each task re-checks
+      // isEstablished and no-ops rather than sending into a torn-down channel.
+      expect(requests).toHaveLength(sentWhileEstablished);
+    });
   });
 
   it('flushes desired sets declared before the first handshake once established', async () => {
@@ -312,9 +412,22 @@ describe('SubscriptionManager', () => {
   });
 
   /**
-   * The two subscribes above, WITHOUT the flush between them - which is the
-   * only arrangement that reaches the race. Bootstrap asks for 'sessions' and
-   * the Board tab focuses and asks for 'full' before the first answer comes
+   * The two subscribes above, arranged so both are in flight at once: the
+   * reconcile's 'sessions' subscribe has to have LEFT before the Board tab
+   * asks for 'full', or there is no race to test.
+   *
+   * The flush between them is what arranges that, and it is load-bearing
+   * rather than incidental. `setDesiredBoards` schedules its subscribe behind
+   * the fan-out cap (`SUBSCRIBE_FAN_OUT_CONCURRENCY`) and the queued task reads
+   * the wanted view at DRAIN time, so without the flush the upgrade lands
+   * first and the reconcile issues 'full' as well - two identical requests and
+   * no stale response to ignore. An earlier revision of this test ran the two
+   * calls back to back and its docstring claimed that was "the only arrangement
+   * that reaches the race"; that was true of the unqueued fan-out and is not
+   * true now.
+   *
+   * The race itself is unchanged in production: bootstrap asks for 'sessions'
+   * and the Board tab focuses and asks for 'full' before the first answer comes
    * back, so two read-boards for one project are in flight at once and the
    * responses can land in either order.
    *
@@ -337,6 +450,9 @@ describe('SubscriptionManager', () => {
     await flushLoopback();
 
     manager.setDesiredBoards(new Set(['project-1']));
+    // Lets the queued 'sessions' subscribe actually leave, so the upgrade
+    // below overlaps it instead of preceding it. See the docstring.
+    await flushLoopback();
     manager.setBoardWantsFull('project-1');
     await flushLoopback();
 
@@ -377,6 +493,10 @@ describe('SubscriptionManager', () => {
     await flushLoopback();
 
     manager.setDesiredStreams(new Set(['sess-1']));
+    // Same reason as the board test above: the queued list-only subscribe has
+    // to leave before the terminal flag flips, or the reconcile reads the new
+    // flag at drain time and never issues a list-only request to go stale.
+    await flushLoopback();
     manager.setStreamWantsTerminal('sess-1', true);
     await flushLoopback();
 

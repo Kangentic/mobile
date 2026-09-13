@@ -38,6 +38,7 @@ import {
   FrameTag,
   generateX25519KeyPair,
   hexToBytes,
+  MAX_FRAME_LENGTH,
   openPairingConfirm,
   PROTOCOL_VERSION,
   randomBytes,
@@ -111,7 +112,28 @@ function parseArgs(argv) {
   // split.
   const advertiseIndex = argv.indexOf('--advertise-relay');
   const advertiseRelayUrl = advertiseIndex >= 0 ? argv[advertiseIndex + 1] : relayUrl;
-  return { relayUrl, autoConfirm, phoneKeyHex, identityFile, advertiseRelayUrl };
+  // --scale-projects N / --scale-sessions M / --scale-payload-kb K: a
+  // SYNTHETIC fleet layered on top of the hand-built board, for measuring the
+  // Agents feed's cold start under load. All default to values that add
+  // nothing, so every Maestro flow and every ordinary rig run is unaffected -
+  // see the scaleProjects() block below for what this is for and how to read
+  // the result. The payload size matters as much as the counts: the cost
+  // being measured is bytes x concurrency.
+  const readCount = (flag, fallback) => {
+    const index = argv.indexOf(flag);
+    if (index < 0) return fallback;
+    const parsed = Number.parseInt(argv[index + 1] ?? '', 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`${flag} needs a non-negative integer, received: ${argv[index + 1] ?? '(nothing)'}`);
+    }
+    return parsed;
+  };
+  const scale = {
+    projects: readCount('--scale-projects', 0),
+    sessions: readCount('--scale-sessions', 8),
+    payloadKb: readCount('--scale-payload-kb', 64),
+  };
+  return { relayUrl, autoConfirm, phoneKeyHex, identityFile, advertiseRelayUrl, scale };
 }
 
 function connect(url) {
@@ -370,6 +392,155 @@ function stubTranscript() {
   ];
 }
 
+/**
+ * SYNTHETIC FLEET, for measuring the Agents feed's cold start under load.
+ *
+ * Off by default (`--scale-projects 0`), so every existing Maestro flow sees
+ * exactly the hand-built board above and nothing here runs. Turned on, it
+ * layers N extra projects of M live sessions on top, which is the condition
+ * the hand-built stub cannot express: one project and three sessions.
+ *
+ * Why it exists. The Home feed pre-warms a snippet per known session, and that
+ * used to be unbounded and fully concurrent - each peek a transcript-window
+ * fetch whose entries carry full tool inputs and results, retained by nothing,
+ * so the cost was peak SIMULTANEOUS TRANSIENT allocation scaling linearly with
+ * fleet size (Sentry MOBILE-8). A fix for that is only checkable against a
+ * fleet, and `--scale-payload-kb` is as load-bearing as the counts: the cost
+ * is bytes x concurrency, so a stub answering with tiny windows measures
+ * nothing at all.
+ *
+ * Measure it on a RELEASE build with `dumpsys meminfo` either side of a cold
+ * start, two samples with the second trusted, and a control taken the same
+ * way - see `.claude/rules/performance-claims-are-measured.md`.
+ */
+function scaleProjects(scale) {
+  return Array.from({ length: scale.projects }, (_, index) => ({
+    id: `scale-project-${index}`,
+    name: `Scale Project ${index + 1}`,
+  }));
+}
+
+function isScaleProjectId(projectId) {
+  return typeof projectId === 'string' && projectId.startsWith('scale-project-');
+}
+
+function scaleSessionId(projectIndex, sessionIndex) {
+  return `scale-session-${projectIndex}-${sessionIndex}`;
+}
+
+function isScaleSessionId(sessionId) {
+  return typeof sessionId === 'string' && sessionId.startsWith('scale-session-');
+}
+
+function scaleBoardSnapshot(projectId, scale) {
+  const projectIndex = Number.parseInt(projectId.slice('scale-project-'.length), 10);
+  return {
+    projectId,
+    columns: stubColumns(),
+    tasks: Array.from({ length: scale.sessions }, (_, sessionIndex) =>
+      stubTask(
+        `scale-task-${projectIndex}-${sessionIndex}`,
+        100 + sessionIndex,
+        `Scale session ${projectIndex + 1}.${sessionIndex + 1}`,
+        'lane-doing',
+        sessionIndex,
+        scaleSessionId(projectIndex, sessionIndex),
+      ),
+    ),
+    backlog: [],
+  };
+}
+
+/**
+ * A transcript window of the shape that actually costs something: tool_result
+ * entries padded to the requested size, with random filler rather than a
+ * repeated character so deflate cannot shrink the payload away to nothing.
+ *
+ * It does still shrink, and by more than "random filler" suggests: the frame
+ * measures 0.29x the JSON across every shape probed (8x64 KiB, 8x256 KiB,
+ * 60x32 KiB, 1x1 MiB - all within 0.287-0.299), because each ~32-byte token is
+ * a ~20-byte repeated `sessionId:index:` prefix around ~11 random base36
+ * characters. That is fine for what the knob is for - the app allocates the
+ * DECODED size, which is the full figure - but it means the wire cost and the
+ * decode cost differ by 3.4x, so do not read one off the other.
+ */
+function buildScaleWindow(sessionId, entryCount, padBytes) {
+  const entries = Array.from({ length: entryCount }, (_, index) => {
+    let filler = '';
+    while (filler.length < padBytes) {
+      filler += `${sessionId}:${index}:${Math.random().toString(36).slice(2)} `;
+    }
+    return {
+      kind: 'tool_result',
+      uuid: `${sessionId}-entry-${index}`,
+      ts: Date.now() - (entryCount - index) * 1000,
+      toolUseId: `${sessionId}-tool-${index}`,
+      content: filler.slice(0, padBytes),
+    };
+  });
+  return { revision: 1, totalEntries: entries.length, startIndex: 0, entries };
+}
+
+/**
+ * Headroom under the protocol's 1 MiB `MAX_FRAME_LENGTH` for the response
+ * envelope the window gets wrapped in, which is a couple of hundred bytes
+ * against the ~100 KiB this leaves spare.
+ */
+const SCALE_FRAME_BUDGET_BYTES = Math.floor(MAX_FRAME_LENGTH * 0.9);
+
+const resolvedScalePadBytes = new Map();
+
+/**
+ * The largest pad that still encodes, found by ENCODING rather than by
+ * predicting.
+ *
+ * Both protocol caps are live here and either one throws: `MAX_DECODED_LENGTH`
+ * (4 MiB) on the JSON and `MAX_FRAME_LENGTH` (1 MiB) on the deflated frame.
+ * Since this process turns an uncaught exception into `exit(1)`, an
+ * over-large knob would kill the stub mid-measurement with a stack trace that
+ * never mentions the knob - and it is reachable: a transcript-window paging
+ * request (limit 60, if someone opens one of these sessions) throws at
+ * `--scale-payload-kb 64`, the default, while a snippet peek (limit 8) of the
+ * same size sits comfortably inside both caps.
+ *
+ * Deliberately NOT a compression-ratio constant. 0.29 is a property of the
+ * filler above, so a future edit making it more random would quietly move the
+ * cliff back under any hardcoded budget. Encoding a probe cannot go stale that
+ * way. Memoized per (entryCount, requested pad) shape, so the deflate cost is
+ * paid once per shape per process and never on the measured request path.
+ */
+function resolveScalePadBytes(sessionId, entryCount, requestedPadBytes) {
+  const shapeKey = `${entryCount}:${requestedPadBytes}`;
+  const memoized = resolvedScalePadBytes.get(shapeKey);
+  if (memoized !== undefined) return memoized;
+  let padBytes = requestedPadBytes;
+  while (padBytes > 0 && measureScaleWindowFrameBytes(sessionId, entryCount, padBytes) > SCALE_FRAME_BUDGET_BYTES) {
+    padBytes = Math.floor(padBytes / 2);
+  }
+  if (padBytes < requestedPadBytes) {
+    console.log(
+      `[scale] ${Math.floor(requestedPadBytes / 1024)} KiB per entry x ${entryCount} entries exceeds the protocol frame cap; using ${Math.floor(padBytes / 1024)} KiB for this window shape`,
+    );
+  }
+  resolvedScalePadBytes.set(shapeKey, padBytes);
+  return padBytes;
+}
+
+function measureScaleWindowFrameBytes(sessionId, entryCount, padBytes) {
+  try {
+    return encodeMessage(buildScaleWindow(sessionId, entryCount, padBytes)).length;
+  } catch {
+    // Over `MAX_DECODED_LENGTH` before compression even runs.
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function scaleTranscriptWindow(sessionId, limit, scale) {
+  const entryCount = Math.max(1, limit);
+  const requestedPadBytes = Math.max(0, scale.payloadKb) * 1024;
+  return buildScaleWindow(sessionId, entryCount, resolveScalePadBytes(sessionId, entryCount, requestedPadBytes));
+}
+
 function stubDiffFileList() {
   return {
     files: [
@@ -392,7 +563,7 @@ function stubDiffFileContent(filePath) {
   return { original: '', modified: 'test("redirect keeps next", () => {\n  expect(loginRedirect("/boards")).toContain("next=");\n});\n', language: 'typescript' };
 }
 
-function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
+function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
   const slotId = deriveSessionSlotId(desktopStatic.publicKey, phoneStaticPublicKey);
   return connect(`${relayUrl}?slot=${slotId}`).then((socket) => {
     let streams = null;
@@ -612,8 +783,16 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
 
       switch (verb) {
         case 'read-board': {
-          if (!payload.projectId) return ok({ projects: [STUB_PROJECT] });
+          if (!payload.projectId) return ok({ projects: [STUB_PROJECT, ...scaleProjects(scale)] });
           if (payload.action === 'unsubscribe') return ok();
+          if (isScaleProjectId(payload.projectId)) {
+            // Synthetic fleet: no archived page, no mutations, just the live
+            // sessions the feed will fan out over.
+            if (payload.action === 'archived') {
+              return ok({ projectId: payload.projectId, archivedTasks: [], archivedTotalCount: 0, summariesByTaskId: {} });
+            }
+            return ok(projectBoardSnapshot(scaleBoardSnapshot(payload.projectId, scale), payload.view));
+          }
           if (payload.action === 'archived') {
             // One page, newest-archived first, honouring limit/offset so the
             // phone's paging cursor is exercised rather than assumed.
@@ -632,8 +811,24 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
         case 'read-stream': {
           if (payload.action === 'unsubscribe') {
             if (payload.sessionId === STUB_CODEX_SESSION_ID) codexStreamSubscribed = false;
-            else streamSubscribed = false;
+            else if (!isScaleSessionId(payload.sessionId)) streamSubscribed = false;
             return ok();
+          }
+          if (isScaleSessionId(payload.sessionId)) {
+            // The fleet's whole purpose: answer a transcript-window with
+            // entries big enough that decoding N of them at once is the cost
+            // being measured. No feed is started for these - they are a load
+            // shape for cold start, not live sessions to interact with.
+            if (payload.action === 'transcript-window') {
+              return ok(scaleTranscriptWindow(payload.sessionId, payload.limit ?? 8, scale));
+            }
+            return ok({
+              scrollback: '',
+              activity: { state: 'thinking', reason: { kind: 'turn-active' } },
+              usage: null,
+              awaitedPromptId: null,
+              ptyDimensions: { ...ptyDimensions },
+            });
           }
           if (payload.sessionId === STUB_CODEX_SESSION_ID) {
             if (payload.action === 'transcript-window') {
@@ -845,12 +1040,12 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey) {
  * every Maestro launchApp performs) permanently strands the session.
  * Returns a stable handle whose send() targets the current dial.
  */
-function runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey) {
+function runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
   let currentSession = null;
   async function dialForever() {
     for (;;) {
       try {
-        currentSession = await runSession(relayUrl, desktopStatic, phoneStaticPublicKey);
+        currentSession = await runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale);
       } catch (dialError) {
         console.log(`[session] relay dial failed (${dialError.message}); retrying in 1s...`);
         await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000));
@@ -882,7 +1077,10 @@ function isEmulatorTypeable(uri) {
 }
 
 async function main() {
-  const { relayUrl, autoConfirm, phoneKeyHex, identityFile, advertiseRelayUrl } = parseArgs(process.argv.slice(2));
+  const { relayUrl, autoConfirm, phoneKeyHex, identityFile, advertiseRelayUrl, scale } = parseArgs(process.argv.slice(2));
+  if (scale.projects > 0) {
+    console.log(`[scale] ${scale.projects} synthetic projects x ${scale.sessions} sessions, ${scale.payloadKb} KiB per transcript entry`);
+  }
 
   // Already-paired fast path: open the ongoing session directly, no pairing.
   if (phoneKeyHex) {
@@ -890,7 +1088,7 @@ async function main() {
     const phoneStaticPublicKey = hexToBytes(phoneKeyHex);
     console.log(`Relay: ${relayUrl}`);
     console.log(`Session-only mode: reconnecting to the phone paired at ${bytesToHex(phoneStaticPublicKey)}`);
-    const session = runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey);
+    const session = runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey, scale);
     setInterval(() => {
       try {
         session.send({ type: 'heartbeat' });
@@ -949,7 +1147,7 @@ async function main() {
   console.log(`\nPaired. Phone static key: ${bytesToHex(phoneStaticPublicKey)}`);
   console.log('Opening the ongoing session and sending a heartbeat every 5s (Ctrl+C to stop)...\n');
 
-  const session = runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey);
+  const session = runSessionWithRedial(relayUrl, desktopStatic, phoneStaticPublicKey, scale);
   setInterval(() => {
     try {
       session.send({ type: 'heartbeat' });

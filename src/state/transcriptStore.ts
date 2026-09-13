@@ -57,6 +57,7 @@ interface TranscriptStoreState {
   retainedSessionIds: string[];
   retainSession: (sessionId: string) => void;
   releaseSession: (sessionId: string) => void;
+  shedBackgroundTranscripts: () => void;
   applyTranscript: (event: TranscriptEvent) => void;
   applyWindow: (sessionId: string, window: TranscriptWindowResponsePayload) => void;
   reset: () => void;
@@ -96,6 +97,33 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
       return {
         retainedSessionIds: state.retainedSessionIds.filter((retainedId) => retainedId !== sessionId),
         bySessionId,
+      };
+    }),
+
+  /**
+   * Drops every retained session's transcript except the most recent, which is
+   * the one on screen (`retainedSessionIds` is LRU, newest last). Called on an
+   * OS memory warning - see `src/observability/memoryPressure.ts`.
+   *
+   * Worth doing even though the cap is only three: a transcript's ENTRY count
+   * is uncapped. `applyWindow`'s older-page branch prepends and never trims,
+   * and `applyTranscript` pushes tail entries and never trims, so a long
+   * scrolled-back session holds an arbitrary number of entries carrying full
+   * tool inputs and results. Three of those is not a small number.
+   *
+   * Everything dropped is reconstructible: the session screen refetches its
+   * window on mount, so this costs a round trip, never content. Idempotent -
+   * with one or zero retained sessions it does nothing.
+   */
+  shedBackgroundTranscripts: () =>
+    set((state) => {
+      if (state.retainedSessionIds.length <= 1) return state;
+      const keptId = state.retainedSessionIds[state.retainedSessionIds.length - 1];
+      if (keptId === undefined) return state;
+      const keptSession = state.bySessionId[keptId];
+      return {
+        retainedSessionIds: [keptId],
+        bySessionId: keptSession === undefined ? {} : { [keptId]: keptSession },
       };
     }),
 

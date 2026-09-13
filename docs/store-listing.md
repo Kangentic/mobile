@@ -273,6 +273,13 @@ two entries, App Store Connect takes four, because Apple splits Diagnostics into
   2026-09-11 capture audit) fall under this same entry, and under Apple's Crash Data below: they
   are the same data class with strictly less content, since the error message is replaced by a
   fixed site label before it leaves the device. No new entry on either store is needed for them.
+
+  The same answer, re-checked rather than assumed, for the OS-memory-pressure breadcrumb added
+  by the MOBILE-8 fix (`src/observability/memoryPressure.ts`, 2026-09-13): it is diagnostic data
+  riding an existing crash payload, carrying a count of memory warnings this launch and no free
+  text, no byte figure and no session content. It collects no new data TYPE on either store, so
+  both forms stand as submitted. It is not a new capture call either - a breadcrumb is scope
+  data attached to an event that was already going to be sent.
 - **Device or other IDs.** Collected: **yes**. sentry-android attaches a per-install identifier
   on its own (`contexts.device.id`) and, on a crash the operating system catches rather than the
   app's own code, additionally promotes it into `user.id` - the `user.id` half confirmed by

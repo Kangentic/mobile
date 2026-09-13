@@ -2033,6 +2033,117 @@ uploading mappings. Note the assertion matches the **enabled** form deliberately
 always writes the `autoUploadProguardMapping` line, with `false` as the value when the upload is
 off, so grepping the property name alone would prove nothing.
 
+**Reading a `WatchdogTermination` (Sentry MOBILE-8), and two dead ends not to re-walk.** iOS kills
+a foreground app for memory without producing a crash report, so sentry-cocoa never captures the
+event - it *infers* one on the next launch by elimination. There is no stack trace and there never
+will be. What the payload does carry is worth knowing precisely, because the first reading of it
+here was wrong in both directions.
+
+- **The breadcrumbs are the KILLED session's, not the detecting one's**, and the event's timestamp
+  is the killed session's LAST BREADCRUMB rather than the detection moment. Read out of
+  sentry-cocoa 8.58.0: `SentryWatchdogTerminationTracker` sets `event.breadcrumbs = @[]` ("so no
+  breadcrumbs of the current scope are added"), then fills
+  `event.serializedBreadcrumbs` from `fileManager readPreviousBreadcrumbs`. So the trail is real
+  evidence about the session that died, and `dateReceived - dateCreated` bounds the whole episode.
+  For MOBILE-8 that was 22.9 s, which is decisive against a slow leak.
+- **Count the breadcrumbs against `maxBreadcrumbs` (20 here).** A trail that starts with
+  sentry-cocoa's own `started` marker and is well under the cap was not truncated - it is the
+  complete life of that session. MOBILE-8's six said the user never navigated past the Agents tab.
+- **RETRACTED, inline where it was drawn:** the absence of a low-memory breadcrumb was read as
+  weak evidence against the memory hypothesis. It is worth nothing.
+  `SentrySystemEventBreadcrumbs` observes keyboard, screenshot, battery, orientation, timezone and
+  time-change - and **not** `UIApplicationDidReceiveMemoryWarningNotification`. On iOS there was
+  no such breadcrumb to be absent. `src/observability/memoryPressure.ts` now records one, so a
+  future event of this shape self-identifies: a trail carrying `app.memory` warnings is an
+  out-of-memory kill, one without is a hang or a force-quit.
+- **A CI simulator can never reproduce or observe a watchdog termination.**
+  `SentryWatchdogTerminationLogic` opens with `if (self.crashAdapter.isSimulatorBuild) { return
+  NO; }`. A probe on the existing crash-probe harness was designed before this was checked and
+  could only ever have produced a false negative. Same ceiling as the NSE probe's `simctl push`.
+- **MetricKit is not a cheap first move.** `@sentry/react-native` 7.11.0 exposes no
+  `enableMetricKit`, so it means new Swift in the main app target, a new config plugin, and an
+  unresolved bridging-header question - and MetricKit payloads do not arrive on a simulator, so
+  proving it works costs a spent `ios.buildNumber` and a TestFlight round.
+- **A JS fatal is NOT misread as a watchdog termination.** It writes a crash report, which is the
+  exact gate the heuristic eliminates on (`crashedLastLaunch`), and MOBILE-1 shows the JS path
+  reporting normally from iOS. Correspondingly no watchdog issue has ever appeared in the
+  `crash-test` environment, despite every such dispatch killing the app with a real JS fatal.
+- **Unrelated but surfaced while checking the above:** `ios-b13` tags `fa137a2`, eight commits
+  before `c64a106` ("fix(nav): perform published navigation inside React"), and `ios-b13` is still
+  the highest `ios-b*` tag. Build 13 therefore ships the task #69 cold-start crash with its fix
+  sitting unshipped on `main`.
+
+**What MOBILE-8 was traced to, and how to re-measure it.** The Agents feed pre-warmed one snippet
+per known session with an unawaited `for` loop (`TriageHomeScreen.tsx`), so peak allocation scaled
+linearly with live-session count: each peek decodes a transcript window carrying full tool inputs
+and results, bounded only by the protocol's **per-frame** 4 MiB decoded cap with no aggregate
+bound. Nothing retains any of it, so it never presented as a leak - it was peak simultaneous
+TRANSIENT allocation, which is what a foreground jetsam kill looks like and what no `dumpsys
+meminfo` retention hunt would ever have found. It is now bounded by a queue
+(`src/lib/boundedTaskQueue.ts`, depth `SNIPPET_WARM_CONCURRENCY`), and the pre-warm no longer
+escalates to a full PTY scrollback. The cold-start **subscribe fan-out** (one `read-board` per
+project plus one `read-stream` per live session, previously all issued at once) is bounded the same
+way, by `SUBSCRIBE_FAN_OUT_CONCURRENCY` in `src/channel/subscriptionManager.ts`. At the fleet size
+that made this report plausible that fan-out is the larger of the two.
+
+**Retracted: "an aggregate in-flight decode budget at `sessionManager.ts` is the durable version of
+this fix, do it after the queue is measured."** That was the plan's deferred item and it is not a
+deferred good idea, it is unsound. `handleApplicationFrame` allocates `opened.plaintext` from
+`streams.receive.open(payload)` BEFORE `decodeMessage` is reached, and the secretstream is stateful
+and strictly in order, so a frame cannot be deferred without buffering the ciphertext (the same
+memory, plus a stalled stream). A budget check at that boundary can therefore never prevent the
+allocation it is aimed at. All it can do is refuse to decode a response whose bytes are already in
+memory, turning a memory problem into a correctness one, which is the risk the plan flagged without
+noticing it was the whole of the effect. **The allocation is bounded at the caller or not at all** -
+which is what the two queues above do. Do not re-derive this: read
+`src/channel/sessionManager.ts`'s `handleApplicationFrame` and the ordering is plain.
+
+**Both queue depths are CHOSEN, not measured**, and the fix does not depend on either value: what
+makes it a fix is that peak allocation stopped being a function of fleet size. To measure the
+snippet depth, build with `EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE=1` and sweep the "Snippet warm
+depth" section in Settings, which moves the cap on a LIVE queue so both arms share one process as
+`.claude/rules/performance-claims-are-measured.md` requires. `SUBSCRIBE_FAN_OUT_CONCURRENCY` is
+deliberately held fixed while that sweeps: an A/B whose arms differ in two things measures neither.
+
+The cause is platform-independent JavaScript, so unlike everything else in this investigation it
+is **measurable on Android**. The rig could not previously produce the condition - one project,
+three sessions - so `scripts/stubDesktopPeer.mjs` takes a synthetic-fleet knob, off by default so
+no Maestro flow sees it:
+
+```
+node scripts/stubDesktopPeer.mjs --relay ws://127.0.0.1:8080 --yes \
+  --scale-projects 6 --scale-sessions 8 --scale-payload-kb 64
+```
+
+That is 48 live sessions answering with 64 KiB-per-entry transcript windows. Read it on a RELEASE
+build (`npx expo run:android --variant release --no-bundler`) across a cold start, two `dumpsys
+meminfo` samples with the second trusted, a control taken the same way, and a median with its
+range - `.claude/rules/performance-claims-are-measured.md` applies in full, and the A/B belongs in
+ONE process, so vary the queue depth at runtime rather than building two APKs. The filler is
+deliberately random rather than a repeated character: the wire deflates anything over the
+protocol's threshold, and a compressible payload would understate the decode cost by orders of
+magnitude.
+
+**It still compresses, and by more than "random" suggests.** Measured across every window shape
+probed (8x64 KiB, 8x256 KiB, 60x32 KiB, 1x1 MiB), the deflated frame is **0.287-0.299x** the JSON,
+because each token is a long repeated `sessionId:index:` prefix around ~11 random base36
+characters. That is fine for what the knob measures - the app allocates the DECODED size - but do
+not read the wire cost off the decode cost or the other way around.
+
+**The payload knob has a real ceiling, and the stub now finds it by encoding rather than by
+predicting.** Two protocol caps bite: `MAX_DECODED_LENGTH` (4 MiB) on the JSON and
+`MAX_FRAME_LENGTH` (1 MiB) on the deflated frame. A snippet peek (limit 8) at 64 KiB sits well
+inside both, but a transcript-window **paging** request (limit 60, which happens the moment
+someone opens one of these synthetic sessions) is 3.9 MiB of JSON at that same setting and
+`encodeMessage` throws - and since the stub turns an uncaught exception into `exit(1)`, that would
+kill the rig mid-measurement with a stack trace naming neither the knob nor the cap.
+`resolveScalePadBytes` therefore halves the pad until a probe window actually encodes, memoized
+per window shape and logged once (`[scale] ... using 32 KiB for this window shape`). Deliberately
+not a hardcoded ratio: 0.29 is a property of the filler, so making the filler more random later
+would silently move the cliff back under any constant. If a run needs more bytes than the clamp
+allows, raise the session COUNT rather than the per-entry size - the defect scales with count,
+which is the point.
+
 **Why the DSN is a variable and not a secret.** A DSN is not confidential: it ships inside the
 published app bundle, so anyone with the APK can read it, and Sentry displays it in plaintext in
 the project's Client Keys page. It is write-only - it can submit an event and read nothing back.
@@ -2496,10 +2607,32 @@ there is nothing here to patch.
 
 **The fix is Android-only, by construction.** `ViewTreeObserver` is an Android API and the patch
 touches `android/src/main/java/**` and nothing else. iOS renders markdown through a separate
-`NSAttributedString` implementation that has NOT been examined and for which this repo has no
-retention measurement path at all (there is no iOS equivalent of `dumpsys meminfo` wired up here,
-and no iOS E2E suite). So: the Android leak is fixed and measured to the bar; whether iOS has an
-analogous one is unknown, and any claim that this unblocks App Review should say so.
+`NSAttributedString` implementation, and this repo still has no retention MEASUREMENT path for it
+(there is no iOS equivalent of `dumpsys meminfo` wired up here, and no iOS E2E suite). So the
+Android leak is fixed and measured to the bar; the iOS side below is **read out of the source**,
+never measured, and any claim that this unblocks App Review should say so.
+
+**The iOS renderer has now been audited, and it is not the Android shape** (source read,
+2026-09-13, prompted by Sentry MOBILE-8). Nothing in
+`node_modules/react-native-enriched-markdown/ios/` registers a per-mount callback on a window- or
+process-scoped object that reaches the RN view tree, which is the mechanism the Android patch
+undoes. Three findings worth keeping, none of them a hierarchy leak:
+
+- `ios/input/ENRMInputLinkPrompt.mm:37-41` adds an `NSNotificationCenter` observer and discards
+  the returned token, with no `removeObserver:` anywhere in the file - the only
+  registration-without-removal in the package. It is per link-prompt in the TextInput path and
+  does not capture the source view, so it is unreachable from the feed.
+- `views/EnrichedMarkdownInternalText.m` and `views/TableContainerView.m` build
+  `UIAccessibilityElement`s with themselves as the container and implement neither
+  `prepareForRecycle` nor `dealloc` to nil them. Per-view, not per-hierarchy.
+  `EnrichedMarkdownText.mm` does nil its elements on recycle, so the gap is an asymmetry between
+  siblings rather than a pattern.
+- `input/EnrichedMarkdownTextInput.mm` implements no `prepareForRecycle` at all, so its text
+  storage, formatting store and pending styles carry across a recycle. Stale state, view-owned.
+
+Clean on everything else checked: one `CADisplayLink` that self-cancels and holds its view weakly,
+no `NSTimer`, no KVO, no strongly-captured blocks on any manager or singleton, no custom `delegate`
+properties to mis-qualify, and an `NSMapTable` with weak values.
 
 **Upgrading does not fix it.** The library is at 0.7.4 here and 1.0.2 is current;
 `MarkdownAccessibilityHelper.kt` is **byte-identical** between the two, and the same code is on

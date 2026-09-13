@@ -6,12 +6,35 @@ import type {
   ReadStreamResponsePayload,
   Unsubscribe,
 } from '@kangentic/protocol';
+import { createBoundedTaskQueue } from '../lib/boundedTaskQueue';
 import type { SessionManager } from './sessionManager';
 import { CapabilityError, type VerbClient } from './verbClient';
 
 const BOARD_REFRESH_DEBOUNCE_MS = 300;
 const DIFF_REFRESH_DEBOUNCE_MS = 500;
 const STREAM_RETRY_DELAY_MS = 2000;
+
+/**
+ * How many subscribe requests may be in flight at once.
+ *
+ * The cold-start fan-out is one `read-board` per project plus one `read-stream`
+ * per live session, and it used to issue all of them at once: at the fleet size
+ * that made Sentry MOBILE-8 plausible that is over fifty simultaneous requests,
+ * each answered by a snapshot this process has to decode. Same shape as the
+ * Agents feed's snippet pre-warm and the same fix, applied one layer up.
+ *
+ * Deliberately its OWN queue rather than one shared with the feed's pre-warm.
+ * Sharing would mean a module in `src/channel/` reaching for screen state, and
+ * these are not interchangeable: a subscribe is required work that must
+ * eventually happen, a pre-warm is discretionary and gets dropped under memory
+ * pressure. The combined worst case is the two caps added together, which is
+ * still a constant rather than a function of fleet size.
+ *
+ * CHOSEN, not measured. The pre-warm's cap has the same status. Both are
+ * provably constant in fleet size, which is the fix; the specific numbers want
+ * the Android A/B described in `docs/developer-guide.md`.
+ */
+export const SUBSCRIBE_FAN_OUT_CONCURRENCY = 4;
 
 export interface SubscriptionSnapshotSinks {
   onStreamSnapshot(sessionId: string, snapshot: ReadStreamResponsePayload): void;
@@ -113,6 +136,25 @@ export class SubscriptionManager {
   private readonly boardRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly diffRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly streamRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  private readonly subscribeQueue = createBoundedTaskQueue(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+  /**
+   * Which ids already have a subscribe SCHEDULED but not yet started.
+   *
+   * Without this the cap makes an existing tolerance into a real problem.
+   * `activeStreamIds` is only written once a response lands, so during the
+   * in-flight window the guard in `setDesiredStreams` is false and a second
+   * reconcile re-issues - harmless today because the desktop's
+   * `SubscriptionRegistry.set` replaces-and-tears-down, so a re-issue is just a
+   * refresh. Behind a queue those duplicates stop being free: they occupy the
+   * four slots that the sessions with no subscription at all are waiting for.
+   *
+   * The flag clears when the task STARTS, not when its response lands, so the
+   * refresh-by-re-issue behaviour above is preserved for anything that asks
+   * while the request is genuinely in flight.
+   */
+  private readonly queuedStreamIds = new Set<string>();
+  private readonly queuedBoardIds = new Set<string>();
   private disposed = false;
 
   constructor(options: SubscriptionManagerOptions) {
@@ -133,7 +175,7 @@ export class SubscriptionManager {
     if (!this.session.isEstablished) return;
     for (const sessionId of this.desiredStreamIds) {
       if (!this.activeStreamIds.has(sessionId) && !this.streamRetryTimers.has(sessionId)) {
-        void this.subscribeStream(sessionId);
+        this.enqueueStreamSubscribe(sessionId);
       }
     }
   }
@@ -147,7 +189,7 @@ export class SubscriptionManager {
     }
     if (!this.session.isEstablished) return;
     for (const projectId of this.desiredBoardIds) {
-      if (!this.activeBoardIds.has(projectId)) void this.subscribeBoard(projectId);
+      if (!this.activeBoardIds.has(projectId)) this.enqueueBoardSubscribe(projectId);
     }
   }
 
@@ -220,7 +262,19 @@ export class SubscriptionManager {
     return true;
   }
 
-  /** Immediate re-subscribe for one stream - the fresh-scrollback path when a session screen opens. */
+  /**
+   * Immediate re-subscribe for one stream - the fresh-scrollback path when a
+   * session screen opens.
+   *
+   * Deliberately NOT queued, and the same goes for `setStreamWantsTerminal`,
+   * `setBoardWantsFull` and `refreshBoard`. Those four are one request each,
+   * caused by a user action, and the screen is waiting on the answer; putting
+   * them behind the fan-out cap would make opening a session screen wait on up
+   * to four background subscribes. The cap exists for the storms, which are
+   * the reconciles that issue one request PER project or PER session. A direct
+   * re-issue can overlap a queued task for the same id, which is the
+   * refresh-by-re-issue the desktop's replace-and-tear-down already makes safe.
+   */
   refreshStream(sessionId: string): void {
     if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return;
     void this.subscribeStream(sessionId);
@@ -263,6 +317,9 @@ export class SubscriptionManager {
 
   dispose(): void {
     this.disposed = true;
+    this.subscribeQueue.clear();
+    this.queuedStreamIds.clear();
+    this.queuedBoardIds.clear();
     this.unsubscribeEstablished();
     this.unsubscribeRekey();
     for (const timer of this.boardRefreshTimers.values()) clearTimeout(timer);
@@ -271,6 +328,47 @@ export class SubscriptionManager {
     this.diffRefreshTimers.clear();
     for (const timer of this.streamRetryTimers.values()) clearTimeout(timer);
     this.streamRetryTimers.clear();
+  }
+
+  /**
+   * Schedules a stream subscribe behind the fan-out cap.
+   *
+   * Every precondition is re-checked at DRAIN time rather than trusted from
+   * the closure, because the gap between enqueue and start is now unbounded.
+   * A session can be desired, dropped, and desired again while its task waits;
+   * the transport can drop and re-handshake. Checking only at enqueue would
+   * re-establish a stream nobody wants (the drop already ran, so nothing would
+   * ever tear it down again) or fire a request at a dead session.
+   *
+   * Note the flag is NOT cleared by `dropStream`. A queued task that finds its
+   * session no longer desired simply no-ops, and one whose session was
+   * re-desired in the meantime does the work the re-add wanted, so the flag can
+   * stay set across the whole drop-and-re-add cycle without either losing a
+   * subscribe or issuing two.
+   */
+  private enqueueStreamSubscribe(sessionId: string, isRetry = false): void {
+    if (this.disposed || this.queuedStreamIds.has(sessionId)) return;
+    this.queuedStreamIds.add(sessionId);
+    this.subscribeQueue.enqueue(async () => {
+      this.queuedStreamIds.delete(sessionId);
+      // The isEstablished half is belt-and-braces: `SessionManager.send`
+      // throws on a dead session anyway, so omitting it puts nothing on the
+      // wire either. What it buys is that the task no-ops instead of throwing
+      // into `subscribeStream`'s catch, which would arm a retry timer per
+      // queued session for a connection that is already gone.
+      if (this.disposed || !this.session.isEstablished || !this.desiredStreamIds.has(sessionId)) return;
+      await this.subscribeStream(sessionId, isRetry);
+    });
+  }
+
+  private enqueueBoardSubscribe(projectId: string): void {
+    if (this.disposed || this.queuedBoardIds.has(projectId)) return;
+    this.queuedBoardIds.add(projectId);
+    this.subscribeQueue.enqueue(async () => {
+      this.queuedBoardIds.delete(projectId);
+      if (this.disposed || !this.session.isEstablished || !this.desiredBoardIds.has(projectId)) return;
+      await this.subscribeBoard(projectId);
+    });
   }
 
   private onEstablished(): void {
@@ -284,14 +382,21 @@ export class SubscriptionManager {
     // controller rejected it, and the catch below clears it as it settles. A
     // fresh handshake starts from nothing in flight.
     this.pendingBoardViewByProjectId.clear();
-    // The boards held at 'full' are the ones a Board tab is showing, so they
-    // go first: the desktop answers in issue order, and the screen the user is
-    // looking at should not queue behind every feed-only project.
+    // The biggest fan-out there is: every board and every live session at
+    // once, on a path that also runs after a transport drop, so it is exactly
+    // the cold-start storm repeated on every reconnect. Hence the cap.
+    //
+    // The full-first ordering matters MORE behind that cap, not less. The
+    // boards held at 'full' are the ones a Board tab is showing, and the
+    // desktop answers in issue order; unqueued, a feed-only project ahead of
+    // them cost one round trip of latency, but with only
+    // SUBSCRIBE_FAN_OUT_CONCURRENCY in flight it can cost several drains'
+    // worth before the screen the user is looking at is even asked for.
     const boardsFullFirst = [...this.desiredBoardIds].sort(
       (left, right) => Number(this.boardViewByProjectId.get(right) === 'full') - Number(this.boardViewByProjectId.get(left) === 'full'),
     );
-    for (const projectId of boardsFullFirst) void this.subscribeBoard(projectId);
-    for (const sessionId of this.desiredStreamIds) void this.subscribeStream(sessionId);
+    for (const projectId of boardsFullFirst) this.enqueueBoardSubscribe(projectId);
+    for (const sessionId of this.desiredStreamIds) this.enqueueStreamSubscribe(sessionId);
     for (const [taskId, desired] of this.desiredDiffsByTaskId) void this.subscribeDiff(taskId, desired);
   }
 
@@ -343,7 +448,10 @@ export class SubscriptionManager {
           sessionId,
           setTimeout(() => {
             this.streamRetryTimers.delete(sessionId);
-            if (this.session.isEstablished && this.desiredStreamIds.has(sessionId)) void this.subscribeStream(sessionId, true);
+            // Queued, not direct: a transport hiccup fails the whole fan-out
+            // at once, so every retry timer fires within the same tick and
+            // the retry is a second storm in its own right.
+            if (this.session.isEstablished && this.desiredStreamIds.has(sessionId)) this.enqueueStreamSubscribe(sessionId, true);
           }, STREAM_RETRY_DELAY_MS),
         );
       }

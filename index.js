@@ -1,5 +1,7 @@
 import './src/lib/cryptoPolyfills';
 import { initializeCrashReporting } from './src/observability/crashReporting';
+import { initializeMemoryPressure } from './src/observability/memoryPressure';
+import { registerMemoryShedders } from './src/state/memoryShed';
 import { initializeNotifications } from './src/notifications';
 import 'expo-router/entry';
 
@@ -18,4 +20,11 @@ import 'expo-router/entry';
 // No-ops entirely when EXPO_PUBLIC_SENTRY_DSN is unset, which is every
 // build made from source - see src/observability/crashReporting.ts.
 initializeCrashReporting();
+// Immediately after, and outside React on purpose. iOS warns before it kills
+// a foreground app for memory, and the episode behind Sentry MOBILE-8 fit
+// inside about 23 seconds of launch - a listener that armed when a screen
+// mounted could miss one entirely. Unlike its neighbour this still arms
+// without a DSN: the shedding half is robustness, not reporting.
+initializeMemoryPressure();
+registerMemoryShedders();
 initializeNotifications();

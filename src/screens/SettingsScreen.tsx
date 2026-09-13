@@ -21,6 +21,12 @@ import {
   setRetentionProbeVariant,
   useRetentionProbeVariant,
 } from '@/devsupport/retentionProbe';
+import {
+  CONCURRENCY_PROBE_DEPTHS,
+  concurrencyProbeEnabled,
+  setConcurrencyProbeDepth,
+  useConcurrencyProbeDepth,
+} from '@/devsupport/concurrencyProbe';
 import { nseProbeEnabled, readNseProbeResult, seedNseProbe } from '@/devsupport/nseProbe';
 import {
   connectionTraceEnabled,
@@ -200,6 +206,7 @@ export function SettingsScreen(): React.JSX.Element {
   const relayUrl = useChannelStore((state) => state.relayUrl);
   const pairedState = useChannelStore((state) => state.pairedState);
   const retentionProbeVariant = useRetentionProbeVariant();
+  const concurrencyProbeDepth = useConcurrencyProbeDepth();
   // The NSE probe rows (build-ios.yml `nse_probe`). A failure's message is
   // rendered on purpose: an errSecMissingEntitlement on the runner's failure
   // screenshot reads differently from a decrypt failure, which is the point.
@@ -502,6 +509,35 @@ export function SettingsScreen(): React.JSX.Element {
                       selected={option.variant === retentionProbeVariant}
                       testID={`settings-retention-probe-${option.variant}`}
                       onPress={() => setRetentionProbeVariant(option.variant)}
+                    />
+                  </React.Fragment>
+                ))}
+              </Stack>
+            </Card>
+          </Stack>
+        ) : null}
+
+        {concurrencyProbeEnabled() ? (
+          <Stack gap="xs">
+            <SectionHeader title="Snippet warm depth" testID="settings-section-concurrency-probe" />
+            <Card>
+              <Stack gap="xs">
+                <RadioRow
+                  label="Shipped"
+                  description="The feed's own cap"
+                  selected={concurrencyProbeDepth === null}
+                  testID="settings-concurrency-probe-shipped"
+                  onPress={() => setConcurrencyProbeDepth(null)}
+                />
+                {CONCURRENCY_PROBE_DEPTHS.map((depth) => (
+                  <React.Fragment key={depth}>
+                    <RowDivider />
+                    <RadioRow
+                      label={`${depth} at a time`}
+                      description={depth === 1 ? 'Fully serial' : `Up to ${depth} peeks in flight`}
+                      selected={depth === concurrencyProbeDepth}
+                      testID={`settings-concurrency-probe-${depth}`}
+                      onPress={() => setConcurrencyProbeDepth(depth)}
                     />
                   </React.Fragment>
                 ))}

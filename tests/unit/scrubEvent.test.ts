@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Breadcrumb, ErrorEvent } from '@sentry/react-native';
-import { allowlistBreadcrumb, scrubEvent } from '@/observability/scrubEvent';
+import { MEMORY_PRESSURE_BREADCRUMB_CATEGORY, allowlistBreadcrumb, scrubEvent } from '@/observability/scrubEvent';
 
 /**
  * These lock the payload shape that leaves the device. The privacy claims in
@@ -148,6 +148,26 @@ describe('allowlistBreadcrumb', () => {
 
   it("lets Sentry's own event bookkeeping through", () => {
     expect(allowlistBreadcrumb(breadcrumb('sentry.event'))).not.toBeNull();
+  });
+
+  /**
+   * The coupling that makes memoryPressure.ts work at all, pinned here rather
+   * than only beside that module. `beforeBreadcrumb` runs BEFORE a JS
+   * breadcrumb syncs into the native scope, so dropping this category would
+   * silently stop the memory-warning signal ever reaching the persisted buffer
+   * that a watchdog-termination event is built from - with every other test,
+   * the lint and tsc still green. That is exactly the failure mode this file
+   * exists to catch (see Sentry MOBILE-8).
+   */
+  it('lets the app-owned memory-pressure category through', () => {
+    expect(allowlistBreadcrumb(breadcrumb(MEMORY_PRESSURE_BREADCRUMB_CATEGORY))).not.toBeNull();
+  });
+
+  it("does NOT let the platform's own device.event through, which the memory category deliberately avoids reusing", () => {
+    // Reusing `device.event` would have allowlisted sentry-cocoa's and
+    // sentry-android's battery, keyboard and screen-state breadcrumbs too.
+    expect(MEMORY_PRESSURE_BREADCRUMB_CATEGORY).not.toBe('device.event');
+    expect(allowlistBreadcrumb(breadcrumb('device.event'))).toBeNull();
   });
 
   it('drops console breadcrumbs, the category that would carry app output', () => {

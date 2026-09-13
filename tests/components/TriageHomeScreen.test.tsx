@@ -1,13 +1,13 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
-import { TriageHomeScreen } from '@/screens/TriageHomeScreen';
+import { SNIPPET_WARM_CONCURRENCY, TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
-import { peekLastAssistantMessage } from '@/connection/actions';
+import { peekLastAssistantMessage, peekLastTerminalLine } from '@/connection/actions';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -56,6 +56,17 @@ jest.mock('@/connection/actions', () => ({
   peekLastAssistantMessage: jest.fn().mockResolvedValue(null),
   peekLastTerminalLine: jest.fn().mockResolvedValue(null),
   answerPermissionPrompt: jest.fn().mockResolvedValue(undefined),
+}));
+
+// Captures what the screen subscribes, so a test can fire OS memory pressure
+// without an AppState round trip. Named `mock*` because a jest.mock factory is
+// hoisted above the imports and may not close over anything else.
+const mockMemoryPressureListeners = new Set<() => void>();
+jest.mock('@/observability/memoryPressure', () => ({
+  subscribeToMemoryPressure: (listener: () => void) => {
+    mockMemoryPressureListeners.add(listener);
+    return () => mockMemoryPressureListeners.delete(listener);
+  },
 }));
 
 function seedStores(): void {
@@ -187,6 +198,8 @@ describe('TriageHomeScreen', () => {
     // resolved value into whichever test runs next.
     jest.mocked(peekLastAssistantMessage).mockReset();
     jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
+    jest.mocked(peekLastTerminalLine).mockReset();
+    jest.mocked(peekLastTerminalLine).mockResolvedValue(null);
     mockFlashListScrollToOffset.mockClear();
     seedStores();
   });
@@ -703,6 +716,133 @@ describe('TriageHomeScreen', () => {
     // The lone row is prompt-pending, which kicks off an async snippet peek;
     // let it settle so it does not bleed into the next test.
     await act(async () => {});
+  });
+
+  /**
+   * The Sentry MOBILE-8 regression: the feed used to pre-warm one snippet per
+   * KNOWN session with a bare unawaited `for` loop, so a user with many live
+   * agents issued a transcript-window fetch per session simultaneously. Those
+   * entries carry full tool inputs and results and are bounded only by the
+   * protocol's PER-FRAME decoded cap - no aggregate bound exists - and nothing
+   * on this screen retains the result, so it never looked like a leak. It was
+   * peak simultaneous TRANSIENT allocation scaling with fleet size, which is
+   * what a foreground out-of-memory kill actually looks like.
+   *
+   * Isolation matters here: the Thinking section is collapsed so no rows
+   * render, which removes the per-row peek and leaves the pre-warm as the only
+   * caller. Without that, a row's own fetch would be indistinguishable from a
+   * pre-warm in the call count.
+   */
+  describe('snippet pre-warm is bounded', () => {
+    const workingSessionIds = Array.from({ length: 12 }, (_, index) => `warm-sess-${index}`);
+
+    function seedManyWorkingSessions(): void {
+      useSettingsStore.setState({ collapsedTriageSection: 'Thinking' });
+      useActivityStore.getState().reset();
+      for (const sessionId of workingSessionIds) {
+        useActivityStore.getState().registerSession(sessionId, `task-${sessionId}`, 'project-1');
+        useActivityStore.getState().applyActivityEvent({
+          kind: 'activity',
+          sessionId,
+          taskId: `task-${sessionId}`,
+          payload: { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } },
+        });
+      }
+    }
+
+    it('runs at most a fixed number of warms at once, not one per session', async () => {
+      seedManyWorkingSessions();
+      // Never settles, so every started warm stays in flight and the call
+      // count IS the concurrency.
+      jest.mocked(peekLastAssistantMessage).mockReturnValue(new Promise<string | null>(() => undefined));
+
+      renderHome();
+      await act(async () => {});
+
+      // Exactly the queue depth, not merely "fewer than twelve": all twelve
+      // sessions are registered before the render, so the effect runs once and
+      // nothing ever resolves to free a slot. Asserting the exact value is
+      // what makes a later drift from 3 to 10 fail here.
+      expect(jest.mocked(peekLastAssistantMessage)).toHaveBeenCalledTimes(SNIPPET_WARM_CONCURRENCY);
+      expect(SNIPPET_WARM_CONCURRENCY).toBeLessThan(workingSessionIds.length);
+    });
+
+    it('does not escalate a warm to a full PTY scrollback', async () => {
+      seedManyWorkingSessions();
+      // No assistant text in the window: the old pre-warm took the terminal
+      // fallback here, which subscribes with `terminal: true` for a FULL
+      // scrollback and then makes a second round trip to undo it - per
+      // session, concurrently, at cold start.
+      jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
+
+      renderHome();
+      await act(async () => {});
+
+      expect(jest.mocked(peekLastTerminalLine)).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The other half of the test above, and the one that keeps the bound from
+     * quietly costing a feature. Dropping the fallback from the PRE-WARM defers
+     * a transcript-less agent's snippet; it must not lose it. Since the pre-warm
+     * cannot reach `peekLastTerminalLine` at all now (previous test), any call
+     * here is the mounted row's own peek - so this asserts the mechanism rather
+     * than the rendered text, which would be identical either way once it
+     * arrives.
+     */
+    it('still takes the fallback for a mounted row, so a transcript-less agent keeps its snippet', async () => {
+      // The seeded session is prompt-pending, which peeks the prompt instead.
+      // A working session is the one that reaches the message/terminal path.
+      useActivityStore.getState().reset();
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } },
+      });
+      jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
+
+      renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+      expect(jest.mocked(peekLastTerminalLine)).toHaveBeenCalledWith('sess-1', expect.any(Number));
+    });
+
+    /**
+     * The screen drops its queued warms when the OS reports memory pressure.
+     * Nothing renders differently either way, so this asserts the mechanism:
+     * let the in-flight warms finish AFTER the pressure signal and check the
+     * queue did not refill from its backlog. Without the subscription the three
+     * finishing warms pull three more in, so the count moves - which is what
+     * makes deleting that one line fail here rather than silently.
+     */
+    it('drops queued warms when the OS reports memory pressure', async () => {
+      seedManyWorkingSessions();
+      const pendingWarmResolvers: ((value: string | null) => void)[] = [];
+      jest.mocked(peekLastAssistantMessage).mockImplementation(
+        () =>
+          new Promise<string | null>((resolve) => {
+            pendingWarmResolvers.push(resolve);
+          }),
+      );
+
+      renderHome();
+      await act(async () => {});
+      expect(jest.mocked(peekLastAssistantMessage)).toHaveBeenCalledTimes(SNIPPET_WARM_CONCURRENCY);
+      expect(mockMemoryPressureListeners.size).toBeGreaterThan(0);
+
+      act(() => {
+        for (const listener of [...mockMemoryPressureListeners]) listener();
+      });
+      await act(async () => {
+        for (const resolve of pendingWarmResolvers) resolve(null);
+      });
+
+      // Still the original three: the backlog was discarded, not merely paused.
+      expect(jest.mocked(peekLastAssistantMessage)).toHaveBeenCalledTimes(SNIPPET_WARM_CONCURRENCY);
+    });
   });
 
   describe('long-press action hub', () => {

@@ -81,6 +81,17 @@ const EXPECTED_TRANSPORT_NOISE: RegExp[] = [
 let initialized = false;
 
 /**
+ * Whether `Sentry.init()` actually ran (a DSN was present). Exported for the
+ * one sibling in this directory that records scope data rather than events -
+ * `memoryPressure.ts` - so it can skip the breadcrumb while still doing its
+ * non-reporting half. Deliberately not exported outside `src/observability/`:
+ * nothing else has a reason to branch on it.
+ */
+export function isCrashReportingInitialized(): boolean {
+  return initialized;
+}
+
+/**
  * Gates the crash-test affordance in Settings and the SDK's `debug` logging.
  * `EXPO_PUBLIC_KANGENTIC_CRASHTEST` is inlined at bundle time by the same
  * mechanism as every other `EXPO_PUBLIC_*` flag, so it can only be true in a

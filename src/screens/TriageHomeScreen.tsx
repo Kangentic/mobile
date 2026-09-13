@@ -29,7 +29,10 @@ import {
   refreshSnapshots,
 } from '@/connection/actions';
 import { buildPendingPromptSummary, collapseToSnippetText } from '@/conversation/pendingPromptSummary';
+import { createBoundedTaskQueue, type BoundedTaskQueue } from '@/lib/boundedTaskQueue';
+import { subscribeToMemoryPressure } from '@/observability/memoryPressure';
 import { MapperLoad } from '@/devsupport/MapperLoad';
+import { useConcurrencyProbeDepth } from '@/devsupport/concurrencyProbe';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
 
@@ -183,8 +186,40 @@ export function TriageHomeScreen(): React.JSX.Element {
    * Deliberately does NOT gate the reveal. Whether you can see your agents at
    * all must not depend on a transcript-window fetch succeeding - a slow peek
    * should cost one row's snippet, not the whole feed.
+   *
+   * BOUNDED, and that bound is the whole point. This used to be a bare `for`
+   * loop firing every peek unawaited, so a user with many live agents issued
+   * one transcript-window fetch PER SESSION simultaneously. Those entries
+   * carry full tool inputs and results and are bounded only by the protocol's
+   * per-frame 4 MiB decoded cap - there is no aggregate bound anywhere - and
+   * each one inflates to a byte array, then a UTF-16 string, then a parsed
+   * object graph. Nothing retains any of it (this screen retains nothing), so
+   * it never read as a leak; it was peak SIMULTANEOUS TRANSIENT allocation
+   * that scaled linearly with fleet size, which is what a foreground
+   * out-of-memory kill on a memory-tight device looks like. Sentry MOBILE-8 is
+   * the report that led here. The queue makes the peak a constant.
    */
+  const concurrencyProbeDepth = useConcurrencyProbeDepth();
   const warmedSessionIdsRef = useRef(new Set<string>());
+  const warmQueueRef = useRef<BoundedTaskQueue | null>(null);
+  warmQueueRef.current ??= createBoundedTaskQueue(concurrencyProbeDepth ?? SNIPPET_WARM_CONCURRENCY);
+
+  // The A/B knob, inert outside a probe build. `setMaxConcurrent` rather than a
+  // fresh queue: a replacement starts at activeCount 0 while the original's
+  // tasks are still running, so the two together would exceed either depth and
+  // the arm would measure something that never ships. See boundedTaskQueue.
+  useEffect(() => {
+    warmQueueRef.current?.setMaxConcurrent(concurrencyProbeDepth ?? SNIPPET_WARM_CONCURRENCY);
+  }, [concurrencyProbeDepth]);
+
+  // Under memory pressure, stop feeding the queue. Warms not yet started are
+  // pure optimisation - every row fetches its own snippet when it mounts,
+  // consulting its own caches and not this set - so dropping them costs
+  // latency and nothing else, while removing the largest discretionary
+  // allocator on this screen at the moment the OS says it is short.
+  // `warmedSessionIdsRef` is deliberately NOT cleared: re-enqueueing dropped
+  // sessions is the one thing that would undo the saving.
+  useEffect(() => subscribeToMemoryPressure(() => warmQueueRef.current?.clear()), []);
   // The effect below needs to run when the SET of sessions changes, so this
   // selector has to be set-valued. It must NOT be reduced to a count: a
   // snapshot that drops one session and adds another leaves the count
@@ -195,17 +230,43 @@ export function TriageHomeScreen(): React.JSX.Element {
   const knownSessionIds = useActivityStore((state) => Object.keys(state.bySessionId).sort().join(','));
   useEffect(() => {
     if (!established) return;
-    for (const entry of Object.values(useActivityStore.getState().bySessionId)) {
-      if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
-      // Already pushed by a 0.8.0+ desktop: warming it would re-fetch, over
-      // the wire, the exact line we were just handed for free.
-      if (entry.messagePreview !== null && sectionForEntry(entry) !== 'needs-you') continue;
-      warmedSessionIdsRef.current.add(entry.sessionId);
-      void peekSnippet(entry.sessionId, entry.awaitedPromptId, sectionForEntry(entry) === 'needs-you', 0).catch(() => {
-        // The row retries on its own once mounted; a failed warm just means
-        // that one snippet arrives late.
-        warmedSessionIdsRef.current.delete(entry.sessionId);
-      });
+    const warmQueue = warmQueueRef.current;
+    if (warmQueue === null) return;
+    // Enqueue in FEED order, not hash order, so the sessions a user is about
+    // to look at are warmed first. Recomputed from the store rather than read
+    // off the `rows` memo on purpose: depending on `rows` would re-run this
+    // effect on every activity event, which is exactly what the set-valued
+    // `knownSessionIds` selector above exists to avoid.
+    //
+    // This changes the ORDER and nothing else. `selectTriageRows` partitions
+    // by `sectionForEntry`, which is total over the three states of the closed
+    // `TriageSection` union, and SECTION_ORDER lists all three - so every
+    // session the previous `Object.values(bySessionId)` loop reached is still
+    // reached exactly once. A future section added to the union without being
+    // added to SECTION_ORDER would silently stop warming its sessions.
+    const sections = selectTriageRows({ bySessionId: useActivityStore.getState().bySessionId });
+    for (const sectionKind of SECTION_ORDER) {
+      const section = sections.find((candidate) => candidate.section === sectionKind);
+      if (!section) continue;
+      for (const entry of section.entries) {
+        if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
+        // Already pushed by a 0.8.0+ desktop: warming it would re-fetch, over
+        // the wire, the exact line we were just handed for free.
+        if (entry.messagePreview !== null && sectionForEntry(entry) !== 'needs-you') continue;
+        warmedSessionIdsRef.current.add(entry.sessionId);
+        const sessionId = entry.sessionId;
+        const awaitedPromptId = entry.awaitedPromptId;
+        const isPermission = sectionForEntry(entry) === 'needs-you';
+        warmQueue.enqueue(() =>
+          // No terminal fallback here: see peekSnippet. The row asks again
+          // with it enabled once it mounts.
+          peekSnippet(sessionId, awaitedPromptId, isPermission, 0, false).catch(() => {
+            // The row retries on its own once mounted; a failed warm just
+            // means that one snippet arrives late.
+            warmedSessionIdsRef.current.delete(sessionId);
+          }),
+        );
+      }
     }
   }, [knownSessionIds, established]);
 
@@ -409,6 +470,19 @@ const SNIPPET_SETTLE_MS = 350;
 const WORKING_SNIPPET_FRESHNESS_MS = 20_000;
 
 /**
+ * How many snippet pre-warms may be in flight at once.
+ *
+ * Small on purpose. Each one decodes a transcript window carrying full tool
+ * inputs and results, so this number multiplies the protocol's per-frame
+ * decoded cap to give the screen's peak transient footprint - the quantity
+ * that was previously unbounded and scaled with the number of live agents.
+ * Three keeps the pipe busy across a round trip without letting the peak grow
+ * with the fleet; the pre-warm is an optimisation (rows fetch their own
+ * snippet on mount regardless), so erring low costs latency, never content.
+ */
+export const SNIPPET_WARM_CONCURRENCY = 3;
+
+/**
  * A row's snippet source, shared with the feed's pre-warm so both resolve
  * through the same caches: the pending decision when a prompt waits,
  * otherwise the agent's last message, falling back to the last readable
@@ -419,12 +493,23 @@ const WORKING_SNIPPET_FRESHNESS_MS = 20_000;
  *
  * Takes primitives rather than the entry object so the row's effect can keep
  * depending on the few fields that should actually trigger a refetch.
+ *
+ * `allowTerminalFallback` exists for the pre-warm, which passes false. The
+ * fallback is a FULL PTY scrollback (`peekLastTerminalLine` subscribes with
+ * `terminal: true`, then makes a second round trip to put the subscription
+ * back), and its trigger is content-shaped rather than agent-shaped: any
+ * window whose eight entries happen to hold no assistant text takes it. Firing
+ * that once per session, concurrently, at cold start is the heaviest term on
+ * this screen. A row that mounts asks again with the fallback enabled, so a
+ * transcript-less agent still gets its snippet - just gated by the row instead
+ * of by the size of the fleet.
  */
 async function peekSnippet(
   sessionId: string,
   awaitedPromptId: string | null,
   isPermission: boolean,
   freshnessMs: number,
+  allowTerminalFallback = true,
 ): Promise<string | null> {
   if (isPermission && awaitedPromptId !== null) {
     return buildPendingPromptSummary(await peekAwaitedPrompt(sessionId, awaitedPromptId));
@@ -434,7 +519,7 @@ async function peekSnippet(
     messagePeekFailed = true;
     return null;
   });
-  const snippetText = messageText ?? (await peekLastTerminalLine(sessionId, freshnessMs));
+  const snippetText = messageText ?? (allowTerminalFallback ? await peekLastTerminalLine(sessionId, freshnessMs) : null);
   if (snippetText === null && messagePeekFailed) throw new Error('snippet peek failed');
   return snippetText;
 }
@@ -572,6 +657,12 @@ const ActivityRow = React.memo(function ActivityRow({
       // The feed pre-warms these before it reveals itself, so on cold start
       // this call resolves straight from the peek caches and the row paints
       // its snippet in its first frame rather than a beat later.
+      //
+      // One exception, deliberate: a session whose window holds no assistant
+      // text was pre-warmed WITHOUT the terminal fallback, so its snippet is
+      // not cached and this call is what fetches it. That row paints empty
+      // first and fills a beat later - the cost of not letting a cold start
+      // fire one full PTY scrollback per live session at once.
       void peekSnippet(entry.sessionId, awaitedPromptId, isPermission, snippetFreshnessMs)
         .then((snippetText) => {
           if (cancelled) return;

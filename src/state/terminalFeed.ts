@@ -202,6 +202,32 @@ export function getUnbufferedListenerSessionIds(): string[] {
   return [...listenersBySessionId.keys()].filter((sessionId) => !ringsBySessionId.has(sessionId));
 }
 
+/**
+ * Drops buffered PTY bytes for every session nobody is watching, and returns
+ * how many rings went. Called on an OS memory warning
+ * (`src/observability/memoryPressure.ts`).
+ *
+ * A listener is the discriminator rather than "retained", because a mounted
+ * TerminalPane is precisely what subscribes: a ring with no listener is
+ * scrollback nothing on screen is reading, and the desktop re-seeds it on the
+ * next read-stream subscribe. A watched session keeps its ring untouched -
+ * shedding that one would blank a terminal the user is looking at, which is a
+ * worse outcome than the pressure.
+ *
+ * Idempotent, as every memory-pressure listener must be: with nothing
+ * unwatched to drop it does nothing and reports 0.
+ */
+export function shedUnwatchedTerminalRings(): number {
+  let shedCount = 0;
+  for (const sessionId of [...ringsBySessionId.keys()]) {
+    const listeners = listenersBySessionId.get(sessionId);
+    if (listeners !== undefined && listeners.size > 0) continue;
+    ringsBySessionId.delete(sessionId);
+    shedCount += 1;
+  }
+  return shedCount;
+}
+
 export function resetTerminalFeed(): void {
   ringsBySessionId.clear();
   listenersBySessionId.clear();
