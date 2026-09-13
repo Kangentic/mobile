@@ -1,5 +1,6 @@
 import type { ActivityEvent, TranscriptEvent, Unsubscribe } from '@kangentic/protocol';
 import type { FeedRouter, SubscriptionManager, SubscriptionSnapshotSinks } from '@/channel';
+import { traceConnection } from '@/devsupport/connectionTrace';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
@@ -68,6 +69,7 @@ export function createSnapshotSinks(getSubscriptions: () => SubscriptionManager)
       useActivityStore.getState().markRejected(sessionId);
     },
     onBoardSnapshot: (snapshot) => {
+      traceConnection('board-snapshot', { view: snapshot.view ?? null, tasks: snapshot.tasks.length });
       useBoardStore.getState().applyBoardSnapshot(snapshot);
       reconcileSessionsFromBoards(getSubscriptions());
     },

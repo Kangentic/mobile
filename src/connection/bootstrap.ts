@@ -1,4 +1,5 @@
 import type { SubscriptionManager, VerbClient } from '@/channel';
+import { traceConnection } from '@/devsupport/connectionTrace';
 import { useBoardStore } from '@/state/boardStore';
 
 /**
@@ -14,7 +15,9 @@ import { useBoardStore } from '@/state/boardStore';
  *    snapshots' non-null session_id, there is no session-list verb).
  */
 export async function runBootstrap(verbs: VerbClient, subscriptions: SubscriptionManager): Promise<void> {
+  traceConnection('bootstrap-start');
   const projectList = await verbs.readProjectList();
+  traceConnection('project-list', { projects: projectList.projects.length });
   useBoardStore.getState().applyProjectList(projectList.projects, projectList.groups);
   subscriptions.setDesiredBoards(new Set(projectList.projects.map((project) => project.id)));
 }

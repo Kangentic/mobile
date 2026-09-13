@@ -1656,6 +1656,70 @@ to a known screen rather than relying on a fresh launch.
 See `CLAUDE.md`'s Testing section for the scoped-run discipline (what to run while actively
 working on a task vs. the full gate).
 
+### Measuring the background-to-foreground reconnect
+
+A "the app has to refresh when I come back to it" report has three different owners, and a dev
+client cannot tell them apart: the socket (a backoff remainder before the first dial), the
+handshake, or the bootstrap. `src/devsupport/connectionTrace.ts` splits them on a release build.
+It is gated exactly like the retention probe: build with
+`EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1` set for BOTH prebuild and Gradle (inlined at bundle
+time, dead code in every other build, never on in a store build) and read the timeline with
+
+```
+adb -s <serial> logcat -d -s ReactNativeJS -e connection-trace
+```
+
+Every line is `[connection-trace] <event> +<ms since the last AppState 'active'> k=v ...`, and
+the events are the whole story: `app-state-active` / `app-state-background` (with the transport
+state, relay close code, established flag and keepalive flag at that moment), `dial`, `open`,
+`close` (with the relay's close code), `schedule-reconnect` (the delay armed and the next rung),
+`redial-now` (whether the foreground kick actually dialed, and whether it was forced),
+`probe-start` / `probe-ok` / `probe-failed` (the foreground liveness probe and its verdict),
+`established`, `bootstrap-start`, `project-list`, `board-snapshot` (one per board, with its
+projection and task count), `wake-source` and `ceiling-timer` (the keepalive's two enforcement
+routes). No content and no identifiers, so the log is safe to paste into a task.
+
+The same build carries a **Foreground recovery** switch under Settings > Connection trace. Off
+disables both the kick and the probe, which makes the before/after an A/B in one build on one
+install with one pairing, per `performance-claims-are-measured.md`. Everything below was measured
+that way on 2026-09-12 (task #70): the emulator's release build paired to the real desktop
+through the hosted relay, screen held on with `svc power stayon true`.
+
+**What a foreground actually costs, by scenario.** Numbers are from the trace unless marked.
+
+| Scenario | How it was produced | Foreground to usable |
+|---|---|---|
+| Live socket, under 5 min | 102 s backgrounded, socket untouched | 0 ms: transport `connected`, established, the kick a no-op. The real phone (Play build, 2 min 46 s) matched: the desktop never saw it leave, and two local notifications were delivered from the background |
+| Ceiling fired, process frozen | Real phone, Play build, hosted relay, resumed from a cached-app freeze (`am_unfreeze` in the events log) | 4.4 s from activity resume to the desktop seeing the session established (desktop-side recorder; the Play build has no trace, so this is not split further) |
+| Dead socket, ladder ratcheted (the task's mechanism) | `svc wifi disable` + `svc data disable` while backgrounded under the keepalive. The OS closed the socket at once (`close 1006` from `connected`), the ladder climbed 500 / 1000 / 2000 / 4000 / 8000 / 15000 with every dial failing in 2 ms, then one retry every 15 s. Network restored just after a retry, foregrounded 4 s later, so the next retry was 6.6 s out | Recovery OFF: `redial-now-skipped`, nothing dialed, the socket opened when the scheduled retry fired at +6.6 s, `established` +7.8 s (the remainder is 0 to 15 s in general). Recovery ON, same state (`transportState=reconnecting relayCloseCode=1006 keepaliveActive=true`): `redial-now dialed=true` +0 ms, `open` +218 ms, `established` +290 ms |
+| Stalled socket, OS never reports it | Airplane mode for 80 s while backgrounded under the keepalive with the socket on the emulator's cellular network (on Wi-Fi, airplane mode closes the socket instead and you get the row above), network restored, foregrounded within a second | Before: indefinite. The transport read `connected`, the session `established`, one late rekey arrived 1.1 s after the network came back, and then nothing for the 2.5 min it was watched. The desktop had marked the peer absent and dropped its subscriptions, so the phone was silently stale. After: `probe-start` +0 ms, `probe-failed timedOut=true` +3.0 s (the send into the stalled socket surfaced nothing, the deadline did the work), `redial-now forced=true`, `open` +3.19 s, `established` +3.26 s, all 19 boards by +6.6 s behind the rekey burst below |
+| Rekey burst after a fresh establish | Every fresh establish in this session where the desktop had marked the device absent (3 of 3): two or three rekeys (`wake-source` lines) within 60 ms to 3.5 s of `established` | Before: the bootstrap request sent at +296 ms was sealed under retired keys, nothing answered it, `project-list` landed at +12.3 s (10 s request timeout plus the 2 s retry). After: `bootstrap-restart reason=rekey` on each rekey, `project-list` 80 ms after the last one, at +4.2 s, all 19 boards by +4.4 s; what is left is the desktop's burst itself (its own task) |
+
+**The bootstrap fan-out is not the cost.** Against the real desktop with 19 registered projects
+over the hosted relay: `established` to `project-list` 91 ms, and all 19 `board-snapshot` lines
+inside the next 330 ms. The task's "render storm" concern about the all-projects fan-out did not
+survive measurement; the one real inefficiency there (every board subscribed twice on a
+re-establish when the project list answers first) is pinned and fixed in
+`tests/unit/bootstrap.test.ts`. What DID cost 12 s was a request lost across a rekey, above.
+
+**The relay's part of a re-dial over a zombie.** A fresh dial on a slot the phone's old socket
+still holds is answered with 4409 at once while the relay pings both incumbents for 2 s
+(`rendezvous.ts` `probePairedSlot`), then terminates the silent one and closes its peer with
+PEER_CLOSED, so the desktop re-parks within its own 500 ms. `RelayTransport` now retries a 4409
+at 2.5 s rather than the 5 s park-timeout floor it used to share. Measured live when Wi-Fi was
+switched off under an established session: `close 1006`, re-dial at 500 ms, `open` then
+`close 4409` in the same millisecond, `schedule-reconnect delayMs=2500`, `open`, `established`,
+all 19 boards and the project list inside the next 250 ms. 3.5 s from the drop to a fresh
+board; the old floor would have made it 6 s.
+
+Two traps met on the way, so nobody re-learns them: the phone's Play build cannot be measured
+with a local build (signature mismatch, and an uninstall wipes the pairing), which is why the
+desktop-side recorder exists (poll `window.electronAPI.mobile.listDevices()` in the desktop's
+renderer and timestamp each device's `connectionState` transition; `connected` there means the
+Noise session is established, `offline` means the desktop is parked with no peer). And an
+emulator's airplane mode is a black hole, not a disconnect: use it to reproduce a stall, never a
+socket death.
+
 ## iOS without a Mac
 
 Every iOS build for this project happens on a GitHub-hosted macOS runner. There is no Mac in the

@@ -61,6 +61,7 @@ export class SubscriptionManager {
   private readonly verbs: VerbClient;
   private readonly sinks: SubscriptionSnapshotSinks;
   private readonly unsubscribeEstablished: Unsubscribe;
+  private readonly unsubscribeRekey: Unsubscribe;
 
   private desiredStreamIds = new Set<string>();
   private desiredBoardIds = new Set<string>();
@@ -92,6 +93,21 @@ export class SubscriptionManager {
    * going to ask for again.
    */
   private readonly activeBoardViewByProjectId = new Map<string, ReadBoardView>();
+  /**
+   * Board subscribes issued and not yet answered, by project, with the view
+   * they asked for. A re-establish issues one subscribe per desired board from
+   * onEstablished, and connectionManager's own established listener then runs
+   * the bootstrap, whose setDesiredBoards re-declares the same set. Before
+   * this map, whether that second pass re-subscribed every board depended on
+   * the desktop answering the project list before or after the N board reads:
+   * `activeBoardIds` only fills as snapshots land, so a fast project list
+   * meant 2N board reads, snapshots and store writes on every reconnect. An
+   * identical request already in flight is the same request; only a request
+   * that has settled (landed, failed, or timed out) can be re-issued, which
+   * keeps setBoardWantsFull's re-focus retry working for a request the
+   * desktop actually lost.
+   */
+  private readonly pendingBoardViewByProjectId = new Map<string, ReadBoardView>();
   private readonly activeDiffTaskIds = new Set<string>();
 
   private readonly boardRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -104,6 +120,7 @@ export class SubscriptionManager {
     this.verbs = options.verbs;
     this.sinks = options.sinks;
     this.unsubscribeEstablished = this.session.onEstablished(() => this.onEstablished());
+    this.unsubscribeRekey = this.session.onRekey(() => this.onRekey());
   }
 
   setDesiredStreams(sessionIds: ReadonlySet<string>): void {
@@ -142,7 +159,9 @@ export class SubscriptionManager {
    * Safe to call repeatedly, and the Board tab does on every focus: while the
    * upgrade has not actually landed this re-issues it, so a request lost to a
    * rekey or a timeout is retried by leaving the tab and coming back rather
-   * than stranding the screen on its loading state.
+   * than stranding the screen on its loading state. An upgrade still in
+   * flight is not lost, and is not re-issued (pendingBoardViewByProjectId);
+   * once it times out it is, and the next focus retries it.
    */
   setBoardWantsFull(projectId: string): void {
     this.boardViewByProjectId.set(projectId, 'full');
@@ -177,7 +196,7 @@ export class SubscriptionManager {
       projectId,
       setTimeout(() => {
         this.boardRefreshTimers.delete(projectId);
-        if (this.session.isEstablished && this.desiredBoardIds.has(projectId)) void this.subscribeBoard(projectId);
+        if (this.session.isEstablished && this.desiredBoardIds.has(projectId)) void this.subscribeBoard(projectId, { force: true });
       }, BOARD_REFRESH_DEBOUNCE_MS),
     );
   }
@@ -245,6 +264,7 @@ export class SubscriptionManager {
   dispose(): void {
     this.disposed = true;
     this.unsubscribeEstablished();
+    this.unsubscribeRekey();
     for (const timer of this.boardRefreshTimers.values()) clearTimeout(timer);
     this.boardRefreshTimers.clear();
     for (const timer of this.diffRefreshTimers.values()) clearTimeout(timer);
@@ -260,9 +280,37 @@ export class SubscriptionManager {
     this.activeBoardIds.clear();
     this.activeBoardViewByProjectId.clear();
     this.activeDiffTaskIds.clear();
-    for (const projectId of this.desiredBoardIds) void this.subscribeBoard(projectId);
+    // Anything still pending was issued on the previous session's keys; the
+    // controller rejected it, and the catch below clears it as it settles. A
+    // fresh handshake starts from nothing in flight.
+    this.pendingBoardViewByProjectId.clear();
+    // The boards held at 'full' are the ones a Board tab is showing, so they
+    // go first: the desktop answers in issue order, and the screen the user is
+    // looking at should not queue behind every feed-only project.
+    const boardsFullFirst = [...this.desiredBoardIds].sort(
+      (left, right) => Number(this.boardViewByProjectId.get(right) === 'full') - Number(this.boardViewByProjectId.get(left) === 'full'),
+    );
+    for (const projectId of boardsFullFirst) void this.subscribeBoard(projectId);
     for (const sessionId of this.desiredStreamIds) void this.subscribeStream(sessionId);
     for (const [taskId, desired] of this.desiredDiffsByTaskId) void this.subscribeDiff(taskId, desired);
+  }
+
+  /**
+   * A board subscribe in flight across a rekey is lost the same way the
+   * bootstrap is (see connectionManager's onRekey listener): sealed under keys
+   * the desktop has just retired, it is never answered, and the board it
+   * asked for stays empty until the next reconcile. Re-issuing it costs one
+   * duplicate snapshot in the case where the answer was merely late, which
+   * applyBoardSnapshot absorbs; `force` is what lets it past the in-flight
+   * dedupe. Streams and diffs are not re-issued here: a lost stream subscribe
+   * is re-declared by the next board snapshot's reconcile, and a diff by its
+   * own screen's focus.
+   */
+  private onRekey(): void {
+    if (!this.session.isEstablished) return;
+    for (const projectId of [...this.pendingBoardViewByProjectId.keys()]) {
+      if (this.desiredBoardIds.has(projectId)) void this.subscribeBoard(projectId, { force: true });
+    }
   }
 
   private async subscribeStream(sessionId: string, isRetry = false): Promise<void> {
@@ -302,10 +350,21 @@ export class SubscriptionManager {
     }
   }
 
-  private async subscribeBoard(projectId: string): Promise<void> {
+  /**
+   * `force` is for refreshBoard only: a board event that lands while a
+   * subscribe is still in flight means the snapshot about to arrive may
+   * predate the change, so the refresh must go out regardless. Every
+   * reconcile path (established, desired-set changes, the Board tab's
+   * upgrade) asks for the same thing an in-flight request already asked for,
+   * and is deduplicated.
+   */
+  private async subscribeBoard(projectId: string, options: { force?: boolean } = {}): Promise<void> {
     const view = this.boardViewByProjectId.get(projectId) ?? 'sessions';
+    if (!options.force && this.pendingBoardViewByProjectId.get(projectId) === view) return;
+    this.pendingBoardViewByProjectId.set(projectId, view);
     try {
       const snapshot = await this.verbs.readBoardSubscribe(projectId, { view });
+      if (this.pendingBoardViewByProjectId.get(projectId) === view) this.pendingBoardViewByProjectId.delete(projectId);
       if (this.disposed || !this.desiredBoardIds.has(projectId)) return;
       // A response that answers a view we no longer want is stale, and
       // applying it would UNDO a newer one. Two subscribes for the same
@@ -325,6 +384,7 @@ export class SubscriptionManager {
       // Board subscribe failures are recovered by the next reconcile
       // (established, refreshBoard, a desired-set change, or the Board tab
       // re-focusing, which re-issues an upgrade that has not landed).
+      if (this.pendingBoardViewByProjectId.get(projectId) === view) this.pendingBoardViewByProjectId.delete(projectId);
     }
   }
 

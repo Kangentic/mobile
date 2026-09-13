@@ -151,4 +151,107 @@ describe('bootstrap over loopback', () => {
     expect(streamUnsubscribes).toHaveLength(1);
     expect((streamUnsubscribes[0] as CapabilityRequestMessage).payload).toEqual({ sessionId: 'sess-2', action: 'unsubscribe' });
   });
+
+  /**
+   * Board task #70, the reconnect fan-out. On a re-establish two listeners
+   * fire in registration order: SubscriptionManager's (constructed first,
+   * subscribes every desired board) and then connectionManager's, which runs
+   * the bootstrap, whose setDesiredBoards re-declares the same set. Whether
+   * that second pass re-subscribed every board used to depend on the desktop
+   * answering the project list BEFORE the board reads - activeBoardIds only
+   * fills as snapshots land - which a fast project-list handler does. On a
+   * machine with twenty registered projects that was forty board reads,
+   * snapshots and store writes per reconnect instead of twenty.
+   *
+   * The stub answers requests synchronously and in order, so to reproduce the
+   * adverse ordering the handler HOLDS every board subscribe (returns null)
+   * and answers only the project list; the test releases the held boards by
+   * hand. Mutation seen failing: dropping the pending-map check at the top of
+   * SubscriptionManager.subscribeBoard ("expected 3, received 6").
+   */
+  it('subscribes each board once per re-establish, even when the project list answers first', async () => {
+    const [phoneTransport, desktopTransport] = createLoopbackPair();
+    await phoneTransport.connect();
+    await desktopTransport.connect();
+    const phoneIdentity = generateX25519KeyPair();
+    const desktopIdentity = generateX25519KeyPair();
+    const session = new SessionManager({
+      identity: phoneIdentity,
+      remoteStaticPublicKey: desktopIdentity.publicKey,
+      transport: phoneTransport,
+    });
+    session.start();
+    const stub = new StubSessionInitiator(desktopTransport, {
+      desktopStatic: desktopIdentity,
+      phoneStaticPublicKey: phoneIdentity.publicKey,
+    });
+
+    const projectIds = ['project-1', 'project-2', 'project-3'];
+    const heldBoardRequests: CapabilityRequestMessage[] = [];
+    stub.setRequestHandler((request: CapabilityRequestMessage): CapabilityResponseMessage | null => {
+      const payload = request.payload as { projectId?: string };
+      if (request.verb === 'read-board' && !payload.projectId) {
+        return {
+          type: 'capability-response',
+          requestId: request.requestId,
+          ok: true,
+          payload: { projects: projectIds.map((id) => ({ id, name: id })) },
+        };
+      }
+      if (request.verb === 'read-board') {
+        heldBoardRequests.push(request);
+        return null;
+      }
+      return { type: 'capability-response', requestId: request.requestId, ok: true };
+    });
+    const releaseHeldBoards = (): void => {
+      for (const request of heldBoardRequests.splice(0)) {
+        const projectId = (request.payload as { projectId: string }).projectId;
+        stub.send({
+          type: 'capability-response',
+          requestId: request.requestId,
+          ok: true,
+          payload: boardSnapshotFixture({ projectId, tasks: [] }) as unknown as JsonValue,
+        });
+      }
+    };
+
+    const capabilities = new CapabilityClient(session);
+    const verbs = new VerbClient(capabilities);
+    const feed = new FeedRouter(session);
+    let subscriptionsHolder: SubscriptionManager | null = null;
+    const subscriptions: SubscriptionManager = new SubscriptionManager({
+      session,
+      verbs,
+      sinks: createSnapshotSinks(() => {
+        if (!subscriptionsHolder) throw new Error('unresolved');
+        return subscriptionsHolder;
+      }),
+    });
+    subscriptionsHolder = subscriptions;
+    bindFeedToStores(feed, subscriptions);
+    // connectionManager's listener, registered after the manager's own, as in
+    // production: the bootstrap runs on every established handshake.
+    session.onEstablished(() => {
+      void runBootstrap(verbs, subscriptions);
+    });
+
+    stub.beginHandshake();
+    await flushLoopback();
+    expect(heldBoardRequests).toHaveLength(3);
+    releaseHeldBoards();
+    await flushLoopback();
+    expect(Object.keys(useBoardStore.getState().boardsByProjectId).sort()).toEqual(projectIds);
+
+    // The reconnect: the controller's transport listener would reset the
+    // session; here the reset is direct, then the desktop re-initiates.
+    session.reset();
+    stub.beginHandshake();
+    await flushLoopback();
+
+    expect(heldBoardRequests.map((request) => (request.payload as { projectId: string }).projectId).sort()).toEqual(projectIds);
+    releaseHeldBoards();
+    await flushLoopback();
+    expect(Object.keys(useBoardStore.getState().boardsByProjectId).sort()).toEqual(projectIds);
+  });
 });

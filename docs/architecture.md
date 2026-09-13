@@ -221,7 +221,21 @@ backgrounded app. The ceiling is therefore also checked against the **wall clock
 closed laptop takes, where the socket drops and retries on its own backoff and no rekey ever
 arrives again). Worst case the service lives for the ceiling plus one rekey interval rather than
 forever. Returning to the foreground needs no ceiling check of its own: the `'active'` transition
-stops the keepalive outright.
+stops the keepalive outright. What it does need is a **dial**: a keepalive that survived the stretch
+leaves `activeConnection` in place, so `openConnection()` has nothing to open, and if the socket
+died while the phone was away the transport is mid-backoff with its retry timer ratcheted towards
+`RelayTransport`'s 15 s cap. The `'active'` branch therefore also calls the transport's
+`redialNow()` (a `RedialableTransport`, a mobile-local extension of the protocol's `Transport`),
+which clears the armed timer, resets the ladder and dials at once; on a healthy socket it is a
+no-op. Before that kick existed the app waited out the backoff remainder on every foreground
+after a dead-socket stretch (board task #70). The kick cannot see the other shape a dead socket
+takes, and it is the one measured on a release build: a network stall the OS never reports leaves
+the transport reading `connected` and the session `established` while the relay has stopped
+hearing the phone and the desktop has marked it absent and dropped its subscriptions. So the
+`'active'` branch also sends one cheap request (the project list) with a 3 s deadline, and a
+request nobody answers forces a fresh dial (`redialNow({ force: true })`, which abandons the
+open socket). The measurement recipe and the numbers are in the developer guide's "Measuring the
+background-to-foreground reconnect".
 
 **Correction, same issue: the budget does not accumulate across background stretches.** This
 section and `connectionManager.ts` both used to reason about exhausting the 6h budget over many

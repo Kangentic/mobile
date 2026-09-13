@@ -31,6 +31,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppState, type AppStateStatus } from 'react-native';
+import type { CapabilityRequestMessage, CapabilityResponseMessage } from '@kangentic/protocol';
 import type { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import type { LoopbackTransport } from '@/devsupport/loopbackTransport';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -42,6 +43,8 @@ import { flushMicrotasks, waitUntil } from '../helpers/async';
 
 /** Must match BACKGROUND_KEEPALIVE_MAX_MS. Held separately on purpose - see the file header. */
 const EXPECTED_KEEPALIVE_CEILING_MS = 5 * 60_000;
+/** Must match FOREGROUND_PROBE_TIMEOUT_MS, held separately for the same reason. */
+const EXPECTED_PROBE_TIMEOUT_MS = 3_000;
 
 /**
  * A promise this file resolves by hand, for pinning the notification-permission
@@ -461,6 +464,128 @@ describe('connectionManager background keepalive ceiling', () => {
       expect(getActiveConnection()).not.toBeNull();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Board task #70. Under the keepalive the 'background' branch keeps the
+   * connection, so a foreground finds `activeConnection` non-null and
+   * openConnection() returns without dialing. If the socket died while the
+   * phone was away, the transport sits mid-backoff with its timer ratcheted
+   * towards the cap, and nothing dials until that timer fires. The 'active'
+   * branch has to kick the transport itself.
+   *
+   * A WIRING test, and its comment says so: the kick is unconditional (the
+   * transport decides whether a dial is warranted), so the spy fires with or
+   * without the simulated drop. The drop only makes the scenario the honest
+   * one. The behavioural proof - a transport ratcheted to its cap dials at
+   * once - is tests/unit/relayTransportReconnect.test.ts; do not read a pass
+   * here as proof of recovery. Mutation seen failing: removing the
+   * kickTransportOnForeground() call from the 'active' branch.
+   */
+  it('kicks the surviving transport on foreground instead of waiting out its backoff', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const connectionBefore = getActiveConnection();
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifeeMocks.displayNotification).toHaveBeenCalledTimes(1);
+      expect(redialNow).not.toHaveBeenCalled();
+
+      phoneTransport.simulateDrop();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(phoneTransport.state).toBe('reconnecting');
+
+      onAppStateChange('active');
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      // The kick acts on the connection that exists: no teardown, no reopen.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getActiveConnection()).toBe(connectionBefore);
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+    }
+  });
+
+  /**
+   * Board task #70, the failure the kick cannot see. Measured on a release
+   * build: a network stall the OS never reports leaves the transport reading
+   * 'connected' and the session 'established' while the relay has stopped
+   * hearing the phone and the desktop has dropped its subscriptions. The
+   * phone then sits silent and stale until something sends. So the 'active'
+   * branch sends one cheap request, and a request nobody answers within the
+   * deadline is the proof that forces a fresh dial.
+   *
+   * The stub has no request handler here, so the probe goes unanswered. The
+   * first redialNow is the unconditional kick (no arguments); the forced one
+   * must land exactly at the deadline. Mutation seen failing: removing the
+   * probeChannelOnForeground() call from the 'active' branch (the second call
+   * never comes).
+   */
+  it('force-redials on foreground when the established channel answers nothing', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).toHaveBeenCalledWith();
+
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS - 1);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(redialNow).toHaveBeenCalledTimes(2);
+      expect(redialNow).toHaveBeenLastCalledWith({ force: true });
+      expect(getActiveConnection()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+    }
+  });
+
+  /**
+   * The other verdict: a channel that answers is left alone. The stub answers
+   * the project list here, so the probe resolves and the deadline passing
+   * forces nothing. A probe that forced regardless of the answer would turn
+   * every foreground into a reconnect, which is the bug this test guards.
+   */
+  it('leaves an answering channel alone on foreground', async () => {
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    stub.setRequestHandler((request: CapabilityRequestMessage): CapabilityResponseMessage => ({
+      type: 'capability-response',
+      requestId: request.requestId,
+      ok: true,
+      payload: { projects: [] },
+    }));
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      // The request and its answer are a handful of loopback microtask hops.
+      for (let round = 0; round < 8; round += 1) await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS + 1);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).not.toHaveBeenCalledWith({ force: true });
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+      stub.setRequestHandler(null);
     }
   });
 

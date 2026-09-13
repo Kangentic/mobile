@@ -100,7 +100,13 @@ export class ChannelController {
   }
 }
 
-export { RelayTransport, type RelayTransportOptions } from './relayTransport';
+export {
+  RelayTransport,
+  isRedialableTransport,
+  type RedialOptions,
+  type RedialableTransport,
+  type RelayTransportOptions,
+} from './relayTransport';
 export { SessionManager, type SessionManagerOptions } from './sessionManager';
 export { CapabilityClient, CapabilityTimeoutError, ChannelDisconnectedError } from './capabilityClient';
 export { FeedRouter } from './feedRouter';
