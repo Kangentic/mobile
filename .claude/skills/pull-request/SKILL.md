@@ -89,19 +89,29 @@ If there are uncommitted changes (non-empty `git status --porcelain`):
 
 If the working tree is clean, skip to Step 1.5.
 
-**Expect changes this session did not write, and do not stop to ask about them.** A task reaching
-Tests has usually just left **Code Review**, and `/code-review` deliberately does not commit: its
-fixes land in the working tree for the next step to commit (`.claude/skills/code-review/SKILL.md`
-states this explicitly, and notes the desktop repo's "commit the pass" step has no counterpart
-here). So the dirty tree at Step 1 routinely contains a review pass's edits, including files the
-committing session never touched and renames of symbols it introduced moments earlier.
+**Expect changes this session did not write, and do NOT ask the user whether to include them.**
+A task reaching this column has usually just left **Code Review**, which runs `/code-review` as a
+separate agent in the SAME worktree - `isolated` isolates the conversation, not the filesystem.
+Moving between active columns performs no git writes at all (the app suspends or respawns a PTY
+and reuses the existing worktree untouched), so whatever that pass left behind is still sitting
+there.
 
-That reads exactly like a concurrent writer, and treating it as one costs a round trip on every
-review-then-test handoff. It also blocks `git rebase`, which refuses to start against unstaged
-changes, so Step 3 fails until Step 1 commits them. Confirm the diff is coherent follow-up on the
-same task (it builds on the commits already there, references to any renamed symbol are all
-updated, `npm run typecheck` is clean), then commit it and carry on. Escalate to the user only
-when the diff is unrelated to the task or genuinely half-written.
+**In this repo a finished review pass leaves the tree DIRTY, not clean.** `/code-review` here does
+not commit its own work: `.claude/skills/code-review/SKILL.md` says so explicitly and notes the
+desktop repo's "commit the pass" step has no counterpart here. So the dirty tree at Step 1
+routinely holds a review pass's edits, including files this session never touched and renames of
+symbols it introduced minutes earlier. Do not port the desktop skill's "a finished pass leaves a
+clean tree" reasoning over; it is false here.
+
+That reads exactly like a concurrent writer. It is not, and treating it as one costs a round trip
+on every single review-then-test handoff. It also blocks Step 3: `git rebase` refuses to start
+against unstaged changes, so the rebase fails until Step 1 commits them.
+
+Everything in this worktree belongs to this task, so a review pass's fixes belong in this PR by
+definition. Sanity-check that the diff is coherent follow-up on the same task (it builds on the
+commits already there, references to any renamed symbol are all updated, `npm run typecheck` is
+clean), commit it, and carry on. Escalate to the user only when the diff is unrelated to the task
+or genuinely half-written.
 
 ## Step 1.5 - Compute the clean public branch name (never rename the local branch)
 
