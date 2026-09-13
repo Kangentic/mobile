@@ -1,4 +1,5 @@
 import { subscribeToMemoryPressure } from '@/observability/memoryPressure';
+import { useBoardStore } from './boardStore';
 import { useTranscriptStore } from './transcriptStore';
 import { shedUnwatchedTerminalRings } from './terminalFeed';
 
@@ -37,5 +38,8 @@ export function registerMemoryShedders(): () => void {
     if (severity !== 'serious') return;
     useTranscriptStore.getState().shedBackgroundTranscripts();
     shedUnwatchedTerminalRings();
+    // The archive is the largest reconstructible thing held: rows carry full
+    // task descriptions, which measure ~7 KB on average against real boards.
+    useBoardStore.getState().shedArchivedPages();
   });
 }

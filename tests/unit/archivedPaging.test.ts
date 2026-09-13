@@ -10,7 +10,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReadBoardArchivedResponsePayload, SessionSummaryWire } from '@kangentic/protocol';
-import { selectArchived, useBoardStore } from '@/state/boardStore';
+import { ARCHIVED_PROJECT_CAP, selectArchived, useBoardStore } from '@/state/boardStore';
 import { boardTaskFixture } from '@/devsupport/desktopFixtures';
 
 function archivedPage(overrides: Partial<ReadBoardArchivedResponsePayload> = {}): ReadBoardArchivedResponsePayload {
@@ -43,6 +43,85 @@ function summaryFixture(overrides: Partial<SessionSummaryWire> = {}): SessionSum
     ...overrides,
   };
 }
+
+/**
+ * Archived rows carry each task's FULL description, which is the largest thing
+ * on this wire: measured against the real boards this app is built on they
+ * average ~7 KB with a 45 KB maximum, and one project holds 580 archived tasks
+ * totalling 2.3 MB of description text, roughly doubled once Hermes holds it as
+ * UTF-16. Every archive opened used to stay for the life of the process, so
+ * browsing a few Done columns could hold more than the entire cold-start saving
+ * the MOBILE-8 bound buys, and never give it back.
+ */
+describe('archived pages are bounded by project', () => {
+  beforeEach(() => {
+    useBoardStore.getState().reset();
+  });
+
+  function loadArchiveFor(projectId: string): void {
+    useBoardStore.getState().applyArchivedPage(
+      archivedPage({
+        projectId,
+        archivedTasks: [boardTaskFixture({ id: `${projectId}-task`, archived_at: '2026-07-20T00:00:00.000Z' })],
+        archivedTotalCount: 1,
+      }),
+      { append: false },
+    );
+  }
+
+  it('holds at most ARCHIVED_PROJECT_CAP projects, evicting least recently loaded', () => {
+    loadArchiveFor('project-a');
+    loadArchiveFor('project-b');
+    loadArchiveFor('project-c');
+
+    const held = Object.keys(useBoardStore.getState().archivedByProjectId).sort();
+    expect(held).toEqual(['project-b', 'project-c']);
+    expect(held.length).toBe(ARCHIVED_PROJECT_CAP);
+  });
+
+  it('re-loading a held project refreshes its recency rather than evicting it', () => {
+    loadArchiveFor('project-a');
+    loadArchiveFor('project-b');
+    // Back to A, which must now outrank B.
+    loadArchiveFor('project-a');
+    loadArchiveFor('project-c');
+
+    expect(Object.keys(useBoardStore.getState().archivedByProjectId).sort()).toEqual(['project-a', 'project-c']);
+  });
+
+  /**
+   * The eviction direction is the trap. Pages arrive newest-archived first and
+   * the user scrolls DOWNWARD, so dropping the oldest-loaded PAGE would remove
+   * the top of the list they are still looking at. Only a whole project they
+   * have navigated away from is safe to drop, which is why paging deeper inside
+   * one project must never evict anything.
+   */
+  it('paging deeper within one project evicts nothing', () => {
+    loadArchiveFor('project-a');
+    for (let page = 0; page < 5; page += 1) {
+      useBoardStore.getState().applyArchivedPage(
+        archivedPage({
+          projectId: 'project-a',
+          archivedTasks: [boardTaskFixture({ id: `page-${page}`, archived_at: '2026-07-19T00:00:00.000Z' })],
+          archivedTotalCount: 10,
+        }),
+        { append: true },
+      );
+    }
+
+    expect(selectArchived({ archivedByProjectId: useBoardStore.getState().archivedByProjectId }, 'project-a').tasks)
+      .toHaveLength(6);
+  });
+
+  it('sheds every archive but the most recent under memory pressure', () => {
+    loadArchiveFor('project-a');
+    loadArchiveFor('project-b');
+
+    useBoardStore.getState().shedArchivedPages();
+
+    expect(Object.keys(useBoardStore.getState().archivedByProjectId)).toEqual(['project-b']);
+  });
+});
 
 describe('applyArchivedPage', () => {
   beforeEach(() => {

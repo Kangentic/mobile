@@ -111,6 +111,10 @@ interface BoardStoreState {
   pendingRemovals: PendingTaskRemoval[];
   /** Completed tasks per project, filled on demand by the Done column. */
   archivedByProjectId: Record<string, ArchivedTasks>;
+  /** LRU over the projects whose archives are held, most recently loaded last. */
+  archivedProjectOrder: string[];
+  /** Releases every held archive but the most recent, for memory pressure. */
+  shedArchivedPages: () => void;
   /** Desktop project groups in display order; empty against a pre-0.11.0 desktop, which means one flat list. */
   projectGroups: ReadBoardProjectGroup[];
   applyProjectList: (projects: ReadBoardProjectSummary[], groups?: ReadBoardProjectGroup[]) => void;
@@ -132,6 +136,14 @@ interface BoardStoreState {
 
 /** Shared empty value, so a project with no page yet still has a shape to read. */
 const EMPTY_ARCHIVED: ArchivedTasks = { tasks: [], totalCount: 0, summariesByTaskId: {}, nextOffset: 0, loading: false };
+
+/**
+ * How many projects' archives are held at once. Two, not one: switching to a
+ * project and straight back is an ordinary gesture, and a cap of one would
+ * refetch on every such bounce. See the eviction comment in applyArchivedPage
+ * for why this is capped by project rather than by page.
+ */
+export const ARCHIVED_PROJECT_CAP = 2;
 
 let nextMoveSequence = 0;
 let nextEditSequence = 0;
@@ -181,6 +193,7 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
   pendingEdits: [],
   pendingRemovals: [],
   archivedByProjectId: {},
+  archivedProjectOrder: [],
   projectGroups: [],
 
   applyProjectList: (projects, groups) => set({ projects, projectGroups: groups ?? [] }),
@@ -195,6 +208,18 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       },
     })),
 
+  shedArchivedPages: () =>
+    set((state) => {
+      const heldProjectIds = Object.keys(state.archivedByProjectId);
+      if (heldProjectIds.length <= 1) return state;
+      const keptProjectId = state.archivedProjectOrder[state.archivedProjectOrder.length - 1];
+      if (keptProjectId === undefined || !(keptProjectId in state.archivedByProjectId)) return state;
+      return {
+        archivedByProjectId: { [keptProjectId]: state.archivedByProjectId[keptProjectId] },
+        archivedProjectOrder: [keptProjectId],
+      };
+    }),
+
   applyArchivedPage: (page, options) =>
     set((state) => {
       const existing = state.archivedByProjectId[page.projectId] ?? EMPTY_ARCHIVED;
@@ -204,21 +229,49 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       const tasks = options.append
         ? [...existing.tasks, ...page.archivedTasks.filter((task) => !existing.tasks.some((held) => held.id === task.id))]
         : page.archivedTasks;
-      return {
-        archivedByProjectId: {
-          ...state.archivedByProjectId,
-          [page.projectId]: {
-            tasks,
-            totalCount: page.archivedTotalCount,
-            summariesByTaskId: options.append
-              ? { ...existing.summariesByTaskId, ...page.summariesByTaskId }
-              : page.summariesByTaskId,
-            // Advanced by what the desktop RETURNED, so a page thinned by
-            // de-duplication still moves the cursor forward by a full page.
-            nextOffset: (options.append ? existing.nextOffset : 0) + page.archivedTasks.length,
-            loading: false,
-          },
+      const archivedByProjectId = {
+        ...state.archivedByProjectId,
+        [page.projectId]: {
+          tasks,
+          totalCount: page.archivedTotalCount,
+          summariesByTaskId: options.append
+            ? { ...existing.summariesByTaskId, ...page.summariesByTaskId }
+            : page.summariesByTaskId,
+          // Advanced by what the desktop RETURNED, so a page thinned by
+          // de-duplication still moves the cursor forward by a full page.
+          nextOffset: (options.append ? existing.nextOffset : 0) + page.archivedTasks.length,
+          loading: false,
         },
+      };
+      // LRU over PROJECTS, evicting whole archives rather than pages.
+      //
+      // Archived rows carry the task's FULL description, and descriptions are
+      // the largest thing on this wire: measured against the real boards this
+      // app is built on, they average ~7 KB with a 45 KB maximum, and one
+      // project holds 580 archived tasks totalling 2.3 MB of description text -
+      // roughly double that once Hermes holds it as UTF-16. Before this, every
+      // archive the user opened stayed until the process died, so browsing a
+      // few projects' Done columns could hold more than the entire cold-start
+      // saving the MOBILE-8 bound buys, permanently.
+      //
+      // Whole projects rather than pages, because pages arrive newest-first and
+      // the user scrolls DOWNWARD: evicting the oldest-loaded page would remove
+      // the TOP of the list they are still looking at. A project they have
+      // navigated away from is the only thing safe to drop.
+      //
+      // Refetch on return is already built: BoardScreen's focus effect reloads
+      // page one whenever the archive is absent. The only thing lost is paging
+      // position in a project left and returned to, which that effect already
+      // discards for anything under a page deep.
+      const archivedProjectOrder = [
+        ...state.archivedProjectOrder.filter((projectId) => projectId !== page.projectId),
+        page.projectId,
+      ];
+      const evictedIds = archivedProjectOrder.slice(0, Math.max(0, archivedProjectOrder.length - ARCHIVED_PROJECT_CAP));
+      for (const evictedId of evictedIds) delete archivedByProjectId[evictedId];
+      return {
+        archivedByProjectId,
+        archivedProjectOrder: archivedProjectOrder.slice(Math.max(0, archivedProjectOrder.length - ARCHIVED_PROJECT_CAP)),
       };
     }),
 
@@ -389,6 +442,7 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       pendingEdits: [],
       pendingRemovals: [],
       archivedByProjectId: {},
+      archivedProjectOrder: [],
       projectGroups: [],
     }),
 }));
