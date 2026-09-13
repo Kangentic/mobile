@@ -164,18 +164,23 @@ appends to disk immediately (no batching, so a fast kill cannot lose it), and
 `SentryWatchdogTerminationTracker` builds its event with `readPreviousBreadcrumbs` after clearing
 the current scope's.
 
-**Android reports the same breadcrumb, through a different source.** React Native's
-`AppStateModule` never emits `memoryWarning` and RN does not surface `onTrimMemory` at all, so the
-local Expo module in `modules/memory-pressure` registers a `ComponentCallbacks2` on the
-APPLICATION context and forwards it. It forwards only the levels that mean pressure: the
-`RUNNING_*` ones plus `MODERATE` and `COMPLETE`. **`TRIM_MEMORY_UI_HIDDEN` and
-`TRIM_MEMORY_BACKGROUND` are deliberately excluded**, and that exclusion is a privacy-adjacent
-decision as much as a correctness one: both arrive on every ordinary backgrounding, so forwarding
-them would make the breadcrumb's count a record of how often the user switched apps rather than a
-record of memory pressure. A forwarded level is then classed as `moderate`
-(`TRIM_MEMORY_RUNNING_MODERATE`, "beginning to run low") or `serious` (everything else, and the
-only class iOS has); the breadcrumb counts both, while the memory shedders act only on `serious`,
-so a busy device does not refetch a transcript the user is reading. The payload is identical on both platforms (a count, no level, no free
+**The breadcrumb is effectively iOS-only, and on Android 14+ it does not fire at all.** React
+Native's `AppStateModule` never emits `memoryWarning` and RN does not surface `onTrimMemory`, so
+the local Expo module in `modules/memory-pressure` registers a `ComponentCallbacks2` on the
+APPLICATION context and forwards it. **From Android 14 the system delivers only
+`TRIM_MEMORY_UI_HIDDEN` and `TRIM_MEMORY_BACKGROUND`**; the `RUNNING_*`, `MODERATE` and `COMPLETE`
+constants are no longer sent and were deprecated in Android 15
+([Android docs](https://developer.android.com/topic/performance/memory/manage-app-memory)).
+
+Those two mean "the user is not looking", not "memory is short", so they are classed
+`backgrounded` and **deliberately do not reach the breadcrumb count**: on a modern Android device
+they are the only signal that ever arrives, so counting them would make `app.memory` a record of
+how often the user left the app - present on every launch, absent never, and therefore worth
+exactly as much as the missing iOS signal it was built to replace. They DO drive the memory
+shedders, which is the safest possible moment to shed. The legacy levels still classify as
+`moderate` / `serious` and still breadcrumb on pre-14 devices. An earlier revision of this file
+claimed Android reported the same breadcrumb; that was wrong, and the module it described was
+inert on every current Android device. The payload is identical on both platforms (a count, no level, no free
 text), so the two sources cannot be told apart in a delivered event. The two never both fire on
 one device, so a single episode is never counted twice.
 

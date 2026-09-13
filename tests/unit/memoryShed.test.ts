@@ -24,12 +24,14 @@ import {
  * loads under vitest, so the subscription is mocked by specifier and the
  * captured listener is driven directly.
  */
+type Severity = 'backgrounded' | 'moderate' | 'serious';
+
 const pressureState = vi.hoisted(() => {
-  const listeners = new Set<(severity: 'moderate' | 'serious') => void>();
+  const listeners = new Set<(severity: Severity) => void>();
   return { listeners };
 });
 vi.mock('@/observability/memoryPressure', () => ({
-  subscribeToMemoryPressure: (listener: (severity: 'moderate' | 'serious') => void) => {
+  subscribeToMemoryPressure: (listener: (severity: Severity) => void) => {
     pressureState.listeners.add(listener);
     return () => pressureState.listeners.delete(listener);
   },
@@ -41,7 +43,7 @@ describe('registerMemoryShedders', () => {
     resetTerminalFeed();
   });
 
-  function firePressure(severity: 'moderate' | 'serious'): void {
+  function firePressure(severity: Severity): void {
     if (pressureState.listeners.size === 0) throw new Error('no shedder was registered');
     for (const listener of [...pressureState.listeners]) listener(severity);
   }
@@ -71,6 +73,25 @@ describe('registerMemoryShedders', () => {
     appendChunk('background', 'offscreen bytes');
 
     firePressure('serious');
+
+    expect(isTerminalRetained('background')).toBe(false);
+  });
+
+  /**
+   * The arm that keeps this feature alive on modern Android. From Android 14
+   * the system delivers ONLY TRIM_MEMORY_UI_HIDDEN and TRIM_MEMORY_BACKGROUND,
+   * both of which map to 'backgrounded'; the legacy RUNNING_* levels are gone
+   * and were deprecated in Android 15. If the shedders ignored this severity
+   * they would never run on any current device, while every test built around
+   * the legacy levels kept passing.
+   */
+  it('sheds when the app is backgrounded, the only signal Android 14+ still sends', async () => {
+    const { registerMemoryShedders } = await import('@/state/memoryShed');
+    registerMemoryShedders();
+    retainTerminal('background');
+    appendChunk('background', 'offscreen bytes');
+
+    firePressure('backgrounded');
 
     expect(isTerminalRetained('background')).toBe(false);
   });

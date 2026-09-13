@@ -47,9 +47,10 @@ doing in the app:
   there had been since the app started. It is a count and nothing more. The app records this
   itself because the system can shut it down for using too much memory without producing a crash
   report at all, and without the note there is no way to tell that apart from the app freezing or
-  you closing it by hand. On Android the app deliberately ignores the similar notice the system
-  sends every time you switch away from it, so this count reflects genuine memory pressure rather
-  than how often you moved between apps
+  you closing it by hand. In practice this applies to iPhone and iPad: recent Android versions no
+  longer send a low-memory notice of this kind, and the app deliberately does not count the
+  notice they do send when you switch away, so this never records how often you moved between
+  apps
 
 It deliberately does **not** contain your session content. No screenshots, no screen recording,
 no on-screen text, no keystrokes, no console output, no network request details, no transcripts,

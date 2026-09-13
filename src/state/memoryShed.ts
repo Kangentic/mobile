@@ -19,14 +19,22 @@ import { shedUnwatchedTerminalRings } from './terminalFeed';
  * Both are idempotent, which matters because listeners fire on every warning
  * rather than only on the ones that get a breadcrumb.
  *
- * SERIOUS PRESSURE ONLY, and the threshold is the point. Android's
- * `TRIM_MEMORY_RUNNING_MODERATE` means "beginning to run low" and arrives on an
- * ordinary busy device; shedding there would drop a transcript the user is
- * about to scroll back through and refetch it in front of them, repeatedly, on
- * a device that was never actually in trouble. "Reconstructible" is a statement
- * about correctness, not about the experience of watching it happen. iOS has no
- * moderate level - its single notification means the app is close to being
- * killed - so nothing is lost there by drawing the line here.
+ * SHEDS ON `serious` OR `backgrounded`, and skips `moderate`. The threshold is
+ * chosen so the user never watches content they are reading get refetched:
+ *
+ * - `backgrounded` (Android `TRIM_MEMORY_UI_HIDDEN` / `TRIM_MEMORY_BACKGROUND`)
+ *   is the safest possible moment to shed, because the app is off screen, and
+ *   from Android 14 it is the ONLY signal the system still delivers. Android's
+ *   own guidance for these two is to aggressively release whatever can be
+ *   reconstructed when the user returns, which is exactly this module's
+ *   contract.
+ * - `moderate` means "beginning to run low" while the app is in the FOREGROUND
+ *   and reaches only pre-Android-14 devices. Shedding there would drop a
+ *   transcript mid-scroll on a device that was merely busy. "Reconstructible"
+ *   is a statement about correctness, not about the experience of watching it
+ *   happen.
+ * - `serious` is a real shortage, foreground or not, and is what iOS's single
+ *   memory warning maps to. Shedding beats being killed.
  *
  * Scope, stated plainly: this is a robustness measure, not a proven cure for
  * Sentry MOBILE-8. A fast allocation spike can be killed with one warning and
@@ -35,7 +43,7 @@ import { shedUnwatchedTerminalRings } from './terminalFeed';
  */
 export function registerMemoryShedders(): () => void {
   return subscribeToMemoryPressure((severity) => {
-    if (severity !== 'serious') return;
+    if (severity === 'moderate') return;
     useTranscriptStore.getState().shedBackgroundTranscripts();
     shedUnwatchedTerminalRings();
     // The archive is the largest reconstructible thing held: rows carry full

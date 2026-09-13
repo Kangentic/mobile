@@ -62,51 +62,52 @@ class MemoryPressureModule : Module() {
   }
 
   /**
-   * NOT every trim level is memory pressure, and forwarding the wrong ones
-   * would be worse than forwarding none.
+   * WHICH LEVELS ANDROID ACTUALLY DELIVERS, which is the thing to get right
+   * here and which an earlier revision of this module got wrong.
    *
-   * `TRIM_MEMORY_UI_HIDDEN` (20) arrives on EVERY backgrounding - it means "your
-   * UI went away", not "memory is short". Forwarding it would make the app shed
-   * transcripts and terminal rings every time the user switches apps, so a
-   * returning user re-fetches everything that was just dropped; and it would
-   * make the `app.memory` breadcrumb's count mean "the user multitasked"
-   * rather than "pressure happened". That second one is the dangerous half: the
-   * whole purpose of the breadcrumb is to let the NEXT watchdog-termination
-   * event self-identify, and a trail that carries memory warnings either way
-   * says exactly as much as the missing signal it replaced, which is nothing.
+   * **From Android 14 the system delivers only `TRIM_MEMORY_UI_HIDDEN` and
+   * `TRIM_MEMORY_BACKGROUND`.** The `RUNNING_*`, `MODERATE` and `COMPLETE`
+   * constants are no longer sent, and were formally deprecated in Android 15
+   * (developer.android.com/topic/performance/memory/manage-app-memory). This
+   * module originally forwarded ONLY those legacy constants and deliberately
+   * excluded the two that still arrive, which made it inert on every modern
+   * device while appearing to work.
    *
-   * So: the RUNNING_* levels, which are delivered while the app is in the
-   * FOREGROUND and are the real analogue of the iOS memory warning, plus
-   * MODERATE and COMPLETE, which say the process is far enough down the LRU
-   * list to be worth releasing everything reconstructible. `TRIM_MEMORY_BACKGROUND`
-   * (40) is deliberately excluded with UI_HIDDEN: it means "on the LRU list",
-   * which is the normal resting state of a backgrounded app rather than a
-   * signal about memory.
+   * It appeared to work because `adb shell am send-trim-memory` INJECTS a level
+   * through `setProcessMemoryTrimLevel`, bypassing the system's delivery
+   * policy. That proves the callback plumbing, not that the OS ever sends the
+   * level. Verifying a signal by injecting it is exactly the kind of false
+   * confidence `.claude/rules/performance-claims-are-measured.md` exists to
+   * prevent, and it is why this comment names the source rather than the test.
    *
-   * MEASURED on a release build, emulator `kangentic_pixel` (API 35), via
-   * `adb shell am send-trim-memory`, 2026-09-13. The three RUNNING_* levels are
-   * delivered and classify as pressure; the platform REFUSES the other four
-   * outright with `IllegalArgumentException: Unable to set a background trim
-   * level on a foreground process`. Two things follow, and the second was not
-   * expected:
+   * The two that survive are not interchangeable with the old ones, so the
+   * distinction is pushed to JS as a severity rather than flattened here:
+   * `UI_HIDDEN` and `BACKGROUND` mean "the user is not looking, release what is
+   * reconstructible", while the legacy `RUNNING_*` levels meant "memory is
+   * short RIGHT NOW, in the foreground". Only the second kind is evidence for
+   * the Sentry MOBILE-8 diagnostic; counting an ordinary backgrounding as a
+   * memory warning would make the breadcrumb's count mean "the user
+   * multitasked" and say exactly as much as the missing signal it replaced,
+   * which is nothing.
    *
-   * 1. The level split is enforced by the OS, not merely by convention: the
-   *    background levels cannot reach a foreground process at all.
-   * 2. **This app is a foreground process even when it is behind the launcher**,
-   *    because it runs a foreground service for background notifications
-   *    (`dumpsys activity processes` reports `fg +50 F/S/FGS (fg-service-act)`
-   *    with the launcher focused). So while that service runs, MODERATE and
-   *    COMPLETE are unreachable here and the effective behaviour of this filter
-   *    is "the three RUNNING_* levels". They are still forwarded rather than
-   *    dropped: the service is tied to a user setting, and in a configuration
-   *    without it the background levels do arrive.
-   *
-   * The exclusion branch is therefore NOT exercised on device, for the same
-   * reason: those levels cannot be delivered. It is verified by reading, not by
-   * measurement, and this comment says so rather than implying coverage.
+   * Observed while establishing the above, and worth keeping because it shapes
+   * how anyone tests this: `am send-trim-memory` REFUSES the four background
+   * levels against a foreground process with `IllegalArgumentException: Unable
+   * to set a background trim level on a foreground process`, and **this app
+   * counts as foreground even behind the launcher** because it runs a
+   * foreground service for background notifications (`dumpsys activity
+   * processes` shows `fg +50 F/S/FGS (fg-service-act)` with the launcher
+   * focused). So pressing HOME delivers nothing while that service runs. Turn
+   * background notifications off before concluding the module is broken.
    */
   private fun isPressure(level: Int): Boolean =
     when (level) {
+      // Still delivered on every API level, and the ONLY two delivered from
+      // Android 14 on. See the note above about the legacy constants.
+      ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN,
+      ComponentCallbacks2.TRIM_MEMORY_BACKGROUND,
+      // Legacy, and dead weight on Android 14+. Kept because minSdk is 24 and
+      // these are the only real PRESSURE signal an older device gives.
       ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE,
       ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW,
       ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,

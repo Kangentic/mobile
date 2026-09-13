@@ -378,14 +378,15 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   and nothing else - no byte figure, no free text, no session content. It exists because the OS
   kills a foreground app for memory without producing a crash report, and sentry-cocoa does not
   breadcrumb the warning itself, so without it there is no way to tell an out-of-memory kill from
-  a hang or a force-quit (see `src/observability/memoryPressure.ts`). Both platforms report it,
-  from different sources: iOS from React Native's `AppState` `memoryWarning` event, Android from
-  the local Expo module in `modules/memory-pressure`, which forwards `onTrimMemory`. The Android
-  side deliberately ignores the trim levels that arrive on every ordinary backgrounding
-  (`TRIM_MEMORY_UI_HIDDEN`, `TRIM_MEMORY_BACKGROUND`), so the count records memory pressure and
-  not how often the app was switched away from. The payload is identical on both platforms: a
-  bare count, with no severity and no level, even though the app distinguishes a mild Android
-  warning from a serious one internally to decide how much to release.
+  a hang or a force-quit (see `src/observability/memoryPressure.ts`). In practice this is an iOS
+  breadcrumb: it comes from React Native's `AppState` `memoryWarning`, and the Android equivalent
+  no longer exists. From Android 14 the system delivers only `TRIM_MEMORY_UI_HIDDEN` and
+  `TRIM_MEMORY_BACKGROUND`, which mean "the user is not looking" rather than "memory is short", so
+  the app uses them to release reconstructible state and deliberately does NOT count them - a
+  count that rose on every ordinary app switch would say nothing about memory. Older Android
+  devices still report the legacy pressure levels and do breadcrumb. The payload is a bare count
+  with no severity and no level, even though the app distinguishes the cases internally to decide
+  how much to release.
   Screenshots and view hierarchy are the two that reach native, and both are off there too.
   Transcripts, terminal output, diff content, board data, pairing material and notification
   payloads are never collected, and `src/pairing/`, `src/channel/`, `src/demo/`,

@@ -160,19 +160,54 @@ describe('initializeMemoryPressure', () => {
    * busy. These pin the mapping, since nothing downstream can tell the
    * difference once it is lost.
    */
-  it('reports Android RUNNING_MODERATE as moderate, and everything else as serious', async () => {
+  it('classifies every Android trim level the module forwards', async () => {
     const module = await loadFreshModule();
     module.initializeMemoryPressure();
     const seen: string[] = [];
     module.subscribeToMemoryPressure((severity) => seen.push(severity));
 
+    fireAndroidMemoryPressure(20); // TRIM_MEMORY_UI_HIDDEN
+    fireAndroidMemoryPressure(40); // TRIM_MEMORY_BACKGROUND
     fireAndroidMemoryPressure(5); // TRIM_MEMORY_RUNNING_MODERATE
     fireAndroidMemoryPressure(10); // TRIM_MEMORY_RUNNING_LOW
     fireAndroidMemoryPressure(15); // TRIM_MEMORY_RUNNING_CRITICAL
     fireAndroidMemoryPressure(60); // TRIM_MEMORY_MODERATE
     fireAndroidMemoryPressure(80); // TRIM_MEMORY_COMPLETE
 
-    expect(seen).toEqual(['moderate', 'serious', 'serious', 'serious', 'serious']);
+    // The first two are the ONLY levels Android 14+ still delivers.
+    expect(seen).toEqual(['backgrounded', 'backgrounded', 'moderate', 'serious', 'serious', 'serious', 'serious']);
+  });
+
+  /**
+   * From Android 14 the only delivered levels map to 'backgrounded', so
+   * counting them would make this breadcrumb a record of how often the user
+   * left the app - present on every launch, absent never, and therefore worth
+   * exactly as much as the missing iOS signal it was built to replace.
+   */
+  it('never counts a backgrounding as a memory warning', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+
+    fireAndroidMemoryPressure(20);
+    fireAndroidMemoryPressure(40);
+
+    expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
+
+    // ...and a real shortage afterwards still counts from one.
+    fireAndroidMemoryPressure(15);
+    const breadcrumb = sentryState.addBreadcrumb.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(breadcrumb.data).toEqual({ count: 1 });
+  });
+
+  it('still notifies listeners on a backgrounding, so the shedders can run', async () => {
+    const module = await loadFreshModule();
+    module.initializeMemoryPressure();
+    const seen: string[] = [];
+    module.subscribeToMemoryPressure((severity) => seen.push(severity));
+
+    fireAndroidMemoryPressure(40);
+
+    expect(seen).toEqual(['backgrounded']);
   });
 
   it('reports an iOS warning as serious, because iOS sends no milder one', async () => {
