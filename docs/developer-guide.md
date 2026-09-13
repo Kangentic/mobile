@@ -1669,15 +1669,41 @@ time, dead code in every other build, never on in a store build) and read the ti
 adb -s <serial> logcat -d -s ReactNativeJS -e connection-trace
 ```
 
-Every line is `[connection-trace] <event> +<ms since the last AppState 'active'> k=v ...`, and
-the events are the whole story: `app-state-active` / `app-state-background` (with the transport
-state, relay close code, established flag and keepalive flag at that moment), `dial`, `open`,
-`close` (with the relay's close code), `schedule-reconnect` (the delay armed and the next rung),
-`redial-now` (whether the foreground kick actually dialed, and whether it was forced),
-`probe-start` / `probe-ok` / `probe-failed` (the foreground liveness probe and its verdict),
-`established`, `bootstrap-start`, `project-list`, `board-snapshot` (one per board, with its
-projection and task count), `wake-source` and `ceiling-timer` (the keepalive's two enforcement
-routes). No content and no identifiers, so the log is safe to paste into a task.
+Every line is `[connection-trace] <event> +<ms since the origin> k=v ...`, and the events are the
+whole story: `app-state-active` / `app-state-background` (with the transport state, relay close
+code, established flag and keepalive flag at that moment), `dial`, `open`, `close` (with the
+relay's close code), `schedule-reconnect` (the delay armed and the next rung), `redial-now`
+(whether the foreground kick actually dialed, and whether it was forced), `redial-now-skipped`
+and `probe-skipped` (the A/B switch turned off), `probe-start` / `probe-ok` / `probe-failed` (the
+foreground liveness probe and its verdict), `established`, `bootstrap-start`,
+`bootstrap-restart` (a bootstrap lost to a rekey, restarted), `project-list`, `board-snapshot`
+(one per board, with its projection and task count), `wake-source` and `ceiling-timer` (the
+keepalive's two enforcement routes). What a line may carry is event names, transport states,
+relay close codes, counts, millisecond deltas, and coarse boolean state (`paired`, `cached`,
+`established`, the keepalive flag). No content and no identifiers, so the log is safe to paste
+into a task.
+
+**Cold-launch-only events**, emitted once per process before any of the above, in the order they
+actually fire: `startup-origin` (the raw `rnStartupTiming` fields plus the clock-conversion
+anchor, see below), `polyfills-ready`, `root-layout-mount`, `lifecycle-start`, `open-start`
+(carrying `cold`), `anchor-loaded` (carrying `ms` and `paired`) and `identity-ready` (carrying
+`ms` and `cached`). `settings-hydrated` is the exception to that ordering: it fires from the
+`.finally()` of an async store hydration, so it lands somewhere after `lifecycle-start` rather
+than between it and `root-layout-mount` - `app/_layout.tsx` calls `startConnectionLifecycle()`
+synchronously and only then awaits the hydrate. Detailed in "Measuring the cold launch" below.
+
+One further event is not cold-launch-only but belongs with them: `origin-rebased`, emitted by
+`markConnectionTraceForeground()` immediately BEFORE it moves the origin, so its own `+<ms>` is
+measured against the origin being retired. Every `+<ms>` after it restarts from a new zero. See
+the mid-launch case under "Measuring the cold launch".
+
+**The origin is not always "the last AppState 'active'".** On a warm foreground it is exactly
+that (`markConnectionTraceForeground()`, called from the `active` transition). On a cold launch
+- before any foreground transition has happened - the origin is instead the instant
+`src/devsupport/connectionTrace.ts` itself evaluates, which is the bundle's first import (see
+`index.js`). That is what makes the cold-launch numbers below possible at all: before this, every
+cold-launch line printed `n/a`, because `foregroundedAtMs` was never set. See "Measuring the cold
+launch" below for that path specifically.
 
 The same build carries a **Foreground recovery** switch under Settings > Connection trace. Off
 disables both the kick and the probe, which makes the before/after an A/B in one build on one
@@ -1719,6 +1745,124 @@ renderer and timestamp each device's `connectionState` transition; `connected` t
 Noise session is established, `offline` means the desktop is parked with no peer). And an
 emulator's airplane mode is a black hole, not a disconnect: use it to reproduce a stall, never a
 socket death.
+
+### Measuring the cold launch
+
+Task #70 above measured the reconnect from AppState `active` onward. Everything BEFORE that -
+process start, bundle evaluation, the React mount, and the trust anchor and device identity reads
+`performOpenConnection` awaits before the WebSocket is even constructed - was unmeasured, because
+`markConnectionTraceForeground()` has exactly one call site (the `active` transition), and a cold
+launch never fires it: it dials directly from `startConnectionLifecycle()`. Every cold-launch line
+used to print `n/a`.
+
+**Two build-time premises turned out not to hold, and the numbers below reflect the corrected
+picture, not the original ones.** There is no libsodium and nothing async to await in the crypto
+stack (`@kangentic/protocol` is pure TS over `@noble/*`; `src/lib/cryptoPolyfills.ts` is a
+synchronous module-scope install). And `performance.rnStartupTiming` - the one native handle on
+"time before JS entry" - is populated with `n/a` in every field on this Expo SDK 57 / RN 0.86.3
+Android build: the native host never calls `ReactMarker.setAppStartTime`, so there is no in-app
+signal for anything before the JS bundle starts evaluating. **Read**, not measured, and
+reproducible two ways: `react-native/src/private/webapis/performance/ReactNativeStartupTiming.js`
+names that marker as `startTime`'s only source, and a grep for `setAppStartTime` across
+`node_modules/react-native`, `node_modules/expo` and `node_modules/expo-modules-core` returns no
+caller. The `startup-origin` line prints all four raw fields on every run, so this is checkable
+from the log on any host rather than taken on trust - if `perfNow` itself ever reads `n/a` the
+derived `initRuntimeBeforeJsEntryMs` / `runJsBeforeJsEntryMs` fields go `n/a` with it.
+
+**The fix:** `src/devsupport/connectionTrace.ts` is now the bundle's literal first import (see
+`index.js`), so its own module evaluation instant becomes the cold-launch origin, seeded into the
+same `foregroundedAtMs` a warm foreground later re-bases. A one-shot `startup-origin` line prints
+the raw `rnStartupTiming` fields alongside the co-captured `performance.now()`/`Date.now()`
+instant, so the clock domain and the native-marker gap above are visible in the log itself rather
+than assumed. New marks: `polyfills-ready` (end of the crypto-stack module), `root-layout-mount`
+and `settings-hydrated` (`app/_layout.tsx`'s mount effect), `lifecycle-start` and `open-start`
+(`connectionManager.ts`, `open-start` carrying `cold` - true until the first warm foreground
+re-bases the clock), `anchor-loaded` (after `trustAnchorStore.load()`, carrying `ms` and `paired`)
+and `identity-ready` (after `deviceIdentityManager.getIdentity()`, carrying `ms` and `cached`).
+`dial` (already existed) is the natural end of this segment: nothing async separates it from
+`new WebSocket()`.
+
+**Measured** 2026-09-13, `EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1` release build
+(`npx expo run:android --variant release --no-bundler`), Android emulator (`kangentic_pixel`,
+API 35, x86_64), an already-persisted trust anchor from earlier dev-rig work on that AVD (not
+paired fresh for this measurement - see the note on scope below), screen held on
+(`svc power stayon true`). Five cold launches: `am force-stop` -> `logcat -c` ->
+`am start -W -S -n com.kangentic.mobile/.MainActivity` -> `logcat -d -v epoch`. The external
+control - `Start proc` from `logcat -v epoch`, independent of the in-app clock entirely - is what
+actually reaches process fork, since nothing in-app can see anything before the bundle starts
+evaluating.
+
+| Segment | Median | Range (5 runs) |
+|---|---|---|
+| Process start (`Start proc`) -> JS entry (`startup-origin`) - **external control** | 361 ms | 330-372 ms |
+| JS entry -> `root-layout-mount` (bundle eval + React mount) | 156 ms | 147-170 ms |
+| JS entry -> `open-start` | 156 ms | 148-170 ms |
+| JS entry -> `anchor-loaded` (three sequential `SecureStore` reads) | 195 ms | 178-204 ms |
+| &nbsp;&nbsp;- the anchor read's own cost (its `ms` field) | 34 ms | 28-42 ms |
+| JS entry -> `identity-ready` | 212 ms | 193-219 ms |
+| &nbsp;&nbsp;- the identity read's own cost (its `ms` field, `cached=false` on all 5 - a fresh process every time) | 17 ms | 14-20 ms |
+| JS entry -> `dial` (**t1**) | 213 ms | 193-219 ms |
+| **Process start -> `dial`: t1 minus t0** | **565 ms** | **548-580 ms** |
+
+The chain is tight: `anchor-loaded`'s own gap from `open-start` and `identity-ready`'s own gap
+from `anchor-loaded` both match their printed `ms` fields exactly across all 5 runs, meaning there
+is no dead time between the marks in a release build - the mock/dev-pairing branches that could
+add one are `__DEV__`-gated and compiled out entirely. The three sequential SecureStore reads in
+`trustAnchor.load()` were the leading hypothesis for where this segment's cost would concentrate,
+and at a median of 34 ms out of a 565 ms total, **they are not it**: parallelising them
+(`Promise.all`) is not worth doing on this evidence, and `trustAnchor.load()` was left
+sequential rather than added behind an A/B switch that would only prove the same null result.
+
+**Caveat this conclusion depends on: the emulator's Keystore is software-only.** A real device can
+back Keystore with StrongBox or a TEE (`secure-storage.md`), and a hardware-backed round trip is
+not guaranteed to cost what an emulator's does - three sequential calls into a secure element
+could plausibly cost more than 34 ms where three into an emulator's software implementation do
+not. Nothing here contradicts the "not worth it" call, but it is scoped to this device: before
+treating the anchor read as permanently ruled out, the cheap check is the same `anchor-loaded ms`
+field read off a real paired phone (`adb -s <serial> logcat -d -s ReactNativeJS -e
+connection-trace`, no rebuild required beyond the trace flag), not a re-derivation from emulator
+numbers.
+
+**A real instrumentation finding, not a defect:** on 2 of the 5 runs, Android's own `AppState`
+reported an `active` transition asynchronously, mid-launch - after `open-start` had already fired
+but before `dial`. That transition re-bases `foregroundedAtMs` exactly as designed (it is the
+same mechanism a warm foreground uses), so the trace's own printed `+Nms` deltas reset to a new
+zero partway through those two runs. The absolute `ms` fields on `anchor-loaded` and
+`identity-ready` are unaffected (they are self-timed), and the raw `logcat -v epoch` timestamps
+recover the true JS-entry-relative deltas regardless - which is how the table above was computed
+for those two runs. Reading the printed `+Nms` blindly across this boundary would have understated
+`identity-ready` and `dial` by roughly 150-190 ms.
+
+**The instrument now says so itself, rather than leaving it to the reader.** Finding this
+originally meant noticing an unrelated `app-state-active` line and inferring the reset, which is
+human vigilance guarding the trace's own primary output on 40% of its runs. `markConnectionTraceForeground()`
+now emits `origin-rebased` immediately before it moves the origin, so the reset is an explicit
+line with its own `+<ms>` against the retired origin: any `+<ms>` after it is measured from a new
+zero, full stop. It fires on every foreground, not just a mid-launch one, and carries no fields.
+Sum across an `origin-rebased`, or fall back to `logcat -v epoch`, rather than reading a single
+`+<ms>` through it. Note the cold/warm latch behind `open-start`'s `cold` field flips at this
+same point, so on such a run an open after the transition correctly reports `cold=false` while
+`anchor-loaded` and `identity-ready` keep their self-timed `ms` values regardless.
+
+**The warm path is unchanged**, confirmed directly: backgrounding the same process and bringing it
+back to the foreground (not a cold launch - `pm` was never force-stopped) produced
+`app-state-active +0ms` -> `open-start +1ms cold=false` -> `anchor-loaded +9ms ms=8` ->
+`identity-ready +9ms ms=0 cached=true` -> `dial +9ms`. `cached=true` there (against `cached=false`
+on every cold run) is the identity memo working exactly as designed: same process, same
+`cachedIdentity` still populated from the cold launch that started it.
+
+**Not measured, deliberately:** the first-ever-launch case (identity keygen plus a `SecureStore`
+write, one `ms` field higher than the steady-state `identity-ready` read) would need clearing this
+AVD's already-useful persisted pairing to observe, and re-pairing to get it back is a live ceremony
+this session had no need to repeat. Read out of `deviceIdentity.ts`: it adds exactly one
+`generateX25519KeyPair()` call (synchronous, sub-millisecond) and one `SecureStore.setItemAsync`
+write on top of the steady-state read, so the extra cost is one native write, not a second read.
+
+**Note on scope.** The measured anchor pointed at a relay this session's local rig no longer had
+running (`dial` -> `close 1006` -> backoff, repeatedly) - expected and irrelevant to `dial`'s own
+timing, which fires before any response and does not depend on the peer. Per the task's own
+framing, this segment is decision-irrelevant to the relay for the same reason: `t1` is the dial
+firing, not the handshake completing.
 
 ## iOS without a Mac
 

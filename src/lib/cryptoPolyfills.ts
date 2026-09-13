@@ -1,11 +1,17 @@
 /**
- * Must be the first import in the JS bundle (see index.js), before any
- * module that touches @kangentic/protocol. Hermes has no global
+ * Must be the first import in the JS bundle that touches
+ * @kangentic/protocol (see index.js). Hermes has no global
  * crypto.getRandomValues, which @noble/* (the protocol's crypto primitives)
  * calls synchronously at key-generation time, and no TextDecoder (only
  * TextEncoder, added separately). Importing this file after protocol code
  * has already loaded is too late - keygen throws.
+ *
+ * `src/devsupport/connectionTrace` precedes this one in index.js - it is a
+ * zero-import leaf that touches nothing crypto- or protocol-related, so it
+ * does not disturb the ordering guarantee above; it exists first only so
+ * its own module evaluation can serve as the cold-launch clock origin.
  */
+import { traceConnection } from '@/devsupport/connectionTrace';
 import 'react-native-get-random-values';
 import '@bacons/text-decoder/install';
 import { generateX25519KeyPair } from '@kangentic/protocol';
@@ -24,6 +30,7 @@ function assertCryptoPolyfilled(): void {
 }
 
 assertCryptoPolyfilled();
+traceConnection('polyfills-ready');
 
 if (__DEV__) {
   // Proves the polyfills actually work end to end on the running engine, not

@@ -1,7 +1,7 @@
 import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { bytesToHex } from '@kangentic/protocol';
 import { ChannelController, SubscriptionManager, isRedialableTransport, type VerbClient } from '@/channel';
-import { foregroundKickEnabled, markConnectionTraceForeground, traceConnection } from '@/devsupport/connectionTrace';
+import { foregroundKickEnabled, isColdLaunch, markConnectionTraceForeground, traceConnection } from '@/devsupport/connectionTrace';
 import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
 // Static, unlike the dev-only branches below, because this one ships: it is a
@@ -288,6 +288,7 @@ function openConnectionOrThrow(): Promise<void> {
 async function performOpenConnection(): Promise<void> {
   if (activeConnection) return;
   const generation = connectGeneration;
+  traceConnection('open-start', { cold: isColdLaunch() });
 
   // Dev-only mock desktop (the dev rig's mock mode sets
   // EXPO_PUBLIC_KANGENTIC_MOCK=1): the real channel stack runs against an
@@ -309,11 +310,31 @@ async function performOpenConnection(): Promise<void> {
     devPairing = getDevPairing();
   }
 
+  // Only the real (non-mock, non-dev-pairing) branch below does any native
+  // work, so the timing is only meaningful - and only recorded - for it.
+  // In a release build mockDesktop and devPairing are always null (their
+  // whole setup above sits behind `__DEV__`, which Metro strips), so the
+  // guard six lines down collapses to "always measure" on the trace build
+  // this task cares about; it is kept so a dev-trace hybrid build never
+  // mislabels a synchronous bypass as a real anchor load. Note the guard has
+  // to re-read mockDesktop AFTER the load, not before: the demo-anchor branch
+  // further down assigns it, and a single hoisted predicate would wrongly
+  // emit identity-ready for a demo pairing.
+  //
+  // The Date.now() capture itself is deliberately NOT gated behind
+  // connectionTraceEnabled(). Unlike the leaf module's module-scope guards,
+  // this is one clock read on a path that runs once per connection open, and
+  // a gate here would buy nothing measurable while splitting the timed region
+  // across a branch. Same for hasCachedIdentity() below.
+  const anchorLoadStartedAtMs = Date.now();
   const anchor: { desktopStaticPublicKey: Uint8Array; relayAddress: string } | null = mockDesktop
     ? { desktopStaticPublicKey: mockDesktop.desktopStaticPublicKey, relayAddress: 'loopback://mock-desktop' }
     : devPairing
       ? { desktopStaticPublicKey: devPairing.desktopStaticPublicKey, relayAddress: devPairing.relayAddress }
       : await trustAnchorStore.load();
+  if (!mockDesktop && !devPairing) {
+    traceConnection('anchor-loaded', { ms: Date.now() - anchorLoadStartedAtMs, paired: anchor !== null });
+  }
   if (!anchor) {
     // Not paired (or a partial/legacy anchor): stay idle; the pairing flow
     // triggers a reconnect via reconnectNow() when it completes.
@@ -360,7 +381,14 @@ async function performOpenConnection(): Promise<void> {
   pushRegistrationDesktopKeyHex = anchorDesktopKeyHex;
 
   useChannelStore.getState().setPairedState('paired');
+  // Read BEFORE calling getIdentity(): the call itself populates the cache,
+  // so checking after would always read true.
+  const identityWasCached = deviceIdentityManager.hasCachedIdentity();
+  const identityStartedAtMs = Date.now();
   const identity = mockDesktop ? mockDesktop.identity : devPairing ? devPairing.identity : await deviceIdentityManager.getIdentity();
+  if (!mockDesktop && !devPairing) {
+    traceConnection('identity-ready', { ms: Date.now() - identityStartedAtMs, cached: identityWasCached });
+  }
   // The AAD every push envelope is sealed against - whichever identity
   // this connection actually pairs under (mock/dev identities included).
   setActivePushIdentityPublicKey(identity.publicKey);
@@ -1012,6 +1040,7 @@ function onAppStateChange(status: AppStateStatus): void {
 /** Idempotent; called once from the root layout. */
 export function startConnectionLifecycle(): void {
   if (appStateSubscription) return;
+  traceConnection('lifecycle-start');
   // Dev-only inspect loop: the bridge dials the local inspect server once
   // per app boot and survives connection churn (it reads stores, not the
   // connection). Dynamic import keeps it out of prod bundles.

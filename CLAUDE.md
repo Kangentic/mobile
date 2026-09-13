@@ -129,8 +129,9 @@ src/
   devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures, the
                   #   dev-only inspect bridge (EXPO_PUBLIC_KANGENTIC_INSPECT), the release-build
                   #   connection trace (EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE, logcat timeline
-                  #   of foreground -> open -> established -> first board snapshot, plus the
-                  #   foreground-recovery A/B switch in Settings; see the developer guide) - shared
+                  #   of cold launch -> foreground -> open -> established -> first board snapshot,
+                  #   plus the foreground-recovery A/B switch in Settings; see the developer
+                  #   guide) - shared
                   #   by tests + rigs - plus claudeCapture*.ts: RECORDED real Claude Code PTY output
                   #   the mock terminal replays (generated, never hand-edited; see scripts/ below),
                   #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE), the concurrency
