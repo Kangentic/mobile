@@ -88,6 +88,21 @@ export type ConcurrencyProbeDepth = (typeof CONCURRENCY_PROBE_DEPTHS)[number];
  */
 const DEPTH_STORAGE_KEY = 'kangentic.probe.snippetWarmDepth';
 
+/**
+ * The same accessibility class every other Keychain item in this app is
+ * written with (`src/pairing/trustAnchor.ts`, `deviceIdentity.ts`,
+ * `src/notifications/pushKeys.ts`). This value is a single digit and not a
+ * secret, so nothing here needs protecting - but it would otherwise be the one
+ * item in the Keychain sitting on expo-secure-store's weaker library default,
+ * next to the identity key and the trust anchor, and the first place anyone
+ * copies from when they add a real one. A write-time attribute only, which is
+ * why the read below passes no options (see the note in
+ * `src/notifications/sharedKeychain.ts`).
+ */
+const DEVICE_BOUND_STORAGE_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+};
+
 function readPersistedDepth(): ConcurrencyProbeDepth | null {
   if (!probeEnabled) return null;
   try {
@@ -125,7 +140,7 @@ export function setConcurrencyProbeDepth(depth: ConcurrencyProbeDepth | null): v
   activeDepth = depth;
   try {
     if (depth === null) SecureStore.deleteItemAsync(DEPTH_STORAGE_KEY).catch(() => undefined);
-    else SecureStore.setItem(DEPTH_STORAGE_KEY, String(depth));
+    else SecureStore.setItem(DEPTH_STORAGE_KEY, String(depth), DEVICE_BOUND_STORAGE_OPTIONS);
   } catch {
     // The in-memory change still stands; only the next launch loses it.
   }

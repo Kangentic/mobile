@@ -2117,6 +2117,30 @@ that per-session state is bounded and cleaned up, with one real exception. All *
 - **An opened session is capped at both ends.** `transcriptStore` holds an LRU of
   `RETAINED_SESSION_CAP` sessions and deletes on eviction and release; `terminalFeed` rings are
   capped at `TERMINAL_RING_CAPACITY_BYTES` (128 KiB) each and exist only for retained sessions.
+- **Shedding a transcript EMPTIES it; it does not un-retain it**, and the difference is the gap
+  between reconstructible and lost. Retention is a claim the screens own (`retainSession` on
+  mount, `releaseSession` on unmount) and three guards read it: `applyTranscript` drops live
+  deltas for a non-retained session, `applyWindow` DISCARDS a refetched window for one, and
+  `releaseSession` no-ops for one. So a shed that also revoked retention could not be undone by
+  refetching - the answer was thrown away on arrival. It bit the screen lower in the navigation
+  stack, which is still MOUNTED: `openSessionScreen` is a mount effect rather than a focus effect,
+  so it never re-ran, and `ConversationTab`'s self-heal reads `needsTailFetch` as false once the
+  entry is gone. The pane stayed blank for the life of the process while the agent went on
+  streaming into a store that was discarding it. `shedBackgroundTranscripts` therefore clears
+  `entries` and sets `needsTailFetch`, which is the signal the self-heal already watches.
+
+  **When that refetch actually costs a round trip, read out of the source and not measured:** the
+  self-heal is gated on `established` as well as `needsTailFetch`, and the two possible
+  configurations both avoid refetching while the user is away. With background notifications OFF
+  (the default, and always on iOS) the lifecycle tears the channel down on background, so
+  `established` is false and the refetch waits for foreground return. With Android's
+  `foreground-service` mode ON the channel does stay up - but the service also makes the process
+  count as FOREGROUND to Android, so `TRIM_MEMORY_UI_HIDDEN` / `_BACKGROUND` are never delivered
+  and no shed fires in the first place (the same quirk the memory-pressure module documents for
+  `am send-trim-memory`). What the refetch buys in exchange is that the restored window is ONE
+  bounded window rather than the unbounded scrolled-back accumulation `applyWindow`'s older-page
+  branch builds up. No number here is measured; the A/B that would produce one is the Android
+  release-build procedure above.
 - **The ARCHIVE was the one unbounded structure, and it is now capped.**
   `boardStore.archivedByProjectId` appended each page the user scrolled and was cleared only by a
   full `reset()`, so every archive opened stayed for the life of the process. **Measured** against
@@ -2125,12 +2149,28 @@ that per-session state is bounded and cleaned up, with one real exception. All *
   of description text, roughly doubled once Hermes holds it as UTF-16. Browsing a few Done columns
   could therefore hold more than the entire cold-start saving the MOBILE-8 bound buys, and never
   give it back. Now bounded by `ARCHIVED_PROJECT_CAP` (2) with `shedArchivedPages()` on serious
-  memory pressure.
+  OR backgrounded pressure (it skips only `moderate`, like every other shedder).
 
   **Why by project and not by page**, since the obvious LRU is the wrong one: pages arrive
   newest-archived first and the user scrolls DOWNWARD, so evicting the oldest-loaded page removes
   the top of the list they are still reading. Only a project navigated away from is safe to drop,
   and BoardScreen's focus effect already refetches page one when an archive is absent.
+
+  **Which project counts as "navigated away from" is the on-screen one, not the last loaded.**
+  `shedArchivedPages` keys on `selectedProjectId ?? projects[0]?.id`, the same expression
+  BoardScreen renders from. The two diverge exactly when the focus effect SKIPS its reload, which
+  it does once the user has paged past page one, so an LRU over load order could elect to drop the
+  archive under the open Done column. That matters most on Android 14+, where `backgrounded` is
+  the only signal the system still sends: an AppState return does not re-run a focus effect, so
+  the blank would have persisted until the user navigated away and back.
+
+  **An archive whose page is still in flight is never dropped.** `setArchivedLoading` writes
+  `archivedByProjectId` BEFORE the round trip, so wiping that record resets `loading` to false
+  underneath two separate in-flight guards (`loadArchivedTasks`'s own re-entrancy check and
+  SessionScreen's), and the screen reads a live fetch as finished-and-empty and issues a duplicate
+  `read-board` for it. The record costs nothing to keep - it holds no tasks yet, which is the
+  whole point of shedding. `setArchivedLoading` also maintains `archivedProjectOrder`, so the map
+  and the LRU cannot disagree about what is held.
 
   **Why not truncate the description instead**, which looks cheaper: `CompletedTaskScreen` renders
   the full description through `MarkdownBlock`, so a truncated copy would silently degrade that

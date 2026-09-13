@@ -21,11 +21,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * category constant rather than importing it. Mocked by specifier, with a real
  * backing map so the persistence this probe depends on is actually exercised.
  */
-const secureStoreState = vi.hoisted(() => ({ items: new Map<string, string>() }));
+const secureStoreState = vi.hoisted(() => ({
+  items: new Map<string, string>(),
+  lastWriteOptions: null as { keychainAccessible?: string } | null,
+}));
 vi.mock('expo-secure-store', () => ({
+  // The accessibility constant has to exist on the mock: the module reads it at
+  // IMPORT time to build its write options, so omitting it fails every test in
+  // this file with a mock-export error rather than anything about the probe.
+  WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY',
   getItem: (key: string) => secureStoreState.items.get(key) ?? null,
-  setItem: (key: string, value: string) => {
+  setItem: (key: string, value: string, options?: { keychainAccessible?: string }) => {
     secureStoreState.items.set(key, value);
+    secureStoreState.lastWriteOptions = options ?? null;
   },
   deleteItemAsync: (key: string) => {
     secureStoreState.items.delete(key);
@@ -49,6 +57,24 @@ describe('concurrencyProbe', () => {
   beforeEach(() => {
     setProbeFlag(undefined);
     secureStoreState.items.clear();
+    secureStoreState.lastWriteOptions = null;
+  });
+
+  /**
+   * `secure-storage.md` requires accessibility to be chosen PER ITEM rather
+   * than left to expo-secure-store's library default. This value is a single
+   * digit and not a secret, so nothing here needs protecting - the reason to
+   * pin it is that this would otherwise be the one item in the Keychain on the
+   * weaker default, sitting beside the identity key and the trust anchor, and
+   * the first thing anyone copies when adding a real secret.
+   */
+  it('writes with the same device-bound accessibility as every other Keychain item', async () => {
+    setProbeFlag('1');
+    const probe = await loadFreshConcurrencyProbe();
+
+    probe.setConcurrencyProbeDepth(8);
+
+    expect(secureStoreState.lastWriteOptions).toEqual({ keychainAccessible: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY' });
   });
 
   /**

@@ -113,13 +113,100 @@ describe('archived pages are bounded by project', () => {
       .toHaveLength(6);
   });
 
-  it('sheds every archive but the most recent under memory pressure', () => {
+  /**
+   * With no `selectedProjectId` set (the shape `reset()` leaves), the
+   * on-screen project is null, so `shedArchivedPages` falls back to the
+   * `archivedProjectOrder` tail - the most recently loaded project. This
+   * case exercises that FALLBACK branch; the on-screen branch itself is
+   * covered separately below.
+   */
+  it('sheds every archive but the most recent under memory pressure, falling back to the most recently loaded project when none is on screen', () => {
     loadArchiveFor('project-a');
     loadArchiveFor('project-b');
 
     useBoardStore.getState().shedArchivedPages();
 
     expect(Object.keys(useBoardStore.getState().archivedByProjectId)).toEqual(['project-b']);
+  });
+
+  /**
+   * The primary branch: the project the user is LOOKING AT survives even
+   * when a different one was loaded more recently. The two diverge whenever
+   * a board is returned to without a refetch - BoardScreen's focus effect
+   * deliberately skips reloading page one once the user has paged deeper -
+   * and dropping the on-screen archive would blank an open Done column
+   * until the next focus.
+   */
+  it('keeps the on-screen project even when a different project was loaded more recently', () => {
+    useBoardStore.getState().selectProject('project-a');
+    loadArchiveFor('project-a');
+    loadArchiveFor('project-b');
+
+    useBoardStore.getState().shedArchivedPages();
+
+    expect(Object.keys(useBoardStore.getState().archivedByProjectId)).toEqual(['project-a']);
+  });
+
+  /**
+   * A project whose page fetch is still IN FLIGHT survives too, even when it
+   * is neither on screen nor the most recently loaded. Such a record costs
+   * nothing (no tasks yet), and wiping it would reset `loading` to false
+   * underneath two separate in-flight guards, making a live fetch read as
+   * finished-and-empty and firing a duplicate request.
+   */
+  it('keeps a project whose archive fetch is still in flight, even when it is neither on screen nor the most recent', () => {
+    useBoardStore.getState().selectProject('project-c');
+    loadArchiveFor('project-c');
+    loadArchiveFor('project-a');
+    useBoardStore.getState().setArchivedLoading('project-b', true);
+
+    useBoardStore.getState().shedArchivedPages();
+
+    const survivors = Object.keys(useBoardStore.getState().archivedByProjectId).sort();
+    expect(survivors).toEqual(['project-b', 'project-c']);
+    expect(useBoardStore.getState().archivedByProjectId['project-b'].loading).toBe(true);
+  });
+
+  it('is idempotent: shedding again after the first pass changes nothing further', () => {
+    loadArchiveFor('project-a');
+    loadArchiveFor('project-b');
+    useBoardStore.getState().shedArchivedPages();
+    const afterFirstShed = useBoardStore.getState();
+
+    useBoardStore.getState().shedArchivedPages();
+    const afterSecondShed = useBoardStore.getState();
+
+    // Reference-stable, not merely equal in content: the no-drop path
+    // returns the SAME state object rather than a freshly constructed one.
+    expect(afterSecondShed.archivedByProjectId).toBe(afterFirstShed.archivedByProjectId);
+    expect(afterSecondShed.archivedProjectOrder).toBe(afterFirstShed.archivedProjectOrder);
+  });
+});
+
+describe('setArchivedLoading keeps archivedProjectOrder in step with archivedByProjectId', () => {
+  beforeEach(() => {
+    useBoardStore.getState().reset();
+  });
+
+  /**
+   * Before this, setArchivedLoading wrote archivedByProjectId alone, so the
+   * two structures disagreed for the whole duration of a first-time fetch:
+   * the project was held but unordered, invisible to applyArchivedPage's
+   * eviction and impossible for shedArchivedPages to elect as the kept one.
+   */
+  it('adds the project to archivedProjectOrder', () => {
+    useBoardStore.getState().setArchivedLoading('project-a', true);
+
+    expect(useBoardStore.getState().archivedProjectOrder).toEqual(['project-a']);
+    expect(useBoardStore.getState().archivedByProjectId['project-a'].loading).toBe(true);
+  });
+
+  it('moves an already-held project to most-recent in archivedProjectOrder', () => {
+    useBoardStore.getState().setArchivedLoading('project-a', true);
+    useBoardStore.getState().setArchivedLoading('project-b', true);
+    useBoardStore.getState().setArchivedLoading('project-a', false);
+
+    expect(useBoardStore.getState().archivedProjectOrder).toEqual(['project-b', 'project-a']);
   });
 });
 
@@ -253,5 +340,36 @@ describe('applyArchivedPage', () => {
     expect(archived.tasks.map((task) => task.id)).toEqual(['task-3']);
     expect(archived.nextOffset).toBe(1);
     expect(Object.keys(archived.summariesByTaskId)).toEqual(['task-3']);
+  });
+});
+
+describe('reset', () => {
+  beforeEach(() => {
+    useBoardStore.getState().reset();
+  });
+
+  it('clears archivedProjectOrder along with the archives themselves', () => {
+    useBoardStore.getState().applyArchivedPage(
+      archivedPage({
+        projectId: 'project-a',
+        archivedTasks: [boardTaskFixture({ id: 'project-a-task', archived_at: '2026-07-20T00:00:00.000Z' })],
+        archivedTotalCount: 1,
+      }),
+      { append: false },
+    );
+    useBoardStore.getState().applyArchivedPage(
+      archivedPage({
+        projectId: 'project-b',
+        archivedTasks: [boardTaskFixture({ id: 'project-b-task', archived_at: '2026-07-20T00:00:00.000Z' })],
+        archivedTotalCount: 1,
+      }),
+      { append: false },
+    );
+    expect(useBoardStore.getState().archivedProjectOrder).toEqual(['project-a', 'project-b']);
+
+    useBoardStore.getState().reset();
+
+    expect(useBoardStore.getState().archivedProjectOrder).toEqual([]);
+    expect(useBoardStore.getState().archivedByProjectId).toEqual({});
   });
 });

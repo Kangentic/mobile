@@ -107,6 +107,13 @@ async function flushLoopback(rounds = 6): Promise<void> {
   }
 }
 
+/** Same round-based flush as `flushLoopback`, but advancing vitest's fake clock instead of a real timer - for tests that also need to control debounce/retry timers precisely. */
+async function flushLoopbackFakeTimers(rounds = 6): Promise<void> {
+  for (let round = 0; round < rounds; round += 1) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+}
+
 describe('SubscriptionManager', () => {
   /**
    * Board task #70. A subscribe in flight across a rekey is sealed under keys
@@ -238,6 +245,182 @@ describe('SubscriptionManager', () => {
       // The backlog drains against a dead session; each task re-checks
       // isEstablished and no-ops rather than sending into a torn-down channel.
       expect(requests).toHaveLength(sentWhileEstablished);
+    });
+
+    /**
+     * `dispose()` drops everything still behind the cap, not merely the ones
+     * already in flight. The proof has to let the active ones SETTLE after
+     * disposing - answering them frees their queue slots, and if the backlog
+     * had merely been left alone (not cleared), `drain()` would start the
+     * next batch once those slots freed, same as an ordinary cap refill.
+     *
+     * `disposed` also short-circuits every queued closure on its own, so this
+     * pins the OUTCOME as a conjunction of the two guards rather than either
+     * one in isolation - the same honesty the transport-drop test above
+     * states about its own drain-time recheck.
+     */
+    it('dispose drops the queued backlog, so it never reaches the wire even once the in-flight requests settle', async () => {
+      const { stub, manager, requests } = await harness(holdEverything());
+      stub.beginHandshake();
+      await flushLoopback();
+
+      manager.setDesiredStreams(new Set(manySessionIds));
+      await flushLoopback();
+      const activeRequests = requests.filter((request) => request.verb === 'read-stream');
+      expect(activeRequests).toHaveLength(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+
+      manager.dispose();
+
+      // Answer every already-active request, which frees its queue slot.
+      // Without the drop, freeing a slot is exactly what lets the next
+      // backlogged session start.
+      for (const activeRequest of activeRequests) stub.send(defaultResponder(activeRequest));
+      await flushLoopback();
+
+      expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+    });
+
+    /**
+     * `subscribeStream`'s catch arms exactly one retry per session
+     * (`!isRetry`), at a fixed delay, so a transport hiccup that fails the
+     * whole fan-out at once schedules every retry to fire together. Routed
+     * through `enqueueStreamSubscribe` rather than a direct re-issue, that
+     * mass-fire respects the cap instead of becoming a second uncapped
+     * storm.
+     */
+    it('a stream retry re-enters through the queue, so a mass timeout does not become a second uncapped storm', async () => {
+      vi.useFakeTimers();
+      try {
+        const retrySessionIds = Array.from({ length: SUBSCRIBE_FAN_OUT_CONCURRENCY + 1 }, (_, index) => `retry-sess-${index}`);
+        const { stub, manager, requests } = await harness(holdEverything());
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+
+        manager.setDesiredStreams(new Set(retrySessionIds));
+        await flushLoopbackFakeTimers();
+        const readStreamRequests = (): CapabilityRequestMessage[] => requests.filter((request) => request.verb === 'read-stream');
+        expect(readStreamRequests()).toHaveLength(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+
+        // Every active request times out at once (CapabilityClient's own
+        // 10s default), which arms a retry timer per session and frees its
+        // slot - letting the one still-backlogged session start its own
+        // first attempt immediately, before any retry timer fires.
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(readStreamRequests()).toHaveLength(SUBSCRIBE_FAN_OUT_CONCURRENCY + 1);
+
+        // The retry timers for the first CAP sessions fire together, 2s
+        // later (STREAM_RETRY_DELAY_MS). Only one slot is free at that
+        // moment - the still-backlogged session's own attempt has its own
+        // later 10s deadline - so a QUEUED re-entry sends only that one
+        // free slot's worth; a direct re-issue would send all CAP
+        // regardless, exceeding the cap by CAP - 1.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(readStreamRequests()).toHaveLength(SUBSCRIBE_FAN_OUT_CONCURRENCY * 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  /**
+   * `refreshStream`, `refreshBoard`, `setStreamWantsTerminal` and
+   * `setBoardWantsFull` are each one request caused by a user action with a
+   * screen waiting on the answer, and deliberately bypass `subscribeQueue`.
+   * The fan-out cap exists for the STORMS - one request per project or per
+   * session, issued all at once - not for a single screen-driven refresh;
+   * putting these four behind it would make opening a session screen wait on
+   * up to `SUBSCRIBE_FAN_OUT_CONCURRENCY` unrelated background subscribes.
+   */
+  describe('the four screen-driven paths bypass the fan-out queue', () => {
+    const saturatingSessionIds = Array.from({ length: SUBSCRIBE_FAN_OUT_CONCURRENCY + 2 }, (_, index) => `bypass-sess-${index}`);
+    const saturatingProjectIds = Array.from({ length: SUBSCRIBE_FAN_OUT_CONCURRENCY + 2 }, (_, index) => `bypass-project-${index}`);
+
+    function holdEverything(): (request: CapabilityRequestMessage) => CapabilityResponseMessage | null {
+      return (request) => (request.verb === 'read-stream' || request.verb === 'read-board' ? null : defaultResponder(request));
+    }
+
+    it('refreshStream reaches the wire immediately while the stream queue is saturated', async () => {
+      const { stub, manager, requests } = await harness(holdEverything());
+      stub.beginHandshake();
+      await flushLoopback();
+      manager.setDesiredStreams(new Set(saturatingSessionIds));
+      await flushLoopback();
+
+      const stillQueuedSessionId = saturatingSessionIds[saturatingSessionIds.length - 1];
+      expect(requests.some((request) => (request.payload as { sessionId?: string }).sessionId === stillQueuedSessionId)).toBe(false);
+      const countBeforeRefresh = requests.filter((request) => request.verb === 'read-stream').length;
+      expect(countBeforeRefresh).toBe(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+
+      manager.refreshStream(stillQueuedSessionId);
+      await flushLoopback();
+
+      expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(countBeforeRefresh + 1);
+    });
+
+    it('setStreamWantsTerminal reaches the wire immediately while the stream queue is saturated', async () => {
+      const { stub, manager, requests } = await harness(holdEverything());
+      stub.beginHandshake();
+      await flushLoopback();
+      manager.setDesiredStreams(new Set(saturatingSessionIds));
+      await flushLoopback();
+
+      const stillQueuedSessionId = saturatingSessionIds[saturatingSessionIds.length - 1];
+      const countBeforeToggle = requests.filter((request) => request.verb === 'read-stream').length;
+      expect(countBeforeToggle).toBe(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+
+      const issuedResubscribe = manager.setStreamWantsTerminal(stillQueuedSessionId, true);
+      await flushLoopback();
+
+      expect(issuedResubscribe).toBe(true);
+      expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(countBeforeToggle + 1);
+    });
+
+    it('refreshBoard reaches the wire on its own debounce timer, not behind the saturated board queue', async () => {
+      vi.useFakeTimers();
+      try {
+        const { stub, manager, requests } = await harness(holdEverything());
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(saturatingProjectIds));
+        await flushLoopbackFakeTimers();
+
+        const stillQueuedProjectId = saturatingProjectIds[saturatingProjectIds.length - 1];
+        const countBeforeRefresh = requests.filter((request) => request.verb === 'read-board').length;
+        expect(countBeforeRefresh).toBe(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+
+        manager.refreshBoard(stillQueuedProjectId);
+        // BOARD_REFRESH_DEBOUNCE_MS, not exported - a fixed, short debounce
+        // independent of how saturated the fan-out queue is.
+        await vi.advanceTimersByTimeAsync(300);
+
+        expect(requests.filter((request) => request.verb === 'read-board')).toHaveLength(countBeforeRefresh + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('setBoardWantsFull reaches the wire immediately while the board queue is saturated', async () => {
+      vi.useFakeTimers();
+      try {
+        const { stub, manager, requests } = await harness(holdEverything());
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(saturatingProjectIds));
+        await flushLoopbackFakeTimers();
+
+        const stillQueuedProjectId = saturatingProjectIds[saturatingProjectIds.length - 1];
+        const countBeforeUpgrade = requests.filter((request) => request.verb === 'read-board').length;
+        expect(countBeforeUpgrade).toBe(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+
+        manager.setBoardWantsFull(stillQueuedProjectId);
+        await flushLoopbackFakeTimers();
+
+        const afterUpgrade = requests.filter((request) => request.verb === 'read-board');
+        expect(afterUpgrade).toHaveLength(countBeforeUpgrade + 1);
+        expect(afterUpgrade[afterUpgrade.length - 1].payload).toMatchObject({ projectId: stillQueuedProjectId, view: 'full' });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

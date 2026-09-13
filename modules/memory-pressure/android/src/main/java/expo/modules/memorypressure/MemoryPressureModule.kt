@@ -25,6 +25,21 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class MemoryPressureModule : Module() {
   private var callbacks: ComponentCallbacks2? = null
 
+  /**
+   * The context the callbacks were actually registered on, held so teardown
+   * can unregister against the SAME object it registered with.
+   *
+   * Re-deriving `appContext.reactContext?.applicationContext` in `OnDestroy`
+   * looks equivalent and is not: `reactContext` can already be null by the
+   * time a module is destroyed, which is the ordinary case on a dev-client
+   * reload. The unregister would then silently not happen while `callbacks`
+   * was nulled out, stranding a `ComponentCallbacks2` on the Application
+   * object - the one thing here that outlives the React context - with no JS
+   * reference left to remove it. Every reload would leak another, each still
+   * firing into a destroyed module, and `emit`'s `runCatching` would hide it.
+   */
+  private var registeredContext: Context? = null
+
   override fun definition() = ModuleDefinition {
     Name("MemoryPressure")
 
@@ -52,12 +67,13 @@ class MemoryPressureModule : Module() {
       }
       applicationContext.registerComponentCallbacks(registered)
       callbacks = registered
+      registeredContext = applicationContext
     }
 
     OnDestroy {
-      val applicationContext = appContext.reactContext?.applicationContext
-      callbacks?.let { applicationContext?.unregisterComponentCallbacks(it) }
+      callbacks?.let { registeredContext?.unregisterComponentCallbacks(it) }
       callbacks = null
+      registeredContext = null
     }
   }
 
@@ -89,6 +105,17 @@ class MemoryPressureModule : Module() {
    * memory warning would make the breadcrumb's count mean "the user
    * multitasked" and say exactly as much as the missing signal it replaced,
    * which is nothing.
+   *
+   * THE OTHER HALF OF THIS TABLE LIVES IN JS, and changing this filter without
+   * it is the silent way to break the feature. `severityForTrimLevel` in
+   * `src/observability/memoryPressure.ts` re-spells three of these constants by
+   * VALUE - `TRIM_MEMORY_RUNNING_MODERATE` (5), `TRIM_MEMORY_UI_HIDDEN` (20)
+   * and `TRIM_MEMORY_BACKGROUND` (40) - and classifies everything else this
+   * module forwards as `serious`. So widening the set below hands JS a level it
+   * will silently call `serious`, and narrowing it makes a branch there dead.
+   * Nothing mechanical connects the two: no JS tier can load Kotlin, which is
+   * why the correspondence is a grep away in both directions and checked by
+   * hand on device (`am send-trim-memory`; see docs/developer-guide.md).
    *
    * Observed while establishing the above, and worth keeping because it shapes
    * how anyone tests this: `am send-trim-memory` REFUSES the four background
