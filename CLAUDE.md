@@ -501,18 +501,26 @@ in a gitignored `CLAUDE.local.md` at the project root.
   green), and the **Ship It** column runs `/merge-pull-request` (merge the green PR, pull back to
   local `main`). For a deliberate direct quick-push that bypasses the PR gate, use `/merge-back`.
   Only push, land, or merge when the user explicitly asks.
-- **A column hands the next one UNCOMMITTED changes in the worktree, by design.** `/code-review`
-  deliberately does not commit: its fixes land in the working tree and the next step commits them
-  (`.claude/skills/code-review/SKILL.md` says so three times, and notes that the desktop repo's
-  "commit the pass" step has no counterpart here). So when a task moves **Code Review -> Tests**,
-  `/pull-request` inherits a dirty tree it did not write, and `git rebase` refuses to start until
-  it is committed.
-  **This is the normal case, not a concurrent writer.** A session that finds unexpected modified
-  files in a task worktree should confirm the diff is coherent follow-up on the same task (it
-  builds on the commits already there, every reference to a renamed symbol is updated, and
-  `npm run typecheck` is clean), then commit it into the PR. Treat it as a hazard only when the
-  diff is unrelated to the task or genuinely half-written. Stopping to ask costs a round trip on
-  every single review-then-test handoff.
+- **A column hands the next one UNCOMMITTED changes in the worktree, by design.** Moving a task
+  between two active columns performs **zero git writes**: the desktop app suspends or respawns a
+  PTY and injects the destination column's `autoCommand`, and `ensureWorktree` short-circuits as
+  `reused`, leaving the directory exactly as the previous agent left it. The worktree is SHARED
+  across all of a task's sessions, and a column marked `isolated` isolates the conversation, not
+  the filesystem. So uncommitted work survives a column move intact, and committing is the
+  incoming column's skill's job, never the app's. (The only two destinations that destroy
+  worktree state are the `todo` and `done` roles, both behind a confirmation dialog that counts
+  uncommitted files first.)
+  Concretely: the column that runs `/code-review` hands the column that runs `/pull-request` a
+  dirty tree. **This repo's `/code-review` does not commit at all** - its fixes land in the
+  working tree and the next step commits them, and `.claude/skills/code-review/SKILL.md` notes
+  the desktop repo's "commit the pass" step has no counterpart here. That divergence matters: on
+  desktop a finished pass normally leaves a CLEAN tree, so a dirty one there means something
+  unusual, while here a dirty one is simply what a finished pass looks like. `git rebase` then
+  refuses to start until those changes are committed.
+  **That is the normal case, not a concurrent writer. Do not stop and ask whether to include it**:
+  everything in the worktree belongs to this task, so the answer is always yes and the question
+  costs a round trip on every review-then-test handoff. Escalate only when the diff is unrelated
+  to the task or genuinely half-written.
 - `/commit`, `/pull-request`, `/merge-pull-request`, and `/merge-back` all write conventional-commit
   messages.
 - `/sync-docs` keeps `docs/` aligned with source; the doc-anchor check runs inside `/pull-request`
