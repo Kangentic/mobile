@@ -469,6 +469,49 @@ const config: ExpoConfig = {
           // both into that one task - which is why no log can split them and the
           // experiment had to be run. Do not repeat it expecting minutes.
           enableShrinkResourcesInReleaseBuilds: true,
+          // Without these, a minified Java/Kotlin stack frame carries a line
+          // number that resolves to NOTHING. R8 renumbers lines, and for a
+          // class kept wholesale by a library's consumer rules (for example
+          // expo-task-manager's `-keep class expo.modules.taskManager.** {*;}`)
+          // it records NO line mapping for that class at all - so the uploaded
+          // mapping.txt cannot translate the frame either.
+          //
+          // Measured, 2026-09-13: a reproducible headless-push crash reported
+          // `expo.modules.taskManager.TaskService.executeTask(...:134)`. Line
+          // 134 of that file is inside `unregisterTask`, and the 73 MB
+          // production mapping.txt for the build in question contains exactly
+          // one line for the class - the identity class mapping, no members and
+          // no line ranges. The frame was therefore undiagnosable from either
+          // the source or the mapping, which is most of why that crash sat
+          // unnoticed.
+          //
+          // `SourceFile` is required alongside `LineNumberTable`: the ART
+          // runtime only prints a line number for a frame that also has a
+          // source-file attribute.
+          //
+          // The second rule is the one that makes background push WORK at all.
+          // `AppLoaderProvider` resolves the headless app loader by name, from
+          // a manifest meta-data string
+          // (`org.unimodules.core.AppLoader#react-native-headless` ->
+          // `expo.modules.adapters.react.apploader.RNHeadlessAppLoader`), via
+          // Class.forName. Nothing references that class statically, so R8 has
+          // no reason to keep it and strips it. Measured on a release build,
+          // 2026-09-13: an FCM data message to a KILLED app produced
+          // `Cannot initialize app loader` / `ClassNotFoundException:
+          // expo.modules.adapters.react.apploader.RNHeadlessAppLoader`, and
+          // `expo-task-manager` then dereferenced the resulting null
+          // (TaskService.executeTask:426) and killed the broadcast process.
+          // Two of those in a row get the whole app marked am_proc_bad.
+          // Upstream has known this shape since expo/expo#7398.
+          //
+          // Keyed on the INTERFACE rather than the concrete class so a rename
+          // upstream cannot silently reintroduce it. `-keep` (not
+          // `-keepnames`) is required: the manifest names the class as a
+          // string, so the name must survive as well as the code.
+          extraProguardRules: [
+            '-keepattributes SourceFile,LineNumberTable',
+            '-keep class * implements expo.modules.apploader.HeadlessAppLoader { *; }',
+          ].join('\n'),
           // E2E BUILDS ONLY. Android blocks cleartext traffic in a
           // release-shaped build, so the dev relay's ws:// socket is refused
           // by the platform before any of our code runs - the pairing screen

@@ -90,6 +90,27 @@ describe('PermissionPromptCard', () => {
   });
 
   /**
+   * `answering` is shared lifecycle state in usePromptAnswer, set by EITHER
+   * action. Keying the Approve label off it alone meant a user who tapped
+   * Deny watched the card say "Approving..." - wrong in the one direction a
+   * permission UI must never be wrong in. Observed on a Pixel against a live
+   * desktop, 2026-09-13, while the desktop had already rejected the write.
+   */
+  it('shows the in-flight label on the button that was actually pressed', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('permission-deny'));
+    expect(screen.queryByText('Approving...')).toBeNull();
+    expect(screen.getByText('Denying...')).toBeTruthy();
+  });
+
+  it('shows the approving label only when approve was pressed', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('permission-approve'));
+    expect(screen.getByText('Approving...')).toBeTruthy();
+    expect(screen.queryByText('Denying...')).toBeNull();
+  });
+
+  /**
    * `options` is scraped off the desktop's terminal grid, and live on a
    * Pixel it produced "Yes, and use auto mode" with half a plan document
    * glued to the end (the TUI redraws a row without clearing to end-of-line,

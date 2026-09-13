@@ -128,13 +128,30 @@ function framingLineForTool(toolName: string): string {
  * design avoids left accent bars) with a framing line ("The agent wants
  * to run this command"), the exact grant as the body, a full-width
  * Approve, and a deliberately quieter Deny (denying is the escape hatch,
- * not a co-equal call to action). Answers ride the interactive-terminal
- * keystroke path and disable once in flight.
+ * not a co-equal call to action). Answers ride the `answer-permission-prompt`
+ * verb (NOT `interactive-terminal`: the desktop binds the answer to a
+ * specific live promptId and rejects a stale one) and disable once in flight.
  */
 export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCardProps): React.JSX.Element {
   const theme = useTheme();
   const { answering, answeredNote, errorNote, submit } = usePromptAnswer(sessionId, prompt.promptId);
   const buttonsDisabled = answering || answeredNote !== null;
+  /**
+   * Which button was pressed, so the in-flight label lands on THAT button.
+   * `answering` is shared lifecycle state set by either action, so keying the
+   * Approve label off it alone told a user who had just tapped Deny that their
+   * rejection was "Approving..." - wrong in the one direction a permission UI
+   * must never be wrong in. Observed on a Pixel against a live desktop.
+   *
+   * Reset on a new promptId for the same reason `usePromptAnswer` does: a
+   * FlashList row can be recycled onto a different prompt.
+   */
+  const [submittedAction, setSubmittedAction] = React.useState<'approve' | 'deny' | null>(null);
+  const [trackedPromptId, setTrackedPromptId] = React.useState(prompt.promptId);
+  if (trackedPromptId !== prompt.promptId) {
+    setTrackedPromptId(prompt.promptId);
+    setSubmittedAction(null);
+  }
   /**
    * ONE-TAP ANSWERING REQUIRES STRUCTURED EVIDENCE.
    *
@@ -201,24 +218,26 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
               <Row gap="sm" style={styles.actionRow}>
                 <View style={styles.flex}>
                   <Button
-                    label={answering ? 'Approving...' : 'Approve'}
+                    label={answering && submittedAction === 'approve' ? 'Approving...' : 'Approve'}
                     variant="primary"
                     testID="permission-approve"
                     disabled={buttonsDisabled}
                     onPress={() => {
                       triggerHaptic('promptAnswered');
+                      setSubmittedAction('approve');
                       submit(approvePermissionKeystrokes());
                     }}
                   />
                 </View>
                 <View style={styles.flex}>
                   <Button
-                    label="Deny"
+                    label={answering && submittedAction === 'deny' ? 'Denying...' : 'Deny'}
                     variant="ghost"
                     testID="permission-deny"
                     disabled={buttonsDisabled}
                     onPress={() => {
                       triggerHaptic('promptAnswered');
+                      setSubmittedAction('deny');
                       submit(denyPermissionKeystrokes());
                     }}
                   />
