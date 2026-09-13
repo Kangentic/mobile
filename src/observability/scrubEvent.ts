@@ -18,37 +18,6 @@ export function allowlistBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
 }
 
 /**
- * Removes fields Sentry does not need for a crash report from an
- * accountless, E2E-encrypted app: no per-device user identity, no captured
- * HTTP request (this app makes none through Sentry's instrumentation, but
- * the field exists on every event), no arbitrary `extra`, no server name
- * (this app has no server), no captured HTTP response context.
- *
- * WHAT THIS CANNOT DO, AND WHY: an event's stack frames cannot be scoped by
- * source file here. Under Expo, @sentry/react-native's rewrite-frames
- * integration replaces every frame's `filename` with one constant bundle
- * name (`app:///index.android.bundle` / `app:///main.jsbundle`) before
- * beforeSend ever runs - real source paths are resolved only server-side,
- * after ingestion, from the uploaded source map. A per-module redaction
- * rule ("if the top frame is under src/notifications/, redact the
- * message") is therefore not implementable on-device and is not attempted.
- *
- * What keeps src/pairing/**, src/channel/** and src/notifications/**
- * content out of Sentry is upstream of this function: those directories
- * cannot import Sentry at all (ESLint-enforced, see
- * .claude/rules/crash-reporting-scope.md), and their own long-standing
- * convention is to catch and discard every error without logging or
- * rethrowing it (.claude/rules/e2e-notification-privacy.md).
- *
- * That is a partial guard, not an invariant, and this comment used to
- * overstate it. The import ban only stops a DELIBERATE capture call; an
- * error from those directories that escapes uncaught is still picked up by
- * the global handler and arrives here with its message intact, because
- * `exception.value` is deliberately never touched (reporting the message is
- * the point). EXPECTED_TRANSPORT_NOISE in crashReporting.ts exists exactly
- * because channel errors do arrive today. The rule file names this gap.
- */
-/**
  * The second line behind reportHandledError (crashReporting.ts). An event
  * tagged `site` came through the handled-error door, whose contract is that
  * no message text leaves; the door already sends a synthetic message, and
@@ -89,6 +58,40 @@ function allowlistEventBreadcrumbs(event: ErrorEvent): ErrorEvent {
   return allowed.length === 0 ? rest : { ...rest, breadcrumbs: allowed };
 }
 
+/**
+ * Removes fields Sentry does not need for a crash report from an
+ * accountless, E2E-encrypted app: no per-device user identity, no captured
+ * HTTP request (this app makes none through Sentry's instrumentation, but
+ * the field exists on every event), no arbitrary `extra`, no server name
+ * (this app has no server), no captured HTTP response context.
+ *
+ * WHAT THIS CANNOT DO, AND WHY: an event's stack frames cannot be scoped by
+ * source file here. Under Expo, @sentry/react-native's rewrite-frames
+ * integration replaces every frame's `filename` with one constant bundle
+ * name (`app:///index.android.bundle` / `app:///main.jsbundle`) before
+ * beforeSend ever runs - real source paths are resolved only server-side,
+ * after ingestion, from the uploaded source map. A per-module redaction
+ * rule ("if the top frame is under src/notifications/, redact the
+ * message") is therefore not implementable on-device and is not attempted.
+ *
+ * What keeps src/pairing/**, src/channel/** and src/notifications/**
+ * content out of Sentry is upstream of this function: those directories
+ * cannot import Sentry at all (ESLint-enforced, see
+ * .claude/rules/crash-reporting-scope.md), and their own long-standing
+ * convention is to catch and discard every error without logging or
+ * rethrowing it (.claude/rules/e2e-notification-privacy.md).
+ *
+ * That is a partial guard, not an invariant, and this comment used to
+ * overstate it. The import ban only stops a DELIBERATE capture call; an
+ * error from those directories that escapes uncaught is still picked up by
+ * the global handler and arrives here with its message intact, because
+ * `exception.value` is deliberately never touched ON AN UNCAUGHT EVENT
+ * (reporting the message is the point). A CAUGHT one that came through the
+ * handled-error door is the exception, and redactHandledExceptionValues
+ * above is where it is rewritten. EXPECTED_TRANSPORT_NOISE in
+ * crashReporting.ts exists exactly because channel errors do arrive today.
+ * The rule file names this gap.
+ */
 export function scrubEvent(event: ErrorEvent): ErrorEvent {
   const {
     user: _user,

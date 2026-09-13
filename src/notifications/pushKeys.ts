@@ -1,5 +1,10 @@
 import * as SecureStore from 'expo-secure-store';
 import { bytesToHex, hexToBytes, randomBytes } from '@kangentic/protocol';
+// Imported rather than re-reading EXPO_PUBLIC_KANGENTIC_NSE_PROBE inline: two
+// copies of the flag name in two gates is how a rename silently disarms one of
+// them. nseProbeVectors.ts is kept free of notifee and SecureStore precisely so
+// it can be imported from a module the plain-Node decrypt tests load.
+import { nseProbeEnabled } from '@/devsupport/nseProbeVectors';
 import {
   LEGACY_PUSH_STORAGE_OPTIONS,
   PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY,
@@ -207,6 +212,17 @@ export async function persistNsePushIdentityPublicKey(identityPublicKey: Uint8Ar
  * call site stays in this module (secure-storage.md's inventory).
  */
 export async function seedSharedPushKeysForProbe(pushKey: Uint8Array, identityPublicKey: Uint8Array): Promise<void> {
+  // The probe gate lives HERE, with the dangerous write, not only on the one
+  // caller that happens to exist today. This function overwrites a real user's
+  // push-decrypt key with a PUBLIC constant, and the shared-group check below
+  // is no protection against that: it is true on every signed iOS build, since
+  // the NSE ships by default and build-ios.yml exports the group on the device
+  // path. A future refactor or a stray import would otherwise reach this with
+  // nothing in the module objecting. seedNseProbe() checks the same flag; both
+  // are deliberate, and this is the one that cannot be refactored away.
+  if (!nseProbeEnabled()) {
+    throw new Error('The NSE probe is not enabled in this build, so the shared push keys must not be overwritten');
+  }
   if (!usesSharedKeychain()) {
     throw new Error('No shared Keychain group is configured, so there is nowhere the extension could read a seeded key from');
   }
@@ -217,6 +233,13 @@ export async function seedSharedPushKeysForProbe(pushKey: Uint8Array, identityPu
   // earlier in this process: same invalidation as clearPushRegistration.
   pushKeyGeneration += 1;
   cachedPushKey = null;
+  // These two writes are NOT atomic, and that residual is accepted rather than
+  // guarded: if the first lands and the second throws, the shared group holds a
+  // seeded decrypt key beside a stale identity key. That degrades safely - the
+  // pair fails verification and the extension renders the placeholder, which is
+  // the designed failure (e2e-notification-privacy.md), never plaintext - and
+  // it is reachable only from a probe dispatch, since both this function and
+  // seedNseProbe refuse without the flag. Re-run the seed to recover.
   await SecureStore.setItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, bytesToHex(pushKey), sharedPushStorageOptions());
   await SecureStore.setItemAsync(PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY, bytesToHex(identityPublicKey), sharedPushStorageOptions());
 }

@@ -152,8 +152,12 @@ export type HandledErrorSite =
  * channel, or a socket that dropped mid-request. Matched by NAME, not
  * `instanceof`: importing NotConnectedError from src/connection is an import
  * cycle (src/connection imports this module), and importing from src/channel
- * would pull the protocol stack into index.js's first import. Each entry is
- * the literal its constructor assigns to `this.name`.
+ * would pull the channel/transport module graph - relay sockets, the session
+ * manager, the Noise handshake - into index.js's first import. NOT the
+ * `@kangentic/protocol` package itself, which this file already imports
+ * directly for `isCapabilityVerb` and which index.js reaches one import later
+ * anyway, through src/notifications. Each entry is the literal its
+ * constructor assigns to `this.name`.
  */
 const HANDLED_ERROR_EXCLUDED_NAMES: ReadonlySet<string> = new Set(['NotConnectedError', 'ChannelDisconnectedError']);
 
@@ -200,8 +204,10 @@ function describeHandledError(error: unknown): HandledErrorShape {
   if (!(error instanceof Error)) return { errorName: 'NonError', verb: null, message: '', frames: null };
   const errorName = SAFE_ERROR_NAME_PATTERN.test(error.name) ? error.name : 'Error';
   // Duck-typed rather than `instanceof CapabilityError`: importing src/channel
-  // here would pull the protocol stack into index.js's first import, and the
-  // verb is validated against the protocol's closed list either way.
+  // here would pull the channel/transport module graph into index.js's first
+  // import (see HANDLED_ERROR_EXCLUDED_NAMES above - the cost is that graph,
+  // not `@kangentic/protocol`, which this file already imports), and the verb
+  // is validated against the protocol's closed list either way.
   const verbCandidate: unknown = (error as Error & { verb?: unknown }).verb;
   const verb = typeof verbCandidate === 'string' && isCapabilityVerb(verbCandidate) ? verbCandidate : null;
   return { errorName, verb, message: error.message, frames: frameLinesOnly(error.stack, error.message) };

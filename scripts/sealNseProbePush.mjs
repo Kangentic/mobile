@@ -68,6 +68,13 @@ export function buildProbePayload(nowMilliseconds = Date.now()) {
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const outFlagIndex = process.argv.indexOf('--out');
   const outputPath = outFlagIndex === -1 ? null : process.argv[outFlagIndex + 1];
+  // `--out` with no path must fail here, not fall through to stdout: the
+  // runner's next step `simctl push`es the file this was meant to write, so a
+  // silent fallback surfaces several steps later as a missing payload.json.
+  if (outFlagIndex !== -1 && (outputPath === undefined || outputPath.startsWith('--'))) {
+    console.error('--out needs a file path, e.g. --out payload.json');
+    process.exit(1);
+  }
   const payloadJson = `${JSON.stringify(buildProbePayload(), null, 2)}\n`;
   if (outputPath) {
     writeFileSync(outputPath, payloadJson, 'utf8');

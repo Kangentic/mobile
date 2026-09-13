@@ -33,7 +33,9 @@ appId: com.kangentic.mobile
 - tapOn:
     id: "settings-crash-test-native"
 # The process dies inside the tap. The screen vanishing is the assertion; the
-# workflow confirms the crash against a crash report.
+# workflow's verdict is the process table (the app is gone), with a crash
+# report collected afterwards as bonus evidence only. See the
+# assert_app_died comment in build-ios.yml.
 - extendedWaitUntil:
     notVisible:
       id: "settings-screen"

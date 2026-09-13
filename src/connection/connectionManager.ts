@@ -233,6 +233,10 @@ async function openConnection(): Promise<void> {
     // 'paired' is just as real, and the error originates in src/pairing (a
     // Keychain read) but is CAUGHT here, which is what the door's site tag
     // records. The message never leaves; see reportHandledError.
+    //
+    // Not the handshake failure the rule forbids reporting: controller.connect()
+    // swallows its own rejection below, so nothing from the dial or the KK
+    // handshake can reach this catch - only pre-handshake setup.
     reportHandledError('connection-open', error);
     if (useChannelStore.getState().pairedState === 'unknown') {
       useChannelStore.getState().setPairedState('unpaired');

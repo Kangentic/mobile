@@ -49,7 +49,12 @@ scrubber is therefore a second line of defence, never the control itself.
   retried bootstrap), and never for a pairing or handshake failure even from a screen
   (`PairingScanScreen`, `PairingConfirmScreen`): the door strips the message, but a ceremony
   failure's existence and timing is itself information about a pairing attempt, and
-  `src/pairing/`'s convention is silence. `site` is a member of the `HandledErrorSite` union, a
+  `src/pairing/`'s convention is silence. Two existing sites read like exceptions to that and are
+  not, so that a reviewer does not have to re-derive it: `connection-open` sits on a catch that
+  `controller.connect()` can never reach, because the dial and the KK handshake are caught and
+  swallowed locally (`connectionManager.ts`, the `.catch(() => {})` on that call), leaving only
+  pre-handshake setup failures; and `devices-paired-info` catches a Keychain READ of material an
+  existing pairing already stored, not an attempt at a new ceremony. `site` is a member of the `HandledErrorSite` union, a
   literal and never computed, and it is the only thing a caller supplies besides the error. The
   door forwards no message text and no `cause`; it tags `site`, `errorName` and, for a
   capability error, `verb`, keeps the stack frames, fingerprints on those three, drops
