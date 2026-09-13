@@ -501,6 +501,18 @@ in a gitignored `CLAUDE.local.md` at the project root.
   green), and the **Ship It** column runs `/merge-pull-request` (merge the green PR, pull back to
   local `main`). For a deliberate direct quick-push that bypasses the PR gate, use `/merge-back`.
   Only push, land, or merge when the user explicitly asks.
+- **A column hands the next one UNCOMMITTED changes in the worktree, by design.** `/code-review`
+  deliberately does not commit: its fixes land in the working tree and the next step commits them
+  (`.claude/skills/code-review/SKILL.md` says so three times, and notes that the desktop repo's
+  "commit the pass" step has no counterpart here). So when a task moves **Code Review -> Tests**,
+  `/pull-request` inherits a dirty tree it did not write, and `git rebase` refuses to start until
+  it is committed.
+  **This is the normal case, not a concurrent writer.** A session that finds unexpected modified
+  files in a task worktree should confirm the diff is coherent follow-up on the same task (it
+  builds on the commits already there, every reference to a renamed symbol is updated, and
+  `npm run typecheck` is clean), then commit it into the PR. Treat it as a hazard only when the
+  diff is unrelated to the task or genuinely half-written. Stopping to ask costs a round trip on
+  every single review-then-test handoff.
 - `/commit`, `/pull-request`, `/merge-pull-request`, and `/merge-back` all write conventional-commit
   messages.
 - `/sync-docs` keeps `docs/` aligned with source; the doc-anchor check runs inside `/pull-request`
