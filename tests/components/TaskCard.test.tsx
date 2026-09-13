@@ -130,7 +130,7 @@ describe('TaskCard', () => {
       //
       // Unlike the undefined cases in tests/unit/prChipPresentation.test.ts,
       // this one IS falsifiable. Verified failing: resolving the undefined arm
-      // of `readinessPresentation` to the `ready` entry rendered a `ready`
+      // of `presentationForReadiness` to the `ready` entry rendered a `ready`
       // label and turned this red on both platform projects at the
       // `queryByText('ready')` line, which is what proves the absent key
       // actually travels to the reader rather than being normalised somewhere

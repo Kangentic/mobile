@@ -23,11 +23,12 @@ import type { TextColorRole } from '../Text';
  *   value - in rust rather than red, so it never reads as `closed`.
  * - `queued` / `running` mean a blocking check is still in flight, so they take
  *   a hue that is neither a pass nor a fail.
- * - `unknown`, null, and any value this client does not recognise render as
- *   plain open. That last one is the protocol's own instruction, and it is what
- *   keeps a desktop that grows a seventh verdict from blanking the chip here.
+ * - `unknown`, null, an absent field, and any value this client does not
+ *   recognise render as plain open. That last one is the protocol's own
+ *   instruction, and it is what keeps a desktop that grows a seventh verdict
+ *   from blanking the chip here.
  *
- * Both parameters are plain strings because `@kangentic/protocol` exports no
+ * Neither parameter narrows to a union, because `@kangentic/protocol` exports no
  * readiness union to narrow against (see
  * `.claude/rules/protocol-types-from-package.md`: a local parallel type would
  * drift from the desktop's, which is the failure this module must not have).
@@ -132,9 +133,14 @@ const CLOSED_PRESENTATION: PrChipPresentation = { label: null, color: 'danger' }
  * type instead of each restating the distinction.
  *
  * Returns `undefined` for a miss as well as for no verdict, which is what lets
- * every caller spell the fallback as a single `??`.
+ * the chip and summary readers spell the fallback as a single `??`, and lets
+ * the spoken reader branch once on absence instead of twice.
+ *
+ * Named for what it returns rather than as the camelCase of
+ * `READINESS_PRESENTATION`: it is not an accessor for that table, it is the
+ * guard in front of it.
  */
-function readinessPresentation(
+function presentationForReadiness(
   prMergeReadiness: string | null | undefined,
 ): ReadinessPresentation | undefined {
   if (prMergeReadiness === null || prMergeReadiness === undefined) return undefined;
@@ -147,7 +153,7 @@ export function prChipPresentation(
 ): PrChipPresentation {
   switch (prState) {
     case 'open':
-      return readinessPresentation(prMergeReadiness)?.chip ?? PLAIN_OPEN;
+      return presentationForReadiness(prMergeReadiness)?.chip ?? PLAIN_OPEN;
     case 'merged':
       return MERGED_PRESENTATION;
     case 'closed':
@@ -174,7 +180,7 @@ export function prStateSummary(
   prMergeReadiness: string | null | undefined,
 ): string {
   if (prState === 'open') {
-    return readinessPresentation(prMergeReadiness)?.chip.label ?? 'open';
+    return presentationForReadiness(prMergeReadiness)?.chip.label ?? 'open';
   }
   if (prState === 'draft' || prState === 'merged' || prState === 'closed') return prState;
   return 'open';
@@ -200,7 +206,7 @@ export function prChipAccessibilityLabel(
   prMergeReadiness: string | null | undefined,
 ): string {
   if (prState === 'open') {
-    const readiness = readinessPresentation(prMergeReadiness);
+    const readiness = presentationForReadiness(prMergeReadiness);
     // No verdict, or one this client does not know: there is nothing to be
     // stale about, so the caveat would be a claim rather than a hedge.
     if (readiness === undefined) return 'Pull request open';

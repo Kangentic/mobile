@@ -35,9 +35,18 @@ jest.mock('@/connection/actions', () => ({
 function seedBoard({
   withDoneColumn,
   task = {},
+  taskOverride,
 }: {
   withDoneColumn: boolean;
   task?: Partial<BoardTaskWire>;
+  /**
+   * A fully-built task stored as-is, bypassing the `boardTaskFixture` merge
+   * below. `{ ...task }` spread over the fixture cannot produce a MISSING
+   * key: an own `undefined` still leaves the key present, and an absent key
+   * in `task` just falls through to the fixture's default. Needed only when
+   * a caller has to `delete` a key first, the way the TaskCard test does.
+   */
+  taskOverride?: BoardTaskWire;
 }): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
@@ -48,7 +57,7 @@ function seedBoard({
           ...(withDoneColumn ? [boardColumnFixture({ id: 'lane-done', name: 'Done', position: 1, role: 'done' })] : []),
         ],
         tasksById: {
-          'task-1': boardTaskFixture({ id: 'task-1', title: 'Fix the login bug', swimlane_id: 'lane-todo', ...task }),
+          'task-1': taskOverride ?? boardTaskFixture({ id: 'task-1', title: 'Fix the login bug', swimlane_id: 'lane-todo', ...task }),
         },
         snapshotAt: 0,
         showTicketNumbers: true,
@@ -105,6 +114,39 @@ describe('TaskActionsScreen', () => {
       renderTaskActions();
 
       expect(screen.getByText('#42 - conflicts')).toBeTruthy();
+    });
+
+    it('captions an open PR whose wire omits the readiness field entirely as plain open', () => {
+      // `pr_merge_readiness` became OPTIONAL in protocol 0.13.1, so a desktop
+      // may leave the key off rather than send null. `prStateSummary`'s only
+      // production caller is this screen's caption, reading the field
+      // straight off the stored BoardTaskWire, so an absent key must land
+      // here as "no verdict" - the same as null - not as a mismatched
+      // comparison. Mirrors the TaskCard test for the same key.
+      //
+      // The key is DELETED rather than left undefined on purpose: an own
+      // `pr_merge_readiness: undefined` still leaves the key present, and
+      // `boardTaskFixture` defaults the field to null.
+      const task = boardTaskFixture({
+        id: 'task-1',
+        title: 'Fix the login bug',
+        swimlane_id: 'lane-todo',
+        pr_number: 42,
+        pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/42',
+        pr_state: 'open',
+      });
+      delete task.pr_merge_readiness;
+      expect('pr_merge_readiness' in task).toBe(false);
+
+      seedBoard({ withDoneColumn: true, taskOverride: task });
+      renderTaskActions();
+
+      // Verified failing: resolving the absent-readiness arm of
+      // `presentationForReadiness` to the `ready` entry instead of `undefined`
+      // rendered "#42 - ready" and turned this red, which is what proves the
+      // absent key actually reaches the caption rather than being
+      // normalised somewhere on the way in.
+      expect(screen.getByText('#42 - open')).toBeTruthy();
     });
 
     it('captions a merged PR without leaking its stale verdict', () => {

@@ -87,8 +87,8 @@ describe('an absent readiness field reads exactly like a null one', () => {
   // .claude/rules/regression-tests-fail-first.md asks for the mutation that
   // makes a test red and this one does not have one. Both mutations were run:
   //
-  // - Dropping the `undefined` arm of `readinessPresentation` (leaving only
-  //   `=== null`, so `undefined` reaches `Map.get`) left all 38 tests in this
+  // - Dropping the `undefined` arm of `presentationForReadiness` (leaving only
+  //   `=== null`, so `undefined` reaches `Map.get`) left every test in this
   //   file GREEN. `Map.get(undefined)` misses, and a miss lands on the same
   //   plain-open path an absent verdict already takes, so the behaviour is
   //   genuinely indistinguishable. Narrowing the parameter back to
