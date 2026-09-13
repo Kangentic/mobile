@@ -115,6 +115,37 @@ describe('TaskCard', () => {
       expect(screen.queryByText('ready')).toBeNull();
     });
 
+    it('spends no title width on an open PR whose wire omits the readiness field entirely', () => {
+      // `pr_merge_readiness` became OPTIONAL in protocol 0.13.1, so a desktop
+      // may leave the key off rather than send null. Every other undefined
+      // case in this change is a literal handed straight to the presentation
+      // helpers; this is the only one that travels the real production path,
+      // reading an absent key off a BoardTaskWire inside the card.
+      //
+      // The key is DELETED rather than set to undefined on purpose: an
+      // explicit `pr_merge_readiness: undefined` is not the same object shape
+      // the wire produces, and `boardTaskFixture` defaults the field to null.
+      // The `delete` below also only compiles because the field is optional,
+      // so this line fails to build against 0.13.0.
+      //
+      // Unlike the undefined cases in tests/unit/prChipPresentation.test.ts,
+      // this one IS falsifiable. Verified failing: resolving the undefined arm
+      // of `readinessPresentation` to the `ready` entry rendered a `ready`
+      // label and turned this red on both platform projects at the
+      // `queryByText('ready')` line, which is what proves the absent key
+      // actually travels to the reader rather than being normalised somewhere
+      // on the way in.
+      const task = boardTaskFixture({ pr_number: 42, pr_state: 'open' });
+      delete task.pr_merge_readiness;
+      expect('pr_merge_readiness' in task).toBe(false);
+
+      renderTaskCard({ task });
+
+      expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
+      expect(screen.queryByText('open')).toBeNull();
+      expect(screen.queryByText('ready')).toBeNull();
+    });
+
     it('never shows a stale verdict on a merged PR', () => {
       // The desktop stops refreshing readiness once a PR lands, so this is
       // what the wire really looks like afterwards. Seen failing against a
