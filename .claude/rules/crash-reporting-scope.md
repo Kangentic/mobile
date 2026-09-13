@@ -162,8 +162,19 @@ watchdog-termination event is verified in sentry-cocoa source rather than assume
 `SentryWatchdogTerminationScopeObserver`, which forwards to a processor that serializes and
 appends to disk immediately (no batching, so a fast kill cannot lose it), and
 `SentryWatchdogTerminationTracker` builds its event with `readPreviousBreadcrumbs` after clearing
-the current scope's. **Android gets nothing from this**: React Native's `AppStateModule` never
-emits `memoryWarning`, and Android's `onTrimMemory` is not surfaced by RN at all.
+the current scope's.
+
+**Android reports the same breadcrumb, through a different source.** React Native's
+`AppStateModule` never emits `memoryWarning` and RN does not surface `onTrimMemory` at all, so the
+local Expo module in `modules/memory-pressure` registers a `ComponentCallbacks2` on the
+APPLICATION context and forwards it. It forwards only the levels that mean pressure: the
+`RUNNING_*` ones plus `MODERATE` and `COMPLETE`. **`TRIM_MEMORY_UI_HIDDEN` and
+`TRIM_MEMORY_BACKGROUND` are deliberately excluded**, and that exclusion is a privacy-adjacent
+decision as much as a correctness one: both arrive on every ordinary backgrounding, so forwarding
+them would make the breadcrumb's count a record of how often the user switched apps rather than a
+record of memory pressure. The payload is identical on both platforms (a count, no level, no free
+text), so the two sources cannot be told apart in a delivered event. The two never both fire on
+one device, so a single episode is never counted twice.
 
 **A crash caught by the operating system, not by the app's own code, carries a per-install
 identifier in `user.id` - `sendDefaultPii: false` does not stop it.** sentry-android always

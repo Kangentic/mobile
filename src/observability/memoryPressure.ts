@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/react-native';
 import { AppState, type NativeEventSubscription } from 'react-native';
+import { addAndroidMemoryPressureListener } from '../../modules/memory-pressure';
 import { isCrashReportingInitialized } from './crashReporting';
 import { MEMORY_PRESSURE_BREADCRUMB_CATEGORY } from './scrubEvent';
 
@@ -37,13 +38,19 @@ import { MEMORY_PRESSURE_BREADCRUMB_CATEGORY } from './scrubEvent';
  * a device under real pressure would fire it repeatedly into a 5,000
  * events/month budget.
  *
- * PLATFORM ASYMMETRY, deliberately not papered over: this is iOS-only in
- * effect. React Native's `RCTAppState.mm` observes the iOS notification and
- * emits `memoryWarning`, but the Android `AppStateModule` never emits that
- * event at all - Android's equivalent is `onTrimMemory`, which React Native
- * does not surface. Wiring Android would need new native code and is not done
- * here. The subscriber API below is still platform-neutral, so an Android
- * source can be added later without touching its consumers.
+ * TWO SOURCES, ONE SIGNAL. React Native's `RCTAppState.mm` observes the iOS
+ * notification and emits `memoryWarning`, but the Android `AppStateModule`
+ * never emits that event at all: Android's equivalent is
+ * `ComponentCallbacks2.onTrimMemory`, which React Native does not surface. So
+ * Android comes from the local Expo module in `modules/memory-pressure`, which
+ * registers the callback on the APPLICATION context and forwards only the
+ * levels that actually mean pressure (`TRIM_MEMORY_UI_HIDDEN` arrives on every
+ * backgrounding and is excluded - see that module for why forwarding it would
+ * poison this breadcrumb rather than enrich it).
+ *
+ * The two never both fire: the module is Android-only and `AppState`'s event is
+ * iOS-only in practice, so a single episode cannot be counted twice. Everything
+ * below this point is platform-neutral and does not know which source spoke.
  */
 
 /**
@@ -68,6 +75,7 @@ export type MemoryPressureListener = () => void;
 
 const listeners = new Set<MemoryPressureListener>();
 let appStateSubscription: NativeEventSubscription | null = null;
+let removeAndroidListener: (() => void) | null = null;
 let warningCountThisLaunch = 0;
 let lastRecordedAtMs: number | null = null;
 
@@ -135,4 +143,18 @@ function handleMemoryWarning(): void {
 export function initializeMemoryPressure(): void {
   if (appStateSubscription !== null) return;
   appStateSubscription = AppState.addEventListener('memoryWarning', handleMemoryWarning);
+  // Android's half. A no-op unsubscribe where the native module is absent, so
+  // this needs no platform branch and no guard in the teardown below.
+  removeAndroidListener = addAndroidMemoryPressureListener(() => handleMemoryWarning());
+}
+
+/**
+ * Tears both sources down. Exists for tests: nothing in the app calls it,
+ * because the listener is armed at bundle entry and should outlive every screen.
+ */
+export function shutdownMemoryPressure(): void {
+  appStateSubscription?.remove();
+  appStateSubscription = null;
+  removeAndroidListener?.();
+  removeAndroidListener = null;
 }
