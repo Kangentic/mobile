@@ -97,14 +97,29 @@ describe('PermissionPromptCard', () => {
    * desktop, 2026-09-13, while the desktop had already rejected the write.
    */
   it('shows the in-flight label on the button that was actually pressed', () => {
+    mockAnswerPermissionPrompt.mockReturnValue(new Promise<void>(() => undefined));
     renderCard();
     fireEvent.press(screen.getByTestId('permission-deny'));
     expect(screen.queryByText('Approving...')).toBeNull();
     expect(screen.getByText('Denying...')).toBeTruthy();
   });
 
+  /**
+   * THIS IS NOT THE GUARD FOR THE BUG ABOVE, and it cannot be: an approve
+   * press renders byte-identically before and after that fix, so reverting
+   * the fix leaves this test green (verified by mutation, 2026-09-13).
+   *
+   * What it does guard, verified red by mutation the same way: the NAIVE
+   * symmetric repair. Writing the Deny label as `answering ? 'Denying...' :
+   * 'Deny'` - the obvious thing to reach for when adding an in-flight label
+   * without tracking WHICH button was pressed - makes an approve press light
+   * up "Denying..." on the other button, and the queryByText assertion below
+   * reddens.
+   */
   it('shows the approving label only when approve was pressed', () => {
+    mockAnswerPermissionPrompt.mockReturnValue(new Promise<void>(() => undefined));
     renderCard();
+    expect(screen.getByText('Approve')).toBeTruthy();
     fireEvent.press(screen.getByTestId('permission-approve'));
     expect(screen.getByText('Approving...')).toBeTruthy();
     expect(screen.queryByText('Denying...')).toBeNull();

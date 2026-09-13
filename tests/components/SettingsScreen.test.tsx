@@ -1,6 +1,6 @@
 import React from 'react';
-import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { AppState, Platform, Switch, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import type { BackgroundPushTaskStatus, PushRegistrationStatus } from '@/notifications';
 import { SettingsScreen } from '@/screens/SettingsScreen';
@@ -331,6 +331,29 @@ describe('SettingsScreen', () => {
     renderSettings();
     fireEvent.press(screen.getByTestId('settings-haptics-toggle'));
     expect(useSettingsStore.getState().hapticsEnabled).toBe(false);
+  });
+
+  /**
+   * STRUCTURAL guard only, not proof of the native touch fix. RNTL renders
+   * against react-test-renderer, never a real Android SwitchCompat, so it
+   * cannot reproduce the touch-swallowing this change fixes (see the comment
+   * on `pointerEvents="none"` in SwitchRow) - that is on-device only. What
+   * this pins is the structure the fix depends on: `pointerEvents="none"`
+   * sits on the View WRAPPING the Switch, never on the Switch itself, because
+   * RN does not forward the prop to the native SwitchCompat view. Reverting
+   * to `pointerEvents="none"` directly on the Switch reintroduces the
+   * swallowed-tap bug invisibly to every tier except a real device.
+   */
+  it('keeps pointerEvents="none" on the View wrapping the Switch, never on the Switch itself', () => {
+    renderSettings();
+    const row = screen.getByTestId('settings-haptics-toggle');
+    const switchElement = within(row).UNSAFE_getByType(Switch);
+    expect(switchElement.props.pointerEvents).toBeUndefined();
+
+    const wrappingView = switchElement.parent;
+    expect(wrappingView).not.toBeNull();
+    expect(wrappingView?.type).toBe('View');
+    expect(wrappingView?.props.pointerEvents).toBe('none');
   });
 
   it('keeps the dictation radios working', () => {

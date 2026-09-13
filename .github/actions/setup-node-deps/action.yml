@@ -1,9 +1,10 @@
 name: Set up Node and dependencies
 description: >
-  Node pinned from .nvmrc plus a shared lockfile-keyed node_modules cache, so
-  npm ci runs only when dependencies actually change. Every CI job uses the same
-  cache key, so the first job to run on a new lockfile pays the install and the
-  rest restore it. Run actions/checkout before this.
+  Node pinned from .nvmrc plus a shared node_modules cache keyed on the
+  lockfile AND patches/, so npm ci runs only when dependencies or patches
+  actually change. Every CI job uses the same cache key, so the first job to run
+  on a new lockfile or patch pays the install and the rest restore it. Run
+  actions/checkout before this.
 
 runs:
   using: composite
