@@ -2121,6 +2121,37 @@ worth not rediscovering:
   level at all, and while that service runs the background levels are unreachable. If you need to
   exercise them, turn background notifications off first rather than assuming the module is broken.
 
+**MEASURED, 2026-09-13, and the honest answer is "no resolvable difference at these depths".**
+Release build, `kangentic_pixel` emulator, stub driven to 6 projects x 8 sessions (48 live
+sessions) at 64 KiB per transcript entry, sampling `dumpsys meminfo` densely across a 30-40 s cold
+start and keeping the PEAK. A single post-settle sample would have measured retention, and this
+defect retains nothing.
+
+| Arm | Stub latency | Peak native heap (KB) | Median | Range |
+|---|---|---|---|---|
+| Depth 1 | 0 ms | 71542, 72861, 73222 | 72861 | 1680 |
+| Depth 8 | 0 ms | 73286, 73525, 73882 | 73525 | 596 |
+| Depth 1 | 1500 ms | 76255, 76885 | 76570 | 630 |
+| Depth 8 | 1500 ms | 77105, 78699 | 77902 | 1594 |
+
+Both deltas (0.7 MB, then 1.3 MB) sit inside the run-to-run spread, so **neither is a result**.
+Two things that took a wrong turn to learn, recorded so nobody repeats them:
+
+- **The first run was a FALSE null caused by the rig.** Concurrency only costs memory while
+  requests are simultaneously in flight, and the stub answers a local relay instantly, so a depth-8
+  arm never actually held eight windows at once. `--scale-latency-ms` exists for this; a real
+  desktop's transcript-window reads are desktop-bound at 0.7-3.8 s. Adding 1500 ms did raise peak
+  heap by ~4 MB across both arms, which is the knob working, but did not separate them.
+- **The A/B cannot currently express the arm that matters.** `CONCURRENCY_PROBE_DEPTHS` tops out at
+  8, while the pre-fix behaviour was one request PER SESSION, i.e. 48 here. So what has been
+  measured is bounded-against-bounded. The fix's claim is not "depth 8 costs more than depth 1"; it
+  is that peak allocation stopped being a function of fleet size, and testing that needs a depth at
+  or above the session count.
+
+What this does and does not license: the bound remains justified on structure (**Read**, and
+O(1)-in-fleet-size rather than O(sessions)), the specific value 3 remains **CHOSEN**, and no claim
+that the fix saves N megabytes has been earned.
+
 **Both queue depths are CHOSEN, not measured**, and the fix does not depend on either value: what
 makes it a fix is that peak allocation stopped being a function of fleet size. To measure the
 snippet depth, build with `EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE=1` and sweep the "Snippet warm
