@@ -476,6 +476,33 @@ describe('activityStore', () => {
       }
     });
 
+    /**
+     * The sibling of the 'idle' case above, for the OTHER reason kind the
+     * selector's condition names. `applyActivityEvent`'s 'permission' branch
+     * never writes `reason` (see this function's docstring point 1), so the
+     * only way a live entry actually carries `reason.kind === 'permission'`
+     * is a snapshot landing while a prompt is already outstanding - exactly
+     * what a cold-launch subscribe into a pending prompt looks like, and what
+     * both `mockDesktop.ts`'s `emitActivity('permission')` and
+     * `stubDesktopPeer.mjs` actually send. Without this, deleting
+     * `|| reason.kind === 'permission'` from the selector's condition leaves
+     * every other test in this block green.
+     */
+    it('prefers reason.since over enteredSectionAt for a permission reason too', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(999_000);
+        liveEntry('sess-1', { activity: { state: 'permission', reason: { kind: 'permission', since: 111_000 } } });
+        const entry = useActivityStore.getState().bySessionId['sess-1'];
+        expect(entry.feedStatus).toBe('live');
+        expect(sectionForEntry(entry)).not.toBe('working');
+        expect(entry.enteredSectionAt).toBe(999_000);
+        expect(selectWaitingSince(entry)).toBe(111_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('falls back to enteredSectionAt when the desktop sends no since', () => {
       vi.useFakeTimers();
       try {
