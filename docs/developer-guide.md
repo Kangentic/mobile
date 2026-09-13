@@ -2147,6 +2147,22 @@ that per-session state is bounded and cleaned up, with one real exception. All *
 production route is the persisted demo trust anchor alone, and the fixtures sit behind a dynamic
 import so a launch that never reaches the demo never parses them.
 
+**Watch item: the iOS half could die the same way the Android half did, silently.** After the
+Android 14 discovery below, the iOS path was checked rather than assumed. **Verified** in this
+repo's pinned React Native 0.86.3: `React/CoreModules/RCTAppState.mm` lists `memoryWarning` in
+`supportedEvents`, registers for `UIApplicationDidReceiveMemoryWarningNotification` in
+`startObserving`, and emits the event. So the chain is intact today, and note that RN uses the
+NOTIFICATION, not the `UIApplicationDelegate` method that is being deprecated.
+
+**Not verified, and worth re-checking on any iOS SDK bump:** Apple is transitioning this area -
+iOS 26 introduces `UIApplication.DidReceiveMemoryWarningMessage` (beta) - and Apple's own
+documentation pages could not be read here to confirm the notification's exact deprecation
+status. If that notification ever stops being posted, `initializeMemoryPressure` goes quiet with
+no error, no test failure, and no visible symptom, which is precisely how the Android module
+managed to be inert on every modern device while looking verified. The MOBILE-8 diagnostic rests
+entirely on this one signal, so treat "the breadcrumb stopped appearing" as a platform question
+before an app question.
+
 **Android memory pressure is observable now, and `am send-trim-memory` is the way to drive it.**
 `modules/memory-pressure` is a local Expo module (autolinked, no `android/` edit) that forwards
 `ComponentCallbacks2.onTrimMemory`, which React Native surfaces nowhere. **Measured** end to end on
@@ -2228,6 +2244,21 @@ any other fleet size, and it must not be read as a fixed saving: the mechanism i
 count, so the number grows with the fleet and shrinks to nothing on a small one. The specific
 value 3 remains **CHOSEN** rather than optimised, since 1, 3 and 8 are separated by less than the
 spread.
+
+**Known and NOT fixed: the row-level snippet fallback is still unbounded.** When a row's 8-entry
+window holds no assistant text, `peekLastTerminalLine` subscribes with `terminal: true` for a FULL
+PTY scrollback and then makes a second round trip to restore the subscription. The MOBILE-8 fix
+removed that from the cold-start pre-warm, but a mounted row still does it, so scrolling a long
+feed can issue several at once. It is bounded by visible rows (FlashList virtualizes) and by the
+20 s peek cache, which is why it was left alone.
+
+**The evidence for how often it fires in the real world is weak, and that is the honest reason it
+was not fixed.** It was observed firing constantly in the stub log during the MOBILE-8
+measurement, but the synthetic fleet's transcript entries are all `tool_result` with zero
+assistant text, so every row took the fallback by construction. That says nothing about a real
+transcript. Before bounding it, measure how often a real session's last eight entries lack
+assistant text; if it is common, route the row peek through a shared bounded queue the same way
+the pre-warm is.
 
 **Both queue depths are CHOSEN, not measured**, and the fix does not depend on either value: what
 makes it a fix is that peak allocation stopped being a function of fleet size. To measure the
