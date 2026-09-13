@@ -220,6 +220,14 @@ sat unpublished while mobile developed against that tarball. `/release-protocol`
 version-bump step in exactly this case; what was missing was the changelog entry, the
 `protocol-v0.13.0` tag, and the push that triggers `publish-protocol.yml`.
 
+**0.13.1** is a type-only follow-up, and the pin now reads `^0.13.1`.
+`BoardTaskWire.pr_merge_readiness` becomes OPTIONAL, so a hand-built wire literal no longer has to
+list it. `^0.13.0` already resolved 0.13.1, so the floor bump buys no new resolution: it is what
+lets this repo's own code depend on the key being omittable. That dependency is real rather than
+theoretical, because the phone calls none of the protocol's `parse*Wire` functions. Nothing
+backfills an absent key to `null` on the way in, so `undefined` reaches the three readers in
+`src/components/board/prChipPresentation.ts` as a third spelling of "no verdict".
+
 ## The relay-address hole, closed at the source
 
 `isSecureRelayAddress` accepted `ws://127.0.0.1:8080@evil.test`. This branch hardened the
