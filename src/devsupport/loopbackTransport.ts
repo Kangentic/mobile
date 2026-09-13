@@ -1,4 +1,5 @@
-import type { Transport, TransportState, Unsubscribe } from '@kangentic/protocol';
+import type { TransportState, Unsubscribe } from '@kangentic/protocol';
+import type { RedialOptions, RedialableTransport } from '@/channel/relayTransport';
 
 /**
  * Two linked in-memory Transports: unit tests and the in-app mock desktop
@@ -23,7 +24,7 @@ import type { Transport, TransportState, Unsubscribe } from '@kangentic/protocol
  * queues the peer close AFTER the send-delivery microtask; at the lifecycle
  * level, spy on the sender instead (tests/unit/connectionManagerBootstrapRetry.test.ts).
  */
-export class LoopbackTransport implements Transport {
+export class LoopbackTransport implements RedialableTransport {
   private peer: LoopbackTransport | null = null;
   private currentState: TransportState = 'idle';
   private readonly frameListeners = new Set<(frame: Uint8Array) => void>();
@@ -68,9 +69,12 @@ export class LoopbackTransport implements Transport {
    * backoff to abandon and no socket to force, so this is a no-op the
    * lifecycle tests can spy on (with or without `{ force: true }`); it exists
    * so the mock desktop and the demo satisfy the same RedialableTransport
-   * shape the production transport does.
+   * shape the production transport does. The class declares that interface
+   * rather than bare Transport, so a future change to RedialOptions fails
+   * `tsc` here instead of slipping past isRedialableTransport, whose runtime
+   * check only asks whether `redialNow` is a function.
    */
-  redialNow(_options?: { force?: boolean }): void {}
+  redialNow(_options?: RedialOptions): void {}
 
   send(frame: Uint8Array): void {
     if (this.currentState !== 'connected') {

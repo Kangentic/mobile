@@ -481,6 +481,7 @@ async function performOpenConnection(): Promise<void> {
   // ~2 minute rekey the backstop for the keepalive ceiling (MOBILE-3).
   const unsubscribeRekey = controller.session.onRekey(() => {
     useChannelStore.getState().noteRekey();
+    rekeyEpoch += 1;
     // A request in flight across a rekey is lost: it was sealed under the
     // keys the rekey just retired, so the desktop cannot open it and nothing
     // ever answers. The bootstrap is the request most exposed to that, and
@@ -834,6 +835,16 @@ const FOREGROUND_PROBE_TIMEOUT_MS = 3_000;
 let foregroundProbeInFlight = false;
 /** Bumped on every established handshake, so a probe verdict can tell whether the session it judged is still the current one. */
 let establishedEpoch = 0;
+/**
+ * Bumped on every rekey, for the same reason `establishedEpoch` exists. A
+ * rekey retires the keys the in-flight probe was sealed under, so the desktop
+ * never opens it and the probe times out exactly as a dead socket would - the
+ * loss this file already documents and restarts the bootstrap for. The
+ * verdict is the opposite one, though: a rekey ARRIVED, which means the phone
+ * received and processed a frame from the desktop, so the socket is provably
+ * alive and the one thing the probe must not do is tear it down.
+ */
+let rekeyEpoch = 0;
 
 /**
  * The foreground liveness probe, for the failure the kick cannot see.
@@ -852,9 +863,13 @@ let establishedEpoch = 0;
  * in milliseconds and nothing else happens. On a dead socket the send either
  * surfaces the failure at once (the OS refuses the write, the transport
  * closes, and the ordinary ladder takes over from the backoff the kick just
- * reset) or vanishes, and the deadline forces a fresh dial. The epoch guard
- * keeps a late verdict from tearing down a session that re-established in
- * the meantime.
+ * reset) or vanishes, and the deadline forces a fresh dial. The epoch guards
+ * keep a late verdict from tearing down a session that re-established, or
+ * rekeyed, in the meantime - a rekey loses the probe exactly as a dead socket
+ * does (see the onRekey listener) while proving the opposite, so without that
+ * guard a rekey landing inside the 3 s window costs a needless teardown. The
+ * window this branch exists to fix is the same one the desktop rekeys hardest
+ * in: it had been probing an absent phone.
  */
 function probeChannelOnForeground(): void {
   const connection = activeConnection;
@@ -868,6 +883,7 @@ function probeChannelOnForeground(): void {
   }
   foregroundProbeInFlight = true;
   const epoch = establishedEpoch;
+  const rekeyEpochAtStart = rekeyEpoch;
   const startedAtMs = Date.now();
   traceConnection('probe-start');
   controller.capabilities
@@ -876,9 +892,18 @@ function probeChannelOnForeground(): void {
       traceConnection('probe-ok', { ms: Date.now() - startedAtMs });
     })
     .catch((error: unknown) => {
+      // `timedOut` is recorded, not branched on, and that is deliberate: this
+      // goes through `capabilities` rather than `verbs`, and CapabilityClient
+      // RESOLVES on any capability-response, `ok: false` included. So a
+      // desktop that refuses the verb (a narrowed device) answers the
+      // liveness question in the affirmative and never reaches this handler.
+      // What is left here is a timeout or a send that threw, and both mean
+      // the socket is not carrying traffic.
       const timedOut = error instanceof Error && /timed out/.test(error.message);
-      const stale = activeConnection !== connection || epoch !== establishedEpoch || transport.state !== 'connected';
-      traceConnection('probe-failed', { ms: Date.now() - startedAtMs, timedOut, stale });
+      const rekeyed = rekeyEpochAtStart !== rekeyEpoch;
+      const stale =
+        activeConnection !== connection || epoch !== establishedEpoch || rekeyed || transport.state !== 'connected';
+      traceConnection('probe-failed', { ms: Date.now() - startedAtMs, timedOut, stale, rekeyed });
       if (stale) return;
       transport.redialNow({ force: true });
     })

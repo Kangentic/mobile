@@ -10,8 +10,15 @@
  * `adb logcat -s ReactNativeJS` filtered on `connection-trace`.
  *
  * Gated exactly like the retention probe: `EXPO_PUBLIC_*` is inlined at
- * bundle time, so every call site collapses to nothing in a build that was
- * not dispatched with the flag on. Never on in a store build.
+ * bundle time, so in a build that was not dispatched with the flag on every
+ * function here returns on its first line and nothing is ever logged. Never
+ * on in a store build. Read that precisely: the BODIES go dead, not the call
+ * sites. A caller's argument object is built before the call, so
+ * `traceConnection('close', { code, stateBefore })` still allocates. That is
+ * a few primitive fields on paths that run once per socket close, board
+ * snapshot or AppState transition - never per frame or per render - so it is
+ * left alone deliberately. Keep it that way: do not add a call site to a
+ * hot loop on the assumption the gate erases it.
  *
  * What it logs, deliberately: event names, transport states, relay close
  * codes, counts and millisecond deltas. Never content, never an identifier.
