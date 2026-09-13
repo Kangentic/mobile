@@ -70,11 +70,18 @@ scrubber is therefore a second line of defence, never the control itself.
   means removing the integration or disabling the feature in `Sentry.init()`. Specifically:
   no screenshots, no view hierarchy, no console breadcrumbs, no network (`xhr`/`fetch`)
   breadcrumbs, no captured failed requests, no structured logs, no session tracking, no
-  performance tracing, no Session Replay, no PII, no message text from a handled catch. This
-  list is the canonical enumeration;
+  performance tracing, no Session Replay, no PII, no message text from a handled catch. The one
+  thing the app itself ADDS to the payload is a single diagnostic breadcrumb: when the OS reports
+  memory pressure, `src/observability/memoryPressure.ts` records category `app.memory` carrying a
+  count of warnings this launch and nothing else - no byte figure, no free text, no session
+  content. This list is the canonical enumeration;
   `docs/security.md` mirrors it, so an addition here has to land there in the same change.
 - **JS breadcrumbs are allowlisted, not denylisted.** An unanticipated category must be dropped
-  by default, because a future SDK version can add one this repo never reviewed. Read the
+  by default, because a future SDK version can add one this repo never reviewed. The allowlist
+  holds exactly two entries: Sentry's own `sentry.event` bookkeeping, and the app's `app.memory`
+  above. That second one is deliberately NOT the platform's `device.event`, which would have
+  admitted sentry-cocoa's and sentry-android's battery, keyboard and screen-state breadcrumbs
+  along with it. Read the
   breadcrumb entry under Known limitations before assuming this covers a native crash: it does
   not.
 - **The DSN is never committed.** It arrives as `EXPO_PUBLIC_SENTRY_DSN` from the `SENTRY_DSN`
@@ -141,6 +148,22 @@ event in a `processEvent` hook (`dist/js/integrations/devicecontext.js`), which 
 default-deny, and omits the key when nothing survives; `tests/unit/scrubEvent.test.ts` pins it.
 That closes the ride-along for JS-captured events on both platforms and changes nothing about a
 native crash, which still never passes through JS.
+
+**An iOS memory warning is recorded by this app because the SDK does not record it.**
+sentry-cocoa's `SentrySystemEventBreadcrumbs` (8.58.0) observes keyboard, screenshot, battery,
+orientation, timezone and significant-time-change notifications, and **not**
+`UIApplicationDidReceiveMemoryWarningNotification`. So on iOS there is no memory-warning
+breadcrumb to be absent, and the absence of one says nothing - a trap worth knowing before
+reasoning about a `WatchdogTermination` event (Sentry MOBILE-8, where exactly that inference was
+drawn and then retracted). `src/observability/memoryPressure.ts` closes it by subscribing to React
+Native's `AppState` `memoryWarning` event and recording the breadcrumb itself. The path to a
+watchdog-termination event is verified in sentry-cocoa source rather than assumed:
+`RNSentry.addBreadcrumb` writes to the real `SentryScope`, whose observers include
+`SentryWatchdogTerminationScopeObserver`, which forwards to a processor that serializes and
+appends to disk immediately (no batching, so a fast kill cannot lose it), and
+`SentryWatchdogTerminationTracker` builds its event with `readPreviousBreadcrumbs` after clearing
+the current scope's. **Android gets nothing from this**: React Native's `AppStateModule` never
+emits `memoryWarning`, and Android's `onTrimMemory` is not surfaced by RN at all.
 
 **A crash caught by the operating system, not by the app's own code, carries a per-install
 identifier in `user.id` - `sendDefaultPii: false` does not stop it.** sentry-android always

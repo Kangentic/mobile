@@ -1,14 +1,43 @@
 import type { Breadcrumb, ErrorEvent } from '@sentry/react-native';
 
 /**
+ * The category `memoryPressure.ts` writes its breadcrumb under.
+ *
+ * Declared HERE, in the allowlist's own module, rather than beside its
+ * producer - and the dependency arrow points that way for a mechanical reason
+ * as well as a conceptual one. Conceptually the allowlist is the control
+ * point, so the categories it admits belong to it. Mechanically, this module
+ * must stay free of any React Native import so it can be unit-tested as pure
+ * TypeScript in the vitest tier; `memoryPressure.ts` pulls in `AppState`, so
+ * importing the constant FROM there dragged `react-native/index.js` into
+ * scrubEvent's test and broke it outright.
+ *
+ * App-owned rather than the platform's `device.event`: allowlisting that would
+ * also admit sentry-cocoa's and sentry-android's battery, keyboard and
+ * screen-state breadcrumbs wherever they ride a JS-captured event.
+ */
+export const MEMORY_PRESSURE_BREADCRUMB_CATEGORY = 'app.memory';
+
+/**
  * Breadcrumb categories this app allows through to Sentry, default-deny
  * rather than default-allow: an unanticipated category (a native SDK
  * breadcrumb this list did not plan for) must be dropped, not silently
  * forwarded. 'sentry.event' is Sentry's own "an event was sent" bookkeeping
  * breadcrumb, the one category the app's breadcrumbsIntegration options
  * leave enabled.
+ *
+ * The second entry is this app's own, written only by
+ * `memoryPressure.ts`: a bare "the OS warned us about memory" signal plus a
+ * count, no user content. It is allowlisted because `beforeBreadcrumb` runs
+ * BEFORE a JS breadcrumb is synced into the native scope, so without an entry
+ * here the breadcrumb would be dropped and would never reach the persisted
+ * buffer a watchdog-termination event is built from - which is the entire
+ * point of recording it. Note it is deliberately NOT the platform's own
+ * `device.event`: allowlisting that would also let sentry-cocoa's and
+ * sentry-android's battery, keyboard and screen-state breadcrumbs through
+ * wherever they ride a JS-captured event.
  */
-const ALLOWED_BREADCRUMB_CATEGORIES = new Set<string>(['sentry.event']);
+const ALLOWED_BREADCRUMB_CATEGORIES = new Set<string>(['sentry.event', MEMORY_PRESSURE_BREADCRUMB_CATEGORY]);
 
 export function allowlistBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
   if (breadcrumb.category !== undefined && ALLOWED_BREADCRUMB_CATEGORIES.has(breadcrumb.category)) {

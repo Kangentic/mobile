@@ -97,6 +97,9 @@ src/
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
+                  #   (whose cold-start fan-out - one read-board per project, one read-stream per
+                  #   live session - is bounded by SUBSCRIBE_FAN_OUT_CONCURRENCY; the screen-driven
+                  #   single re-subscribes deliberately bypass it)
   connection/     # Lifecycle composer: AppState connect/background policy, bootstrap, store feed glue,
                   #   the actions API screens call (accountless-core scoped), the
                   #   mockDesktop peer (dev rig via EXPO_PUBLIC_KANGENTIC_MOCK, and - since the
@@ -117,7 +120,10 @@ src/
                   #   foreground-recovery A/B switch in Settings; see the developer guide) - shared
                   #   by tests + rigs - plus claudeCapture*.ts: RECORDED real Claude Code PTY output
                   #   the mock terminal replays (generated, never hand-edited; see scripts/ below),
-                  #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE) and the NSE probe
+                  #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE), the concurrency
+                  #   probe (EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE: sweeps the Agents feed's
+                  #   snippet-warm queue depth on a LIVE queue, so the MOBILE-8 A/B happens in one
+                  #   process) and the NSE probe
                   #   (EXPO_PUBLIC_KANGENTIC_NSE_PROBE: seeds known push vectors so
                   #   `build-ios.yml -f nse_probe=true` can prove the extension decrypts).
                   #   NOTE: no longer dev-only in the bundling sense - the demo pulls the
@@ -130,14 +136,23 @@ src/
                   #   tap routing, Settings status and RICH display are all cross-platform; iOS
                   #   decrypts in the targets/nse/ extension, Android in the Notifee handler)
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
-                  #   channel-fed, in-memory) + the non-Zustand terminalFeed PTY ring buffers
+                  #   channel-fed, in-memory) + the non-Zustand terminalFeed PTY ring buffers +
+                  #   memoryShed (registers the OS-memory-pressure reactions; lives here rather
+                  #   than in observability/ because it touches the stores, and here rather than
+                  #   in connection/ because that directory is banned from the observability door)
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
                   #   pure event/breadcrumb scrubber (see crash-reporting-scope.md). Two capture
                   #   calls live behind it: reportCaughtError (the root error boundary) and
                   #   reportHandledError (the handled-error door for caught failures, which
-                  #   never forwards message text; sites are a closed union)
-  lib/            # Shared pure utilities (crypto polyfills, haptics)
+                  #   never forwards message text; sites are a closed union). Also
+                  #   memoryPressure: the OS memory-warning subscriber, which records the one
+                  #   breadcrumb this app ADDS (category app.memory, a count and nothing else,
+                  #   because sentry-cocoa observes no memory warning of its own) and re-publishes
+                  #   the signal as a plain callback the Sentry-banned directories can subscribe
+                  #   to. A breadcrumb is scope data, so the two-capture-call count is unchanged
+  lib/            # Shared pure utilities (crypto polyfills, haptics, the bounded task queue that
+                  #   caps the Home feed's cold-start snippet pre-warm)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library
