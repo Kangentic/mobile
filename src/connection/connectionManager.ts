@@ -1,6 +1,7 @@
 import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { bytesToHex } from '@kangentic/protocol';
-import { ChannelController, SubscriptionManager, type VerbClient } from '@/channel';
+import { ChannelController, SubscriptionManager, isRedialableTransport, type VerbClient } from '@/channel';
+import { foregroundKickEnabled, markConnectionTraceForeground, traceConnection } from '@/devsupport/connectionTrace';
 import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
 // Static, unlike the dev-only branches below, because this one ships: it is a
@@ -419,17 +420,29 @@ async function performOpenConnection(): Promise<void> {
   // healthy channel until a manual pull-to-refresh.
   let bootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let bootstrapGeneration = 0;
+  let bootstrapInFlight = false;
   const runBootstrapWithRetry = (attempt: number, generation: number): void => {
-    void runBootstrap(controller.verbs, subscriptions).catch((bootstrapError: unknown) => {
-      if (generation !== bootstrapGeneration) return;
-      if (!controller.session.isEstablished) return;
-      const delayMs = Math.min(BOOTSTRAP_RETRY_MAX_MS, BOOTSTRAP_RETRY_BASE_MS * 2 ** attempt);
-      if (__DEV__) {
-        const reason = bootstrapError instanceof Error ? bootstrapError.message : String(bootstrapError);
-        console.log(`[bootstrap] attempt ${attempt + 1} failed (${reason}); retrying in ${delayMs}ms`);
-      }
-      bootstrapRetryTimer = setTimeout(() => runBootstrapWithRetry(attempt + 1, generation), delayMs);
-    });
+    bootstrapInFlight = true;
+    void runBootstrap(controller.verbs, subscriptions)
+      .then(() => {
+        if (generation === bootstrapGeneration) bootstrapInFlight = false;
+      })
+      .catch((bootstrapError: unknown) => {
+        if (generation !== bootstrapGeneration) return;
+        bootstrapInFlight = false;
+        if (!controller.session.isEstablished) return;
+        const delayMs = Math.min(BOOTSTRAP_RETRY_MAX_MS, BOOTSTRAP_RETRY_BASE_MS * 2 ** attempt);
+        if (__DEV__) {
+          const reason = bootstrapError instanceof Error ? bootstrapError.message : String(bootstrapError);
+          console.log(`[bootstrap] attempt ${attempt + 1} failed (${reason}); retrying in ${delayMs}ms`);
+        }
+        bootstrapRetryTimer = setTimeout(() => runBootstrapWithRetry(attempt + 1, generation), delayMs);
+      });
+  };
+  const restartBootstrap = (): void => {
+    if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
+    bootstrapGeneration += 1;
+    runBootstrapWithRetry(0, bootstrapGeneration);
   };
 
   // The demo pairing must stay networkless: the App Review notes promise it
@@ -441,10 +454,10 @@ async function performOpenConnection(): Promise<void> {
   const demoConnection = isDemoAnchor(anchor);
 
   const unsubscribeEstablished = controller.session.onEstablished(() => {
+    traceConnection('established');
+    establishedEpoch += 1;
     useChannelStore.getState().markEstablished();
-    if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
-    bootstrapGeneration += 1;
-    runBootstrapWithRetry(0, bootstrapGeneration);
+    restartBootstrap();
     if (demoConnection) return;
     // Fire-and-forget push registration on every established handshake
     // (idempotent; re-hits the wire only on first run or token rotation).
@@ -468,6 +481,20 @@ async function performOpenConnection(): Promise<void> {
   // ~2 minute rekey the backstop for the keepalive ceiling (MOBILE-3).
   const unsubscribeRekey = controller.session.onRekey(() => {
     useChannelStore.getState().noteRekey();
+    // A request in flight across a rekey is lost: it was sealed under the
+    // keys the rekey just retired, so the desktop cannot open it and nothing
+    // ever answers. The bootstrap is the request most exposed to that, and
+    // measured on a release build (task #70) it is exactly what happened on a
+    // fresh open: the desktop, which had been probing an absent phone, sent
+    // two rekeys inside 3.5 s of the handshake, the project-list request sent
+    // at +296 ms vanished, and the board painted at +12.3 s - the 10 s request
+    // timeout plus the 2 s retry. Restarting an in-flight bootstrap the moment
+    // a rekey lands turns that into one more round trip. A bootstrap that has
+    // already settled, or is waiting on its retry timer, is left alone.
+    if (bootstrapInFlight) {
+      traceConnection('bootstrap-restart', { reason: 'rekey' });
+      queueMicrotask(restartBootstrap);
+    }
     // Deferred a microtask for the same reason onRemoteClosed below is: this
     // listener fires inside the session's own frame handling, and hitting the
     // ceiling tears that very session down.
@@ -685,6 +712,7 @@ function startBackgroundKeepalive(): void {
   keepaliveCeilingTimer = setTimeout(() => {
     keepaliveCeilingTimer = null;
     if (generation !== keepaliveGeneration) return;
+    traceConnection('ceiling-timer', { elapsedMs: Date.now() - keepaliveStartedAtMs });
     enforceKeepaliveCeiling();
   }, BACKGROUND_KEEPALIVE_MAX_MS);
   void import('@/notifications/foregroundService')
@@ -746,7 +774,9 @@ function stopBackgroundKeepalive(): void {
  * the other half of the recovery (reassertForegroundServiceState). A ceiling
  * check there would be dead code: the only transition that can arrive with the
  * keepalive still armed is 'active', and that branch already stops the
- * keepalive outright, ceiling or no ceiling.
+ * keepalive outright, ceiling or no ceiling. What the 'active' branch DOES
+ * need, and stopping the keepalive does not give it, is a dial: see
+ * kickTransportOnForeground.
  *
  * Order is load-bearing: stop THEN close. closeConnection() does not stop the
  * keepalive, so closing first would leave the foreground-service notification
@@ -765,8 +795,109 @@ function enforceKeepaliveCeiling(): void {
  * owes. The second is a no-op unless a previous stop failed outright.
  */
 function onKeepaliveWakeSource(): void {
+  traceConnection('wake-source', {
+    keepaliveActive: backgroundKeepaliveActive,
+    elapsedMs: backgroundKeepaliveActive ? Date.now() - keepaliveStartedAtMs : null,
+  });
   enforceKeepaliveCeiling();
   reassertForegroundServiceState();
+}
+
+/**
+ * The foreground kick. Under the Android keepalive the 'background' branch
+ * keeps the connection, so `openConnection()` below finds `activeConnection`
+ * and returns without dialing. If the socket died while the phone was away,
+ * the transport is mid-backoff with its timer ratcheted towards the 15 s cap,
+ * and without this the user waits out that remainder before the first dial
+ * even starts. Acts on the connection that already exists: no second
+ * connection is built, so the openAttempt / connectGeneration orphan hazard
+ * documented above is not engaged. A healthy transport makes it a no-op.
+ */
+function kickTransportOnForeground(): void {
+  const transport = activeConnection?.controller.transport;
+  if (!transport || !isRedialableTransport(transport)) return;
+  if (!foregroundKickEnabled()) {
+    traceConnection('redial-now-skipped', { reason: 'ab-switch-off', state: transport.state });
+    return;
+  }
+  transport.redialNow();
+}
+
+/**
+ * How long the foreground probe waits for the desktop's answer before it
+ * declares the socket dead. The project list answered in about 90 ms over
+ * the hosted relay on the measurement run (task #70); 3 s is thirty times
+ * that, and the cost of a wrong verdict is one needless reconnect, about a
+ * second of handshake plus bootstrap.
+ */
+const FOREGROUND_PROBE_TIMEOUT_MS = 3_000;
+let foregroundProbeInFlight = false;
+/** Bumped on every established handshake, so a probe verdict can tell whether the session it judged is still the current one. */
+let establishedEpoch = 0;
+
+/**
+ * The foreground liveness probe, for the failure the kick cannot see.
+ *
+ * Measured on the emulator release build against the hosted relay (task #70):
+ * cut the network for 80 s while backgrounded under the keepalive, restore
+ * it, foreground. The transport read 'connected' and the session
+ * 'established' throughout - the OS never reported the stall - so the kick
+ * was a no-op. The relay meanwhile had stopped hearing the phone, the desktop
+ * had marked it absent and DROPPED its subscriptions (mobile-bridge-service's
+ * peerAbsent), and the phone then sat established, silent and stale for the
+ * whole 2.5 minutes it was watched: nothing sends on the Agents tab, and
+ * nothing inbound can arrive on a subscription the desktop no longer holds.
+ *
+ * One cheap request settles it. On a healthy channel the project list answers
+ * in milliseconds and nothing else happens. On a dead socket the send either
+ * surfaces the failure at once (the OS refuses the write, the transport
+ * closes, and the ordinary ladder takes over from the backoff the kick just
+ * reset) or vanishes, and the deadline forces a fresh dial. The epoch guard
+ * keeps a late verdict from tearing down a session that re-established in
+ * the meantime.
+ */
+function probeChannelOnForeground(): void {
+  const connection = activeConnection;
+  if (!connection || foregroundProbeInFlight) return;
+  const { controller } = connection;
+  const transport = controller.transport;
+  if (!controller.session.isEstablished || transport.state !== 'connected' || !isRedialableTransport(transport)) return;
+  if (!foregroundKickEnabled()) {
+    traceConnection('probe-skipped', { reason: 'ab-switch-off' });
+    return;
+  }
+  foregroundProbeInFlight = true;
+  const epoch = establishedEpoch;
+  const startedAtMs = Date.now();
+  traceConnection('probe-start');
+  controller.capabilities
+    .request('read-board', {}, { timeoutMs: FOREGROUND_PROBE_TIMEOUT_MS })
+    .then(() => {
+      traceConnection('probe-ok', { ms: Date.now() - startedAtMs });
+    })
+    .catch((error: unknown) => {
+      const timedOut = error instanceof Error && /timed out/.test(error.message);
+      const stale = activeConnection !== connection || epoch !== establishedEpoch || transport.state !== 'connected';
+      traceConnection('probe-failed', { ms: Date.now() - startedAtMs, timedOut, stale });
+      if (stale) return;
+      transport.redialNow({ force: true });
+    })
+    .finally(() => {
+      foregroundProbeInFlight = false;
+    });
+}
+
+function traceAppStateTransition(status: AppStateStatus): void {
+  const transport = activeConnection?.controller.transport ?? null;
+  const relayCloseCode =
+    transport && 'relayCloseCode' in transport && typeof transport.relayCloseCode === 'number' ? transport.relayCloseCode : null;
+  traceConnection(`app-state-${status}`, {
+    hasConnection: activeConnection !== null,
+    transportState: transport?.state ?? null,
+    relayCloseCode,
+    established: activeConnection?.controller.session.isEstablished ?? false,
+    keepaliveActive: backgroundKeepaliveActive,
+  });
 }
 
 function reassertForegroundServiceState(): void {
@@ -785,7 +916,17 @@ function onAppStateChange(status: AppStateStatus): void {
   // is already inactive, which is exactly the state a failed stop leaves behind.
   reassertForegroundServiceState();
   if (status === 'active') {
+    markConnectionTraceForeground();
+    traceAppStateTransition(status);
     stopBackgroundKeepalive();
+    // Three things, in this order: retire the keepalive; kick a transport the
+    // keepalive kept alive through a dead socket (it is mid-backoff, nothing
+    // else dials); probe a transport that still reads healthy (it may not be,
+    // and nothing else would find out). openConnection() after that only does
+    // work when there is no connection at all (every non-keepalive background
+    // path closed it).
+    kickTransportOnForeground();
+    probeChannelOnForeground();
     void openConnection();
     // Keeps the permission cache current: the user can revoke the permission
     // from system settings at any time, and returning to the app is the only
@@ -807,6 +948,7 @@ function onAppStateChange(status: AppStateStatus): void {
         // Cache keeps its previous value; the gate fails open either way.
       });
   } else if (status === 'background') {
+    traceAppStateTransition(status);
     const settings = useSettingsStore.getState();
     const hasEstablishedConnection = activeConnection?.controller.session.isEstablished === true;
     // hydrated matters: startConnectionLifecycle runs before hydrate()

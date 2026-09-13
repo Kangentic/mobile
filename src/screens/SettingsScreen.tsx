@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { AppState, Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
@@ -22,6 +22,12 @@ import {
   useRetentionProbeVariant,
 } from '@/devsupport/retentionProbe';
 import { nseProbeEnabled, readNseProbeResult, seedNseProbe } from '@/devsupport/nseProbe';
+import {
+  connectionTraceEnabled,
+  foregroundKickEnabled,
+  setForegroundKickEnabled,
+  subscribeForegroundKick,
+} from '@/devsupport/connectionTrace';
 import { crashNatively, crashTestEnabled, reportHandledTestError, throwTestError } from '@/observability/crashReporting';
 import { useChannelStore } from '@/state/channelStore';
 import {
@@ -228,6 +234,8 @@ export function SettingsScreen(): React.JSX.Element {
       )
       .finally(() => setNseProbeInFlight(false));
   };
+
+  const foregroundKickOn = useSyncExternalStore(subscribeForegroundKick, foregroundKickEnabled, foregroundKickEnabled);
 
   const connectionLabel =
     pairedState === 'unpaired'
@@ -461,6 +469,21 @@ export function SettingsScreen(): React.JSX.Element {
                   </Text>
                 ) : null}
               </Stack>
+            </Card>
+          </Stack>
+        ) : null}
+
+        {connectionTraceEnabled() ? (
+          <Stack gap="xs">
+            <SectionHeader title="Connection trace" testID="settings-section-connection-trace" />
+            <Card>
+              <SwitchRow
+                label="Foreground recovery"
+                description="Off measures the pre-fix reconnect"
+                checked={foregroundKickOn}
+                testID="settings-connection-trace-foreground-kick"
+                onValueChange={setForegroundKickEnabled}
+              />
             </Card>
           </Stack>
         ) : null}

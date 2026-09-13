@@ -108,6 +108,39 @@ async function flushLoopback(rounds = 6): Promise<void> {
 }
 
 describe('SubscriptionManager', () => {
+  /**
+   * Board task #70. A subscribe in flight across a rekey is sealed under keys
+   * the desktop has just retired, so nothing ever answers it and the board
+   * stays empty until the next reconcile. The manager re-issues every pending
+   * board subscribe when a rekey lands. The responder holds the first
+   * read-board (returns null) and answers the re-issue; the stub's
+   * beginHandshake on an established session is a rekey. Mutation seen
+   * failing: dropping the onRekey subscription from the constructor (one
+   * request, no snapshot).
+   */
+  it('re-issues a board subscribe that was in flight across a rekey', async () => {
+    let held = 0;
+    const { stub, manager, requests, sinkCalls } = await harness((request) => {
+      if (request.verb === 'read-board' && held === 0) {
+        held += 1;
+        return null;
+      }
+      return defaultResponder(request);
+    });
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredBoards(new Set(['project-1']));
+    await flushLoopback();
+    expect(requests.filter((request) => request.verb === 'read-board')).toHaveLength(1);
+    expect(sinkCalls.boardSnapshots).toEqual([]);
+
+    stub.beginHandshake();
+    await flushLoopback();
+
+    expect(requests.filter((request) => request.verb === 'read-board')).toHaveLength(2);
+    expect(sinkCalls.boardSnapshots).toEqual(['project-1']);
+  });
+
   it('flushes desired sets declared before the first handshake once established', async () => {
     const { stub, manager, sinkCalls } = await harness();
     manager.setDesiredBoards(new Set(['project-1']));

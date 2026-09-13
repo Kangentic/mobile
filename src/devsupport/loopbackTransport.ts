@@ -53,6 +53,25 @@ export class LoopbackTransport implements Transport {
     this.setState('connected');
   }
 
+  /**
+   * Drop the socket and STAY dropped: 'reconnecting' with no recovery, which
+   * is the state a phone is in when it comes back to the foreground with a
+   * dead relay socket. simulateReconnect above cannot express it, because it
+   * flips straight back to 'connected'.
+   */
+  simulateDrop(): void {
+    this.setState('reconnecting');
+  }
+
+  /**
+   * The foreground kick (see RelayTransport.redialNow). A loopback has no
+   * backoff to abandon and no socket to force, so this is a no-op the
+   * lifecycle tests can spy on (with or without `{ force: true }`); it exists
+   * so the mock desktop and the demo satisfy the same RedialableTransport
+   * shape the production transport does.
+   */
+  redialNow(_options?: { force?: boolean }): void {}
+
   send(frame: Uint8Array): void {
     if (this.currentState !== 'connected') {
       throw new Error('LoopbackTransport.send() called while not connected');

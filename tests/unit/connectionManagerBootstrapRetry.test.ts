@@ -237,6 +237,50 @@ describe('connectionManager bootstrap retry', () => {
       vi.useRealTimers();
     }
   });
+
+  /**
+   * Board task #70. A request in flight across a rekey is sealed under keys
+   * the desktop has just retired and is never answered. Measured on a release
+   * build: a desktop that had been probing an absent phone sent two rekeys
+   * inside 3.5 s of the fresh handshake, the project-list request sent at
+   * +296 ms vanished, and the board painted at +12.3 s (the 10 s request
+   * timeout plus the 2 s retry). An in-flight bootstrap now restarts the
+   * moment a rekey lands. The stub's beginHandshake on an established session
+   * IS a rekey. Mutation seen failing: dropping the `if (bootstrapInFlight)`
+   * block from the onRekey listener (the second call never comes).
+   */
+  it('restarts an in-flight bootstrap the moment a rekey lands', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    mockRunBootstrap.mockImplementation(() => new Promise<void>(() => undefined));
+
+    startConnectionLifecycle();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 1);
+    expect(mockRunBootstrap).toHaveBeenCalledTimes(1);
+
+    (mockDesktopSeam.stub as StubSessionInitiator).beginHandshake();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 2, { label: 'bootstrap restarted on rekey' });
+    expect(mockRunBootstrap).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The restart is for a bootstrap that is IN FLIGHT. One that already
+   * settled has nothing to lose to the rekey, and re-running it on every
+   * two-minute tick would be nineteen board reads for nothing.
+   */
+  it('leaves a settled bootstrap alone when a rekey lands', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    mockRunBootstrap.mockResolvedValue(undefined);
+
+    startConnectionLifecycle();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 1);
+    // The resolved promise's then-handler (which clears the in-flight flag)
+    // runs a tick after the call itself.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    (mockDesktopSeam.stub as StubSessionInitiator).beginHandshake();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(mockRunBootstrap).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('connectionManager teardown intent', () => {

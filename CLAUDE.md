@@ -111,10 +111,13 @@ src/
                   #   IKpsk0 ceremony against StubPairingResponder, the isDemoAnchor
                   #   discriminator. Ships in release builds by design (App Review 2.1(a))
   devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures, the
-                  #   dev-only inspect bridge (EXPO_PUBLIC_KANGENTIC_INSPECT) - shared by tests +
-                  #   rigs - plus claudeCapture*.ts: RECORDED real Claude Code PTY output the mock
-                  #   terminal replays (generated, never hand-edited; see scripts/ below), the
-                  #   retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE) and the NSE probe
+                  #   dev-only inspect bridge (EXPO_PUBLIC_KANGENTIC_INSPECT), the release-build
+                  #   connection trace (EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE, logcat timeline
+                  #   of foreground -> open -> established -> first board snapshot, plus the
+                  #   foreground-recovery A/B switch in Settings; see the developer guide) - shared
+                  #   by tests + rigs - plus claudeCapture*.ts: RECORDED real Claude Code PTY output
+                  #   the mock terminal replays (generated, never hand-edited; see scripts/ below),
+                  #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE) and the NSE probe
                   #   (EXPO_PUBLIC_KANGENTIC_NSE_PROBE: seeds known push vectors so
                   #   `build-ios.yml -f nse_probe=true` can prove the extension decrypts).
                   #   NOTE: no longer dev-only in the bundling sense - the demo pulls the
