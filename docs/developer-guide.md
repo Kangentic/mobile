@@ -2117,11 +2117,28 @@ that per-session state is bounded and cleaned up, with one real exception. All *
 - **An opened session is capped at both ends.** `transcriptStore` holds an LRU of
   `RETAINED_SESSION_CAP` sessions and deletes on eviction and release; `terminalFeed` rings are
   capped at `TERMINAL_RING_CAPACITY_BYTES` (128 KiB) each and exist only for retained sessions.
-- **The one unbounded structure is the ARCHIVE.** `boardStore.archivedByProjectId` appends each
-  page the user scrolls and is cleared only by a full `reset()`, so browsing deep into a project's
-  archive accumulates every archived task plus its session summary for the life of the app run.
-  User-driven and per-project rather than a background leak, but it is the one place where memory
-  grows with use and never comes back, and it is a candidate for an LRU or a drop-on-leave.
+- **The ARCHIVE was the one unbounded structure, and it is now capped.**
+  `boardStore.archivedByProjectId` appended each page the user scrolled and was cleared only by a
+  full `reset()`, so every archive opened stayed for the life of the process. **Measured** against
+  the real boards this app is built on: archived task descriptions average **7,055 bytes** with a
+  **45,893-byte** maximum, and the busiest project holds **580 archived tasks totalling 2.32 MB**
+  of description text, roughly doubled once Hermes holds it as UTF-16. Browsing a few Done columns
+  could therefore hold more than the entire cold-start saving the MOBILE-8 bound buys, and never
+  give it back. Now bounded by `ARCHIVED_PROJECT_CAP` (2) with `shedArchivedPages()` on serious
+  memory pressure.
+
+  **Why by project and not by page**, since the obvious LRU is the wrong one: pages arrive
+  newest-archived first and the user scrolls DOWNWARD, so evicting the oldest-loaded page removes
+  the top of the list they are still reading. Only a project navigated away from is safe to drop,
+  and BoardScreen's focus effect already refetches page one when an archive is absent.
+
+  **Why not truncate the description instead**, which looks cheaper: `CompletedTaskScreen` renders
+  the full description through `MarkdownBlock`, so a truncated copy would silently degrade that
+  screen. Capping what is HELD keeps the rows that exist complete.
+
+  Still uncapped by design: depth within one project. Scrolling 580 archived tasks holds all of
+  them, because the list cannot show rows it has dropped. The project cap bounds the common case
+  (browsing several boards); the depth case needs windowed paging, which is a larger change.
 - `activityStore.endedSessionIds` also grows monotonically, by one short string per session ended
   per app run. Deliberate (the fact has to outlive the pruned entry) and small enough to leave.
 
