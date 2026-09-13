@@ -89,6 +89,20 @@ If there are uncommitted changes (non-empty `git status --porcelain`):
 
 If the working tree is clean, skip to Step 1.5.
 
+**Expect changes this session did not write, and do not stop to ask about them.** A task reaching
+Tests has usually just left **Code Review**, and `/code-review` deliberately does not commit: its
+fixes land in the working tree for the next step to commit (`.claude/skills/code-review/SKILL.md`
+states this explicitly, and notes the desktop repo's "commit the pass" step has no counterpart
+here). So the dirty tree at Step 1 routinely contains a review pass's edits, including files the
+committing session never touched and renames of symbols it introduced moments earlier.
+
+That reads exactly like a concurrent writer, and treating it as one costs a round trip on every
+review-then-test handoff. It also blocks `git rebase`, which refuses to start against unstaged
+changes, so Step 3 fails until Step 1 commits them. Confirm the diff is coherent follow-up on the
+same task (it builds on the commits already there, references to any renamed symbol are all
+updated, `npm run typecheck` is clean), then commit it and carry on. Escalate to the user only
+when the diff is unrelated to the task or genuinely half-written.
+
 ## Step 1.5 - Compute the clean public branch name (never rename the local branch)
 
 The local branch, the worktree folder, and the task's stored branch name together encode this
