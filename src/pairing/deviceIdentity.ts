@@ -47,6 +47,27 @@ export class DeviceIdentityManager {
     const identity = await this.getIdentity();
     return bytesToHex(identity.publicKey);
   }
+
+  /**
+   * For instrumentation only (the cold-launch connection trace): true when
+   * the identity is already resident in memory. Must be read BEFORE calling
+   * getIdentity(), since that call is what populates the cache.
+   *
+   * A point-in-time observation, deliberately not a readiness predicate, and
+   * it is NOT the same question as "will the next getIdentity() hit
+   * SecureStore". Two reasons, both by design above: `cachedIdentity` is
+   * MODULE scope, shared by every DeviceIdentityManager instance (there are
+   * four), so an unrelated consumer - the killed-app push-decrypt fallback in
+   * notifications/pushIdentity.ts, say - can warm it on a genuinely cold
+   * launch; and during the inFlightIdentity window this reads false while
+   * getIdentity() would in fact join the in-flight load rather than start a
+   * second round trip. Both make the trace's `cached` field read
+   * conservatively, which is fine for instrumentation and wrong for control
+   * flow. Do not branch on it.
+   */
+  hasCachedIdentity(): boolean {
+    return cachedIdentity !== null;
+  }
 }
 
 async function loadOrGenerateIdentity(): Promise<X25519KeyPair> {

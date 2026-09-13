@@ -63,7 +63,10 @@ describe('connectionTrace (non-trace build)', () => {
    * Mutation seen failing: deleting `if (!traceEnabled) return;` from
    * traceConnection made it call console.log even in a non-trace build -
    * "expected "log" to not be called at all, but actually been called 2
-   * times".
+   * times". Also covers the lazy one-shot `startup-origin` line
+   * (emitStartupOriginOnce, called from inside traceConnection): it sits
+   * behind the same early return, so a call that never logs `probe-start`
+   * or `probe-failed` never logs `startup-origin` either.
    */
   it('traceConnection logs nothing when the trace flag is unset', async () => {
     delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
@@ -79,5 +82,65 @@ describe('connectionTrace (non-trace build)', () => {
     } finally {
       consoleLogSpy.mockRestore();
     }
+  });
+
+  /**
+   * Guards the module-scope cold-launch origin capture. `startupOriginMs`
+   * and `startupPerfNowMs` are meant to be inert in a non-trace build, so
+   * neither clock should be read at all merely by importing the module -
+   * this is what a shipped store build actually does on every cold launch.
+   *
+   * BOTH clocks are asserted, because the docstring claims both: spying only
+   * Date.now left `startupPerformanceNowMs = traceEnabled ? ... : null` free
+   * to become an unconditional call with the test still green.
+   *
+   * Mutation seen failing: changing
+   * `const startupOriginMs = traceEnabled ? Date.now() : 0;` to
+   * `const startupOriginMs = Date.now();` made this fail - "expected "now"
+   * to not be called at all, but actually been called 1 times". Separately,
+   * changing
+   * `const startupPerformanceNowMs = traceEnabled ? readPerformanceNowMs() : null;`
+   * to `const startupPerformanceNowMs = readPerformanceNowMs();` made the
+   * performance.now assertion fail the same way, and left the Date.now one
+   * green - which is the hole this second spy closes.
+   */
+  it('reads neither clock at module evaluation when the trace flag is unset', async () => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+    vi.resetModules();
+    const dateNowSpy = vi.spyOn(Date, 'now');
+    const performanceNowSpy = vi.spyOn(globalThis.performance, 'now');
+
+    try {
+      await import('@/devsupport/connectionTrace');
+
+      expect(dateNowSpy).not.toHaveBeenCalled();
+      expect(performanceNowSpy).not.toHaveBeenCalled();
+    } finally {
+      dateNowSpy.mockRestore();
+      performanceNowSpy.mockRestore();
+    }
+  });
+
+  /**
+   * isColdLaunch() is a hard FALSE in a non-trace build, the same shape as
+   * foregroundKickEnabled's hard TRUE above.
+   *
+   * Scope, stated so it is not mistaken for more than it is: this pins ONLY
+   * the non-trace hard-false. It cannot distinguish the real implementation
+   * from `return traceEnabled;`, because that is already false here - the
+   * warmForegroundSeen latch itself has no ON-path test, per this file's
+   * header. What protects the latch is that it is a one-way boolean rather
+   * than the clock-equality check it replaced, which is auditable by reading
+   * it; the behaviour it guards is a log field in a dev-only build.
+   *
+   * Mutation seen failing: changing `isColdLaunch` to `return true;` made
+   * this read `true` instead of `false`.
+   */
+  it('isColdLaunch is false when the trace flag is unset', async () => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+    vi.resetModules();
+    const { isColdLaunch } = await import('@/devsupport/connectionTrace');
+
+    expect(isColdLaunch()).toBe(false);
   });
 });

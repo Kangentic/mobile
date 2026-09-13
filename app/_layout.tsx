@@ -7,6 +7,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { ThemeProvider, useTheme } from '@/components';
 import { startConnectionLifecycle } from '@/connection/connectionManager';
+import { traceConnection } from '@/devsupport/connectionTrace';
 import { initializeNotifications } from '@/notifications';
 import { PendingNavigationRunner } from '@/navigation/PendingNavigationRunner';
 import { AppErrorBoundaryScreen } from '@/screens/AppErrorBoundaryScreen';
@@ -52,6 +53,7 @@ const LazyInspectRouteProbe =
 
 export default function RootLayout(): React.JSX.Element {
   useEffect(() => {
+    traceConnection('root-layout-mount');
     // Idempotent backstop: the real registration point is index.js (entry
     // scope, outside React, present in headless launches too).
     initializeNotifications();
@@ -60,6 +62,7 @@ export default function RootLayout(): React.JSX.Element {
       .getState()
       .hydrate()
       .finally(() => {
+        traceConnection('settings-hydrated');
         void SplashScreen.hideAsync().catch(() => undefined);
       });
   }, []);

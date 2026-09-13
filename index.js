@@ -1,3 +1,9 @@
+// Must be the true first import: this module's own evaluation IS the
+// cold-launch clock origin the connection trace measures from (see its
+// docstring and docs/developer-guide.md's cold-launch section). In a build
+// without EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE set, its body is dead code
+// and this import costs nothing beyond the module load itself.
+import './src/devsupport/connectionTrace';
 import './src/lib/cryptoPolyfills';
 import { initializeCrashReporting } from './src/observability/crashReporting';
 import { initializeMemoryPressure } from './src/observability/memoryPressure';
