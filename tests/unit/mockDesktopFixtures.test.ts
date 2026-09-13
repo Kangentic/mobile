@@ -299,7 +299,7 @@ describe('the mock board demonstrates every PR readiness verdict', () => {
     const demonstrated = prBearingTasks().some(
       (task) =>
         task.pr_state === 'open' &&
-        task.pr_merge_readiness !== null &&
+        typeof task.pr_merge_readiness === 'string' &&
         !PR_READINESS_VERDICTS.includes(task.pr_merge_readiness),
     );
     expect(demonstrated).toBe(true);
@@ -312,7 +312,7 @@ describe('the mock board demonstrates every PR readiness verdict', () => {
     const demonstrated = prBearingTasks().some(
       (task) =>
         task.pr_state !== 'open' &&
-        task.pr_merge_readiness !== null &&
+        typeof task.pr_merge_readiness === 'string' &&
         PR_READINESS_VERDICTS.includes(task.pr_merge_readiness),
     );
     expect(demonstrated).toBe(true);
