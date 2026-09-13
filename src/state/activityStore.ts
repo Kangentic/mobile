@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
   ActivityEvent,
+  ActivityEventPayload,
   ActivityReasonWire,
   ActivityStateWire,
   ReadStreamResponsePayload,
@@ -87,6 +88,28 @@ interface ActivityStoreState {
    * Grows by one short string per session ended in an app run, in memory only.
    */
   endedSessionIds: Record<string, true>;
+  /**
+   * The desktop's in-flight spawn-progress label from a `session-ended` push
+   * (e.g. "Switching model..."), keyed by the session that ended. Kept
+   * SEPARATELY from `bySessionId` for the same reason `endedSessionIds` is:
+   * the entry is pruned a few hundred milliseconds after the session ends
+   * (reconcileSessionsFromBoards, once the board drops the sessionless task),
+   * and this fact must outlive that pruning just as long as `endedSessionIds`
+   * does - a screen reading it after the prune is exactly the case this
+   * field exists for.
+   *
+   * Presence means the desktop expects a successor session to land and is
+   * naming the phase it is in; absence means either a genuine park or a
+   * desktop that predates the field (protocol has no such field yet - see
+   * kangentic board task #639). Per that field's own contract, this is
+   * INTENT, not a guarantee: a consumer must keep whatever timeout already
+   * bounds its own wait for a successor and use presence only to skip a
+   * redundant one, never as proof one is coming.
+   *
+   * Grows by one short string per respawn in an app run, in memory only -
+   * same bound as `endedSessionIds`.
+   */
+  spawnProgressLabelBySessionId: Record<string, string>;
   registerSession: (sessionId: string, taskId: string, projectId: string) => void;
   applySnapshot: (sessionId: string, taskId: string, projectId: string, snapshot: ReadStreamResponsePayload) => void;
   applyActivityEvent: (event: ActivityEvent) => void;
@@ -122,9 +145,28 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
   };
 }
 
+/**
+ * Reads a `session-ended` payload's optional `spawnProgressLabel` field
+ * without declaring a local parallel type (protocol-types-from-package.md
+ * forbids that). The field does not exist in `ActivityEventPayload` until
+ * the desktop's protocol package ships it (kangentic board #639), so this is
+ * a runtime guard over an UNKNOWN extra property, not a declared shape: `in`
+ * narrows to an intersection with `Record<K, unknown>`, and `typeof` narrows
+ * that to `string`. Once the package bumps this keeps working unchanged -
+ * TypeScript sees the real optional field and the guard is still correct,
+ * just redundant.
+ */
+function extractSpawnProgressLabel(payload: ActivityEventPayload): string | null {
+  if (payload.type !== 'session-ended') return null;
+  return 'spawnProgressLabel' in payload && typeof payload.spawnProgressLabel === 'string'
+    ? payload.spawnProgressLabel
+    : null;
+}
+
 export const useActivityStore = create<ActivityStoreState>((set) => ({
   bySessionId: {},
   endedSessionIds: {},
+  spawnProgressLabelBySessionId: {},
 
   registerSession: (sessionId, taskId, projectId) =>
     set((state) => {
@@ -178,7 +220,20 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // or push tap) that it is over.
       const endedSessionIds: Record<string, true> =
         payload.type === 'session-ended' ? { ...state.endedSessionIds, [event.sessionId]: true } : state.endedSessionIds;
-      if (!existing) return endedSessionIds === state.endedSessionIds ? state : { endedSessionIds };
+      // Same reasoning, same timing: a deep-linked or push-tapped screen with
+      // no local entry must still learn the desktop's spawn-progress label,
+      // not just that the session ended.
+      const spawnProgressLabel = extractSpawnProgressLabel(payload);
+      const spawnProgressLabelBySessionId: Record<string, string> =
+        spawnProgressLabel !== null
+          ? { ...state.spawnProgressLabelBySessionId, [event.sessionId]: spawnProgressLabel }
+          : state.spawnProgressLabelBySessionId;
+      if (!existing) {
+        if (endedSessionIds === state.endedSessionIds && spawnProgressLabelBySessionId === state.spawnProgressLabelBySessionId) {
+          return state;
+        }
+        return { endedSessionIds, spawnProgressLabelBySessionId };
+      }
       const updated: SessionActivityEntry = { ...existing, lastEventAt: Date.now() };
       switch (payload.type) {
         case 'activity':
@@ -236,7 +291,11 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         updated.sectionChangedAt = Date.now();
         updated.enteredSectionAt = Date.now();
       }
-      return { bySessionId: { ...state.bySessionId, [event.sessionId]: updated }, endedSessionIds };
+      return {
+        bySessionId: { ...state.bySessionId, [event.sessionId]: updated },
+        endedSessionIds,
+        spawnProgressLabelBySessionId,
+      };
     }),
 
   markRejected: (sessionId) =>
@@ -267,7 +326,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, unreadCount: 0 } } };
     }),
 
-  reset: () => set({ bySessionId: {}, endedSessionIds: {} }),
+  reset: () => set({ bySessionId: {}, endedSessionIds: {}, spawnProgressLabelBySessionId: {} }),
 }));
 
 /**
@@ -277,6 +336,20 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
  */
 export function selectSessionEnded(state: { endedSessionIds: Record<string, true> }, sessionId: string | null): boolean {
   return sessionId !== null && state.endedSessionIds[sessionId] === true;
+}
+
+/**
+ * The desktop's in-flight spawn-progress label for a session that just
+ * ended, or null if the desktop sent none (a genuine park, or a desktop
+ * that predates the field). Survives the activity entry's pruning the same
+ * way `selectSessionEnded` does - see `spawnProgressLabelBySessionId`.
+ */
+export function selectSessionSpawnProgressLabel(
+  state: { spawnProgressLabelBySessionId: Record<string, string> },
+  sessionId: string | null,
+): string | null {
+  if (sessionId === null) return null;
+  return state.spawnProgressLabelBySessionId[sessionId] ?? null;
 }
 
 /**

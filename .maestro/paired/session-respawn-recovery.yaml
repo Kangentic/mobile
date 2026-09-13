@@ -1,9 +1,12 @@
 appId: com.kangentic.mobile
 ---
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
-# /respawn makes the stub swap the task to a fresh sessionId (a model
-# switch). The screen must follow the successor automatically - the new
-# session's transcript marker appears and the ended state never shows.
+# /respawn makes the stub end the current session, sit sessionless for a real
+# gap (STUB_RESPAWN_GAP_MS), then swap the task to a fresh sessionId - the
+# same suspend-then-respawn shape a real desktop-driven model/agent/effort
+# change produces. During the gap the screen must show the "Switching
+# session" overlay, never the "Session ended" one; once the successor lands,
+# its transcript marker appears and the switching overlay clears.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
@@ -29,6 +32,23 @@ appId: com.kangentic.mobile
 - inputText: "/respawn"
 - tapOn:
     id: "composer-send"
+# The gap: the task is sessionless while the stub holds STUB_RESPAWN_GAP_MS
+# before installing the successor. By testID, never copy - the label text is
+# desktop-authored and is the component test's job, not this flow's.
+#
+# TRIAGE NOTE: this is the one assertion here on a TRANSIENT state, visible
+# only for the stub's 6s gap. A starved emulator can poll first after the
+# successor has already bound, which burns the full timeout and reports
+# "never visible" - indistinguishable from the real regression. Check process
+# state and emulator load BEFORE reading a failure here as a product bug (the
+# same trap the google_apis image set off in the developer guide), and never
+# just raise the timeout: a longer wait cannot see a state that has passed.
+- extendedWaitUntil:
+    visible:
+      id: "session-switching-state"
+    timeout: 10000
+- assertNotVisible:
+    id: "session-ended-state"
 # Anchored regex: the markdown renderer can split the marker across text
 # nodes, and Maestro's text matcher is full-string - match the stable head.
 - extendedWaitUntil:
@@ -60,8 +80,9 @@ appId: com.kangentic.mobile
     timeout: 15000
 - assertNotVisible:
     id: "session-ended-state"
-# A respawn keeps the task in its column, so the swap grace window never opens
-# and the transitional scrim must not appear either. A future edit that adds a
-# column move to this flow needs to expect this one instead.
+# The successor's marker text is already visible above, which means it has
+# bound and the switching window has closed (SessionScreen resets both swap
+# latches the instant a successor binds) - so by this point in the flow the
+# scrim should be gone too, not merely never-opened.
 - assertNotVisible:
     id: "session-switching-state"

@@ -1,6 +1,7 @@
 import {
   generateX25519KeyPair,
   parseCapabilityRequestPayload,
+  type ActivityEventPayload,
   type BoardTaskWire,
   type BridgeEvent,
   type CapabilityRequestMessage,
@@ -136,6 +137,39 @@ const MOCK_MODEL_CODEX = { id: 'gpt-5-codex', displayName: 'GPT-5 Codex' };
 const MOCK_MODEL_GEMINI = { id: 'gemini-3-pro', displayName: 'Gemini 3 Pro' };
 /** After this many tick-driven Bash cells, the mock stops growing the transcript further - see tickEntryCount. */
 const MOCK_MAX_TICK_ENTRIES = 20;
+
+/**
+ * How long `/respawn` leaves the task sessionless before the successor lands,
+ * mirroring the real desktop's suspend-to-respawn window (task-move.ts's
+ * Phase 1 suspend through Phase 3's spawn, several seconds on the real
+ * desktop). Long enough to watch under dev:mock, comfortably inside
+ * SESSION_SWAP_GRACE_MS - a rig choice, not a product timing claim. Matches
+ * scripts/stubDesktopPeer.mjs's STUB_RESPAWN_GAP_MS by convention (the two
+ * rigs share no code), so the two gaps read the same across dev:mock and E2E.
+ */
+const MOCK_RESPAWN_GAP_MS = 6000;
+
+/**
+ * A `session-ended` payload carrying the desktop's in-flight spawn-progress
+ * label (kangentic board #639), which `@kangentic/protocol` does not declare
+ * yet.
+ *
+ * Built by INTERSECTION rather than a hand-written parallel payload shape,
+ * which is the one local extension protocol-types-from-package.md permits
+ * ("extend or narrow a protocol type locally only by composition"). The base
+ * payload stays fully type-checked - a typo in `type` or a missing
+ * `intentional` is still a compile error - and only the single unpublished
+ * field is widened. When the package ships the field this collapses to a
+ * plain literal and the helper can go.
+ */
+function sessionEndedWithSpawnProgress(spawnProgressLabel: string): ActivityEventPayload {
+  const payload: ActivityEventPayload & { spawnProgressLabel?: string } = {
+    type: 'session-ended',
+    intentional: true,
+    spawnProgressLabel,
+  };
+  return payload;
+}
 
 /**
  * Where the streaming session's context bar starts, and how fast it climbs.
@@ -2987,35 +3021,70 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
 
   /**
    * The /respawn magic command: the desktop restarts the task's agent under
-   * a FRESH session id (a model switch). The transcript resets (a new
-   * process has a new transcript) with a marker entry Maestro can assert on.
+   * a FRESH session id (a model switch). Mirrors the real desktop's
+   * suspend-then-respawn shape (see `suspendLiveSessionForRespawn` in the
+   * desktop repo's task-move.ts): the outgoing session is torn down with its
+   * own `session-ended` push exactly like `endActiveSession`, the task goes
+   * sessionless for a real gap, and only then does the successor land. Without
+   * the gap this never reproduced the bug the phone actually has - assigning
+   * the successor id in the same tick as the ended push meant the board was
+   * never sessionless, so SessionScreen always found a live successor and no
+   * overlay ever showed.
+   *
+   * The outgoing session id MUST be captured and pushed before anything else
+   * touches `activeSessionId` - reversing that order records the SUCCESSOR in
+   * the phone's endedSessionIds set and wedges the screen on the ended state
+   * forever, since that id can then never "end" again.
+   *
+   * The ended push CARRIES the spawn-progress label, and must: this mock's
+   * own boardSnapshot() applies the `view: 'sessions'` filter, so during the
+   * gap the sessionless task leaves the board entirely and neither of
+   * SessionScreen's swap-window openers can fire off the column. Without the
+   * label, dev:mock would render "Session ended" for the whole gap - the
+   * exact regression this screen's spawn-label window exists to prevent, put
+   * back into the rig that is supposed to demonstrate the fix.
    */
   function respawnActiveSession(): void {
-    respawnCounter += 1;
-    const successorSessionId = `mock-session-${respawnCounter}`;
+    const endedSessionId = activeSessionId;
     pendingPromptId = null;
     pendingTickResult = null;
-    activeSessionId = successorSessionId;
+    if (endedSessionId !== null) {
+      emit({
+        kind: 'activity',
+        sessionId: endedSessionId,
+        taskId: MOCK_TASK_ID,
+        payload: sessionEndedWithSpawnProgress('Switching model...'),
+      });
+    }
+    activeSessionId = null;
     streamSubscribed = false;
-    // Worse than the end-session case: activeSessionId is NOT null here, so a
-    // playback left running would emit the dead session's recorded bytes into
-    // the successor's terminal. The next subscribe restarts it from the top.
+    // The replay outlives the session unless it is stopped here - same reason
+    // endActiveSession stops it, and doubly so here since a playback left
+    // running would otherwise write the dead session's bytes into whatever
+    // subscribes next.
     stopTerminalPlayback();
-    transcript = [
-      {
-        kind: 'assistant',
-        uuid: `mock-respawn-marker-${respawnCounter}`,
-        ts: Date.now(),
-        agentName: 'Claude Code',
-        model: MOCK_MODEL_SONNET.displayName,
-        // The successor's id is deliberately NOT rendered: these fixtures reach
-        // published screenshots and, since the demo pairing shipped, an App
-        // Review device, and the internal ids read as scaffolding.
-        blocks: [{ type: 'text', text: 'Session restarted. Picking up where the previous run left off.' }],
-      },
-    ];
-    transcriptRevision = 1;
-    setTaskSession(successorSessionId);
+    setTaskSession(null);
+    later(MOCK_RESPAWN_GAP_MS, () => {
+      respawnCounter += 1;
+      const successorSessionId = `mock-session-${respawnCounter}`;
+      activeSessionId = successorSessionId;
+      streamSubscribed = false;
+      transcript = [
+        {
+          kind: 'assistant',
+          uuid: `mock-respawn-marker-${respawnCounter}`,
+          ts: Date.now(),
+          agentName: 'Claude Code',
+          model: MOCK_MODEL_SONNET.displayName,
+          // The successor's id is deliberately NOT rendered: these fixtures reach
+          // published screenshots and, since the demo pairing shipped, an App
+          // Review device, and the internal ids read as scaffolding.
+          blocks: [{ type: 'text', text: 'Session restarted. Picking up where the previous run left off.' }],
+        },
+      ];
+      transcriptRevision = 1;
+      setTaskSession(successorSessionId);
+    });
   }
 
   function raiseQuestionPrompt(): void {

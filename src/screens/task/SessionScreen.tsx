@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Screen } from '@/components';
 import { findArchivedTaskById, findTaskById, isDoneRole, isTodoRole, useBoardStore } from '@/state/boardStore';
-import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
+import { selectSessionEnded, selectSessionSpawnProgressLabel, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
@@ -28,16 +28,28 @@ import type { SessionMode } from './SessionModeToggle';
 const REJECTED_FEED_GRACE_MS = 1500;
 
 /**
- * How long a column move may keep the screen in the "switching session" state
- * before it gives up and declares the session ended.
+ * How long the screen may stay in the "switching session" state before it
+ * gives up and declares the session ended.
  *
- * A move that restarts the agent suspends the old session (which pushes
- * `session-ended`) and spawns the successor after the worktree work, so the
- * gap is the whole desktop-side move. Measured on the desktop's own IPC log:
- * cross-column `task:move` runs a median 2.3s with a 24.4s tail, and the
- * successor's board snapshot normally closes this window in ~2-3s. 20s covers
- * the common tail without leaving a wrong "switching" label up indefinitely
- * when nothing is coming.
+ * The window has TWO openers, both bounded by this same timeout for the same
+ * reason: something suspended the live session in a way that PROMISES a
+ * successor but does not GUARANTEE one, so the screen must eventually fall
+ * back to the ended state if nothing arrives.
+ *
+ * 1. A column move that restarts the agent (see swapWindowSwimlaneId below).
+ *    Measured on the desktop's own IPC log: cross-column `task:move` runs a
+ *    median 2.3s with a 24.4s tail, and the successor's board snapshot
+ *    normally closes this window in ~2-3s.
+ * 2. A same-column respawn (model/agent/effort change, isolated-session-track
+ *    switch) signalled by the desktop's spawnProgressLabel on `session-ended`
+ *    (see spawnLabelWindowSessionId below, kangentic board #639). The
+ *    desktop's own contract for that field is INTENT, not a guarantee - a
+ *    board profile, a failed worktree checkout, or a racing move can still
+ *    suspend with no successor landing - so this timeout is not optional for
+ *    that opener either.
+ *
+ * 20s covers the common move tail without leaving a wrong "switching" label
+ * up indefinitely when nothing is coming.
  */
 const SESSION_SWAP_GRACE_MS = 20_000;
 
@@ -116,6 +128,15 @@ export function SessionScreen(): React.JSX.Element {
   // "Had one before" is state adjusted during render (the sanctioned
   // derive-from-props pattern), not a ref read in render.
   const [lastBoundSessionId, setLastBoundSessionId] = useState<string | null>(null);
+  // The desktop's in-flight spawn-progress label for the session that just
+  // ended (kangentic board #639), read here - ahead of the latch chain below
+  // that consumes it - on the same `sessionId ?? lastBoundSessionId` key
+  // `boundSessionEnded` uses further down, and for the same reason: once the
+  // board drops the sessionless task the only sessionId left to key off is
+  // the one this screen already bound.
+  const boundSpawnProgressLabel = useActivityStore((state) =>
+    selectSessionSpawnProgressLabel(state, sessionId ?? lastBoundSessionId),
+  );
   // The column the task sat in when the CURRENT session bound, and a latch
   // that opens when it changes. A column move that restarts the agent is a
   // session swap, and `session-ended` for the old session arrives seconds
@@ -136,13 +157,29 @@ export function SessionScreen(): React.JSX.Element {
   // screen never reached the ended state at all.
   const [swapWindowSwimlaneId, setSwapWindowSwimlaneId] = useState<string | null>(null);
   const [spentSwapSwimlaneId, setSpentSwapSwimlaneId] = useState<string | null>(null);
-  const swapWindowOpen = swapWindowSwimlaneId !== null;
+  // The SESSION-keyed sibling latch: opened by a desktop spawnProgressLabel
+  // rather than a column change, so it works for a same-column respawn. Keyed
+  // on the session id (via lastBoundSessionId, never null during the gap)
+  // rather than the swimlane, because the column branch's own
+  // `locatedSwimlaneId !== null` requirement cannot hold here - a respawn
+  // gap can leave the task off the board entirely under the `sessions`
+  // board projection (see boundSessionEnded's comment below), so the two
+  // latches cannot be merged into one. Same non-boolean shape as the swap
+  // latch and for the same reason: an expired window must not re-open on the
+  // next render while the label is still being read.
+  const [spawnLabelWindowSessionId, setSpawnLabelWindowSessionId] = useState<string | null>(null);
+  const [spentSpawnLabelSessionId, setSpentSpawnLabelSessionId] = useState<string | null>(null);
+  const swapWindowOpen = swapWindowSwimlaneId !== null || spawnLabelWindowSessionId !== null;
   if (sessionId !== null && sessionId !== lastBoundSessionId) {
     setLastBoundSessionId(sessionId);
-    // A successor bound: this column is the new baseline, and the move is over.
+    // A successor bound: this column is the new baseline, and the move is
+    // over - for BOTH openers. A stale label window left open here would
+    // read as "switching" on the successor's own later, genuine park.
     setSwimlaneIdWhenSessionBound(locatedSwimlaneId);
     setSwapWindowSwimlaneId(null);
     setSpentSwapSwimlaneId(null);
+    setSpawnLabelWindowSessionId(null);
+    setSpentSpawnLabelSessionId(null);
   } else if (sessionId !== null && swimlaneIdWhenSessionBound === null && locatedSwimlaneId !== null) {
     // The board located the task after this screen bound its session from the
     // nav param: adopt the column as the baseline, never read it as a change.
@@ -160,6 +197,22 @@ export function SessionScreen(): React.JSX.Element {
     !isDoneRole(locatedColumnRole)
   ) {
     setSwapWindowSwimlaneId(locatedSwimlaneId);
+  } else if (
+    spawnLabelWindowSessionId === null &&
+    boundSpawnProgressLabel !== null &&
+    lastBoundSessionId !== null &&
+    lastBoundSessionId !== spentSpawnLabelSessionId &&
+    // Same two exclusions as the column branch, kept for the same reason:
+    // a label racing an optimistic Done/To-Do write must not open a window
+    // for a task that is finishing or resetting rather than switching. These
+    // two clauses go inert (both role checks read false) once the task is off
+    // the board, since locatedColumnRole is null then - so they narrow this
+    // branch without blocking it in the common respawn case, where the
+    // sessionless task has left the board's `sessions` projection entirely.
+    !isTodoRole(locatedColumnRole) &&
+    !isDoneRole(locatedColumnRole)
+  ) {
+    setSpawnLabelWindowSessionId(lastBoundSessionId);
   }
   useEffect(() => {
     if (swapWindowSwimlaneId === null) return;
@@ -170,6 +223,18 @@ export function SessionScreen(): React.JSX.Element {
     }, SESSION_SWAP_GRACE_MS);
     return () => clearTimeout(swapTimer);
   }, [swapWindowSwimlaneId]);
+  // Mirrors the effect above: the desktop's spawnProgressLabel is intent, not
+  // a guarantee (see SESSION_SWAP_GRACE_MS's docblock), so this window is
+  // bound by the same timeout rather than left open until a successor binds.
+  useEffect(() => {
+    if (spawnLabelWindowSessionId === null) return;
+    const waitingOnSessionId = spawnLabelWindowSessionId;
+    const spawnLabelTimer = setTimeout(() => {
+      setSpentSpawnLabelSessionId(waitingOnSessionId);
+      setSpawnLabelWindowSessionId(null);
+    }, SESSION_SWAP_GRACE_MS);
+    return () => clearTimeout(spawnLabelTimer);
+  }, [spawnLabelWindowSessionId]);
   const feedStatus = useActivityStore((state) =>
     sessionId !== null ? (state.bySessionId[sessionId]?.feedStatus ?? null) : null,
   );
@@ -473,7 +538,7 @@ export function SessionScreen(): React.JSX.Element {
               transitional scrim stands in for the ended state rather than
               rendering beside it: two overlays on the same box would fight
               for the same stacking slot. */}
-          {showSwitchingState ? <SessionSwitchingState onViewChanges={openChanges} /> : null}
+          {showSwitchingState ? <SessionSwitchingState onViewChanges={openChanges} label={boundSpawnProgressLabel} /> : null}
           {showEndedState ? (
             <SessionEndedState
               onViewChanges={openChanges}
