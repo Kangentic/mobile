@@ -145,6 +145,15 @@ export function PermissionPromptCard({ sessionId, prompt }: PermissionPromptCard
    *
    * Reset on a new promptId for the same reason `usePromptAnswer` does: a
    * FlashList row can be recycled onto a different prompt.
+   *
+   * That reset is DEFENSIVE, not currently load-bearing, and deliberately has
+   * no test: `submittedAction` is only ever read behind `answering &&`, and
+   * `usePromptAnswer` independently clears `answering` on a promptId change,
+   * so a stale value cannot reach the screen today. Deleting these two lines
+   * would keep every test green. It is kept as insurance for the day the hook
+   * stops resetting, or a label stops gating on `answering`. Do not "cover" it
+   * with a test that would pass either way - see
+   * .claude/rules/regression-tests-fail-first.md.
    */
   const [submittedAction, setSubmittedAction] = React.useState<'approve' | 'deny' | null>(null);
   const [trackedPromptId, setTrackedPromptId] = React.useState(prompt.promptId);

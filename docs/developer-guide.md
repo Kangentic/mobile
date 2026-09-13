@@ -2039,9 +2039,11 @@ binary cannot receive remote notifications.
 
 ### Verifying a push landed (Android)
 
-A push has TWO ways to look delivered and be broken, and neither shows up in the app: the OS can
-draw the notification instead of us, or nothing can run at all. One logcat line separates them, so
-check it before debugging anything else.
+A push has THREE ways to look delivered and be broken, and none of them shows up in the app: the OS
+can draw the notification instead of us, nothing can run at all, or our own task can start and take
+the process down with it. One logcat line separates the first two, so check it before debugging
+anything else. The third looks exactly like "no push arrived" and is covered at the end of this
+section.
 
 #### First, get the phone into a state where a push can arrive
 
@@ -2133,6 +2135,54 @@ Check which build you are actually looking at first - `adb shell dumpsys package
 for `versionName` / `versionCode` - because the notification stack's behaviour depends on the
 `expo-notifications` version inside the APK, and a device on an older dependency tree invalidates
 every conclusion above.
+
+#### Third: nothing logged at all, because the task killed the process
+
+**Measured 2026-09-13**, first on a Pixel running the Play build and then reproduced on an emulator
+release build. A push to a KILLED app ran our task, threw an uncaught `NullPointerException` on the
+Java side, and killed the FCM broadcast process. Nothing rendered, no `notification_enqueue` was
+written, and the working-path line `TaskService: Finished task 'kangentic-background-push'` never
+appeared either. Against the tag table above, that reads as "the message never arrived". It had been
+shipping since background push first went out.
+
+**The discriminator is in the same `events` buffer you are already reading.** A crash on this path
+writes `am_crash` for `com.kangentic.mobile`, and after two of them ActivityManager writes
+`am_proc_bad` and stops restarting the process, so the symptom gets *worse* the more you test:
+
+```
+adb logcat -b events
+```
+
+An `am_crash` with no `notification_enqueue` is this failure. No `am_crash` and no `TaskService:
+Finished task` line is the genuine no-delivery case.
+
+**Cause (measured, then confirmed by the fix).** R8 strips
+`expo.modules.adapters.react.apploader.RNHeadlessAppLoader`. Nothing references it statically:
+`AppLoaderProvider` resolves it by name from a manifest meta-data string through `Class.forName`, so
+minification sees an unused class. `expo-task-manager` then dereferenced the resulting null at
+`TaskService.executeTask:426`, the one call site of three in that file that is unguarded. The fix is
+the `-keep` rule in `app.config.ts` plus `patches/expo-task-manager+57.0.17.patch`, and the patch is
+inert without the `expo.autolinking.buildFromSource` entries in `package.json`. `tests/unit/appConfigPushDelivery.test.ts`
+pins all three, because removing any one of them breaks push with a green pipeline and no other
+signal.
+
+**Why no tier caught it, which is the part worth remembering.** It needs a release build (there is
+no R8 in a dev client) AND a killed app (a connected phone is presence-suppressed by the desktop,
+and "Stay connected" mode's local notifier covers the backgrounded case). Sentry cannot see it at
+all: `Sentry.init()` runs from JS, and JS never starts on a headless Java crash path. So the only
+instrument that reports this is `adb logcat -b events`.
+
+**A correction, kept here because the reasoning is the reusable part.** The R8-stripping hypothesis
+was raised early and then wrongly dismissed, on the grounds that logcat showed no
+`Cannot initialize app loader` message. That was an argument from an ABSENCE: on the crashing build
+that line is written to `System.err` microseconds before the NPE kills the process, so it is lost
+before it flushes. Once the null guard kept the process alive, `ClassNotFoundException:
+RNHeadlessAppLoader` appeared immediately and confirmed the original hypothesis. **A missing log line
+on a path that crashes is not evidence of anything.** Stop the crash first, then read the logs.
+
+`-keepattributes SourceFile,LineNumberTable` (also in `app.config.ts`) is why this was diagnosable
+at all. Without it the crash frame read `TaskService.executeTask(...:134)`, a line number that
+resolves to nothing in either the source or the 73 MB production mapping file.
 
 ## Crash reporting (Sentry)
 
