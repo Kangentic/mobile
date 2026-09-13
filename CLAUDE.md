@@ -85,11 +85,14 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   release we depend on. The filename pins the version, so a bump
                               #   drops the patch silently: re-measure with the retention probe
                               #   (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1) before accepting one.
-                              #   CI's node_modules cache is keyed on package-lock.json ALONE and
-                              #   `npm ci` (so `postinstall`, so patch-package) runs only on a
-                              #   miss, so editing a .patch without touching the lockfile restores
-                              #   a cache holding the OLD patch. Bump something in the lockfile, or
-                              #   clear the cache, whenever a patch changes on its own.
+                              #   CI's node_modules cache used to be keyed on package-lock.json
+                              #   ALONE, and `npm ci` (so `postinstall`, so patch-package) runs
+                              #   only on a MISS - so editing a .patch without touching the
+                              #   lockfile restored a cache holding the OLD patch, silently and
+                              #   with CI green. FIXED 2026-09-13: the key in
+                              #   .github/actions/setup-node-deps/action.yml now hashes
+                              #   `patches/**` too, so a patch change misses the cache on its own
+                              #   and no lockfile bump is needed. Keep those two in step.
                               #   expo-task-manager+57.0.17.patch guards a null HeadlessAppLoader
                               #   at TaskService.executeTask:426, the one call site of three in
                               #   that file that did not. It returns null silently when the
