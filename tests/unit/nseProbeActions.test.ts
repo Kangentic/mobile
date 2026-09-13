@@ -5,7 +5,7 @@
  * this file pins the composition around them, which the SettingsScreen tests
  * mock away wholesale.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hexToBytes } from '@kangentic/protocol';
 import type { DisplayedNotification } from '@notifee/react-native';
 import { NSE_PROBE_IDENTITY_PUBLIC_KEY_HEX, NSE_PROBE_PUSH_KEY_HEX } from '@/devsupport/nseProbeVectors';
@@ -58,9 +58,30 @@ beforeEach(() => {
     notificationsState.callOrder.push('seed');
   });
   notificationsState.callOrder = [];
+  // Every build that is not a probe dispatch reads this as unset, which
+  // seedNseProbe now refuses on. The seeding tests below are the probe build.
+  vi.stubEnv('EXPO_PUBLIC_KANGENTIC_NSE_PROBE', '1');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('seedNseProbe', () => {
+  it('refuses to seed when the probe flag is off, whoever calls it', async () => {
+    // The flag gates the Settings row too, but the row is not the gate: this
+    // module ships in a store binary (no __DEV__ guard, no dynamic import, so
+    // Metro strips nothing), and seedSharedPushKeysForProbe's own throw does
+    // not fire in a signed build, where the shared group is always configured.
+    // So the refusal has to live here or a real user's push key is one call
+    // away from a public constant.
+    vi.stubEnv('EXPO_PUBLIC_KANGENTIC_NSE_PROBE', '');
+
+    await expect(seedNseProbe()).rejects.toThrow('not enabled in this build');
+    expect(notificationsState.seedSharedPushKeysForProbe).not.toHaveBeenCalled();
+    expect(notificationsState.requestNotificationPermission).not.toHaveBeenCalled();
+  });
+
   it('seeds the probe vectors as bytes through the production write path, then asks for permission', async () => {
     const outcome = await seedNseProbe();
 

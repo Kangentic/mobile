@@ -142,7 +142,8 @@ tests/
   web/            # Playwright via react-native-web (later)
 .maestro/         # Maestro E2E flows (smoke unpaired; paired/ flows need scripts/stubDesktopPeer.mjs;
                   #   probes/ are NOT tests: the crash-test flows that
-                  #   `build-ios.yml -f crash_test=true` drives on the CI simulator)
+                  #   `build-ios.yml -f crash_test=true` drives on the CI simulator, plus the
+                  #   nse-seed / nse-read pair that `-f nse_probe=true` drives there)
 scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.mjs
                   #   (assembles xterm.html from the page fragments in xterm-page/),
                   #   xterm-page/ (the WebView glue as plain browser .js modules,

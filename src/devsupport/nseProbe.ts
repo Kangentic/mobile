@@ -26,6 +26,16 @@ export interface NseProbeSeedOutcome {
  * looking like a decrypt failure.
  */
 export async function seedNseProbe(): Promise<NseProbeSeedOutcome> {
+  // The flag check belongs HERE, not only on the Settings row that calls this.
+  // Metro leaves this module in the bundle (no `__DEV__` guard and no dynamic
+  // import boundary, both deliberate - the probe must build Release), so the
+  // seeding path ships inert rather than absent, and the only other in-code
+  // refusal (seedSharedPushKeysForProbe's missing-shared-group throw) does not
+  // fire in a signed build, where the group is always configured. Without this
+  // line nothing between a caller and a real user's push key is probe-aware.
+  if (!nseProbeEnabled()) {
+    throw new Error('The NSE probe is not enabled in this build, so it must not seed push keys');
+  }
   await seedSharedPushKeysForProbe(hexToBytes(NSE_PROBE_PUSH_KEY_HEX), hexToBytes(NSE_PROBE_IDENTITY_PUBLIC_KEY_HEX));
   const permissionGranted = await requestNotificationPermission();
   return { permissionGranted };

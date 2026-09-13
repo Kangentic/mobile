@@ -351,8 +351,11 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
 
 - **What Sentry cannot see:** session content. No screenshots, no view hierarchy, no console
   output, no captured network requests, no JS network breadcrumbs, no Session Replay, no
-  performance traces, no structured logs, no PII, and no message text from a failure the app
-  caught and showed you - each disabled explicitly, several of them ON by default in the SDK.
+  performance traces, no structured logs, no PII, and no message text from a failure reported
+  through the handled-error door (`reportHandledError`) - each disabled explicitly, several of
+  them ON by default in the SDK. The one deliberate exception is a render throw caught by the
+  app's root error boundary, which keeps its message: that text is written by this app, not by
+  a peer or a user, and it is what makes the crash diagnosable.
   Screenshots and view hierarchy are the two that reach native, and both are off there too.
   Transcripts, terminal output, diff content, board data, pairing material and notification
   payloads are never collected, and `src/pairing/`, `src/channel/`, `src/demo/`,

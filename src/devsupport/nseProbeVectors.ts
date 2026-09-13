@@ -17,17 +17,36 @@
  * pure (no notifee, no SecureStore) so that test can import it in the
  * plain-Node tier.
  *
- * Gated exactly like the crash-test rig: `EXPO_PUBLIC_*` is inlined at bundle
- * time, so the probe is inert in every build not dispatched with the flag on,
- * and build-ios.yml refuses the flag together with a TestFlight submission.
- * The stakes are higher than the crash-test flag's, though: a real install
- * running with this flag on would have a push channel keyed by a PUBLIC
- * value, so every one of the four gates is load-bearing on its own - the
- * bundle-time inlining, the flag being exported only by the simulator job
- * (the device job has no probe branch), the refusal steps at the top of both
- * build jobs and in submit-testflight, and seedSharedPushKeysForProbe
- * refusing to write without a shared group. Loosening any one of them is a
- * security change, not a convenience.
+ * Gated like the crash-test rig: `EXPO_PUBLIC_*` is inlined at bundle time, so
+ * the probe is inert in every build not dispatched with the flag on, and
+ * build-ios.yml refuses the flag together with a TestFlight submission.
+ *
+ * INERT IS NOT ABSENT, and the difference matters for what the gates are worth.
+ * This module has no `__DEV__` guard and no dynamic-import boundary (both
+ * deliberate: the probe has to build Release), so Metro strips nothing. These
+ * two literals and the whole seeding path ship inside a store binary with
+ * `nseProbeEnabled()` merely returning false at runtime - unlike
+ * connectionManager's mock peer, which IS stripped because it sits behind
+ * `__DEV__ && await import(...)`.
+ *
+ * The stakes are higher than the crash-test flag's: a real install running with
+ * this flag on would have a push channel keyed by a PUBLIC value. So count the
+ * gates honestly, strongest first:
+ *
+ * 1. CI - the flag is exported only by the simulator job (the device job has no
+ *    probe branch), and refusal steps at the top of both build jobs and in
+ *    submit-testflight reject a probe build that also submits.
+ * 2. Runtime - `nseProbeEnabled()` is checked both by the Settings row that
+ *    renders the affordance and, load-bearingly, by `seedNseProbe()` itself,
+ *    so the seeding path refuses regardless of who calls it.
+ *
+ * `seedSharedPushKeysForProbe`'s missing-shared-group throw is NOT a third
+ * gate: build-ios.yml exports EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP on the
+ * signed device path too (the NSE needs it), so `usesSharedKeychain()` is true
+ * in exactly the build where a gate would matter. It guards against writing
+ * somewhere the extension cannot read, which is a different failure.
+ *
+ * Loosening any of the above is a security change, not a convenience.
  */
 export const NSE_PROBE_PUSH_KEY_HEX = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
 export const NSE_PROBE_IDENTITY_PUBLIC_KEY_HEX = 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100';

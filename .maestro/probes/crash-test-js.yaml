@@ -70,8 +70,11 @@ appId: com.kangentic.mobile
     id: "settings-crash-test-js"
 # The throw is on a 0 ms timer; the SDK flushes for up to two seconds, then
 # RCTFatal aborts the process. The settings screen vanishing is this flow's
-# assertion that the crash happened; the workflow confirms it against a crash
-# report in ~/Library/Logs/DiagnosticReports, which is the verdict.
+# assertion that the crash happened; the workflow's verdict is the PROCESS
+# TABLE (the app is gone), not a crash report. A .ips in
+# ~/Library/Logs/DiagnosticReports is collected afterwards as bonus evidence
+# and its absence is only a warning - run 34672597979 crashed with no report
+# written 25 s later. See the assert_app_died comment in build-ios.yml.
 - extendedWaitUntil:
     notVisible:
       id: "settings-screen"

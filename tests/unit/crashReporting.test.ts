@@ -638,6 +638,43 @@ describe('reportHandledError', () => {
     expect(sentryState.captureException).toHaveBeenCalledTimes(10);
   });
 
+  it('keys the rate limit on errorName as well as site, so a different class gets its own slot', async () => {
+    // Both existing rate-limit tests above only ever vary `site`; this pins
+    // the `errorName` half of the key so a collapsed key (site alone) cannot
+    // pass unnoticed.
+    vi.useFakeTimers();
+    const crashReporting = await loadInitialisedCrashReporting();
+
+    crashReporting.reportHandledError('create-task', new Error('plain one'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(1);
+
+    crashReporting.reportHandledError('create-task', capabilityErrorLike('capability one', 'read-board'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(2);
+
+    // A repeat of the exact same site + name + verb, still inside the
+    // cooldown, is suppressed - proving the two calls above were not simply
+    // both let through regardless of key.
+    crashReporting.reportHandledError('create-task', capabilityErrorLike('capability one again', 'read-board'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys the rate limit on verb as well as site and errorName, so a different verb gets its own slot', async () => {
+    vi.useFakeTimers();
+    const crashReporting = await loadInitialisedCrashReporting();
+
+    crashReporting.reportHandledError('create-task', capabilityErrorLike('one', 'read-board'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(1);
+
+    crashReporting.reportHandledError('create-task', capabilityErrorLike('two', 'read-diff'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(2);
+
+    // A repeat of the exact same site + name + verb, still inside the
+    // cooldown, is suppressed - proving the two calls above were not simply
+    // both let through regardless of key.
+    crashReporting.reportHandledError('create-task', capabilityErrorLike('two again', 'read-diff'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(2);
+  });
+
   it('never forwards a non-Error value', async () => {
     const crashReporting = await loadInitialisedCrashReporting();
 

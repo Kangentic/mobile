@@ -80,6 +80,11 @@ function configureSharedKeychain(): void {
   process.env.EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP = SHARED_ACCESS_GROUP;
 }
 
+/** What `build-ios.yml -f nse_probe=true` exports; unset in every other build. */
+function enableNseProbe(): void {
+  process.env.EXPO_PUBLIC_KANGENTIC_NSE_PROBE = '1';
+}
+
 describe('pushKeys', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -87,10 +92,12 @@ describe('pushKeys', () => {
     secureStoreState.storedValues.clear();
     secureStoreState.swallowWrites = false;
     delete process.env.EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_NSE_PROBE;
   });
 
   afterEach(() => {
     delete process.env.EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_NSE_PROBE;
   });
 
   it('generates a 32-byte key on first use and persists it as hex', async () => {
@@ -156,6 +163,7 @@ describe('pushKeys', () => {
    */
   it('seedSharedPushKeysForProbe writes both items into the shared service and group, and nowhere else', async () => {
     configureSharedKeychain();
+    enableNseProbe();
     const pushKeys = await loadPushKeys();
     const pushKey = new Uint8Array(32).fill(0x11);
     const identityPublicKey = new Uint8Array(32).fill(0xee);
@@ -169,6 +177,7 @@ describe('pushKeys', () => {
   });
 
   it('seedSharedPushKeysForProbe refuses without a shared group, and writes nothing', async () => {
+    enableNseProbe();
     const pushKeys = await loadPushKeys();
 
     await expect(pushKeys.seedSharedPushKeysForProbe(new Uint8Array(32), new Uint8Array(32))).rejects.toThrow(/shared/i);
@@ -176,8 +185,25 @@ describe('pushKeys', () => {
     expect(secureStoreState.storedValues.size).toBe(0);
   });
 
+  it('seedSharedPushKeysForProbe refuses when the probe flag is off, even with a shared group configured', async () => {
+    // The gate that matters, and the one the shared-group check above is NOT:
+    // usesSharedKeychain() is true on every signed iOS build, because the NSE
+    // ships by default and build-ios.yml exports the group on the device path.
+    // So without this refusal, the one thing standing between a real user's
+    // push-decrypt key and a PUBLIC constant is the caller's own discipline.
+    configureSharedKeychain();
+    const pushKeys = await loadPushKeys();
+
+    await expect(
+      pushKeys.seedSharedPushKeysForProbe(new Uint8Array(32).fill(0x11), new Uint8Array(32).fill(0xee)),
+    ).rejects.toThrow(/probe is not enabled/i);
+
+    expect(secureStoreState.storedValues.size).toBe(0);
+  });
+
   it('seedSharedPushKeysForProbe refuses a key of the wrong length, and writes nothing', async () => {
     configureSharedKeychain();
+    enableNseProbe();
     const pushKeys = await loadPushKeys();
 
     await expect(pushKeys.seedSharedPushKeysForProbe(new Uint8Array(16), new Uint8Array(32))).rejects.toThrow(/32/);
@@ -191,6 +217,7 @@ describe('pushKeys', () => {
     // seed that only wrote storage would leave getPushKeyIfExists returning
     // the old key while the extension decrypts with the new one.
     configureSharedKeychain();
+    enableNseProbe();
     const pushKeys = await loadPushKeys();
     const generatedKey = await pushKeys.getOrCreatePushKey();
     const seededKey = new Uint8Array(32).fill(0x11);
