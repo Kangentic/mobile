@@ -172,7 +172,10 @@ APPLICATION context and forwards it. It forwards only the levels that mean press
 `TRIM_MEMORY_BACKGROUND` are deliberately excluded**, and that exclusion is a privacy-adjacent
 decision as much as a correctness one: both arrive on every ordinary backgrounding, so forwarding
 them would make the breadcrumb's count a record of how often the user switched apps rather than a
-record of memory pressure. The payload is identical on both platforms (a count, no level, no free
+record of memory pressure. A forwarded level is then classed as `moderate`
+(`TRIM_MEMORY_RUNNING_MODERATE`, "beginning to run low") or `serious` (everything else, and the
+only class iOS has); the breadcrumb counts both, while the memory shedders act only on `serious`,
+so a busy device does not refetch a transcript the user is reading. The payload is identical on both platforms (a count, no level, no free
 text), so the two sources cannot be told apart in a delivered event. The two never both fire on
 one device, so a single episode is never counted twice.
 

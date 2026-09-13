@@ -71,7 +71,31 @@ import { MEMORY_PRESSURE_BREADCRUMB_CATEGORY } from './scrubEvent';
  */
 export const MEMORY_PRESSURE_COALESCE_MS = 10_000;
 
-export type MemoryPressureListener = () => void;
+/**
+ * How urgent the OS says the shortage is.
+ *
+ * Android reports gradations and iOS reports one bare notification, so this is
+ * the smallest vocabulary that does not throw away the Android detail or
+ * invent iOS detail that does not exist:
+ *
+ * - `moderate` is Android's `TRIM_MEMORY_RUNNING_MODERATE`, which means "the
+ *   device is BEGINNING to run low". It is advisory and can arrive on an
+ *   ordinary busy device.
+ * - `serious` is everything else forwarded, and it is what iOS's single
+ *   `memoryWarning` maps to. iOS only sends that notification when the app is
+ *   genuinely close to being killed, so treating it as anything milder would
+ *   understate the one platform the MOBILE-8 report came from.
+ *
+ * WHY THIS EXISTS AT ALL. The Android source was added carrying the trim level
+ * and the JS boundary then discarded it, so a mild `RUNNING_MODERATE` triggered
+ * exactly the same aggressive shed as a critical one. That is invisible on iOS,
+ * which has no gradations, and on Android it means dropping transcripts and
+ * terminal rings on a device that is merely busy - the user then watches
+ * content they were reading get refetched. Consumers choose per severity now.
+ */
+export type MemoryPressureSeverity = 'moderate' | 'serious';
+
+export type MemoryPressureListener = (severity: MemoryPressureSeverity) => void;
 
 const listeners = new Set<MemoryPressureListener>();
 let appStateSubscription: NativeEventSubscription | null = null;
@@ -92,12 +116,31 @@ let lastRecordedAtMs: number | null = null;
  * has nothing to do with how often it is worth releasing memory. A listener
  * must therefore be idempotent and cheap - one that has nothing left to
  * release should do nothing rather than rebuild anything.
+ *
+ * Every listener receives the severity and decides for itself, rather than
+ * this module filtering. The right threshold depends on what the reaction
+ * COSTS: dropping a cached snippet warm is free and worth doing early, while
+ * dropping a transcript the user may scroll back to is not.
  */
 export function subscribeToMemoryPressure(listener: MemoryPressureListener): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
+}
+
+/**
+ * `TRIM_MEMORY_RUNNING_MODERATE` is 5. Everything else the native module
+ * forwards (RUNNING_LOW 10, RUNNING_CRITICAL 15, MODERATE 60, COMPLETE 80) is
+ * a real shortage. The constant is spelled here rather than imported because
+ * the module's own filter is the thing that decides what arrives at all, and
+ * duplicating its whole table would let the two drift apart silently; this only
+ * needs to know where "advisory" ends.
+ */
+const TRIM_MEMORY_RUNNING_MODERATE = 5;
+
+function severityForTrimLevel(level: number): MemoryPressureSeverity {
+  return level === TRIM_MEMORY_RUNNING_MODERATE ? 'moderate' : 'serious';
 }
 
 function recordBreadcrumb(nowMs: number): void {
@@ -116,12 +159,20 @@ function recordBreadcrumb(nowMs: number): void {
   });
 }
 
-function handleMemoryWarning(): void {
+/**
+ * The breadcrumb counts EVERY pressure signal, moderate included, and carries
+ * no severity of its own. Two reasons: the payload is a bare count by design
+ * (`.claude/rules/crash-reporting-scope.md` enumerates it that way, and adding
+ * a field would be a disclosure change), and for the diagnostic question the
+ * breadcrumb exists to answer - was this launch under memory pressure before
+ * the OS killed it - a moderate warning is evidence too.
+ */
+function handleMemoryWarning(severity: MemoryPressureSeverity): void {
   warningCountThisLaunch += 1;
   recordBreadcrumb(Date.now());
   for (const listener of [...listeners]) {
     try {
-      listener();
+      listener(severity);
     } catch {
       // A listener that throws must not stop the others from shedding, and
       // must not cascade into the reporting path either.
@@ -142,10 +193,12 @@ function handleMemoryWarning(): void {
  */
 export function initializeMemoryPressure(): void {
   if (appStateSubscription !== null) return;
-  appStateSubscription = AppState.addEventListener('memoryWarning', handleMemoryWarning);
+  // iOS sends this only when the app is close to being killed, so it is always
+  // 'serious'. There is no milder iOS notification to map.
+  appStateSubscription = AppState.addEventListener('memoryWarning', () => handleMemoryWarning('serious'));
   // Android's half. A no-op unsubscribe where the native module is absent, so
   // this needs no platform branch and no guard in the teardown below.
-  removeAndroidListener = addAndroidMemoryPressureListener(() => handleMemoryWarning());
+  removeAndroidListener = addAndroidMemoryPressureListener((level) => handleMemoryWarning(severityForTrimLevel(level)));
 }
 
 /**

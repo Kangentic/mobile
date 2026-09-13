@@ -219,6 +219,12 @@ export function TriageHomeScreen(): React.JSX.Element {
   // allocator on this screen at the moment the OS says it is short.
   // `warmedSessionIdsRef` is deliberately NOT cleared: re-enqueueing dropped
   // sessions is the one thing that would undo the saving.
+  //
+  // Fires on EVERY severity, unlike the store shedders, which wait for
+  // 'serious'. The asymmetry is deliberate and follows the cost: dropping a
+  // queued warm costs one snippet arriving a beat later, while dropping a
+  // transcript costs a visible refetch of something the user may be reading. So
+  // the cheap reaction takes the earliest hint and the expensive one does not.
   useEffect(() => subscribeToMemoryPressure(() => warmQueueRef.current?.clear()), []);
   // The effect below needs to run when the SET of sessions changes, so this
   // selector has to be set-valued. It must NOT be reduced to a count: a

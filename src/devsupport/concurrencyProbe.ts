@@ -41,7 +41,26 @@ const probeEnabled = process.env.EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE === '1'
  * the delta between 1 and 8 is inside the run-to-run spread then the knee is
  * not here and no depth in between is worth arguing about either.
  */
-export const CONCURRENCY_PROBE_DEPTHS = [1, 2, 3, 5, 8] as const;
+export const CONCURRENCY_PROBE_DEPTHS = [1, 2, 3, 5, 8, 64] as const;
+
+/**
+ * The arm that actually tests the fix, and the one the first measurement round
+ * could not express.
+ *
+ * The claim behind the MOBILE-8 bound is not "depth 8 costs more than depth 1".
+ * It is that peak allocation stopped being a function of FLEET SIZE. Testing
+ * that needs an arm at or above the live-session count, because the pre-fix
+ * behaviour was one request per session with no cap at all. Every depth below
+ * that is bounded-against-bounded, which measures the shape of the curve near
+ * the origin and says nothing about the thing that was fixed.
+ *
+ * 64 is chosen to exceed the fleet the stub can practically drive
+ * (`--scale-projects 6 --scale-sessions 8` is 48), so at that size this arm
+ * reproduces the unbounded behaviour exactly: every session's warm starts at
+ * once. Above 64 sessions it stops being a faithful control and becomes just a
+ * larger bound, so raise it alongside the fleet if the fleet grows.
+ */
+export const CONCURRENCY_PROBE_UNBOUNDED_DEPTH = 64;
 
 export type ConcurrencyProbeDepth = (typeof CONCURRENCY_PROBE_DEPTHS)[number];
 

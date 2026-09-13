@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import {
   appendChunk,
@@ -18,6 +18,63 @@ import {
  * out-of-memory kill for a certain blank screen, which is a worse bug than the
  * one it set out to fix.
  */
+
+/**
+ * The observability door reaches Sentry and React Native, neither of which
+ * loads under vitest, so the subscription is mocked by specifier and the
+ * captured listener is driven directly.
+ */
+const pressureState = vi.hoisted(() => {
+  const listeners = new Set<(severity: 'moderate' | 'serious') => void>();
+  return { listeners };
+});
+vi.mock('@/observability/memoryPressure', () => ({
+  subscribeToMemoryPressure: (listener: (severity: 'moderate' | 'serious') => void) => {
+    pressureState.listeners.add(listener);
+    return () => pressureState.listeners.delete(listener);
+  },
+}));
+
+describe('registerMemoryShedders', () => {
+  beforeEach(() => {
+    pressureState.listeners.clear();
+    resetTerminalFeed();
+  });
+
+  function firePressure(severity: 'moderate' | 'serious'): void {
+    if (pressureState.listeners.size === 0) throw new Error('no shedder was registered');
+    for (const listener of [...pressureState.listeners]) listener(severity);
+  }
+
+  /**
+   * Android's RUNNING_MODERATE means "beginning to run low" and arrives on an
+   * ordinary busy device. Shedding there refetches a transcript the user may be
+   * reading, in front of them, repeatedly, on a device that was never in
+   * trouble. The Android source originally discarded the level entirely, which
+   * made every warning look critical.
+   */
+  it('does not shed on moderate pressure', async () => {
+    const { registerMemoryShedders } = await import('@/state/memoryShed');
+    registerMemoryShedders();
+    retainTerminal('background');
+    appendChunk('background', 'offscreen bytes');
+
+    firePressure('moderate');
+
+    expect(isTerminalRetained('background')).toBe(true);
+  });
+
+  it('sheds on serious pressure', async () => {
+    const { registerMemoryShedders } = await import('@/state/memoryShed');
+    registerMemoryShedders();
+    retainTerminal('background');
+    appendChunk('background', 'offscreen bytes');
+
+    firePressure('serious');
+
+    expect(isTerminalRetained('background')).toBe(false);
+  });
+});
 
 describe('shedUnwatchedTerminalRings', () => {
   beforeEach(() => {
