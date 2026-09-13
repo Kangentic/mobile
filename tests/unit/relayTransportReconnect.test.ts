@@ -271,6 +271,31 @@ describe('RelayTransport reconnect ladder', () => {
   });
 
   /**
+   * The force branch's OTHER duty: a socket abandoned mid-dial (never
+   * opened) must reject the promise `connect()` handed the caller, not leave
+   * it hanging forever. The force test above starts from an already OPEN
+   * socket (`connectAndOpen()`), so `pendingDialReject` is already null by
+   * the time it kicks and the rejection branch inside `abandonSocket()` is
+   * never reached. This test starts the kick before `onopen` ever fires, so
+   * that branch is the one actually exercised.
+   *
+   * Mutation seen failing: deleting the `if (this.pendingDialReject) { ... }`
+   * block from `abandonSocket()` left `connecting` permanently unsettled -
+   * the awaited rejection below never resolved and the test failed on
+   * vitest's own "Test timed out in 5000ms" rather than an assertion.
+   */
+  it('rejects the pending dial promise when a forced redial abandons a socket mid-dial', async () => {
+    const transport = createTransport();
+    const connecting = transport.connect();
+    expect(socketCount()).toBe(1);
+
+    transport.redialNow({ force: true });
+
+    expect(socketCount()).toBe(2);
+    await expect(connecting).rejects.toThrow('Relay connection abandoned by a forced redial');
+  });
+
+  /**
    * A park timeout means nobody is home on the slot, and the 5 s floor keeps
    * the phone from hammering an empty rendezvous. Pinned so the value is a
    * deliberate edit rather than drift.

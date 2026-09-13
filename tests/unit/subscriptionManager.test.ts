@@ -155,6 +155,38 @@ describe('SubscriptionManager', () => {
   });
 
   /**
+   * The boards a Board tab already has open (upgraded to 'full') go out
+   * before the feed-only ones on a fresh establish, so the desktop answers
+   * the screen the user is looking at first rather than queuing it behind
+   * every other project.
+   *
+   * Mutation seen failing: reverting boardsFullFirst to plain
+   * `[...this.desiredBoardIds]` issued project-1 ('sessions') first instead
+   * of project-2 ('full') - the first subscribe's payload matched
+   * `{"projectId":"project-1","view":"sessions"}` instead of the expected
+   * `{"projectId":"project-2","view":"full"}`.
+   */
+  it('issues full-board subscribes before sessions-board subscribes on establish', async () => {
+    const { stub, manager, requests } = await harness();
+    manager.setDesiredBoards(new Set(['project-1', 'project-2', 'project-3']));
+    manager.setBoardWantsFull('project-2');
+
+    stub.beginHandshake();
+    await flushLoopback();
+
+    const boardSubscribes = requests.filter(
+      (request) => request.verb === 'read-board' && (request.payload as { action?: string }).action !== 'unsubscribe',
+    );
+    expect(boardSubscribes).toHaveLength(3);
+    expect(boardSubscribes[0].payload).toMatchObject({ projectId: 'project-2', view: 'full' });
+    const remainingProjectIds = boardSubscribes
+      .slice(1)
+      .map((request) => (request.payload as { projectId?: string }).projectId)
+      .sort();
+    expect(remainingProjectIds).toEqual(['project-1', 'project-3']);
+  });
+
+  /**
    * The feed discards PTY bytes on arrival, and on a live board that discard
    * measured ~13MB an hour with no terminal on screen. So a stream is
    * subscribed list-only by default, and only a session screen asks for the
@@ -596,6 +628,48 @@ describe('SubscriptionManager', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * refreshBoard must get PAST the in-flight dedupe, not merely behind it.
+   * The debounce test above always lets the prior subscribe land before the
+   * debounced call fires, so pendingBoardViewByProjectId is empty by then
+   * and dropping `{ force: true }` from refreshBoard's re-subscribe would
+   * still leave that test green. Holding the read-board response here keeps
+   * the first subscribe "in flight" for the whole time the debounced call
+   * fires.
+   *
+   * Mutation seen failing: dropping `{ force: true }` from refreshBoard's
+   * `void this.subscribeBoard(projectId, { force: true })` left the
+   * debounced call swallowed by subscribeBoard's own dedupe guard -
+   * "expected 2, received 1" for the read-board request count.
+   */
+  it('refreshBoard forces its re-subscribe past the in-flight dedupe', async () => {
+    const heldBoardRequests: CapabilityRequestMessage[] = [];
+    const { stub, manager, requests } = await harness((request) => {
+      if (request.verb === 'read-board') {
+        heldBoardRequests.push(request);
+        return null;
+      }
+      return defaultResponder(request);
+    });
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredBoards(new Set(['project-1']));
+    await flushLoopback();
+
+    const boardRequestCount = (): number => requests.filter((request) => request.verb === 'read-board').length;
+    expect(boardRequestCount()).toBe(1);
+    expect(heldBoardRequests).toHaveLength(1);
+
+    manager.refreshBoard('project-1');
+    // Real wait past BOARD_REFRESH_DEBOUNCE_MS (300ms): the first subscribe
+    // is still held/unanswered the whole time, unlike the debounce test above.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await flushLoopback();
+
+    expect(boardRequestCount()).toBe(2);
+    expect(heldBoardRequests).toHaveLength(2);
   });
 
   it('diff scope change re-subscribes; blur unsubscribes with the projectId', async () => {

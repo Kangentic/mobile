@@ -590,6 +590,172 @@ describe('connectionManager background keepalive ceiling', () => {
   });
 
   /**
+   * The stale-verdict branch: a probe that finally rejects (its 3 s deadline
+   * elapsing) must NOT force a redial once the session it was judging has
+   * since re-established. Both probe tests above keep the SAME connection
+   * live and unchanged throughout, so `stale` is always false in them and
+   * deleting the `if (stale) return;` guard would still leave both green.
+   *
+   * Mutation seen failing: deleting `if (stale) return;` from
+   * probeChannelOnForeground made the deadline's rejection call
+   * `transport.redialNow({ force: true })` even though establishedEpoch had
+   * moved on - "expected redialNow to be called 1 times, but got 2 times".
+   */
+  it('does not force a redial when the probed session re-establishes before the deadline elapses', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+    const connectionBeforeReestablish = getActiveConnection();
+    if (!connectionBeforeReestablish) throw new Error('expected an active connection before the probe');
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).toHaveBeenCalledWith();
+
+      // Before the probe's deadline, the SAME connection re-establishes (a
+      // fresh KK handshake), bumping establishedEpoch past the value the
+      // in-flight probe captured when it started.
+      const bootstrapCallCountBeforeReestablish = mockRunBootstrap.mock.calls.length;
+      connectionBeforeReestablish.controller.session.reset();
+      stub.beginHandshake();
+      for (
+        let round = 0;
+        round < 20 && mockRunBootstrap.mock.calls.length === bootstrapCallCountBeforeReestablish;
+        round += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(mockRunBootstrap.mock.calls.length).toBeGreaterThan(bootstrapCallCountBeforeReestablish);
+
+      // The probe's own deadline elapses; the unanswered read-board rejects
+      // with a timeout, but the verdict must see the probe as stale.
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS + 1);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).not.toHaveBeenCalledWith({ force: true });
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+    }
+  });
+
+  /**
+   * The rekey variant of the same stale-verdict guard. `establishedEpoch`
+   * does not move on a rekey - src/channel/sessionManager.ts documents that a
+   * rekey fires onRekey only, never onEstablished, deliberately, because "a
+   * rekey must not look like a fresh connection". But a rekey landing inside
+   * the probe's 3 s window loses the probe exactly the way a dead socket
+   * would: connectionManager's own onRekey listener documents that a request
+   * in flight across a rekey is sealed under keys the rekey just retired, so
+   * the desktop can never open it and nothing answers. The phone receiving
+   * and processing that rekey frame is proof the socket is alive, so the
+   * verdict must not tear it down.
+   *
+   * `useChannelStore().rekeyCount` is asserted FIRST, and deliberately before
+   * the deadline-crossing advance below: it is the phone's own onRekey
+   * listener actually firing (SessionManager.onRekey -> connectionManager's
+   * listener, which bumps both rekeyCount and rekeyEpoch on the same
+   * synchronous tick), so a silent no-op that never reached the phone cannot
+   * make the later "no forced redial" assertion pass vacuously.
+   *
+   * Mutation seen failing: removing `rekeyed` from the `stale` expression in
+   * probeChannelOnForeground made the deadline's rejection call
+   * `transport.redialNow({ force: true })` even though a rekey had landed -
+   * "expected redialNow to be called 1 times, but got 2 times".
+   */
+  it('does not force a redial when a rekey lands inside the probe window', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).toHaveBeenCalledWith();
+
+      // Partway through the probe's own deadline, a rekey lands and loses it.
+      await vi.advanceTimersByTimeAsync(500);
+      const rekeyCountBeforeRekey = useChannelStore.getState().rekeyCount;
+      stub.beginHandshake();
+      for (
+        let round = 0;
+        round < 20 && useChannelStore.getState().rekeyCount === rekeyCountBeforeRekey;
+        round += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      // The phone actually saw the rekey - checked BEFORE the deadline-crossing
+      // advance below, so a silent no-op cannot make this test pass vacuously.
+      expect(useChannelStore.getState().rekeyCount).toBeGreaterThan(rekeyCountBeforeRekey);
+
+      // Past the probe's own deadline; the lost probe rejects with a timeout,
+      // but the verdict must see the rekey and leave the transport alone.
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).not.toHaveBeenCalledWith({ force: true });
+      expect(getActiveConnection()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+    }
+  });
+
+  /**
+   * foregroundProbeInFlight's own re-entry guard: two 'active' transitions
+   * before the first probe settles must not send two read-board requests.
+   * Every existing probe test drives 'active' exactly once, so none of them
+   * would notice this guard disappearing.
+   *
+   * Mutation seen failing: relaxing the guard from
+   * `if (!connection || foregroundProbeInFlight) return;` to
+   * `if (!connection) return;` let the second 'active' transition send a
+   * second read-board request - "expected 'request' to be called 1 times,
+   * but got 2 times".
+   */
+  it('does not send a second foreground probe while the first is still in flight', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const connection = getActiveConnection();
+    if (!connection) throw new Error('expected an active connection');
+    const capabilitiesRequest = vi.spyOn(connection.controller.capabilities, 'request');
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(capabilitiesRequest).toHaveBeenCalledTimes(1);
+      expect(capabilitiesRequest).toHaveBeenCalledWith('read-board', {}, { timeoutMs: EXPECTED_PROBE_TIMEOUT_MS });
+
+      // A second 'active' transition arrives while the first probe is still
+      // outstanding.
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(capabilitiesRequest).toHaveBeenCalledTimes(1);
+
+      // Let the first probe's own deadline elapse so nothing leaks into
+      // another test.
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS + 1);
+    } finally {
+      vi.useRealTimers();
+      capabilitiesRequest.mockRestore();
+    }
+  });
+
+  /**
    * closeConnection() does not own the keepalive (see reconnectNow's own
    * comment), so reconnectNow() has to stop it explicitly rather than relying
    * on a prior AppState 'active' transition to have already done so. Left

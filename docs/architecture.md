@@ -234,8 +234,14 @@ the transport reading `connected` and the session `established` while the relay 
 hearing the phone and the desktop has marked it absent and dropped its subscriptions. So the
 `'active'` branch also sends one cheap request (the project list) with a 3 s deadline, and a
 request nobody answers forces a fresh dial (`redialNow({ force: true })`, which abandons the
-open socket). The measurement recipe and the numbers are in the developer guide's "Measuring the
-background-to-foreground reconnect".
+open socket). Read "nobody answers" strictly. A desktop that REFUSES the verb has answered, and
+the probe is deliberately issued through `capabilities` rather than `verbs` so that a narrowed
+device's `ok: false` resolves rather than throws. A rekey landing inside the 3 s window is the
+other one: it loses the in-flight probe exactly as a dead socket would, while proving the socket
+is alive (the phone received the frame), so the probe carries a rekey epoch alongside the
+established epoch and treats that verdict as stale. Both guards only ever SUPPRESS a teardown;
+neither can add one. The measurement recipe and the numbers are in the developer guide's
+"Measuring the background-to-foreground reconnect".
 
 **Correction, same issue: the budget does not accumulate across background stretches.** This
 section and `connectionManager.ts` both used to reason about exhausting the 6h budget over many
