@@ -200,23 +200,57 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
 
   selectProject: (projectId) => set({ selectedProjectId: projectId }),
 
+  // Touches the LRU as well as the map. This is the only other writer of
+  // `archivedByProjectId`, and it runs BEFORE the network round trip, so
+  // leaving the order alone let the two structures disagree for the whole
+  // duration of a first-time fetch: the project was held but unordered, which
+  // made it invisible to `applyArchivedPage`'s eviction and impossible for
+  // `shedArchivedPages` to elect as the one to keep.
   setArchivedLoading: (projectId, loading) =>
     set((state) => ({
       archivedByProjectId: {
         ...state.archivedByProjectId,
         [projectId]: { ...(state.archivedByProjectId[projectId] ?? EMPTY_ARCHIVED), loading },
       },
+      archivedProjectOrder: [...state.archivedProjectOrder.filter((heldId) => heldId !== projectId), projectId],
     })),
 
+  /**
+   * Releases held archives under memory pressure, keeping the one on screen.
+   *
+   * Keyed on the project the user is LOOKING AT - spelled the way BoardScreen
+   * spells it - rather than the most recently loaded one. The two diverge
+   * whenever a board is returned to without a refetch, which the focus effect
+   * deliberately skips once the user has paged past page one; dropping the
+   * archive under an open Done column blanks it until the next focus, because
+   * that effect is the only thing that reloads it and an AppState return does
+   * not re-trigger it.
+   *
+   * A project whose page is still IN FLIGHT is kept too. Such a record costs
+   * nothing (no tasks yet, which is the whole point of shedding) and wiping it
+   * resets `loading` to false underneath two separate in-flight guards -
+   * `loadArchivedTasks`'s own re-entrancy check and SessionScreen's - so the
+   * screen reads a live fetch as finished-and-empty and issues a duplicate
+   * request for it.
+   *
+   * Idempotent: a second run elects the same survivors and returns the state
+   * untouched, which also covers the nothing-to-drop case.
+   */
   shedArchivedPages: () =>
     set((state) => {
-      const heldProjectIds = Object.keys(state.archivedByProjectId);
-      if (heldProjectIds.length <= 1) return state;
-      const keptProjectId = state.archivedProjectOrder[state.archivedProjectOrder.length - 1];
-      if (keptProjectId === undefined || !(keptProjectId in state.archivedByProjectId)) return state;
+      const onScreenProjectId = state.selectedProjectId ?? state.projects[0]?.id ?? null;
+      const keptProjectId =
+        onScreenProjectId !== null && onScreenProjectId in state.archivedByProjectId
+          ? onScreenProjectId
+          : state.archivedProjectOrder[state.archivedProjectOrder.length - 1];
+      const archivedByProjectId: Record<string, ArchivedTasks> = {};
+      for (const [projectId, archived] of Object.entries(state.archivedByProjectId)) {
+        if (projectId === keptProjectId || archived.loading) archivedByProjectId[projectId] = archived;
+      }
+      if (Object.keys(archivedByProjectId).length === Object.keys(state.archivedByProjectId).length) return state;
       return {
-        archivedByProjectId: { [keptProjectId]: state.archivedByProjectId[keptProjectId] },
-        archivedProjectOrder: [keptProjectId],
+        archivedByProjectId,
+        archivedProjectOrder: state.archivedProjectOrder.filter((projectId) => projectId in archivedByProjectId),
       };
     }),
 

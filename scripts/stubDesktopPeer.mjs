@@ -128,6 +128,14 @@ function parseArgs(argv) {
     }
     return parsed;
   };
+  // RAISING THESE HAS A COUNTERPART IN THE APP. The concurrency probe's
+  // "effectively unbounded" arm, CONCURRENCY_PROBE_UNBOUNDED_DEPTH in
+  // src/devsupport/concurrencyProbe.ts, is 64 precisely because it exceeds the
+  // largest fleet this block can practically drive (6 projects x 8 sessions =
+  // 48). That arm is the control that reproduces the pre-fix behaviour, so a
+  // fleet grown past it quietly stops being unbounded and becomes just a bigger
+  // bound - the probe keeps reporting a number, it simply stops being the
+  // number its own docstring claims. Raise that constant alongside these.
   const scale = {
     projects: readCount('--scale-projects', 0),
     sessions: readCount('--scale-sessions', 8),

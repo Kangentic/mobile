@@ -101,9 +101,9 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
     }),
 
   /**
-   * Drops every retained session's transcript except the most recent, which is
-   * the one on screen (`retainedSessionIds` is LRU, newest last). Called on an
-   * OS memory warning - see `src/observability/memoryPressure.ts`.
+   * Empties every retained session's transcript except the most recent, which
+   * is the one on screen (`retainedSessionIds` is LRU, newest last). Called on
+   * an OS memory warning - see `src/observability/memoryPressure.ts`.
    *
    * Worth doing even though the cap is only three: a transcript's ENTRY count
    * is uncapped. `applyWindow`'s older-page branch prepends and never trims,
@@ -111,20 +111,63 @@ export const useTranscriptStore = create<TranscriptStoreState>((set, get) => ({
    * scrolled-back session holds an arbitrary number of entries carrying full
    * tool inputs and results. Three of those is not a small number.
    *
-   * Everything dropped is reconstructible: the session screen refetches its
-   * window on mount, so this costs a round trip, never content. Idempotent -
-   * with one or zero retained sessions it does nothing.
+   * RETENTION IS NOT REVOKED, and that distinction is the whole correctness of
+   * this function. Retention is a claim the SCREENS own (`retainSession` on
+   * mount, `releaseSession` on unmount), and three separate guards key off it:
+   * `applyTranscript` drops live deltas for a session that is not retained,
+   * `applyWindow` DISCARDS a fetched window for one, and `releaseSession`
+   * no-ops for one. An earlier revision deleted the shed sessions from
+   * `retainedSessionIds` outright, which made the drop unrecoverable rather
+   * than reconstructible: a `SessionScreen` lower in the stack is still
+   * MOUNTED, so `openSessionScreen` (a mount effect, not a focus effect) never
+   * runs again, and even an explicit refetch would have had its window thrown
+   * away on arrival. The pane stayed blank for the life of the process while
+   * the agent went on streaming into a store that was discarding it.
+   *
+   * So the entries go and the claim stays. `needsTailFetch` is the existing
+   * self-heal signal `ConversationTab` already watches, so a mounted pane
+   * refetches one BOUNDED window in place of the unbounded scrolled-back
+   * accumulation this exists to release - which is the saving, not a
+   * concession to it. Idempotent: re-running over an already-emptied session
+   * produces the same state, and with one or zero retained sessions it does
+   * nothing.
    */
   shedBackgroundTranscripts: () =>
     set((state) => {
       if (state.retainedSessionIds.length <= 1) return state;
       const keptId = state.retainedSessionIds[state.retainedSessionIds.length - 1];
       if (keptId === undefined) return state;
-      const keptSession = state.bySessionId[keptId];
-      return {
-        retainedSessionIds: [keptId],
-        bySessionId: keptSession === undefined ? {} : { [keptId]: keptSession },
-      };
+      let shedAnySession = false;
+      const bySessionId = { ...state.bySessionId };
+      for (const retainedId of state.retainedSessionIds) {
+        if (retainedId === keptId) continue;
+        const shedSession = bySessionId[retainedId];
+        if (shedSession === undefined || !shedSession.hasWindow) continue;
+        // Everything the desktop will re-send on the next window fetch, reset
+        // to the pre-fetch shape. `totalEntries` is kept: it is a scalar the
+        // feed reads for a row's position and costs nothing to hold.
+        bySessionId[retainedId] = {
+          ...emptySessionState(),
+          totalEntries: shedSession.totalEntries,
+          // Advanced, never rewound - the same thing `applyTranscript`'s reset
+          // branch does with the same `emptySessionState()` spread, and for
+          // the same reason. Every other writer only ever moves this forward,
+          // and `ConversationTab` resets its live-tail buffer on any CHANGE,
+          // so falling back to the spread's 0 would fire that reset twice
+          // (once rewinding here, once when the refetched window advances past
+          // it). Advancing once is independently correct: the buffered tail
+          // describes entries this shed just dropped.
+          tailRevision: shedSession.tailRevision + 1,
+        };
+        shedAnySession = true;
+      }
+      // Reference-stable when there was nothing to drop. Listeners fire on
+      // EVERY warning, not only the ones that breadcrumb, and on Android 14+
+      // `backgrounded` arrives on every app switch - so returning a fresh
+      // object regardless would re-render every transcript consumer for a
+      // no-op, several times a session.
+      if (!shedAnySession) return state;
+      return { bySessionId };
     }),
 
   applyTranscript: (event) => {
