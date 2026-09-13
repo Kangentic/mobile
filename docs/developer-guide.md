@@ -2098,6 +2098,29 @@ noticing it was the whole of the effect. **The allocation is bounded at the call
 which is what the two queues above do. Do not re-derive this: read
 `src/channel/sessionManager.ts`'s `handleApplicationFrame` and the ordering is plain.
 
+**Android memory pressure is observable now, and `am send-trim-memory` is the way to drive it.**
+`modules/memory-pressure` is a local Expo module (autolinked, no `android/` edit) that forwards
+`ComponentCallbacks2.onTrimMemory`, which React Native surfaces nowhere. **Measured** end to end on
+a release build against the `kangentic_pixel` emulator (API 35), 2026-09-13:
+
+```
+adb -s <serial> shell am send-trim-memory com.kangentic.mobile RUNNING_CRITICAL
+```
+
+logs `onTrimMemory level=15` in the module and, 15 ms later, the JS handler running. Two findings
+worth not rediscovering:
+
+- **The OS partitions the levels by process state and enforces it.** The four background levels
+  (`HIDDEN`, `BACKGROUND`, `MODERATE`, `COMPLETE`) are refused outright against a foreground
+  process with `IllegalArgumentException: Unable to set a background trim level on a foreground
+  process`. Only the three `RUNNING_*` levels reach a foregrounded app, and those are exactly the
+  analogue of the iOS memory warning that MOBILE-8 is about.
+- **This app counts as foreground even behind the launcher**, because the background-notifications
+  foreground service keeps it there: `dumpsys activity processes` reports
+  `fg +50 F/S/FGS (fg-service-act)` while the launcher has focus. So pressing HOME delivers no trim
+  level at all, and while that service runs the background levels are unreachable. If you need to
+  exercise them, turn background notifications off first rather than assuming the module is broken.
+
 **Both queue depths are CHOSEN, not measured**, and the fix does not depend on either value: what
 makes it a fix is that peak allocation stopped being a function of fleet size. To measure the
 snippet depth, build with `EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE=1` and sweep the "Snippet warm

@@ -82,6 +82,28 @@ class MemoryPressureModule : Module() {
    * (40) is deliberately excluded with UI_HIDDEN: it means "on the LRU list",
    * which is the normal resting state of a backgrounded app rather than a
    * signal about memory.
+   *
+   * MEASURED on a release build, emulator `kangentic_pixel` (API 35), via
+   * `adb shell am send-trim-memory`, 2026-09-13. The three RUNNING_* levels are
+   * delivered and classify as pressure; the platform REFUSES the other four
+   * outright with `IllegalArgumentException: Unable to set a background trim
+   * level on a foreground process`. Two things follow, and the second was not
+   * expected:
+   *
+   * 1. The level split is enforced by the OS, not merely by convention: the
+   *    background levels cannot reach a foreground process at all.
+   * 2. **This app is a foreground process even when it is behind the launcher**,
+   *    because it runs a foreground service for background notifications
+   *    (`dumpsys activity processes` reports `fg +50 F/S/FGS (fg-service-act)`
+   *    with the launcher focused). So while that service runs, MODERATE and
+   *    COMPLETE are unreachable here and the effective behaviour of this filter
+   *    is "the three RUNNING_* levels". They are still forwarded rather than
+   *    dropped: the service is tied to a user setting, and in a configuration
+   *    without it the background levels do arrive.
+   *
+   * The exclusion branch is therefore NOT exercised on device, for the same
+   * reason: those levels cannot be delivered. It is verified by reading, not by
+   * measurement, and this comment says so rather than implying coverage.
    */
   private fun isPressure(level: Int): Boolean =
     when (level) {
