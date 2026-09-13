@@ -1,0 +1,29 @@
+diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
+index de829ca..b5e0bdf 100644
+--- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
++++ b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
+@@ -423,7 +423,23 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
+     }
+     mTasksAndEventsRepository.putEventForAppScopeKey(appScopeKey, body);
+
+-    getAppLoader().loadApp(mContextRef.get(),
++    // getAppLoader() is nullable and the other two call sites in this file
++    // (isAppLoaded / invalidateAppRecord) both guard it; this one did not.
++    // It returns null silently when the WeakReference<Context> has been
++    // cleared, which is the normal state of a freshly started headless
++    // broadcast process - exactly the path an FCM data message takes when the
++    // app has been killed. The resulting NullPointerException killed the
++    // broadcast process, and two of them in a row got the whole app marked
++    // bad by ActivityManager (am_process_crashed_too_much / am_proc_bad).
++    // The event has already been queued above, so returning leaves it to be
++    // delivered on the next launch instead of taking the process down.
++    HeadlessAppLoader appLoader = getAppLoader();
++    if (appLoader == null) {
++      Log.w(TAG, "No headless app loader available; leaving event queued for app with scoping identifier '" + appScopeKey + "'.");
++      return;
++    }
++
++    appLoader.loadApp(mContextRef.get(),
+       new HeadlessAppLoader.Params(appScopeKey, task.getAppUrl()),
+       () -> {
+       },

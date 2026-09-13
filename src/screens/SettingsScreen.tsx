@@ -708,15 +708,25 @@ function SwitchRow({
         nodes in one row (duplicate screen-reader announcements) and let a
         tap on the thumb fire both handlers - a doubled SecureStore write
         and a doubled register-push resync per tap.
+
+        The `pointerEvents="none"` MUST sit on a wrapping View, not on the
+        Switch. Android's native SwitchCompat consumes the touch itself, and
+        RN does not apply the prop to it, so a tap landing on the switch was
+        swallowed: the native widget animated the flip, no handler ran, and
+        React re-rendered it straight back from `value`. That reads as "the
+        toggle flips back instantly" and it hit the one spot every user aims
+        for - only the label half of the row worked. Verified on a Pixel
+        against the shipped Play build, and re-verified after this change.
       */}
-      <Switch
-        value={checked}
-        pointerEvents="none"
-        importantForAccessibility="no-hide-descendants"
-        accessibilityElementsHidden
-        trackColor={{ false: theme.colors.border, true: theme.colors.accentMuted }}
-        thumbColor={checked ? theme.colors.accent : theme.colors.textMuted}
-      />
+      <View pointerEvents="none">
+        <Switch
+          value={checked}
+          importantForAccessibility="no-hide-descendants"
+          accessibilityElementsHidden
+          trackColor={{ false: theme.colors.border, true: theme.colors.accentMuted }}
+          thumbColor={checked ? theme.colors.accent : theme.colors.textMuted}
+        />
+      </View>
     </Pressable>
   );
 }

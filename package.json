@@ -15,6 +15,12 @@
       "exclude": [
         "react-native-gesture-handler"
       ]
+    },
+    "autolinking": {
+      "buildFromSource": [
+        "expo-task-manager",
+        "unimodules-app-loader"
+      ]
     }
   },
   "reanimated": {

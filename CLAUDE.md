@@ -89,7 +89,27 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   `npm ci` (so `postinstall`, so patch-package) runs only on a
                               #   miss, so editing a .patch without touching the lockfile restores
                               #   a cache holding the OLD patch. Bump something in the lockfile, or
-                              #   clear the cache, whenever a patch changes on its own
+                              #   clear the cache, whenever a patch changes on its own.
+                              #   expo-task-manager+57.0.17.patch guards a null HeadlessAppLoader
+                              #   at TaskService.executeTask:426, the one call site of three in
+                              #   that file that did not. It returns null silently when the
+                              #   WeakReference<Context> is empty, which is the normal state of a
+                              #   headless FCM broadcast process, so a push to a KILLED app threw
+                              #   NPE, killed the process, and after two of them got the app marked
+                              #   am_proc_bad. Nothing rendered, and Sentry never saw it (init runs
+                              #   from JS, which never starts on that path). Upstream has the same
+                              #   fix open as expo/expo PR #46449 (since 2026-06, blocked) with
+                              #   issues #46589 and #49216; drop this patch when that ships.
+                              #   THE PATCH IS INERT WITHOUT `expo.autolinking.buildFromSource` in
+                              #   package.json naming BOTH expo-task-manager and
+                              #   unimodules-app-loader: the module ships a prebuilt AAR and is not
+                              #   compiled from source by default, so a patched .java would never
+                              #   reach the APK, and expo-task-manager's build.gradle references
+                              #   project(':unimodules-app-loader'), which only exists once that
+                              #   stub (a 1272-byte AAR) is a source project too.
+                              #   patch-package patch paths must be prefixed `node_modules/<pkg>/`.
+                              #   A package-relative patch is accepted by `patch -p1` and SILENTLY
+                              #   rejected by patch-package with only a generic failure message
 targets/nse/                  # iOS Notification Service Extension source (Swift), copied into the
                               #   generated Xcode project by the plugin above, never into ios/.
                               #   Decrypts the push envelope before iOS renders the alert; vendors
