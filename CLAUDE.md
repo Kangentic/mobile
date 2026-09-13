@@ -69,13 +69,13 @@ modules/                      # LOCAL Expo modules, autolinked by CNG (no ios/ o
                               #   app can see memory pressure on the one platform this project can
                               #   actually measure. Android-only by design - iOS already has
                               #   AppState's memoryWarning and a second source would double-count.
-                              #   Forwards only the RUNNING_*/MODERATE/COMPLETE levels;
-                              #   TRIM_MEMORY_UI_HIDDEN and _BACKGROUND arrive on every ordinary
-                              #   backgrounding and are excluded, or the breadcrumb's count would
-                              #   record app switching rather than pressure. RUNNING_MODERATE maps
-                              #   to 'moderate' severity and the rest to 'serious'; the store
-                              #   shedders act only on 'serious', so a merely busy device does not
-                              #   refetch a transcript the user is reading
+                              #   ANDROID 14+ DELIVERS ONLY TRIM_MEMORY_UI_HIDDEN AND _BACKGROUND
+                              #   (the legacy RUNNING_*/MODERATE/COMPLETE levels are no longer
+                              #   sent, deprecated in Android 15), so those two are classed
+                              #   'backgrounded': they drive the store shedders but never the
+                              #   app.memory breadcrumb, since a count that rose on every app
+                              #   switch would say nothing about memory. Legacy levels still map
+                              #   to 'moderate'/'serious' on pre-14 devices and do breadcrumb
 patches/                      # patch-package patches, applied by the `postinstall` script.
                               #   react-native-enriched-markdown+0.7.4.patch removes an
                               #   accessibility OnGlobalLayoutListener the library leaves on the

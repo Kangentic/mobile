@@ -78,22 +78,27 @@ export const MEMORY_PRESSURE_COALESCE_MS = 10_000;
  * the smallest vocabulary that does not throw away the Android detail or
  * invent iOS detail that does not exist:
  *
- * - `moderate` is Android's `TRIM_MEMORY_RUNNING_MODERATE`, which means "the
- *   device is BEGINNING to run low". It is advisory and can arrive on an
- *   ordinary busy device.
- * - `serious` is everything else forwarded, and it is what iOS's single
- *   `memoryWarning` maps to. iOS only sends that notification when the app is
- *   genuinely close to being killed, so treating it as anything milder would
- *   understate the one platform the MOBILE-8 report came from.
+ * - `backgrounded` is Android's `TRIM_MEMORY_UI_HIDDEN` / `TRIM_MEMORY_BACKGROUND`.
+ *   It does NOT mean memory is short; it means the user is not looking and the
+ *   process is a termination candidate. Worth releasing reconstructible state
+ *   for, worthless as evidence about memory.
+ * - `moderate` is Android's legacy `TRIM_MEMORY_RUNNING_MODERATE`, "beginning
+ *   to run low". Advisory, and reachable only below Android 14.
+ * - `serious` is real shortage: the other legacy Android levels, and what iOS's
+ *   single `memoryWarning` maps to. iOS only sends that when the app is close
+ *   to being killed, so treating it as milder would understate the one platform
+ *   the MOBILE-8 report came from.
  *
- * WHY THIS EXISTS AT ALL. The Android source was added carrying the trim level
- * and the JS boundary then discarded it, so a mild `RUNNING_MODERATE` triggered
- * exactly the same aggressive shed as a critical one. That is invisible on iOS,
- * which has no gradations, and on Android it means dropping transcripts and
- * terminal rings on a device that is merely busy - the user then watches
- * content they were reading get refetched. Consumers choose per severity now.
+ * THE SPLIT IS LOAD-BEARING, because from Android 14 the ONLY levels the system
+ * still delivers are the two that map to `backgrounded` - the legacy ones were
+ * dropped and then deprecated in Android 15. So on a modern Android device this
+ * module hears about backgrounding and nothing else. Flattening the two would
+ * therefore either make the shedders never run on Android, or make the
+ * `app.memory` breadcrumb count ordinary app switches as memory warnings, which
+ * is precisely the "a signal present either way says nothing" trap the
+ * breadcrumb exists to escape.
  */
-export type MemoryPressureSeverity = 'moderate' | 'serious';
+export type MemoryPressureSeverity = 'backgrounded' | 'moderate' | 'serious';
 
 export type MemoryPressureListener = (severity: MemoryPressureSeverity) => void;
 
@@ -138,8 +143,11 @@ export function subscribeToMemoryPressure(listener: MemoryPressureListener): () 
  * needs to know where "advisory" ends.
  */
 const TRIM_MEMORY_RUNNING_MODERATE = 5;
+const TRIM_MEMORY_UI_HIDDEN = 20;
+const TRIM_MEMORY_BACKGROUND = 40;
 
 function severityForTrimLevel(level: number): MemoryPressureSeverity {
+  if (level === TRIM_MEMORY_UI_HIDDEN || level === TRIM_MEMORY_BACKGROUND) return 'backgrounded';
   return level === TRIM_MEMORY_RUNNING_MODERATE ? 'moderate' : 'serious';
 }
 
@@ -168,8 +176,15 @@ function recordBreadcrumb(nowMs: number): void {
  * the OS killed it - a moderate warning is evidence too.
  */
 function handleMemoryWarning(severity: MemoryPressureSeverity): void {
-  warningCountThisLaunch += 1;
-  recordBreadcrumb(Date.now());
+  // `backgrounded` is NOT evidence of memory pressure and must not reach the
+  // count. On Android 14+ it is also the only thing that ever arrives, so
+  // counting it would turn this breadcrumb into a record of how often the user
+  // left the app - indistinguishable from pressure, and therefore useless for
+  // the question it exists to answer. Listeners still hear it below.
+  if (severity !== 'backgrounded') {
+    warningCountThisLaunch += 1;
+    recordBreadcrumb(Date.now());
+  }
   for (const listener of [...listeners]) {
     try {
       listener(severity);

@@ -2159,11 +2159,21 @@ adb -s <serial> shell am send-trim-memory com.kangentic.mobile RUNNING_CRITICAL
 logs `onTrimMemory level=15` in the module and, 15 ms later, the JS handler running. Two findings
 worth not rediscovering:
 
+- **RETRACTED, and this is the important one: that test proved the plumbing, not the platform.**
+  `am send-trim-memory` INJECTS a level through `setProcessMemoryTrimLevel`, bypassing the
+  system's delivery policy. **From Android 14 the system delivers only `TRIM_MEMORY_UI_HIDDEN`
+  and `TRIM_MEMORY_BACKGROUND`**; the `RUNNING_*`, `MODERATE` and `COMPLETE` constants are no
+  longer sent and were deprecated in Android 15
+  ([Android docs](https://developer.android.com/topic/performance/memory/manage-app-memory)).
+  The module originally forwarded ONLY those legacy constants and deliberately excluded the two
+  that still arrive, so it was **inert on every modern Android device while the injected test
+  passed**. Verifying a signal by injecting it is precisely the false confidence
+  `performance-claims-are-measured.md` exists to prevent. The two surviving levels now class as
+  `backgrounded`: they drive the shedders (the safest moment to shed, since the user is not
+  looking) and never the breadcrumb.
 - **The OS partitions the levels by process state and enforces it.** The four background levels
-  (`HIDDEN`, `BACKGROUND`, `MODERATE`, `COMPLETE`) are refused outright against a foreground
-  process with `IllegalArgumentException: Unable to set a background trim level on a foreground
-  process`. Only the three `RUNNING_*` levels reach a foregrounded app, and those are exactly the
-  analogue of the iOS memory warning that MOBILE-8 is about.
+  are refused outright against a foreground process with `IllegalArgumentException: Unable to set
+  a background trim level on a foreground process`.
 - **This app counts as foreground even behind the launcher**, because the background-notifications
   foreground service keeps it there: `dumpsys activity processes` reports
   `fg +50 F/S/FGS (fg-service-act)` while the launcher has focus. So pressing HOME delivers no trim
