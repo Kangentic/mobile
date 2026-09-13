@@ -7,14 +7,21 @@
  * registry before a fresh dynamic import, rather than relying on import
  * order across files to keep the flag unset.
  *
- * The ON-path branches (a real trace build) are deliberately NOT covered
- * here - they are dev-only instrumentation, and are not worth chasing with
- * vi.resetModules() gymnastics unless it stays clean, which it does not for
- * a module-scope const. What matters in production is this file: if the OFF
- * path ever stopped being a hard floor, the whole foreground-reconnect fix
- * (board task #70 - RelayTransport.redialNow, connectionManager's kick and
- * probe) would be silently disabled in every shipped build, with nothing
- * else in the suite positioned to notice.
+ * The ON-path branches (a real trace build) are mostly NOT covered here -
+ * they are dev-only instrumentation with no correctness consequence for a
+ * shipped build. What matters in production is this file: if the OFF path
+ * ever stopped being a hard floor, the whole foreground-reconnect fix (board
+ * task #70 - RelayTransport.redialNow, connectionManager's kick and probe)
+ * would be silently disabled in every shipped build, with nothing else in
+ * the suite positioned to notice.
+ *
+ * Two ON-path behaviors ARE covered, in their own file
+ * (tests/unit/connectionTraceOnPath.test.ts) rather than here, so the trace
+ * flag never coexists with this file's OFF-path assumption in the same
+ * module registry: markConnectionTraceForeground's `origin-rebased` line,
+ * and the warmForegroundSeen latch isColdLaunch() reads. The
+ * `vi.resetModules()` pattern below turned out to work fine for that; see
+ * that file for why it was worth doing there and not everywhere.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -128,10 +135,9 @@ describe('connectionTrace (non-trace build)', () => {
    * Scope, stated so it is not mistaken for more than it is: this pins ONLY
    * the non-trace hard-false. It cannot distinguish the real implementation
    * from `return traceEnabled;`, because that is already false here - the
-   * warmForegroundSeen latch itself has no ON-path test, per this file's
-   * header. What protects the latch is that it is a one-way boolean rather
-   * than the clock-equality check it replaced, which is auditable by reading
-   * it; the behaviour it guards is a log field in a dev-only build.
+   * warmForegroundSeen latch's ON-path behaviour is instead pinned in
+   * tests/unit/connectionTraceOnPath.test.ts, which mutates `isColdLaunch` to
+   * exactly `return traceEnabled;` and watches it fail.
    *
    * Mutation seen failing: changing `isColdLaunch` to `return true;` made
    * this read `true` instead of `false`.
