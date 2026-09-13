@@ -7,7 +7,9 @@
  * ran - the ambiguity the probe exists to remove. Same duplicated-constant
  * pattern, and same reason, as tests/unit/nseConstantsParity.test.ts.
  */
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { hexToBytes, openPushEnvelope } from '@kangentic/protocol';
@@ -99,5 +101,54 @@ describe('sealNseProbePush.mjs', () => {
     const payload = buildProbePayload();
     const otherIdentity = new Uint8Array(32).fill(0x42);
     expect(() => openPushEnvelope(hexToBytes(PROBE_PUSH_KEY_HEX), otherIdentity, payload.blob)).toThrow();
+  });
+});
+
+/**
+ * The `--out` guard only runs on the "am I the entry point" branch
+ * (`import.meta.url === pathToFileURL(process.argv[1]).href`), which importing
+ * the module for the tests above never triggers. Exercising it needs a real
+ * child process. `build-ios.yml` pipes this script's `--out` straight into the
+ * next step's `simctl push`, so a silent fallback to stdout here would surface
+ * several steps later as a missing payload.json, not as a failure at the seal
+ * step itself - which is exactly why stdout, not just the exit code, has to be
+ * asserted empty.
+ */
+describe('sealNseProbePush.mjs CLI - --out validation', () => {
+  const SEAL_SCRIPT_PATH = join(__dirname, '..', '..', 'scripts', 'sealNseProbePush.mjs');
+  let workingDirectory: string;
+
+  function runSealScript(args: readonly string[]): { status: number | null; stderr: string; stdout: string } {
+    const result = spawnSync(process.execPath, [SEAL_SCRIPT_PATH, ...args], {
+      cwd: workingDirectory,
+      encoding: 'utf8',
+    });
+    return { status: result.status, stderr: result.stderr, stdout: result.stdout };
+  }
+
+  afterEach(() => {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  });
+
+  it('exits 1 and prints nothing to stdout when --out is the last argument with no path', () => {
+    workingDirectory = mkdtempSync(join(tmpdir(), 'kangentic-nse-probe-cli-'));
+    const result = runSealScript(['--out']);
+
+    expect(result.stderr).toMatch(/--out needs a file path/);
+    expect(result.status).toBe(1);
+    // The load-bearing assertion: a broken guard falls through to the stdout
+    // branch and prints the payload, which reads as success right here and
+    // only fails several steps later when simctl looks for a file that was
+    // never written.
+    expect(result.stdout).toBe('');
+  });
+
+  it('exits 1 when the value after --out looks like another flag rather than a path', () => {
+    workingDirectory = mkdtempSync(join(tmpdir(), 'kangentic-nse-probe-cli-'));
+    const result = runSealScript(['--out', '--verbose']);
+
+    expect(result.stderr).toMatch(/--out needs a file path/);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
   });
 });
