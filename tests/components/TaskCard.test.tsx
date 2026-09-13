@@ -135,6 +135,19 @@ describe('TaskCard', () => {
       // `queryByText('ready')` line, which is what proves the absent key
       // actually travels to the reader rather than being normalised somewhere
       // on the way in.
+      //
+      // The accessibilityLabel assertion covers the card's OTHER production
+      // call site (`prChipAccessibilityLabel` at TaskCard.tsx:152), which the
+      // rest of this block exercises but never asserts on. The shared-helper
+      // mutation above cannot isolate this line: Jest stops at the first
+      // failing assertion, and that mutation reddens `queryByText('ready')`
+      // first. Verified failing with a mutation scoped to this call site
+      // instead: making `prChipAccessibilityLabel`'s absent-verdict branch
+      // return `'Pull request'` (rather than `'Pull request open'`) only when
+      // `prMergeReadiness === undefined` left both `queryByText` assertions
+      // green and reddened only this line - `Expected: "Pull request open" /
+      // Received: "Pull request"` - which is what proves this assertion
+      // carries coverage the two above it do not.
       const task = boardTaskFixture({ pr_number: 42, pr_state: 'open' });
       delete task.pr_merge_readiness;
       expect('pr_merge_readiness' in task).toBe(false);
@@ -144,6 +157,7 @@ describe('TaskCard', () => {
       expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
       expect(screen.queryByText('open')).toBeNull();
       expect(screen.queryByText('ready')).toBeNull();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-pr`).props.accessibilityLabel).toBe('Pull request open');
     });
 
     it('never shows a stale verdict on a merged PR', () => {
