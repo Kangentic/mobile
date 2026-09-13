@@ -298,6 +298,14 @@ export interface MockStaticSessionSpec {
   model: SessionUsageWire['model'];
   usedTokens: number;
   activityState: 'thinking' | 'idle';
+  /**
+   * How long this session has ALREADY been waiting when the rig starts, for an
+   * idle session. Backdates the emitted `since` so the Agents feed shows a
+   * realistic spread of wait times rather than every row counting up from zero
+   * in lockstep - which would never exercise the hours branch of the label.
+   * Ignored while thinking.
+   */
+  alreadyWaitingForMs?: number;
 }
 
 export interface MockExtraThinkingSessionSpec extends MockStaticSessionSpec {
@@ -875,6 +883,9 @@ export const MOCK_IDLE_STATIC_SESSION: MockStaticSessionSpec = {
   model: MOCK_MODEL_OPUS,
   usedTokens: 28_000,
   activityState: 'idle',
+  // The long-blocked one: exercises the label's hours branch ('4h 7m'), which
+  // a rig where every session starts counting from zero never reaches.
+  alreadyWaitingForMs: 4 * 60 * 60_000 + 7 * 60_000,
   toolCells: [
     { name: 'Read', input: { file_path: 'perf/load-test-results.json' }, result: '50 carts, 4 regions, 20 minute soak' },
     {
@@ -952,6 +963,7 @@ export const MOCK_PAUSED_STATIC_SESSION: MockStaticSessionSpec = {
   // The protocol has no paused ActivityStateWire, so this reports 'idle' (the
   // closest real state) and communicates "paused" only through the text.
   activityState: 'idle',
+  alreadyWaitingForMs: 26 * 60_000,
   toolCells: [
     { name: 'Read', input: { file_path: 'src/billing/chargeStored.ts' }, result: '41 lines' },
     {
@@ -1062,6 +1074,7 @@ function archivedStaticSession(projectId: string): MockStaticSessionSpec {
     model: MOCK_MODEL_SONNET,
     usedTokens: 42_000,
     activityState: 'idle',
+    alreadyWaitingForMs: 3 * 60_000,
     toolCells: [
       { name: 'Read', input: { file_path: 'src/home/productGrid.ts' }, result: '96 lines' },
       {
@@ -1130,6 +1143,7 @@ const MOCK_CHECKOUT_ARCHIVED_SESSION: MockStaticSessionSpec = {
   model: MOCK_MODEL_FABLE,
   usedTokens: 36_000,
   activityState: 'idle',
+  alreadyWaitingForMs: 71 * 60_000,
   toolCells: [
     { name: 'Read', input: { file_path: 'src/totals/tax.ts' }, result: '72 lines' },
     {
@@ -1641,11 +1655,76 @@ function staticSessionAgentName(spec: MockStaticSessionSpec): string {
   return spec.model === MOCK_MODEL_CODEX ? 'Codex CLI' : 'Claude Code';
 }
 
+/**
+ * When each session first needed the user, mirroring the desktop's `since`.
+ *
+ * THE POINT OF THIS MAP is that the value must SURVIVE a permission <-> idle
+ * crossing and a re-subscribe. On a real desktop `since` spans both without
+ * resetting, while the phone's fallback (`enteredSectionAt`) resets on each -
+ * so a mock that emitted a fresh `Date.now()` every time would agree with the
+ * fallback exactly, and a broken primary path would be indistinguishable from
+ * a working one in the rig and in the shipped demo. That is the bug this map
+ * exists to keep visible. Module-level so the subscribe snapshot and the live
+ * events cannot disagree. Cleared the moment a session goes back to work.
+ */
+const waitingSinceBySessionId = new Map<string, number>();
+
+/**
+ * Anchored at MODULE LOAD, deliberately, not at `createMockDesktop`.
+ *
+ * `createMockDesktop` runs inside `openConnection` (connectionManager.ts), and
+ * the connection is disposed on background and reopened on foreground - so a
+ * per-construction anchor would restart every wait clock on each app switch,
+ * dropping a demo row from '4h 12m' back to '4h 7m'. That is precisely the
+ * resetting behaviour `reason.since` exists to avoid (it is what the phone's
+ * `enteredSectionAt` fallback does), reintroduced in the one build App Review
+ * sees. A process-lifetime anchor makes a static session's wait survive a
+ * reconnect exactly as a real desktop's would.
+ */
+const MOCK_WAIT_EPOCH_MS = Date.now();
+
+/**
+ * A static session's wait start: fixed for the life of the process.
+ *
+ * `alreadyWaitingForMs` is a DURATION, unlike the epoch instants this returns
+ * and that `selectWaitingSince` / `TaskCard`'s `waitingSinceMs` deal in. It
+ * seeds the session as having ALREADY been waiting when the app launched, so
+ * the feed shows a plausible spread (minutes through hours) instead of every
+ * row counting up from zero together - which would never exercise the hours
+ * formatting at all, and would sit under `WaitLabel`'s `MINIMUM_VISIBLE_MS`
+ * floor for the first minute of every run.
+ */
+function staticWaitingSince(spec: MockStaticSessionSpec): number | undefined {
+  if (spec.activityState !== 'idle') return undefined;
+  return MOCK_WAIT_EPOCH_MS - (spec.alreadyWaitingForMs ?? 0);
+}
+
+/**
+ * The STREAMING session's wait start, which unlike a static session's is
+ * genuinely dynamic: it begins when the scenario raises its prompt and must
+ * survive the permission <-> idle crossing without resetting (the whole point
+ * of the field), then clear when the agent goes back to work.
+ */
+function waitingSinceFor(sessionId: string, waiting: boolean): number | undefined {
+  if (!waiting) {
+    waitingSinceBySessionId.delete(sessionId);
+    return undefined;
+  }
+  const existing = waitingSinceBySessionId.get(sessionId);
+  if (existing !== undefined) return existing;
+  const since = Date.now();
+  waitingSinceBySessionId.set(sessionId, since);
+  return since;
+}
+
 function staticSessionSnapshot(spec: MockStaticSessionSpec, wantsTerminal: boolean): ReadStreamResponsePayload {
+  const since = staticWaitingSince(spec);
   return {
     scrollback: wantsTerminal ? spec.scrollback : '',
     activity:
-      spec.activityState === 'idle' ? { state: 'idle', reason: { kind: 'idle' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
+      spec.activityState === 'idle'
+        ? { state: 'idle', reason: { kind: 'idle', since } }
+        : { state: 'thinking', reason: { kind: 'turn-active' } },
     usage: mockUsage(spec.usedTokens, spec.model),
     awaitedPromptId: null,
     ptyDimensions: activeGrid(),
@@ -2788,6 +2867,12 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     phoneStaticPublicKey: identity.publicKey,
   });
 
+  // The STREAMING session's wait clock restarts with the scenario it belongs
+  // to, like every other line below. Static sessions deliberately do NOT reset
+  // here - see MOCK_WAIT_EPOCH_MS for why a foreground reconnect must not walk
+  // a four-hour wait back to its seed.
+  waitingSinceBySessionId.clear();
+
   // Mutable scenario state, reset whenever the connection reopens (the
   // module is re-instantiated per openConnection).
   const tasks = initialTasks();
@@ -2923,13 +3008,22 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   }
 
   function emitStaticSessionActivity(spec: MockStaticSessionSpec, state: 'thinking' | 'idle'): void {
-    const reason = state === 'idle' ? { kind: 'idle' as const } : { kind: 'turn-active' as const };
+    // Same process-lifetime anchor the snapshot uses, so a live event and a
+    // re-subscribe can never report two different waits for one session.
+    const since = state === 'idle' ? staticWaitingSince(spec) : undefined;
+    const reason = state === 'idle' ? { kind: 'idle' as const, since } : { kind: 'turn-active' as const };
     emit({ kind: 'activity', sessionId: spec.sessionId, taskId: spec.taskId, payload: { type: 'activity', state, reason } });
   }
 
   function emitActivity(state: 'thinking' | 'idle' | 'permission'): void {
     if (activeSessionId === null) return;
-    const reason = state === 'permission' ? { kind: 'permission' as const } : state === 'idle' ? { kind: 'idle' as const } : { kind: 'turn-active' as const };
+    const since = waitingSinceFor(activeSessionId, state !== 'thinking');
+    const reason =
+      state === 'permission'
+        ? { kind: 'permission' as const, since }
+        : state === 'idle'
+          ? { kind: 'idle' as const, since }
+          : { kind: 'turn-active' as const };
     emit({ kind: 'activity', sessionId: activeSessionId, taskId: MOCK_TASK_ID, payload: { type: 'activity', state, reason } });
   }
 
@@ -3453,7 +3547,9 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         startTerminalPlayback(wantsTerminal);
         const snapshot: ReadStreamResponsePayload = {
           scrollback: wantsTerminal ? mockTerminalScrollback() : '',
-          activity: pendingPromptId ? { state: 'permission', reason: { kind: 'permission' } } : { state: 'thinking', reason: { kind: 'turn-active' } },
+          activity: pendingPromptId
+            ? { state: 'permission', reason: { kind: 'permission', since: waitingSinceFor(activeSessionId, true) } }
+            : { state: 'thinking', reason: { kind: 'turn-active' } },
           usage: mockUsage(streamingUsedTokens(feedTick), MOCK_MODEL_SONNET),
           awaitedPromptId: pendingPromptId,
           awaitedPromptOptions: pendingPromptId === PERMISSION_PROMPT_ID ? MOCK_PERMISSION_OPTIONS : null,

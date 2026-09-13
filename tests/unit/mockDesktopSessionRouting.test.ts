@@ -320,6 +320,86 @@ describe('archived sessions', () => {
   });
 });
 
+/**
+ * The mock's `since`, which exists so the rig cannot hide a broken primary path.
+ *
+ * `reason.since` and the phone's fallback (`enteredSectionAt`) normally land
+ * within milliseconds of each other, so a mock emitting no `since` - or a fresh
+ * `Date.now()` on every event - would make a WORKING selector and a BROKEN one
+ * look identical under `dev:mock` and in the shipped demo, which is the one
+ * failure the field cannot afford. These pin the two properties that keep the
+ * difference visible: the value is genuinely backdated, and it holds still
+ * across a re-subscribe that resets the fallback.
+ */
+describe('activity reason.since', () => {
+  it('backdates an idle session far enough to exercise the hours format', async () => {
+    const subscribedAtMs = Date.now();
+    const snapshot = await controller.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false });
+
+    expect(snapshot.activity.state).toBe('idle');
+    const reason = snapshot.activity.reason;
+    expect(reason?.kind).toBe('idle');
+    const since = reason !== null && reason.kind === 'idle' ? reason.since : undefined;
+    expect(typeof since).toBe('number');
+    // Hours, not milliseconds: a mock reporting Date.now() would agree with the
+    // fallback exactly and never reach the 'Xh Ym' branch of the label at all.
+    expect(subscribedAtMs - (since as number)).toBeGreaterThan(60 * 60_000);
+  });
+
+  it('reports the same since on a re-subscribe rather than restarting the clock', async () => {
+    const first = await controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false });
+    const second = await controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false });
+
+    const sinceOf = (activity: typeof first.activity): number | undefined =>
+      activity.reason !== null && activity.reason.kind === 'idle' ? activity.reason.since : undefined;
+
+    expect(sinceOf(first.activity)).toBeDefined();
+    expect(sinceOf(second.activity)).toBe(sinceOf(first.activity));
+  });
+
+  it('leaves a working session with no since to report', async () => {
+    const snapshot = await controller.verbs.readStreamSubscribe(MOCK_CODEX_STATIC_SESSION.sessionId, { terminal: false });
+    expect(snapshot.activity.state).toBe('thinking');
+    expect(snapshot.activity.reason).toEqual({ kind: 'turn-active' });
+  });
+
+  /**
+   * createMockDesktop runs inside openConnection, and the connection is
+   * disposed on background and reopened on foreground - so anything anchored to
+   * mock CONSTRUCTION restarts on every app switch. That would walk a demo row
+   * from '4h 12m' back to '4h 7m': the exact resetting behaviour `since` exists
+   * to avoid, in the one build App Review sees. Two mocks in one process here
+   * stand in for that background/foreground cycle.
+   */
+  it('holds a static wait across a reconnect, rather than reseeding it', async () => {
+    const before = await controller.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false });
+
+    controller.dispose();
+    mockDesktop.dispose();
+    const reconnected = createMockDesktop();
+    const secondController = new ChannelController({
+      identity: reconnected.identity,
+      desktopStaticPublicKey: reconnected.desktopStaticPublicKey,
+      relayUrl: 'loopback://reconnect-test',
+      transport: reconnected.phoneTransport,
+    });
+    try {
+      await secondController.connect();
+      await reconnected.start();
+      await waitUntil(() => secondController.session.isEstablished, { label: 'second loopback session establishes' });
+      const after = await secondController.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false });
+
+      const sinceOf = (activity: typeof before.activity): number | undefined =>
+        activity.reason !== null && activity.reason.kind === 'idle' ? activity.reason.since : undefined;
+
+      expect(sinceOf(after.activity)).toBe(sinceOf(before.activity));
+    } finally {
+      secondController.dispose();
+      reconnected.dispose();
+    }
+  });
+});
+
 describe('register-push', () => {
   it('acknowledges a registration instead of failing the verb', async () => {
     const response = await controller.verbs.registerPush({

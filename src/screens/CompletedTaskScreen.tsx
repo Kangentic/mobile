@@ -5,6 +5,7 @@ import { ClipboardList, MessagesSquare } from 'lucide-react-native';
 import type { SessionSummaryWire } from '@kangentic/protocol';
 import { EmptyState, MarkdownBlock, Screen, SegmentedSwitcher, Stack, Text, useTheme, type SegmentOption } from '@/components';
 import { loadTranscriptTail } from '@/connection/actions';
+import { formatDuration } from '@/lib/formatDuration';
 import { findArchivedTaskById, useBoardStore } from '@/state/boardStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { ConversationTab } from './task/ConversationTab';
@@ -195,15 +196,6 @@ function formatTimestamp(value: string | null): string {
     hour: 'numeric',
     minute: '2-digit',
   });
-}
-
-function formatDuration(milliseconds: number): string {
-  if (milliseconds <= 0) return '0m';
-  const totalMinutes = Math.round(milliseconds / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours === 0) return `${minutes}m`;
-  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
 /** Sub-cent costs round to $0.00, which reads as free; show them as the smallest real figure instead. */

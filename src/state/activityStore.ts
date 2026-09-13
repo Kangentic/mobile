@@ -370,6 +370,41 @@ export function sectionForEntry(entry: SessionActivityEntry): TriageSection {
   }
 }
 
+/**
+ * When this session first needed the user, as epoch ms, or null if it is not
+ * waiting on one. The Home feed's "how long has this been sitting" label.
+ *
+ * Three things here are load-bearing and each has bitten, or would have:
+ *
+ * 1. WHETHER to show is gated on `sectionForEntry`, never on `reason.kind`.
+ *    `applyActivityEvent`'s 'permission' branch sets `state` without writing
+ *    `reason`, so a session that genuinely needs the user can be carrying a
+ *    stale `{kind:'turn-active'}` reason from the turn that led into it.
+ *
+ * 2. `feedStatus` must be 'live', not merely 'not ended'. `registerSession`
+ *    stamps `enteredSectionAt` when the board first names a session, BEFORE
+ *    any snapshot lands, and `applySnapshot` defaults to `state ?? 'idle'`.
+ *    So a 'pending' (subscribe in flight) or 'rejected' entry sits at
+ *    `state: 'idle'` with a running clock, and would claim "1m" a minute into
+ *    a cold start for a session this phone never actually subscribed to.
+ *
+ * 3. `reason.since` is the real answer and `enteredSectionAt` only a fallback
+ *    for a desktop that sends none. The fallback UNDER-REPORTS, in two ways
+ *    that matter: it re-stamps on the permission <-> idle crossing (the exact
+ *    crossing `since` exists to span without resetting), and again on every
+ *    `registerSession` after a reconnect, so a four-hour wait reads 0m on a
+ *    cold launch. It is a degradation, not a simplification of the primary.
+ */
+export function selectWaitingSince(entry: SessionActivityEntry): number | null {
+  if (entry.feedStatus !== 'live') return null;
+  if (sectionForEntry(entry) === 'working') return null;
+  const reason = entry.reason;
+  if (reason !== null && (reason.kind === 'idle' || reason.kind === 'permission') && typeof reason.since === 'number') {
+    return reason.since;
+  }
+  return entry.enteredSectionAt;
+}
+
 export interface TriageRows {
   section: TriageSection;
   entries: SessionActivityEntry[];

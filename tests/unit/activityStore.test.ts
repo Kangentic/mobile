@@ -4,7 +4,14 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
-import { sectionForEntry, selectSessionEnded, selectSessionSpawnProgressLabel, selectTriageRows, useActivityStore } from '@/state/activityStore';
+import {
+  sectionForEntry,
+  selectSessionEnded,
+  selectSessionSpawnProgressLabel,
+  selectTriageRows,
+  selectWaitingSince,
+  useActivityStore,
+} from '@/state/activityStore';
 import { streamSnapshotFixture, usageFixture } from '@/devsupport/desktopFixtures';
 
 function activityEvent(sessionId: string, payload: ActivityEventPayload): ActivityEvent {
@@ -443,6 +450,96 @@ describe('activityStore', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('selectWaitingSince', () => {
+    function liveEntry(sessionId: string, snapshot: Parameters<typeof streamSnapshotFixture>[0]): void {
+      useActivityStore.getState().registerSession(sessionId, 'task-1', 'project-1');
+      useActivityStore.getState().applySnapshot(sessionId, 'task-1', 'project-1', streamSnapshotFixture(snapshot));
+    }
+
+    /**
+     * THE test for this selector. `since` and `enteredSectionAt` normally agree
+     * closely enough that a fallback-only implementation passes every other
+     * assertion in this block, so they are forced far apart here: only a
+     * selector that genuinely reads `reason.since` can return 111_000.
+     */
+    it('prefers reason.since over enteredSectionAt when the two disagree', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(999_000);
+        liveEntry('sess-1', { activity: { state: 'idle', reason: { kind: 'idle', since: 111_000 } } });
+        expect(useActivityStore.getState().bySessionId['sess-1'].enteredSectionAt).toBe(999_000);
+        expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-1'])).toBe(111_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('falls back to enteredSectionAt when the desktop sends no since', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(4_000);
+        liveEntry('sess-1', { activity: { state: 'idle', reason: { kind: 'idle' } } });
+        expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-1'])).toBe(4_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('returns null while the agent is working', () => {
+      liveEntry('sess-1', { activity: { state: 'thinking', reason: { kind: 'turn-active' } } });
+      expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-1'])).toBeNull();
+    });
+
+    /**
+     * applyActivityEvent's 'permission' branch sets `state` but never writes
+     * `reason`, so a session that genuinely needs the user can still be
+     * carrying the previous turn's `turn-active`. A selector gated on
+     * `reason.kind` returns null here and the label silently never appears for
+     * a pending prompt - the single most important row to show it on.
+     */
+    it('still reports a time when a pending prompt leaves a stale turn-active reason', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(2_000);
+        liveEntry('sess-1', { activity: { state: 'thinking', reason: { kind: 'turn-active' } } });
+        vi.setSystemTime(7_000);
+        useActivityStore
+          .getState()
+          .applyActivityEvent(activityEvent('sess-1', { type: 'permission', promptId: 'sess-1:tool-1', pending: true }));
+
+        const entry = useActivityStore.getState().bySessionId['sess-1'];
+        expect(entry.state).toBe('permission');
+        expect(entry.reason).toEqual({ kind: 'turn-active' });
+        expect(selectWaitingSince(entry)).toBe(7_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * registerSession stamps enteredSectionAt before any snapshot lands, and an
+     * un-snapshotted entry sits at state 'idle'. Without the feedStatus gate a
+     * session this phone never actually subscribed to would claim "1m" a minute
+     * into a cold start.
+     */
+    it('returns null for a pending or rejected feed, despite its idle state', () => {
+      useActivityStore.getState().registerSession('sess-pending', 'task-1', 'project-1');
+      const pending = useActivityStore.getState().bySessionId['sess-pending'];
+      expect(pending.feedStatus).toBe('pending');
+      expect(sectionForEntry(pending)).toBe('idle');
+      expect(selectWaitingSince(pending)).toBeNull();
+
+      useActivityStore.getState().markRejected('sess-pending');
+      expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-pending'])).toBeNull();
+    });
+
+    it('returns null once the session has ended', () => {
+      liveEntry('sess-1', { activity: { state: 'idle', reason: { kind: 'idle', since: 111_000 } } });
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
+      expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-1'])).toBeNull();
+    });
   });
 
   it('selectTriageRows buckets by state and sorts each section by recency', () => {

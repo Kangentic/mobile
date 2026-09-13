@@ -53,11 +53,32 @@ export function ScreenMotionProvider({ children }: ScreenMotionProviderProps): R
  * accident.
  */
 export function useScreenMotionActive(): boolean {
-  const focused = useContext(ScreenMotionContext);
+  // Built ON the focus gate rather than beside it, so the pair cannot drift:
+  // this hook is exactly `useScreenFocusActive` PLUS the probe override, and
+  // saying so in code is what stops a later edit to one silently diverging the
+  // other. The difference between them is the override and nothing else.
+  const focused = useScreenFocusActive();
   // Probe override: forces every gate closed at runtime, so "is looping motion
   // the cost" is one Settings tap rather than one APK.
   if (getRetentionProbeVariant() === 'no-motion') return false;
   return focused;
+}
+
+/**
+ * True when this subtree's screen is focused. Same context, same provider, same
+ * `ScreenMotionOverride` test seam as `useScreenMotionActive` - but WITHOUT the
+ * retention probe's `no-motion` override.
+ *
+ * The distinction exists because not everything that should pause on blur is
+ * motion. A periodic clock costs the same as a looping animation while nobody
+ * can see it, so it wants the focus gate; but freezing it under the probe would
+ * make elapsed times stop advancing during the very run that is measuring idle
+ * cost, confounding the measurement with a second changed variable. Read this
+ * for work that is merely PERIODIC, and `useScreenMotionActive` for work that
+ * actually animates.
+ */
+export function useScreenFocusActive(): boolean {
+  return useContext(ScreenMotionContext);
 }
 
 /**
