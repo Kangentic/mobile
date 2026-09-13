@@ -609,6 +609,25 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     let streams = null;
     let streamSubscribed = false;
     let permissionPending = false;
+    /**
+     * Epoch ms the session first needed the user, mirroring the desktop's
+     * `reason.since` (protocol 0.13.x). The phone renders it as the Agents
+     * feed's elapsed-wait label.
+     *
+     * BACKDATED, and that is the whole point: a flow runs for well under a
+     * minute, and the label deliberately shows nothing below `MINIMUM_VISIBLE_MS`
+     * (60s, in src/components/board/WaitLabel.tsx), so a truthful `Date.now()`
+     * here would mean the label never renders and no E2E flow could ever assert
+     * it. Seeding the wait in the past puts it on screen immediately. Raising
+     * that floor past this backdate would break the assertion in
+     * .maestro/paired/home-needs-you-approve.yaml, so the two travel together.
+     * It is also held still once set, so the value
+     * survives the permission <-> idle crossing exactly as a real desktop's
+     * does - the phone's own fallback resets on that crossing, so a stub that
+     * reset too would make a broken primary path indistinguishable from a
+     * working one.
+     */
+    const STUB_WAITING_SINCE_MS = Date.now() - 4 * 60 * 60_000 - 7 * 60_000;
     let feedTimer = null;
     let feedTick = 0;
     // The /respawn magic command's pending successor-install timer. Tracked
@@ -863,7 +882,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
             blocks: [{ type: 'tool_use', id: 'stub-tool-2', name: 'Bash', input: { command: 'npm run test:unit -- auth-redirect' } }],
           });
           sendEvent({ kind: 'activity', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { type: 'permission', promptId: STUB_PROMPT_ID, pending: true } });
-          sendEvent({ kind: 'activity', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'permission', reason: { kind: 'permission' } } });
+          sendEvent({ kind: 'activity', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { type: 'activity', state: 'permission', reason: { kind: 'permission', since: STUB_WAITING_SINCE_MS } } });
           console.log('[feed] raised a permission prompt (answer it from the phone)');
         }
       }, 1000);
@@ -963,7 +982,10 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
           startFeed();
           return ok({
             scrollback: 'kangentic stub desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n',
-            activity: { state: permissionPending ? 'permission' : 'thinking', reason: permissionPending ? { kind: 'permission' } : { kind: 'turn-active' } },
+            activity: {
+              state: permissionPending ? 'permission' : 'thinking',
+              reason: permissionPending ? { kind: 'permission', since: STUB_WAITING_SINCE_MS } : { kind: 'turn-active' },
+            },
             usage: null,
             awaitedPromptId: permissionPending ? STUB_PROMPT_ID : null,
             ptyDimensions: { ...ptyDimensions },

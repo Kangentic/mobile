@@ -31,6 +31,13 @@ appId: com.kangentic.mobile
     visible:
       text: "Approve:.*"
     timeout: 60000
+# How long the row has been waiting, beside the snippet it belongs to. The stub
+# backdates its `reason.since` (see STUB_WAITING_SINCE_MS): a flow runs for well
+# under a minute and the label renders nothing below MINIMUM_VISIBLE_MS (60s, in
+# src/components/board/WaitLabel.tsx), so without the backdate there would be no
+# label here to assert at all.
+- assertVisible:
+    id: "activity-row-stub-session-1-wait"
 # No inline controls on Home: the approve button must NOT be on this screen.
 - assertNotVisible:
     id: "permission-approve"

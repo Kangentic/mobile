@@ -1,12 +1,12 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import { ThemeProvider } from '@/components';
+import { NOW_TICK_MS, ThemeProvider } from '@/components';
 import { SNIPPET_WARM_CONCURRENCY, TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { peekLastAssistantMessage, peekLastTerminalLine } from '@/connection/actions';
 
 const mockPush = jest.fn();
@@ -202,6 +202,23 @@ describe('TriageHomeScreen', () => {
     jest.mocked(peekLastTerminalLine).mockResolvedValue(null);
     mockFlashListScrollToOffset.mockClear();
     seedStores();
+  });
+
+  /**
+   * Every row fires a snippet peek on mount, and its `.then` lands a setState
+   * AFTER the synchronous test body has finished - outside act(), which React
+   * reports as a console.error per row per test. The assertions are unaffected
+   * (the peek is mocked to null and nothing waits on it), but the noise runs to
+   * ~190KB a run and buries the output of a test that genuinely fails.
+   *
+   * Flushing the microtask queue inside act() here lets that update land where
+   * React expects it. It is an afterEach rather than part of renderHome so the
+   * ~50 sync call sites do not all have to become async.
+   */
+  afterEach(async () => {
+    await act(async () => {
+      await Promise.resolve();
+    });
   });
 
   it('files prompt-pending rows under Idle (the user\'s move) and hides empty sections', () => {
@@ -873,6 +890,120 @@ describe('TriageHomeScreen', () => {
         params: { taskId: 'task-2', projectId: 'project-2' },
       });
       expect(screen.queryByTestId('task-actions-sheet')).toBeNull();
+    });
+  });
+
+  /**
+   * The elapsed-wait label, asserted through the WHOLE composition rather than
+   * on WaitLabel alone.
+   *
+   * This is the assembly WaitLabel.test.tsx cannot reach: the clock lives in a
+   * provider wrapping the list, the row between it and the label is
+   * `React.memo` with props that do not change on a tick, and FlashList
+   * recycles the row instances. The label updating here is what proves the
+   * context reaches a memoized, recycled row at all - a prop-drilled
+   * implementation would render once and then freeze, and every WaitLabel test
+   * would still pass.
+   */
+  describe('elapsed wait time', () => {
+    const MINUTE = 60_000;
+
+    function seedWaitingSession(waitedMs: number): void {
+      seedStores();
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({
+          activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - waitedMs } },
+        }));
+    }
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('shows the wait on the row and advances it on the shared clock', () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      seedWaitingSession(12 * MINUTE);
+      renderHome();
+
+      expect(screen.getByTestId('activity-row-sess-1-wait')).toHaveTextContent('12m');
+
+      act(() => {
+        jest.advanceTimersByTime(NOW_TICK_MS * 2);
+      });
+
+      expect(screen.getByTestId('activity-row-sess-1-wait')).toHaveTextContent('13m');
+    });
+
+    it('shows nothing on a working row', () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      seedStores();
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({
+          activity: { state: 'thinking', reason: { kind: 'turn-active' } },
+        }));
+      renderHome();
+
+      expect(screen.queryByTestId('activity-row-sess-1-wait')).toBeNull();
+    });
+
+    /**
+     * `<NowTickProvider enabled={anySessionWaiting}>` is the one line that
+     * decides whether the whole feed pays for a 30s timer. The test above
+     * ('shows nothing on a working row') cannot catch a hardcoded
+     * `enabled={true}`: a working row passes `waitingSinceMs={null}`, so
+     * `WaitLabel` never mounts and never asks the provider for anything -
+     * the provider could be running a timer nobody reads and that test would
+     * still pass. This asserts the provider itself, through `setInterval`,
+     * which fires regardless of whether any row happens to render a label.
+     *
+     * The `setInterval` spy must be installed AFTER `jest.useFakeTimers()`
+     * (fake timers replace the global), and the positive arm right below is
+     * not decoration - it is what proves the spy is actually wired to catch a
+     * real NOW_TICK_MS interval, rather than merely never seeing one because
+     * it never would.
+     */
+    it('starts no 30s clock when every session is working (enabled={anySessionWaiting} pinned false)', () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      seedStores();
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({
+          activity: { state: 'thinking', reason: { kind: 'turn-active' } },
+        }));
+      const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
+      renderHome();
+
+      // Confirms the list (and so the NowTickProvider wrapping it) actually
+      // rendered, rather than this passing because an empty/connecting state
+      // short-circuited before the provider ever mounted.
+      expect(screen.getByTestId('triage-home-list')).toBeTruthy();
+      const nowTickIntervalCalls = setIntervalSpy.mock.calls.filter(
+        (callArguments) => callArguments[1] === NOW_TICK_MS,
+      );
+      expect(nowTickIntervalCalls).toHaveLength(0);
+      setIntervalSpy.mockRestore();
+    });
+
+    it('starts the 30s clock when at least one session is idle (enabled={anySessionWaiting} pinned true)', () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      seedWaitingSession(12 * MINUTE);
+      const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
+      renderHome();
+
+      expect(screen.getByTestId('activity-row-sess-1-wait')).toBeTruthy();
+      const nowTickIntervalCalls = setIntervalSpy.mock.calls.filter(
+        (callArguments) => callArguments[1] === NOW_TICK_MS,
+      );
+      expect(nowTickIntervalCalls.length).toBeGreaterThan(0);
+      setIntervalSpy.mockRestore();
     });
   });
 });

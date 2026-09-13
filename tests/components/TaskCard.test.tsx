@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet, type StyleProp, type TextStyle } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { ThemeProvider } from '@/components';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
@@ -211,4 +212,98 @@ describe('TaskCard', () => {
       expect(screen.getByText('+3')).toBeTruthy();
     });
   });
+
+  describe('the elapsed-wait label', () => {
+    const MINUTE = 60_000;
+    const BODY_HEIGHT = 32;
+
+    /**
+     * Outside a NowTickProvider `useNowTick` freezes at mount, so "now" is
+     * whatever Date.now() returns during render. Fake timers pin it, which is
+     * what lets these assert an exact string rather than a regex.
+     */
+    function renderWithWait(waitedMs: number | null): void {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      renderTaskCard({
+        bodyMinHeight: BODY_HEIGHT,
+        bodyNumberOfLines: 2,
+        waitingSinceMs: waitedMs === null ? null : Date.now() - waitedMs,
+      });
+    }
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('renders how long the message beside it has been waiting', () => {
+      renderWithWait(4 * 60 * MINUTE + 7 * MINUTE);
+      expect(screen.getByTestId(`${BASE_TEST_ID}-wait`)).toHaveTextContent('4h 7m');
+    });
+
+    it('spells the span out for a screen reader, since "4h 7m" read alone says nothing', () => {
+      renderWithWait(4 * 60 * MINUTE + 7 * MINUTE);
+      expect(screen.getByTestId(`${BASE_TEST_ID}-wait`).props.accessibilityLabel).toBe('Waiting 4 hours 7 minutes');
+    });
+
+    /**
+     * A row that has only just gone idle is not "waiting" in any sense the user
+     * cares about, and a label blinking on at every turn boundary is exactly
+     * the status filler the Agents feed deliberately has none of.
+     */
+    it('renders nothing at all below a minute - never "0m"', () => {
+      renderWithWait(45_000);
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-wait`)).toBeNull();
+      expect(screen.queryByText('0m')).toBeNull();
+    });
+
+    it('renders nothing for a working row, which passes null', () => {
+      renderWithWait(null);
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-wait`)).toBeNull();
+    });
+
+    /**
+     * The card's fixed body slot exists so a feed never moves under a reading
+     * thumb. The wait label rides INSIDE that slot for the same reason, so
+     * adding one must not change the reserved height - a label that pushed the
+     * row taller would shift every card below it the moment a session crossed
+     * a minute.
+     */
+    it('keeps the fixed body slot at exactly its reserved height', () => {
+      renderWithWait(12 * MINUTE);
+      const snippet = screen.getByTestId(`${BASE_TEST_ID}-snippet`);
+      const slot = findAncestorWithHeight(snippet, BODY_HEIGHT);
+      expect(slot).toBeTruthy();
+    });
+
+    /**
+     * `styles.snippetText`'s `flex: 1` is the load-bearing half that makes the
+     * snippet TRUNCATE instead of pushing the wait label off the card (RN
+     * expands `flex: 1` to `flexGrow 1 / flexShrink 1 / flexBasis 0`, see the
+     * comment on `styles.snippetText` in TaskCard.tsx). RNTL computes no flex
+     * layout, so no rendering assertion can see the effect of removing this
+     * style - a bug here is invisible in rendered output, so this pins the
+     * mechanism directly instead: the style prop actually attached to the
+     * snippet Text.
+     */
+    it('keeps the snippet flexible so it truncates instead of pushing the wait label off the card', () => {
+      renderWithWait(12 * MINUTE);
+      const snippet = screen.getByTestId(`${BASE_TEST_ID}-snippet`);
+      const flattenedSnippetStyle = StyleSheet.flatten(snippet.props.style as StyleProp<TextStyle>);
+      expect(flattenedSnippetStyle?.flex).toBe(1);
+    });
+  });
 });
+
+/** Walks up from a node to the ancestor whose style fixes the given height. */
+function findAncestorWithHeight(instance: ReactTestInstance, height: number): ReactTestInstance | null {
+  let currentInstance: ReactTestInstance | null = instance;
+  while (currentInstance !== null) {
+    const style: unknown = currentInstance.props.style;
+    if (style !== null && typeof style === 'object' && (style as { height?: number }).height === height) {
+      return currentInstance;
+    }
+    currentInstance = currentInstance.parent;
+  }
+  return null;
+}

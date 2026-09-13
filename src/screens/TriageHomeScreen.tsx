@@ -10,10 +10,11 @@ import Animated, { ReduceMotion, cancelAnimation, useAnimatedStyle, useSharedVal
 import { useRouter } from 'expo-router';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import type { BoardTaskWire } from '@kangentic/protocol';
-import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, SectionHeader, useTheme } from '@/components';
+import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, NowTickProvider, SectionHeader, useTheme } from '@/components';
 import { TaskCard } from '@/components/board/TaskCard';
 import {
   selectTriageRows,
+  selectWaitingSince,
   sectionForEntry,
   type SessionActivityEntry,
   type TriageSection,
@@ -127,6 +128,15 @@ export function TriageHomeScreen(): React.JSX.Element {
     }
     return listRows;
   }, [bySessionId, collapsedTriageSection]);
+
+  // Whether anything on screen actually needs a clock. Correct for an empty or
+  // all-working feed and nothing more: one idle session makes it true, and a
+  // feed of idle sessions is the case this screen exists for. The provider's
+  // focus gate is what stops the timer in practice.
+  const anySessionWaiting = useMemo(
+    () => Object.values(bySessionId).some((entry) => selectWaitingSince(entry) !== null),
+    [bySessionId],
+  );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -364,49 +374,54 @@ export function TriageHomeScreen(): React.JSX.Element {
     <Screen edges={['left', 'right']}>
       <AppHeader title="Agents" />
       <ConnectionBanner />
-      <FlashList<TriageListRow>
-        ref={listRef}
-        testID="triage-home-list"
-        data={rows}
-        onScroll={onScroll}
-        scrollEventThrottle={64}
-        onContentSizeChange={onContentSizeChange}
-        refreshControl={
-          // tintColor styles iOS; colors + progressBackgroundColor style
-          // Android (stock is a white circle, jarring on the warm theme).
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={theme.colors.textSecondary}
-            colors={[theme.colors.accent]}
-            progressBackgroundColor={theme.colors.surfaceOverlay}
-          />
-        }
-        keyExtractor={(row) => (row.kind === 'section-header' ? `section-${row.section}` : row.entry.sessionId)}
-        getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : 'activity')}
-        renderItem={({ item }) =>
-          item.kind === 'section-header' ? (
-            <SectionHeader
-              title={item.title}
-              // Keyed by the TITLE the user sees, not the underlying section.
-              // "Idle" is shared by needs-you and idle, and which of the two
-              // leads changes as a prompt arrives or resolves - so a
-              // section-keyed id silently renames itself mid-session, which is
-              // exactly the kind of moving selector an E2E flow cannot hold.
-              // The collapse state is title-keyed for the same reason.
-              testID={`section-header-${item.title.toLowerCase()}`}
-              count={item.count}
-              collapsed={collapsedTriageSection === item.title}
-              onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}
+      {/* One clock for the whole feed. Wrapping the list rather than each row
+          is the point: N rows showing the same instant need one timer, not N,
+          and only the rows that actually render a time subscribe to it. It
+          renders no view of its own, so the list's layout is unchanged. */}
+      <NowTickProvider enabled={anySessionWaiting}>
+        <FlashList<TriageListRow>
+          ref={listRef}
+          testID="triage-home-list"
+          data={rows}
+          onScroll={onScroll}
+          scrollEventThrottle={64}
+          onContentSizeChange={onContentSizeChange}
+          refreshControl={
+            // tintColor styles iOS; colors + progressBackgroundColor style
+            // Android (stock is a white circle, jarring on the warm theme).
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={theme.colors.textSecondary}
+              colors={[theme.colors.accent]}
+              progressBackgroundColor={theme.colors.surfaceOverlay}
             />
-          ) : (
-            <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-              <ActivityRow entry={item.entry} onLongPressTask={onLongPressTask} />
-            </View>
-          )
-        }
-      />
-
+          }
+          keyExtractor={(row) => (row.kind === 'section-header' ? `section-${row.section}` : row.entry.sessionId)}
+          getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : 'activity')}
+          renderItem={({ item }) =>
+            item.kind === 'section-header' ? (
+              <SectionHeader
+                title={item.title}
+                // Keyed by the TITLE the user sees, not the underlying section.
+                // "Idle" is shared by needs-you and idle, and which of the two
+                // leads changes as a prompt arrives or resolves - so a
+                // section-keyed id silently renames itself mid-session, which is
+                // exactly the kind of moving selector an E2E flow cannot hold.
+                // The collapse state is title-keyed for the same reason.
+                testID={`section-header-${item.title.toLowerCase()}`}
+                count={item.count}
+                collapsed={collapsedTriageSection === item.title}
+                onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}
+              />
+            ) : (
+              <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
+                <ActivityRow entry={item.entry} onLongPressTask={onLongPressTask} />
+              </View>
+            )
+          }
+        />
+      </NowTickProvider>
     </Screen>
   );
 }
@@ -710,6 +725,16 @@ const ActivityRow = React.memo(function ActivityRow({
   // and a slot that grew from one line to two shifted every card below it
   // mid-read. Reserving both lines up front costs one line of space and
   // buys a feed that never moves under the thumb.
+  //
+  // The elapsed-wait label is the one exception, and it is not a counter-example
+  // to the rule above: "Thinking" restates what the icon already says, while
+  // "4h 7m" is information nothing else on this screen carries. It earns the
+  // space by answering the question this feed exists for - who is waiting on
+  // me, and for how long - and it obeys the geometry rule strictly, riding
+  // INSIDE the fixed slot so no row changes height. A working row passes null
+  // and renders nothing at all: the label appears exactly when the text beside
+  // it has stopped moving (see `snippetFreshnessMs` above - an idle row's
+  // snippet is refetched at freshness 0 precisely because it is the last word).
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
   /**
@@ -739,6 +764,7 @@ const ActivityRow = React.memo(function ActivityRow({
         bodyText={bodyText}
         bodyNumberOfLines={SNIPPET_LINES}
         bodyMinHeight={snippetSlotHeight}
+        waitingSinceMs={selectWaitingSince(entry)}
         onPress={openTask}
         onLongPress={onLongPress}
         overlay={
