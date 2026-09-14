@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { SubscriptionManager } from '../../src/channel/subscriptionManager';
 import { buildInspectPayload } from '../../src/devsupport/inspectBridge';
 import type { InspectRequestKind } from '../../src/devsupport/inspectProtocol';
+import { streamSnapshotFixture } from '../../src/devsupport/desktopFixtures';
 import { setInspectRoute, setInspectSubscriptions, setInspectTerminal } from '../../src/devsupport/inspectState';
 import { useActivityStore } from '../../src/state/activityStore';
 import { useBoardStore } from '../../src/state/boardStore';
@@ -58,6 +59,26 @@ describe('buildInspectPayload', () => {
     expect(payload.board.projects).toEqual([]);
     expect(payload.diff).toEqual([]);
     expect(JSON.stringify(payload)).not.toContain('entries":');
+  });
+
+  /**
+   * The null case above is not enough on its own: a registered-but-unsnapshotted
+   * entry's sessionStatus is null BY CONSTRUCTION (emptyEntry), so a hardcoded
+   * `sessionStatus: null` in buildInspectPayload's mapper would satisfy that test
+   * without ever reading `entry.sessionStatus`. This snapshots a session to a
+   * live, non-null status first, so the assertion can only pass if the mapper
+   * actually forwards the field.
+   */
+  it('echoes a live entry\'s sessionStatus, not a hardcoded null', async () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended' }));
+
+    const payload = (await payloadFor('stores')) as {
+      activity: { sessionId: string; sessionStatus: string | null }[];
+    };
+    expect(payload.activity).toEqual([expect.objectContaining({ sessionId: 'sess-1', sessionStatus: 'suspended' })]);
   });
 
   it('reports terminal feed ring stats, and listeners with no ring behind them', async () => {
