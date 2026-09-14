@@ -1,7 +1,12 @@
 import type { ActivityEvent, TranscriptEvent, Unsubscribe } from '@kangentic/protocol';
 import type { FeedRouter, SubscriptionManager, SubscriptionSnapshotSinks } from '@/channel';
 import { traceConnection } from '@/devsupport/connectionTrace';
-import { useActivityStore } from '@/state/activityStore';
+import {
+  RESPAWN_ROW_GRACE_MS,
+  extractSpawnProgressLabel,
+  selectTaskRespawnLabel,
+  useActivityStore,
+} from '@/state/activityStore';
 import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
@@ -34,6 +39,17 @@ function sessionOwnerFor(sessionId: string): { taskId: string; projectId: string
  * After each board snapshot: register every live session with its owning
  * task (the triage card needs taskId/projectId), drop activity entries for
  * sessions no board claims anymore, and re-declare the desired stream set.
+ *
+ * The prune has ONE exception, and it is the whole fix for the vanishing
+ * respawn row: a task the desktop said it is respawning keeps its entry, so
+ * the Home feed can go on drawing the row (captioned "Switching model...")
+ * instead of dropping it for the several seconds the task is sessionless.
+ *
+ * Ordering makes that safe without any extra bookkeeping. The register loop
+ * runs FIRST and `registerSession` clears the task's respawn fact, so by the
+ * time the prune loop asks `selectTaskRespawnLabel`, the snapshot that
+ * installs the successor has already answered "no respawn in flight" and the
+ * ghost is released in that same pass. One snapshot, never two rows.
  */
 function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
   const boardState = useBoardStore.getState();
@@ -47,7 +63,12 @@ function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
     }
   }
   for (const sessionId of Object.keys(useActivityStore.getState().bySessionId)) {
-    if (!liveSessionIds.has(sessionId)) useActivityStore.getState().removeSession(sessionId);
+    if (liveSessionIds.has(sessionId)) continue;
+    const entry = useActivityStore.getState().bySessionId[sessionId];
+    if (entry !== undefined && selectTaskRespawnLabel(useActivityStore.getState(), entry.taskId) !== null) {
+      continue;
+    }
+    useActivityStore.getState().removeSession(sessionId);
   }
 
   subscriptions.setDesiredStreams(liveSessionIds);
@@ -115,6 +136,10 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
   // the pane re-seeds. Debounced per session: a drag-resize emits a burst.
   const RESIZE_RESEED_DEBOUNCE_MS = 300;
   const resizeReseedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // One pending prune per task with a respawn in flight - see the activity
+  // handler. Keyed by task so a second respawn restarts that task's window
+  // rather than stacking a second sweep.
+  const respawnSweepTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   let pendingTranscriptEvents: TranscriptEvent[] = [];
   let transcriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -194,6 +219,31 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
         return;
       }
       useActivityStore.getState().applyActivityEvent(event);
+      // A respawn that never lands must not leave its row on screen forever.
+      // The retention above releases the ghost on the board snapshot carrying
+      // the successor - but board snapshots are EVENT-driven, not periodic, so
+      // on a quiet desktop a failed respawn would see no further snapshot and
+      // the row would sit there indefinitely. This is the only thing that
+      // re-runs the prune on a clock.
+      //
+      // Deliberately re-runs the existing reconcile rather than removing the
+      // entry directly, so `removeSession` keeps exactly one caller and the
+      // retention rule is evaluated in one place. By the deadline
+      // `selectTaskRespawnLabel` reports no respawn in flight, so the pass
+      // prunes normally. No early cancel when the successor lands: that pass
+      // is already a no-op, and one extra reconcile per respawn is cheaper
+      // than the bookkeeping to avoid it.
+      if (extractSpawnProgressLabel(event.payload) === null) return;
+      const respawnedTaskId = event.taskId;
+      const pendingSweep = respawnSweepTimers.get(respawnedTaskId);
+      if (pendingSweep !== undefined) clearTimeout(pendingSweep);
+      respawnSweepTimers.set(
+        respawnedTaskId,
+        setTimeout(() => {
+          respawnSweepTimers.delete(respawnedTaskId);
+          reconcileSessionsFromBoards(subscriptions);
+        }, RESPAWN_ROW_GRACE_MS),
+      );
     }),
     feed.on('board', (event) => {
       // BoardEvents carry ids only; reconciliation is a debounced re-snapshot.
@@ -207,6 +257,11 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
   return () => {
     for (const reseedTimer of resizeReseedTimers.values()) clearTimeout(reseedTimer);
     resizeReseedTimers.clear();
+    // Dropped rather than flushed: unbinding tears the feed down, and a prune
+    // pass firing against a disconnected channel would re-declare a desired
+    // stream set nothing is listening for.
+    for (const sweepTimer of respawnSweepTimers.values()) clearTimeout(sweepTimer);
+    respawnSweepTimers.clear();
     if (transcriptFlushTimer !== null) {
       clearTimeout(transcriptFlushTimer);
       transcriptFlushTimer = null;

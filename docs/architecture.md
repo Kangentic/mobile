@@ -499,11 +499,64 @@ authority over whether a session is over.
 
 Only `'suspended'` is excluded, and the other two statuses are deliberate keeps rather than
 oversights. `'queued'` is not excluded because a queued session cannot reach this predicate in the
-first place: the settle only arms on a `thinking -> idle` edge, and a queued placeholder has no PTY
-and a fresh session id, so its entry is created idle and never reports `thinking`. Excluding it
+first place: the settle only arms on a `thinking -> idle` edge, and a queued placeholder has no PTY,
+so its entry is created idle and never reports `thinking` while it stays queued. Excluding it
 would be dead code that reads as a considered decision. `'exited'` is a snapshot racing teardown,
 and the `session-ended` push stays the authority there because it carries `intentional`, which a
 snapshot cannot.
+
+**Correction (2026-09-13):** the paragraph above used to add "and a fresh session id" to that
+reasoning. That half was wrong, and it mattered once `'queued'` started being RENDERED. A queue
+promotion reuses the SAME session id - the desktop's `session-spawn-flow.ts` says so outright
+("For queue promotions, the ID was set on the input when the placeholder was created in
+`spawn()`") - so a promoted session goes on reporting activity under the id the phone already
+holds. Since `sessionStatus` is written only by `applySnapshot` and `setDesiredStreams` never
+re-subscribes a session that already has a stream, nothing would ever correct the stale
+`'queued'`, and a running agent would stay badged as waiting for the life of the connection.
+`applyActivityEvent` therefore retires `'queued'` on ANY payload but `'session-ended'`, not just a
+`'thinking'` one and not only on an `'activity'` payload: a placeholder with no PTY emits nothing at
+all, so any payload arriving is itself the proof of promotion. The retirement sits ABOVE the switch
+for exactly that reason - its justification is the payload ARRIVING, not what the payload says.
+Scoping it to the `'activity'` case would have left a session whose first push after promotion
+happened to be a `'permission'` badged "Waiting for a free slot" with its prompt hidden behind that
+caption, because `starting` outranks every other body source on the feed row. `'session-ended'` is
+the one exclusion: a session cancelled OUT of the queue never ran, so calling it `'running'` would
+be a lie. All of that is wider than the `'suspended'` clause above on purpose - a parked session's
+entry can legitimately carry a stale `'idle'`, so only positive proof of work retires that one.
+
+### Transitional states on the Home feed and the board card
+
+Two states are neither working nor idle, and both used to be invisible on the list surfaces.
+
+A **respawn** leaves the task sessionless for several seconds. `reconcileSessionsFromBoards` prunes
+the activity entry for any session no board claims, and the Home feed builds its rows from
+`bySessionId` alone, so the row vanished for the gap and then reappeared under the successor's id;
+the board card, keyed on `task.session_id`, lost its status glyph the same way. The fix is a
+task-keyed `respawnByTaskId`, written from the same `session-ended` payload as the session-keyed
+`spawnProgressLabelBySessionId` (which serves `SessionScreen`, the one consumer that still has a
+session id to key on). The reconciler keeps an entry alive while its task has a respawn in flight,
+and `registerSession` clears the fact - so the single snapshot that installs the successor also
+releases the retained row, in that order, with no window in which the task owns two rows. A respawn
+that never lands is bounded by `RESPAWN_ROW_GRACE_MS` (20s, matching `SessionScreen`'s
+`SESSION_SWAP_GRACE_MS`) plus a timer in `storeFeed` that re-runs the prune: board snapshots are
+event-driven, so on a quiet desktop nothing else would ever clear it.
+
+A **queued** session is the durable one. The desktop's placeholder has no PTY, so it never reports
+thinking and its entry sits at `state: 'idle'` - indistinguishable from an agent that finished its
+work, which is exactly why it was invisible.
+
+Both render as a fourth `AgentStatusKind`, `'starting'`: the agent ring drawn STILL and in the muted
+`statusIdle` tone, plus a caption in the feed row's body (the desktop's own phase label, or
+"Waiting for a free slot"). All three surfaces that draw a session's status read the same two
+signals - the Home feed row, the board card, and `TaskHeader` - so one task cannot report two
+different states on two screens at once. The header keeps its existing `activityEntry` guard, so a
+transitional state adds no glyph where there was none: during a respawn gap the session screen
+already says more than a glyph could, through the "Switching session" overlay. Deliberately **not** a fourth `TriageSection` - `sectionForEntry` stays
+a pure function of `entry.state`, which keeps both states structurally unable to reach
+`endedSessionIds` or `SessionScreen`'s `sessionEnded`, and keeps a respawning row in its existing
+section rather than bouncing it through a new one twice in five seconds. The ring is static because
+a queued session can sit for minutes and a never-ending animation holds the app drawing at full
+frame rate; rendering it through the hookless path also registers no Reanimated mapper.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`

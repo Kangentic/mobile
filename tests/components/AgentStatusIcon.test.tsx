@@ -314,6 +314,67 @@ describe('the idle envelope', () => {
   });
 });
 
+/**
+ * The third kind: a task between two sessions (a respawn's sessionless gap) or
+ * one the desktop has QUEUED behind its concurrency limit. It borrows the
+ * agent ring's geometry and must never borrow its motion.
+ */
+describe('the starting ring', () => {
+  it('draws the agent ring, not the envelope, so it still reads as an agent', () => {
+    renderIcon({ kind: 'starting' });
+
+    const circle = screen.getByTestId('svg-circle');
+    expect(circle.props.cx).toBe(workingRing.cx);
+    expect(circle.props.r).toBe(workingRing.r);
+    // 'keep-dash' at rest, exactly as reduced motion draws the working ring:
+    // a held arc reads as a paused spinner, where a closed solid circle would
+    // read as a different glyph entirely.
+    expect(circle.props.strokeDasharray).toEqual([...workingDash]);
+    expect(screen.queryByTestId('svg-rect')).toBeNull();
+  });
+
+  /**
+   * THE POINT OF THIS KIND, and the assertion worth the most in this block.
+   *
+   * A queued session can sit for MINUTES, and per motion-conventions.md an
+   * indicator that never stops holds the whole app drawing at full frame rate
+   * for as long as it is mounted - a battery cost `dumpsys gfxinfo` reports as
+   * perfectly smooth. Worse, mounting SpinningMark registers a `useAnimatedStyle`
+   * mapper, and idle CPU scales with REGISTERED mappers whether or not they are
+   * dirty (~0.47 points each, measured on a release build).
+   *
+   * Neither cost is visible in the drawn output: a stopped spinner and a static
+   * ring render identically. So this asserts the MECHANISM - no driver started,
+   * and no rotating wrapper mounted at all - which is the only thing that can
+   * catch `kind: 'starting'` quietly falling through to the spinning branch.
+   */
+  it('mounts no spin driver and no rotating node, so it registers no mappers', () => {
+    const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+    const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
+
+    renderIcon({ kind: 'starting' });
+
+    expect(withTimingSpy).not.toHaveBeenCalled();
+    expect(withRepeatSpy).not.toHaveBeenCalled();
+    expect(rotatingNodeCount()).toBe(0);
+    expect(screen.getByTestId('svg-circle').props.animatedProps).toBeUndefined();
+  });
+
+  /**
+   * The mark is SHARED with 'working', so the tone is the only thing separating
+   * the two on screen - asserted against all three of the other kinds' colours
+   * so "muted" cannot quietly become one of them.
+   */
+  it('tints muted, distinct from both working and every idle kind', () => {
+    renderIcon({ kind: 'starting' });
+
+    const { props } = screen.getByTestId('agent-status-starting');
+    expect(props.color).toBe(darkTerminalTheme.colors.statusIdle);
+    expect(props.color).not.toBe(darkTerminalTheme.colors.statusWorking);
+    expect(props.color).not.toBe(darkTerminalTheme.colors.warning);
+  });
+});
+
 describe('reduced motion', () => {
   it('rests the ring holding its arc instead of closing it into a solid circle', () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
@@ -511,6 +572,22 @@ describe('registered mappers (the idle-CPU lever)', () => {
         </ScreenMotionOverride>
       </ThemeProvider>,
     );
+    expect(animatedStyleSpy).not.toHaveBeenCalled();
+    expect(animatedPropsSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The starting ring shares `agent-working`'s mark, which DOES declare a spin -
+   * so unlike the idle envelope above it is one mistaken condition away from
+   * registering a mapper, and a queued session can hold that mapper for minutes.
+   * The mark's own data cannot express this (it is shared), so the gate lives in
+   * the component and this is what holds it there.
+   */
+  it('registers no animated mapper for a starting ring, despite sharing the spinning mark', () => {
+    const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+    const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
+    renderIcon({ kind: 'starting' });
+    expect(workingMark.spin).toBeDefined();
     expect(animatedStyleSpy).not.toHaveBeenCalled();
     expect(animatedPropsSpy).not.toHaveBeenCalled();
   });

@@ -6,7 +6,7 @@ import { GitCompareArrows } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, Text, useTheme } from '@/components';
 import { getColumnIcon } from '@/components/board/columnIcons';
-import { sectionForEntry, useActivityStore } from '@/state/activityStore';
+import { isStartingSession, sectionForEntry, selectTaskRespawnLabel, useActivityStore } from '@/state/activityStore';
 import { findTaskById, selectTaskColumn, useBoardStore } from '@/state/boardStore';
 
 export interface TaskHeaderProps {
@@ -35,6 +35,18 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const activityEntry = useActivityStore((state) => (sessionId ? (state.bySessionId[sessionId] ?? null) : null));
+  /**
+   * The same transitional read the feed row and board card make, so one task
+   * cannot report two different states on two screens at once. A queued
+   * session is the case that bit: its entry is `state: 'idle'`, so this header
+   * drew the yellow idle envelope while the feed drew the muted starting ring
+   * for the very same session.
+   *
+   * Task-keyed like the other two, and guarded on `taskId` because this header
+   * is also used by CompletedTaskScreen, which passes none.
+   */
+  const respawnLabel = useActivityStore((state) => (taskId ? selectTaskRespawnLabel(state, taskId) : null));
+  const starting = isStartingSession(respawnLabel, activityEntry?.sessionStatus);
   const column = useBoardStore((state) => (taskId ? selectTaskColumn(state, taskId) : null));
   // locatedProjectId deliberately, never a route-param fallback: MoveTaskScreen
   // needs the board that actually HOLDS the task, which is findTaskById's
@@ -69,10 +81,16 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
       >
         <IconButton iconName="chevron-back" onPress={() => router.back()} testID="task-back-button" accessibilityLabel="Back" />
         {/* The same status language as the feed and board cards: green
-            spinner while working, yellow mail for every idle state. */}
+            spinner while working, muted still ring while queued or mid-respawn,
+            yellow mail for every other idle state.
+
+            Still gated on `activityEntry`, so a transitional state adds no
+            glyph where there was none - during a respawn gap this screen
+            already says far more than a glyph could, through the full
+            "Switching session" overlay. */}
         {activityEntry ? (
           <AgentStatusIcon
-            kind={sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'}
+            kind={starting ? 'starting' : sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'}
             testID="task-header-status"
           />
         ) : null}

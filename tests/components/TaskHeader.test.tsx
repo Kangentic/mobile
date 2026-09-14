@@ -1,10 +1,10 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { ThemeProvider } from '@/components';
+import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { TaskHeader } from '@/screens/task/TaskHeader';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
-import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -130,5 +130,110 @@ describe('TaskHeader column chip', () => {
 
     expect(screen.getByText('Doing')).toBeTruthy();
     expect(screen.queryByText('To Do')).toBeNull();
+  });
+});
+
+/**
+ * One task must not report two different states on two screens at once. The
+ * feed row and the board card badge a queued or mid-respawn session with the
+ * muted starting ring; this header drew the yellow idle envelope for the very
+ * same session, because a queued placeholder has no PTY and so sits at
+ * `state: 'idle'` - which is all `sectionForEntry` can see.
+ */
+describe('TaskHeader status glyph', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    seedLocatedTask();
+  });
+
+  /**
+   * Which kind rendered, read off the mark's TINT.
+   *
+   * Not off a testID: `AgentStatusIcon` resolves `testID ?? fallbackTestID`, and
+   * this header passes an explicit `task-header-status`, so the per-kind
+   * fallback ids never appear here and every kind answers to the same selector.
+   * The colour is the one thing that differs, and it is already how
+   * AgentStatusIcon.test.tsx distinguishes them.
+   *
+   * 'idle' and 'idle-unread' share the warning tone by design, so they collapse
+   * to one answer - which is all this header ever draws for them anyway.
+   */
+  const renderedStatusTone = (): string | null => {
+    const icon = screen.queryByTestId('task-header-status');
+    if (icon === null) return null;
+    const { color } = icon.props;
+    if (color === darkTerminalTheme.colors.statusIdle) return 'starting';
+    if (color === darkTerminalTheme.colors.statusWorking) return 'working';
+    if (color === darkTerminalTheme.colors.warning) return 'idle';
+    return `unknown:${String(color)}`;
+  };
+
+  it('shows the starting ring for a queued session, matching the feed and the board card', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applySnapshot(
+      'sess-1',
+      'task-1',
+      'project-1',
+      streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
+    );
+
+    renderTaskHeader({ sessionId: 'sess-1' });
+
+    expect(renderedStatusTone()).toBe('starting');
+  });
+
+  /**
+   * The control, and the reason the test above is not just asserting "idle
+   * renders something": the SAME idle entry without the queued status must
+   * still draw the envelope.
+   */
+  it('still shows the idle envelope for an ordinary settled session', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applySnapshot(
+      'sess-1',
+      'task-1',
+      'project-1',
+      streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
+    );
+
+    renderTaskHeader({ sessionId: 'sess-1' });
+
+    expect(renderedStatusTone()).toBe('idle');
+  });
+
+  /**
+   * A respawn is task-keyed, so the header finds it without a session id of
+   * its own - but only where a glyph already existed. The guard stays on
+   * `activityEntry` deliberately: during the gap this screen shows the full
+   * "Switching session" overlay, and a header glyph appearing where there was
+   * none would be a second, weaker signal saying the same thing.
+   */
+  it('shows the starting ring for a respawning task that still has its outgoing entry', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+    });
+
+    renderTaskHeader({ sessionId: 'sess-1' });
+
+    expect(renderedStatusTone()).toBe('starting');
+  });
+
+  it('draws no glyph at all when no session is bound, respawn or not', () => {
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+    });
+
+    renderTaskHeader({ sessionId: null });
+
+    expect(renderedStatusTone()).toBeNull();
   });
 });

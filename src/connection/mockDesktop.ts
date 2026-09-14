@@ -124,6 +124,23 @@ const MOCK_IDLE_TASK_ID = 'mock-task-idle';
  */
 const MOCK_PAUSED_SESSION_ID = 'mock-session-paused';
 const MOCK_PAUSED_TASK_ID = 'mock-task-paused';
+/**
+ * A session the desktop has QUEUED behind its concurrency limit
+ * (`agent.maxConcurrentSessions`, default 8). SessionManager returns a
+ * placeholder with `pty: null` and `status: 'queued'` the moment
+ * `sessionQueue.shouldQueue()` is true, and the transition engine writes the
+ * task's `session_id` to it on the very next statement - so the phone sees an
+ * ordinary live session whose ACTIVITY is idle, because a placeholder with no
+ * PTY never reports thinking.
+ *
+ * That is precisely why this state used to be invisible: created-idle and
+ * never-thinking is indistinguishable from an agent that FINISHED its work,
+ * and `sessionStatus` is the only thing that separates the two. This is the
+ * rig's one exercise of that path, the queue counterpart to the paused session
+ * above.
+ */
+const MOCK_QUEUED_SESSION_ID = 'mock-session-queued';
+const MOCK_QUEUED_TASK_ID = 'mock-task-queued';
 const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
@@ -1626,7 +1643,33 @@ export const MOCK_GEMINI_STATIC_SESSION: MockStaticSessionSpec = {
   },
 };
 
-/** Every session that answers from static content: the extras, codex, opencode, gemini, idle, paused, and the archived pair. */
+/**
+ * A queued session has RUN nothing, so every content field here is empty and
+ * that emptiness is the fixture. No scrollback: the placeholder holds no PTY,
+ * so the desktop serializes an empty frame. No assistant turn: the seed
+ * transcript builder skips the assistant cell when both its texts are empty,
+ * leaving the user's prompt alone on the chat lens, which is exactly what a
+ * real desktop can serve before the agent starts. No tokens spent either.
+ */
+export const MOCK_QUEUED_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: MOCK_QUEUED_SESSION_ID,
+  taskId: MOCK_QUEUED_TASK_ID,
+  userText: 'Add a low-stock badge to the product grid, driven by the warehouse feed.',
+  assistantText: '',
+  replyText: 'Still waiting on a free slot - I will pick this up the moment one opens.',
+  scrollback: '',
+  model: MOCK_MODEL_SONNET,
+  usedTokens: 0,
+  // Idle, because that is what the placeholder genuinely reports. The queue is
+  // carried by sessionStatus below and by nothing else - if this fixture ever
+  // starts implying the state through snippet text instead, it has stopped
+  // testing the thing it exists for.
+  activityState: 'idle',
+  alreadyWaitingForMs: 3 * 60_000,
+  sessionStatus: 'queued',
+};
+
+/** Every session that answers from static content: the extras, codex, opencode, gemini, idle, paused, queued, and the archived pair. */
 export const MOCK_STATIC_SESSIONS: MockStaticSessionSpec[] = [
   ...MOCK_EXTRA_THINKING_SESSIONS,
   MOCK_CODEX_STATIC_SESSION,
@@ -1634,6 +1677,7 @@ export const MOCK_STATIC_SESSIONS: MockStaticSessionSpec[] = [
   MOCK_GEMINI_STATIC_SESSION,
   MOCK_IDLE_STATIC_SESSION,
   MOCK_PAUSED_STATIC_SESSION,
+  MOCK_QUEUED_STATIC_SESSION,
   ...MOCK_ARCHIVED_STATIC_SESSIONS,
 ];
 
@@ -2290,6 +2334,24 @@ export function initialTasks2(): BoardTaskWire[] {
       session_id: MOCK_OPENCODE_STATIC_SESSION.sessionId,
       branch_name: 'feature/idempotency-keys',
       labels: ['payments'],
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    boardTaskFixture({
+      id: MOCK_QUEUED_TASK_ID,
+      display_id: 4,
+      // A QUEUED agent session - see MOCK_QUEUED_STATIC_SESSION. It sits in an
+      // active column with a real session_id, exactly as the desktop leaves it,
+      // so the Agents feed and the board card both have to tell it apart from
+      // the idle row two cards up using sessionStatus alone.
+      title: 'Show a low-stock badge on the product grid',
+      description: 'Shoppers add sold-out sizes to the cart and only find out at checkout. Surface the warehouse count on the grid card itself.',
+      swimlane_id: 'lane2-progress',
+      position: 2,
+      agent: 'claude',
+      session_id: MOCK_QUEUED_SESSION_ID,
+      branch_name: 'feature/low-stock-badge',
+      labels: ['storefront'],
       created_at: nowIso,
       updated_at: nowIso,
     }),

@@ -34,6 +34,7 @@ import {
   MOCK_EXTRA_THINKING_SESSIONS,
   MOCK_GEMINI_STATIC_SESSION,
   MOCK_OPENCODE_STATIC_SESSION,
+  MOCK_QUEUED_STATIC_SESSION,
   MOCK_STATIC_SESSIONS,
   MOCK_STREAM_CEILING_FOR_TEST,
   activeCapture,
@@ -623,6 +624,12 @@ describe('authored claude frames fill the grid with the live chrome', () => {
         spec !== MOCK_CODEX_STATIC_SESSION &&
         spec !== MOCK_GEMINI_STATIC_SESSION &&
         spec !== MOCK_OPENCODE_STATIC_SESSION &&
+        // Excluded for a different reason than the three above, which are
+        // merely a different CLI's chrome: a QUEUED session has no PTY at all,
+        // so there is no frame for the desktop to serialize and an empty
+        // scrollback is the correct fixture. Asserted positively below rather
+        // than left as a silent hole in this guard.
+        spec !== MOCK_QUEUED_STATIC_SESSION &&
         spec.model.id !== codexModelId,
     );
     // The expectation side is a LITERAL set of ids, not the same predicate
@@ -649,6 +656,19 @@ describe('authored claude frames fill the grid with the live chrome', () => {
       expect(bottomRows, `${spec.sessionId} prompt`).toContain('❯');
       expect(bottomRows, `${spec.sessionId} footer`).toContain('auto mode on');
     }
+  });
+
+  /**
+   * The other half of the exclusion above. Without this, giving the queued
+   * session a scrollback would silently drop it out of the guard's reach and
+   * nothing would notice - and a queued session that paints a terminal is not
+   * a cosmetic slip: it would mean the rig had stopped modelling a placeholder
+   * with `pty: null` and started implying the state through content, which is
+   * exactly the failure MOCK_QUEUED_STATIC_SESSION's own comment warns against.
+   */
+  it('keeps the queued session frameless, because a placeholder has no PTY', () => {
+    expect(MOCK_QUEUED_STATIC_SESSION.scrollback).toBe('');
+    expect(MOCK_QUEUED_STATIC_SESSION.sessionStatus).toBe('queued');
   });
 });
 
