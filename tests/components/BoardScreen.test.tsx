@@ -5,6 +5,7 @@ import { BoardScreen } from '@/screens/BoardScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
+import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -282,6 +283,70 @@ describe('BoardScreen', () => {
     );
 
     expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
+  });
+
+  /**
+   * The OTHER transitional state, and the one the respawn tests above cannot
+   * exercise: a queued session keeps its `session_id` (`seedBoard`'s task-1
+   * already has `sess-1`), so `activityEntry` is non-null here, unlike the
+   * sessionless respawn case. A queued placeholder has no PTY and so reports
+   * `state: 'idle'` - indistinguishable from a session that finished its work
+   * unless `sessionStatus` is read too. This is the exact shape
+   * `MOCK_QUEUED_STATIC_SESSION` documents: "the Agents feed and the board
+   * card both have to tell it apart from the idle row two cards up using
+   * sessionStatus alone."
+   *
+   * Distinct regression risk from the respawn test above: `statusKind`'s
+   * ternary checks `starting` before `activityEntry`, and with a null
+   * `activityEntry` (the respawn case) that ordering is unobservable - either
+   * branch order reaches the same `starting ? 'starting' : null` result. Only
+   * a case where `activityEntry` is truthy, like this one, can tell the
+   * ternary's ordering apart from a version that checks `activityEntry` first
+   * and falls back to the idle envelope for a queued session.
+   */
+  it('shows a starting glyph for a queued task that still has a live session entry', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
+      );
+
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+  });
+
+  /**
+   * The control: the SAME idle entry without the queued status must keep
+   * drawing the ordinary idle envelope, so the test above cannot be passing
+   * merely because idle-with-a-live-entry always draws the starting tint.
+   */
+  it('still shows the idle envelope for an ordinary settled task, not the starting tint', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
+      );
+
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.warning);
   });
 
   /**
