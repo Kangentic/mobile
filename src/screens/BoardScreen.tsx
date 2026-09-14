@@ -16,7 +16,7 @@ import {
   useBoardStore,
   type ProjectBoard,
 } from '@/state/boardStore';
-import { useActivityStore, sectionForEntry } from '@/state/activityStore';
+import { useActivityStore, isStartingSession, sectionForEntry, selectTaskRespawnLabel } from '@/state/activityStore';
 import { ARCHIVED_PAGE_SIZE, loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
 import { reportHandledError } from '@/observability/crashReporting';
 
@@ -426,15 +426,26 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
     });
   }, [router, task.id, task.session_id, task.archived_at, projectId]);
 
+  // Task-keyed, not session-keyed, and that is the entire point: during a
+  // respawn the task's session_id is null, so `activityEntry` above is null
+  // and this card used to show no status at all for the several seconds the
+  // desktop was handing the work to a new agent.
+  const respawnLabel = useActivityStore((state) => selectTaskRespawnLabel(state, task.id));
+  const starting = isStartingSession(respawnLabel, activityEntry?.sessionStatus);
+
   // Desktop TaskCard parity: spinner while thinking, mail while the
-  // session waits on the user (permission or idle).
-  const statusKind: AgentStatusKind | null = activityEntry
-    ? sectionForEntry(activityEntry) === 'working'
-      ? 'working'
-      : sectionForEntry(activityEntry) === 'needs-you' || activityEntry.unreadCount > 0
-        ? 'idle-unread'
-        : 'idle'
-    : null;
+  // session waits on the user (permission or idle). 'starting' outranks both -
+  // a queued session reports idle (no PTY, so it never thinks) and would
+  // otherwise be indistinguishable from an agent that finished its work.
+  const statusKind: AgentStatusKind | null = starting
+    ? 'starting'
+    : activityEntry
+      ? sectionForEntry(activityEntry) === 'working'
+        ? 'working'
+        : sectionForEntry(activityEntry) === 'needs-you' || activityEntry.unreadCount > 0
+          ? 'idle-unread'
+          : 'idle'
+      : null;
   const descriptionPreview = task.description.length > 0 ? collapseToSnippetText(task.description) : '';
 
   return (

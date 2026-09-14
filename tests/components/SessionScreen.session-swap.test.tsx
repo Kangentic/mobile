@@ -1202,9 +1202,10 @@ describe('SessionScreen across a column move', () => {
      * The composed path, not just either half in isolation. activityStore
      * records ANY non-empty string spawnProgressLabel with no shape check
      * (see activityStore.test.ts); SessionScreen opens the switching window
-     * off presence alone (`boundSpawnProgressLabel !== null`); and only
-     * SessionSwitchingState's own `renderableLabel` rejects a malformed one
-     * and substitutes the generic caption (see SessionSwitchingState.test.tsx,
+     * off presence alone (`boundSpawnProgressLabel !== null`); and only the
+     * shared `renderableSpawnLabel` (src/lib/spawnLabel.ts) rejects a malformed
+     * one, with SessionSwitchingState substituting its own generic caption
+     * when it does (see SessionSwitchingState.test.tsx,
      * which drives that fallback via a directly-passed prop). Nothing before
      * this test exercises the three wired together: a real desktop-shaped
      * over-cap label flowing through the store into the mounted screen. What

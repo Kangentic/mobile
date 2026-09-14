@@ -26,7 +26,7 @@ import { useTheme } from './theme/ThemeProvider';
 /** One full turn, so `spinTurns` (0..1 per pass) reads as degrees for the view transform. */
 const FULL_TURN_DEGREES = 360;
 
-export type AgentStatusKind = 'working' | 'idle-unread' | 'idle';
+export type AgentStatusKind = 'working' | 'idle-unread' | 'idle' | 'starting';
 
 export interface AgentStatusIconProps {
   kind: AgentStatusKind;
@@ -53,10 +53,32 @@ const DOT_CENTER_X = ACTIVITY_GRID_WIDTH / 2;
 const DOT_CENTER_Y = ACTIVITY_GRID_HEIGHT / 2;
 const DOT_RADIUS_UNITS = 3;
 
+/**
+ * Only two marks exist upstream, so 'starting' reuses the agent ring rather
+ * than inventing a third glyph (a new mark is a @kangentic/branding change, not
+ * a local one). It is the RESTING ring: `agent-working` declares
+ * `restRendering: 'keep-dash'`, so at rest it holds its arc rather than closing
+ * into a solid circle - a rendering the marks already design for, and the one
+ * reduced motion draws. Still ring plus muted tone reads as "the agent is not
+ * running yet", which is exactly what queued and mid-respawn both mean.
+ */
 const MARK_BY_KIND: Record<AgentStatusKind, ActivityMarkName> = {
   working: 'agent-working',
   'idle-unread': 'agent-idle',
   idle: 'agent-idle',
+  starting: 'agent-working',
+};
+
+/**
+ * The testID a caller gets when it passes none. A `Record` like the mark map
+ * above rather than a ternary chain, so a fifth kind fails the build here
+ * instead of silently falling through to the idle id.
+ */
+const FALLBACK_TESTID_BY_KIND: Record<AgentStatusKind, string> = {
+  working: 'agent-status-working',
+  'idle-unread': 'agent-status-idle-unread',
+  idle: 'agent-status-idle',
+  starting: 'agent-status-starting',
 };
 
 /**
@@ -255,6 +277,11 @@ function MarchingMark({
  * first served ('idle-unread' is kept as a semantic kind for testing/telemetry
  * but renders identically).
  *
+ * 'starting' is the third state, and the one with no desktop counterpart: a
+ * task between two sessions (a respawn's sessionless gap) or one the desktop
+ * has queued behind its concurrency limit. It draws the agent ring MUTED and
+ * STILL - not working, and not waiting on the user either.
+ *
  * The geometry, the 1400ms period and the reduced-motion rendering all arrive
  * as generated data, so none of them can drift from the assets the desktop and
  * the website draw. Do not hardcode a duration or a dash here.
@@ -290,13 +317,27 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
    * renders through the hookless static path, so it holds no registered mapper
    * for a view nobody can see.
    */
-  const marching = !reducedMotion && screenMotionActive && !belowFloor && march !== undefined;
-  const spinning = !reducedMotion && screenMotionActive && !belowFloor && spin !== undefined;
+  /**
+   * 'starting' borrows the spinning mark's GEOMETRY but never its motion, so
+   * it is gated out here rather than by the mark data (which it shares with
+   * 'working'). A session can sit queued for minutes, and per
+   * motion-conventions.md an indicator that never stops holds the whole app
+   * drawing at full frame rate for as long as it is mounted. Gating here also
+   * keeps it on the hookless static path below, so a starting row registers
+   * ZERO Reanimated mappers - the same lever the idle envelope already banks.
+   */
+  const isStarting = kind === 'starting';
+  const marching = !reducedMotion && screenMotionActive && !belowFloor && !isStarting && march !== undefined;
+  const spinning = !reducedMotion && screenMotionActive && !belowFloor && !isStarting && spin !== undefined;
 
-  const color = kind === 'working' ? theme.colors.statusWorking : theme.colors.warning;
-  const fallbackTestID =
-    kind === 'working' ? 'agent-status-working' : kind === 'idle-unread' ? 'agent-status-idle-unread' : 'agent-status-idle';
-  const resolvedTestID = testID ?? fallbackTestID;
+  // Muted rather than green or amber: this state asks nothing of the user and
+  // reports no work being done, which is the one status that should recede.
+  const color = isStarting
+    ? theme.colors.statusIdle
+    : kind === 'working'
+      ? theme.colors.statusWorking
+      : theme.colors.warning;
+  const resolvedTestID = testID ?? FALLBACK_TESTID_BY_KIND[kind];
 
   // Below the mark's legibility floor a 2px stroke on a 24 grid falls under one
   // device pixel and the glyph turns to mush, so the contract says draw a dot

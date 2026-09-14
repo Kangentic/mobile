@@ -5,17 +5,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
 import {
+  RESPAWN_ROW_GRACE_MS,
   sectionForEntry,
   selectSessionEnded,
   selectSessionSpawnProgressLabel,
+  selectTaskRespawnLabel,
   selectTriageRows,
   selectWaitingSince,
   useActivityStore,
 } from '@/state/activityStore';
 import { streamSnapshotFixture, usageFixture } from '@/devsupport/desktopFixtures';
 
-function activityEvent(sessionId: string, payload: ActivityEventPayload): ActivityEvent {
-  return { kind: 'activity', sessionId, taskId: 'task-1', payload };
+/**
+ * `taskId` defaults to the 'task-1' every other test in this file registers
+ * against, and is a parameter only for the respawn-map block below: that map is
+ * keyed by TASK, so proving it is keyed correctly needs an event whose task and
+ * session ids cannot be confused for one another.
+ */
+function activityEvent(sessionId: string, payload: ActivityEventPayload, taskId = 'task-1'): ActivityEvent {
+  return { kind: 'activity', sessionId, taskId, payload };
 }
 
 /** A `session-ended` payload carrying the desktop's `spawnProgressLabel` (protocol 0.14.0+). */
@@ -28,8 +36,8 @@ function sessionEndedWithLabel(intentional: boolean, spawnProgressLabel: string)
  * protocol declares it `string | undefined` and `parseActivityEventPayload`
  * rejects anything else, so this cannot arrive from a validated wire event; it
  * exists to prove the store does not hand a non-string on to
- * `SessionSwitchingState`'s `renderableLabel`, which would call `.trim()` on it
- * and throw at render.
+ * `renderableSpawnLabel` (`src/lib/spawnLabel.ts`), which would call `.trim()`
+ * on it and throw at render.
  *
  * Built by INTERSECTION, not `as unknown as ActivityEventPayload`: a blanket
  * cast would accept any object shape at all, while this keeps the base payload
@@ -238,7 +246,7 @@ describe('activityStore', () => {
 
     /**
      * The runtime guard's `typeof` half. Without it a non-string label would
-     * sail through to `SessionSwitchingState`'s `renderableLabel`, which
+     * sail through to `renderableSpawnLabel` (`src/lib/spawnLabel.ts`), which
      * calls `.trim()` unconditionally and throws at render.
      */
     it('rejects a non-string spawnProgressLabel (a number), leaving the selector null', () => {
@@ -436,6 +444,247 @@ describe('activityStore', () => {
         .applyActivityEvent(activityEvent('sess-1', { type: 'activity', state: 'idle', reason: { kind: 'idle' } }));
 
       expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('suspended');
+    });
+
+    /**
+     * The QUEUED retirement, which is deliberately WIDER than the 'suspended'
+     * one above and must stay that way.
+     *
+     * A queued placeholder has `pty: null` (the desktop's shouldQueue branch),
+     * so it can emit nothing at all - which makes ANY payload but a
+     * 'session-ended' proof the queue promoted it, whatever it says. The
+     * narrower
+     * 'thinking'-only rule would leave a promoted session that happens to
+     * report idle first badged "Waiting for a free slot" forever, because the
+     * promotion REUSES the same session id and setDesiredStreams never
+     * re-subscribes a session that already has a stream, so no snapshot would
+     * ever correct it.
+     *
+     * 'idle' is the case that matters here: it is the one the 'suspended'
+     * clause explicitly refuses, so a test that only passed 'thinking' would
+     * still pass with the two clauses merged into one.
+     */
+    it.each([
+      { state: 'idle' as const, reason: { kind: 'idle' as const } },
+      { state: 'thinking' as const, reason: { kind: 'turn-active' as const } },
+    ])('retires a stale queued when an activity event reports $state', ({ state, reason }) => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued' }));
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('queued');
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'activity', state, reason }));
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('running');
+    });
+
+    /**
+     * The NON-activity payloads, which is where scoping the retirement to
+     * `case 'activity'` actually bit. A queued placeholder emits nothing at
+     * all, so any of these arriving is equally proof of promotion - and
+     * 'permission' is the one with teeth: `starting` outranks every other body
+     * source on the feed row, so a promoted session whose first push was a
+     * prompt would have rendered as a muted "Waiting for a free slot" with the
+     * decision it wants from the user hidden behind that caption, and the row's
+     * peek effect skipped so nothing would fetch it either.
+     *
+     * These fail against a retirement that lives inside the switch's
+     * `case 'activity'`, which is the whole point of listing them separately
+     * from the it.each above.
+     */
+    it.each([
+      {
+        label: 'a permission prompt',
+        payload: { type: 'permission' as const, promptId: 'prompt-1', pending: true },
+      },
+      { label: 'a usage report', payload: { type: 'usage' as const, usage: usageFixture() } },
+      { label: 'a message preview', payload: { type: 'message-preview' as const, text: 'Reading the warehouse feed.' } },
+    ])('retires a stale queued when the first payload after promotion is $label', ({ payload }) => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued' }));
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('queued');
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', payload));
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('running');
+    });
+
+    /**
+     * The exclusion, and the control that stops the widening above from being
+     * "retire on literally everything". A session cancelled OUT of the queue
+     * ends without ever running, so calling it 'running' would be a lie the
+     * ended-state handling then has to work around.
+     */
+    it('leaves a queued status alone when the session ends without running', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued' }));
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('queued');
+      expect(useActivityStore.getState().bySessionId['sess-1'].feedStatus).toBe('ended');
+    });
+
+    /**
+     * The queued sibling of the constraint guard above. 'queued' is now
+     * RENDERED (the Home feed row and the board card badge it), which is
+     * exactly the pressure that would tempt someone to route it somewhere
+     * load-bearing. It must stay a display-only observation: a queued session
+     * is idle in triage terms and is emphatically not ended - it has not even
+     * started.
+     */
+    it('never leaks a queued status into triage or endedness', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
+        );
+
+      const entry = useActivityStore.getState().bySessionId['sess-1'];
+      expect(entry.sessionStatus).toBe('queued');
+      expect(sectionForEntry(entry)).toBe('idle');
+      expect(entry.feedStatus).toBe('live');
+      expect(selectSessionEnded(useActivityStore.getState(), 'sess-1')).toBe(false);
+    });
+  });
+
+  /**
+   * The TASK-keyed respawn map, which exists because the session-keyed one
+   * above cannot serve the two list surfaces. During a respawn the task's
+   * session_id is null, so the Home feed row and the board card have no
+   * session id to look a label up with - and the feed's rows come only from
+   * `bySessionId`, which the reconciler prunes, so without this the row
+   * vanishes for the whole gap and then reappears.
+   */
+  describe('respawnByTaskId (the task-keyed respawn signal)', () => {
+    /**
+     * Keyed by the event's TASK, never its session. A session-keyed write
+     * would pass any test that used the same string for both, which is why the
+     * ids here are deliberately unalike: the assertion fails on a
+     * `[event.sessionId]` mutation instead of silently agreeing with it.
+     */
+    it('records a respawn against the task, not the ended session', () => {
+      useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
+
+      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching model...');
+      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'sess-old')).toBeNull();
+    });
+
+    /** A genuine park sends no label, and must leave no respawn behind. */
+    it('records nothing when session-ended carries no label', () => {
+      useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
+
+      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+    });
+
+    /**
+     * The successor landing is what spends the fact, and `registerSession` is
+     * where the reconciler announces it. The clear has to happen THERE rather
+     * than on a later pass: the reconciler registers every live session before
+     * it prunes, so this is what lets the single board snapshot that installs
+     * the successor also release the retained ghost - one snapshot, never two
+     * rows for one task.
+     */
+    it('clears the respawn when a successor session registers for the task', () => {
+      useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
+
+      useActivityStore.getState().registerSession('sess-new', 'task-7', 'project-1');
+
+      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+    });
+
+    /** A different task's successor must not spend this task's respawn. */
+    it('leaves the respawn alone when an unrelated task registers a session', () => {
+      useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
+
+      useActivityStore.getState().registerSession('sess-other', 'task-9', 'project-1');
+
+      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching model...');
+    });
+
+    /**
+     * The desktop's label is INTENT, not a guarantee that a successor is
+     * coming, so an unbounded map would leave a row claiming "Switching
+     * model..." forever when a respawn dies. The selector is where that bound
+     * lives, so the two cards and the reconciler's retention rule cannot
+     * disagree about whether a respawn is still in flight.
+     */
+    it('stops reporting a respawn once the grace window has passed', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000_000);
+        useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+        useActivityStore
+          .getState()
+          .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
+
+        vi.setSystemTime(1_000_000 + RESPAWN_ROW_GRACE_MS - 1);
+        expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching model...');
+
+        vi.setSystemTime(1_000_000 + RESPAWN_ROW_GRACE_MS);
+        expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * Same reasoning as `endedSessionIds` recording before the no-entry bail:
+     * a phone that never registered the outgoing session (a deep link, a push
+     * tap) still has to learn a respawn is in flight for the task.
+     */
+    it('records a respawn even with no entry to update', () => {
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-unknown', sessionEndedWithLabel(true, 'Switching agent...'), 'task-7'));
+
+      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching agent...');
+    });
+
+    it('clears on reset', () => {
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
+
+      useActivityStore.getState().reset();
+
+      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+    });
+
+    /**
+     * `registerSession` runs once per live task on EVERY board snapshot, so a
+     * clear that rebuilt the map unconditionally would hand every subscriber a
+     * new object on every snapshot - re-rendering each board card and feed row
+     * for a fact that did not change.
+     */
+    it('leaves the map referentially unchanged when a registering task has no respawn', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      const before = useActivityStore.getState().respawnByTaskId;
+
+      useActivityStore.getState().registerSession('sess-2', 'task-2', 'project-1');
+
+      expect(useActivityStore.getState().respawnByTaskId).toBe(before);
     });
   });
 

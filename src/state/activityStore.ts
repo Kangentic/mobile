@@ -11,6 +11,31 @@ import type {
 
 export type TriageSection = 'needs-you' | 'working' | 'idle';
 
+/**
+ * How long a task with a respawn in flight keeps its Home feed row and its
+ * board-card status glyph after the outgoing session ended.
+ *
+ * Deliberately the same 20s as `SESSION_SWAP_GRACE_MS` in
+ * `src/screens/task/SessionScreen.tsx`, so a user glancing between the feed and
+ * the session screen sees one window rather than two. Kept as a second constant
+ * agreeing by documented convention rather than moved: that one lives in the
+ * file `tests/components/SessionScreen.session-swap.test.tsx` renders, and the
+ * two rigs already couple their respawn gaps the same way (see
+ * `scripts/stubDesktopPeer.mjs`'s STUB_RESPAWN_GAP_MS). Raising either means
+ * checking both.
+ *
+ * The desktop's label is INTENT, not a guarantee that a successor is coming, so
+ * this bound is not optional - without it a respawn that dies leaves a row
+ * claiming "Switching model..." forever.
+ */
+export const RESPAWN_ROW_GRACE_MS = 20_000;
+
+/** One in-flight respawn: the desktop's phase label and when the ending session reported it. */
+interface RespawnInFlight {
+  label: string;
+  reportedAt: number;
+}
+
 export interface SessionActivityEntry {
   sessionId: string;
   taskId: string;
@@ -149,6 +174,26 @@ interface ActivityStoreState {
    * same bound as `endedSessionIds`.
    */
   spawnProgressLabelBySessionId: Record<string, string>;
+  /**
+   * The same `session-ended` spawn-progress label, keyed by TASK rather than by
+   * the session that ended. Both keyings are needed and neither is redundant:
+   *
+   * - `SessionScreen` holds `lastBoundSessionId`, so the session-keyed map
+   *   above is the only one it can reach once the board drops the task.
+   * - The Home feed row and the board card are TASK-keyed. During the gap the
+   *   task has no session_id at all (`BoardScreen` reads
+   *   `state.bySessionId[task.session_id]`, which is null), so they have no
+   *   session id to look the label up with. Without this map the row simply
+   *   vanishes for the whole respawn, which is the bug this exists to fix.
+   *
+   * Unlike its two siblings this map is CLEARED rather than grown forever:
+   * `registerSession` drops the entry when the successor lands, so a
+   * completed respawn leaves nothing behind. A respawn that never lands leaks
+   * one small object, bounded exactly like `endedSessionIds`; the grace window
+   * in `selectTaskRespawnLabel` is what stops it being DISPLAYED, so read this
+   * map through that selector and never directly.
+   */
+  respawnByTaskId: Record<string, RespawnInFlight>;
   registerSession: (sessionId: string, taskId: string, projectId: string) => void;
   applySnapshot: (sessionId: string, taskId: string, projectId: string, snapshot: ReadStreamResponsePayload) => void;
   applyActivityEvent: (event: ActivityEvent) => void;
@@ -195,8 +240,8 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
  *
  * The `typeof` check is kept now that the field is DECLARED, and is not
  * redundant with the type. It is the runtime floor under a render crash: a
- * non-string reaching `SessionSwitchingState`'s `renderableLabel` would call
- * `.trim()` on it and throw. The wire path cannot deliver one today
+ * non-string reaching `renderableSpawnLabel` (`src/lib/spawnLabel.ts`) would
+ * call `.trim()` on it and throw. The wire path cannot deliver one today
  * (`feedRouter` gates on `isBridgeEvent`, which validates through
  * `parseActivityEventPayload` and drops the whole event on a non-string), so
  * this guards against a future producer that skips that gate, not against the
@@ -211,19 +256,53 @@ export function extractSpawnProgressLabel(payload: ActivityEventPayload): string
   return typeof payload.spawnProgressLabel === 'string' ? payload.spawnProgressLabel : null;
 }
 
+/**
+ * Drops a task's respawn-in-flight fact, preserving referential identity when
+ * there was nothing to drop. That matters: `registerSession` runs once per live
+ * task on EVERY board snapshot, so returning a fresh map each time would churn
+ * every subscriber of this field on every snapshot.
+ */
+function clearTaskRespawn(
+  respawnByTaskId: Record<string, RespawnInFlight>,
+  taskId: string,
+): Record<string, RespawnInFlight> {
+  if (respawnByTaskId[taskId] === undefined) return respawnByTaskId;
+  const next = { ...respawnByTaskId };
+  delete next[taskId];
+  return next;
+}
+
 export const useActivityStore = create<ActivityStoreState>((set) => ({
   bySessionId: {},
   endedSessionIds: {},
   spawnProgressLabelBySessionId: {},
+  respawnByTaskId: {},
 
   registerSession: (sessionId, taskId, projectId) =>
     set((state) => {
+      // A session registering for this task IS the successor landing, so the
+      // respawn-in-flight fact is spent. Cleared HERE rather than on a later
+      // pass so that the single board snapshot which installs the successor
+      // also releases the retained ghost entry: reconcileSessionsFromBoards
+      // registers every live session before it prunes, so by the time the
+      // prune loop asks "is a respawn in flight for this task?" the answer is
+      // already no. One snapshot, no double row, no flicker.
+      const respawnByTaskId = clearTaskRespawn(state.respawnByTaskId, taskId);
+      const respawnChanged = respawnByTaskId !== state.respawnByTaskId;
       const existing = state.bySessionId[sessionId];
       if (existing) {
-        if (existing.taskId === taskId && existing.projectId === projectId) return state;
-        return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, taskId, projectId } } };
+        if (existing.taskId === taskId && existing.projectId === projectId) {
+          return respawnChanged ? { respawnByTaskId } : state;
+        }
+        return {
+          bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, taskId, projectId } },
+          respawnByTaskId,
+        };
       }
-      return { bySessionId: { ...state.bySessionId, [sessionId]: emptyEntry(sessionId, taskId, projectId) } };
+      return {
+        bySessionId: { ...state.bySessionId, [sessionId]: emptyEntry(sessionId, taskId, projectId) },
+        respawnByTaskId,
+      };
     }),
 
   applySnapshot: (sessionId, taskId, projectId, snapshot) =>
@@ -279,22 +358,58 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         spawnProgressLabel !== null
           ? { ...state.spawnProgressLabelBySessionId, [event.sessionId]: spawnProgressLabel }
           : state.spawnProgressLabelBySessionId;
+      // The same label, keyed by task, for the two surfaces that have no
+      // session id during the gap. Written from the SAME extracted value, so
+      // the two maps cannot disagree about whether a respawn is in flight.
+      const respawnByTaskId: Record<string, RespawnInFlight> =
+        spawnProgressLabel !== null
+          ? { ...state.respawnByTaskId, [event.taskId]: { label: spawnProgressLabel, reportedAt: Date.now() } }
+          : state.respawnByTaskId;
       if (!existing) {
-        if (endedSessionIds === state.endedSessionIds && spawnProgressLabelBySessionId === state.spawnProgressLabelBySessionId) {
+        if (
+          endedSessionIds === state.endedSessionIds &&
+          spawnProgressLabelBySessionId === state.spawnProgressLabelBySessionId &&
+          respawnByTaskId === state.respawnByTaskId
+        ) {
           return state;
         }
-        return { endedSessionIds, spawnProgressLabelBySessionId };
+        return { endedSessionIds, spawnProgressLabelBySessionId, respawnByTaskId };
       }
       const updated: SessionActivityEntry = { ...existing, lastEventAt: Date.now() };
+      // The 'queued' retirement, hoisted ABOVE the switch on purpose, because
+      // its justification is about the payload ARRIVING and not about what the
+      // payload says. A queued placeholder has `pty: null` (desktop
+      // session-manager.ts's shouldQueue branch), so it can emit nothing at
+      // all - any payload reaching this entry is proof the queue promoted it.
+      // Scoping it to `case 'activity'` would have left a promoted session
+      // whose first push happened to be a 'permission' badged "Waiting for a
+      // free slot" with its prompt hidden behind that caption, since `starting`
+      // outranks every other body source on the feed row.
+      //
+      // 'session-ended' is the one exclusion: a session cancelled OUT of the
+      // queue ends without ever running, and calling that 'running' would be a
+      // lie the ended-state handling below then has to work around.
+      //
+      // This matters because no later snapshot would correct a stale status:
+      // `setDesiredStreams` skips a session that already has a stream, so a
+      // live channel re-snapshots nothing. The promotion REUSES the same
+      // session id (desktop session-spawn-flow.ts: "For queue promotions, the
+      // ID was set on the input when the placeholder was created"), which is
+      // exactly why the stale status would otherwise outlive the queue and
+      // leave a running agent badged as waiting for the life of the connection.
+      if (existing.sessionStatus === 'queued' && payload.type !== 'session-ended') {
+        updated.sessionStatus = 'running';
+      }
       switch (payload.type) {
         case 'activity':
           updated.state = payload.state;
           updated.reason = payload.reason;
-          // A thinking session is not parked, so this retires a 'suspended'
-          // that no later snapshot would ever correct - see the field's docs.
-          // Narrow on purpose: only 'suspended' is overwritten, so 'exited'
-          // and the null "never snapshotted" case are left exactly as they
-          // were, and the snapshot stays the authority on everything else.
+          // The 'suspended' retirement, and deliberately much NARROWER than the
+          // 'queued' one above: a parked session's entry can legitimately carry
+          // a stale 'idle', so only positive proof of WORK retires it, where a
+          // queued placeholder's silence makes any payload proof enough.
+          // 'exited' and the null "never snapshotted" case are left exactly as
+          // they were, and the snapshot stays the authority on everything else.
           if (payload.state === 'thinking' && existing.sessionStatus === 'suspended') {
             updated.sessionStatus = 'running';
           }
@@ -354,6 +469,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         bySessionId: { ...state.bySessionId, [event.sessionId]: updated },
         endedSessionIds,
         spawnProgressLabelBySessionId,
+        respawnByTaskId,
       };
     }),
 
@@ -385,7 +501,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, unreadCount: 0 } } };
     }),
 
-  reset: () => set({ bySessionId: {}, endedSessionIds: {}, spawnProgressLabelBySessionId: {} }),
+  reset: () => set({ bySessionId: {}, endedSessionIds: {}, spawnProgressLabelBySessionId: {}, respawnByTaskId: {} }),
 }));
 
 /**
@@ -409,6 +525,72 @@ export function selectSessionSpawnProgressLabel(
 ): string | null {
   if (sessionId === null) return null;
   return state.spawnProgressLabelBySessionId[sessionId] ?? null;
+}
+
+/**
+ * The desktop's in-flight spawn-progress label for a TASK, or null when no
+ * respawn is in flight for it. The Home feed row and the board card read this;
+ * `selectSessionSpawnProgressLabel` above serves the session screen, which has
+ * a session id to key on and this does not require.
+ *
+ * The window is applied HERE rather than at each call site so that the two
+ * cards and `reconcileSessionsFromBoards` - which uses this to decide whether
+ * to keep a sessionless task's row alive - can never disagree about whether a
+ * respawn is still in flight. A row retained by one rule and captioned by
+ * another would be the worst of both.
+ *
+ * Reads the clock, so this is not a pure function of the state: the same state
+ * answers differently once the window passes. That is intended and is what
+ * bounds a respawn that never lands. The storeFeed timer re-runs the prune at
+ * the same deadline, so the row and the caption expire together rather than
+ * leaving a captionless ghost behind.
+ *
+ * "Together" is to the same deadline, not to the same instant, and the
+ * difference is worth knowing rather than discovering: nothing re-renders a
+ * subscriber merely because the clock crossed the boundary (Zustand compares on
+ * store WRITES), so between the window closing and the sweep's
+ * `reconcileSessionsFromBoards` landing, an already-rendered row can still be
+ * showing a caption from a window that has just closed. Both are driven off the
+ * same constant, so the two deadlines coincide by construction - but the gap
+ * between them is whatever `setTimeout` latency the JS thread is under, which
+ * is unbounded above and NOT measured here (read out of the source, not a
+ * timing claim). Deliberately not engineered against: the worst case is a
+ * caption outliving its window on an already-drawn row until the sweep lands.
+ */
+export function selectTaskRespawnLabel(
+  state: { respawnByTaskId: Record<string, RespawnInFlight> },
+  taskId: string,
+): string | null {
+  const respawn = state.respawnByTaskId[taskId];
+  if (respawn === undefined) return null;
+  if (Date.now() - respawn.reportedAt >= RESPAWN_ROW_GRACE_MS) return null;
+  return respawn.label;
+}
+
+/**
+ * Whether a task is in one of the two transitional states the `'starting'`
+ * glyph stands for: mid-respawn (the desktop said it is handing the work to a
+ * new agent) or queued behind the desktop's concurrency limit.
+ *
+ * Shared rather than recomputed at each surface BECAUSE the surfaces claim to
+ * agree. The Home feed row, the board card and `TaskHeader` all promise that
+ * one task cannot report two different states on two screens at once (see
+ * `docs/architecture.md`'s "Transitional states" section), and three hand-copied
+ * predicates have nothing holding them to that promise - a fifth transitional
+ * state would have to be remembered in three files with no compiler check.
+ * Small, in the same spirit as `sectionForEntry`: the classification rule lives
+ * once, and each caller supplies only the two facts it happens to hold.
+ *
+ * Takes the values rather than the store because the three callers reach them
+ * differently: two read `sessionStatus` off a possibly-absent entry, one off an
+ * entry it always has, and `TaskHeader` may have no `taskId` to look a respawn
+ * up with at all.
+ */
+export function isStartingSession(
+  taskRespawnLabel: string | null,
+  sessionStatus: ReadStreamSessionStatusWire | null | undefined,
+): boolean {
+  return taskRespawnLabel !== null || sessionStatus === 'queued';
 }
 
 /**
@@ -469,6 +651,22 @@ export interface TriageRows {
   entries: SessionActivityEntry[];
 }
 
+/**
+ * The order `selectTriageRows` RETURNS its sections in - which is not the order
+ * the Home feed displays them in, and the difference is a trap worth naming.
+ *
+ * `TriageHomeScreen` has its own `SECTION_ORDER` (`['needs-you', 'idle',
+ * 'working']`, Idle above Thinking) and re-finds each section by name, so this
+ * array's order reaches no screen. That makes it look like drift somebody
+ * should "tidy" by matching the two. It is not inert: `activityStore.test.ts`
+ * indexes the result POSITIONALLY (`selectTriageRows(...)[1]` means the working
+ * section), so reordering this silently changes what those assertions are about
+ * rather than failing.
+ *
+ * Adding a member to `TriageSection` means adding it to BOTH arrays - the
+ * screen's copy carries the same warning, since a section missing from its
+ * SECTION_ORDER renders no rows and warms no snippets.
+ */
 const TRIAGE_SECTION_ORDER: readonly TriageSection[] = ['needs-you', 'working', 'idle'];
 
 /** Pure selector for `useActivityStore((state) => selectTriageRows(state))`-style reactive reads. */

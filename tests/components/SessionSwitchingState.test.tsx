@@ -36,7 +36,7 @@ describe('SessionSwitchingState', () => {
     ['a string carrying a carriage return', 'Switching model...\r(waiting 12s)'],
     // U+2028 and U+2029 break a line in RN's Text just like \n, but trim()
     // treats them as line terminators and strips them only at the ends, so an
-    // INTERIOR one clears every other check in renderableLabel.
+    // INTERIOR one clears every other check in renderableSpawnLabel.
     ['a string carrying a U+2028 line separator', 'Switching model... (waiting 12s)'],
     ['a string carrying a U+2029 paragraph separator', 'Switching model... (waiting 12s)'],
     ['a string over the one-line cap', 'A'.repeat(46)],

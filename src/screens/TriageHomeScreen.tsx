@@ -11,8 +11,11 @@ import { useRouter } from 'expo-router';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, NowTickProvider, SectionHeader, useTheme } from '@/components';
+import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
 import {
+  isStartingSession,
+  selectTaskRespawnLabel,
   selectTriageRows,
   selectWaitingSince,
   sectionForEntry,
@@ -31,6 +34,7 @@ import {
 } from '@/connection/actions';
 import { buildPendingPromptSummary, collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { createBoundedTaskQueue, type BoundedTaskQueue } from '@/lib/boundedTaskQueue';
+import { renderableSpawnLabel } from '@/lib/spawnLabel';
 import { subscribeToMemoryPressure } from '@/observability/memoryPressure';
 import { MapperLoad } from '@/devsupport/MapperLoad';
 import { useConcurrencyProbeDepth } from '@/devsupport/concurrencyProbe';
@@ -266,6 +270,14 @@ export function TriageHomeScreen(): React.JSX.Element {
       if (!section) continue;
       for (const entry of section.entries) {
         if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
+        // An ended session has nothing left to peek: the desktop tore its
+        // read-stream subscription down, so this would be a request that can
+        // only fail. Such an entry used to be pruned within a few hundred ms
+        // and the loop rarely saw one - it is now RETAINED for the length of a
+        // respawn (see reconcileSessionsFromBoards), so without this every
+        // respawn would enqueue a doomed peek. The row shows its switching
+        // caption instead of a snippet anyway.
+        if (entry.feedStatus === 'ended') continue;
         // Already pushed by a 0.8.0+ desktop: warming it would re-fetch, over
         // the wire, the exact line we were just handed for free.
         if (entry.messagePreview !== null && sectionForEntry(entry) !== 'needs-you') continue;
@@ -600,10 +612,27 @@ const ActivityRow = React.memo(function ActivityRow({
     onLongPressTask(task, entry.projectId);
   }, [onLongPressTask, task, entry.projectId]);
 
+  /**
+   * The two transitional states, both TASK-keyed rather than section-derived.
+   *
+   * A respawn leaves the task sessionless for several seconds, and this row
+   * only still exists because reconcileSessionsFromBoards retains it for
+   * exactly that window - without this the row vanished and came back.
+   *
+   * A queued session is the quieter of the two: the desktop holds a
+   * placeholder with no PTY, so it never reports thinking and its entry sits
+   * at `state: 'idle'`, indistinguishable from an agent that finished its
+   * work. `sessionStatus` is the only thing that separates them.
+   */
+  const respawnLabel = useActivityStore((state) => selectTaskRespawnLabel(state, entry.taskId));
+  const starting = isStartingSession(respawnLabel, entry.sessionStatus);
+
   // Desktop-parity status treatment: green spinner while the agent works,
   // the yellow mail envelope for EVERY idle session (a pending prompt is
   // idle too - all idle rows are equal priority, first come first served).
-  const statusKind = working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
+  // 'starting' outranks both: neither of its two states is doing work, and
+  // neither is waiting on the user.
+  const statusKind: AgentStatusKind = starting ? 'starting' : working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
 
   // One subtle tint fade when the row lands in a new section. The cleanup
   // zeroes the shared value: FlashList recycles row instances, and a
@@ -662,6 +691,10 @@ const ActivityRow = React.memo(function ActivityRow({
    */
   const previewPushedByDesktop = !isPermission && entry.messagePreview !== null;
   useEffect(() => {
+    // Nothing to fetch, and for a respawn nothing that COULD be fetched: the
+    // caption below takes the body outright, and a retained ghost's session is
+    // gone desktop-side, so a peek would retry-loop against a dead id.
+    if (starting) return undefined;
     if (previewPushedByDesktop) return undefined;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -716,6 +749,7 @@ const ActivityRow = React.memo(function ActivityRow({
     peekRetryNonce,
     snippetFreshnessMs,
     previewPushedByDesktop,
+    starting,
   ]);
 
   // No status filler ("Thinking", "Waiting for..."): the section header
@@ -738,6 +772,25 @@ const ActivityRow = React.memo(function ActivityRow({
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
   /**
+   * The transitional states take the body outright, ahead of every source
+   * below, because all of those describe work this session is NOT currently
+   * doing: a respawn's snippet belongs to the agent that just ended, and a
+   * queued session has produced no output at all. The caption is the only
+   * honest line available, and it is what makes the state legible - the muted
+   * glyph alone says "not running" without saying why.
+   *
+   * The label is the desktop's own phase text and is untrusted display text,
+   * so it goes through the same sanitizer the switching overlay uses. A
+   * rejected label degrades to the generic line rather than truncating.
+   * One clause each: the glyph carries the state, so per ui-copy-brevity.md
+   * the caption carries only what the glyph cannot.
+   */
+  const startingBodyText = !starting
+    ? null
+    : respawnLabel !== null
+      ? (renderableSpawnLabel(respawnLabel) ?? 'Starting a new session')
+      : 'Waiting for a free slot';
+  /**
    * Body preference, cheapest first:
    *   1. the desktop's pushed preview (protocol 0.8.0+) - already on a feed
    *      the app receives, so it costs no request at all;
@@ -750,7 +803,7 @@ const ActivityRow = React.memo(function ActivityRow({
    *      the feed revealed with every body empty and filled them a beat later,
    *      which read as a second load.
    */
-  const bodyText = (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
+  const bodyText = startingBodyText ?? (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
 
   return (
     <>

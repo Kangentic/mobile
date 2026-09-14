@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { ThemeProvider } from '@/components';
+import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { BoardScreen } from '@/screens/BoardScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
@@ -107,6 +107,13 @@ describe('BoardScreen', () => {
     // archived-page cursor, or a pending move) survives into the next test's
     // freshly-seeded board, which only overwrites the fields seedBoard names.
     useBoardStore.getState().reset();
+    // Same hazard, other store, and it was a real leak rather than a
+    // precaution: the activity store's respawn and ended maps deliberately
+    // OUTLIVE the entry pruning, so nothing in a test clears them on its own.
+    // A card that showed no status glyph until its own test registered a
+    // session hid this; the task-keyed respawn lookup does not, because it
+    // needs no session at all.
+    useActivityStore.getState().reset();
     seedBoard();
   });
 
@@ -208,6 +215,73 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-card-task-1-usage')).toBeTruthy();
     expect(screen.getByText('Fable 5')).toBeTruthy();
     expect(screen.getByText('47%')).toBeTruthy();
+  });
+
+  /**
+   * The board card reads its status from `bySessionId[task.session_id]`, so
+   * during a respawn - when the desktop has nulled session_id and not yet
+   * assigned the successor - it resolved to null and the card showed NO status
+   * glyph at all, for the several seconds the work was being handed over.
+   *
+   * The respawn fact is therefore looked up by TASK, which is the only id the
+   * card still has. Seeded with `session_id: null` because that is exactly the
+   * state the gap leaves the board in.
+   */
+  it('shows a starting glyph for a sessionless task the desktop is respawning', () => {
+    useBoardStore.setState((state) => ({
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        'project-1': {
+          ...state.boardsByProjectId['project-1'],
+          tasksById: { 'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, null) },
+        },
+      },
+    }));
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+    });
+
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    // Read off the TINT, not mere presence. `TaskCard` renders the same
+    // `${testID}-status` for EVERY non-null kind, so `toBeTruthy()` alone would
+    // pass for `starting ? 'working' : ...` just as happily - it would only
+    // catch respawn-awareness being removed outright. The colour is the one
+    // thing that separates the kinds, and it is how `TaskHeader.test.tsx`
+    // discriminates them.
+    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+  });
+
+  /**
+   * The control: the same sessionless card with NO respawn in flight keeps its
+   * glyph-less rendering. Without this, a change that simply always drew a
+   * glyph would satisfy the test above.
+   */
+  it('still shows no glyph for a sessionless task with no respawn in flight', () => {
+    useBoardStore.setState((state) => ({
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        'project-1': {
+          ...state.boardsByProjectId['project-1'],
+          tasksById: { 'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, null) },
+        },
+      },
+    }));
+
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
   });
 
   /**

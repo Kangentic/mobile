@@ -1006,4 +1006,141 @@ describe('TriageHomeScreen', () => {
       setIntervalSpy.mockRestore();
     });
   });
+
+  /**
+   * The two transitional states, on the surface that used to hide both.
+   *
+   * A respawn made the row DISAPPEAR for several seconds; a queued session
+   * rendered as an ordinary finished-work idle row. Both are task-keyed facts,
+   * and neither is expressible through `sectionForEntry`, which reads only
+   * `entry.state`.
+   */
+  describe('transitional states (respawning and queued)', () => {
+    /** The desktop's respawn push for the seeded task-1/sess-1 pair. */
+    const pushRespawnEnded = (label = 'Switching model...'): void => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: label },
+      });
+    };
+
+    /**
+     * The CAPTION is what this tier proves. Whether the row survives the gap is
+     * decided by reconcileSessionsFromBoards, which no board snapshot drives
+     * here - so the surviving row below is not evidence of retention and must
+     * not be read as such. That half lives in
+     * tests/unit/storeFeedRespawnRetention.test.ts, where the snapshots that
+     * prune are actually published.
+     */
+    it('captions a respawning row with the desktop label', () => {
+      renderHome();
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+
+      act(() => {
+        pushRespawnEnded();
+      });
+
+      expect(screen.getByText('Switching model...')).toBeTruthy();
+    });
+
+    /**
+     * The caption is the desktop's own text and is untrusted, so a malformed
+     * one must degrade to the generic line rather than truncating or rendering
+     * raw. An over-cap label is the case `renderableSpawnLabel` rejects.
+     */
+    it('degrades an over-long desktop label to the generic caption', () => {
+      renderHome();
+
+      act(() => {
+        pushRespawnEnded('x'.repeat(200));
+      });
+
+      expect(screen.getByText('Starting a new session')).toBeTruthy();
+      expect(screen.queryByText('x'.repeat(200))).toBeNull();
+    });
+
+    /**
+     * A retained ghost's session is gone desktop-side - the read-stream
+     * subscription was torn down before the `session-ended` push - so a peek
+     * for it can only fail, and on failure the row arms a retry. Left
+     * unskipped, every respawn would spend the gap retry-looping against a
+     * dead session id for a snippet the caption has already replaced.
+     *
+     * Asserted as "no call at all" rather than through rendered output,
+     * because a failed peek renders exactly like a skipped one: the body shows
+     * the caption either way, so only the call count separates them.
+     *
+     * Two details make this non-vacuous, and both were found by watching an
+     * earlier version PASS against the unguarded effect:
+     *
+     * 1. BOTH peeks are asserted. `peekSnippet` branches on `isPermission`,
+     *    and this file's seed leaves sess-1 prompt-pending - a `session-ended`
+     *    does not clear `state` - so the row takes the PROMPT branch and never
+     *    reaches `peekLastAssistantMessage` at all.
+     * 2. The respawn is pushed BEFORE the render. Re-running the effect on an
+     *    already-mounted row takes the settle-timer path (the row has resolved
+     *    a peek once, so a burst is debounced), which no microtask flush ever
+     *    fires - so a post-mount push cannot tell a skipped peek from a
+     *    merely-deferred one. At mount the first peek fires synchronously.
+     */
+    it('fetches no snippet for a respawning row, whose session is already gone', async () => {
+      pushRespawnEnded();
+      jest.mocked(peekLastAssistantMessage).mockClear();
+      mockPeekAwaitedPrompt.mockClear();
+
+      renderHome();
+      await act(async () => {});
+
+      expect(mockPeekAwaitedPrompt).not.toHaveBeenCalled();
+      expect(jest.mocked(peekLastAssistantMessage)).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The queued row. Its entry is idle and live - nothing about its STATE
+     * distinguishes it from an agent that finished its work, which is exactly
+     * why it was invisible. The caption is the only thing that separates them,
+     * and it is driven by `sessionStatus` alone.
+     */
+    it('captions a queued session instead of letting it read as finished work', async () => {
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
+        );
+
+      renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+      expect(screen.getByText('Waiting for a free slot')).toBeTruthy();
+    });
+
+    /**
+     * The control that keeps the test above honest: the SAME idle entry
+     * without the queued status must show its ordinary snippet, so the caption
+     * cannot be coming from the idle state itself.
+     */
+    it('leaves an ordinary idle row captioned by its snippet, not by the queue line', async () => {
+      jest.mocked(peekLastAssistantMessage).mockResolvedValue('Summary written to the task notes.');
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
+        );
+
+      renderHome();
+      await act(async () => {});
+
+      expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
+      expect(screen.queryByText('Waiting for a free slot')).toBeNull();
+    });
+  });
 });
