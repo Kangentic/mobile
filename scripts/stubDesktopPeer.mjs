@@ -803,10 +803,8 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     // else touches activeSessionId - reversing that order records the
     // SUCCESSOR as ended and wedges the phone on the ended state forever.
     //
-    // The ended push carries spawnProgressLabel ahead of the protocol
-    // package publishing the field (kangentic board #639). This is a plain
-    // .mjs file, so the literal needs nothing; mockDesktop.ts emits the same
-    // label through a checked intersection, so BOTH rigs open the phone's
+    // The ended push carries spawnProgressLabel (protocol 0.14.0+).
+    // mockDesktop.ts emits the same label, so BOTH rigs open the phone's
     // switching window and dev:mock and E2E show the same thing.
     function respawnActiveSession() {
       const endedSessionId = activeSessionId;
@@ -949,6 +947,11 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
               usage: null,
               awaitedPromptId: null,
               ptyDimensions: { ...ptyDimensions },
+              // A real desktop sets sessionStatus on every read-stream
+              // response, so the rig does too rather than leaning on the
+              // phone's pre-0.5.0 'running' fallback. Every stub session is
+              // live; the parked path is exercised under dev:mock, not here.
+              sessionStatus: 'running',
             });
           }
           if (payload.sessionId === STUB_CODEX_SESSION_ID) {
@@ -965,6 +968,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
               usage: null,
               awaitedPromptId: null,
               ptyDimensions: { ...ptyDimensions },
+              sessionStatus: 'running',
             });
           }
           if (activeSessionId === null || payload.sessionId !== activeSessionId) return fail(`No such session: ${payload.sessionId}`);
@@ -989,6 +993,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
             usage: null,
             awaitedPromptId: permissionPending ? STUB_PROMPT_ID : null,
             ptyDimensions: { ...ptyDimensions },
+            sessionStatus: 'running',
           });
         }
         case 'read-diff':

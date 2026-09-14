@@ -18,40 +18,40 @@ function activityEvent(sessionId: string, payload: ActivityEventPayload): Activi
   return { kind: 'activity', sessionId, taskId: 'task-1', payload };
 }
 
-/**
- * A `session-ended` payload carrying the desktop's proposed `spawnProgressLabel`
- * field (kangentic board #639), which does not exist in `ActivityEventPayload`
- * until the protocol package ships it.
- *
- * Built by INTERSECTION, the one local extension protocol-types-from-package.md
- * permits ("extend or narrow a protocol type locally only by composition"), and
- * matching `sessionEndedWithSpawnProgress` in mockDesktop.ts. A blanket
- * `as unknown as ActivityEventPayload` would accept any object shape at all;
- * this keeps the base payload checked and widens only the one new field.
- */
+/** A `session-ended` payload carrying the desktop's `spawnProgressLabel` (protocol 0.14.0+). */
 function sessionEndedWithLabel(intentional: boolean, spawnProgressLabel: string): ActivityEventPayload {
-  const payload: ActivityEventPayload & { spawnProgressLabel?: string } = {
-    type: 'session-ended',
-    intentional,
-    spawnProgressLabel,
-  };
-  return payload;
+  return { type: 'session-ended', intentional, spawnProgressLabel };
 }
 
 /**
- * A `session-ended` payload whose `spawnProgressLabel` is NOT a string - a
- * real desktop never sends this, but `extractSpawnProgressLabel`'s
- * `typeof === 'string'` guard has to hold anyway: a non-string reaching
- * `SessionSwitchingState`'s `renderableLabel` would call `.trim()` on it and
- * throw at render. Same composition pattern as `sessionEndedWithLabel`.
+ * A `session-ended` payload whose `spawnProgressLabel` is NOT a string. The
+ * protocol declares it `string | undefined` and `parseActivityEventPayload`
+ * rejects anything else, so this cannot arrive from a validated wire event; it
+ * exists to prove the store does not hand a non-string on to
+ * `SessionSwitchingState`'s `renderableLabel`, which would call `.trim()` on it
+ * and throw at render.
+ *
+ * Built by INTERSECTION, not `as unknown as ActivityEventPayload`: a blanket
+ * cast would accept any object shape at all, while this keeps the base payload
+ * fully checked (a typo in `type`, a missing `intentional`) and widens only the
+ * one field under test. That is the one local extension
+ * protocol-types-from-package.md permits.
+ *
+ * The `Omit<Extract<...>>` is REQUIRED, not ceremony, and the flat
+ * `ActivityEventPayload & { spawnProgressLabel?: number | ... }` this replaced
+ * no longer compiles: 0.14.0 declares the field as `string`, so intersecting it
+ * with `number` collapses the property to `string & number`. Omitting it from
+ * the extracted member before re-adding it is what leaves a hole to widen.
  */
 function sessionEndedWithNonStringLabel(spawnProgressLabel: number | Record<string, unknown>): ActivityEventPayload {
-  const payload: ActivityEventPayload & { spawnProgressLabel?: number | Record<string, unknown> } = {
+  const payload: Omit<Extract<ActivityEventPayload, { type: 'session-ended' }>, 'spawnProgressLabel'> & {
+    spawnProgressLabel?: number | Record<string, unknown>;
+  } = {
     type: 'session-ended',
     intentional: true,
     spawnProgressLabel,
   };
-  return payload;
+  return payload as ActivityEventPayload;
 }
 
 /**
@@ -277,6 +277,165 @@ describe('activityStore', () => {
       useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
 
       expect(useActivityStore.getState().spawnProgressLabelBySessionId).toBe(before);
+    });
+  });
+
+  /**
+   * `sessionStatus` crossed the wire from protocol 0.5.0 onward and was dropped
+   * on the floor by applySnapshot, so a snapshot that said 'suspended' or
+   * 'queued' was recorded as an ordinary live session.
+   */
+  describe('sessionStatus from the read-stream snapshot', () => {
+    it('records the desktop-reported status', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended' }));
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('suspended');
+    });
+
+    /**
+     * The protocol's own stated fallback for a pre-0.5.0 desktop, which omits
+     * the field entirely - streamSnapshotFixture() omits it by default.
+     */
+    it('assumes running when the desktop omits the field', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+
+      useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture());
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('running');
+    });
+
+    /**
+     * Null and 'running' are not synonyms: null is "no snapshot has landed",
+     * 'running' is "one landed and said so (or omitted the field)". A registered
+     * session that has never been snapshotted must stay distinguishable from a
+     * running one, or a caller cannot tell "unknown" from "fine".
+     */
+    it('leaves a registered-but-unsnapshotted session null, not running', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+
+      const entry = useActivityStore.getState().bySessionId['sess-1'];
+      expect(entry.sessionStatus).toBeNull();
+      expect(entry.feedStatus).toBe('pending');
+    });
+
+    /**
+     * THE CONSTRAINT GUARD, and the assertion in this block worth the most.
+     *
+     * `sessionStatus` is a snapshot-time observation, never an endedness
+     * signal. Routing 'suspended' (or 'exited', a snapshot racing teardown)
+     * into `endedSessionIds` or into the triage sections would re-open the
+     * mid-respawn "Session ended" flash that SessionScreen's spawn-label swap
+     * latch exists to prevent, since `selectSessionEnded` is one of that
+     * derivation's inputs. This fails loudly if anyone later wires it there.
+     */
+    it('never leaks a suspended or exited status into triage or endedness', () => {
+      for (const status of ['suspended', 'exited'] as const) {
+        useActivityStore.getState().reset();
+        useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+        useActivityStore
+          .getState()
+          .applySnapshot(
+            'sess-1',
+            'task-1',
+            'project-1',
+            streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: status }),
+          );
+
+        const entry = useActivityStore.getState().bySessionId['sess-1'];
+        expect(entry.sessionStatus).toBe(status);
+        expect(sectionForEntry(entry)).toBe('idle');
+        expect(entry.feedStatus).toBe('live');
+        expect(selectSessionEnded(useActivityStore.getState(), 'sess-1')).toBe(false);
+      }
+    });
+
+    /**
+     * The field deliberately goes stale rather than being re-derived: the
+     * `session-ended` PUSH is the sole authority on endedness (it carries
+     * `intentional`, which a snapshot cannot), so applyActivityEvent must not
+     * write 'exited' here and give two fields authority over one fact.
+     */
+    it('is left stale by session-ended rather than re-derived', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended' }));
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: true }));
+
+      const entry = useActivityStore.getState().bySessionId['sess-1'];
+      expect(entry.sessionStatus).toBe('suspended');
+      expect(entry.feedStatus).toBe('ended');
+    });
+
+    /**
+     * THE RESUME, and the one place staleness is NOT allowed to stand.
+     *
+     * The field is written only by applySnapshot, a snapshot lands only on a
+     * fresh read-stream subscribe, and subscriptionManager's setDesiredStreams
+     * skips a session that already has one. So on a live channel nothing ever
+     * re-snapshots a resumed session, and without this a 'suspended' recorded
+     * once would suppress localNotifier's "Agent went idle" for the rest of
+     * the connection. A 'thinking' event is proof the session is not parked.
+     */
+    it('retires a stale suspended when an activity event reports thinking', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended' }));
+
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-1', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('running');
+    });
+
+    /**
+     * The narrowing guard for the retirement above: it is a LIVENESS
+     * correction, so it may only ever overwrite 'suspended'. 'exited' must
+     * survive (the `session-ended` push is the authority on endedness, and a
+     * snapshot racing teardown is not a resume), and null must stay null
+     * rather than becoming a snapshot-derived 'running' no snapshot reported.
+     */
+    it.each([
+      { before: 'exited' as const, expected: 'exited' },
+      { before: null, expected: null },
+    ])('leaves $before alone when an activity event reports thinking', ({ before, expected }) => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      if (before !== null) {
+        useActivityStore
+          .getState()
+          .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: before }));
+      }
+
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-1', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe(expected);
+    });
+
+    /**
+     * And the other half of the narrowing: only 'thinking' retires. An 'idle'
+     * event carries no proof of a resume - the desktop can report idle for a
+     * session it is about to park - so the park must survive one.
+     */
+    it('keeps a suspended status when an activity event reports idle', () => {
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended' }));
+
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-1', { type: 'activity', state: 'idle', reason: { kind: 'idle' } }));
+
+      expect(useActivityStore.getState().bySessionId['sess-1'].sessionStatus).toBe('suspended');
     });
   });
 

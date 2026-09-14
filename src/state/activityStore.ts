@@ -5,6 +5,7 @@ import type {
   ActivityReasonWire,
   ActivityStateWire,
   ReadStreamResponsePayload,
+  ReadStreamSessionStatusWire,
   SessionUsageWire,
 } from '@kangentic/protocol';
 
@@ -67,6 +68,44 @@ export interface SessionActivityEntry {
    * notification - see localNotifier.
    */
   endedIntentionally: boolean | null;
+  /**
+   * The desktop's lifecycle status for this session AS OF THE LAST SNAPSHOT,
+   * or null when no snapshot has landed yet.
+   *
+   * `null` and `'running'` are NOT synonyms. Null means this entry has only
+   * been registered, never snapshotted (it is still `feedStatus: 'pending'`).
+   * `'running'` means a snapshot DID land and either said so or omitted the
+   * field, which is the fallback the protocol mandates for pre-0.5.0 desktops.
+   *
+   * NOT AN ENDEDNESS SIGNAL, and this is the load-bearing part. `feedStatus`
+   * and `endedSessionIds` are the authority on whether a session is over; this
+   * is a snapshot-time observation that goes stale between snapshots. An entry
+   * that snapshots 'suspended' and then receives `session-ended` keeps the
+   * stale 'suspended' - correct, not a bug to fix by writing 'exited' here,
+   * which would give two fields authority over one fact.
+   *
+   * THE ONE EXCEPTION IS A RESUME, and it is a liveness correction rather than
+   * an endedness one. `applyActivityEvent` clears a stale 'suspended' when an
+   * `activity` event reports 'thinking', because a thinking session is by
+   * definition not parked. Without that, staleness is unbounded in the one
+   * direction that costs a notification: `sessionStatus` is written only by
+   * `applySnapshot`, a snapshot lands only on a fresh `read-stream` subscribe,
+   * and `setDesiredStreams` skips ids already in `activeStreamIds` - so a
+   * session observed suspended and then resumed on the same established
+   * channel would keep suppressing `localNotifier`'s "Agent went idle" for the
+   * rest of that connection. Only 'thinking' clears, and only from 'suspended':
+   * the settle arms on a thinking -> idle edge, so that is exactly the reach of
+   * the gap and nothing wider.
+   *
+   * Nothing on the session screen may read it. `SessionScreen`'s `sessionEnded`
+   * is balanced against the spawn-label swap latch, and a fourth input re-opens
+   * the mid-respawn "Session ended" flash that latch exists to prevent. The
+   * same applies to 'exited': the protocol calls it a snapshot racing teardown,
+   * so routing it into `endedSessionIds` would flash the ended state in exactly
+   * the gap the latch covers. The `session-ended` PUSH stays the sole
+   * authority, because it carries `intentional`, which a snapshot cannot.
+   */
+  sessionStatus: ReadStreamSessionStatusWire | null;
 }
 
 interface ActivityStoreState {
@@ -100,8 +139,8 @@ interface ActivityStoreState {
    *
    * Presence means the desktop expects a successor session to land and is
    * naming the phase it is in; absence means either a genuine park or a
-   * desktop that predates the field (protocol has no such field yet - see
-   * kangentic board task #639). Per that field's own contract, this is
+   * desktop that predates the field (protocol 0.14.0, kangentic board task
+   * #639). Per that field's own contract, this is
    * INTENT, not a guarantee: a consumer must keep whatever timeout already
    * bounds its own wait for a successor and use presence only to skip a
    * redundant one, never as proof one is coming.
@@ -142,25 +181,34 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     unreadCount: 0,
     feedStatus: 'pending',
     endedIntentionally: null,
+    // Null, never 'running': no snapshot has landed for a freshly registered
+    // session, and the two must stay distinguishable - see the field's docs.
+    sessionStatus: null,
   };
 }
 
 /**
  * Reads a `session-ended` payload's optional `spawnProgressLabel` field
- * without declaring a local parallel type (protocol-types-from-package.md
- * forbids that). The field does not exist in `ActivityEventPayload` until
- * the desktop's protocol package ships it (kangentic board #639), so this is
- * a runtime guard over an UNKNOWN extra property, not a declared shape: `in`
- * narrows to an intersection with `Record<K, unknown>`, and `typeof` narrows
- * that to `string`. Once the package bumps this keeps working unchanged -
- * TypeScript sees the real optional field and the guard is still correct,
- * just redundant.
+ * (protocol 0.14.0+), normalising "absent" to null so callers have one empty
+ * case rather than two. Absent from a pre-0.14.0 desktop, and never sent as
+ * null, so the two are the same fact here: no respawn was in flight.
+ *
+ * The `typeof` check is kept now that the field is DECLARED, and is not
+ * redundant with the type. It is the runtime floor under a render crash: a
+ * non-string reaching `SessionSwitchingState`'s `renderableLabel` would call
+ * `.trim()` on it and throw. The wire path cannot deliver one today
+ * (`feedRouter` gates on `isBridgeEvent`, which validates through
+ * `parseActivityEventPayload` and drops the whole event on a non-string), so
+ * this guards against a future producer that skips that gate, not against the
+ * desktop.
+ *
+ * Exported only so the rig tests that assert on a produced `session-ended`
+ * read it through the SAME guard the store applies, instead of hand-copying
+ * these two lines and calling the copy "kept in step" when nothing keeps it so.
  */
-function extractSpawnProgressLabel(payload: ActivityEventPayload): string | null {
+export function extractSpawnProgressLabel(payload: ActivityEventPayload): string | null {
   if (payload.type !== 'session-ended') return null;
-  return 'spawnProgressLabel' in payload && typeof payload.spawnProgressLabel === 'string'
-    ? payload.spawnProgressLabel
-    : null;
+  return typeof payload.spawnProgressLabel === 'string' ? payload.spawnProgressLabel : null;
 }
 
 export const useActivityStore = create<ActivityStoreState>((set) => ({
@@ -190,6 +238,9 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         usage: snapshot.usage,
         awaitedPromptId: snapshot.awaitedPromptId,
         awaitedPromptOptions: snapshot.awaitedPromptOptions ?? null,
+        // 'running' is the protocol's own stated fallback for a desktop that
+        // predates the field (pre-0.5.0), not a guess.
+        sessionStatus: snapshot.sessionStatus ?? 'running',
         lastEventAt: Date.now(),
         // 'ended' is TERMINAL, the same invariant markRejected enforces. The
         // desktop pushes session-ended just BEFORE it tears the read-stream
@@ -239,6 +290,14 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         case 'activity':
           updated.state = payload.state;
           updated.reason = payload.reason;
+          // A thinking session is not parked, so this retires a 'suspended'
+          // that no later snapshot would ever correct - see the field's docs.
+          // Narrow on purpose: only 'suspended' is overwritten, so 'exited'
+          // and the null "never snapshotted" case are left exactly as they
+          // were, and the snapshot stays the authority on everything else.
+          if (payload.state === 'thinking' && existing.sessionStatus === 'suspended') {
+            updated.sessionStatus = 'running';
+          }
           // The engine leaving 'permission' means the prompt resolved; the
           // dedicated permission event usually races ahead of this, but a
           // missed one must not leave a stale answerable prompt behind.

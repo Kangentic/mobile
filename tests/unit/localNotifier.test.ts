@@ -13,7 +13,7 @@ import { startLocalNotifier } from '@/notifications/localNotifier';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { brandTokens } from '@/components/theme/tokens';
 
 // settingsStore.ts persists via expo-secure-store; mocked (not the store
@@ -358,6 +358,113 @@ describe('startLocalNotifier', () => {
     vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
 
     expect(displayNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A PARK, which reaches the phone by a different route than an end and so was
+   * not covered by the two tests above. The desktop answers a read-stream
+   * subscribe for a suspended session with `sessionStatus: 'suspended'` rather
+   * than pushing `session-ended`, so `feedStatus` stays 'live' and the settle
+   * survived: 45s later the user got "Agent went idle" for an agent the desktop
+   * had already put down.
+   *
+   * This pins the SUBSCRIBER-CANCEL path only, and deliberately claims no more
+   * than that. The snapshot is a store transition, so the subscriber observes
+   * it and clears the timer before the clock is advanced, which means the
+   * fire-time re-read never runs here at all. It shares the same predicate as
+   * its backstop, but a test that advanced past a cancelled timer cannot tell
+   * a working backstop from an absent one.
+   */
+  it('cancels a pending settle when a resubscribe reveals the session was parked', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    useActivityStore
+      .getState()
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }),
+      );
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+    expect(displayNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The other side of the same clause: ONLY 'suspended' is excluded. Without
+   * these, the fix above would pass just as well if it had disabled
+   * turn-complete for every session that gets re-snapshotted mid-window - which
+   * a reconnect does to all of them at once.
+   *
+   * 'exited' is the one that carries real weight, and is why this list is not
+   * just 'running'. It is a DELIBERATE KEEP: the protocol calls it a snapshot
+   * racing teardown, and the `session-ended` push stays the authority on
+   * endedness because it carries `intentional`, which a snapshot cannot. So an
+   * exited snapshot must still let the alert through. Narrowing the clause to
+   * `sessionStatus === 'running'` would mute a genuine crash alert and, without
+   * this case, would pass every other test in the file.
+   *
+   * 'queued' is here as the SYNTHETIC case, and is labelled so nobody reads it
+   * as evidence about real traffic: a queued placeholder has no PTY and a fresh
+   * session id, so a real one is created idle and never reports thinking, which
+   * means it can never arm a settle at all. Driving it here through explicit
+   * thinking/idle events is the only way to reach the predicate with that
+   * status. What it pins is that the new clause narrows to 'suspended' alone
+   * and did not quietly become "any non-running status suppresses".
+   */
+  it.each(['running', 'exited', 'queued'] as const)(
+    'leaves a pending settle armed when a resubscribe shows the session %s',
+    (sessionStatus) => {
+      seedSession();
+      stopNotifier = startLocalNotifier();
+      appStateMock.emit('background');
+
+      useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+      useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus }));
+      vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+      expect(displayNotification).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  /**
+   * THE RESUME, which the park test above cannot reach and which the
+   * suppression would otherwise break permanently.
+   *
+   * There is NO second snapshot here, on purpose: `sessionStatus` is written
+   * only by applySnapshot, and nothing re-subscribes a stream that is already
+   * active on a live channel, so a resume genuinely arrives as activity events
+   * and nothing else. Before the store retired a stale 'suspended' on
+   * 'thinking', this session stayed suppressed for the rest of the connection
+   * and the user silently stopped being told its agent had gone idle.
+   */
+  it('fires again once the parked session resumes and finishes another turn', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore
+      .getState()
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }),
+      );
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
   });
 
   /**

@@ -408,7 +408,7 @@ monorepo** at `packages/protocol`; it is published to npm only at release milest
 every change.
 
 - **Committed dependency.** This app's `package.json` pins `@kangentic/protocol` to a published
-  semver range (e.g. `^0.4.0`). That is what a fresh `npm install`, CI, and EAS cloud builds
+  semver range (e.g. `^0.14.0`). That is what a fresh `npm install`, CI, and EAS cloud builds
   resolve, so the pinned version must be published before a cloud build that needs it.
 - **Local iteration (no publish).** The dev rig builds the sibling monorepo's `packages/protocol`
   and links its packed output into this app's `node_modules` on every run (the rig's

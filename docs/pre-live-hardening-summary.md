@@ -172,7 +172,7 @@ and a transport drop clears the flag before the next handshake. Both paths misse
 forever and looked exactly like a re-handshake that never happened. `SessionManager.onRekey` now
 carries the signal; it reached 1 over the hosted relay with the session intact.
 
-## Protocol 0.10.0, 0.11.0, 0.11.1, 0.12.0 and 0.13.0 (published)
+## Protocol 0.10.0 through 0.14.0 (published)
 
 Desktop PR **#209** merged and `@kangentic/protocol` **0.10.0** published via the
 `protocol-v0.10.0` tag. `read-board` gains an `archived` action returning a page of completed
@@ -227,6 +227,29 @@ lets this repo's own code depend on the key being omittable. That dependency is 
 theoretical, because the phone calls none of the protocol's `parse*Wire` functions. Nothing
 backfills an absent key to `null` on the way in, so `undefined` reaches the three readers in
 `src/components/board/prChipPresentation.ts` as a third spelling of "no verdict".
+
+**0.14.0** is additive, and the pin now reads `^0.14.0`. It declares
+`spawnProgressLabel?: string` on the `session-ended` activity payload (kangentic board task
+#639), the field the desktop had been sending ahead of the package: the phone read it through a
+runtime guard over an unknown extra property, and the mock desktop and two test files each built
+their payloads by intersection, which is the one local extension
+`.claude/rules/protocol-types-from-package.md` permits. All three shims are gone now that the
+field is declared, and one of them could not have survived the bump anyway: the flat
+`ActivityEventPayload & { spawnProgressLabel?: number }` used to force a non-string through a
+guard test stops compiling once the real field is `string`, because the intersection collapses
+the property to `string & number`.
+
+`sessionStatus` came along in the same bump only in the sense that this is when the phone
+started READING it. The field has been on `ReadStreamResponsePayload` since **0.5.0**, and
+`applySnapshot` dropped it on the floor for nine releases, so a snapshot that said `'suspended'`
+was recorded as an ordinary live session. It now lands on `SessionActivityEntry`, where
+`localNotifier` uses it to stop firing "Agent went idle" for an agent the desktop has parked.
+Two traps that cost a review to find, both written up beside the code: `null` and `'running'`
+are not synonyms (null is "no snapshot yet", `'running'` is the fallback the protocol mandates
+for a pre-0.5.0 desktop), and the value is snapshot-time only, so it needs an explicit exit -
+nothing re-snapshots an already-subscribed stream on a live channel, so without retiring a stale
+`'suspended'` on the next `thinking` event a resumed session would go unannounced for the rest
+of the connection.
 
 ## The relay-address hole, closed at the source
 
