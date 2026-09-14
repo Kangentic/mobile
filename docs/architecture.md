@@ -471,12 +471,39 @@ on each `thinking -> idle` transition produced one alert per reply (20+ for a si
 task). Both producers now arm a ~45s timer on reaching idle, cancel it if the session returns to
 `thinking` or `permission` (or exits), and re-check the live state when it fires: the desktop in
 `push-notifier.ts` (mirroring its 2s permission debounce) and the phone in `localNotifier.ts`.
-On the phone, "still idle" means `state === 'idle'` **and** `feedStatus !== 'ended'`: a
-`session-ended` event sets `feedStatus` and leaves `state` untouched, so checking `state` alone
-would let a pending settle outlive the session and fire "Agent went idle" 45s after
-`session-failed` - or, for a deliberate stop, fire an alert where the design is to send none.
-Both are needed - the desktop suppresses remote push for any device with a live bridge session, so
-during the five-minute background keepalive the local notifier is the only thing firing.
+Both producers are needed - the desktop suppresses remote push for any device with a live bridge
+session, so during the five-minute background keepalive the local notifier is the only thing
+firing.
+
+On the phone, "still idle" means `state === 'idle'`, **and** `feedStatus !== 'ended'`, **and**
+`sessionStatus !== 'suspended'`. Each clause catches a different way the session can stop deserving
+the alert:
+
+- `feedStatus` catches an END. A `session-ended` event sets it and leaves `state` untouched, so
+  checking `state` alone would let a pending settle outlive the session and fire "Agent went idle"
+  45s after `session-failed` - or, for a deliberate stop, fire an alert where the design is to send
+  none.
+- `sessionStatus` catches a PARK, which reaches the phone by a different route entirely: the
+  desktop answers a read-stream subscribe for a suspended session with `sessionStatus: 'suspended'`
+  rather than pushing `session-ended`, so `feedStatus` stays `live` and only this clause stops the
+  alert.
+
+A park is not a one-way door, and the exit is in the store rather than the predicate.
+`sessionStatus` is written only by `applySnapshot`, a snapshot lands only on a fresh `read-stream`
+subscribe, and `setDesiredStreams` skips a session that already has one - so on a live channel a
+resumed session would never be re-snapshotted, and the clause above would go on suppressing its
+alerts indefinitely. `applyActivityEvent` therefore retires a stale `'suspended'` the moment an
+`activity` event reports `'thinking'`, which is proof the session is not parked. That is a liveness
+correction, not an endedness one: only `'suspended'` is overwritten, so `session-ended` keeps sole
+authority over whether a session is over.
+
+Only `'suspended'` is excluded, and the other two statuses are deliberate keeps rather than
+oversights. `'queued'` is not excluded because a queued session cannot reach this predicate in the
+first place: the settle only arms on a `thinking -> idle` edge, and a queued placeholder has no PTY
+and a fresh session id, so its entry is created idle and never reports `thinking`. Excluding it
+would be dead code that reads as a considered decision. `'exited'` is a snapshot racing teardown,
+and the `session-ended` push stays the authority there because it carries `intentional`, which a
+snapshot cannot.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`

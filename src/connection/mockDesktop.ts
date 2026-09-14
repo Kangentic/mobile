@@ -1,7 +1,6 @@
 import {
   generateX25519KeyPair,
   parseCapabilityRequestPayload,
-  type ActivityEventPayload,
   type BoardTaskWire,
   type BridgeEvent,
   type CapabilityRequestMessage,
@@ -11,6 +10,7 @@ import {
   type JsonValue,
   type ReadBoardView,
   type ReadStreamResponsePayload,
+  type ReadStreamSessionStatusWire,
   type SessionUsageWire,
   type TranscriptWindowResponsePayload,
   type Transport,
@@ -111,11 +111,16 @@ const MOCK_GEMINI_TASK_ID = 'mock-task-gemini';
 const MOCK_IDLE_SESSION_ID = 'mock-session-idle';
 const MOCK_IDLE_TASK_ID = 'mock-task-idle';
 /**
- * A "paused" session sitting in Executing: the protocol has no paused
+ * A "paused" session sitting in Executing. There is still no paused
  * ActivityStateWire (only 'thinking' | 'idle' | 'permission' - see
- * .claude/rules/protocol-types-from-package.md, no local stand-in types),
- * so this reports 'idle' - the closest real state - and communicates
- * "paused" only through its snippet text, for display/testing purposes.
+ * .claude/rules/protocol-types-from-package.md, no local stand-in types), so
+ * the ACTIVITY stays 'idle', the closest real state. The park itself now rides
+ * the snapshot's `sessionStatus: 'suspended'` instead of being implied by
+ * snippet text alone, which is how a real desktop reports it: SessionManager
+ * leaves the registry row in place with `status = 'suspended'`, and
+ * read-stream answers a subscribe for it. That makes this session the rig's
+ * one exercise of the parked path - notably localNotifier's suppression of a
+ * "went idle" alert for an agent the desktop has put down.
  */
 const MOCK_PAUSED_SESSION_ID = 'mock-session-paused';
 const MOCK_PAUSED_TASK_ID = 'mock-task-paused';
@@ -148,28 +153,6 @@ const MOCK_MAX_TICK_ENTRIES = 20;
  * rigs share no code), so the two gaps read the same across dev:mock and E2E.
  */
 const MOCK_RESPAWN_GAP_MS = 6000;
-
-/**
- * A `session-ended` payload carrying the desktop's in-flight spawn-progress
- * label (kangentic board #639), which `@kangentic/protocol` does not declare
- * yet.
- *
- * Built by INTERSECTION rather than a hand-written parallel payload shape,
- * which is the one local extension protocol-types-from-package.md permits
- * ("extend or narrow a protocol type locally only by composition"). The base
- * payload stays fully type-checked - a typo in `type` or a missing
- * `intentional` is still a compile error - and only the single unpublished
- * field is widened. When the package ships the field this collapses to a
- * plain literal and the helper can go.
- */
-function sessionEndedWithSpawnProgress(spawnProgressLabel: string): ActivityEventPayload {
-  const payload: ActivityEventPayload & { spawnProgressLabel?: string } = {
-    type: 'session-ended',
-    intentional: true,
-    spawnProgressLabel,
-  };
-  return payload;
-}
 
 /**
  * Where the streaming session's context bar starts, and how fast it climbs.
@@ -306,6 +289,13 @@ export interface MockStaticSessionSpec {
    * Ignored while thinking.
    */
   alreadyWaitingForMs?: number;
+  /**
+   * The desktop's lifecycle status for this session. Omitted means 'running',
+   * which is what staticSessionSnapshot sends - a real desktop sets the field
+   * on every read-stream response, so the rig sends it rather than leaning on
+   * the phone's pre-0.5.0 fallback.
+   */
+  sessionStatus?: ReadStreamSessionStatusWire;
 }
 
 export interface MockExtraThinkingSessionSpec extends MockStaticSessionSpec {
@@ -960,10 +950,12 @@ export const MOCK_PAUSED_STATIC_SESSION: MockStaticSessionSpec = {
   ], { branchTag: 'feature/vault-token-migration', done: 'Churned for 22m 51s · done 5:03 PM' }),
   model: MOCK_MODEL_FABLE,
   usedTokens: 61_000,
-  // The protocol has no paused ActivityStateWire, so this reports 'idle' (the
-  // closest real state) and communicates "paused" only through the text.
+  // The protocol has no paused ActivityStateWire, so the ACTIVITY is 'idle',
+  // the closest real state. The park itself rides sessionStatus below, which is
+  // where a real desktop reports it.
   activityState: 'idle',
   alreadyWaitingForMs: 26 * 60_000,
+  sessionStatus: 'suspended',
   toolCells: [
     { name: 'Read', input: { file_path: 'src/billing/chargeStored.ts' }, result: '41 lines' },
     {
@@ -1728,6 +1720,7 @@ function staticSessionSnapshot(spec: MockStaticSessionSpec, wantsTerminal: boole
     usage: mockUsage(spec.usedTokens, spec.model),
     awaitedPromptId: null,
     ptyDimensions: activeGrid(),
+    sessionStatus: spec.sessionStatus ?? 'running',
   };
 }
 
@@ -3147,7 +3140,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         kind: 'activity',
         sessionId: endedSessionId,
         taskId: MOCK_TASK_ID,
-        payload: sessionEndedWithSpawnProgress('Switching model...'),
+        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
       });
     }
     activeSessionId = null;
@@ -3554,6 +3547,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           awaitedPromptId: pendingPromptId,
           awaitedPromptOptions: pendingPromptId === PERMISSION_PROMPT_ID ? MOCK_PERMISSION_OPTIONS : null,
           ptyDimensions: { ...ptyDimensions },
+          sessionStatus: 'running',
         };
         return ok(request, snapshot as unknown as JsonValue);
       }

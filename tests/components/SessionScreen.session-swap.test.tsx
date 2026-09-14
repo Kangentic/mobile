@@ -145,19 +145,9 @@ function seedBoardWithoutTask(): void {
   });
 }
 
-/**
- * `spawnProgressLabel` (kangentic board #639) does not exist in
- * `ActivityEventPayload` until the protocol package ships it.
- *
- * Built by INTERSECTION, the one local extension protocol-types-from-package.md
- * permits ("extend or narrow a protocol type locally only by composition"), and
- * matching `sessionEndedWithLabel` in activityStore.test.ts and
- * `sessionEndedWithSpawnProgress` in mockDesktop.ts. A blanket
- * `as unknown as ActivityEventPayload` would accept any object shape at all;
- * this keeps the base payload checked and widens only the one new field.
- */
+/** Pushes a `session-ended`, optionally carrying `spawnProgressLabel` (protocol 0.14.0+, kangentic board #639). */
 function pushSessionEnded(sessionId: string, options: { spawnProgressLabel?: string } = {}): void {
-  const payload: ActivityEventPayload & { spawnProgressLabel?: string } = {
+  const payload: ActivityEventPayload = {
     type: 'session-ended',
     intentional: true,
     ...options,

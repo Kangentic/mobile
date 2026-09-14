@@ -49,7 +49,10 @@ describe('buildInspectPayload', () => {
       diff: unknown[];
     };
     expect(payload.activity).toEqual([
-      expect.objectContaining({ sessionId: 'sess-1', taskId: 'task-1', feedStatus: 'pending' }),
+      // sessionStatus sits next to feedStatus deliberately and is NOT the same
+      // fact: null here is "no snapshot has landed yet", which is exactly the
+      // state a registered-but-unsnapshotted session is in.
+      expect.objectContaining({ sessionId: 'sess-1', taskId: 'task-1', feedStatus: 'pending', sessionStatus: null }),
     ]);
     expect(payload.transcript).toEqual([]);
     expect(payload.board.projects).toEqual([]);

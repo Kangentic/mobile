@@ -113,6 +113,10 @@ export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' |
           taskId: entry.taskId,
           state: entry.state,
           feedStatus: entry.feedStatus,
+          // The desktop's snapshot-time lifecycle status. Distinct from
+          // feedStatus, and worth seeing next to it: a parked session reads
+          // 'suspended' here while feedStatus is still 'live'.
+          sessionStatus: entry.sessionStatus,
           awaitedPromptId: entry.awaitedPromptId,
           unreadCount: entry.unreadCount,
         })),

@@ -17,7 +17,7 @@
  *    release build fires on establish.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ActivityEventPayload, BridgeEvent } from '@kangentic/protocol';
+import type { BridgeEvent } from '@kangentic/protocol';
 import { ChannelController } from '@/channel';
 import {
   createMockDesktop,
@@ -28,6 +28,10 @@ import {
   staticSessionSeedTranscriptForTest,
   type MockDesktop,
 } from '@/connection/mockDesktop';
+// The store's OWN guard, imported rather than re-implemented: this test asserts
+// on what the store would actually read out of the rig's push, and a hand-copy
+// would be free to drift from it while still passing.
+import { extractSpawnProgressLabel } from '@/state/activityStore';
 import { waitUntil } from '../helpers/async';
 
 /** The second project's real id (probed from the fixtures, not guessed): the checkout-api board. */
@@ -149,6 +153,25 @@ describe('read-stream terminal gating', () => {
   it('serves empty scrollback for a list-only subscribe to a static, non-agent-flavored session', async () => {
     const snapshot = await controller.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false });
     expect(snapshot.scrollback).toBe('');
+  });
+
+  /**
+   * The rig must report sessionStatus the way a real desktop does, on every
+   * response rather than leaving the phone to assume 'running'. Without this
+   * the mock modelled a pre-0.5.0 desktop, and the parked path that
+   * localNotifier now suppresses on was unreachable under dev:mock.
+   *
+   * The paused session carries 'suspended' because its ACTIVITY cannot: the
+   * protocol has no paused ActivityStateWire, so before this the park was
+   * implied by snippet text alone.
+   */
+  it('reports the desktop lifecycle status, suspended for the paused session and running for the rest', async () => {
+    const paused = await controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false });
+    expect(paused.sessionStatus).toBe('suspended');
+    expect(paused.activity.state).toBe('idle');
+
+    const idle = await controller.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false });
+    expect(idle.sessionStatus).toBe('running');
   });
 });
 
@@ -413,21 +436,6 @@ describe('register-push', () => {
 });
 
 /**
- * Reads a `session-ended` payload's `spawnProgressLabel` (kangentic board
- * #639) without declaring a local parallel type - the SAME composition guard
- * as `extractSpawnProgressLabel` in `src/state/activityStore.ts` and
- * `sessionEndedWithLabel` in `tests/unit/activityStore.test.ts`, since the
- * field does not exist in `ActivityEventPayload` until the protocol package
- * ships it.
- */
-function readSpawnProgressLabel(payload: ActivityEventPayload): string | null {
-  if (payload.type !== 'session-ended') return null;
-  return 'spawnProgressLabel' in payload && typeof payload.spawnProgressLabel === 'string'
-    ? payload.spawnProgressLabel
-    : null;
-}
-
-/**
  * The `/respawn` rig fix (mockDesktop.ts's `respawnActiveSession`,
  * kangentic board #639): the outgoing session's `session-ended` push MUST
  * carry a non-empty `spawnProgressLabel`, because this mock's OWN
@@ -458,7 +466,7 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
       if (!endedEvent || endedEvent.kind !== 'activity') {
         throw new Error('expected a session-ended activity event for the outgoing session');
       }
-      const spawnProgressLabel = readSpawnProgressLabel(endedEvent.payload);
+      const spawnProgressLabel = extractSpawnProgressLabel(endedEvent.payload);
       expect(typeof spawnProgressLabel).toBe('string');
       expect(spawnProgressLabel?.length ?? 0).toBeGreaterThan(0);
 

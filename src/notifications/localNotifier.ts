@@ -53,15 +53,39 @@ const IDLE_SETTLE_MS = 45_000;
  * Whether a session is quiet in the sense 'turn-complete' means: still running,
  * and not doing anything.
  *
- * BOTH FIELDS ARE LOAD-BEARING. `session-ended` sets `feedStatus` and leaves
- * `state` untouched (activityStore.ts), so a session that crashes or is stopped
- * while sitting idle stays `state: 'idle'` forever. Checking `state` alone
- * would let a pending settle survive the end and fire "Agent went idle" 45s
- * after the session was already reported as failed - or, worse, fire it for a
- * deliberate stop, which notifies nothing at all by design.
+ * ALL THREE FIELDS ARE LOAD-BEARING. `session-ended` sets `feedStatus` and
+ * leaves `state` untouched (activityStore.ts), so a session that crashes or is
+ * stopped while sitting idle stays `state: 'idle'` forever. Checking `state`
+ * alone would let a pending settle survive the end and fire "Agent went idle"
+ * 45s after the session was already reported as failed - or, worse, fire it for
+ * a deliberate stop, which notifies nothing at all by design.
+ *
+ * `sessionStatus` is the third for the same reason applied to a PARK rather
+ * than an end. A suspended session produces no `session-ended` on the path that
+ * matters here, so `feedStatus` does not catch it, and the 45s settle is long
+ * enough for a timer armed before the park to fire well after it:
+ * `scheduleIdleSettle` re-reads the store at fire time, so the entry it finds
+ * is the parked one. Without this clause the user gets "Agent went idle" pushed
+ * for an agent the desktop has already put down.
+ *
+ * The suppression is not permanent, and that half lives in the store rather
+ * than here: `applyActivityEvent` retires a stale 'suspended' the moment an
+ * `activity` event reports 'thinking', so a resumed session alerts normally on
+ * its next turn. It has to be retired somewhere, because nothing re-snapshots
+ * an already-subscribed stream on a live channel - see the field's docs in
+ * activityStore.ts.
+ *
+ * Only 'suspended' is excluded, and the other two are deliberate keeps.
+ * 'queued' cannot reach this predicate anyway: the settle arms only on a
+ * thinking -> idle edge, and a queued placeholder has no PTY and a fresh
+ * session id, so its entry is created idle (emptyEntry) and never reports
+ * thinking. Excluding it would be dead code wearing the clothes of a
+ * considered decision. 'exited' is a snapshot racing teardown, and the
+ * `session-ended` push is the authority on that (it carries `intentional`,
+ * which a snapshot cannot) - see the field's docs in activityStore.ts.
  */
 function isSettledIdle(entry: SessionActivityEntry): boolean {
-  return entry.state === 'idle' && entry.feedStatus !== 'ended';
+  return entry.state === 'idle' && entry.feedStatus !== 'ended' && entry.sessionStatus !== 'suspended';
 }
 
 function resolveTaskTitle(entry: SessionActivityEntry): string {
