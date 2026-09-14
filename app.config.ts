@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.6.3',
+  version: '0.7.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -139,7 +139,18 @@ const config: ExpoConfig = {
     // Reanimated mapper walk are both cross-platform, so iOS gets the leak fix
     // and the mapper reduction even though the CPU numbers were taken on a
     // Pixel. The synchronous-UI-props flag is the one Android-only piece.
-    buildNumber: '13',
+    //
+    // 14 is the v0.7.0 release cut 2026-09-14. 13 is spent, tagged ios-b13.
+    // The iOS-specific item is the cold-start crash fix: expo-router's
+    // imperative router was being called from module scope, which throws above
+    // every error boundary once the queue drains, and that is what killed
+    // 0.6.3 build 13 on a notification tap 452 ms into the process. See
+    // .claude/rules/imperative-router-inside-react.md. Everything else is
+    // cross-platform: the Home feed now shows how long each session has been
+    // waiting and no longer hides a queued or mid-respawn session, task cards
+    // carry PR merge readiness, and the handled-error door reports caught
+    // failures to Sentry.
+    buildNumber: '14',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -324,13 +335,22 @@ const config: ExpoConfig = {
     // Pixel 11 Pro; docs/developer-guide.md carries the numbers and the scope
     // of each claim.
     //
+    // 12 is the v0.7.0 release cut 2026-09-14, going to the INTERNAL track. 11
+    // is spent, tagged android-vc11. The Android-specific items are the
+    // force-quit push delivery fix (R8 was stripping the headless task's entry
+    // point, so a push to a killed app rendered nothing) and seeing OS memory
+    // pressure at all, which React Native does not surface. The rest is
+    // cross-platform: elapsed wait time on the Home feed, transitional session
+    // states (queued and mid-respawn) that the feed and board card used to
+    // hide, PR merge readiness on task cards, and the handled-error door.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 11,
+    versionCode: 12,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
