@@ -4,7 +4,11 @@ import { StyleSheet, Text } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
-import { SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL, SessionSwapVeil } from '@/screens/task/SessionSwapVeil';
+import {
+  SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
+  SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL,
+  SessionSwapVeil,
+} from '@/screens/task/SessionSwapVeil';
 
 const { opacityMin, opacityMax } = darkTerminalTheme.motion.swapVeilPulse;
 
@@ -86,6 +90,48 @@ describe('SessionSwapVeil', () => {
     const flattenedStyle = StyleSheet.flatten(screen.getByTestId('session-swap-veil-scrim').props.style);
     expect(flattenedStyle.opacity).toBe(opacityMax);
     expect(flattenedStyle.backgroundColor).toBe(darkTerminalTheme.colors.background);
+  });
+
+  /**
+   * The waiting phase: the same veil, with the empty terminal painted UNDER
+   * its scrim in place of the dead session's last frame, the waiting label,
+   * and still nothing to read. The desktop's launch overlay is a spinner
+   * over a blank terminal area; this is the phone's version of blank.
+   */
+  describe('the waiting phase', () => {
+    it('paints the empty terminal under the scrim, carries the waiting label, and still renders no text', () => {
+      render(
+        <ThemeProvider>
+          <SessionSwapVeil waiting />
+        </ThemeProvider>,
+      );
+
+      const veil = screen.getByTestId('session-swap-veil');
+      expect(veil.props.accessibilityLabel).toBe(SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL);
+      const emptyLayer = screen.getByTestId('session-swap-veil-empty');
+      expect(StyleSheet.flatten(emptyLayer.props.style).backgroundColor).toBe(
+        darkTerminalTheme.colors.terminalBackground,
+      );
+      expect(emptyLayer.props.pointerEvents).toBe('none');
+      // Painted BEFORE the scrim, so the scrim dims the empty terminal and
+      // not the other way round.
+      const layerOrder = veil.children.map((child) => (typeof child === 'string' ? child : child.props.testID));
+      expect(layerOrder).toEqual(['session-swap-veil-empty', 'session-swap-veil-scrim']);
+      expect(screen.UNSAFE_queryAllByType(Text)).toHaveLength(0);
+    });
+
+    it('paints no empty layer through the quiet phase, where the last frame is the point', () => {
+      render(
+        <ThemeProvider>
+          <SessionSwapVeil />
+        </ThemeProvider>,
+      );
+
+      expect(screen.queryByTestId('session-swap-veil-empty')).toBeNull();
+      expect(screen.getByTestId('session-swap-veil').props.accessibilityLabel).toBe(
+        SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
+      );
+    });
   });
 
   /**

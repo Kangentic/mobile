@@ -569,25 +569,38 @@ transcript window lands, and never in changes mode, where the veil merely yields
 finally paints the successor keeps the predecessor's cell size (`keepFont`), so a shorter grid
 comes up at the same resolution, centred, rather than zoomed to fill the height; the fit button
 and a desktop grid change fit again. Past
-`SESSION_SWAP_QUIET_MS` with the dead session still bound, ONE text surface reveals over the same
-scrim: `SessionWaitingState`, a card and not a verdict ("Waiting for the desktop" / "This screen
-updates as soon as it reports a session for this task."), with "Read transcript" raised as the
-primary and "Move task" outlined beneath it, and the mode switcher still on its usual footer row
-under the card with the composer and quick keys hidden (`switcherOnly` on `SessionInputBar`). The
-card shows in terminal mode only: "Read transcript" is a tap to Chat, where the dead session's
-transcript is still readable, and Changes has the diff. It replaced two surfaces ("Switching
-session" with the desktop's label when a column or label latch promised a successor, "Session
-ended" otherwise) and the 20 s fallback between them, which was the phone changing its verdict on
-a clock; from here the phone cannot tell a stalled spawn from a park or from its own updates not
-arriving, and the last is the likeliest on a phone. The label latch went with them, and the label
-is rendered nowhere; the column latch stays for the move opener, still bounded by
-`SESSION_SWAP_GRACE_MS`. The veil leaves by the same 220 ms crossfade it arrives by. Every normal
-move never reaches the card. A move to To Do or Done leaves the screen instead, back to wherever
-the task was opened from (on the column role the instant the move is confirmed on the phone, or
-on the archive page for a desktop-made move under the sessions projection): neither promises a
-successor, so no card would be honest, and the old completed-task redirect pushed a screen at a
-user who had just confirmed a move. An end handled that way is marked spent at once, or a reset
-task dropped by the sessions projection would get a veil over its own exit.
+`SESSION_SWAP_QUIET_MS` with the dead session still bound, NOTHING is revealed: the window enters
+its waiting phase and stays there for as long as it takes, the way the desktop's own launch
+overlay (a muted spinner over a blank terminal area while a session spawns) does. The deadline is
+a phase change inside the same wait: the pane under the scrim clears from the dead session's last
+frame to the empty terminal (the veil's `waiting` layer, the terminal's own background), the
+footer drops to the switcher alone with the composer and quick keys hidden (`switcherOnly` on
+`SessionInputBar`), Chat and Changes become reachable (the veil yields to both once cleared, so
+the dead session's transcript and diff are one tap away), and a screen reader hears "Waiting for
+the desktop to report a session" once. The header's column chip is the move affordance, as
+always. A successor that binds out of the waiting phase paints under the cleared pane (the empty
+layer stays for the life of the window, so the dead frame never reappears) and the scrim lifts on
+its first non-blank paint; a bound successor that never paints is uncovered by a fresh deadline
+counted from the bind. The pulse therefore no longer stops on a clock, which motion-conventions.md
+records as its one sanctioned exception (measured on the release build at about 11% of a core
+against 5% static; the route's `ScreenMotionProvider` and OS reduced motion still gate it).
+
+This replaced, in two steps on 2026-09-18, the two text surfaces ("Switching session" with the
+desktop's label when a column or label latch promised a successor, "Session ended" otherwise) with
+the 20 s fallback between them, and then the one-line "Waiting for the desktop" card that briefly
+stood in for them: a card the desktop never shows, with buttons for things the screen already
+offers. From here the phone cannot tell a stalled spawn from a park or from its own updates not
+arriving, and the last is the likeliest on a phone, so it says nothing. The label latch went with
+the text, and the label is rendered nowhere; the column latch stays for the move opener, still
+bounded by `SESSION_SWAP_GRACE_MS`. The veil leaves by the same 220 ms crossfade it arrives by.
+Every normal move never reaches the waiting phase. A move to To Do or Done leaves the screen
+instead, back to wherever the task was opened from (on the column role the instant the move is
+confirmed on the phone, or on the archive page for a desktop-made move under the sessions
+projection): neither promises a successor, so waiting would be waiting for nothing, and the old
+completed-task redirect pushed a screen at a user who had just confirmed a move. An end handled
+that way is marked spent at once, or a reset task dropped by the sessions projection would get a
+veil over its own exit. One known gap: a desktop-side move to To Do seen from the Agents tab
+cannot see the column, so it waits rather than leaves.
 
 Nothing else on that screen changes during the window. The panes and the footer are fed
 `sessionId ?? lastBoundSessionId`, so neither board projection unmounts the xterm WebView or flashes

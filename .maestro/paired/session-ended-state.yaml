@@ -2,16 +2,15 @@ appId: com.kangentic.mobile
 ---
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
 # /end-session makes the stub drop the task's session with no successor.
-# Every end goes QUIET first (the swap veil, no text, for SESSION_SWAP_QUIET_MS),
-# because the phone cannot tell a park from a swap when the push lands; then,
-# with no successor having painted, the screen must show the one waiting card
-# ("Waiting for the desktop": never a frozen frame, never a verdict), with the
-# mode switcher still on its footer row beneath it, and the card's "Read
-# transcript" must land on the in-session Chat surface with the composer gone
-# (the session is over; the switcher is the whole footer). This flow is the
-# only E2E coverage of the reveal. The file keeps its historical name: it is
-# the flow that caught the ended-state stacking bug, and CI and the docs
-# refer to it by this name.
+# Every end goes QUIET first (the swap veil over the last frame, no text, for
+# SESSION_SWAP_QUIET_MS), because the phone cannot tell a park from a swap
+# when the push lands; then, with no successor having painted, the wait goes
+# ON rather than revealing anything: the same veil over the empty terminal,
+# the footer down to the switcher alone (the quick keys leave, which is the
+# one observable the phase flip has), and Chat reachable with the composer
+# gone. This flow is the only E2E coverage of the waiting phase. The file
+# keeps its historical name: it is the flow that caught the ended-state
+# stacking bug, and CI and the docs refer to it by this name.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
@@ -38,34 +37,37 @@ appId: com.kangentic.mobile
 - inputText: "/end-session"
 - tapOn:
     id: "composer-send"
-# Back to the terminal: the card shows over the last terminal frame only.
-# Chat is where its "Read transcript" leads, so a card there would cover the
-# very surface it points at.
+# Back to the terminal: the veil covers Chat through the quiet phase (the
+# successor of a real swap lands there) and yields to it only once the pane
+# has cleared, so the terminal is where the whole sequence is visible.
 - tapOn:
     id: "session-mode-terminal"
-# The quiet phase first. Not a transient-state race: the veil holds for the
-# whole quiet window with nothing arriving to close it early.
+# The quiet phase first: the veil, with the footer held in place (the quick
+# keys still there, inert). Not a transient-state race: the veil holds for
+# the whole quiet window with nothing arriving to close it early.
 - extendedWaitUntil:
     visible:
       id: "session-swap-veil"
     timeout: 10000
-- assertNotVisible:
-    id: "session-waiting-state"
-# Then the reveal. This wait must stay past SESSION_SWAP_QUIET_MS with room to
-# spare (tests/unit/sessionRespawnGapTiming.test.ts pins the constant).
-- extendedWaitUntil:
-    visible:
-      id: "session-waiting-state"
-    timeout: 20000
-# The switcher is beneath the card, not hidden by it: the footer is a sibling
-# below the pane box the card covers. This tap would fail if the card sat
-# over the footer, which is the only way a stacking fault ever surfaces.
 - assertVisible:
-    id: "session-mode-toggle"
+    id: "quick-key-esc"
+# Then the phase flip: the quick keys leave the footer. This wait must stay
+# past SESSION_SWAP_QUIET_MS with room to spare
+# (tests/unit/sessionRespawnGapTiming.test.ts pins the constant).
+- extendedWaitUntil:
+    notVisible:
+      id: "quick-key-esc"
+    timeout: 20000
+# ...and the veil is still up: nothing was revealed.
+- assertVisible:
+    id: "session-swap-veil"
+# The switcher is beneath the veil, not hidden by it: the footer is a sibling
+# below the pane box the veil covers. This tap would fail if the veil sat
+# over the footer, which is the only way a stacking fault ever surfaces.
 - tapOn:
-    id: "session-waiting-read-transcript"
+    id: "session-mode-chat"
 - assertNotVisible:
-    id: "session-waiting-state"
+    id: "session-swap-veil"
 # Chat with the composer gone: the conversation list is the pane, and the
 # footer is the switcher alone.
 - extendedWaitUntil:
@@ -74,10 +76,10 @@ appId: com.kangentic.mobile
     timeout: 10000
 - assertNotVisible:
     id: "composer-input"
-# And the way back: the switcher brings the card back with the terminal.
+# And the way back: the switcher brings the veil back with the terminal.
 - tapOn:
     id: "session-mode-terminal"
 - extendedWaitUntil:
     visible:
-      id: "session-waiting-state"
+      id: "session-swap-veil"
     timeout: 10000

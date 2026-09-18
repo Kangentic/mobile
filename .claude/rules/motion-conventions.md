@@ -90,7 +90,12 @@ measurement commands.
 **An animation that never stops keeps the whole app DRAWING at full frame rate.** Check what an
 idle screen costs, not just what it looks like: the idle release build rendered 6131 frames in 51
 seconds (continuous 120 Hz) because per-row spinners never end. That is a battery and thermal cost
-no jank metric reports - `dumpsys gfxinfo` will call it perfectly smooth.
+no jank metric reports - `dumpsys gfxinfo` will call it perfectly smooth. The one sanctioned
+exception is the session screen's swap veil once its wait has outlived the quiet deadline
+(`src/screens/task/SessionSwapVeil.tsx`): a decision taken on 2026-09-18 to mirror the desktop's
+own launch overlay, measured on the release build at about 11% of a core against 5% static, and
+gated by the route's `ScreenMotionProvider` (a pushed route or a backgrounded app stops it) and by
+OS reduced motion. Anything else that loops must still stop on its own.
 
 **But do not read that as "Reanimated is idle when nothing animates".** It is not, and the
 difference matters when you go looking for a cost. `scheduledMapperRun` in
