@@ -32,7 +32,16 @@ interface TerminalUiStoreState {
    * WebView ready).
    */
   focusKeyboardRequestBySessionId: Record<string, boolean>;
+  /**
+   * Sessions whose terminal pane has reported a NON-BLANK first paint since
+   * its init (the WebView's 'painted' report, see terminalBridge.ts). The
+   * session screen releases its swap veil on the successor's entry here: the
+   * bind alone says the board knows the new session, this says its frame is
+   * on screen. Cleared with the rest of the session's render state.
+   */
+  paintedSessionIds: Record<string, true>;
   setApplicationCursorMode: (sessionId: string, enabled: boolean) => void;
+  markTerminalPainted: (sessionId: string) => void;
   setStickyModes: (sessionId: string, modes: TerminalStickyModes) => void;
   requestSessionMode: (sessionId: string, mode: 'terminal' | 'chat', options?: { focusKeyboard?: boolean }) => void;
   consumeRequestedMode: (sessionId: string) => void;
@@ -50,6 +59,13 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
   stickyModesBySessionId: {},
   requestedModeBySessionId: {},
   focusKeyboardRequestBySessionId: {},
+  paintedSessionIds: {},
+
+  markTerminalPainted: (sessionId) =>
+    set((state) => {
+      if (state.paintedSessionIds[sessionId] === true) return state;
+      return { paintedSessionIds: { ...state.paintedSessionIds, [sessionId]: true } };
+    }),
 
   setApplicationCursorMode: (sessionId, enabled) =>
     set((state) => {
@@ -104,7 +120,8 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
       const hasStickyModes = sessionId in state.stickyModesBySessionId;
       const hasRequestedMode = sessionId in state.requestedModeBySessionId;
       const hasFocusRequest = sessionId in state.focusKeyboardRequestBySessionId;
-      if (!hasCursorMode && !hasStickyModes && !hasRequestedMode && !hasFocusRequest) return state;
+      const hasPainted = sessionId in state.paintedSessionIds;
+      if (!hasCursorMode && !hasStickyModes && !hasRequestedMode && !hasFocusRequest && !hasPainted) return state;
       const nextCursorModes = { ...state.applicationCursorModeBySessionId };
       delete nextCursorModes[sessionId];
       const nextStickyModes = { ...state.stickyModesBySessionId };
@@ -113,11 +130,19 @@ export const useTerminalUiStore = create<TerminalUiStoreState>((set) => ({
       delete nextRequestedModes[sessionId];
       const nextFocusRequests = { ...state.focusKeyboardRequestBySessionId };
       delete nextFocusRequests[sessionId];
+      const nextPainted = { ...state.paintedSessionIds };
+      delete nextPainted[sessionId];
       return {
         applicationCursorModeBySessionId: nextCursorModes,
         stickyModesBySessionId: nextStickyModes,
         requestedModeBySessionId: nextRequestedModes,
         focusKeyboardRequestBySessionId: nextFocusRequests,
+        paintedSessionIds: nextPainted,
       };
     }),
 }));
+
+/** Whether the terminal pane has painted a non-blank frame for this session since its last init. */
+export function selectTerminalPainted(state: { paintedSessionIds: Record<string, true> }, sessionId: string | null): boolean {
+  return sessionId !== null && state.paintedSessionIds[sessionId] === true;
+}

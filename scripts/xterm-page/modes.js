@@ -41,8 +41,49 @@
     postToHost(next);
   }
 
-  function afterWriteFlushed() {
+  /**
+   * Whether the VIEWPORT rows hold no visible glyph at all: the cell text of
+   * every row, right-trimmed, is empty. Reads the parsed buffer, never the
+   * bytes. An escape-only seed (a fresh PTY's alternate-screen switch, a
+   * clear) parses to a blank grid, and nothing about its byte length says so.
+   */
+  function visibleGridIsBlank() {
+    var buffer = terminal.buffer.active;
+    for (var row = 0; row < terminal.rows; row += 1) {
+      var line = buffer.getLine(buffer.viewportY + row);
+      if (line && line.translateToString(true).trim().length > 0) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Report the first PAINT after a (re-)init: once right after the init's seed
+   * has flushed (blank or not), then once more on the first write that leaves
+   * visible glyphs, after which the page stays quiet until the next init. The
+   * host holds its session-swap veil on this: the successor's frame is "on
+   * screen" once a non-blank report arrives, never merely once its init was
+   * posted.
+   *
+   * One frame later rather than inline: the write callback fires once the
+   * bytes are PARSED, and the renderer draws them on the next animation frame.
+   * "Painted" is inferred from that ordering, not measured.
+   */
+  function reportPaintedIfAwaiting(afterInit) {
+    if (!terminal || !awaitingNonBlankPaint) return;
+    var blank = visibleGridIsBlank();
+    if (blank && !afterInit) return;
+    if (!blank) awaitingNonBlankPaint = false;
+    var seq = activeInitSeq;
+    requestAnimationFrame(function () {
+      paintReportCounts[blank ? 'blank' : 'painted'] += 1;
+      postToHost({ type: 'painted', seq: seq, blank: blank });
+    });
+  }
+
+  /** `afterInit` is true only from the init seed's own flush; a plain write's callback passes nothing. */
+  function afterWriteFlushed(afterInit) {
     reportModesIfFlipped();
+    reportPaintedIfAwaiting(afterInit === true);
     panToCursor();
     followCursorVertically(false);
     if (pendingJumpRepaint) {

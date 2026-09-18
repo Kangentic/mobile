@@ -20,6 +20,18 @@
   // when something actually flipped. Null after every (re-)init: the restored
   // modes must be reported afresh against the new terminal.
   var lastReportedModes = null;
+  // The host stamps every 'init' with a monotonic seq and the page echoes it
+  // on each 'painted' report, so the host can attribute a report to the init
+  // it posted rather than to whichever session it is bound to by the time
+  // the report lands (a double swap inside one frame). Null from a host that
+  // sent no seq.
+  var activeInitSeq = null;
+  // Armed by every (re-)init, cleared by the first write flush that leaves
+  // visible glyphs in the viewport. While armed the page reports whether the
+  // grid is still blank; once cleared it stays quiet until the next init.
+  var awaitingNonBlankPaint = false;
+  // Probe counters: how many paint reports went out blank vs painted.
+  var paintReportCounts = { blank: 0, painted: 0 };
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
   // not fight the user's finger; auto-pan resumes after the pause.
   var MANUAL_PAN_PAUSE_MS = 4000;

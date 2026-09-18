@@ -9,7 +9,7 @@ import {
   getTerminalDimensions,
   getTerminalFeedStats,
   getUnbufferedListenerSessionIds,
-  hasBufferedFrame,
+  hasPaintableFrame,
   isTerminalRetained,
   releaseTerminal,
   resetTerminalFeed,
@@ -140,21 +140,30 @@ describe('terminalFeed', () => {
     expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-1', listeners: 1 })]);
   });
 
-  it('hasBufferedFrame is false until the session has bytes or a known grid', () => {
-    expect(hasBufferedFrame('sess-1')).toBe(false);
+  it('hasPaintableFrame is false until the session holds bytes that draw a glyph', () => {
+    expect(hasPaintableFrame('sess-1')).toBe(false);
     retainTerminal('sess-1');
     // Retained but empty: re-initialising the WebView from this would paint an
     // empty grid over whatever good frame is on screen.
-    expect(hasBufferedFrame('sess-1')).toBe(false);
+    expect(hasPaintableFrame('sess-1')).toBe(false);
 
+    // A known grid alone is not a frame: dims land before the seed, and an
+    // init on dims alone is exactly the empty grid above.
     setTerminalDimensions('sess-1', { cols: 120, rows: 30 });
-    expect(hasBufferedFrame('sess-1')).toBe(true);
+    expect(hasPaintableFrame('sess-1')).toBe(false);
+
+    // Escape-only bytes (a fresh PTY's alternate-screen switch and clear)
+    // have length and paint nothing.
+    appendChunk('sess-1', '\x1b[?1049h\x1b[H\x1b[2J');
+    expect(hasPaintableFrame('sess-1')).toBe(false);
+    appendChunk('sess-1', 'frame');
+    expect(hasPaintableFrame('sess-1')).toBe(true);
 
     releaseTerminal('sess-1');
     retainTerminal('sess-1');
-    expect(hasBufferedFrame('sess-1')).toBe(false);
+    expect(hasPaintableFrame('sess-1')).toBe(false);
     seedScrollback('sess-1', 'frame');
-    expect(hasBufferedFrame('sess-1')).toBe(true);
+    expect(hasPaintableFrame('sess-1')).toBe(true);
   });
 
   it('records dims for retained sessions and notifies listeners only on change', () => {

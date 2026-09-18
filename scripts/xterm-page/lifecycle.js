@@ -15,6 +15,10 @@
     currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
     lastAppCursorMode = false;
     lastReportedModes = null;
+    // Every init re-arms the paint report (see reportPaintedIfAwaiting) and
+    // records which init it answers for.
+    activeInitSeq = typeof initMessage.seq === 'number' ? initMessage.seq : null;
+    awaitingNonBlankPaint = true;
     manualPanUntil = 0;
     stopHistoryFling();
     dragSamples = [];
@@ -44,7 +48,7 @@
     if (initMessage.scrollback) {
       terminal.write(initMessage.scrollback, function () {
         applyGeometry();
-        afterWriteFlushed();
+        afterWriteFlushed(true);
       });
       cleanFeedWrite(initMessage.scrollback);
     } else {
@@ -55,6 +59,10 @@
       // land) would otherwise never report at all, leaving the host with no
       // confirmation that the terminal came up in the right state.
       reportModesIfFlipped();
+      // And it is a (blank) first paint: the host's swap veil learns the
+      // successor came up with nothing to show yet, and the first write that
+      // draws glyphs reports again.
+      reportPaintedIfAwaiting(true);
     }
     // Cell metrics AND the viewport height can settle a frame after open();
     // re-fit the font (not just the geometry) once they have.

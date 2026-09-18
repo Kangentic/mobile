@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createLiveTailBuffer,
+  hasVisibleContent,
   lastContentLineFromScrollback,
   parseColsFromScrollback,
   stripAnsiPreservingLayout,
@@ -375,6 +376,20 @@ describe('stripAnsiPreservingLayout', () => {
 
   it('passes plain text through untouched', () => {
     expect(stripAnsiPreservingLayout('plain\ntext')).toBe('plain\ntext');
+  });
+});
+
+describe('hasVisibleContent', () => {
+  it('is false for nothing, whitespace, and escape-only bytes (a fresh PTY switching to the alternate screen)', () => {
+    expect(hasVisibleContent('')).toBe(false);
+    expect(hasVisibleContent(' \n\r\n\t')).toBe(false);
+    expect(hasVisibleContent('\x1b[?1049h\x1b[H\x1b[2J')).toBe(false);
+    expect(hasVisibleContent('\x1b]0;title\x07\x1b[?25l')).toBe(false);
+  });
+
+  it('is true once a single printable glyph survives the stripping', () => {
+    expect(hasVisibleContent('\x1b[?1049h\x1b[H\x1b[2J$')).toBe(true);
+    expect(hasVisibleContent('\x1b[1;31m\x1b[0m\n x')).toBe(true);
   });
 });
 

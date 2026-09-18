@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useTerminalUiStore } from '@/state/terminalUiStore';
+import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
 import type { TerminalStickyModes } from '@/terminal/modeRestore';
 
 const SESSION_ID = 'sess-sticky-modes';
@@ -18,6 +18,7 @@ describe('terminalUiStore setStickyModes', () => {
       stickyModesBySessionId: {},
       requestedModeBySessionId: {},
       focusKeyboardRequestBySessionId: {},
+      paintedSessionIds: {},
     });
   });
 
@@ -57,12 +58,13 @@ describe('terminalUiStore setStickyModes', () => {
     });
   });
 
-  it('clearSession removes the session entry from stickyModesBySessionId and the other three maps', () => {
+  it('clearSession removes the session entry from stickyModesBySessionId and the other four maps', () => {
     const otherSessionId = 'sess-other';
     useTerminalUiStore.getState().setStickyModes(SESSION_ID, BASELINE_MODES);
     useTerminalUiStore.getState().setStickyModes(otherSessionId, BASELINE_MODES);
     useTerminalUiStore.getState().setApplicationCursorMode(SESSION_ID, true);
     useTerminalUiStore.getState().requestSessionMode(SESSION_ID, 'terminal', { focusKeyboard: true });
+    useTerminalUiStore.getState().markTerminalPainted(SESSION_ID);
 
     useTerminalUiStore.getState().clearSession(SESSION_ID);
 
@@ -71,7 +73,30 @@ describe('terminalUiStore setStickyModes', () => {
     expect(stateAfterClear.applicationCursorModeBySessionId[SESSION_ID]).toBeUndefined();
     expect(stateAfterClear.requestedModeBySessionId[SESSION_ID]).toBeUndefined();
     expect(stateAfterClear.focusKeyboardRequestBySessionId[SESSION_ID]).toBeUndefined();
+    expect(selectTerminalPainted(stateAfterClear, SESSION_ID)).toBe(false);
     // The other session's entry survives - clearSession is scoped, not a wipe.
     expect(stateAfterClear.stickyModesBySessionId[otherSessionId]).toEqual(BASELINE_MODES);
+  });
+});
+
+describe('terminalUiStore markTerminalPainted', () => {
+  beforeEach(() => {
+    useTerminalUiStore.setState({ paintedSessionIds: {} });
+  });
+
+  it('records the session as painted, and a null session id never reads as painted', () => {
+    expect(selectTerminalPainted(useTerminalUiStore.getState(), SESSION_ID)).toBe(false);
+    useTerminalUiStore.getState().markTerminalPainted(SESSION_ID);
+    expect(selectTerminalPainted(useTerminalUiStore.getState(), SESSION_ID)).toBe(true);
+    expect(selectTerminalPainted(useTerminalUiStore.getState(), null)).toBe(false);
+  });
+
+  it('returns the same state object when the session is already painted', () => {
+    useTerminalUiStore.getState().markTerminalPainted(SESSION_ID);
+    const stateAfterFirstMark = useTerminalUiStore.getState();
+
+    useTerminalUiStore.getState().markTerminalPainted(SESSION_ID);
+
+    expect(useTerminalUiStore.getState()).toBe(stateAfterFirstMark);
   });
 });

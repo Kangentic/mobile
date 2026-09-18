@@ -6,12 +6,13 @@ import { TerminalPane } from '@/components/terminal/TerminalPane';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
 import {
   appendChunk,
+  releaseTerminal,
   resetTerminalFeed,
   retainTerminal,
   seedScrollback,
   setTerminalDimensions,
 } from '@/state/terminalFeed';
-import { useTerminalUiStore } from '@/state/terminalUiStore';
+import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
 
 jest.mock('@/connection/actions', () => ({
   writeTerminal: jest.fn().mockResolvedValue(undefined),
@@ -201,6 +202,7 @@ describe('TerminalPane (faithful mirror)', () => {
       stickyModesBySessionId: {},
       requestedModeBySessionId: {},
       focusKeyboardRequestBySessionId: {},
+      paintedSessionIds: {},
     });
     appStateListeners.clear();
     jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener): NativeEventSubscription => {
@@ -630,6 +632,89 @@ describe('TerminalPane (faithful mirror)', () => {
       }
     },
   );
+
+  /**
+   * THE HOLD RULE and the paint report. A session swap used to reach the
+   * WebView as an empty init (a fresh PTY's seed is empty or escape-only) and
+   * then a write of the successor's bytes into the predecessor's grid, so the
+   * user saw the old frame, a blank grid, then the TUI's first paint. The pane
+   * now never posts an init that would replace a painted frame with a blank
+   * one, and the page reports back when a NON-BLANK frame is on screen,
+   * attributed to the init it answers by seq.
+   */
+  describe('the hold rule and the paint report', () => {
+    it('stamps every init with a monotonically increasing seq', async () => {
+      retainTerminal('sess-1');
+      appendChunk('sess-1', 'hello');
+      const result = await renderPaneAndReady();
+      rerenderPane(result, false);
+      rerenderPane(result, true);
+
+      const initSeqs = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.seq] : []));
+      expect(initSeqs).toEqual([1, 2]);
+    });
+
+    it('marks the session painted only on a non-blank report that answers the latest init', async () => {
+      retainTerminal('sess-1');
+      appendChunk('sess-1', 'hello');
+      await renderPaneAndReady();
+
+      // Blank: the page is up, but nothing is on screen yet.
+      postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+      expect(selectTerminalPainted(useTerminalUiStore.getState(), 'sess-1')).toBe(false);
+      // A stale seq: a late report for an init this pane has since superseded.
+      postFromWebView(JSON.stringify({ type: 'painted', seq: 0, blank: false }));
+      expect(selectTerminalPainted(useTerminalUiStore.getState(), 'sess-1')).toBe(false);
+
+      postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+      expect(selectTerminalPainted(useTerminalUiStore.getState(), 'sess-1')).toBe(true);
+    });
+
+    it('holds an empty same-session re-seed until visible bytes arrive, instead of painting a blank grid', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        appendChunk('sess-1', 'hello');
+        await renderPaneAndReady();
+        webViewMock.__postMessageMock.mockClear();
+
+        // The stream refresh came back with nothing: the frame on screen stays.
+        act(() => seedScrollback('sess-1', ''));
+        expect(decodedPosts()).toEqual([]);
+        // An escape-only chunk still paints nothing - and it must not be
+        // WRITTEN into the held frame either, even once the batch timer fires.
+        act(() => appendChunk('sess-1', '\x1b[2J'));
+        act(() => {
+          jest.advanceTimersByTime(100);
+        });
+        expect(decodedPosts()).toEqual([]);
+
+        act(() => appendChunk('sess-1', 'world'));
+        const posts = decodedPosts();
+        expect(posts).toHaveLength(1);
+        expect(posts[0]?.type).toBe('init');
+        if (posts[0]?.type === 'init') {
+          // ONE init carrying the whole ring, not a write of the last chunk.
+          expect(posts[0].scrollback).toBe('\x1b[2Jworld');
+        }
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('posts no init on re-activation when the ring was released underneath a painted frame', async () => {
+      retainTerminal('sess-1');
+      appendChunk('sess-1', 'hello');
+      const result = await renderPaneAndReady();
+      rerenderPane(result, false);
+      releaseTerminal('sess-1');
+      webViewMock.__postMessageMock.mockClear();
+
+      rerenderPane(result, true);
+
+      expect(decodedPosts().some((message) => message?.type === 'init')).toBe(false);
+    });
+  });
 
   /**
    * The pinch lifecycle: the WebView cannot tell reliably that a pinch is

@@ -75,6 +75,7 @@ describe('generated xterm.html', () => {
 
   it('carries the bridge glue markers the pane depends on', () => {
     expect(generatedHtml).toContain("postToHost({ type: 'ready' })");
+    expect(generatedHtml).toContain("postToHost({ type: 'painted'");
     expect(generatedHtml).toContain('function diffCleanLines(');
     expect(generatedHtml).toContain('HeadlessXterm.Terminal');
   });
@@ -1611,11 +1612,178 @@ describe('generated xterm.html', () => {
   });
 
   /**
+   * The paint report: modes.js from visibleGridIsBlank to the end of the file
+   * (the two report functions plus afterWriteFlushed, which drives them), run
+   * against a fake buffer whose viewport rows the test fills. Frames run
+   * inline. reportModesIfFlipped and the follow/jump collaborators are stubs:
+   * they are afterWriteFlushed's other jobs, not what is under test.
+   */
+  interface PaintReport {
+    type: string;
+    seq: number | null;
+    blank: boolean;
+  }
+
+  function buildPaintReportHarness(): {
+    /** What lifecycle.js does on init: arm the report, then flush the seed with afterInit = true. */
+    init: (seq: number, rows: string[]) => void;
+    /** What dispatch.js does on a write: flush with no afterInit argument. */
+    write: (rows: string[]) => void;
+    posts: () => PaintReport[];
+    counts: () => { blank: number; painted: number };
+  } {
+    const source = pageModule('modes.js');
+    const paintSource = source.slice(source.indexOf('function visibleGridIsBlank('));
+    expect(paintSource).toContain('function reportPaintedIfAwaiting(');
+    expect(paintSource).toContain('function afterWriteFlushed(');
+    assertInjectionsAreAlive('modes.js (paint report slice)', paintSource, [
+      'terminal',
+      'activeInitSeq',
+      'awaitingNonBlankPaint',
+      'paintReportCounts',
+      'postToHost',
+      'requestAnimationFrame',
+      'reportModesIfFlipped',
+      'panToCursor',
+      'followCursorVertically',
+      'pendingJumpRepaint',
+      'jumpRepaintCount',
+    ]);
+    const viewport = { rows: [] as string[] };
+    const terminal = {
+      rows: 3,
+      buffer: {
+        active: {
+          viewportY: 0,
+          getLine: (index: number) => ({ translateToString: () => viewport.rows[index] ?? '' }),
+        },
+      },
+    };
+    const posts: PaintReport[] = [];
+    const build = new Function(
+      'terminal',
+      'postToHost',
+      'requestAnimationFrame',
+      'reportModesIfFlipped',
+      'panToCursor',
+      'followCursorVertically',
+      `var activeInitSeq = null;
+       var awaitingNonBlankPaint = false;
+       var paintReportCounts = { blank: 0, painted: 0 };
+       var pendingJumpRepaint = false;
+       var jumpRepaintCount = 0;
+       ${paintSource}
+       return {
+         arm: function (seq) { activeInitSeq = seq; awaitingNonBlankPaint = true; },
+         flush: afterWriteFlushed,
+         counts: function () { return paintReportCounts; },
+       };`,
+    ) as (...dependencies: unknown[]) => {
+      arm: (seq: number) => void;
+      flush: (afterInit?: boolean) => void;
+      counts: () => { blank: number; painted: number };
+    };
+    const built = build(
+      terminal,
+      (message: PaintReport) => posts.push(message),
+      (callback: () => void) => callback(),
+      () => undefined,
+      () => undefined,
+      () => undefined,
+    );
+    return {
+      init: (seq, rows) => {
+        viewport.rows = rows;
+        built.arm(seq);
+        built.flush(true);
+      },
+      write: (rows) => {
+        viewport.rows = rows;
+        built.flush();
+      },
+      posts: () => posts,
+      counts: built.counts,
+    };
+  }
+
+  describe('modes.js paint report', () => {
+    it('reports blank once after an init that draws nothing, again on the first write with glyphs, then stays quiet', () => {
+      const harness = buildPaintReportHarness();
+
+      harness.init(7, ['', '', '']);
+      expect(harness.posts()).toEqual([{ type: 'painted', seq: 7, blank: true }]);
+
+      // A write that leaves the grid blank (a clear, a cursor move) says nothing new.
+      harness.write(['   ', '', '']);
+      expect(harness.posts()).toHaveLength(1);
+
+      harness.write(['', '$ claude', '']);
+      expect(harness.posts()).toEqual([
+        { type: 'painted', seq: 7, blank: true },
+        { type: 'painted', seq: 7, blank: false },
+      ]);
+
+      // Quiet until the next init: later writes, even one that clears the
+      // grid and one that redraws it, report nothing.
+      harness.write(['', '', '']);
+      harness.write(['more', '', '']);
+      expect(harness.posts()).toHaveLength(2);
+      expect(harness.counts()).toEqual({ blank: 1, painted: 1 });
+    });
+
+    it('reports non-blank straight from an init whose seed draws glyphs, and nothing after', () => {
+      const harness = buildPaintReportHarness();
+
+      harness.init(3, ['$ ls', '', '']);
+      expect(harness.posts()).toEqual([{ type: 'painted', seq: 3, blank: false }]);
+
+      harness.write(['$ ls', 'a.txt', '']);
+      expect(harness.posts()).toHaveLength(1);
+    });
+
+    it("re-arms on every init, echoing that init's own seq", () => {
+      const harness = buildPaintReportHarness();
+
+      harness.init(1, ['x', '', '']);
+      harness.init(2, ['', '', '']);
+      harness.write(['y', '', '']);
+
+      expect(harness.posts().map((report) => report.seq)).toEqual([1, 2, 2]);
+    });
+
+    /**
+     * The arming half lives in lifecycle.js, outside the slice above: every
+     * init records the host's seq and re-arms the report, the seed's own flush
+     * says it is the init's, and an EMPTY seed reports on its own (there is no
+     * write flush to ride). A plain write's flush passes nothing, so it can
+     * never masquerade as an init's. Pinned by containment, the way this file
+     * pins the other lifecycle shapes.
+     */
+    it('is armed by every init and reported by the seed flush, empty seed included', () => {
+      const lifecycleSource = pageModule('lifecycle.js');
+      const resetBody = lifecycleSource.slice(
+        lifecycleSource.indexOf('function resetSessionViewState('),
+        lifecycleSource.indexOf('function seedAndSettle('),
+      );
+      expect(resetBody).toContain('awaitingNonBlankPaint = true');
+      expect(resetBody).toContain('activeInitSeq = ');
+      const seedBody = lifecycleSource.slice(
+        lifecycleSource.indexOf('function seedAndSettle('),
+        lifecycleSource.indexOf('function createTerminal('),
+      );
+      expect(seedBody).toContain('afterWriteFlushed(true)');
+      expect(seedBody).toContain('reportPaintedIfAwaiting(true)');
+      expect(pageModule('dispatch.js')).toContain('terminal.write(message.data, afterWriteFlushed)');
+    });
+  });
+
+  /**
    * reportModesIfFlipped, run against a fake terminal whose modes/buffer are
    * mutable so the harness can drive a baseline report and then a flip. The
-   * module's OTHER function (afterWriteFlushed) is never called here, so its
-   * own dependencies (panToCursor, followCursorVertically, the jump-repaint
-   * fields, requestAnimationFrame) only need to exist as harmless stubs.
+   * module's OTHER functions (the paint report, afterWriteFlushed) are never
+   * called here, so their own dependencies (panToCursor,
+   * followCursorVertically, the jump-repaint fields, requestAnimationFrame)
+   * only need to exist as harmless stubs.
    */
   interface ModesReport {
     type: string;
