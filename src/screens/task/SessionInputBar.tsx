@@ -21,11 +21,11 @@ export interface SessionInputBarProps {
    */
   suspended?: boolean;
   /**
-   * True once the session is over (past the quiet window with no successor
-   * bound): the footer is the switcher alone, in every mode. Keys and
-   * messages have nowhere to go, and the switcher is what keeps the
-   * transcript and the diff one tap away from the waiting card, and the way
-   * back from them.
+   * True in the swap window's waiting phase (past the quiet deadline with no
+   * successor bound): the footer is the switcher alone, in every mode. Keys
+   * and messages have nowhere to go, and the switcher is what keeps the
+   * transcript and the diff one tap away from the wait, and the way back
+   * from them.
    */
   switcherOnly?: boolean;
 }

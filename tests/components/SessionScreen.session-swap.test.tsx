@@ -4,6 +4,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import type { ActivityEventPayload } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
 import { SESSION_SWAP_QUIET_MS, SessionScreen } from '@/screens/task/SessionScreen';
+import {
+  SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
+  SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL,
+} from '@/screens/task/SessionSwapVeil';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -121,6 +125,10 @@ jest.mock('@/screens/task/SessionInputBar', () => {
               onPress: () => props.onModeChange('terminal'),
             }),
             ReactModule.createElement(Pressable, {
+              testID: 'session-mode-chat',
+              onPress: () => props.onModeChange('chat'),
+            }),
+            ReactModule.createElement(Pressable, {
               testID: 'session-mode-changes',
               onPress: () => props.onModeChange('changes'),
             }),
@@ -203,30 +211,34 @@ function renderSessionScreen(): ReturnType<typeof render> {
 }
 
 /**
- * The quiet phase: the veil and NOTHING else. The waiting card is asserted
- * absent by testID, and the veil itself carries no Text (pinned in
- * SessionSwapVeil.test.tsx), so this is "nothing to read" in full.
+ * The quiet phase: the veil over the last frame and NOTHING else. The veil
+ * carries no Text (pinned in SessionSwapVeil.test.tsx) and has not cleared
+ * the pane yet, so this is "nothing to read, nothing changed" in full.
  */
 function expectQuietVeilOnly(): void {
-  expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
-  expect(screen.queryByTestId('session-waiting-state')).toBeNull();
+  const veil = screen.getByTestId('session-swap-veil');
+  expect(veil.props.accessibilityLabel).toBe(SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL);
+  expect(screen.queryByTestId('session-swap-veil-empty')).toBeNull();
 }
 
 /**
- * The reveal: the one card over the last frame, the veil gone, and the footer
- * still mounted beneath it as the switcher alone (the stub records
- * `switcherOnly`). The old ended state hid the footer outright.
+ * The waiting phase: the same veil, now carrying the waiting label with the
+ * empty terminal painted under its scrim, and the footer still mounted
+ * beneath it as the switcher alone (the stub records `switcherOnly`). No
+ * text, no buttons: the old ended state hid the footer outright, and the
+ * card that briefly replaced it put a title and two buttons here.
  */
-function expectWaitingCard(): void {
-  expect(screen.queryByTestId('session-swap-veil')).toBeNull();
-  expect(screen.getByTestId('session-waiting-state')).toBeTruthy();
+function expectWaitingVeil(): void {
+  const veil = screen.getByTestId('session-swap-veil');
+  expect(veil.props.accessibilityLabel).toBe(SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL);
+  expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
   expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'switcher-only' });
+  expect(screen.queryByText('Waiting for the desktop')).toBeNull();
 }
 
-/** Neither swap surface: the screen is live, or on its way out. */
+/** No swap surface: the screen is live, or on its way out. */
 function expectNoSwapSurface(): void {
   expect(screen.queryByTestId('session-swap-veil')).toBeNull();
-  expect(screen.queryByTestId('session-waiting-state')).toBeNull();
 }
 
 /** Runs the clock past SESSION_SWAP_QUIET_MS under fake timers: the long-gap reveal. */
@@ -246,6 +258,11 @@ function resetRouterMocks(): void {
   jest.clearAllMocks();
   mockCanGoBack.mockReset();
   mockCanGoBack.mockReturnValue(true);
+  // The stub's Chat pill goes through onModeChange, which REMEMBERS the
+  // task's lens in the settings store; without this a test that visited Chat
+  // hands the next test a screen that mounts on Chat, where the waiting veil
+  // deliberately does not show.
+  useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
 }
 
 describe('SessionScreen session binding', () => {
@@ -291,11 +308,12 @@ describe('SessionScreen session binding', () => {
   /**
    * The full-projection end: the located task reports no session after this
    * screen had one. Quiet first (the veil over the last frame, the footer
-   * held and inert), then past the deadline the one card, with the footer
-   * still there as the switcher alone. The old ended state hid the footer
-   * outright, which left Changes a one-way trip out.
+   * held and inert), then past the deadline the waiting phase: the same veil
+   * over the empty terminal, with the footer still there as the switcher
+   * alone. The old ended state hid the footer outright, which left Changes a
+   * one-way trip out.
    */
-  it('veils, then shows the waiting card with the switcher beneath it, when the located task loses its session', () => {
+  it('veils, then clears to the empty terminal with the switcher beneath, when the located task loses its session', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -311,13 +329,19 @@ describe('SessionScreen session binding', () => {
       expect(screen.getByTestId('stub-session-input-bar').props.accessibilityState).toEqual({ disabled: true });
 
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('recovers from the waiting card when a successor session appears', () => {
+  /**
+   * A successor that arrives out of the waiting phase paints UNDER the
+   * cleared pane: the veil stays up across its bind (with the footer live for
+   * it) and lets go on its first paint, so the dead session's frame never
+   * flashes between the two.
+   */
+  it('recovers from the waiting phase when a successor session appears and paints', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -327,15 +351,24 @@ describe('SessionScreen session binding', () => {
         seedTaskWithSession(null);
       });
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
       act(() => {
         seedTaskWithSession('sess-c');
       });
 
-      expectNoSwapSurface();
+      expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+      expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
       expect(openSessionScreenMock).toHaveBeenCalledWith('sess-c');
-      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'full' });
+      const inputBar = screen.getByTestId('stub-session-input-bar');
+      expect(inputBar.props.accessibilityValue).toEqual({ text: 'full' });
+      expect(inputBar.props.accessibilityState).toEqual({ disabled: false });
+
+      act(() => {
+        useTerminalUiStore.getState().markTerminalPainted('sess-c');
+      });
+
+      expectNoSwapSurface();
     } finally {
       jest.useRealTimers();
     }
@@ -350,9 +383,9 @@ describe('SessionScreen session binding', () => {
    * hundred milliseconds later. Both signals the screen used to rely on are gone
    * within one round trip of the end, and the ended state appeared and vanished.
    * The end must stay handled through the drop and the prune: quiet until the
-   * deadline, then the card, and no veil re-opening over it on a later render.
+   * deadline, then the waiting phase, holding on a later render.
    */
-  it('keeps the waiting card after the sessions projection drops the task and the entry is pruned', () => {
+  it('keeps the waiting phase after the sessions projection drops the task and the entry is pruned', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -375,14 +408,13 @@ describe('SessionScreen session binding', () => {
       expectQuietVeilOnly();
 
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
-      // A later render of the same shape: the card stays, and nothing quiet
-      // opens over it.
+      // A later render of the same shape: still waiting, nothing re-opened.
       act(() => {
         seedBoardWithoutTask();
       });
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
@@ -392,9 +424,9 @@ describe('SessionScreen session binding', () => {
    * The same collapse, entered from the board rather than a triage row, so
    * there is no sessionId param either. With the task gone nothing can name
    * the dead session but the binding the screen already made: the quiet
-   * window opens off lastBoundSessionId and the card reveals at the deadline.
+   * window opens off lastBoundSessionId and waits past the deadline.
    */
-  it('keeps the waiting card with no sessionId param to fall back on', () => {
+  it('keeps waiting with no sessionId param to fall back on', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1' };
@@ -411,7 +443,7 @@ describe('SessionScreen session binding', () => {
       expectQuietVeilOnly();
 
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
@@ -437,7 +469,7 @@ describe('SessionScreen session binding', () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
-  it('declares the session over when its feed stays rejected past the grace window: the veil, then the card', () => {
+  it('declares the session over when its feed stays rejected past the grace window: the veil, then the wait', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -457,7 +489,7 @@ describe('SessionScreen session binding', () => {
       expectQuietVeilOnly();
 
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
@@ -557,7 +589,11 @@ describe('SessionScreen session binding', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it('offers Move task on the waiting card while the task is still on a full board', () => {
+  /**
+   * What the retired card's Move button did is the header's column chip,
+   * which never left: it is outside the pane box the veil covers.
+   */
+  it('keeps the header column chip as the move affordance through the waiting phase', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -567,9 +603,9 @@ describe('SessionScreen session binding', () => {
         seedTaskWithSession(null);
       });
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
-      fireEvent.press(screen.getByTestId('session-waiting-move-task'));
+      fireEvent.press(screen.getByTestId('task-header-column'));
 
       expect(mockPush).toHaveBeenCalledWith({
         pathname: '/move-task',
@@ -581,21 +617,22 @@ describe('SessionScreen session binding', () => {
   });
 
   /**
-   * The card covers the WHOLE pane area, so "Read transcript" switching the
-   * mode underneath is not enough: an overlay that keeps rendering leaves the
-   * user looking at the same panel they just tapped out of, and the primary
-   * reads as a dead button. The card yields to Chat as well as Changes for
-   * exactly this reason, and the footer stays as the switcher alone there
-   * (no composer for a dead session).
+   * The veil covers the WHOLE pane area, so switching the mode underneath is
+   * not enough: an overlay that keeps rendering leaves the user looking at
+   * the same panel they just tapped out of. Through the quiet phase the veil
+   * yields to Changes only; once the pane has cleared it yields to Chat as
+   * well, since the transcript outlives the session and the switcher is how
+   * the user gets to it. The footer stays as the switcher alone there (no
+   * composer for a dead session).
    *
    * No existing tier catches the covering itself. All three panes are always
    * mounted and only their ACCESSIBILITY visibility flips with the mode, so a
-   * "chat is visible" assertion passes while the card still covers it. It is
-   * the exact mirror of the zIndex bug the card's own docblock records: that
-   * one was caught because a TAP was swallowed, not because a visibility
+   * "chat is visible" assertion passes while the veil still covers it. It is
+   * the exact mirror of the stacking bug the veil's own docblock records:
+   * that one was caught because a TAP was swallowed, not because a visibility
    * assert failed.
    */
-  it('gets out of the way when the user taps Read transcript, landing on Chat with the switcher alone', () => {
+  it('yields to Chat in the waiting phase, with the switcher alone, and not before', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -604,12 +641,19 @@ describe('SessionScreen session binding', () => {
       act(() => {
         seedTaskWithSession(null);
       });
+      expectQuietVeilOnly();
+
+      // Through the quiet phase Chat stays covered: the successor lands there.
+      fireEvent.press(screen.getByTestId('session-mode-chat'));
+      expectQuietVeilOnly();
+      fireEvent.press(screen.getByTestId('session-mode-terminal'));
+
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
-      fireEvent.press(screen.getByTestId('session-waiting-read-transcript'));
+      fireEvent.press(screen.getByTestId('session-mode-chat'));
 
-      expect(screen.queryByTestId('session-waiting-state')).toBeNull();
+      expectNoSwapSurface();
       // ...and the Chat pane is the one now live behind where it was.
       expect(screen.getByTestId('session-pane-chat').props.accessibilityElementsHidden).toBe(false);
       // The footer stays bound to the session this screen last had (the panes
@@ -624,14 +668,14 @@ describe('SessionScreen session binding', () => {
   });
 
   /**
-   * The escape above only proves the card CAN be dismissed - a regression
-   * that latched "dismissed" into its own state (rather than deriving
-   * showWaitingState from `mode` alone) would pass it just as well.
-   * Round-tripping the mode back to terminal is what actually exercises the
-   * derivation. Via the desktop-ended push (session_id stays 'sess-a'), the
-   * route a real park takes.
+   * The escape above only proves the veil CAN be left - a regression that
+   * latched "left" into its own state (rather than deriving showQuietVeil
+   * from `mode` alone) would pass it just as well. Round-tripping the mode
+   * back to terminal is what actually exercises the derivation. Via the
+   * desktop-ended push (session_id stays 'sess-a'), the route a real park
+   * takes.
    */
-  it('brings the card back once the mode returns to terminal', () => {
+  it('brings the waiting veil back once the mode returns to terminal', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -641,14 +685,14 @@ describe('SessionScreen session binding', () => {
         pushSessionEnded('sess-a');
       });
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
-      fireEvent.press(screen.getByTestId('session-waiting-read-transcript'));
-      expect(screen.queryByTestId('session-waiting-state')).toBeNull();
+      fireEvent.press(screen.getByTestId('session-mode-chat'));
+      expectNoSwapSurface();
 
       fireEvent.press(screen.getByTestId('session-mode-terminal'));
 
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
@@ -656,10 +700,10 @@ describe('SessionScreen session binding', () => {
 
   /**
    * Under the sessions projection an ended task is dropped from the board, so
-   * MoveTaskScreen could not locate it either: the Move button hides while
-   * Read transcript stays (the transcript outlives the session).
+   * MoveTaskScreen could not locate it either: the header chip hides while
+   * Chat stays reachable (the transcript outlives the session).
    */
-  it('hides Move task when the sessions projection dropped the task', () => {
+  it('has no move affordance once the sessions projection dropped the task, and still reaches Chat', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -674,9 +718,12 @@ describe('SessionScreen session binding', () => {
       });
       passQuietDeadline();
 
-      expectWaitingCard();
-      expect(screen.queryByTestId('session-waiting-move-task')).toBeNull();
-      expect(screen.getByTestId('session-waiting-read-transcript')).toBeTruthy();
+      expectWaitingVeil();
+      expect(screen.queryByTestId('task-header-column')).toBeNull();
+
+      fireEvent.press(screen.getByTestId('session-mode-chat'));
+      expectNoSwapSurface();
+      expect(screen.getByTestId('session-pane-chat').props.accessibilityElementsHidden).toBe(false);
     } finally {
       jest.useRealTimers();
     }
@@ -700,7 +747,7 @@ describe('SessionScreen session binding', () => {
    * visible pane - so that is what this does. The real proof stays the paired
    * Maestro flow.
    */
-  it('stacks the waiting card above the visible pane, so its buttons can be tapped', () => {
+  it('stacks the waiting veil above the visible pane, so nothing under it can be tapped', () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
@@ -710,8 +757,9 @@ describe('SessionScreen session binding', () => {
         seedTaskWithSession(null);
       });
       passQuietDeadline();
+      expectWaitingVeil();
 
-      const overlayZIndex = StyleSheet.flatten(screen.getByTestId('session-waiting-state').props.style)?.zIndex;
+      const overlayZIndex = StyleSheet.flatten(screen.getByTestId('session-swap-veil').props.style)?.zIndex;
       // Terminal is the default mode, so that is the pane carrying paneVisible.
       //
       // `includeHiddenElements` because the assertion is about STACKING, and
@@ -804,7 +852,7 @@ describe('SessionScreen across a column move', () => {
     });
   }
 
-  it('shows the waiting card, not a verdict, once a move outlives the quiet window', () => {
+  it('enters the waiting phase, not a verdict, once a move outlives the quiet window', () => {
     jest.useFakeTimers();
     try {
       seedRoledBoard('sess-a');
@@ -825,9 +873,8 @@ describe('SessionScreen across a column move', () => {
 
       passQuietDeadline();
 
-      expectWaitingCard();
-      expect(screen.getByText('Waiting for the desktop')).toBeTruthy();
-      // The switcher is still there beneath the card, on the same lens; only
+      expectWaitingVeil();
+      // The switcher is still there beneath the veil, on the same lens; only
       // the keys are gone.
       expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('terminal');
     } finally {
@@ -838,10 +885,10 @@ describe('SessionScreen across a column move', () => {
   /**
    * A swap can hold the screen for a long time on a slow machine, and the
    * work so far is still readable in the diff - so the switcher beneath the
-   * card is the way to Changes, the card yields to it, and the mode pill
-   * brings the card back.
+   * veil is the way to Changes, the veil yields to it, and the mode pill
+   * brings it back.
    */
-  it('lets the user out to Changes from under the card, and brings it back with the mode pill', () => {
+  it('lets the user out to Changes from under the waiting veil, and brings it back with the mode pill', () => {
     jest.useFakeTimers();
     try {
       seedRoledBoard('sess-a');
@@ -853,25 +900,31 @@ describe('SessionScreen across a column move', () => {
         pushSessionEnded('sess-a');
       });
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
       fireEvent.press(screen.getByTestId('session-mode-changes'));
 
-      expect(screen.queryByTestId('session-waiting-state')).toBeNull();
+      expectNoSwapSurface();
       expect(screen.getByTestId('session-pane-changes').props.accessibilityElementsHidden).toBe(false);
       // Still bound to the outgoing session, so the pill is the way back - and
-      // going back to terminal must bring the card with it.
+      // going back to terminal must bring the veil with it.
       expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('changes');
 
       fireEvent.press(screen.getByTestId('session-mode-terminal'));
 
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('clears the waiting card when the successor session binds', () => {
+  /**
+   * A successor that binds out of the waiting phase paints under the CLEARED
+   * pane: the veil and its empty layer stay up across the bind (the footer
+   * comes alive for the successor), and let go on the first paint. Letting
+   * go at the bind is what would flash the dead session's frame.
+   */
+  it('keeps the cleared pane under the veil across a late bind, and lets go on the paint', () => {
     jest.useFakeTimers();
     try {
       seedRoledBoard('sess-a');
@@ -883,15 +936,62 @@ describe('SessionScreen across a column move', () => {
         pushSessionEnded('sess-a');
       });
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
       // The desktop spawned the successor and the settled snapshot carries it.
       act(() => {
         seedRoledBoard('sess-b', 'lane-review');
       });
 
-      expectNoSwapSurface();
+      expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+      expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
       expect(openSessionScreenMock).toHaveBeenCalledWith('sess-b');
+      const inputBar = screen.getByTestId('stub-session-input-bar');
+      expect(inputBar.props.accessibilityValue).toEqual({ text: 'full' });
+      expect(inputBar.props.accessibilityState).toEqual({ disabled: false });
+
+      act(() => {
+        useTerminalUiStore.getState().markTerminalPainted('sess-b');
+      });
+
+      expectNoSwapSurface();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
+   * The bound-but-unpainted bound, restarted from the bind: a successor that
+   * binds out of the waiting phase and then paints nothing (an agent that has
+   * printed nothing) is uncovered SESSION_SWAP_QUIET_MS after its bind, as
+   * one that bound inside the quiet phase would be. Never forever.
+   */
+  it('uncovers a late successor that never paints, one quiet window after its bind', () => {
+    jest.useFakeTimers();
+    try {
+      seedRoledBoard('sess-a');
+      renderSessionScreen();
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+      passQuietDeadline();
+      expectWaitingVeil();
+
+      act(() => {
+        jest.advanceTimersByTime(30_000);
+        seedRoledBoard('sess-b', 'lane-doing');
+      });
+      expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+
+      act(() => {
+        jest.advanceTimersByTime(SESSION_SWAP_QUIET_MS - 1);
+      });
+      expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+
+      act(() => {
+        jest.advanceTimersByTime(2);
+      });
+      expectNoSwapSurface();
       expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'full' });
     } finally {
       jest.useRealTimers();
@@ -901,10 +1001,10 @@ describe('SessionScreen across a column move', () => {
   /**
    * There used to be a 20 s fallback here, from "Switching session" to
    * "Session ended": the phone changing its verdict on a clock, for a
-   * question it cannot answer from here. With one card for the whole stretch
+   * question it cannot answer from here. The wait now has no clock at all:
    * nothing changes at 20 s, or ever, until the desktop reports a session.
    */
-  it('keeps the one card past the old 20 s fallback, never changing its verdict on a clock', () => {
+  it('keeps waiting past the old 20 s fallback, never changing its verdict on a clock', () => {
     jest.useFakeTimers();
     try {
       seedRoledBoard('sess-a');
@@ -916,18 +1016,17 @@ describe('SessionScreen across a column move', () => {
         pushSessionEnded('sess-a');
       });
       passQuietDeadline();
-      expectWaitingCard();
+      expectWaitingVeil();
 
       act(() => {
         jest.advanceTimersByTime(20_001 - (SESSION_SWAP_QUIET_MS + 1));
       });
-      expectWaitingCard();
-      expect(screen.getByText('Waiting for the desktop')).toBeTruthy();
+      expectWaitingVeil();
 
       act(() => {
         jest.advanceTimersByTime(60_000);
       });
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
@@ -1265,7 +1364,7 @@ describe('SessionScreen across a column move', () => {
    * `session-ended` push carries an in-flight spawnProgressLabel (kangentic
    * board #639) naming the phase, and nothing else changes. The label used to
    * open a second, session-keyed latch that chose "Switching session" over
-   * "Session ended" at the reveal. With one card for every case the label
+   * "Session ended" at the reveal. With one wait for every case the label
    * opens nothing and is rendered nowhere; what these pin is that a labelled
    * end behaves exactly like an unlabelled one on this screen.
    *
@@ -1273,7 +1372,7 @@ describe('SessionScreen across a column move', () => {
    * never call moveTaskToColumn.
    */
   describe('a same-column respawn (spawnProgressLabel, no column move)', () => {
-    it('shows the waiting card once a labelled swap outlives the quiet window', () => {
+    it('enters the waiting phase once a labelled swap outlives the quiet window', () => {
       jest.useFakeTimers();
       try {
         seedRoledBoard('sess-a', 'lane-doing');
@@ -1286,7 +1385,7 @@ describe('SessionScreen across a column move', () => {
 
         passQuietDeadline();
 
-        expectWaitingCard();
+        expectWaitingVeil();
       } finally {
         jest.useRealTimers();
       }
@@ -1295,7 +1394,7 @@ describe('SessionScreen across a column move', () => {
     /**
      * The label is untrusted display text that no surface renders any more,
      * well-formed or not. Before the deadline the veil carries no text at
-     * all; after it the card says the same thing whatever the label was.
+     * all; after it there is still nothing to read, whatever the label was.
      */
     it.each([
       ['a well-formed label', 'Switching model...'],
@@ -1313,9 +1412,8 @@ describe('SessionScreen across a column move', () => {
 
         passQuietDeadline();
 
-        expectWaitingCard();
+        expectWaitingVeil();
         expect(screen.queryByText(label)).toBeNull();
-        expect(screen.getByText('Waiting for the desktop')).toBeTruthy();
       } finally {
         jest.useRealTimers();
       }
@@ -1324,9 +1422,9 @@ describe('SessionScreen across a column move', () => {
     /**
      * A desktop that predates spawnProgressLabel (or a genuine park with no
      * successor coming) sends no label, and the screen cannot tell the two
-     * apart from here: the same veil, then the same card.
+     * apart from here: the same veil, then the same wait.
      */
-    it('goes quiet, then shows the same card, when the desktop sends no label', () => {
+    it('goes quiet, then waits the same way, when the desktop sends no label', () => {
       jest.useFakeTimers();
       try {
         seedRoledBoard('sess-a', 'lane-doing');
@@ -1339,13 +1437,13 @@ describe('SessionScreen across a column move', () => {
 
         passQuietDeadline();
 
-        expectWaitingCard();
+        expectWaitingVeil();
       } finally {
         jest.useRealTimers();
       }
     });
 
-    it('keeps the one card past the old 20 s fallback for a labelled end', () => {
+    it('keeps waiting past the old 20 s fallback for a labelled end', () => {
       jest.useFakeTimers();
       try {
         seedRoledBoard('sess-a', 'lane-doing');
@@ -1354,25 +1452,26 @@ describe('SessionScreen across a column move', () => {
           pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching agent...' });
         });
         passQuietDeadline();
-        expectWaitingCard();
+        expectWaitingVeil();
 
         act(() => {
           jest.advanceTimersByTime(20_001 - (SESSION_SWAP_QUIET_MS + 1));
         });
 
-        expectWaitingCard();
+        expectWaitingVeil();
       } finally {
         jest.useRealTimers();
       }
     });
 
     /**
-     * The quiet window's spent marker is mandatory, not defensive: nothing
-     * ever changes the ended fact after the deadline, so without it the
-     * window would re-open on the very next render and the card would never
-     * stay.
+     * The waiting phase is a fact about the window, not something re-derived
+     * per render: a board re-snapshot at the same shape well after the
+     * deadline must neither drop it back to the quiet phase (the dead frame
+     * returning under the scrim) nor announce it a second time.
      */
-    it('does not re-open the veil on a render well after the deadline', () => {
+    it('holds the waiting phase across a render well after the deadline, announcing it once', () => {
+      const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
       jest.useFakeTimers();
       try {
         seedRoledBoard('sess-a', 'lane-doing');
@@ -1383,23 +1482,28 @@ describe('SessionScreen across a column move', () => {
         act(() => {
           jest.advanceTimersByTime(20_001);
         });
-        expectWaitingCard();
+        expectWaitingVeil();
+        expect(announceSpy.mock.calls.map((call) => call[0])).toEqual([
+          SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
+          SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL,
+        ]);
 
         // Advance well past the deadline again and force a render (a board
-        // re-snapshot at the same shape) - the ended fact is still in the
-        // store, so a missing spent marker would re-open the window here.
+        // re-snapshot at the same shape).
         act(() => {
           jest.advanceTimersByTime(20_000);
           seedRoledBoard('sess-a', 'lane-doing');
         });
 
-        expectWaitingCard();
+        expectWaitingVeil();
+        expect(announceSpy).toHaveBeenCalledTimes(2);
       } finally {
         jest.useRealTimers();
+        announceSpy.mockRestore();
       }
     });
 
-    it('clears the waiting card when the successor session binds', () => {
+    it('keeps the cleared pane under the veil across a late bind, and lets go on the paint', () => {
       jest.useFakeTimers();
       try {
         seedRoledBoard('sess-a', 'lane-doing');
@@ -1408,7 +1512,7 @@ describe('SessionScreen across a column move', () => {
           pushSessionEnded('sess-a', { spawnProgressLabel: 'Starting new session...' });
         });
         passQuietDeadline();
-        expectWaitingCard();
+        expectWaitingVeil();
 
         // The desktop spawned the successor and the settled snapshot carries
         // it, still in the same column - no move involved.
@@ -1416,8 +1520,15 @@ describe('SessionScreen across a column move', () => {
           seedRoledBoard('sess-b', 'lane-doing');
         });
 
-        expectNoSwapSurface();
+        expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+        expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
         expect(openSessionScreenMock).toHaveBeenCalledWith('sess-b');
+
+        act(() => {
+          useTerminalUiStore.getState().markTerminalPainted('sess-b');
+        });
+
+        expectNoSwapSurface();
       } finally {
         jest.useRealTimers();
       }
@@ -1460,7 +1571,7 @@ describe('SessionScreen across a column move', () => {
      * fallback the ended signal itself relies on once the task is off the
      * board.
      */
-    it('reveals the card off lastBoundSessionId with no sessionId param', () => {
+    it('enters the waiting phase off lastBoundSessionId with no sessionId param', () => {
       jest.useFakeTimers();
       try {
         mockParams = { taskId: 'task-1', projectId: 'project-1' };
@@ -1475,7 +1586,7 @@ describe('SessionScreen across a column move', () => {
         expectQuietVeilOnly();
         passQuietDeadline();
 
-        expectWaitingCard();
+        expectWaitingVeil();
       } finally {
         jest.useRealTimers();
       }
@@ -1485,10 +1596,10 @@ describe('SessionScreen across a column move', () => {
   /**
    * A labelled end landing only AFTER the column latch has run out and been
    * marked spent. The label used to open a latch of its own here; now the
-   * end alone opens the quiet window (nothing had spent it), and the card
-   * reveals at its deadline. The column latch's expiry is invisible.
+   * end alone opens the quiet window (nothing had spent it), and the wait
+   * goes on past its deadline. The column latch's expiry is invisible.
    */
-  it('veils and reveals the card for a labelled end that arrives after the column latch already expired', () => {
+  it('veils and then waits for a labelled end that arrives after the column latch already expired', () => {
     jest.useFakeTimers();
     try {
       seedRoledBoard('sess-a');
@@ -1512,7 +1623,7 @@ describe('SessionScreen across a column move', () => {
       expectQuietVeilOnly();
       passQuietDeadline();
 
-      expectWaitingCard();
+      expectWaitingVeil();
     } finally {
       jest.useRealTimers();
     }
@@ -1635,11 +1746,11 @@ describe('SessionScreen across a column move', () => {
         });
         expectQuietVeilOnly();
 
-        // Past B's deadline: the reveal.
+        // Past B's deadline: the wait.
         act(() => {
           jest.advanceTimersByTime(4_000);
         });
-        expectWaitingCard();
+        expectWaitingVeil();
       } finally {
         jest.useRealTimers();
       }
@@ -1761,7 +1872,7 @@ describe('SessionScreen across a column move', () => {
         act(() => {
           jest.advanceTimersByTime(1001);
         });
-        expectWaitingCard();
+        expectWaitingVeil();
       } finally {
         jest.useRealTimers();
       }
@@ -1793,7 +1904,7 @@ describe('SessionScreen across a column move', () => {
         expectQuietVeilOnly();
 
         passQuietDeadline();
-        expectWaitingCard();
+        expectWaitingVeil();
       } finally {
         jest.useRealTimers();
       }
@@ -1801,10 +1912,11 @@ describe('SessionScreen across a column move', () => {
 
     /**
      * The other half of the veil's accessibility story: a screen reader user
-     * who heard the wait begin also hears it end. Only on a settle - the
-     * card that reveals at the deadline is readable on its own.
+     * who heard the wait begin also hears it end on a settle, and hears the
+     * wait change shape at the deadline (the pane cleared, still nothing to
+     * read), which is the one thing the deadline says out loud.
      */
-    it('announces the wait over when the successor settles, and not at the deadline', () => {
+    it('announces the wait over when the successor settles, and the waiting phase at the deadline', () => {
       const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
       jest.useFakeTimers();
       try {
@@ -1821,16 +1933,17 @@ describe('SessionScreen across a column move', () => {
         });
         expect(announceSpy.mock.calls.map((call) => call[0])).toEqual(['Switching session, please wait', 'Session ready']);
 
-        // A second swap that stalls: the deadline reveals the card and says nothing.
+        // A second swap that stalls: the deadline clears the pane and says so.
         act(() => {
           pushSessionEnded('sess-b');
         });
         passQuietDeadline();
-        expectWaitingCard();
+        expectWaitingVeil();
         expect(announceSpy.mock.calls.map((call) => call[0])).toEqual([
           'Switching session, please wait',
           'Session ready',
           'Switching session, please wait',
+          SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL,
         ]);
       } finally {
         jest.useRealTimers();
