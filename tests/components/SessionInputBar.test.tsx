@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionInputBar } from '@/screens/task/SessionInputBar';
 import type { SessionMode } from '@/screens/task/SessionModeToggle';
@@ -64,5 +64,45 @@ describe('SessionInputBar', () => {
   it('renders nothing without a session', () => {
     renderBar('terminal', null);
     expect(screen.queryByTestId('session-input-bar')).toBeNull();
+  });
+
+  /**
+   * Held through a session swap: the footer looks exactly as it did (no
+   * dimming, nothing new to read) but its mode row takes no touches and
+   * leaves the accessibility tree, since it points at a dead PTY. The pill
+   * stays live - it is the way out to Changes.
+   */
+  describe('suspended (the quiet swap window)', () => {
+    it('takes no touches on the mode row while suspended, and still switches modes from the pill', () => {
+      const onModeChange = jest.fn();
+      render(
+        <ThemeProvider>
+          <SessionInputBar sessionId="sess-1" mode="terminal" onModeChange={onModeChange} chatAttention={false} suspended />
+        </ThemeProvider>,
+      );
+
+      const modeRow = screen.getByTestId('session-input-row', { includeHiddenElements: true });
+      expect(modeRow.props.pointerEvents).toBe('none');
+      expect(modeRow.props.accessibilityElementsHidden).toBe(true);
+      expect(modeRow.props.importantForAccessibility).toBe('no-hide-descendants');
+      // Held in place: the keys are still there, just inert.
+      expect(screen.getByTestId('quick-key-esc', { includeHiddenElements: true })).toBeTruthy();
+
+      fireEvent.press(screen.getByTestId('session-mode-chat'));
+      expect(onModeChange).toHaveBeenCalledWith('chat');
+    });
+
+    it('keeps the mode row live when not suspended', () => {
+      renderBar('chat');
+
+      const modeRow = screen.getByTestId('session-input-row');
+      expect(modeRow.props.pointerEvents).toBe('auto');
+      expect(modeRow.props.accessibilityElementsHidden).toBe(false);
+    });
+
+    it('renders no mode-row wrapper in changes mode, so nothing adds a gap above the pill', () => {
+      renderBar('changes');
+      expect(screen.queryByTestId('session-input-row')).toBeNull();
+    });
   });
 });

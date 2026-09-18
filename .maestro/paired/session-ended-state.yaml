@@ -1,10 +1,15 @@
 appId: com.kangentic.mobile
 ---
 # Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
-# /end-session makes the stub drop the task's session with no successor:
-# the screen must show the honest ended state (never a frozen frame), and
-# its View-changes escape hatch must land on the in-session Changes mode
-# (the mode pill's changes pane; the old pushed ChangesScreen is dead code).
+# /end-session makes the stub drop the task's session with no successor.
+# Every end goes QUIET first (the swap veil, no text, for SESSION_SWAP_QUIET_MS),
+# because the phone cannot tell a park from a swap when the push lands; then,
+# with no successor having painted, the screen must show the honest ended
+# state (never a frozen frame), and its View-changes escape hatch must land
+# on the in-session Changes mode (the mode pill's changes pane; the old
+# pushed ChangesScreen is dead code). This flow is the only E2E coverage of
+# the long-gap reveal; the SWITCHING reveal has none until a stub command
+# holds a respawn open past the quiet deadline.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
@@ -31,6 +36,16 @@ appId: com.kangentic.mobile
 - inputText: "/end-session"
 - tapOn:
     id: "composer-send"
+# The quiet phase first. Not a transient-state race: the veil holds for the
+# whole quiet window with nothing arriving to close it early.
+- extendedWaitUntil:
+    visible:
+      id: "session-swap-veil"
+    timeout: 10000
+- assertNotVisible:
+    id: "session-ended-state"
+# Then the reveal. This wait must stay past SESSION_SWAP_QUIET_MS with room to
+# spare (tests/unit/sessionRespawnGapTiming.test.ts pins the constants).
 - extendedWaitUntil:
     visible:
       id: "session-ended-state"

@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Screen } from '@/components';
+import { useScreenFocusActive } from '@/components/motion/ScreenMotion';
+import { traceConnection } from '@/devsupport/connectionTrace';
 import { findArchivedTaskById, findTaskById, isDoneRole, isTodoRole, useBoardStore } from '@/state/boardStore';
 import { selectSessionEnded, selectSessionSpawnProgressLabel, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
-import { useTerminalUiStore } from '@/state/terminalUiStore';
+import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
 import { closeSessionScreen, loadArchivedTasks, openSessionScreen } from '@/connection/actions';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
@@ -14,6 +16,7 @@ import { ChangesTab } from './ChangesTab';
 import { TerminalTab } from './TerminalTab';
 import { SessionEndedState } from './SessionEndedState';
 import { SessionSwitchingState } from './SessionSwitchingState';
+import { SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL, SessionSwapVeil } from './SessionSwapVeil';
 import { SessionInputBar } from './SessionInputBar';
 import { ModeToggleHint } from './ModeToggleHint';
 import { resolveCurrentSessionId } from './sessionResolution';
@@ -52,6 +55,25 @@ const REJECTED_FEED_GRACE_MS = 1500;
  * up indefinitely when nothing is coming.
  */
 const SESSION_SWAP_GRACE_MS = 20_000;
+
+/**
+ * How long a session swap stays SILENT: from the bound session's end until
+ * either the successor has painted or this deadline passes, the screen shows
+ * the swap veil (the last frame under a breathing scrim, no text) and nothing
+ * else. Only past it do the two text surfaces above reveal, because a desktop
+ * can genuinely stall a spawn (a git queue, a failed worktree) and the diff is
+ * still worth reading then. Every normal move never reaches it.
+ *
+ * Bounded twice: the rigs' respawn gap (STUB_RESPAWN_GAP_MS,
+ * MOCK_RESPAWN_GAP_MS) must sit at least 2s inside it so a rig swap stays
+ * silent, and it must leave at least 5s before SESSION_SWAP_GRACE_MS so a text
+ * phase exists before the ended fallback; tests/unit/sessionRespawnGapTiming
+ * .test.ts pins both. The value is set from the connection trace's
+ * `session-swap` timeline on a release build (see docs/developer-guide.md);
+ * the Home feed's ENDED_ROW_GRACE_MS is kept equal to it, so a swap that goes
+ * quiet here goes quiet on the list surfaces for the same span.
+ */
+export const SESSION_SWAP_QUIET_MS = 8_000;
 
 /**
  * The task's SESSION view: one live session, three surfaces. Terminal (the
@@ -93,7 +115,21 @@ export function SessionScreen(): React.JSX.Element {
     const board = state.boardsByProjectId[located.projectId];
     return board?.columns.find((column) => column.id === located.task.swimlane_id)?.role ?? null;
   });
-  const taskTitle = locatedTaskTitle ?? 'Task';
+  // The header must not change what it says during a swap. Under the board's
+  // 'sessions' projection the task leaves the snapshot for the whole gap, so
+  // the located title and number go null; without this hold the title read
+  // as the literal "Task" and the number vanished for a second or two. Held
+  // while located (render-time state adjustment, the pattern this file uses
+  // for lastBoundSessionId below), read while not.
+  const [heldIdentity, setHeldIdentity] = useState<{ title: string; displayId: number | null } | null>(null);
+  if (
+    locatedTaskTitle !== null &&
+    (heldIdentity === null || heldIdentity.title !== locatedTaskTitle || heldIdentity.displayId !== locatedDisplayId)
+  ) {
+    setHeldIdentity({ title: locatedTaskTitle, displayId: locatedDisplayId });
+  }
+  const taskTitle = locatedTaskTitle ?? heldIdentity?.title ?? 'Task';
+  const headerDisplayId = taskLocated ? locatedDisplayId : (heldIdentity?.displayId ?? null);
   const projectId = params.projectId && params.projectId.length > 0 ? params.projectId : locatedProjectId;
   const paramSessionId = params.sessionId && params.sessionId.length > 0 ? params.sessionId : null;
   // The board is authoritative once it has located the task (a respawn swaps
@@ -128,6 +164,16 @@ export function SessionScreen(): React.JSX.Element {
   // "Had one before" is state adjusted during render (the sanctioned
   // derive-from-props pattern), not a ref read in render.
   const [lastBoundSessionId, setLastBoundSessionId] = useState<string | null>(null);
+  // What the PANES and the FOOTER are bound to. The board's answer wins while
+  // it has one; while it has none (the full projection reports a located task
+  // with session_id null mid-swap, the sessions projection drops the task and
+  // a board-entered screen has no param to fall back on) they stay on the
+  // last session this screen bound rather than unmounting. Unmounting was the
+  // xterm WebView being destroyed and rebuilt on every column move under the
+  // Board tab, and ChatPane's "no session" empty state flashing under Home.
+  // Everything that TALKS to the session (the open/close effect, the feed
+  // status, the prompt dot, the mode request) stays on the real `sessionId`.
+  const displaySessionId = sessionId ?? lastBoundSessionId;
   // The desktop's in-flight spawn-progress label for the session that just
   // ended (kangentic board #639), read here - ahead of the latch chain below
   // that consumes it - on the same `sessionId ?? lastBoundSessionId` key
@@ -364,6 +410,140 @@ export function SessionScreen(): React.JSX.Element {
   // and the redirect above is what it is waiting for.
   const sessionSwitching = sessionEnded && swapWindowOpen && completedTaskProjectId === null;
 
+  /**
+   * THE QUIET WINDOW: one silent surface for every swap kind.
+   *
+   * Opens on ANY end of the bound session - a labelled or unlabelled
+   * `session-ended`, the full board reporting the task sessionless, a refused
+   * feed past its grace - keyed on the session that ended, in the same
+   * id-not-boolean shape as the two latches above and for the same reason:
+   * `sessionEnded` stays true for that session forever, so a boolean would
+   * re-arm on the next render after the deadline and the text would never
+   * reveal. The label and the column latch no longer decide WHETHER something
+   * quiet shows; they only decide WHAT the long-gap reveal says.
+   *
+   * It is NOT reset by the successor's bind (the ladder above resets the two
+   * text latches at the bind, deliberately; this one is left alone there).
+   * The bind is a board fact, and it lands a round trip before the
+   * successor's first frame exists; letting go then is what showed the old
+   * frame, an empty grid and the new frame in sequence. "Awaiting paint" is
+   * derived rather than stored: the window is open and the bound session is
+   * no longer the one whose end opened it. It closes silently when that
+   * successor has settled, or at SESSION_SWAP_QUIET_MS - and at the deadline
+   * with the dead session still bound, the text surfaces reveal exactly as
+   * they did before the veil existed.
+   *
+   * Same To Do / Done exclusions as the latches (those moves promise no
+   * successor and the Done redirect is what a task is waiting for), and never
+   * over a task the archive has already claimed.
+   */
+  const [quietWindowSessionId, setQuietWindowSessionId] = useState<string | null>(null);
+  const [spentQuietSessionId, setSpentQuietSessionId] = useState<string | null>(null);
+  const quietWindowOpen = quietWindowSessionId !== null;
+  const successorBound = quietWindowOpen && sessionId !== null && sessionId !== quietWindowSessionId;
+  const successorPainted = useTerminalUiStore((state) =>
+    selectTerminalPainted(state, successorBound ? sessionId : null),
+  );
+  const successorLens = useTranscriptStore((state) => selectChatLens(state, successorBound ? sessionId : null));
+  // What "the successor is on screen" means depends on the lens the user is
+  // looking at. Terminal: the WebView reported a NON-BLANK paint for it (the
+  // terminal pane's hold keeps the old frame until then). Chat: its transcript
+  // window landed - the pane skips seeds while it is not the visible page, so
+  // a paint can never arrive in chat mode. Changes: never; the veil merely
+  // yields there, and closing the window on a diff would put the stale frame
+  // back on screen with nothing over it the moment the user returned.
+  const successorSettled =
+    successorBound &&
+    (mode === 'terminal' ? successorPainted : mode === 'chat' ? successorLens !== 'loading' : false);
+  if (quietWindowOpen && successorSettled) {
+    setSpentQuietSessionId(quietWindowSessionId);
+    setQuietWindowSessionId(null);
+  } else if (
+    sessionEnded &&
+    lastBoundSessionId !== null &&
+    // Opens when closed, and RE-KEYS when a newer bound session has died
+    // while the window was still waiting on the previous one (A ended, B
+    // bound, B ended before it painted): the deadline restarts for B.
+    lastBoundSessionId !== quietWindowSessionId &&
+    lastBoundSessionId !== spentQuietSessionId
+  ) {
+    if (completedTaskProjectId !== null || isTodoRole(locatedColumnRole) || isDoneRole(locatedColumnRole)) {
+      // Handled WITHOUT a window: the text shows now and must stay. Marked
+      // spent here because the two role checks go inert once the task leaves
+      // the board (locatedColumnRole is null then), and without the marker a
+      // reset task dropped by the sessions projection would open a veil OVER
+      // the ended state it had already, honestly, shown.
+      setSpentQuietSessionId(lastBoundSessionId);
+    } else {
+      setQuietWindowSessionId(lastBoundSessionId);
+    }
+  }
+  // The one deadline (same shape as the latch timers above). Whether a
+  // successor was bound decides what the closure MEANS: with the dead session
+  // still bound the text reveals; with a successor bound but not yet settled
+  // the window simply closes and the pane's own hold carries on, since
+  // `sessionEnded` is false for the successor and no text can show.
+  const swapTraceRef = useRef({ endedAt: 0, bindAt: null as number | null, deadlineFor: null as string | null });
+  useEffect(() => {
+    if (quietWindowSessionId === null) return;
+    const waitingOnSessionId = quietWindowSessionId;
+    const quietTimer = setTimeout(() => {
+      swapTraceRef.current.deadlineFor = waitingOnSessionId;
+      traceConnection('session-swap', { phase: 'deadline', bound: swapTraceRef.current.bindAt !== null });
+      setSpentQuietSessionId(waitingOnSessionId);
+      setQuietWindowSessionId(null);
+    }, SESSION_SWAP_QUIET_MS);
+    return () => clearTimeout(quietTimer);
+  }, [quietWindowSessionId]);
+  // Read at fire time by the effects below (synced every render), so they can
+  // key on the window alone: an announcement keyed on the label or the focus
+  // as well would repeat mid-swap.
+  const screenFocused = useScreenFocusActive();
+  const swapContextRef = useRef({ hasLabel: false, located: false, focused: true, mode });
+  useEffect(() => {
+    swapContextRef.current = {
+      hasLabel: boundSpawnProgressLabel !== null,
+      located: taskLocated,
+      focused: screenFocused,
+      mode,
+    };
+  });
+  // Once per window, on the WINDOW opening rather than the veil mounting: a
+  // Changes round-trip remounts the veil and must not re-announce. The visible
+  // surface carries no text, so this announcement is the whole accessibility
+  // story (a11y copy is exempt from the no-text ask). Skipped while another
+  // route covers this screen.
+  useEffect(() => {
+    if (quietWindowSessionId === null) return;
+    swapTraceRef.current = { endedAt: Date.now(), bindAt: null, deadlineFor: null };
+    traceConnection('session-swap', {
+      phase: 'ended',
+      hasLabel: swapContextRef.current.hasLabel,
+      located: swapContextRef.current.located,
+    });
+    if (swapContextRef.current.focused) {
+      AccessibilityInfo.announceForAccessibility(SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL);
+    }
+  }, [quietWindowSessionId]);
+  useEffect(() => {
+    if (!successorBound) return;
+    const now = Date.now();
+    swapTraceRef.current.bindAt = now;
+    traceConnection('session-swap', { phase: 'bind', sinceEndedMs: now - swapTraceRef.current.endedAt });
+  }, [successorBound]);
+  useEffect(() => {
+    if (spentQuietSessionId === null) return;
+    const trace = swapTraceRef.current;
+    if (trace.deadlineFor === spentQuietSessionId) return;
+    const now = Date.now();
+    traceConnection('session-swap', {
+      phase: 'settled',
+      mode: swapContextRef.current.mode,
+      sinceEndedMs: now - trace.endedAt,
+      sinceBindMs: trace.bindAt === null ? null : now - trace.bindAt,
+    });
+  }, [spentQuietSessionId]);
+
   // The Chat segment's needs-you dot: a prompt is pending and the user is
   // looking at the terminal. Never auto-switch a surface someone types into.
   const awaitedPromptId = useActivityStore((state) =>
@@ -378,8 +558,11 @@ export function SessionScreen(): React.JSX.Element {
   // ONE predicate, shared with ChatPane: the parser has to be on exactly when
   // the reading view is on, and computing it twice put them out of step while
   // the window was still loading, re-initialising the WebView for nothing.
+  // On displaySessionId, not sessionId: a null id resolves to 'conversation'
+  // and would flip the flag under the held pane mid-swap, which the pane
+  // treats as a re-init of the dead session from its released ring.
   const chatFallbackActive = useTranscriptStore(
-    (state) => selectChatLens(state, sessionId) === 'reading-view',
+    (state) => selectChatLens(state, displaySessionId) === 'reading-view',
   );
   const agentLabel = useBoardStore((state) => findTaskById(state, taskId)?.task.agent ?? null);
 
@@ -442,15 +625,24 @@ export function SessionScreen(): React.JSX.Element {
    * switching task still has something to say.
    */
   const overlaysYieldToChanges = mode === 'changes';
-  const showSwitchingState = sessionSwitching && !overlaysYieldToChanges;
-  const showEndedState = sessionEnded && !sessionSwitching && !overlaysYieldToChanges;
-  // Either overlay occludes the panes, visually and for assistive technology.
-  const overlayCoversPanes = showSwitchingState || showEndedState;
+  // While the quiet window is open the veil is the ONLY surface: the two text
+  // overlays wait for the deadline. Never over a task the archive has claimed.
+  const showQuietVeil = quietWindowOpen && !overlaysYieldToChanges && completedTaskProjectId === null;
+  const showSwitchingState = sessionSwitching && !quietWindowOpen && !overlaysYieldToChanges;
+  const showEndedState = sessionEnded && !sessionSwitching && !quietWindowOpen && !overlaysYieldToChanges;
+  // Any overlay occludes the panes, visually and for assistive technology.
+  const overlayCoversPanes = showSwitchingState || showEndedState || showQuietVeil;
   // The footer comes back with them, because in `changes` mode it is only the
   // mode pill (no composer, no quick keys - see SessionInputBar). Without it
   // Changes is a one-way trip out of the ended state with nothing but the
-  // system Back button to leave by.
-  const showInputBar = !sessionEnded || overlaysYieldToChanges;
+  // system Back button to leave by. And it never leaves during the quiet
+  // window: a footer that blinked out the instant the session ended and back
+  // on the bind was one of the flashes this surface exists to remove.
+  const showInputBar = !sessionEnded || overlaysYieldToChanges || quietWindowOpen;
+  // Held in its pre-swap state, but INERT while it points at the dead
+  // session: keys to a dead PTY are silently swallowed and the composer would
+  // show an error. Live again the moment the successor binds, veil or not.
+  const footerSuspended = quietWindowOpen && displaySessionId === quietWindowSessionId;
 
   // Move is a native form sheet ROUTE (app/move-task.tsx): this screen only
   // navigates. locatedProjectId, not the param fallback: MoveTaskScreen needs
@@ -462,7 +654,7 @@ export function SessionScreen(): React.JSX.Element {
 
   return (
     <Screen testID="session-screen">
-      <TaskHeader taskTitle={taskTitle} sessionId={sessionId} displayId={locatedDisplayId} taskId={taskId} />
+      <TaskHeader taskTitle={taskTitle} sessionId={displaySessionId} displayId={headerDisplayId} taskId={taskId} />
       {/* behavior="padding" on BOTH platforms: edge-to-edge Android never
           resizes the window for the soft keyboard, so without JS-side
           padding the keyboard fully covers the composer (send button
@@ -499,6 +691,7 @@ export function SessionScreen(): React.JSX.Element {
             collapsable={false}
             accessibilityElementsHidden={overlayCoversPanes}
             importantForAccessibility={overlayCoversPanes ? 'no-hide-descendants' : 'auto'}
+            testID="session-panes"
           >
             <View
               style={[styles.pane, mode === 'terminal' ? styles.paneVisible : styles.paneHidden]}
@@ -512,7 +705,11 @@ export function SessionScreen(): React.JSX.Element {
               importantForAccessibility={mode === 'terminal' ? 'auto' : 'no-hide-descendants'}
               testID="session-pane-terminal"
             >
-              <TerminalTab sessionId={sessionId} active={mode === 'terminal'} cleanFeedEnabled={chatFallbackActive} />
+              <TerminalTab
+                sessionId={displaySessionId}
+                active={mode === 'terminal'}
+                cleanFeedEnabled={chatFallbackActive}
+              />
             </View>
             <View
               style={[styles.pane, mode === 'chat' ? styles.paneVisible : styles.paneHidden]}
@@ -521,7 +718,7 @@ export function SessionScreen(): React.JSX.Element {
               importantForAccessibility={mode === 'chat' ? 'auto' : 'no-hide-descendants'}
               testID="session-pane-chat"
             >
-              <ChatPane taskId={taskId} sessionId={sessionId} projectId={projectId} agentLabel={agentLabel} />
+              <ChatPane taskId={taskId} sessionId={displaySessionId} projectId={projectId} agentLabel={agentLabel} />
             </View>
             <View
               style={[styles.pane, mode === 'changes' ? styles.paneVisible : styles.paneHidden]}
@@ -534,10 +731,12 @@ export function SessionScreen(): React.JSX.Element {
             </View>
           </View>
 
-          {/* Mid-swap the session is over but the TASK is not, so the
+          {/* Mid-swap the session is over but the TASK is not. The veil is the
+              only surface for the quiet phase, and past its deadline the
               transitional scrim stands in for the ended state rather than
               rendering beside it: two overlays on the same box would fight
               for the same stacking slot. */}
+          {showQuietVeil ? <SessionSwapVeil /> : null}
           {showSwitchingState ? <SessionSwitchingState onViewChanges={openChanges} label={boundSpawnProgressLabel} /> : null}
           {showEndedState ? (
             <SessionEndedState
@@ -550,10 +749,11 @@ export function SessionScreen(): React.JSX.Element {
         {showModeHint ? <ModeToggleHint onDismiss={dismissModeHint} /> : null}
         {showInputBar ? (
           <SessionInputBar
-            sessionId={sessionId}
+            sessionId={displaySessionId}
             mode={mode}
             onModeChange={onModeChange}
             chatAttention={chatAttention}
+            suspended={footerSuspended}
           />
         ) : null}
       </KeyboardAvoidingView>

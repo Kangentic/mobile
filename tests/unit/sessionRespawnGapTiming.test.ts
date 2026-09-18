@@ -17,6 +17,11 @@
  * - `SESSION_SWAP_GRACE_MS` (src/screens/task/SessionScreen.tsx) - how long
  *   the phone waits for a successor before giving up and declaring the
  *   session dead.
+ * - `SESSION_SWAP_QUIET_MS` (same file) - how long a swap stays SILENT (the
+ *   veil, no text) before the switching or ended surface may reveal. A rig
+ *   swap must finish inside it, or dev:mock and E2E would show the long-gap
+ *   text on every run; and it must leave a text phase before the grace
+ *   fallback, or the switching surface could never show at all.
  *
  * Two failure modes this closes, both silent without it:
  *
@@ -61,12 +66,29 @@ function readNumericConstant(source: string, constantName: string): number | nul
 const stubRespawnGapMs = readNumericConstant(stubDesktopPeerSource, 'STUB_RESPAWN_GAP_MS');
 const mockRespawnGapMs = readNumericConstant(mockDesktopSource, 'MOCK_RESPAWN_GAP_MS');
 const sessionSwapGraceMs = readNumericConstant(sessionScreenSource, 'SESSION_SWAP_GRACE_MS');
+const sessionSwapQuietMs = readNumericConstant(sessionScreenSource, 'SESSION_SWAP_QUIET_MS');
 
 describe('the respawn-gap and swap-grace constants stay in the relationship the comments claim', () => {
-  it('finds all three constants (a silent extraction failure would make every comparison below vacuous)', () => {
+  it('finds all four constants (a silent extraction failure would make every comparison below vacuous)', () => {
     expect(stubRespawnGapMs).not.toBeNull();
     expect(mockRespawnGapMs).not.toBeNull();
     expect(sessionSwapGraceMs).not.toBeNull();
+    expect(sessionSwapQuietMs).not.toBeNull();
+  });
+
+  it('keeps every rig swap inside the quiet window, so a rig respawn never reveals the long-gap text', () => {
+    // 2000ms of headroom: the gap is the desktop side of the swap, and the
+    // phone's own bind-to-paint round trip lands on top of it.
+    const requiredHeadroomMs = 2000;
+    expect(stubRespawnGapMs).toBeLessThanOrEqual((sessionSwapQuietMs as number) - requiredHeadroomMs);
+    expect(mockRespawnGapMs).toBeLessThanOrEqual((sessionSwapQuietMs as number) - requiredHeadroomMs);
+  });
+
+  it('leaves a text phase between the quiet deadline and the ended fallback', () => {
+    // Without this the switching surface could never show: the grace
+    // fallback would land before (or with) the reveal.
+    const requiredTextPhaseMs = 5000;
+    expect(sessionSwapQuietMs).toBeLessThanOrEqual((sessionSwapGraceMs as number) - requiredTextPhaseMs);
   });
 
   it("the stub rig's gap matches the mock rig's, as both files' comments claim", () => {

@@ -38,9 +38,16 @@ export interface SessionSwitchingStateProps {
  * session's last frame stays visible behind it, so the screen reads as in
  * transit rather than blanked. The successor's first snapshot repaints it.
  *
- * No animation, deliberately. This can be on screen for the whole grace
+ * This is the LONG-GAP surface, not the first thing a swap shows. For the
+ * first SESSION_SWAP_QUIET_MS SessionScreen shows the silent SessionSwapVeil
+ * instead (no text at all), and this reveals only once a swap has outlived
+ * that threshold - the case where a desktop has genuinely stalled a spawn and
+ * the diff is still worth reading. Every normal move never reaches it.
+ *
+ * No animation, deliberately. This can be on screen for the rest of the grace
  * window, and per motion-conventions.md an indicator that never stops holds
- * the app drawing at full frame rate for as long as it is mounted.
+ * the app drawing at full frame rate for as long as it is mounted. The veil's
+ * pulse is allowed exactly because it is bounded by the quiet threshold.
  */
 export function SessionSwitchingState({ onViewChanges, label }: SessionSwitchingStateProps): React.JSX.Element {
   const theme = useTheme();
