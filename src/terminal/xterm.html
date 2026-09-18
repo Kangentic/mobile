@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build db44cdfff5e6) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 2b1ec8887a46) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -380,6 +380,8 @@ return exports; })();
   // fit the font to its grid. For the probe; the decision itself is the
   // host's (TerminalPane's keepFont).
   var lastInitKeepFont = false;
+  // How many frame holds have been raised (see holdFrameSnapshot). Probe only.
+  var frameHoldCount = 0;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
   // not fight the user's finger; auto-pan resumes after the pause.
   var MANUAL_PAN_PAUSE_MS = 4000;
@@ -824,6 +826,9 @@ return exports; })();
     var seq = activeInitSeq;
     requestAnimationFrame(function () {
       paintReportCounts[blank ? 'blank' : 'painted'] += 1;
+      // The successor is drawn on this frame: the held copy of the old one
+      // (lifecycle.js holdFrameSnapshot) lifts with it.
+      if (!blank) clearFrameHold();
       postToHost({ type: 'painted', seq: seq, blank: blank });
     });
   }
@@ -1363,6 +1368,66 @@ return exports; })();
   // --- end clean feed -----------------------------------------------------
 
   /**
+   * THE FRAME HOLD: a text copy of the viewport, raised over the terminal
+   * for the span between a keepFont re-init and the successor's first
+   * non-blank paint.
+   *
+   * A re-init over a painted frame resets the grid (terminal.reset() is RIS)
+   * and replays the successor's ring, and on a resume that ring's snapshot
+   * often parses to a BLANK viewport with the redraw arriving as chunks up to
+   * a second and a half later. The host's swap veil covers the pane, but at
+   * its floor opacity the dimmed frame could be seen going black underneath.
+   * This keeps the frame there: every viewport row's text, in the terminal's
+   * own font and cell height, over the same rectangle, in the theme's
+   * foreground on its background. Colours and bold are lost, which under a
+   * scrim at four-fifths opacity is nothing. Removed on the first non-blank
+   * paint report (modes.js), so it lifts on the same frame the successor is
+   * drawn; a second re-init while it is up (two seeds land per swap) never
+   * replaces it with a copy of the blank grid.
+   */
+  var FRAME_HOLD_ID = 'frame-hold';
+  function holdFrameSnapshot() {
+    if (!terminal || document.getElementById(FRAME_HOLD_ID)) return;
+    var gridHost = document.getElementById('terminal');
+    var screen = document.querySelector('.xterm-screen');
+    if (!gridHost || !screen) return;
+    var buffer = terminal.buffer.active;
+    var rows = [];
+    for (var row = 0; row < terminal.rows; row += 1) {
+      var line = buffer.getLine(buffer.viewportY + row);
+      rows.push(line ? line.translateToString(true) : '');
+    }
+    // A blank grid is not worth holding, and holding it would hide the
+    // successor's paint behind an opaque block until the report came back.
+    if (rows.join('').trim().length === 0) return;
+    var hostRect = gridHost.getBoundingClientRect();
+    var screenRect = screen.getBoundingClientRect();
+    var theme = terminal.options.theme || {};
+    var hold = document.createElement('pre');
+    hold.id = FRAME_HOLD_ID;
+    hold.setAttribute('aria-hidden', 'true');
+    hold.style.cssText =
+      'position:absolute;margin:0;overflow:hidden;pointer-events:none;z-index:3;white-space:pre;' +
+      'left:' + (screenRect.left - hostRect.left) + 'px;' +
+      'top:' + (screenRect.top - hostRect.top) + 'px;' +
+      'width:' + screenRect.width + 'px;' +
+      'height:' + screenRect.height + 'px;' +
+      'font-family:' + terminal.options.fontFamily + ';' +
+      'font-size:' + terminal.options.fontSize + 'px;' +
+      'line-height:' + screenRect.height / terminal.rows + 'px;' +
+      'color:' + (theme.foreground || '#ffffff') + ';' +
+      'background:' + (theme.background || '#000000') + ';';
+    hold.textContent = rows.join('\n');
+    gridHost.appendChild(hold);
+    frameHoldCount += 1;
+  }
+
+  function clearFrameHold() {
+    var hold = document.getElementById(FRAME_HOLD_ID);
+    if (hold && hold.parentNode) hold.parentNode.removeChild(hold);
+  }
+
+  /**
    * The reset both init paths share, before their halves diverge into
    * construction vs reset(): adopt the new grid and font, clear the
    * per-session view state (modes, pan, zoom-follow translate, glide,
@@ -1497,6 +1562,9 @@ return exports; })();
    */
   function softReinit(initMessage) {
     initCounts.soft += 1;
+    // Before the reset, while the frame worth keeping is still in the buffer.
+    if (initMessage.keepFont === true) holdFrameSnapshot();
+    else clearFrameHold();
     resetSessionViewState(initMessage);
     terminal.reset();
     terminal.options.theme = initMessage.theme;
@@ -1947,7 +2015,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: 'db44cdfff5e6',
+      buildId: '2b1ec8887a46',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
@@ -2003,6 +2071,8 @@ return exports; })();
       awaitingNonBlankPaint: awaitingNonBlankPaint,
       paintReportCounts: JSON.parse(JSON.stringify(paintReportCounts)),
       lastInitKeepFont: lastInitKeepFont,
+      frameHoldCount: frameHoldCount,
+      frameHoldActive: document.getElementById('frame-hold') !== null,
       netHistoryUnits: netHistoryUnits,
       jumpRepaintCount: jumpRepaintCount,
       lastJumpAt: lastJumpAt,

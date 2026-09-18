@@ -16,7 +16,11 @@ import { ChangesTab } from './ChangesTab';
 import { TerminalTab } from './TerminalTab';
 import { SessionEndedState } from './SessionEndedState';
 import { SessionSwitchingState } from './SessionSwitchingState';
-import { SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL, SessionSwapVeil } from './SessionSwapVeil';
+import {
+  SESSION_SWAP_SETTLED_ANNOUNCEMENT,
+  SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
+  SessionSwapVeil,
+} from './SessionSwapVeil';
 import { SessionInputBar } from './SessionInputBar';
 import { ModeToggleHint } from './ModeToggleHint';
 import { resolveCurrentSessionId } from './sessionResolution';
@@ -238,6 +242,10 @@ export function SessionScreen(): React.JSX.Element {
   // next render while the label is still being read.
   const [spawnLabelWindowSessionId, setSpawnLabelWindowSessionId] = useState<string | null>(null);
   const [spentSpawnLabelSessionId, setSpentSpawnLabelSessionId] = useState<string | null>(null);
+  // The column latch the quiet window below has ALREADY opened for, so a
+  // window that ran out while the session was still alive is not re-opened
+  // by the same move on the next render. Reset with the latch at the bind.
+  const [veiledSwapSwimlaneId, setVeiledSwapSwimlaneId] = useState<string | null>(null);
   const swapWindowOpen = swapWindowSwimlaneId !== null || spawnLabelWindowSessionId !== null;
   if (sessionId !== null && sessionId !== lastBoundSessionId) {
     setLastBoundSessionId(sessionId);
@@ -249,6 +257,7 @@ export function SessionScreen(): React.JSX.Element {
     setSpentSwapSwimlaneId(null);
     setSpawnLabelWindowSessionId(null);
     setSpentSpawnLabelSessionId(null);
+    setVeiledSwapSwimlaneId(null);
   } else if (sessionId !== null && swimlaneIdWhenSessionBound === null && locatedSwimlaneId !== null) {
     // The board located the task after this screen bound its session from the
     // nav param: adopt the column as the baseline, never read it as a change.
@@ -459,6 +468,19 @@ export function SessionScreen(): React.JSX.Element {
    * Same To Do / Done exclusions as the latches (those moves promise no
    * successor and the Done redirect is what a task is waiting for), and never
    * over a task the archive has already claimed.
+   *
+   * THE MOVE OPENER. The board reports a column move seconds before the
+   * session actually ends: the desktop interrupts the agent, waits for a
+   * running tool, then suspends (measured live: eight seconds between the
+   * move and the end while a typecheck finished). In that window the screen
+   * used to show the dying session being interrupted, and the Home row hopped
+   * sections. So the window also opens the moment the column latch above
+   * opens, on the LIVE session, and the end that follows keeps it open rather
+   * than opening a second one. The deadline counts from the END (it restarts
+   * on the moving-to-ended flip), because the end is where nothing can be
+   * shown; a move whose end has not come by the deadline simply drops the
+   * veil - the session is still live and readable - and is not marked spent,
+   * so the end re-opens it with a full window of its own.
    */
   const [quietWindowSessionId, setQuietWindowSessionId] = useState<string | null>(null);
   const [spentQuietSessionId, setSpentQuietSessionId] = useState<string | null>(null);
@@ -500,37 +522,66 @@ export function SessionScreen(): React.JSX.Element {
     } else {
       setQuietWindowSessionId(lastBoundSessionId);
     }
+  } else if (
+    !sessionEnded &&
+    quietWindowSessionId === null &&
+    swapWindowSwimlaneId !== null &&
+    swapWindowSwimlaneId !== veiledSwapSwimlaneId &&
+    sessionId !== null &&
+    sessionId !== spentQuietSessionId &&
+    completedTaskProjectId === null
+  ) {
+    // The move opener: the latch already applied the To Do / Done exclusions.
+    setVeiledSwapSwimlaneId(swapWindowSwimlaneId);
+    setQuietWindowSessionId(sessionId);
   }
-  // The one deadline (same shape as the latch timers above). Whether a
-  // successor was bound decides what the closure MEANS: with the dead session
-  // still bound the text reveals; with a successor bound but not yet settled
-  // the window simply closes and the pane's own hold carries on, since
-  // `sessionEnded` is false for the successor and no text can show.
-  const swapTraceRef = useRef({ endedAt: 0, bindAt: null as number | null, deadlineFor: null as string | null });
-  useEffect(() => {
-    if (quietWindowSessionId === null) return;
-    const waitingOnSessionId = quietWindowSessionId;
-    const quietTimer = setTimeout(() => {
-      swapTraceRef.current.deadlineFor = waitingOnSessionId;
-      traceConnection('session-swap', { phase: 'deadline', bound: swapTraceRef.current.bindAt !== null });
-      setSpentQuietSessionId(waitingOnSessionId);
-      setQuietWindowSessionId(null);
-    }, SESSION_SWAP_QUIET_MS);
-    return () => clearTimeout(quietTimer);
-  }, [quietWindowSessionId]);
+  // Which phase the open window is in, for the deadline: 'moving' while the
+  // session it veils is still alive, 'ended' from its end (or a successor's
+  // bind) on. The flip from moving to ended restarts the deadline.
+  const quietWindowPhase = !quietWindowOpen ? null : successorBound || sessionEnded ? 'ended' : 'moving';
   // Read at fire time by the effects below (synced every render), so they can
   // key on the window alone: an announcement keyed on the label or the focus
   // as well would repeat mid-swap.
   const screenFocused = useScreenFocusActive();
-  const swapContextRef = useRef({ hasLabel: false, located: false, focused: true, mode });
+  const swapContextRef = useRef({ hasLabel: false, located: false, focused: true, mode, ended: false });
   useEffect(() => {
     swapContextRef.current = {
       hasLabel: boundSpawnProgressLabel !== null,
       located: taskLocated,
       focused: screenFocused,
       mode,
+      ended: sessionEnded,
     };
   });
+  // The one deadline (same shape as the latch timers above). Whether a
+  // successor was bound decides what the closure MEANS: with the dead session
+  // still bound the text reveals; with a successor bound but not yet settled
+  // the window simply closes and the pane's own hold carries on, since
+  // `sessionEnded` is false for the successor and no text can show. And a
+  // window still in its moving phase (the end never came) closes WITHOUT
+  // being spent, so the end can open its own.
+  const swapTraceRef = useRef({
+    openedAt: 0,
+    endedAt: null as number | null,
+    bindAt: null as number | null,
+    deadlineFor: null as string | null,
+  });
+  useEffect(() => {
+    if (quietWindowSessionId === null) return;
+    const waitingOnSessionId = quietWindowSessionId;
+    const quietTimer = setTimeout(() => {
+      const ended = swapContextRef.current.ended || swapTraceRef.current.bindAt !== null;
+      traceConnection('session-swap', { phase: 'deadline', bound: swapTraceRef.current.bindAt !== null, ended });
+      if (ended) {
+        swapTraceRef.current.deadlineFor = waitingOnSessionId;
+        setSpentQuietSessionId(waitingOnSessionId);
+      }
+      setQuietWindowSessionId(null);
+    }, SESSION_SWAP_QUIET_MS);
+    return () => clearTimeout(quietTimer);
+    // quietWindowPhase is a dependency ON PURPOSE: its moving-to-ended flip
+    // is what restarts the deadline from the end.
+  }, [quietWindowSessionId, quietWindowPhase]);
   // Once per window, on the WINDOW opening rather than the veil mounting: a
   // Changes round-trip remounts the veil and must not re-announce. The visible
   // surface carries no text, so this announcement is the whole accessibility
@@ -538,9 +589,11 @@ export function SessionScreen(): React.JSX.Element {
   // route covers this screen.
   useEffect(() => {
     if (quietWindowSessionId === null) return;
-    swapTraceRef.current = { endedAt: Date.now(), bindAt: null, deadlineFor: null };
+    const now = Date.now();
+    const openedByEnd = swapContextRef.current.ended;
+    swapTraceRef.current = { openedAt: now, endedAt: openedByEnd ? now : null, bindAt: null, deadlineFor: null };
     traceConnection('session-swap', {
-      phase: 'ended',
+      phase: openedByEnd ? 'ended' : 'move',
       hasLabel: swapContextRef.current.hasLabel,
       located: swapContextRef.current.located,
     });
@@ -548,11 +601,23 @@ export function SessionScreen(): React.JSX.Element {
       AccessibilityInfo.announceForAccessibility(SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL);
     }
   }, [quietWindowSessionId]);
+  // The end arriving inside a window the move opened.
+  useEffect(() => {
+    if (quietWindowPhase !== 'ended' || swapTraceRef.current.endedAt !== null || successorBound) return;
+    const now = Date.now();
+    swapTraceRef.current.endedAt = now;
+    traceConnection('session-swap', { phase: 'ended', sinceMoveMs: now - swapTraceRef.current.openedAt });
+  }, [quietWindowPhase, successorBound]);
   useEffect(() => {
     if (!successorBound) return;
     const now = Date.now();
-    swapTraceRef.current.bindAt = now;
-    traceConnection('session-swap', { phase: 'bind', sinceEndedMs: now - swapTraceRef.current.endedAt });
+    const trace = swapTraceRef.current;
+    trace.bindAt = now;
+    traceConnection('session-swap', {
+      phase: 'bind',
+      sinceEndedMs: trace.endedAt === null ? 'n/a' : now - trace.endedAt,
+      sinceMoveMs: now - trace.openedAt,
+    });
   }, [successorBound]);
   useEffect(() => {
     if (spentQuietSessionId === null) return;
@@ -562,9 +627,14 @@ export function SessionScreen(): React.JSX.Element {
     traceConnection('session-swap', {
       phase: 'settled',
       mode: swapContextRef.current.mode,
-      sinceEndedMs: now - trace.endedAt,
+      sinceEndedMs: trace.endedAt === null ? 'n/a' : now - trace.endedAt,
+      sinceMoveMs: now - trace.openedAt,
       sinceBindMs: trace.bindAt === null ? null : now - trace.bindAt,
     });
+    // The other half of the veil's accessibility story: the wait is over.
+    if (swapContextRef.current.focused) {
+      AccessibilityInfo.announceForAccessibility(SESSION_SWAP_SETTLED_ANNOUNCEMENT);
+    }
   }, [spentQuietSessionId]);
 
   // The Chat segment's needs-you dot: a prompt is pending and the user is

@@ -1631,6 +1631,8 @@ describe('generated xterm.html', () => {
     write: (rows: string[]) => void;
     posts: () => PaintReport[];
     counts: () => { blank: number; painted: number };
+    /** How many times the frame hold (lifecycle.js) was told to lift. */
+    frameHoldClears: () => number;
   } {
     const source = pageModule('modes.js');
     const paintSource = source.slice(source.indexOf('function visibleGridIsBlank('));
@@ -1648,6 +1650,7 @@ describe('generated xterm.html', () => {
       'followCursorVertically',
       'pendingJumpRepaint',
       'jumpRepaintCount',
+      'clearFrameHold',
     ]);
     const viewport = { rows: [] as string[] };
     const terminal = {
@@ -1660,6 +1663,7 @@ describe('generated xterm.html', () => {
       },
     };
     const posts: PaintReport[] = [];
+    let frameHoldClears = 0;
     const build = new Function(
       'terminal',
       'postToHost',
@@ -1667,6 +1671,7 @@ describe('generated xterm.html', () => {
       'reportModesIfFlipped',
       'panToCursor',
       'followCursorVertically',
+      'clearFrameHold',
       `var activeInitSeq = null;
        var awaitingNonBlankPaint = false;
        var paintReportCounts = { blank: 0, painted: 0 };
@@ -1690,6 +1695,9 @@ describe('generated xterm.html', () => {
       () => undefined,
       () => undefined,
       () => undefined,
+      () => {
+        frameHoldClears += 1;
+      },
     );
     return {
       init: (seq, rows) => {
@@ -1703,6 +1711,7 @@ describe('generated xterm.html', () => {
       },
       posts: () => posts,
       counts: built.counts,
+      frameHoldClears: () => frameHoldClears,
     };
   }
 
@@ -1749,6 +1758,24 @@ describe('generated xterm.html', () => {
       harness.write(['y', '', '']);
 
       expect(harness.posts().map((report) => report.seq)).toEqual([1, 2, 2]);
+    });
+
+    /**
+     * The frame hold (lifecycle.js) is the old frame's text kept over the
+     * grid while the successor re-seeds. It lifts on the same frame the
+     * successor is drawn, which is exactly the non-blank report, and never
+     * on a blank one - a blank report is the hold's whole reason to exist.
+     */
+    it('lifts the frame hold on the first non-blank paint, never on a blank one', () => {
+      const harness = buildPaintReportHarness();
+
+      harness.init(4, ['', '', '']);
+      expect(harness.frameHoldClears()).toBe(0);
+      harness.write(['', '', '']);
+      expect(harness.frameHoldClears()).toBe(0);
+
+      harness.write(['$ claude', '', '']);
+      expect(harness.frameHoldClears()).toBe(1);
     });
 
     /**
@@ -1887,6 +1914,8 @@ describe('generated xterm.html', () => {
     autoFitCalls: () => number;
     options: () => { lineHeight: number; fontSize: number; theme: unknown };
     seedCalls: () => unknown[];
+    /** The order of the calls that matter for the frame hold: 'hold', 'clear' and 'reset'. */
+    holdLog: () => string[];
   } {
     const source = pageModule('lifecycle.js');
     const softReinitSource = source.slice(source.indexOf('function softReinit('), source.indexOf('function applyFontSize('));
@@ -1899,10 +1928,15 @@ describe('generated xterm.html', () => {
       'autoFitFontToScreen',
       'applyGeometry',
       'seedAndSettle',
+      'holdFrameSnapshot',
+      'clearFrameHold',
     ]);
+    const holdLog: string[] = [];
     const terminal = {
       options: { lineHeight: initialLineHeight, fontSize: 0, theme: null as unknown },
-      reset: () => undefined,
+      reset: () => {
+        holdLog.push('reset');
+      },
     };
     let autoFitCalls = 0;
     const seedCalls: unknown[] = [];
@@ -1912,6 +1946,8 @@ describe('generated xterm.html', () => {
       'autoFitFontToScreen',
       'applyGeometry',
       'seedAndSettle',
+      'holdFrameSnapshot',
+      'clearFrameHold',
       `var initCounts = { hard: 0, soft: 0 };
        var currentFontSizePx = 9;
        ${softReinitSource}
@@ -1927,12 +1963,19 @@ describe('generated xterm.html', () => {
       (initMessage: unknown) => {
         seedCalls.push(initMessage);
       },
+      () => {
+        holdLog.push('hold');
+      },
+      () => {
+        holdLog.push('clear');
+      },
     );
     return {
       softReinit: built.softReinit,
       autoFitCalls: () => autoFitCalls,
       options: () => terminal.options,
       seedCalls: () => seedCalls,
+      holdLog: () => holdLog,
     };
   }
 
@@ -1958,6 +2001,144 @@ describe('generated xterm.html', () => {
       // The host's copy of the current size, re-capped by resetSessionViewState.
       expect(harness.options().fontSize).toBe(9);
       expect(harness.seedCalls()).toHaveLength(1);
+    });
+
+    /**
+     * The hold has to be taken BEFORE terminal.reset(), while the frame worth
+     * keeping is still in the buffer; a plain re-init (a fresh fit) lifts any
+     * hold instead, since the frame it would keep is not the one being fitted.
+     */
+    it('holds the frame ahead of the reset on a keepFont re-init, and lifts it on a plain one', () => {
+      const harness = buildSoftReinitHarness(1);
+
+      harness.softReinit({ keepFont: true, theme: {}, scrollback: 'x' });
+      expect(harness.holdLog()).toEqual(['hold', 'reset']);
+
+      harness.softReinit({ keepFont: false, theme: {}, scrollback: 'y' });
+      expect(harness.holdLog()).toEqual(['hold', 'reset', 'clear', 'reset']);
+    });
+  });
+
+  /**
+   * holdFrameSnapshot and clearFrameHold, sliced from lifecycle.js and run
+   * against a fake document: the hold is the viewport's text laid over the
+   * screen's rectangle in the terminal's own font and cell height, in the
+   * theme's colours; a blank grid is never held (it would hide the successor
+   * behind an opaque block); and a second call while one is up is a no-op, so
+   * the double seed every swap lands cannot replace the good copy with a copy
+   * of the blank grid.
+   */
+  interface FakeHoldElement {
+    id: string;
+    style: { cssText: string };
+    textContent: string;
+    attributes: Record<string, string>;
+    parentNode: { removeChild: (child: FakeHoldElement) => void } | null;
+    setAttribute: (name: string, value: string) => void;
+  }
+
+  function buildFrameHoldHarness(rows: string[]): {
+    hold: () => void;
+    clear: () => void;
+    held: () => FakeHoldElement | null;
+    holdCount: () => number;
+  } {
+    const source = pageModule('lifecycle.js');
+    const holdSource = source.slice(source.indexOf('var FRAME_HOLD_ID'), source.indexOf('function resetSessionViewState('));
+    expect(holdSource).toContain('function holdFrameSnapshot(');
+    expect(holdSource).toContain('function clearFrameHold(');
+    assertInjectionsAreAlive('lifecycle.js (frame hold slice)', holdSource, ['terminal', 'document', 'frameHoldCount']);
+
+    let held: FakeHoldElement | null = null;
+    const gridHost = {
+      getBoundingClientRect: () => ({ left: 10, top: 20, width: 500, height: 300 }),
+      appendChild: (child: FakeHoldElement) => {
+        held = child;
+        child.parentNode = {
+          removeChild: () => {
+            held = null;
+          },
+        };
+      },
+    };
+    const screen = { getBoundingClientRect: () => ({ left: 14, top: 26, width: 480, height: 288 }) };
+    const document = {
+      getElementById: (id: string) => (id === 'terminal' ? gridHost : id === 'frame-hold' ? held : null),
+      querySelector: (selector: string) => (selector === '.xterm-screen' ? screen : null),
+      createElement: (): FakeHoldElement => {
+        const element: FakeHoldElement = {
+          id: '',
+          style: { cssText: '' },
+          textContent: '',
+          attributes: {},
+          parentNode: null,
+          setAttribute: (name, value) => {
+            element.attributes[name] = value;
+          },
+        };
+        return element;
+      },
+    };
+    const terminal = {
+      rows: rows.length,
+      options: { fontFamily: 'Menlo, monospace', fontSize: 11, theme: { foreground: '#f0e9dd', background: '#0c0a07' } },
+      buffer: {
+        active: {
+          viewportY: 0,
+          getLine: (index: number) => ({ translateToString: () => rows[index] ?? '' }),
+        },
+      },
+    };
+    const build = new Function(
+      'terminal',
+      'document',
+      `var frameHoldCount = 0;
+       ${holdSource}
+       return { hold: holdFrameSnapshot, clear: clearFrameHold, count: function () { return frameHoldCount; } };`,
+    ) as (...dependencies: unknown[]) => { hold: () => void; clear: () => void; count: () => number };
+    const built = build(terminal, document);
+    return { hold: built.hold, clear: built.clear, held: () => held, holdCount: built.count };
+  }
+
+  describe('lifecycle.js frame hold', () => {
+    it('lays the viewport text over the screen rectangle in the terminal font and theme, and lifts on clear', () => {
+      const harness = buildFrameHoldHarness(['$ claude', '', '● DONE', '']);
+
+      harness.hold();
+
+      const held = harness.held();
+      expect(held).not.toBeNull();
+      expect(held?.id).toBe('frame-hold');
+      expect(held?.textContent).toBe('$ claude\n\n● DONE\n');
+      expect(held?.attributes['aria-hidden']).toBe('true');
+      const css = held?.style.cssText ?? '';
+      expect(css).toContain('left:4px');
+      expect(css).toContain('top:6px');
+      expect(css).toContain('width:480px');
+      expect(css).toContain('height:288px');
+      expect(css).toContain('line-height:72px');
+      expect(css).toContain('font-size:11px');
+      expect(css).toContain('font-family:Menlo, monospace');
+      expect(css).toContain('color:#f0e9dd');
+      expect(css).toContain('background:#0c0a07');
+      expect(harness.holdCount()).toBe(1);
+
+      harness.clear();
+      expect(harness.held()).toBeNull();
+    });
+
+    it('never holds a blank grid, and never stacks a second hold over the first', () => {
+      const blank = buildFrameHoldHarness(['', '   ', '']);
+      blank.hold();
+      expect(blank.held()).toBeNull();
+      expect(blank.holdCount()).toBe(0);
+
+      const painted = buildFrameHoldHarness(['frame one', '']);
+      painted.hold();
+      const first = painted.held();
+      painted.hold();
+      expect(painted.held()).toBe(first);
+      expect(painted.holdCount()).toBe(1);
     });
   });
 

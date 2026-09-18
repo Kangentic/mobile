@@ -1679,10 +1679,13 @@ foreground liveness probe and its verdict), `established`, `bootstrap-start`,
 `bootstrap-restart` (a bootstrap lost to a rekey, restarted), `project-list`, `board-snapshot`
 (one per board, with its projection and task count), `wake-source` and `ceiling-timer` (the
 keepalive's two enforcement routes), and the session swap's own timeline: `session-swap` with
-`phase=ended` (the bound session's end opened the quiet window, with `hasLabel` and `located`),
-`phase=bind` (the successor bound, `sinceEndedMs`), `phase=settled` (the veil let go, with the
-`mode` it settled in, `sinceEndedMs` and `sinceBindMs`) or `phase=deadline` (the quiet threshold
-passed first, with `bound`), plus two from the terminal pane: `terminal-init` on every init it
+`phase=move` (the column latch opened the quiet window on the live session, with `hasLabel` and
+`located`) or `phase=ended` (the bound session's end opened it, same fields; or, inside a
+move-opened window, the end arriving, with `sinceMoveMs`), `phase=bind` (the successor bound,
+`sinceEndedMs` and `sinceMoveMs`), `phase=settled` (the veil let go, with the `mode` it settled
+in, `sinceEndedMs`, `sinceMoveMs` and `sinceBindMs`) or `phase=deadline` (the quiet threshold
+passed first, with `bound` and `ended`; `ended=false` is a move whose end never came, which drops
+the veil without spending the window), plus two from the terminal pane: `terminal-init` on every init it
 posts (`reason`, one of `ready`, `seed`, `chunk-release`, `swap`, `clean-feed` or `reactivate`;
 the grid's `cols` and `rows`, `n/a` before the desktop reports one; `fontSizePx`; and `keepFont`,
 whether that init kept the cell size or fit the font) and `terminal-painted` on every paint

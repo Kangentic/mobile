@@ -496,6 +496,55 @@ describe('SubscriptionManager', () => {
     expect((afterOpen[1].payload as { terminal?: boolean }).terminal).toBe(true);
   });
 
+  /**
+   * Measured on a release build: every column move seeded the successor's
+   * terminal TWICE, 30 to 45 ms apart. The board snapshot's reconcile queued a
+   * subscribe for the new session and the screen's terminal flip issued a
+   * direct one before the queued copy had started; the copy then started,
+   * read the same flag, and the page replayed the whole ring a second time.
+   * The direct request supersedes the queued copy.
+   */
+  it('issues one subscribe, not two, when the terminal flip lands while the reconcile copy is still queued', async () => {
+    const { stub, manager, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+
+    manager.setDesiredStreams(new Set(['sess-1']));
+    // Synchronously, before the queue's microtask starts the copy: the shape
+    // a board snapshot followed by the screen's open produces.
+    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(true);
+    await flushLoopback();
+
+    const subscribes = requests.filter((request) => request.verb === 'read-stream');
+    expect(subscribes).toHaveLength(1);
+    expect((subscribes[0].payload as { terminal?: boolean }).terminal).toBe(true);
+  });
+
+  /**
+   * The other order: a reconcile that lands while a subscribe for the same
+   * session is already on the wire. Nothing it could ask for differs from
+   * what is about to be answered.
+   */
+  it('does not re-issue a subscribe that is already in flight when a reconcile re-lists the session', async () => {
+    const { stub, manager, requests } = await harness((request) => {
+      // Hold every read-stream: the first subscribe stays in flight.
+      if (request.verb === 'read-stream') return null;
+      return defaultResponder(request);
+    });
+    stub.beginHandshake();
+    await flushLoopback();
+
+    manager.setDesiredStreams(new Set(['sess-1']));
+    await flushLoopback();
+    expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(1);
+
+    manager.setDesiredStreams(new Set(['sess-1', 'sess-2']));
+    await flushLoopback();
+
+    const subscribes = requests.filter((request) => request.verb === 'read-stream');
+    expect(subscribes.map((request) => (request.payload as { sessionId?: string }).sessionId)).toEqual(['sess-1', 'sess-2']);
+  });
+
   it('drops back to list-only when the screen closes', async () => {
     const { stub, manager, requests } = await harness();
     stub.beginHandshake();

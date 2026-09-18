@@ -80,6 +80,17 @@ export interface SessionActivityEntry {
    * must never be set to an empty string to mean "nothing to say".
    */
   messagePreview: string | null;
+  /**
+   * True while `messagePreview` is the GHOST's line, copied by successorEntry
+   * so the Home row shows nothing new across a swap. The successor may be a
+   * different conversation (an isolated column's session ending and the main
+   * one resuming), so the line is only borrowed: the successor's first
+   * snapshot drops it, which hands the row back to its own peek, and a
+   * preview the successor pushes itself replaces it outright. Seen live: a
+   * resumed session that stayed idle wore the dead review agent's sentence
+   * for minutes.
+   */
+  inheritedPreview: boolean;
   /** Epoch ms of the last snapshot/event touching this session. */
   lastEventAt: number;
   /**
@@ -252,6 +263,7 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     // null against an older desktop, which is what keeps the Home feed's own
     // transcript peek as the fallback.
     messagePreview: null,
+    inheritedPreview: false,
     lastEventAt: Date.now(),
     enteredSectionAt: Date.now(),
     sectionChangedAt: null,
@@ -311,6 +323,7 @@ function successorEntry(
     state: ghost.state === 'permission' ? 'idle' : ghost.state,
     enteredSectionAt: ghost.enteredSectionAt,
     messagePreview: ghost.messagePreview,
+    inheritedPreview: ghost.messagePreview !== null,
     usage: ghost.usage,
     unreadCount: ghost.unreadCount,
   };
@@ -406,6 +419,10 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         // predates the field (pre-0.5.0), not a guess.
         sessionStatus: snapshot.sessionStatus ?? 'running',
         lastEventAt: Date.now(),
+        // The successor's own snapshot is where a borrowed preview is handed
+        // back: null re-arms the Home row's peek of THIS session's transcript.
+        messagePreview: existing.inheritedPreview ? null : existing.messagePreview,
+        inheritedPreview: false,
         // 'ended' is TERMINAL, the same invariant markRejected enforces. The
         // desktop pushes session-ended just BEFORE it tears the read-stream
         // registry entry down, so a subscribe already in flight can still
@@ -530,6 +547,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         // the Home feed's own peek stays as the fallback.
         case 'message-preview':
           updated.messagePreview = payload.text;
+          updated.inheritedPreview = false;
           break;
         // The desktop pushes this immediately before tearing the read-stream
         // subscription down. It was parsed and forwarded but had no case here,

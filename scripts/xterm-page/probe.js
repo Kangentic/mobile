@@ -97,6 +97,8 @@
       awaitingNonBlankPaint: awaitingNonBlankPaint,
       paintReportCounts: JSON.parse(JSON.stringify(paintReportCounts)),
       lastInitKeepFont: lastInitKeepFont,
+      frameHoldCount: frameHoldCount,
+      frameHoldActive: document.getElementById('frame-hold') !== null,
       netHistoryUnits: netHistoryUnits,
       jumpRepaintCount: jumpRepaintCount,
       lastJumpAt: lastJumpAt,

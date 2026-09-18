@@ -76,6 +76,9 @@
     var seq = activeInitSeq;
     requestAnimationFrame(function () {
       paintReportCounts[blank ? 'blank' : 'painted'] += 1;
+      // The successor is drawn on this frame: the held copy of the old one
+      // (lifecycle.js holdFrameSnapshot) lifts with it.
+      if (!blank) clearFrameHold();
       postToHost({ type: 'painted', seq: seq, blank: blank });
     });
   }

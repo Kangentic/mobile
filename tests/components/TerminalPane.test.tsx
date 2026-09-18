@@ -13,11 +13,27 @@ import {
   setTerminalDimensions,
 } from '@/state/terminalFeed';
 import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
+import { useSettingsStore } from '@/state/settingsStore';
 
 jest.mock('@/connection/actions', () => ({
   writeTerminal: jest.fn().mockResolvedValue(undefined),
   refreshTerminalStream: jest.fn(),
 }));
+
+// The settings store persists the remembered fit size through the secure
+// store; an in-memory stand-in keeps the component tier free of the native
+// module and lets a test read back what was written.
+jest.mock('expo-secure-store', () => {
+  const stored = new Map<string, string>();
+  return {
+    getItemAsync: (key: string) => Promise.resolve(stored.get(key) ?? null),
+    setItemAsync: (key: string, value: string) => {
+      stored.set(key, value);
+      return Promise.resolve();
+    },
+    __stored: stored,
+  };
+});
 
 // Drives the foreground/background transitions the pane refits on.
 // Spied on the real AppState (registered in beforeEach) rather than mocked as
@@ -204,6 +220,7 @@ describe('TerminalPane (faithful mirror)', () => {
       focusKeyboardRequestBySessionId: {},
       paintedSessionIds: {},
     });
+    useSettingsStore.setState({ terminalFitFontPx: null });
     appStateListeners.clear();
     jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener): NativeEventSubscription => {
       const appStateListener = listener as (nextStatus: AppStateStatus) => void;
@@ -717,6 +734,44 @@ describe('TerminalPane (faithful mirror)', () => {
 
       const keepFontByInit = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.keepFont] : []));
       expect(keepFontByInit).toEqual([false, true]);
+    });
+
+    /**
+     * The remembered cell size: a fresh page normally fits its font to the
+     * grid it is handed, which for a task the desktop is showing in a short
+     * panel means zoomed in, then a jump when the desktop rests it at its
+     * detail grid. Once the mirror has fitted anywhere, every later open
+     * starts at that size and keeps it, so the resolution is the same each
+     * time; the fit button still fits anew, and so does the very first open.
+     */
+    it('opens at the remembered fit size with keepFont, and fits anew when none is remembered', async () => {
+      useSettingsStore.setState({ terminalFitFontPx: 9 });
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+
+      const remembered = decodedPosts().find((message) => message?.type === 'init');
+      expect(remembered?.type === 'init' ? { fontSizePx: remembered.fontSizePx, keepFont: remembered.keepFont } : null).toEqual({
+        fontSizePx: 9,
+        keepFont: true,
+      });
+    });
+
+    it('remembers the size the page fitted, and never a pinch', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      const firstInit = decodedPosts().find((message) => message?.type === 'init');
+      // The very first open fits, and starts from the default size.
+      expect(firstInit?.type === 'init' ? firstInit.keepFont : null).toBe(false);
+
+      postFromWebView(JSON.stringify({ type: 'font-size', fontSizePx: 10 }));
+      await waitFor(() => expect(useSettingsStore.getState().terminalFitFontPx).toBe(10));
+
+      // A pinch drives the page from here and is never reported back as a fit.
+      firePinchCallback('onUpdate', { numberOfTouches: 2, scale: 2 } as unknown as { numberOfTouches: number });
+      expect(decodedPosts().some((message) => message?.type === 'set-font-size')).toBe(true);
+      expect(useSettingsStore.getState().terminalFitFontPx).toBe(10);
     });
 
     it('fits the font again on the fit button, through its re-seed, while a later re-seed keeps the size', async () => {
