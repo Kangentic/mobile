@@ -8,7 +8,7 @@ import { useActivityStore } from '../../src/state/activityStore';
 import { useBoardStore } from '../../src/state/boardStore';
 import { useChannelStore } from '../../src/state/channelStore';
 import { useDiffStore } from '../../src/state/diffStore';
-import { appendChunk, resetTerminalFeed, retainTerminal, subscribeChunks } from '../../src/state/terminalFeed';
+import { appendChunk, resetTerminalFeed, retainTerminal, seedScrollback, subscribeChunks } from '../../src/state/terminalFeed';
 import { useTranscriptStore } from '../../src/state/transcriptStore';
 
 function payloadFor(kind: InspectRequestKind, argument?: string): Promise<unknown> {
@@ -87,9 +87,17 @@ describe('buildInspectPayload', () => {
     // A pane that has rebound to a successor the screen has not retained yet:
     // normal for a moment mid-swap, a leaked subscription if it persists.
     subscribeChunks('sess-successor', () => undefined);
+    // `seeded` is what the terminal pane's hold rule reads: a ring built from
+    // chunks alone is replaced the moment the seed lands, so a ring reporting
+    // chunks with seeded=false is a pane waiting on its scrollback.
     await expect(payloadFor('feed-stats')).resolves.toEqual({
-      rings: [{ sessionId: 'sess-1', chunks: 1, totalBytes: 11, dims: null, listeners: 0 }],
+      rings: [{ sessionId: 'sess-1', chunks: 1, totalBytes: 11, dims: null, seeded: false, listeners: 0 }],
       unbufferedListeners: ['sess-successor'],
+    });
+
+    seedScrollback('sess-1', 'seeded scrollback');
+    await expect(payloadFor('feed-stats')).resolves.toMatchObject({
+      rings: [expect.objectContaining({ sessionId: 'sess-1', seeded: true })],
     });
   });
 
