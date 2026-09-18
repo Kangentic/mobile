@@ -12,8 +12,8 @@ import type {
 export type TriageSection = 'needs-you' | 'working' | 'idle';
 
 /**
- * How long a task with a respawn in flight keeps its Home feed row and its
- * board-card status glyph after the outgoing session ended.
+ * How long a task whose session ended WITH a spawn-progress label keeps its
+ * Home feed row and its board-card status glyph.
  *
  * Deliberately the same 20s as `SESSION_SWAP_GRACE_MS` in
  * `src/screens/task/SessionScreen.tsx`, so a user glancing between the feed and
@@ -21,19 +21,42 @@ export type TriageSection = 'needs-you' | 'working' | 'idle';
  * agreeing by documented convention rather than moved: that one lives in the
  * file `tests/components/SessionScreen.session-swap.test.tsx` renders, and the
  * two rigs already couple their respawn gaps the same way (see
- * `scripts/stubDesktopPeer.mjs`'s STUB_RESPAWN_GAP_MS). Raising either means
- * checking both.
+ * `scripts/stubDesktopPeer.mjs`'s STUB_RESPAWN_GAP_MS).
+ * `tests/unit/sessionRespawnGapTiming.test.ts` pins the equality.
  *
  * The desktop's label is INTENT, not a guarantee that a successor is coming, so
  * this bound is not optional - without it a respawn that dies leaves a row
- * claiming "Switching model..." forever.
+ * wearing the starting glyph forever.
  */
 export const RESPAWN_ROW_GRACE_MS = 20_000;
 
-/** One in-flight respawn: the desktop's phase label and when the ending session reported it. */
-interface RespawnInFlight {
-  label: string;
+/**
+ * How long a task whose session ended WITHOUT a label keeps the same row and
+ * glyph. Shorter than the labelled window, because at arrival the phone
+ * cannot tell this end apart from a genuine park: the desktop's own
+ * column-move swap arrives unlabelled (the suspend-then-resume shape), and so
+ * does a Stop. Retaining both for a short span is what keeps the row from
+ * vanishing and reappearing on every column move; the bound is what keeps a
+ * park from lingering. Equal to `SESSION_SWAP_QUIET_MS` (the session screen's
+ * silent phase), pinned by `tests/unit/sessionRespawnGapTiming.test.ts`, so a
+ * swap that goes quiet on the session screen goes quiet on the list surfaces
+ * for the same span.
+ */
+export const ENDED_ROW_GRACE_MS = 8_000;
+
+/**
+ * One session end, in flight: the desktop's phase label when it sent one
+ * (null for an unlabelled end), and when the ending session reported it.
+ * Read through `selectTaskRespawn`, which applies the window.
+ */
+export interface RespawnInFlight {
+  label: string | null;
   reportedAt: number;
+}
+
+/** The retention window a given end earns: a labelled one is explicit desktop intent, an unlabelled one is a bet. */
+export function respawnGraceMs(respawn: Pick<RespawnInFlight, 'label'>): number {
+  return respawn.label !== null ? RESPAWN_ROW_GRACE_MS : ENDED_ROW_GRACE_MS;
 }
 
 export interface SessionActivityEntry {
@@ -163,35 +186,41 @@ interface ActivityStoreState {
    * field exists for.
    *
    * Presence means the desktop expects a successor session to land and is
-   * naming the phase it is in; absence means either a genuine park or a
+   * naming the phase it is in; absence means either a genuine park, a
    * desktop that predates the field (protocol 0.14.0, kangentic board task
-   * #639). Per that field's own contract, this is
-   * INTENT, not a guarantee: a consumer must keep whatever timeout already
-   * bounds its own wait for a successor and use presence only to skip a
-   * redundant one, never as proof one is coming.
+   * #639), or the desktop's own column-move swap, which suspends and resumes
+   * without a label. Per that field's own contract, this is INTENT, not a
+   * guarantee: a consumer must keep whatever timeout already bounds its own
+   * wait for a successor and use presence only to skip a redundant one, never
+   * as proof one is coming. The session screen reads it only to choose what
+   * its long-gap reveal says; nothing reads absence as "no successor".
    *
    * Grows by one short string per respawn in an app run, in memory only -
    * same bound as `endedSessionIds`.
    */
   spawnProgressLabelBySessionId: Record<string, string>;
   /**
-   * The same `session-ended` spawn-progress label, keyed by TASK rather than by
-   * the session that ended. Both keyings are needed and neither is redundant:
+   * The END fact, keyed by TASK rather than by the session that ended, and
+   * written on EVERY `session-ended`, label or not. Both keyings are needed
+   * and neither is redundant:
    *
-   * - `SessionScreen` holds `lastBoundSessionId`, so the session-keyed map
-   *   above is the only one it can reach once the board drops the task.
+   * - `SessionScreen` holds `lastBoundSessionId`, so the session-keyed maps
+   *   above are the only ones it can reach once the board drops the task.
    * - The Home feed row and the board card are TASK-keyed. During the gap the
    *   task has no session_id at all (`BoardScreen` reads
    *   `state.bySessionId[task.session_id]`, which is null), so they have no
-   *   session id to look the label up with. Without this map the row simply
-   *   vanishes for the whole respawn, which is the bug this exists to fix.
+   *   session id to look anything up with. Without this map the row simply
+   *   vanishes for the whole swap, which is the bug this exists to fix - and
+   *   the desktop's column-move swap arrives UNLABELLED, indistinguishable
+   *   from a park at arrival, so both are retained and the window
+   *   (`respawnGraceMs`) is what tells them apart.
    *
    * Unlike its two siblings this map is CLEARED rather than grown forever:
    * `registerSession` drops the entry when the successor lands, so a
-   * completed respawn leaves nothing behind. A respawn that never lands leaks
-   * one small object, bounded exactly like `endedSessionIds`; the grace window
-   * in `selectTaskRespawnLabel` is what stops it being DISPLAYED, so read this
-   * map through that selector and never directly.
+   * completed swap leaves nothing behind. An end with no successor leaks one
+   * small object, bounded exactly like `endedSessionIds`; the grace window in
+   * `selectTaskRespawn` is what stops it being DISPLAYED, so read this map
+   * through that selector and never directly.
    */
   respawnByTaskId: Record<string, RespawnInFlight>;
   registerSession: (sessionId: string, taskId: string, projectId: string) => void;
@@ -358,11 +387,12 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         spawnProgressLabel !== null
           ? { ...state.spawnProgressLabelBySessionId, [event.sessionId]: spawnProgressLabel }
           : state.spawnProgressLabelBySessionId;
-      // The same label, keyed by task, for the two surfaces that have no
-      // session id during the gap. Written from the SAME extracted value, so
-      // the two maps cannot disagree about whether a respawn is in flight.
+      // The end, keyed by task, for the two surfaces that have no session id
+      // during the gap - EVERY end, label or not, since the desktop's own
+      // column-move swap arrives unlabelled. Written from the SAME extracted
+      // label, so the two maps cannot disagree about what the desktop said.
       const respawnByTaskId: Record<string, RespawnInFlight> =
-        spawnProgressLabel !== null
+        payload.type === 'session-ended'
           ? { ...state.respawnByTaskId, [event.taskId]: { label: spawnProgressLabel, reportedAt: Date.now() } }
           : state.respawnByTaskId;
       if (!existing) {
@@ -528,49 +558,58 @@ export function selectSessionSpawnProgressLabel(
 }
 
 /**
- * The desktop's in-flight spawn-progress label for a TASK, or null when no
- * respawn is in flight for it. The Home feed row and the board card read this;
+ * The end in flight for a TASK (its label, if the desktop sent one), or null
+ * when none is - or when the one there was has outlived its window. The Home
+ * feed row, the board card and `TaskHeader` read this;
  * `selectSessionSpawnProgressLabel` above serves the session screen, which has
  * a session id to key on and this does not require.
  *
- * The window is applied HERE rather than at each call site so that the two
- * cards and `reconcileSessionsFromBoards` - which uses this to decide whether
- * to keep a sessionless task's row alive - can never disagree about whether a
- * respawn is still in flight. A row retained by one rule and captioned by
- * another would be the worst of both.
+ * The window is applied HERE rather than at each call site so that the three
+ * surfaces and `reconcileSessionsFromBoards` - which uses this to decide
+ * whether to keep a sessionless task's row alive - can never disagree about
+ * whether an end is still in flight. A row retained by one rule and badged by
+ * another would be the worst of both. The window depends on the label
+ * (`respawnGraceMs`): 20s when the desktop said a successor is coming, the
+ * short `ENDED_ROW_GRACE_MS` when it said nothing.
+ *
+ * Returns the record rather than a boolean so the one caller that still needs
+ * the label (the session screen's long-gap reveal does not read this; the Home
+ * row derives its queued caption as "starting for a reason that is not a
+ * swap") gets it through the same windowed read, never a second selector.
  *
  * Reads the clock, so this is not a pure function of the state: the same state
  * answers differently once the window passes. That is intended and is what
- * bounds a respawn that never lands. The storeFeed timer re-runs the prune at
- * the same deadline, so the row and the caption expire together rather than
- * leaving a captionless ghost behind.
+ * bounds an end with no successor. The storeFeed timer re-runs the prune at
+ * the same deadline, so the row and the glyph expire together rather than
+ * leaving a glyph-less ghost behind.
  *
  * "Together" is to the same deadline, not to the same instant, and the
  * difference is worth knowing rather than discovering: nothing re-renders a
  * subscriber merely because the clock crossed the boundary (Zustand compares on
  * store WRITES), so between the window closing and the sweep's
  * `reconcileSessionsFromBoards` landing, an already-rendered row can still be
- * showing a caption from a window that has just closed. Both are driven off the
- * same constant, so the two deadlines coincide by construction - but the gap
+ * wearing a glyph from a window that has just closed. Both are driven off the
+ * same constants, so the two deadlines coincide by construction - but the gap
  * between them is whatever `setTimeout` latency the JS thread is under, which
  * is unbounded above and NOT measured here (read out of the source, not a
  * timing claim). Deliberately not engineered against: the worst case is a
- * caption outliving its window on an already-drawn row until the sweep lands.
+ * glyph outliving its window on an already-drawn row until the sweep lands.
  */
-export function selectTaskRespawnLabel(
+export function selectTaskRespawn(
   state: { respawnByTaskId: Record<string, RespawnInFlight> },
   taskId: string,
-): string | null {
+): RespawnInFlight | null {
   const respawn = state.respawnByTaskId[taskId];
   if (respawn === undefined) return null;
-  if (Date.now() - respawn.reportedAt >= RESPAWN_ROW_GRACE_MS) return null;
-  return respawn.label;
+  if (Date.now() - respawn.reportedAt >= respawnGraceMs(respawn)) return null;
+  return respawn;
 }
 
 /**
  * Whether a task is in one of the two transitional states the `'starting'`
- * glyph stands for: mid-respawn (the desktop said it is handing the work to a
- * new agent) or queued behind the desktop's concurrency limit.
+ * glyph stands for: between two sessions (its last one ended, labelled or
+ * not, and the window `selectTaskRespawn` applies has not passed) or queued
+ * behind the desktop's concurrency limit.
  *
  * Shared rather than recomputed at each surface BECAUSE the surfaces claim to
  * agree. The Home feed row, the board card and `TaskHeader` all promise that
@@ -583,14 +622,14 @@ export function selectTaskRespawnLabel(
  *
  * Takes the values rather than the store because the three callers reach them
  * differently: two read `sessionStatus` off a possibly-absent entry, one off an
- * entry it always has, and `TaskHeader` may have no `taskId` to look a respawn
- * up with at all.
+ * entry it always has, and `TaskHeader` may have no `taskId` to look an end up
+ * with at all.
  */
 export function isStartingSession(
-  taskRespawnLabel: string | null,
+  taskRespawn: RespawnInFlight | null,
   sessionStatus: ReadStreamSessionStatusWire | null | undefined,
 ): boolean {
-  return taskRespawnLabel !== null || sessionStatus === 'queued';
+  return taskRespawn !== null || sessionStatus === 'queued';
 }
 
 /**

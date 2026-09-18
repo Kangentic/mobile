@@ -5,11 +5,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
 import {
+  ENDED_ROW_GRACE_MS,
   RESPAWN_ROW_GRACE_MS,
+  isStartingSession,
   sectionForEntry,
   selectSessionEnded,
   selectSessionSpawnProgressLabel,
-  selectTaskRespawnLabel,
+  selectTaskRespawn,
   selectTriageRows,
   selectWaitingSince,
   useActivityStore,
@@ -558,14 +560,14 @@ describe('activityStore', () => {
   });
 
   /**
-   * The TASK-keyed respawn map, which exists because the session-keyed one
-   * above cannot serve the two list surfaces. During a respawn the task's
-   * session_id is null, so the Home feed row and the board card have no
-   * session id to look a label up with - and the feed's rows come only from
-   * `bySessionId`, which the reconciler prunes, so without this the row
-   * vanishes for the whole gap and then reappears.
+   * The TASK-keyed end map, which exists because the session-keyed one above
+   * cannot serve the list surfaces. During a swap the task's session_id is
+   * null, so the Home feed row and the board card have no session id to look
+   * anything up with - and the feed's rows come only from `bySessionId`, which
+   * the reconciler prunes, so without this the row vanishes for the whole gap
+   * and then reappears.
    */
-  describe('respawnByTaskId (the task-keyed respawn signal)', () => {
+  describe('respawnByTaskId (the task-keyed end signal)', () => {
     /**
      * Keyed by the event's TASK, never its session. A session-keyed write
      * would pass any test that used the same string for both, which is why the
@@ -579,17 +581,67 @@ describe('activityStore', () => {
         .getState()
         .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
 
-      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching model...');
-      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'sess-old')).toBeNull();
+      expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')?.label).toBe('Switching model...');
+      expect(selectTaskRespawn(useActivityStore.getState(), 'sess-old')).toBeNull();
     });
 
-    /** A genuine park sends no label, and must leave no respawn behind. */
-    it('records nothing when session-ended carries no label', () => {
+    /**
+     * An UNLABELLED end is recorded too. The desktop's own column-move swap
+     * arrives with no label, indistinguishable from a park when it lands, so
+     * the list surfaces retain both and the window is what separates them.
+     */
+    it('records an unlabelled end against the task, with a null label', () => {
       useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
 
       useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
 
-      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+      const respawn = selectTaskRespawn(useActivityStore.getState(), 'task-7');
+      expect(respawn).not.toBeNull();
+      expect(respawn?.label).toBeNull();
+    });
+
+    it('is a starting session for an unlabelled end, exactly as for a labelled one', () => {
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
+
+      expect(isStartingSession(selectTaskRespawn(useActivityStore.getState(), 'task-7'), 'running')).toBe(true);
+      expect(isStartingSession(null, 'running')).toBe(false);
+    });
+
+    /**
+     * The two windows. An unlabelled end is a bet (it might be a park), so it
+     * expires on the short grace; a labelled one is explicit desktop intent
+     * and keeps the full window. Each direction has its own mutation: a single
+     * window in either direction fails exactly one of these.
+     */
+    it('stops reporting an unlabelled end at the short grace, before a labelled one would', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000_000);
+        useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
+
+        vi.setSystemTime(1_000_000 + ENDED_ROW_GRACE_MS - 1);
+        expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')).not.toBeNull();
+
+        vi.setSystemTime(1_000_000 + ENDED_ROW_GRACE_MS);
+        expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps reporting a labelled end past the short grace', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000_000);
+        useActivityStore
+          .getState()
+          .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
+
+        vi.setSystemTime(1_000_000 + ENDED_ROW_GRACE_MS);
+        expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')?.label).toBe('Switching model...');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     /**
@@ -608,7 +660,7 @@ describe('activityStore', () => {
 
       useActivityStore.getState().registerSession('sess-new', 'task-7', 'project-1');
 
-      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+      expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')).toBeNull();
     });
 
     /** A different task's successor must not spend this task's respawn. */
@@ -620,7 +672,7 @@ describe('activityStore', () => {
 
       useActivityStore.getState().registerSession('sess-other', 'task-9', 'project-1');
 
-      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching model...');
+      expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')?.label).toBe('Switching model...');
     });
 
     /**
@@ -640,10 +692,10 @@ describe('activityStore', () => {
           .applyActivityEvent(activityEvent('sess-old', sessionEndedWithLabel(true, 'Switching model...'), 'task-7'));
 
         vi.setSystemTime(1_000_000 + RESPAWN_ROW_GRACE_MS - 1);
-        expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching model...');
+        expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')?.label).toBe('Switching model...');
 
         vi.setSystemTime(1_000_000 + RESPAWN_ROW_GRACE_MS);
-        expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+        expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')).toBeNull();
       } finally {
         vi.useRealTimers();
       }
@@ -659,7 +711,7 @@ describe('activityStore', () => {
         .getState()
         .applyActivityEvent(activityEvent('sess-unknown', sessionEndedWithLabel(true, 'Switching agent...'), 'task-7'));
 
-      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBe('Switching agent...');
+      expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')?.label).toBe('Switching agent...');
     });
 
     it('clears on reset', () => {
@@ -669,7 +721,7 @@ describe('activityStore', () => {
 
       useActivityStore.getState().reset();
 
-      expect(selectTaskRespawnLabel(useActivityStore.getState(), 'task-7')).toBeNull();
+      expect(selectTaskRespawn(useActivityStore.getState(), 'task-7')).toBeNull();
     });
 
     /**

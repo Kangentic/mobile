@@ -55,6 +55,7 @@ const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const stubDesktopPeerSource = readFileSync(`${repositoryRoot}scripts/stubDesktopPeer.mjs`, 'utf8');
 const mockDesktopSource = readFileSync(`${repositoryRoot}src/connection/mockDesktop.ts`, 'utf8');
 const sessionScreenSource = readFileSync(`${repositoryRoot}src/screens/task/SessionScreen.tsx`, 'utf8');
+const activityStoreSource = readFileSync(`${repositoryRoot}src/state/activityStore.ts`, 'utf8');
 
 /** Reads a `const NAME = 1_234;`-shaped numeric literal, underscores and all. */
 function readNumericConstant(source: string, constantName: string): number | null {
@@ -67,13 +68,28 @@ const stubRespawnGapMs = readNumericConstant(stubDesktopPeerSource, 'STUB_RESPAW
 const mockRespawnGapMs = readNumericConstant(mockDesktopSource, 'MOCK_RESPAWN_GAP_MS');
 const sessionSwapGraceMs = readNumericConstant(sessionScreenSource, 'SESSION_SWAP_GRACE_MS');
 const sessionSwapQuietMs = readNumericConstant(sessionScreenSource, 'SESSION_SWAP_QUIET_MS');
+const respawnRowGraceMs = readNumericConstant(activityStoreSource, 'RESPAWN_ROW_GRACE_MS');
+const endedRowGraceMs = readNumericConstant(activityStoreSource, 'ENDED_ROW_GRACE_MS');
 
 describe('the respawn-gap and swap-grace constants stay in the relationship the comments claim', () => {
-  it('finds all four constants (a silent extraction failure would make every comparison below vacuous)', () => {
+  it('finds all six constants (a silent extraction failure would make every comparison below vacuous)', () => {
     expect(stubRespawnGapMs).not.toBeNull();
     expect(mockRespawnGapMs).not.toBeNull();
     expect(sessionSwapGraceMs).not.toBeNull();
     expect(sessionSwapQuietMs).not.toBeNull();
+    expect(respawnRowGraceMs).not.toBeNull();
+    expect(endedRowGraceMs).not.toBeNull();
+  });
+
+  /**
+   * The list surfaces and the session screen claim ONE window each, in prose
+   * ("deliberately the same 20s", "equal to SESSION_SWAP_QUIET_MS"). A user
+   * glancing between the feed and the session screen must see one swap, not
+   * a row that outlives the veil or a veil that outlives the row.
+   */
+  it('keeps the list surfaces on the same two windows as the session screen', () => {
+    expect(respawnRowGraceMs).toBe(sessionSwapGraceMs);
+    expect(endedRowGraceMs).toBe(sessionSwapQuietMs);
   });
 
   it('keeps every rig swap inside the quiet window, so a rig respawn never reveals the long-gap text', () => {

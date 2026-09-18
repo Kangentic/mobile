@@ -6,7 +6,7 @@ import { GitCompareArrows } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, Text, useTheme } from '@/components';
 import { getColumnIcon } from '@/components/board/columnIcons';
-import { isStartingSession, sectionForEntry, selectTaskRespawnLabel, useActivityStore } from '@/state/activityStore';
+import { isStartingSession, sectionForEntry, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { findTaskById, selectTaskColumn, useBoardStore } from '@/state/boardStore';
 
 export interface TaskHeaderProps {
@@ -45,8 +45,8 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
    * Task-keyed like the other two, and guarded on `taskId` because this header
    * is also used by CompletedTaskScreen, which passes none.
    */
-  const respawnLabel = useActivityStore((state) => (taskId ? selectTaskRespawnLabel(state, taskId) : null));
-  const starting = isStartingSession(respawnLabel, activityEntry?.sessionStatus);
+  const respawn = useActivityStore((state) => (taskId ? selectTaskRespawn(state, taskId) : null));
+  const starting = isStartingSession(respawn, activityEntry?.sessionStatus);
   const column = useBoardStore((state) => (taskId ? selectTaskColumn(state, taskId) : null));
   // locatedProjectId deliberately, never a route-param fallback: MoveTaskScreen
   // needs the board that actually HOLDS the task, which is findTaskById's
@@ -81,13 +81,12 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
       >
         <IconButton iconName="chevron-back" onPress={() => router.back()} testID="task-back-button" accessibilityLabel="Back" />
         {/* The same status language as the feed and board cards: green
-            spinner while working, muted still ring while queued or mid-respawn,
+            spinner while working, muted still ring while queued or mid-swap,
             yellow mail for every other idle state.
 
             Still gated on `activityEntry`, so a transitional state adds no
-            glyph where there was none - during a respawn gap this screen
-            already says far more than a glyph could, through the full
-            "Switching session" overlay. */}
+            glyph where there was none: a header that had nothing bound draws
+            nothing, and a swap may change the glyph but never conjure one. */}
         {activityEntry ? (
           <AgentStatusIcon
             kind={starting ? 'starting' : sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'}

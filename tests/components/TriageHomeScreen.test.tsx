@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import { NOW_TICK_MS, ThemeProvider } from '@/components';
+import { NOW_TICK_MS, ThemeProvider, darkTerminalTheme } from '@/components';
 import { SNIPPET_WARM_CONCURRENCY, TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
@@ -1016,49 +1016,69 @@ describe('TriageHomeScreen', () => {
    * `entry.state`.
    */
   describe('transitional states (respawning and queued)', () => {
-    /** The desktop's respawn push for the seeded task-1/sess-1 pair. */
-    const pushRespawnEnded = (label = 'Switching model...'): void => {
+    /**
+     * The desktop's end push for the seeded task-1/sess-1 pair: labelled (a
+     * model switch), or not (the column-move swap, or a park).
+     */
+    const pushRespawnEnded = (label: string | null = 'Switching model...'): void => {
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
         sessionId: 'sess-1',
         taskId: 'task-1',
-        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: label },
+        payload:
+          label === null
+            ? { type: 'session-ended', intentional: true }
+            : { type: 'session-ended', intentional: true, spawnProgressLabel: label },
       });
     };
 
     /**
-     * The CAPTION is what this tier proves. Whether the row survives the gap is
-     * decided by reconcileSessionsFromBoards, which no board snapshot drives
-     * here - so the surviving row below is not evidence of retention and must
-     * not be read as such. That half lives in
-     * tests/unit/storeFeedRespawnRetention.test.ts, where the snapshots that
-     * prune are actually published.
+     * NOTHING NEW TO READ during a swap: the row keeps the body it had and only
+     * the glyph changes, whatever the desktop sent. The label once replaced
+     * the body here ("Switching model...", or "Starting a new session" for a
+     * rejected one), which was text appearing and vanishing inside a
+     * two-second gap. The body is seeded as a pushed preview so "unchanged" is
+     * an exact string, and the row is idle so that preview is what it shows.
+     *
+     * Whether the row SURVIVES the gap is decided by
+     * reconcileSessionsFromBoards, which no board snapshot drives here - the
+     * surviving row is not evidence of retention. That half lives in
+     * tests/unit/storeFeedRespawnRetention.test.ts. For the unlabelled arm the
+     * glyph assertion is the load-bearing one: the text assertions pass
+     * against the old label-only store too, since it recorded nothing.
      */
-    it('captions a respawning row with the desktop label', () => {
+    it.each([
+      ['a labelled end', 'Switching model...'],
+      ['an over-cap labelled end', 'x'.repeat(200)],
+      ['an unlabelled end', null],
+    ])('keeps the body it had and adds nothing to read on %s', async (_kind, label) => {
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
+        );
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'message-preview', text: 'Summary written to the task notes.' },
+      });
       renderHome();
-      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+      await act(async () => {});
+      expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
 
       act(() => {
-        pushRespawnEnded();
+        pushRespawnEnded(label);
       });
 
-      expect(screen.getByText('Switching model...')).toBeTruthy();
-    });
-
-    /**
-     * The caption is the desktop's own text and is untrusted, so a malformed
-     * one must degrade to the generic line rather than truncating or rendering
-     * raw. An over-cap label is the case `renderableSpawnLabel` rejects.
-     */
-    it('degrades an over-long desktop label to the generic caption', () => {
-      renderHome();
-
-      act(() => {
-        pushRespawnEnded('x'.repeat(200));
-      });
-
-      expect(screen.getByText('Starting a new session')).toBeTruthy();
-      expect(screen.queryByText('x'.repeat(200))).toBeNull();
+      expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
+      if (label !== null) expect(screen.queryByText(label)).toBeNull();
+      expect(screen.queryByText('Starting a new session')).toBeNull();
+      expect(screen.queryByText('Waiting for a free slot')).toBeNull();
+      expect(screen.getByTestId('activity-row-sess-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
     });
 
     /**
@@ -1085,8 +1105,11 @@ describe('TriageHomeScreen', () => {
      *    fires - so a post-mount push cannot tell a skipped peek from a
      *    merely-deferred one. At mount the first peek fires synchronously.
      */
-    it('fetches no snippet for a respawning row, whose session is already gone', async () => {
-      pushRespawnEnded();
+    it.each([
+      ['a labelled end', 'Switching model...'],
+      ['an unlabelled end', null],
+    ])('fetches no snippet for a row between sessions (%s), whose session is already gone', async (_kind, label) => {
+      pushRespawnEnded(label);
       jest.mocked(peekLastAssistantMessage).mockClear();
       mockPeekAwaitedPrompt.mockClear();
 
@@ -1141,6 +1164,35 @@ describe('TriageHomeScreen', () => {
 
       expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
       expect(screen.queryByText('Waiting for a free slot')).toBeNull();
+    });
+
+    /**
+     * The queued caption is derived as "starting for a reason that is not a
+     * swap", not by re-reading `sessionStatus` at the call site. A queued
+     * session cancelled out of the queue keeps its stale 'queued' status (the
+     * store's retirement excludes session-ended on purpose), so a call site
+     * reading the status directly would keep captioning a session that is
+     * over. What makes this non-vacuous: the glyph still says starting.
+     */
+    it('drops the queue caption once a queued session ends, while the glyph still says starting', async () => {
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
+        );
+      renderHome();
+      await act(async () => {});
+      expect(screen.getByText('Waiting for a free slot')).toBeTruthy();
+
+      act(() => {
+        pushRespawnEnded(null);
+      });
+
+      expect(screen.queryByText('Waiting for a free slot')).toBeNull();
+      expect(screen.getByTestId('activity-row-sess-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
     });
   });
 });

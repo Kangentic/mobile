@@ -803,10 +803,13 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     // else touches activeSessionId - reversing that order records the
     // SUCCESSOR as ended and wedges the phone on the ended state forever.
     //
-    // The ended push carries spawnProgressLabel (protocol 0.14.0+).
-    // mockDesktop.ts emits the same label, so BOTH rigs open the phone's
-    // switching window and dev:mock and E2E show the same thing.
-    function respawnActiveSession() {
+    // The ended push carries spawnProgressLabel (protocol 0.14.0+) by default
+    // (/respawn), or none at all (/respawn-quiet: the shape of the desktop's
+    // column-move swap, which suspends and resumes unlabelled). The phone
+    // goes quiet on both; the label only decides what its long-gap reveal
+    // says. mockDesktop.ts offers the same two commands, so dev:mock and E2E
+    // show the same thing.
+    function respawnActiveSession(spawnProgressLabel = 'Switching model...') {
       const endedSessionId = activeSessionId;
       permissionPending = false;
       if (endedSessionId !== null) {
@@ -814,7 +817,10 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
           kind: 'activity',
           sessionId: endedSessionId,
           taskId: STUB_TASK_ID,
-          payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+          payload:
+            spawnProgressLabel === null
+              ? { type: 'session-ended', intentional: true }
+              : { type: 'session-ended', intentional: true, spawnProgressLabel },
         });
       }
       activeSessionId = null;
@@ -1004,6 +1010,10 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
           console.log(`[message] phone says: ${payload.text}`);
           if (payload.text.trim() === '/respawn') {
             respawnActiveSession();
+            return ok({ delivered: true });
+          }
+          if (payload.text.trim() === '/respawn-quiet') {
+            respawnActiveSession(null);
             return ok({ delivered: true });
           }
           if (payload.text.trim() === '/end-session') {

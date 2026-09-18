@@ -21,7 +21,7 @@ import type { SubscriptionManager } from '@/channel/subscriptionManager';
 import { bindFeedToStores, createSnapshotSinks } from '@/connection/storeFeed';
 import { FeedRouter } from '@/channel/feedRouter';
 import type { SessionManager } from '@/channel/sessionManager';
-import { RESPAWN_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
+import { ENDED_ROW_GRACE_MS, RESPAWN_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 
@@ -47,8 +47,12 @@ describe('reconcileSessionsFromBoards keeps a respawning task on screen', () => 
     );
   };
 
-  /** The desktop's respawn push: the outgoing session ends, naming the phase it is entering. */
-  const pushRespawnEnded = (): void => {
+  /**
+   * The desktop's end push for the outgoing session: naming the phase it is
+   * entering (a labelled respawn), or saying nothing (the desktop's column-move
+   * swap, or a park - indistinguishable when the push lands).
+   */
+  const pushRespawnEnded = (label: string | null = 'Switching model...'): void => {
     if (!deliverMessage) throw new Error('feed not wired');
     deliverMessage({
       type: 'event',
@@ -56,7 +60,10 @@ describe('reconcileSessionsFromBoards keeps a respawning task on screen', () => 
         kind: 'activity',
         sessionId: OLD_SESSION_ID,
         taskId: TASK_ID,
-        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+        payload:
+          label === null
+            ? { type: 'session-ended', intentional: true }
+            : { type: 'session-ended', intentional: true, spawnProgressLabel: label },
       },
     });
   };
@@ -110,26 +117,36 @@ describe('reconcileSessionsFromBoards keeps a respawning task on screen', () => 
   });
 
   /**
-   * The control, and the reason the test above is not vacuous: a park sends no
-   * spawn-progress label, and must still be pruned immediately. Without this,
-   * a retention bug that kept EVERY ended session would pass the test above.
+   * An UNLABELLED end is retained too, but on the short window. The desktop's
+   * own column-move swap arrives with no label and cannot be told from a park
+   * when the push lands, so the row must survive the gap either way; the
+   * short grace is what stops a park lingering. Two halves, two mutations:
+   * the label-only store write fails the first assertion, a sweep that still
+   * skips unlabelled ends fails the last (the row would never prune).
    */
-  it('still prunes an ended session the desktop is not respawning', () => {
+  it('keeps an unlabelled ended session for the short grace, then prunes it on the clock', () => {
     publishBoard(OLD_SESSION_ID);
-    if (!deliverMessage) throw new Error('feed not wired');
-    deliverMessage({
-      type: 'event',
-      event: {
-        kind: 'activity',
-        sessionId: OLD_SESSION_ID,
-        taskId: TASK_ID,
-        payload: { type: 'session-ended', intentional: true },
-      },
-    });
-
+    pushRespawnEnded(null);
     publishBoard(null);
+    expect(hasRow(OLD_SESSION_ID)).toBe(true);
+
+    vi.advanceTimersByTime(ENDED_ROW_GRACE_MS - 1);
+    expect(hasRow(OLD_SESSION_ID)).toBe(true);
+
+    vi.advanceTimersByTime(2);
 
     expect(hasRow(OLD_SESSION_ID)).toBe(false);
+  });
+
+  /** The two windows are different: a labelled end (explicit desktop intent) outlives the short grace. */
+  it('keeps a labelled end past the short grace, since the desktop said a successor is coming', () => {
+    publishBoard(OLD_SESSION_ID);
+    pushRespawnEnded();
+    publishBoard(null);
+
+    vi.advanceTimersByTime(ENDED_ROW_GRACE_MS + 1);
+
+    expect(hasRow(OLD_SESSION_ID)).toBe(true);
   });
 
   /**

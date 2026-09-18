@@ -1,10 +1,12 @@
 /**
  * The desktop's in-flight spawn-progress label (kangentic board #639) is
- * untrusted DISPLAY TEXT, and three surfaces now render it: the session
- * screen's switching overlay, the Home feed row, and the board card. The
- * sanitizer lives here so those three cannot drift - in particular so none of
- * them re-derives the `typeof`-adjacent guard and calls `.trim()` on something
- * that is not a string.
+ * untrusted DISPLAY TEXT. One surface renders it: the session screen's
+ * switching overlay, the long-gap reveal past the quiet swap window. The list
+ * surfaces (the Home feed row, the board card) deliberately no longer do - a
+ * swap changes nothing readable there. The sanitizer still lives in its own
+ * module rather than beside that overlay so any future caller shares the
+ * `typeof`-adjacent guard instead of calling `.trim()` on something that is
+ * not a string.
  */
 
 /**

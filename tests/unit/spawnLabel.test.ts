@@ -1,11 +1,10 @@
 /**
  * renderableSpawnLabel: the shared sanitizer for the desktop's untrusted
- * in-flight spawn-progress label (kangentic board #639). Three surfaces
- * render its result (the session screen's switching overlay, the Home feed
- * row, and the board card), and each is covered only indirectly through its
- * own component - this file pins the sanitizer's contract directly so a
- * regression in one branch cannot hide behind a call site that happens not
- * to exercise it.
+ * in-flight spawn-progress label (kangentic board #639). One surface renders
+ * its result (the session screen's switching overlay, the long-gap reveal),
+ * and it is covered only indirectly through that component - this file pins
+ * the sanitizer's contract directly so a regression in one branch cannot hide
+ * behind a call site that happens not to exercise it.
  */
 import { describe, expect, it } from 'vitest';
 import { renderableSpawnLabel } from '@/lib/spawnLabel';
