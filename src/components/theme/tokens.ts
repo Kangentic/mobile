@@ -135,6 +135,17 @@ export interface MotionTokens {
     opacityMin: number;
     opacityMax: number;
   };
+  /**
+   * The session screen's swap veil: a scrim over the last terminal frame that
+   * breathes while a session swap is in flight. Slower than the skeleton (a
+   * transition, not a loading placeholder) and never far from opaque, so the
+   * dead frame under it can be seen to still be there but never read as live.
+   */
+  swapVeilPulse: {
+    durationMs: number;
+    opacityMin: number;
+    opacityMax: number;
+  };
 }
 
 export interface TypographyToken {
@@ -205,6 +216,14 @@ export const motionTokens: MotionTokens = {
     durationMs: 1200,
     opacityMin: 0.4,
     opacityMax: 0.8,
+  },
+  // Design values, tuned by eye on a release build rather than measured: the
+  // max is the switching overlay's own scrim opacity, the min keeps the frame
+  // underneath dimmed enough never to read as live output.
+  swapVeilPulse: {
+    durationMs: 1600,
+    opacityMin: 0.8,
+    opacityMax: 0.92,
   },
 };
 
