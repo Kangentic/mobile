@@ -20,6 +20,14 @@ export interface SessionInputBarProps {
    * stays live in every case; it is the way out to Changes.
    */
   suspended?: boolean;
+  /**
+   * True once the session is over (past the quiet window with no successor
+   * bound): the footer is the switcher alone, in every mode. Keys and
+   * messages have nowhere to go, and the switcher is what keeps the
+   * transcript and the diff one tap away from the waiting card, and the way
+   * back from them.
+   */
+  switcherOnly?: boolean;
 }
 
 /**
@@ -37,6 +45,7 @@ export function SessionInputBar({
   onModeChange,
   chatAttention,
   suspended = false,
+  switcherOnly = false,
 }: SessionInputBarProps): React.JSX.Element | null {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -59,8 +68,9 @@ export function SessionInputBar({
       }}
     >
       {/* Rendered only when a mode row exists: an empty wrapper would add a
-          `gap` slot above the pill in changes mode. */}
-      {mode !== 'changes' ? (
+          `gap` slot above the pill in changes mode, and past the end of the
+          session the pill is the whole footer. */}
+      {mode !== 'changes' && !switcherOnly ? (
         <View
           testID="session-input-row"
           pointerEvents={suspended ? 'none' : 'auto'}

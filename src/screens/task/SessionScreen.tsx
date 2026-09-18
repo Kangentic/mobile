@@ -14,8 +14,7 @@ import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
 import { ChangesTab } from './ChangesTab';
 import { TerminalTab } from './TerminalTab';
-import { SessionEndedState } from './SessionEndedState';
-import { SessionSwitchingState } from './SessionSwitchingState';
+import { SessionWaitingState } from './SessionWaitingState';
 import {
   SESSION_SWAP_SETTLED_ANNOUNCEMENT,
   SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
@@ -35,28 +34,26 @@ import type { SessionMode } from './SessionModeToggle';
 const REJECTED_FEED_GRACE_MS = 1500;
 
 /**
- * How long the screen may stay in the "switching session" state before it
- * gives up and declares the session ended.
+ * How long the column latch below stays armed after a move.
  *
- * The window has TWO openers, both bounded by this same timeout for the same
- * reason: something suspended the live session in a way that PROMISES a
- * successor but does not GUARANTEE one, so the screen must eventually fall
- * back to the ended state if nothing arrives.
+ * A column move that restarts the agent is a session swap, and the board
+ * reports the move seconds before the session actually ends (the desktop
+ * interrupts the agent, waits for a running tool, then suspends). The latch
+ * is what lets the quiet window open on the move itself. But a move PROMISES
+ * a successor without GUARANTEEING one (a board profile can keep the session,
+ * two columns can share one, a worktree checkout can fail), so the latch is
+ * bounded, or the next move could never arm one of its own. Measured on the
+ * desktop's own IPC log: cross-column `task:move` runs a median 2.3s with a
+ * 24.4s tail; 20s covers the common tail.
  *
- * 1. A column move that restarts the agent (see swapWindowSwimlaneId below).
- *    Measured on the desktop's own IPC log: cross-column `task:move` runs a
- *    median 2.3s with a 24.4s tail, and the successor's board snapshot
- *    normally closes this window in ~2-3s.
- * 2. A same-column respawn (model/agent/effort change, isolated-session-track
- *    switch) signalled by the desktop's spawnProgressLabel on `session-ended`
- *    (see spawnLabelWindowSessionId below, kangentic board #639). The
- *    desktop's own contract for that field is INTENT, not a guarantee - a
- *    board profile, a failed worktree checkout, or a racing move can still
- *    suspend with no successor landing - so this timeout is not optional for
- *    that opener either.
- *
- * 20s covers the common move tail without leaving a wrong "switching" label
- * up indefinitely when nothing is coming.
+ * Nothing user-visible hangs on this expiry any more. It used to be the
+ * fallback from "Switching session" to "Session ended", which was the phone
+ * changing its verdict on a clock; past the quiet window the screen now
+ * shows one waiting card for as long as it takes. The Home feed's
+ * RESPAWN_ROW_GRACE_MS (how long a labelled ghost row is retained) is kept
+ * equal to it so the desktop's "a successor is coming" stops counting on both
+ * surfaces at the same moment; tests/unit/sessionRespawnGapTiming.test.ts
+ * pins that.
  */
 const SESSION_SWAP_GRACE_MS = 20_000;
 
@@ -64,15 +61,14 @@ const SESSION_SWAP_GRACE_MS = 20_000;
  * How long a session swap stays SILENT: from the bound session's end until
  * either the successor has painted or this deadline passes, the screen shows
  * the swap veil (the last frame under a breathing scrim, no text) and nothing
- * else. Only past it do the two text surfaces above reveal, because a desktop
- * can genuinely stall a spawn (a git queue, a failed worktree) and the diff is
- * still worth reading then. Every normal move never reaches it.
+ * else. Only past it does the one text surface reveal, SessionWaitingState
+ * (a card, not a verdict: the phone cannot tell a stalled spawn from a park
+ * or from its own updates not arriving), because the transcript and the diff
+ * are still worth reading then. Every normal move never reaches it.
  *
- * Bounded twice: the rigs' respawn gap (STUB_RESPAWN_GAP_MS,
- * MOCK_RESPAWN_GAP_MS) must sit at least 2s inside it so a rig swap stays
- * silent, and it must leave at least 5s before SESSION_SWAP_GRACE_MS so a text
- * phase exists before the ended fallback; tests/unit/sessionRespawnGapTiming
- * .test.ts pins both.
+ * Bounded below by the rigs' respawn gap (STUB_RESPAWN_GAP_MS,
+ * MOCK_RESPAWN_GAP_MS), which must sit at least 2s inside it so a rig swap
+ * stays silent; tests/unit/sessionRespawnGapTiming.test.ts pins it.
  *
  * MEASURED (release build, x86_64 emulator, the real desktop over the hosted
  * relay, 2026-09-18, ten column moves across Executing, Code Review and
@@ -202,19 +198,20 @@ export function SessionScreen(): React.JSX.Element {
   // status, the prompt dot, the mode request) stays on the real `sessionId`.
   const displaySessionId = sessionId ?? lastBoundSessionId;
   // The desktop's in-flight spawn-progress label for the session that just
-  // ended (kangentic board #639), read here - ahead of the latch chain below
-  // that consumes it - on the same `sessionId ?? lastBoundSessionId` key
-  // `boundSessionEnded` uses further down, and for the same reason: once the
-  // board drops the sessionless task the only sessionId left to key off is
-  // the one this screen already bound.
+  // ended (kangentic board #639). Nothing on this screen renders it any more;
+  // it feeds the connection trace's `hasLabel` only, so a measured swap can
+  // be told from a same-column respawn. Read on the same
+  // `sessionId ?? lastBoundSessionId` key `boundSessionEnded` uses further
+  // down, and for the same reason: once the board drops the sessionless task
+  // the only sessionId left to key off is the one this screen already bound.
   const boundSpawnProgressLabel = useActivityStore((state) =>
     selectSessionSpawnProgressLabel(state, sessionId ?? lastBoundSessionId),
   );
   // The column the task sat in when the CURRENT session bound, and a latch
   // that opens when it changes. A column move that restarts the agent is a
-  // session swap, and `session-ended` for the old session arrives seconds
-  // before the successor exists - without this the screen declares the task
-  // dead in the middle of its own move.
+  // session swap, and the board reports the move seconds before the desktop
+  // has suspended the session; the latch is what lets the quiet window below
+  // open on the move itself rather than on the end that follows.
   //
   // The latch is a LATCH, not a re-derived predicate. For a phone-initiated
   // move applyOptimisticMove writes the new swimlane the instant the user
@@ -223,40 +220,28 @@ export function SessionScreen(): React.JSX.Element {
   // taking `locatedSwimlaneId` to null. Either way the evidence of the move is
   // gone by the time it is needed, so it is captured when it appears and held.
   const [swimlaneIdWhenSessionBound, setSwimlaneIdWhenSessionBound] = useState<string | null>(null);
-  // The column the open window is waiting on (null = closed), and the column
-  // whose window has already been spent. Both are ids rather than booleans so
-  // an expired window cannot re-open: the task is STILL in the column it moved
-  // to, so a plain boolean latch re-armed on the very next render and the
-  // screen never reached the ended state at all.
+  // The column the open latch is waiting on (null = closed), and the column
+  // whose latch has already run out. Both are ids rather than booleans so an
+  // expired latch cannot re-arm: the task is STILL in the column it moved to,
+  // so a plain boolean re-armed on the very next render.
+  //
+  // There used to be a SESSION-keyed sibling latch here, opened by the
+  // desktop's spawnProgressLabel for a same-column respawn. It chose between
+  // "Switching session" and "Session ended" at the reveal; with one waiting
+  // card for every case there is nothing left for it to choose, and the quiet
+  // window below opens on any end of the bound session, label or not.
   const [swapWindowSwimlaneId, setSwapWindowSwimlaneId] = useState<string | null>(null);
   const [spentSwapSwimlaneId, setSpentSwapSwimlaneId] = useState<string | null>(null);
-  // The SESSION-keyed sibling latch: opened by a desktop spawnProgressLabel
-  // rather than a column change, so it works for a same-column respawn. Keyed
-  // on the session id (via lastBoundSessionId, never null during the gap)
-  // rather than the swimlane, because the column branch's own
-  // `locatedSwimlaneId !== null` requirement cannot hold here - a respawn
-  // gap can leave the task off the board entirely under the `sessions`
-  // board projection (see boundSessionEnded's comment below), so the two
-  // latches cannot be merged into one. Same non-boolean shape as the swap
-  // latch and for the same reason: an expired window must not re-open on the
-  // next render while the label is still being read.
-  const [spawnLabelWindowSessionId, setSpawnLabelWindowSessionId] = useState<string | null>(null);
-  const [spentSpawnLabelSessionId, setSpentSpawnLabelSessionId] = useState<string | null>(null);
   // The column latch the quiet window below has ALREADY opened for, so a
   // window that ran out while the session was still alive is not re-opened
   // by the same move on the next render. Reset with the latch at the bind.
   const [veiledSwapSwimlaneId, setVeiledSwapSwimlaneId] = useState<string | null>(null);
-  const swapWindowOpen = swapWindowSwimlaneId !== null || spawnLabelWindowSessionId !== null;
   if (sessionId !== null && sessionId !== lastBoundSessionId) {
     setLastBoundSessionId(sessionId);
-    // A successor bound: this column is the new baseline, and the move is
-    // over - for BOTH openers. A stale label window left open here would
-    // read as "switching" on the successor's own later, genuine park.
+    // A successor bound: this column is the new baseline, and the move is over.
     setSwimlaneIdWhenSessionBound(locatedSwimlaneId);
     setSwapWindowSwimlaneId(null);
     setSpentSwapSwimlaneId(null);
-    setSpawnLabelWindowSessionId(null);
-    setSpentSpawnLabelSessionId(null);
     setVeiledSwapSwimlaneId(null);
   } else if (sessionId !== null && swimlaneIdWhenSessionBound === null && locatedSwimlaneId !== null) {
     // The board located the task after this screen bound its session from the
@@ -268,29 +253,13 @@ export function SessionScreen(): React.JSX.Element {
     locatedSwimlaneId !== null &&
     locatedSwimlaneId !== swimlaneIdWhenSessionBound &&
     locatedSwimlaneId !== spentSwapSwimlaneId &&
-    // Two destinations promise no successor, so neither gets a grace window:
-    // a move to To Do is a full reset (session killed, worktree removed), and
-    // a move to Done archives the task, which routes to the completed view.
+    // Two destinations promise no successor and leave this screen instead
+    // (see leaveScreen below): a move to To Do is a full reset (session
+    // killed, worktree removed), and a move to Done archives the task.
     !isTodoRole(locatedColumnRole) &&
     !isDoneRole(locatedColumnRole)
   ) {
     setSwapWindowSwimlaneId(locatedSwimlaneId);
-  } else if (
-    spawnLabelWindowSessionId === null &&
-    boundSpawnProgressLabel !== null &&
-    lastBoundSessionId !== null &&
-    lastBoundSessionId !== spentSpawnLabelSessionId &&
-    // Same two exclusions as the column branch, kept for the same reason:
-    // a label racing an optimistic Done/To-Do write must not open a window
-    // for a task that is finishing or resetting rather than switching. These
-    // two clauses go inert (both role checks read false) once the task is off
-    // the board, since locatedColumnRole is null then - so they narrow this
-    // branch without blocking it in the common respawn case, where the
-    // sessionless task has left the board's `sessions` projection entirely.
-    !isTodoRole(locatedColumnRole) &&
-    !isDoneRole(locatedColumnRole)
-  ) {
-    setSpawnLabelWindowSessionId(lastBoundSessionId);
   }
   useEffect(() => {
     if (swapWindowSwimlaneId === null) return;
@@ -301,18 +270,6 @@ export function SessionScreen(): React.JSX.Element {
     }, SESSION_SWAP_GRACE_MS);
     return () => clearTimeout(swapTimer);
   }, [swapWindowSwimlaneId]);
-  // Mirrors the effect above: the desktop's spawnProgressLabel is intent, not
-  // a guarantee (see SESSION_SWAP_GRACE_MS's docblock), so this window is
-  // bound by the same timeout rather than left open until a successor binds.
-  useEffect(() => {
-    if (spawnLabelWindowSessionId === null) return;
-    const waitingOnSessionId = spawnLabelWindowSessionId;
-    const spawnLabelTimer = setTimeout(() => {
-      setSpentSpawnLabelSessionId(waitingOnSessionId);
-      setSpawnLabelWindowSessionId(null);
-    }, SESSION_SWAP_GRACE_MS);
-    return () => clearTimeout(spawnLabelTimer);
-  }, [spawnLabelWindowSessionId]);
   const feedStatus = useActivityStore((state) =>
     sessionId !== null ? (state.bySessionId[sessionId]?.feedStatus ?? null) : null,
   );
@@ -347,25 +304,35 @@ export function SessionScreen(): React.JSX.Element {
     (sessionId !== null && feedStatus === 'rejected' && gracePassedForSessionId === sessionId);
 
   /**
-   * COMPLETED TASKS LEAVE THIS SCREEN.
+   * FINISHED AND RESET TASKS LEAVE THIS SCREEN.
    *
-   * A move to Done suspends the agent and deletes the worktree, so the ended
-   * state's copy ("if it starts a new one, this screen reconnects") is wrong,
-   * its Move button vanishes with the card, and its View changes button opens
-   * a diff of a worktree that no longer exists - read-diff falls back to the
-   * PROJECT path once `worktree_path` is cleared, which renders the main
-   * checkout's working diff as if it were this task's work.
+   * A move to Done suspends the agent, deletes the worktree and archives the
+   * task; a move to To Do kills the session and removes the worktree. Neither
+   * promises a successor, so no waiting card would be honest here, and the
+   * Changes pane would show read-diff's fallback to the PROJECT checkout once
+   * `worktree_path` is cleared, the main checkout's working diff dressed as
+   * this task's work. The screen goes back to wherever the task was opened
+   * from (the board, the Agents feed), which is what confirming the move on
+   * the sheet already implied. Never to the completed-task view: a move the
+   * user just made is not a reason to push a new screen at them.
    *
-   * Keyed on the ARCHIVE rather than on who moved the card, so a move made
-   * from the desktop lands the same way. The archive page is requested once
-   * the session looks over, and the navigation is driven by a reactive read
-   * of the store rather than by that request resolving: loadArchivedTasks
-   * early-returns while any page is in flight, so a BoardScreen fetch racing
-   * this one would otherwise make the request a silent no-op and the screen
-   * would sit on the ended state forever.
+   * Two signals. The COLUMN ROLE fires the instant a move is confirmed on
+   * this phone (applyOptimisticMove writes the destination column before any
+   * round trip) and on the next snapshot for a move made on the desktop under
+   * the full projection. Gated on a bound session, so a To Do task opened
+   * with no session (the board routes those to the edit form, but a stale
+   * row can still land here) simply shows its empty state. The ARCHIVE covers
+   * the rest: under the sessions projection a task moved to Done leaves the
+   * snapshot exactly as it does for every swap, so the archive page is
+   * requested once the session looks over, and the navigation is driven by a
+   * reactive read of the store rather than by that request resolving.
+   * loadArchivedTasks early-returns while any page is in flight, so a
+   * BoardScreen fetch racing this one would otherwise make the request a
+   * silent no-op and the screen would sit under the waiting card forever.
    */
-  const maybeArchived =
-    sessionEnded || isDoneRole(locatedColumnRole) || (!taskLocated && lastBoundSessionId !== null);
+  const taskLeftForRole =
+    lastBoundSessionId !== null && (isDoneRole(locatedColumnRole) || isTodoRole(locatedColumnRole));
+  const maybeArchived = sessionEnded || (!taskLocated && lastBoundSessionId !== null);
   /**
    * Not a single one-shot: the first look can legitimately be too early.
    * Moving to Done writes the task into the done column optimistically, so
@@ -401,10 +368,10 @@ export function SessionScreen(): React.JSX.Element {
     if (archiveFetchInFlight) return;
     archiveFetchedForKeyRef.current = archiveFetchKey;
     void loadArchivedTasks({ projectId }).catch(() => {
-      // Offline, or the desktop refused: the screen stays on the ended state,
-      // which is the honest answer when we cannot tell that it completed. The
-      // task leaving the board still changes the key, so the decisive second
-      // look survives a failed first one.
+      // Offline, or the desktop refused: the screen stays on the waiting
+      // card, which is the honest answer when we cannot tell that it
+      // completed. The task leaving the board still changes the key, so the
+      // decisive second look survives a failed first one.
       //
       // The key is NOT given back here. A failure sets `loading` false on its
       // way out, which is a dependency of this effect, so freeing the key
@@ -425,22 +392,21 @@ export function SessionScreen(): React.JSX.Element {
   // `!taskLocated` as well as the archive hit: an archive page held from an
   // earlier visit must not bounce a task that has since been moved back out of
   // Done and is live on the board again.
-  const completedTaskProjectId = !taskLocated ? archivedProjectId : null;
+  const taskArchived = !taskLocated && archivedProjectId !== null;
+  const leaveScreen = taskLeftForRole || taskArchived;
   useFocusEffect(
     // Focus-gated, and that is load bearing: the move sheet dismisses itself
-    // with router.back() on success, and an unguarded replace from underneath
+    // with router.back() on success, and an unguarded pop from underneath
     // races that dismissal and intermittently leaves the sheet on screen.
     useCallback(() => {
-      if (completedTaskProjectId === null) return;
-      router.replace({
-        pathname: '/completed-task',
-        params: { taskId, projectId: completedTaskProjectId },
-      });
-    }, [completedTaskProjectId, router, taskId]),
+      if (!leaveScreen) return;
+      // Back to where the task was opened from, whichever tab that was. A
+      // cold start straight onto this route (a notification tap) has nothing
+      // behind it, and Home is where that tap would have landed anyway.
+      if (router.canGoBack()) router.back();
+      else router.replace('/');
+    }, [leaveScreen, router]),
   );
-  // A task on its way to Done is not "switching" to anything: it is finishing,
-  // and the redirect above is what it is waiting for.
-  const sessionSwitching = sessionEnded && swapWindowOpen && completedTaskProjectId === null;
 
   /**
    * THE QUIET WINDOW: one silent surface for every swap kind.
@@ -450,24 +416,23 @@ export function SessionScreen(): React.JSX.Element {
    * feed past its grace - keyed on the session that ended, in the same
    * id-not-boolean shape as the two latches above and for the same reason:
    * `sessionEnded` stays true for that session forever, so a boolean would
-   * re-arm on the next render after the deadline and the text would never
-   * reveal. The label and the column latch no longer decide WHETHER something
-   * quiet shows; they only decide WHAT the long-gap reveal says.
+   * re-arm on the next render after the deadline and the card would never
+   * reveal. The column latch no longer decides WHETHER something quiet shows,
+   * only whether it can show on the move itself (below).
    *
-   * It is NOT reset by the successor's bind (the ladder above resets the two
-   * text latches at the bind, deliberately; this one is left alone there).
+   * It is NOT reset by the successor's bind (the ladder above resets the
+   * column latch at the bind, deliberately; this one is left alone there).
    * The bind is a board fact, and it lands a round trip before the
    * successor's first frame exists; letting go then is what showed the old
    * frame, an empty grid and the new frame in sequence. "Awaiting paint" is
    * derived rather than stored: the window is open and the bound session is
    * no longer the one whose end opened it. It closes silently when that
    * successor has settled, or at SESSION_SWAP_QUIET_MS - and at the deadline
-   * with the dead session still bound, the text surfaces reveal exactly as
-   * they did before the veil existed.
+   * with the dead session still bound, the waiting card reveals over the
+   * same scrim.
    *
-   * Same To Do / Done exclusions as the latches (those moves promise no
-   * successor and the Done redirect is what a task is waiting for), and never
-   * over a task the archive has already claimed.
+   * Never for a task on its way out of this screen (a move to To Do or Done,
+   * an archived task; see leaveScreen above).
    *
    * THE MOVE OPENER. The board reports a column move seconds before the
    * session actually ends: the desktop interrupts the agent, waits for a
@@ -512,12 +477,12 @@ export function SessionScreen(): React.JSX.Element {
     lastBoundSessionId !== quietWindowSessionId &&
     lastBoundSessionId !== spentQuietSessionId
   ) {
-    if (completedTaskProjectId !== null || isTodoRole(locatedColumnRole) || isDoneRole(locatedColumnRole)) {
-      // Handled WITHOUT a window: the text shows now and must stay. Marked
-      // spent here because the two role checks go inert once the task leaves
-      // the board (locatedColumnRole is null then), and without the marker a
-      // reset task dropped by the sessions projection would open a veil OVER
-      // the ended state it had already, honestly, shown.
+    if (leaveScreen) {
+      // Handled WITHOUT a window: the screen is on its way out. Marked spent
+      // because the role checks go inert once the task leaves the board
+      // (locatedColumnRole is null then), and without the marker a reset
+      // task dropped by the sessions projection would open a veil over its
+      // own exit.
       setSpentQuietSessionId(lastBoundSessionId);
     } else {
       setQuietWindowSessionId(lastBoundSessionId);
@@ -529,7 +494,7 @@ export function SessionScreen(): React.JSX.Element {
     swapWindowSwimlaneId !== veiledSwapSwimlaneId &&
     sessionId !== null &&
     sessionId !== spentQuietSessionId &&
-    completedTaskProjectId === null
+    !leaveScreen
   ) {
     // The move opener: the latch already applied the To Do / Done exclusions.
     setVeiledSwapSwimlaneId(swapWindowSwimlaneId);
@@ -553,12 +518,12 @@ export function SessionScreen(): React.JSX.Element {
       ended: sessionEnded,
     };
   });
-  // The one deadline (same shape as the latch timers above). Whether a
+  // The one deadline (same shape as the latch timer above). Whether a
   // successor was bound decides what the closure MEANS: with the dead session
-  // still bound the text reveals; with a successor bound but not yet settled
-  // the window simply closes and the pane's own hold carries on, since
-  // `sessionEnded` is false for the successor and no text can show. And a
-  // window still in its moving phase (the end never came) closes WITHOUT
+  // still bound the waiting card reveals; with a successor bound but not yet
+  // settled the window simply closes and the pane's own hold carries on,
+  // since `sessionEnded` is false for the successor and no card can show. And
+  // a window still in its moving phase (the end never came) closes WITHOUT
   // being spent, so the end can open its own.
   const swapTraceRef = useRef({
     openedAt: 0,
@@ -697,45 +662,51 @@ export function SessionScreen(): React.JSX.Element {
     [dismissModeHint, taskId],
   );
 
-  const openChanges = useCallback(() => {
-    onModeChange('changes');
-  }, [onModeChange]);
+  // "Read transcript" on the waiting card: a one-off way to the surface that
+  // outlives the session, not a lens preference. The switcher remembers the
+  // task's lens; this deliberately does not.
+  const readTranscript = useCallback(() => {
+    setMode('chat');
+  }, []);
 
   /**
-   * BOTH overlays yield to the Changes pane.
+   * The overlays yield to the panes the user can still read.
    *
    * They cover the whole pane area at zIndex 2, so switching the mode
    * underneath is not enough: an overlay that kept rendering left the user
-   * looking at the same panel they had just tapped out of, and "View changes"
-   * read as a dead button. No tier caught it - `session-ended-state.yaml`
-   * asserts `changes-scope` becomes visible, but all three panes are always
-   * mounted and only their ACCESSIBILITY visibility follows the mode, so that
+   * looking at the same panel they had just tapped out of, and the way out
+   * read as a dead button. No tier caught it - the paired flow asserts
+   * `changes-scope` becomes visible, but all three panes are always mounted
+   * and only their ACCESSIBILITY visibility follows the mode, so that
    * assertion passed with the pane fully covered. It is the mirror of the
-   * zIndex bug in SessionEndedState's own docblock: that one surfaced because
+   * zIndex bug in the waiting card's own docblock: that one surfaced because
    * a TAP was swallowed, which is the only way a stacking fault ever shows.
    *
-   * Diffs outlive the session, so Changes is exactly where an ended or
-   * switching task still has something to say.
+   * The veil yields to Changes only (diffs outlive the session; a swap's
+   * successor lands on the terminal and the chat, so those stay covered).
+   * The waiting card yields to Chat as well: "Read transcript" is a tap to
+   * Chat, and a card over the transcript would make it a dead button. It
+   * shows in terminal mode alone, over the last frame.
    */
   const overlaysYieldToChanges = mode === 'changes';
-  // While the quiet window is open the veil is the ONLY surface: the two text
-  // overlays wait for the deadline. Never over a task the archive has claimed.
-  const showQuietVeil = quietWindowOpen && !overlaysYieldToChanges && completedTaskProjectId === null;
-  const showSwitchingState = sessionSwitching && !quietWindowOpen && !overlaysYieldToChanges;
-  const showEndedState = sessionEnded && !sessionSwitching && !quietWindowOpen && !overlaysYieldToChanges;
-  // Any overlay occludes the panes, visually and for assistive technology.
-  const overlayCoversPanes = showSwitchingState || showEndedState || showQuietVeil;
-  // The footer comes back with them, because in `changes` mode it is only the
-  // mode pill (no composer, no quick keys - see SessionInputBar). Without it
-  // Changes is a one-way trip out of the ended state with nothing but the
-  // system Back button to leave by. And it never leaves during the quiet
-  // window: a footer that blinked out the instant the session ended and back
-  // on the bind was one of the flashes this surface exists to remove.
-  const showInputBar = !sessionEnded || overlaysYieldToChanges || quietWindowOpen;
-  // Held in its pre-swap state, but INERT while it points at the dead
-  // session: keys to a dead PTY are silently swallowed and the composer would
-  // show an error. Live again the moment the successor binds, veil or not.
+  // While the quiet window is open the veil is the ONLY surface; the card
+  // waits for the deadline. Never over a screen on its way out.
+  const showQuietVeil = quietWindowOpen && !overlaysYieldToChanges && !leaveScreen;
+  const showWaitingState = sessionEnded && !quietWindowOpen && mode === 'terminal' && !leaveScreen;
+  // Either overlay occludes the panes, visually and for assistive technology.
+  const overlayCoversPanes = showQuietVeil || showWaitingState;
+  // The footer never leaves. A footer that blinked out the instant the
+  // session ended and back on the bind was one of the flashes the veil
+  // exists to remove, and past the deadline the switcher is how the
+  // transcript and the diff stay one tap away from the card, and the way
+  // back from them. Through the quiet window it is held in its pre-swap
+  // state but INERT while it points at the dead session (keys to a dead PTY
+  // are silently swallowed and the composer would show an error), live again
+  // the moment the successor binds, veil or not; past the deadline it is the
+  // switcher alone, in every mode, since keys and messages have nowhere to
+  // go.
   const footerSuspended = quietWindowOpen && displaySessionId === quietWindowSessionId;
+  const footerSwitcherOnly = sessionEnded && !quietWindowOpen;
 
   // Move is a native form sheet ROUTE (app/move-task.tsx): this screen only
   // navigates. locatedProjectId, not the param fallback: MoveTaskScreen needs
@@ -766,11 +737,11 @@ export function SessionScreen(): React.JSX.Element {
           {/* collapsable={false} keeps this wrapper as a real native view.
               Android view flattening would otherwise dissolve a plain flex
               View, promoting the three panes into the parent alongside the
-              SessionEndedState overlay - one stacking context, where a
-              pane's zIndex: 1 outranks the overlay and swallows its taps.
-              The overlay now sets zIndex: 2 as well, so the fix holds under
-              either reading; this keeps the next overlay added over these
-              panes out of the same trap. */}
+              overlays - one stacking context, where a pane's zIndex: 1
+              outranks an overlay and swallows its taps. Both overlays set
+              zIndex: 2 as well, so the fix holds under either reading; this
+              keeps the next overlay added over these panes out of the same
+              trap. */}
           {/* While either overlay covers the panes, take ALL THREE out of the
               accessibility tree. Each pane's own props below follow `mode`
               alone, so the pane the user was last looking at stays exposed
@@ -825,30 +796,29 @@ export function SessionScreen(): React.JSX.Element {
           </View>
 
           {/* Mid-swap the session is over but the TASK is not. The veil is the
-              only surface for the quiet phase, and past its deadline the
-              transitional scrim stands in for the ended state rather than
-              rendering beside it: two overlays on the same box would fight
-              for the same stacking slot. */}
+              only surface for the quiet phase; past its deadline the card
+              takes its place over the same scrim rather than rendering
+              beside it, since two overlays on the same box would fight for
+              the same stacking slot. Both cover the PANE box only: the footer
+              below is a sibling, so the switcher stays beneath them. */}
           {showQuietVeil ? <SessionSwapVeil /> : null}
-          {showSwitchingState ? <SessionSwitchingState onViewChanges={openChanges} label={boundSpawnProgressLabel} /> : null}
-          {showEndedState ? (
-            <SessionEndedState
-              onViewChanges={openChanges}
+          {showWaitingState ? (
+            <SessionWaitingState
+              onReadTranscript={readTranscript}
               onMoveTask={locatedProjectId !== null ? openMoveSheet : null}
             />
           ) : null}
         </View>
 
         {showModeHint ? <ModeToggleHint onDismiss={dismissModeHint} /> : null}
-        {showInputBar ? (
-          <SessionInputBar
-            sessionId={displaySessionId}
-            mode={mode}
-            onModeChange={onModeChange}
-            chatAttention={chatAttention}
-            suspended={footerSuspended}
-          />
-        ) : null}
+        <SessionInputBar
+          sessionId={displaySessionId}
+          mode={mode}
+          onModeChange={onModeChange}
+          chatAttention={chatAttention}
+          suspended={footerSuspended}
+          switcherOnly={footerSwitcherOnly}
+        />
       </KeyboardAvoidingView>
     </Screen>
   );

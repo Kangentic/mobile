@@ -15,28 +15,25 @@
  *   the dev:mock rig, kept equal "by convention" per both files' comments so
  *   dev:mock and E2E show the same thing.
  * - `SESSION_SWAP_GRACE_MS` (src/screens/task/SessionScreen.tsx) - how long
- *   the phone waits for a successor before giving up and declaring the
- *   session dead.
+ *   the phone's column latch stays armed after a move, and (pinned equal
+ *   below) how long the Home feed retains a labelled ghost row.
  * - `SESSION_SWAP_QUIET_MS` (same file) - how long a swap stays SILENT (the
- *   veil, no text) before the switching or ended surface may reveal. A rig
- *   swap must finish inside it, or dev:mock and E2E would show the long-gap
- *   text on every run; and it must leave a text phase before the grace
- *   fallback, or the switching surface could never show at all.
+ *   veil, no text) before the waiting card may reveal. A rig swap must
+ *   finish inside it, or dev:mock and E2E would show the card on every run.
  *
  * Two failure modes this closes, both silent without it:
  *
- * 1. A rig gap widened (or the phone's grace window narrowed) until the gap
- *    exceeds the grace window: the phone would give up and show "Session
- *    ended" mid-respawn on every dev:mock/E2E run - the exact regression
+ * 1. A rig gap widened (or the phone's quiet window narrowed) until the gap
+ *    exceeds the window: the phone would reveal the waiting card
+ *    mid-respawn on every dev:mock/E2E run - the shape of the regression
  *    task #75 fixed, reintroduced by a values-only edit that touches no
  *    logic and trips no other test.
- * 2. A rig gap narrowed toward zero: the "Switching session" overlay is
- *    visible for only the gap's duration, and `.maestro/paired/`
- *    `session-respawn-recovery.yaml`'s own TRIAGE NOTE names the resulting
- *    failure mode - a starved emulator's first poll can land after the
- *    successor has already bound, reading as a real regression when it is
- *    only a timing squeeze. A floor keeps the transient window wide enough
- *    to survive that.
+ * 2. A rig gap narrowed toward zero: the swap veil is visible for only the
+ *    gap's duration, and `.maestro/paired/session-respawn-recovery.yaml`'s
+ *    own TRIAGE NOTE names the resulting failure mode - a starved emulator's
+ *    first poll can land after the successor has already bound, reading as a
+ *    real regression when it is only a timing squeeze. A floor keeps the
+ *    transient window wide enough to survive that.
  *
  * Deliberately regex-extraction over importing the values: the .mjs script
  * exports nothing (see scripts/stubDesktopPeer.mjs's module-level comments),
@@ -83,28 +80,23 @@ describe('the respawn-gap and swap-grace constants stay in the relationship the 
 
   /**
    * The list surfaces and the session screen claim ONE window each, in prose
-   * ("deliberately the same 20s", "equal to SESSION_SWAP_QUIET_MS"). A user
-   * glancing between the feed and the session screen must see one swap, not
-   * a row that outlives the veil or a veil that outlives the row.
+   * ("kept equal to it", "equal to SESSION_SWAP_QUIET_MS"). A user glancing
+   * between the feed and the session screen must see one swap, not a row
+   * that outlives the veil or a veil that outlives the row; and the
+   * desktop's "a successor is coming" must stop counting on both surfaces
+   * (the column latch there, the labelled row here) at the same moment.
    */
   it('keeps the list surfaces on the same two windows as the session screen', () => {
     expect(respawnRowGraceMs).toBe(sessionSwapGraceMs);
     expect(endedRowGraceMs).toBe(sessionSwapQuietMs);
   });
 
-  it('keeps every rig swap inside the quiet window, so a rig respawn never reveals the long-gap text', () => {
+  it('keeps every rig swap inside the quiet window, so a rig respawn never reveals the waiting card', () => {
     // 2000ms of headroom: the gap is the desktop side of the swap, and the
     // phone's own bind-to-paint round trip lands on top of it.
     const requiredHeadroomMs = 2000;
     expect(stubRespawnGapMs).toBeLessThanOrEqual((sessionSwapQuietMs as number) - requiredHeadroomMs);
     expect(mockRespawnGapMs).toBeLessThanOrEqual((sessionSwapQuietMs as number) - requiredHeadroomMs);
-  });
-
-  it('leaves a text phase between the quiet deadline and the ended fallback', () => {
-    // Without this the switching surface could never show: the grace
-    // fallback would land before (or with) the reveal.
-    const requiredTextPhaseMs = 5000;
-    expect(sessionSwapQuietMs).toBeLessThanOrEqual((sessionSwapGraceMs as number) - requiredTextPhaseMs);
   });
 
   it("the stub rig's gap matches the mock rig's, as both files' comments claim", () => {
@@ -114,13 +106,16 @@ describe('the respawn-gap and swap-grace constants stay in the relationship the 
     expect(stubRespawnGapMs).toBe(mockRespawnGapMs);
   });
 
-  it('leaves real headroom between the respawn gap and the phone giving up', () => {
+  it('leaves real headroom between the respawn gap and the labelled row retention', () => {
     // Both rig docblocks state the requirement in words ("comfortably short
     // of / well below the phone's session-swap grace window"); this is that
-    // requirement as a number. 5000ms of headroom is deliberately more than
-    // the smallest gap that would technically still close before the grace
-    // window expires: a gap that merely EQUALS the grace window minus one
-    // tick is still a real regression risk on a slow desktop, not a margin.
+    // requirement as a number, and what it protects now is the Home row: a
+    // labelled rig respawn must keep its ghost row through the whole gap
+    // (RESPAWN_ROW_GRACE_MS, pinned equal to the grace constant above).
+    // 5000ms of headroom is deliberately more than the smallest gap that
+    // would technically still close before the window expires: a gap that
+    // merely EQUALS the window minus one tick is still a real regression
+    // risk on a slow desktop, not a margin.
     const requiredHeadroomMs = 5000;
     expect(sessionSwapGraceMs).not.toBeNull();
     expect(stubRespawnGapMs).not.toBeNull();
@@ -131,7 +126,7 @@ describe('the respawn-gap and swap-grace constants stay in the relationship the 
 
   it('keeps the respawn gap long enough for the transient window to survive a slow poll', () => {
     // The Maestro flow's own TRIAGE NOTE names the failure this floor
-    // prevents: a starved emulator's first poll for "session-switching-state"
+    // prevents: a starved emulator's first poll for "session-swap-veil"
     // can land after the successor has already bound, burning the full
     // extendedWaitUntil timeout and reading as the regression this whole
     // feature exists to fix. A gap driven toward zero makes that increasingly

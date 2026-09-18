@@ -4,7 +4,13 @@ import { useTheme } from './theme/ThemeProvider';
 import { Text } from './Text';
 import { PressScale } from './motion/PressScale';
 
-export type ButtonVariant = 'primary' | 'ghost' | 'danger';
+/**
+ * `outline` is the secondary action beside a raised primary: transparent
+ * like `ghost`, but with a visible bound (ui-conventions.md's visible
+ * tap-target rule), so a two-action card reads as one call to action and
+ * one alternative rather than two floating labels.
+ */
+export type ButtonVariant = 'primary' | 'ghost' | 'danger' | 'outline';
 
 export interface ButtonProps {
   label: string;
@@ -20,8 +26,9 @@ export function Button({ label, onPress, testID, variant = 'primary', disabled =
   const theme = useTheme();
   const backgroundColor = backgroundForVariant(variant, theme.colors);
   // Tinted fills (primary/danger) carry onAccent ink, guaranteed readable on
-  // accent and semantic fills; only the transparent ghost uses textPrimary.
-  const textColor = variant === 'ghost' ? theme.colors.textPrimary : theme.colors.onAccent;
+  // accent and semantic fills; the two transparent variants use textPrimary.
+  const transparentFill = variant === 'ghost' || variant === 'outline';
+  const textColor = transparentFill ? theme.colors.textPrimary : theme.colors.onAccent;
 
   // Pressed depth comes from PressScale's scale transform; opacity only
   // signals the disabled state.
@@ -42,6 +49,10 @@ export function Button({ label, onPress, testID, variant = 'primary', disabled =
           backgroundColor,
           opacity: disabled ? 0.5 : 1,
         },
+        // A full dp rather than the hairline Card and the raised IconButton
+        // use: this variant sits over a scrimmed frame of arbitrary colour,
+        // where a hairline in the border tone disappears.
+        variant === 'outline' && { borderWidth: 1, borderColor: theme.colors.border },
         style,
       ]}
     >
@@ -57,6 +68,7 @@ function backgroundForVariant(variant: ButtonVariant, colors: ReturnType<typeof 
     case 'primary':
       return colors.accent;
     case 'ghost':
+    case 'outline':
       return 'transparent';
     case 'danger':
       return colors.danger;

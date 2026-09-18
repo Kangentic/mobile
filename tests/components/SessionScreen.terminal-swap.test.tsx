@@ -41,7 +41,7 @@ const mockParams: { taskId: string; sessionId?: string; projectId?: string } = {
 };
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
-  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: jest.fn() }),
+  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: jest.fn(), canGoBack: () => true }),
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   useFocusEffect: (effect: () => void | (() => void)) => require('react').useEffect(effect, [effect]),
 }));
@@ -152,8 +152,12 @@ function seedTaskWithSession(sessionId: string | null): void {
     projects: [{ id: 'project-1', name: 'Alpha' }],
     boardsByProjectId: {
       'project-1': {
-        columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-doing', name: 'Doing', position: 1 })],
-        tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', session_id: sessionId }) },
+        // A working column with no role: boardColumnFixture defaults to the
+        // To Do role, and a To Do task with a bound session now LEAVES the
+        // session screen (a move there is a reset), which is not the swap
+        // this suite is about.
+        columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, position: 1 })],
+        tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', session_id: sessionId, swimlane_id: 'lane-doing' }) },
         snapshotAt: 0,
         showTicketNumbers: true,
         view: 'full',

@@ -15,7 +15,7 @@ export const SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL = 'Switching session, please 
 /**
  * Announced once when the swap SETTLES (the successor painted, or its
  * transcript landed), so a screen reader user who heard the label above
- * also hears that the wait is over. Never at the deadline: the text surface
+ * also hears that the wait is over. Never at the deadline: the waiting card
  * that reveals there is readable on its own.
  */
 export const SESSION_SWAP_SETTLED_ANNOUNCEMENT = 'Session ready';
@@ -29,13 +29,17 @@ export const SESSION_SWAP_SETTLED_ANNOUNCEMENT = 'Session ready';
  * the dead session's last frame stays under a scrim that breathes slowly,
  * and NOTHING is written on it - no title, no caption, no button. There is
  * nothing for the user to read or try to act on, which is the point: the
- * text surfaces that used to flash here for a second or two
- * (SessionSwitchingState, SessionEndedState) now reveal only if the swap
- * outlives SessionScreen's quiet threshold, the abnormal case.
+ * one text surface (SessionWaitingState, a card and not a verdict) reveals
+ * only if the swap outlives SessionScreen's quiet threshold, the abnormal
+ * case, and the text that used to flash here for a second or two is gone.
  *
- * Why this one may animate when SessionSwitchingState deliberately did not:
- * the pulse is BOUNDED by that threshold (a few seconds, never the 20 s grace
- * window), it is gated by the session route's `ScreenMotionProvider` so a
+ * It leaves by the crossfade it arrived by (`crossfadeOut`, the base
+ * duration on the standard curve): what the eye follows at the reveal is the
+ * successor's frame underneath, and the fast banner exit read as a cut.
+ *
+ * Why this one may animate when the waiting card deliberately does not: the
+ * pulse is BOUNDED by that threshold (a few seconds, never the 20 s column
+ * latch), it is gated by the session route's `ScreenMotionProvider` so a
  * pushed route stops it, it registers exactly one Reanimated mapper and only
  * while mounted (`PulsingBlock` is the branch that animates; the other branch
  * is a plain View), and OS reduced motion degrades it to a static scrim at the
@@ -61,10 +65,10 @@ export function SessionSwapVeil(): React.JSX.Element {
       testID="session-swap-veil"
       style={styles.overlay}
       entering={presets.crossfadeIn}
-      exiting={presets.bannerOut}
+      exiting={presets.crossfadeOut}
       // Modal to VoiceOver, so it cannot reach the covered pane behind the
       // scrim; SessionScreen hides the pane subtree for Android. One atomic
-      // stop is right here, unlike the switching overlay: there is no button
+      // stop is right here, unlike the waiting card: there is no button
       // inside it for a screen reader to miss.
       accessibilityViewIsModal
       accessibilityRole="progressbar"

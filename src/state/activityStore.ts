@@ -160,12 +160,12 @@ export interface SessionActivityEntry {
    * the gap and nothing wider.
    *
    * Nothing on the session screen may read it. `SessionScreen`'s `sessionEnded`
-   * is balanced against the spawn-label swap latch, and a fourth input re-opens
-   * the mid-respawn "Session ended" flash that latch exists to prevent. The
-   * same applies to 'exited': the protocol calls it a snapshot racing teardown,
-   * so routing it into `endedSessionIds` would flash the ended state in exactly
-   * the gap the latch covers. The `session-ended` PUSH stays the sole
-   * authority, because it carries `intentional`, which a snapshot cannot.
+   * is balanced against the quiet swap window, and a fourth input re-opens
+   * the mid-respawn flash that window exists to prevent. The same applies to
+   * 'exited': the protocol calls it a snapshot racing teardown, so routing it
+   * into `endedSessionIds` would end the session on the phone in exactly the
+   * gap the window covers. The `session-ended` PUSH stays the sole authority,
+   * because it carries `intentional`, which a snapshot cannot.
    */
   sessionStatus: ReadStreamSessionStatusWire | null;
 }
@@ -206,8 +206,10 @@ interface ActivityStoreState {
    * without a label. Per that field's own contract, this is INTENT, not a
    * guarantee: a consumer must keep whatever timeout already bounds its own
    * wait for a successor and use presence only to skip a redundant one, never
-   * as proof one is coming. The session screen reads it only to choose what
-   * its long-gap reveal says; nothing reads absence as "no successor".
+   * as proof one is coming. Nothing renders it any more (the session screen
+   * reads it for the connection trace alone, and the list surfaces show no
+   * caption for a swap); it lengthens the row's retention window, and
+   * nothing reads absence as "no successor".
    *
    * Grows by one short string per respawn in an app run, in memory only -
    * same bound as `endedSessionIds`.
@@ -336,9 +338,11 @@ function successorEntry(
  * null, so the two are the same fact here: no respawn was in flight.
  *
  * The `typeof` check is kept now that the field is DECLARED, and is not
- * redundant with the type. It is the runtime floor under a render crash: a
- * non-string reaching `renderableSpawnLabel` (`src/lib/spawnLabel.ts`) would
- * call `.trim()` on it and throw. The wire path cannot deliver one today
+ * redundant with the type. It is the runtime floor under the store's own
+ * reads: a non-string recorded here would count as "the desktop said a
+ * successor is coming" and lengthen a row's retention on garbage (the label
+ * is no longer rendered anywhere, so a render crash is not the risk it once
+ * was). The wire path cannot deliver one today
  * (`feedRouter` gates on `isBridgeEvent`, which validates through
  * `parseActivityEventPayload` and drops the whole event on a non-string), so
  * this guards against a future producer that skips that gate, not against the
@@ -650,9 +654,9 @@ export function selectSessionSpawnProgressLabel(
  * short `ENDED_ROW_GRACE_MS` when it said nothing.
  *
  * Returns the record rather than a boolean so the one caller that still needs
- * the label (the session screen's long-gap reveal does not read this; the Home
- * row derives its queued caption as "starting for a reason that is not a
- * swap") gets it through the same windowed read, never a second selector.
+ * the label (the Home row derives its queued caption as "starting for a
+ * reason that is not a swap"; no surface renders the label itself) gets it
+ * through the same windowed read, never a second selector.
  *
  * Reads the clock, so this is not a pure function of the state: the same state
  * answers differently once the window passes. That is intended and is what

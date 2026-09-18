@@ -105,4 +105,29 @@ describe('SessionInputBar', () => {
       expect(screen.queryByTestId('session-input-row')).toBeNull();
     });
   });
+
+  /**
+   * Past the end of the session (the waiting card is up, or the user has
+   * gone to Chat or Changes from it): keys and messages have nowhere to go,
+   * so the footer is the switcher alone in every mode. Not merely inert like
+   * `suspended`: the row is gone, so nothing under the card invites a tap.
+   */
+  describe('switcherOnly (past the end of the session)', () => {
+    it.each(['terminal', 'chat'] as const)('renders the switcher alone in %s mode, and it still switches', (mode) => {
+      const onModeChange = jest.fn();
+      render(
+        <ThemeProvider>
+          <SessionInputBar sessionId="sess-1" mode={mode} onModeChange={onModeChange} chatAttention={false} switcherOnly />
+        </ThemeProvider>,
+      );
+
+      expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
+      expect(screen.queryByTestId('session-input-row', { includeHiddenElements: true })).toBeNull();
+      expect(screen.queryByTestId('quick-key-esc', { includeHiddenElements: true })).toBeNull();
+      expect(screen.queryByTestId('composer-input', { includeHiddenElements: true })).toBeNull();
+
+      fireEvent.press(screen.getByTestId('session-mode-changes'));
+      expect(onModeChange).toHaveBeenCalledWith('changes');
+    });
+  });
 });

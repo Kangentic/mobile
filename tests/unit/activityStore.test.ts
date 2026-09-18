@@ -37,9 +37,9 @@ function sessionEndedWithLabel(intentional: boolean, spawnProgressLabel: string)
  * A `session-ended` payload whose `spawnProgressLabel` is NOT a string. The
  * protocol declares it `string | undefined` and `parseActivityEventPayload`
  * rejects anything else, so this cannot arrive from a validated wire event; it
- * exists to prove the store does not hand a non-string on to
- * `renderableSpawnLabel` (`src/lib/spawnLabel.ts`), which would call `.trim()`
- * on it and throw at render.
+ * exists to prove the store does not record a non-string as a label, which
+ * would count as "a successor is coming" and lengthen a row's retention on
+ * garbage.
  *
  * Built by INTERSECTION, not `as unknown as ActivityEventPayload`: a blanket
  * cast would accept any object shape at all, while this keeps the base payload
@@ -248,8 +248,7 @@ describe('activityStore', () => {
 
     /**
      * The runtime guard's `typeof` half. Without it a non-string label would
-     * sail through to `renderableSpawnLabel` (`src/lib/spawnLabel.ts`), which
-     * calls `.trim()` unconditionally and throws at render.
+     * be recorded as a label and lengthen the row's retention window.
      */
     it('rejects a non-string spawnProgressLabel (a number), leaving the selector null', () => {
       useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
@@ -338,9 +337,9 @@ describe('activityStore', () => {
      * `sessionStatus` is a snapshot-time observation, never an endedness
      * signal. Routing 'suspended' (or 'exited', a snapshot racing teardown)
      * into `endedSessionIds` or into the triage sections would re-open the
-     * mid-respawn "Session ended" flash that SessionScreen's spawn-label swap
-     * latch exists to prevent, since `selectSessionEnded` is one of that
-     * derivation's inputs. This fails loudly if anyone later wires it there.
+     * mid-respawn flash that SessionScreen's quiet swap window exists to
+     * prevent, since `selectSessionEnded` is one of that derivation's inputs.
+     * This fails loudly if anyone later wires it there.
      */
     it('never leaks a suspended or exited status into triage or endedness', () => {
       for (const status of ['suspended', 'exited'] as const) {
