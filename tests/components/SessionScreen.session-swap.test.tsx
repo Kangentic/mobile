@@ -1743,12 +1743,12 @@ describe('SessionScreen across a column move', () => {
     });
 
     /**
-     * Under the sessions projection with a nav param the dead id stays
-     * RESOLVED (the param bridges the gap), so "suspended" cannot be derived
-     * from a null sessionId: it is the footer pointing at the session whose
-     * end opened the window.
+     * Under the sessions projection with a nav param, "suspended" is the
+     * footer pointing at the session whose end opened the window - never
+     * derived from the resolved sessionId, which the param used to keep on the
+     * dead id for the gap and which now resolves to null there (the next test).
      */
-    it('suspends the footer while it points at the dead session, even when the param keeps that id resolved', () => {
+    it('suspends the footer while it points at the dead session, whatever the param resolves to', () => {
       seedRoledBoard('sess-a', 'lane-doing');
       useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
       renderSessionScreen();
@@ -1763,6 +1763,55 @@ describe('SessionScreen across a column move', () => {
       const inputBar = screen.getByTestId('stub-session-input-bar');
       expect(inputBar.props.accessibilityLabel).toBe('terminal');
       expect(inputBar.props.accessibilityState).toEqual({ disabled: true });
+    });
+
+    /**
+     * The route param is a snapshot of the world when the user tapped, and it
+     * bridges only the gap before the FIRST board snapshot. The sessions
+     * projection drops the task for the whole of every later swap, and
+     * re-trusting the param there rebinds the session the screen was opened
+     * with - by the second swap a dead one. Seen on the release build
+     * (2026-09-18): a Planning-to-Executing move re-subscribed the very first
+     * session's stream and re-keyed the quiet window to it, a second `ended`
+     * trace line 29 ms after the real one. Once located, the drop resolves to
+     * null like the full projection's sessionless task; the panes keep the
+     * last bound session either way.
+     */
+    it('never rebinds the param session once the board has located the task and the sessions projection drops it', () => {
+      mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
+      seedRoledBoard('sess-a', 'lane-doing');
+      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+      renderSessionScreen();
+      expect(openSessionScreenMock).toHaveBeenCalledTimes(1);
+      expect(openSessionScreenMock).toHaveBeenCalledWith('sess-a');
+
+      // First swap: sess-a dies, sess-b binds and paints.
+      act(() => {
+        pushSessionEnded('sess-a');
+        seedRoledBoard('sess-b', 'lane-doing');
+        useActivityStore.getState().registerSession('sess-b', 'task-1', 'project-1');
+      });
+      act(() => {
+        useTerminalUiStore.getState().markTerminalPainted('sess-b');
+      });
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+      expect(openSessionScreenMock).toHaveBeenCalledTimes(2);
+
+      // Second swap under the sessions projection: sess-b dies and the task
+      // leaves the snapshot. The param still names sess-a.
+      act(() => {
+        pushSessionEnded('sess-b');
+        seedBoardWithoutTask();
+      });
+
+      expectQuietVeilOnly();
+      // The dead binding closes like the full projection's; the corpse in the
+      // param is never reopened.
+      expect(closeSessionScreenMock).toHaveBeenCalledWith('sess-b');
+      expect(openSessionScreenMock).toHaveBeenCalledTimes(2);
+      expect(
+        screen.getByTestId('stub-terminal-tab', { includeHiddenElements: true }).props.accessibilityLabel,
+      ).toBe('sess-b');
     });
   });
 
