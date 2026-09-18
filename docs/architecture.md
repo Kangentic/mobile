@@ -107,6 +107,7 @@ decides *what* it may do:
 | `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...) |
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
+| `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone does not send it yet: the session screen's "Start again" is a follow-up (a button on the swap veil during the waiting phase) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
