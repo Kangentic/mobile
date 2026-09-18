@@ -4,9 +4,10 @@ import { Text } from 'react-native';
 import { ScreenMotionOverride, ScreenMotionProvider, useScreenMotionActive } from '@/components/motion/ScreenMotion';
 
 /**
- * `app/(tabs)/index.tsx` and `app/(tabs)/board.tsx` wrap the Home and Board
- * screens in `ScreenMotionProvider`, so its focus/blur wiring is real,
- * shipped behaviour, not test scaffolding. Every other test in the suite
+ * `app/(tabs)/index.tsx`, `app/(tabs)/board.tsx` and `app/task/[taskId]/index.tsx`
+ * wrap the Home, Board and Session screens in `ScreenMotionProvider`, so its
+ * focus/blur wiring is real, shipped behaviour, not test scaffolding (the
+ * session route gates the swap veil's pulse). Every other test in the suite
  * exercises `useScreenMotionActive` through `ScreenMotionOverride`, which
  * bypasses this provider entirely - so an inverted boolean or a dropped
  * cleanup here would ship green today. This file is the only coverage of the
