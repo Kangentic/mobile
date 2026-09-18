@@ -19,6 +19,7 @@
     // records which init it answers for.
     activeInitSeq = typeof initMessage.seq === 'number' ? initMessage.seq : null;
     awaitingNonBlankPaint = true;
+    lastInitKeepFont = initMessage.keepFont === true;
     manualPanUntil = 0;
     stopHistoryFling();
     dragSamples = [];
@@ -45,8 +46,18 @@
 
   /** The seed both init paths share, after their halves prepared the grid. */
   function seedAndSettle(initMessage) {
+    var keepFont = initMessage.keepFont === true;
     if (initMessage.scrollback) {
+      // The seq this seed belongs to. xterm flushes writes asynchronously, so
+      // when two inits land inside one frame the FIRST seed's callback fires
+      // after the second init has already reset the grid and re-armed the
+      // paint report: it would report the second init's seq against a grid
+      // its own bytes never reached (seen live as a doubled blank report),
+      // and re-apply a geometry the second init owns. A superseded seed's
+      // flush is nobody's business any more.
+      var initSeq = activeInitSeq;
       terminal.write(initMessage.scrollback, function () {
+        if (initSeq !== activeInitSeq) return;
         applyGeometry();
         afterWriteFlushed(true);
       });
@@ -65,8 +76,11 @@
       reportPaintedIfAwaiting(true);
     }
     // Cell metrics AND the viewport height can settle a frame after open();
-    // re-fit the font (not just the geometry) once they have.
-    requestAnimationFrame(refit);
+    // re-fit once they have - the font too on a fresh fit, the measured
+    // height only when this init keeps the cell size.
+    requestAnimationFrame(function () {
+      refit(keepFont);
+    });
   }
 
   function createTerminal(initMessage) {
@@ -122,11 +136,22 @@
     resetSessionViewState(initMessage);
     terminal.reset();
     terminal.options.theme = initMessage.theme;
-    // A previous height fit may have stretched the line height; the fresh fit
-    // below assumes the same clean slate a constructed terminal starts with.
-    terminal.options.lineHeight = 1;
-    terminal.options.fontSize = currentFontSizePx;
-    autoFitFontToScreen();
+    if (initMessage.keepFont !== true) {
+      // A previous height fit may have stretched the line height; the fresh
+      // fit below assumes the same clean slate a constructed terminal starts
+      // with.
+      terminal.options.lineHeight = 1;
+      terminal.options.fontSize = currentFontSizePx;
+      autoFitFontToScreen();
+    } else {
+      // KEEP the cell size the previous frame was read at: font AND line
+      // height stay, and the grid that follows is laid out in those cells,
+      // centred when it is shorter than the viewport. currentFontSizePx is
+      // the host's copy of that size (it mirrors every fit and pinch back),
+      // re-capped for this grid's width in resetSessionViewState, so a wider
+      // grid can still be forced smaller by the GPU texture limit.
+      terminal.options.fontSize = currentFontSizePx;
+    }
     applyGeometry();
     seedAndSettle(initMessage);
   }

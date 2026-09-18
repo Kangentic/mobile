@@ -19,6 +19,7 @@ describe('host -> terminal round-trip', () => {
       fontSizePx: 13,
       theme: { background: '#101014', foreground: '#e6e6e6', cursor: '#e6e6e6', black: '#000000' },
       cleanFeed: false,
+      keepFont: false,
     };
     expect(decodeHostMessage(encodeHostMessage(knownDims))).toEqual(knownDims);
 
@@ -31,8 +32,30 @@ describe('host -> terminal round-trip', () => {
       fontSizePx: 12,
       theme: {},
       cleanFeed: true,
+      keepFont: true,
     };
     expect(decodeHostMessage(encodeHostMessage(legacy))).toEqual(legacy);
+  });
+
+  /**
+   * keepFont is what keeps the cell size across a session swap; an init that
+   * lost the field (an older host against a newer page, or the reverse) must
+   * not decode into a fit-or-keep the sender never chose.
+   */
+  it('rejects an init missing or with a non-boolean keepFont field', () => {
+    const withoutKeepFont = {
+      type: 'init',
+      seq: 3,
+      scrollback: '',
+      cols: 80,
+      rows: 24,
+      fontSizePx: 12,
+      theme: {},
+      cleanFeed: false,
+    };
+    expect(decodeHostMessage(JSON.stringify(withoutKeepFont))).toBeNull();
+    expect(decodeHostMessage(JSON.stringify({ ...withoutKeepFont, keepFont: 'yes' }))).toBeNull();
+    expect(decodeHostMessage(JSON.stringify({ ...withoutKeepFont, keepFont: true }))).not.toBeNull();
   });
 
   it('round-trips a write message including control bytes', () => {

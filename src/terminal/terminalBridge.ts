@@ -41,6 +41,17 @@ export type HostToTerminalMessage =
        * structured transcript). Costs a parse per chunk; off by default.
        */
       cleanFeed: boolean;
+      /**
+       * True keeps the CELL SIZE the page is already showing instead of
+       * re-fitting the font to this init's grid: the host sends it on every
+       * re-init over a painted frame (a session swap, a lens switch back, a
+       * re-seed), so a successor with a shorter grid renders at the same
+       * resolution, centred, rather than zoomed to fill the height. A fresh
+       * page, the fit button and a desktop grid change still fit. The page
+       * still steps the font DOWN when the kept size would overflow the
+       * viewport (a taller grid), because the mirror never clips rows.
+       */
+      keepFont: boolean;
     }
   | { type: 'write'; data: string }
   | { type: 'set-font-size'; fontSizePx: number }
@@ -244,7 +255,8 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
     (parsedObject.rows === null || isFiniteNumber(parsedObject.rows)) &&
     isFiniteNumber(parsedObject.fontSizePx) &&
     isStringRecord(parsedObject.theme) &&
-    typeof parsedObject.cleanFeed === 'boolean'
+    typeof parsedObject.cleanFeed === 'boolean' &&
+    typeof parsedObject.keepFont === 'boolean'
   ) {
     return {
       type: 'init',
@@ -255,6 +267,7 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
       fontSizePx: parsedObject.fontSizePx,
       theme: parsedObject.theme,
       cleanFeed: parsedObject.cleanFeed,
+      keepFont: parsedObject.keepFont,
     };
   }
   return null;

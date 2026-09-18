@@ -14,7 +14,13 @@ import { buildModeRestoreSequence } from '@/terminal/modeRestore';
 import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import type { InspectTerminalHandle, InspectTerminalWriteStats } from '@/devsupport/inspectState';
-import { getBufferedData, getTerminalDimensions, hasPaintableFrame, subscribeChunks } from '@/state/terminalFeed';
+import {
+  getBufferedData,
+  getTerminalDimensions,
+  hasPaintableFrame,
+  hasSeed,
+  subscribeChunks,
+} from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { refreshTerminalStream, writeTerminal } from '@/connection/actions';
@@ -79,6 +85,13 @@ const inspectEnabled = __DEV__ && process.env.EXPO_PUBLIC_KANGENTIC_INSPECT === 
 
 /** How long to wait for the WebView to answer an injected expression. */
 const TERMINAL_EVAL_TIMEOUT_MS = 5000;
+
+/**
+ * Why an init was posted, carried on the `terminal-init` connection-trace
+ * line so a logcat timeline can tell a swap's seed init from a chunk
+ * release or a lens switch back. Names a code path, never content.
+ */
+type TerminalInitReason = 'ready' | 'seed' | 'chunk-release' | 'swap' | 'clean-feed' | 'reactivate';
 
 interface PendingTerminalEval {
   resolve: (value: unknown) => void;
@@ -146,9 +159,17 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
 /**
  * The raw interactive terminal: a FAITHFUL MIRROR of the desktop terminal.
  * An xterm.js WebView fed by the terminalFeed ring renders the desktop's
- * EXACT grid 1:1, with the font sized so the grid's ROWS fill the phone's
- * height. A grid wider than the screen then overflows and pans horizontally
- * (the cursor stays in view); pinch-zoom reads the detail.
+ * EXACT grid 1:1, with the font sized ONCE, on first open, so the grid's ROWS
+ * fill the phone's height. A grid wider than the screen then overflows and
+ * pans horizontally (the cursor stays in view); pinch-zoom reads the detail.
+ *
+ * Every later re-init over a painted frame (a session swap, a lens switch
+ * back, a re-seed) keeps that cell size (`keepFont` on the init): a successor
+ * whose PTY is shorter renders at the same resolution, centred, instead of
+ * zooming to fill the height and then jumping back when the desktop rests it
+ * at its detail grid. The fit button, a fresh page and a desktop grid change
+ * fit again; the page still steps the font down when a taller grid would
+ * overflow, because the mirror never clips rows.
  *
  * It NEVER resizes the desktop PTY - a shared desktop session must not be
  * reshaped by the phone. Keyboard input typed inside the WebView flows back
@@ -311,76 +332,108 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
 
   /**
    * THE HOLD RULE: never post an init that would replace a painted frame with
-   * a blank grid.
+   * a blank grid, and never build the successor's frame from chunks its seed
+   * is about to replace.
    *
-   * Four refs carry it. `initSeqRef` stamps every init so the page's
+   * Five refs carry it. `initSeqRef` stamps every init so the page's
    * 'painted' report can be attributed to the init it answers;
    * `lastInitSessionIdRef` is which session that init was for.
    * `displayedFrameSessionIdRef` is the session whose PAINTABLE bytes were
    * last posted (null on a fresh page, where there is nothing to protect).
    * `heldInitSessionIdRef` is a session whose init is deferred until its ring
-   * carries visible glyphs - the seed, swap and re-activation paths all route
-   * through postInitOrHold, and the chunk listener releases the hold.
+   * is SEEDED and carries visible glyphs - the seed, swap and re-activation
+   * paths all route through postInitOrHold, and the chunk listener releases
+   * the hold. `fitOnNextInitRef` is the fit button's one-shot: its re-seed
+   * init fits the font where every other re-init keeps the cell size.
    *
    * Why a hold and not a byte-count gate: a fresh PTY's first seed is often
    * escape-only (the alternate-screen switch, a clear), which has bytes and
    * paints nothing. The previous gate counted dims as a frame and posted an
    * empty grid over the dead session's last frame on every column move.
+   *
+   * Why the seed as well as glyphs: the desktop pushes a successor's live
+   * output the moment the subscription exists and answers the subscribe with
+   * the serialised scrollback a beat later. A frame built from those early
+   * chunks paints, the veil lets go, and then the seed's own init resets the
+   * grid and replays - measured live as a black grid for about a second, in
+   * the open, on a column move. Waiting for the seed makes the successor's
+   * first init its last.
    */
   const initSeqRef = useRef(0);
   const lastInitSessionIdRef = useRef<string | null>(null);
   const displayedFrameSessionIdRef = useRef<string | null>(null);
   const heldInitSessionIdRef = useRef<string | null>(null);
+  const fitOnNextInitRef = useRef(false);
 
-  const postInit = useCallback(() => {
-    lastInitPostAtRef.current = Date.now();
-    initSeqRef.current += 1;
-    lastInitSessionIdRef.current = sessionId;
-    heldInitSessionIdRef.current = null;
-    const scrollback = getBufferedData(sessionId);
-    // The RAW ring decides, not the mode-restore-prefixed string below: the
-    // prefix is escape sequences by construction and would count as content.
-    if (hasVisibleContent(scrollback)) displayedFrameSessionIdRef.current = sessionId;
-    const ptyDimensions = getTerminalDimensions(sessionId);
+  const postInit = useCallback(
+    (reason: TerminalInitReason) => {
+      lastInitPostAtRef.current = Date.now();
+      initSeqRef.current += 1;
+      lastInitSessionIdRef.current = sessionId;
+      heldInitSessionIdRef.current = null;
+      // Keep the cell size whenever a frame is already on screen; only a fresh
+      // page (nothing displayed) or the fit button's own re-seed fits anew.
+      const keepFont = displayedFrameSessionIdRef.current !== null && !fitOnNextInitRef.current;
+      fitOnNextInitRef.current = false;
+      const scrollback = getBufferedData(sessionId);
+      // The RAW ring decides, not the mode-restore-prefixed string below: the
+      // prefix is escape sequences by construction and would count as content.
+      if (hasVisibleContent(scrollback)) displayedFrameSessionIdRef.current = sessionId;
+      const ptyDimensions = getTerminalDimensions(sessionId);
+      traceConnection('terminal-init', {
+        reason,
+        cols: ptyDimensions ? ptyDimensions.cols : 'n/a',
+        rows: ptyDimensions ? ptyDimensions.rows : 'n/a',
+        fontSizePx: fontSizePxRef.current,
+        keepFont,
+      });
     // Put the terminal back into the modes the desktop's TUI set once at
     // startup BEFORE replaying the tail. The feed is a ring, so those DECSETs
     // are long evicted, and without this every re-init comes up in the normal
     // buffer with mouse reporting off while the PTY is in the alternate screen
     // with it on - which silently disables history scrolling. See
     // src/terminal/modeRestore.ts for the measurements.
-    const modeRestore = buildModeRestoreSequence(
-      useTerminalUiStore.getState().stickyModesBySessionId[sessionId] ?? null,
-    );
-    postToTerminal({
-      type: 'init',
-      seq: initSeqRef.current,
-      scrollback: modeRestore + scrollback,
-      // The desktop's exact grid. When the dims have not arrived yet (e.g.
-      // mid-reconnect, before the snapshot lands) infer cols from content and
-      // leave rows null; the real grid arrives shortly as a 'resize'.
-      cols: ptyDimensions ? ptyDimensions.cols : parseColsFromScrollback(scrollback),
-      rows: ptyDimensions ? ptyDimensions.rows : null,
-      fontSizePx: fontSizePxRef.current,
-      theme: buildXtermTheme(theme.terminalPalette, theme.colors),
-      cleanFeed: cleanFeedEnabled,
-    });
-  }, [postToTerminal, sessionId, theme, cleanFeedEnabled]);
+      const modeRestore = buildModeRestoreSequence(
+        useTerminalUiStore.getState().stickyModesBySessionId[sessionId] ?? null,
+      );
+      postToTerminal({
+        type: 'init',
+        seq: initSeqRef.current,
+        scrollback: modeRestore + scrollback,
+        // The desktop's exact grid. When the dims have not arrived yet (e.g.
+        // mid-reconnect, before the snapshot lands) infer cols from content and
+        // leave rows null; the real grid arrives shortly as a 'resize'.
+        cols: ptyDimensions ? ptyDimensions.cols : parseColsFromScrollback(scrollback),
+        rows: ptyDimensions ? ptyDimensions.rows : null,
+        fontSizePx: fontSizePxRef.current,
+        theme: buildXtermTheme(theme.terminalPalette, theme.colors),
+        cleanFeed: cleanFeedEnabled,
+        keepFont,
+      });
+    },
+    [postToTerminal, sessionId, theme, cleanFeedEnabled],
+  );
 
   /**
-   * Init now, or hold until this session's ring can paint something. With a
-   * frame on screen, an init from a ring with no visible bytes is the blank
-   * grid this pane exists to never show; the chunk listener posts the deferred
-   * init the moment glyphs arrive, replaying the whole ring. A fresh page
+   * Init now, or hold until this session's ring is seeded AND can paint
+   * something. With a frame on screen, an init from a ring with no visible
+   * bytes is the blank grid this pane exists to never show, and an init from
+   * live chunks the seed has not caught up with is a frame the seed tears
+   * down a beat later; the seed listener and the chunk listener post the
+   * deferred init once both hold, replaying the whole ring. A fresh page
    * (nothing displayed yet) always inits: an empty grid is the honest state
    * there, and the page's 'ready' depends on it.
    */
-  const postInitOrHold = useCallback(() => {
-    if (displayedFrameSessionIdRef.current !== null && !hasPaintableFrame(sessionId)) {
-      heldInitSessionIdRef.current = sessionId;
-      return;
-    }
-    postInit();
-  }, [postInit, sessionId]);
+  const postInitOrHold = useCallback(
+    (reason: TerminalInitReason) => {
+      if (displayedFrameSessionIdRef.current !== null && (!hasSeed(sessionId) || !hasPaintableFrame(sessionId))) {
+        heldInitSessionIdRef.current = sessionId;
+        return;
+      }
+      postInit(reason);
+    },
+    [postInit, sessionId],
+  );
 
   const flushPendingChunks = useCallback(() => {
     const joinedData = pendingChunksRef.current.join('');
@@ -418,20 +471,21 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         // stays until it does (postInitOrHold).
         pendingChunksRef.current = [];
         clearFlushTimer();
-        postInitOrHold();
+        postInitOrHold('seed');
         return;
       }
       if (heldInitSessionIdRef.current === sessionId) {
         // A held init: never WRITE into the frame on screen (it belongs to
         // another session, or to this one before its blank re-seed). The ring
         // already holds this chunk; once the ring can paint, the deferred
-        // init replays all of it. The chunk alone decides - the ring had no
-        // visible bytes when the hold began, so only what arrived since can
-        // change the answer.
-        if (hasVisibleContent(event.data)) {
+        // init replays all of it. The chunk alone decides the glyph half - the
+        // ring had no visible bytes when the hold began, so only what arrived
+        // since can change the answer - and a chunk that beat the seed never
+        // releases: that seed replaces the ring, and inits from it.
+        if (hasSeed(sessionId) && hasVisibleContent(event.data)) {
           pendingChunksRef.current = [];
           clearFlushTimer();
-          postInit();
+          postInit('chunk-release');
         }
         return;
       }
@@ -469,7 +523,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     if (isActive && !wasActive && terminalReady) {
       pendingChunksRef.current = [];
       clearFlushTimer();
-      postInitOrHold();
+      postInitOrHold('reactivate');
     }
   }, [isActive, terminalReady, postInitOrHold, clearFlushTimer]);
 
@@ -496,14 +550,17 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   // successor's seed may already have landed while this pane was bound to the
   // old session, so waiting for a 'seed' event alone is not enough.
   //
-  // But re-init ONLY when the successor has something to paint. A swap
-  // normally arrives before its first snapshot does - SessionScreen retains
-  // the new ring and asks the desktop for it, and the answer is a round trip
-  // away - so an unconditional init here posts an EMPTY grid, which is the
-  // black terminal this whole path is about. postInitOrHold keeps the dead
-  // session's last frame until the successor's ring can paint (the chunk
-  // listener releases the hold); SessionScreen's swap veil covers that frame
-  // and lets go once the page reports the successor painted.
+  // But re-init ONLY when the successor's seed has landed and has something
+  // to paint. A swap normally arrives before its first snapshot does -
+  // SessionScreen retains the new ring and asks the desktop for it, and the
+  // answer is a round trip away - so an unconditional init here posts an
+  // EMPTY grid, which is the black terminal this whole path is about.
+  // postInitOrHold keeps the dead session's last frame until the successor's
+  // ring is seeded and can paint (the seed and chunk listeners release the
+  // hold); SessionScreen's swap veil covers that frame and lets go once the
+  // page reports the successor painted. The init it finally posts keeps the
+  // predecessor's cell size (keepFont), so the successor's grid comes up at
+  // the same resolution whatever its row count.
   //
   // A clean-feed flip goes through the same hold. The flag only takes effect
   // at init, and on a fresh page (nothing displayed) it posts at once; with a
@@ -520,7 +577,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     if (!terminalReady) return;
     pendingChunksRef.current = [];
     clearFlushTimer();
-    postInitOrHold();
+    postInitOrHold(sessionChanged ? 'swap' : 'clean-feed');
   }, [sessionId, cleanFeedEnabled, terminalReady, postInitOrHold, clearFlushTimer]);
 
   // Drop this session's DECCKM + reading-view state on unmount. There is
@@ -560,7 +617,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         // init unconditionally, even from an empty ring.
         displayedFrameSessionIdRef.current = null;
         heldInitSessionIdRef.current = null;
-        postInit();
+        postInit('ready');
         setTerminalReady(true);
         return;
       }
@@ -755,12 +812,19 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
               // press (the refit's fit passes, then the seed's own re-init),
               // which read as screen flashes; the re-seed re-fits everything
               // itself, so the explicit refit is purely the offline fallback.
+              // The re-seed's init is the ONE re-init over a painted frame
+              // that fits the font instead of keeping the cell size - this
+              // button is how the user asks for the fitted view back.
               const pressedAt = Date.now();
+              fitOnNextInitRef.current = true;
               refreshTerminalStream(sessionId);
               if (refitFallbackTimerRef.current !== null) clearTimeout(refitFallbackTimerRef.current);
               refitFallbackTimerRef.current = setTimeout(() => {
                 refitFallbackTimerRef.current = null;
-                if (lastInitPostAtRef.current < pressedAt) postToTerminal({ type: 'refit' });
+                if (lastInitPostAtRef.current < pressedAt) {
+                  fitOnNextInitRef.current = false;
+                  postToTerminal({ type: 'refit' });
+                }
               }, REFIT_FALLBACK_DELAY_MS);
             }}
           />

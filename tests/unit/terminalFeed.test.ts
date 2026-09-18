@@ -10,6 +10,7 @@ import {
   getTerminalFeedStats,
   getUnbufferedListenerSessionIds,
   hasPaintableFrame,
+  hasSeed,
   isTerminalRetained,
   releaseTerminal,
   resetTerminalFeed,
@@ -164,6 +165,31 @@ describe('terminalFeed', () => {
     expect(hasPaintableFrame('sess-1')).toBe(false);
     seedScrollback('sess-1', 'frame');
     expect(hasPaintableFrame('sess-1')).toBe(true);
+  });
+
+  /**
+   * The seed half of the terminal pane's hold rule: live chunks can beat the
+   * read-stream snapshot that answers the subscribe, and a frame built from
+   * them is torn down when it lands. Chunks alone never count as seeded; an
+   * EMPTY seed does (it is the snapshot, there was just nothing in it); and a
+   * release-and-retain starts over, because the new ring gets its own seed.
+   */
+  it('hasSeed is true only once a snapshot has landed in the ring since it was retained', () => {
+    expect(hasSeed('sess-1')).toBe(false);
+    retainTerminal('sess-1');
+    expect(hasSeed('sess-1')).toBe(false);
+    appendChunk('sess-1', 'live output that beat the snapshot');
+    expect(hasSeed('sess-1')).toBe(false);
+    expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-1', seeded: false })]);
+
+    seedScrollback('sess-1', '');
+    expect(hasSeed('sess-1')).toBe(true);
+    expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-1', seeded: true })]);
+
+    releaseTerminal('sess-1');
+    expect(hasSeed('sess-1')).toBe(false);
+    retainTerminal('sess-1');
+    expect(hasSeed('sess-1')).toBe(false);
   });
 
   it('records dims for retained sessions and notifies listeners only on change', () => {
