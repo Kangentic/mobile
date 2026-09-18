@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack, useTheme } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
@@ -11,6 +11,15 @@ export interface SessionInputBarProps {
   mode: SessionMode;
   onModeChange: (mode: SessionMode) => void;
   chatAttention: boolean;
+  /**
+   * True while the footer is held on a session that has ended and its
+   * successor has not bound (SessionScreen's quiet swap window). The mode row
+   * stays exactly as it looked - no dimming, nothing new to read - but takes
+   * no touches and leaves the accessibility tree: a key to a dead PTY is
+   * silently swallowed and the composer would show an error. The mode pill
+   * stays live in every case; it is the way out to Changes.
+   */
+  suspended?: boolean;
 }
 
 /**
@@ -22,7 +31,13 @@ export interface SessionInputBarProps {
  * geometry. Typing in terminal happens directly in the terminal (tap it to
  * raise the keyboard).
  */
-export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }: SessionInputBarProps): React.JSX.Element | null {
+export function SessionInputBar({
+  sessionId,
+  mode,
+  onModeChange,
+  chatAttention,
+  suspended = false,
+}: SessionInputBarProps): React.JSX.Element | null {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   if (sessionId === null) return null;
@@ -43,8 +58,19 @@ export function SessionInputBar({ sessionId, mode, onModeChange, chatAttention }
         paddingBottom: Math.max(theme.spacing.xs, insets.bottom - theme.spacing.sm),
       }}
     >
-      {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}
-      {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}
+      {/* Rendered only when a mode row exists: an empty wrapper would add a
+          `gap` slot above the pill in changes mode. */}
+      {mode !== 'changes' ? (
+        <View
+          testID="session-input-row"
+          pointerEvents={suspended ? 'none' : 'auto'}
+          accessibilityElementsHidden={suspended}
+          importantForAccessibility={suspended ? 'no-hide-descendants' : 'auto'}
+        >
+          {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}
+          {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}
+        </View>
+      ) : null}
       <SessionModeToggle mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />
     </Stack>
   );

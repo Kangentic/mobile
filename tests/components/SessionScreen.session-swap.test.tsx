@@ -1,12 +1,13 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { AccessibilityInfo, StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { ActivityEventPayload } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
-import { SessionScreen } from '@/screens/task/SessionScreen';
+import { SESSION_SWAP_QUIET_MS, SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
+import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { boardColumnFixture, boardTaskFixture, userEntryFixture } from '@/devsupport/desktopFixtures';
 import { closeSessionScreen, loadArchivedTasks, openSessionScreen } from '@/connection/actions';
@@ -82,20 +83,35 @@ jest.mock('@/screens/task/SessionInputBar', () => {
   const { Pressable, View } = require('react-native');
   return {
     __esModule: true,
-    // The Pressable child is additive: the outer View keeps the same testID
-    // and accessibilityLabel every other test in this suite reads, and this
-    // is the only stub in the suite that needs a way back to terminal mode -
-    // the overlay round-trip tests press it to prove showSwitchingState /
-    // showEndedState are a pure DERIVATION of mode, not a one-way latch.
-    SessionInputBar: (props: { sessionId: string | null; mode: string; onModeChange: (mode: string) => void }) =>
+    // The Pressable children are additive: the outer View keeps the same
+    // testID and accessibilityLabel every other test in this suite reads
+    // (plus `accessibilityState.disabled` carrying `suspended`, the footer's
+    // inert-while-held flag), and this is the only stub in the suite that
+    // needs a way between modes - the overlay round-trip tests press these to
+    // prove showSwitchingState / showEndedState / showQuietVeil are a pure
+    // DERIVATION of mode, not a one-way latch.
+    SessionInputBar: (props: {
+      sessionId: string | null;
+      mode: string;
+      onModeChange: (mode: string) => void;
+      suspended?: boolean;
+    }) =>
       props.sessionId === null
         ? null
         : ReactModule.createElement(
             View,
-            { testID: 'stub-session-input-bar', accessibilityLabel: props.mode },
+            {
+              testID: 'stub-session-input-bar',
+              accessibilityLabel: props.mode,
+              accessibilityState: { disabled: props.suspended === true },
+            },
             ReactModule.createElement(Pressable, {
               testID: 'session-mode-terminal',
               onPress: () => props.onModeChange('terminal'),
+            }),
+            ReactModule.createElement(Pressable, {
+              testID: 'session-mode-changes',
+              onPress: () => props.onModeChange('changes'),
             }),
           ),
   };
@@ -168,6 +184,24 @@ function renderSessionScreen(): ReturnType<typeof render> {
   );
 }
 
+/**
+ * The quiet phase: the veil and NOTHING else. Both text overlays are asserted
+ * absent by testID, and the veil itself carries no Text (pinned in
+ * SessionSwapVeil.test.tsx), so this is "nothing to read" in full.
+ */
+function expectQuietVeilOnly(): void {
+  expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+  expect(screen.queryByTestId('session-switching-state')).toBeNull();
+  expect(screen.queryByTestId('session-ended-state')).toBeNull();
+}
+
+/** Runs the clock past SESSION_SWAP_QUIET_MS under fake timers: the long-gap reveal. */
+function passQuietDeadline(): void {
+  act(() => {
+    jest.advanceTimersByTime(SESSION_SWAP_QUIET_MS + 1);
+  });
+}
+
 describe('SessionScreen session binding', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -175,6 +209,10 @@ describe('SessionScreen session binding', () => {
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useTranscriptStore.getState().reset();
+    // The stubbed TerminalTab never clears a session's painted flag on
+    // unmount the way the real pane does, so a flag from an earlier test
+    // would settle the next test's successor the instant it bound.
+    useTerminalUiStore.setState({ paintedSessionIds: {} });
     useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
   });
 
@@ -252,41 +290,59 @@ describe('SessionScreen session binding', () => {
     renderSessionScreen();
     expect(screen.getByTestId('stub-session-input-bar')).toBeTruthy();
 
+    // The fixture's task sits in the To Do role column, which promises no
+    // successor, so the end is handled without a quiet window and the ended
+    // state shows at once.
     act(() => {
       pushSessionEnded('sess-a');
     });
     expect(screen.getByTestId('session-ended-state')).toBeTruthy();
 
     // What lands next: the board refetch drops the task, and the reconciler
-    // prunes the activity entry behind it.
+    // prunes the activity entry behind it. Off the board the role check goes
+    // inert, so an end that was already handled must stay handled - a veil
+    // opening here, OVER the ended state, is the regression this pins.
     act(() => {
       seedBoardWithoutTask();
       useActivityStore.getState().removeSession('sess-a');
     });
 
     expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
     expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
   });
 
   /**
    * The same collapse, entered from the board rather than a triage row, so
    * there is no sessionId param either. With the task gone nothing can name
-   * the dead session but the binding the screen already made.
+   * the dead session but the binding the screen already made. The push and
+   * the drop land in one act here, so the screen never sees the To Do role
+   * at the end: the quiet window opens off lastBoundSessionId and the ended
+   * state reveals at the deadline.
    */
   it('keeps the ended state with no sessionId param to fall back on', () => {
-    mockParams = { taskId: 'task-1' };
-    seedTaskWithSession('sess-a');
-    useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
-    renderSessionScreen();
-    expect(screen.queryByTestId('session-ended-state')).toBeNull();
+    jest.useFakeTimers();
+    try {
+      mockParams = { taskId: 'task-1' };
+      seedTaskWithSession('sess-a');
+      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+      renderSessionScreen();
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
 
-    act(() => {
-      pushSessionEnded('sess-a');
-      seedBoardWithoutTask();
-      useActivityStore.getState().removeSession('sess-a');
-    });
+      act(() => {
+        pushSessionEnded('sess-a');
+        seedBoardWithoutTask();
+        useActivityStore.getState().removeSession('sess-a');
+      });
+      expectQuietVeilOnly();
 
-    expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      passQuietDeadline();
+
+      expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('does not show the ended state for a task that never had a session', () => {
@@ -457,10 +513,11 @@ describe('SessionScreen session binding', () => {
     expect(screen.queryByTestId('session-ended-state')).toBeNull();
     // ...and the Changes pane is the one now live behind where it was.
     expect(screen.getByTestId('session-pane-changes').props.accessibilityElementsHidden).toBe(false);
-    // No mode pill here, and that is real: this task's session is gone
-    // outright, and SessionInputBar renders nothing without one. The way back
-    // is the system Back button. The switching case below, where the screen is
-    // still bound to the outgoing session, does get the pill.
+    // The footer stays bound to the session this screen last had (the panes
+    // and the footer never unbind while the board reports nothing), so the
+    // mode pill is the way back from Changes, exactly as in the switching
+    // case below.
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('changes');
   });
 
   /**
@@ -498,20 +555,26 @@ describe('SessionScreen session binding', () => {
    * View changes stays (diffs outlive the session).
    */
   it('hides Move task when the sessions projection dropped the task', () => {
-    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
-    seedTaskWithSession('sess-a');
-    useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
-    renderSessionScreen();
+    jest.useFakeTimers();
+    try {
+      mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+      seedTaskWithSession('sess-a');
+      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+      renderSessionScreen();
 
-    act(() => {
-      pushSessionEnded('sess-a');
-      seedBoardWithoutTask();
-      useActivityStore.getState().removeSession('sess-a');
-    });
+      act(() => {
+        pushSessionEnded('sess-a');
+        seedBoardWithoutTask();
+        useActivityStore.getState().removeSession('sess-a');
+      });
+      passQuietDeadline();
 
-    expect(screen.getByTestId('session-ended-state')).toBeTruthy();
-    expect(screen.queryByTestId('session-ended-move-task')).toBeNull();
-    expect(screen.getByTestId('session-ended-view-changes')).toBeTruthy();
+      expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      expect(screen.queryByTestId('session-ended-move-task')).toBeNull();
+      expect(screen.getByTestId('session-ended-view-changes')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   /**
@@ -583,6 +646,8 @@ describe('SessionScreen across a column move', () => {
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useTranscriptStore.getState().reset();
+    // See the session-binding block: the stubbed pane never clears this.
+    useTerminalUiStore.setState({ paintedSessionIds: {} });
     useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
   });
 
@@ -625,28 +690,39 @@ describe('SessionScreen across a column move', () => {
     });
   }
 
-  it('shows the switching state, not the ended state, while a move is in flight', () => {
-    seedRoledBoard('sess-a');
-    renderSessionScreen();
+  it('shows the switching state, not the ended state, once a move outlives the quiet window', () => {
+    jest.useFakeTimers();
+    try {
+      seedRoledBoard('sess-a');
+      renderSessionScreen();
 
-    // The user confirms the move: the card lands in the new column at once.
-    act(() => {
-      moveTaskToColumn('lane-doing');
-    });
-    // Seconds later the desktop's suspend reaches the phone. The successor
-    // does not exist yet.
-    act(() => {
-      pushSessionEnded('sess-a');
-    });
+      // The user confirms the move: the card lands in the new column at once.
+      act(() => {
+        moveTaskToColumn('lane-doing');
+      });
+      // Seconds later the desktop's suspend reaches the phone. The successor
+      // does not exist yet. For the quiet phase there is nothing to read, and
+      // the footer stays exactly where it was.
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+      expectQuietVeilOnly();
+      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('terminal');
 
-    // The ended assertion runs FIRST, deliberately: it is the reported bug
-    // (the overlay flashing mid-move), and a missing switching testID would
-    // otherwise mask it as "the component is not there" rather than "the
-    // screen declared the task dead".
-    expect(screen.queryByTestId('session-ended-state')).toBeNull();
-    expect(screen.getByTestId('session-switching-state')).toBeTruthy();
-    // Nothing to type into between two sessions.
-    expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
+      passQuietDeadline();
+
+      // The ended assertion runs FIRST, deliberately: it is the reported bug
+      // (the overlay flashing mid-move), and a missing switching testID would
+      // otherwise mask it as "the component is not there" rather than "the
+      // screen declared the task dead".
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+      // Nothing to type into once the screen admits it is between sessions.
+      expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   /**
@@ -655,48 +731,60 @@ describe('SessionScreen across a column move', () => {
    * the same escape hatch as the ended state, and yields to it.
    */
   it('lets the user out to Changes while switching, and comes back with the mode pill', () => {
-    seedRoledBoard('sess-a');
-    renderSessionScreen();
-    act(() => {
-      moveTaskToColumn('lane-doing');
-    });
-    act(() => {
-      pushSessionEnded('sess-a');
-    });
-    expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+    jest.useFakeTimers();
+    try {
+      seedRoledBoard('sess-a');
+      renderSessionScreen();
+      act(() => {
+        moveTaskToColumn('lane-doing');
+      });
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+      passQuietDeadline();
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('session-switching-view-changes'));
+      fireEvent.press(screen.getByTestId('session-switching-view-changes'));
 
-    expect(screen.queryByTestId('session-switching-state')).toBeNull();
-    expect(screen.getByTestId('session-pane-changes').props.accessibilityElementsHidden).toBe(false);
-    // Still bound to the outgoing session, so the pill is the way back - and
-    // going back to terminal must bring the scrim with it.
-    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('changes');
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.getByTestId('session-pane-changes').props.accessibilityElementsHidden).toBe(false);
+      // Still bound to the outgoing session, so the pill is the way back - and
+      // going back to terminal must bring the scrim with it.
+      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('changes');
 
-    fireEvent.press(screen.getByTestId('session-mode-terminal'));
+      fireEvent.press(screen.getByTestId('session-mode-terminal'));
 
-    expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('clears the switching state when the successor session binds', () => {
-    seedRoledBoard('sess-a');
-    renderSessionScreen();
-    act(() => {
-      moveTaskToColumn('lane-doing');
-    });
-    act(() => {
-      pushSessionEnded('sess-a');
-    });
-    expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+    jest.useFakeTimers();
+    try {
+      seedRoledBoard('sess-a');
+      renderSessionScreen();
+      act(() => {
+        moveTaskToColumn('lane-doing');
+      });
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+      passQuietDeadline();
+      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
 
-    // The desktop spawned the successor and the settled snapshot carries it.
-    act(() => {
-      seedRoledBoard('sess-b', 'lane-doing');
-    });
+      // The desktop spawned the successor and the settled snapshot carries it.
+      act(() => {
+        seedRoledBoard('sess-b', 'lane-doing');
+      });
 
-    expect(screen.queryByTestId('session-switching-state')).toBeNull();
-    expect(screen.queryByTestId('session-ended-state')).toBeNull();
-    expect(openSessionScreenMock).toHaveBeenCalledWith('sess-b');
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      expect(openSessionScreenMock).toHaveBeenCalledWith('sess-b');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('falls back to the ended state when no successor arrives within the grace window', () => {
@@ -710,10 +798,13 @@ describe('SessionScreen across a column move', () => {
       act(() => {
         pushSessionEnded('sess-a');
       });
+      passQuietDeadline();
       expect(screen.getByTestId('session-switching-state')).toBeTruthy();
 
+      // The latch timer started with the ended push, so the ended fallback is
+      // 20s from THAT instant, not from the reveal.
       act(() => {
-        jest.advanceTimersByTime(20_001);
+        jest.advanceTimersByTime(20_001 - (SESSION_SWAP_QUIET_MS + 1));
       });
 
       expect(screen.queryByTestId('session-switching-state')).toBeNull();
@@ -741,6 +832,7 @@ describe('SessionScreen across a column move', () => {
     });
 
     expect(screen.queryByTestId('session-switching-state')).toBeNull();
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
     expect(screen.getByTestId('session-ended-state')).toBeTruthy();
   });
 
@@ -765,6 +857,7 @@ describe('SessionScreen across a column move', () => {
     });
 
     expect(screen.queryByTestId('session-switching-state')).toBeNull();
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
     expect(screen.getByTestId('session-ended-state')).toBeTruthy();
   });
 
@@ -808,6 +901,7 @@ describe('SessionScreen across a column move', () => {
       pathname: '/completed-task',
       params: { taskId: 'task-1', projectId: 'project-1' },
     });
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
   });
 
   /**
@@ -985,6 +1079,8 @@ describe('SessionScreen across a column move', () => {
   });
 
   it('does not redirect a task that is still on the board', () => {
+    // seedRoledBoard's default column is the To Do role, so the end is
+    // handled without a quiet window and the ended state shows at once.
     seedRoledBoard('sess-a');
     renderSessionScreen();
 
@@ -1023,50 +1119,77 @@ describe('SessionScreen across a column move', () => {
    * stay byte-for-byte unchanged by this addition.
    */
   describe('a same-column respawn (spawnProgressLabel, no column move)', () => {
-    it('shows the switching state, not the ended state, while a label is in flight', () => {
-      seedRoledBoard('sess-a', 'lane-doing');
-      renderSessionScreen();
+    it('shows the switching state, not the ended state, once a label swap outlives the quiet window', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
 
-      act(() => {
-        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
-      });
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+        });
+        expectQuietVeilOnly();
 
-      // The ended assertion runs FIRST, deliberately - same reasoning as the
-      // column-move version of this test: the reported bug IS the ended
-      // state appearing here, so a missing switching testID must not be
-      // allowed to read as "not there" rather than "declared dead".
-      expect(screen.queryByTestId('session-ended-state')).toBeNull();
-      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
-      expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
+        passQuietDeadline();
+
+        // The ended assertion runs FIRST, deliberately - same reasoning as the
+        // column-move version of this test: the reported bug IS the ended
+        // state appearing here, so a missing switching testID must not be
+        // allowed to read as "not there" rather than "declared dead".
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+        expect(screen.queryByTestId('stub-session-input-bar')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('renders the label text on the overlay, not just the generic caption', () => {
-      seedRoledBoard('sess-a', 'lane-doing');
-      renderSessionScreen();
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
 
-      act(() => {
-        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
-      });
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+        });
+        // Nothing to read during the quiet phase, the label included.
+        expect(screen.queryByText('Switching model...')).toBeNull();
 
-      expect(screen.getByText('Switching model...')).toBeTruthy();
+        passQuietDeadline();
+
+        expect(screen.getByText('Switching model...')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     /**
-     * Must stay green through this whole change: a desktop that predates
-     * spawnProgressLabel (or a genuine park with no successor coming) sends
-     * no label, and the screen's only signal is the plain session-ended push
-     * - so it falls through to the ended state exactly as it always did.
+     * A desktop that predates spawnProgressLabel (or a genuine park with no
+     * successor coming) sends no label. The label no longer decides whether
+     * something QUIET shows - every end of the bound session gets the veil -
+     * only what the long-gap reveal says: with no evidence of a successor
+     * that is the ended state, and the switching one never shows.
      */
-    it('falls straight to the ended state when the desktop sends no label', () => {
-      seedRoledBoard('sess-a', 'lane-doing');
-      renderSessionScreen();
+    it('goes quiet, then falls to the ended state (never the switching one) when the desktop sends no label', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
 
-      act(() => {
-        pushSessionEnded('sess-a');
-      });
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        expectQuietVeilOnly();
 
-      expect(screen.queryByTestId('session-switching-state')).toBeNull();
-      expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+        passQuietDeadline();
+
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+        expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('falls back to the ended state when no successor arrives within the grace window', () => {
@@ -1077,10 +1200,11 @@ describe('SessionScreen across a column move', () => {
         act(() => {
           pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching agent...' });
         });
+        passQuietDeadline();
         expect(screen.getByTestId('session-switching-state')).toBeTruthy();
 
         act(() => {
-          jest.advanceTimersByTime(20_001);
+          jest.advanceTimersByTime(20_001 - (SESSION_SWAP_QUIET_MS + 1));
         });
 
         expect(screen.queryByTestId('session-switching-state')).toBeNull();
@@ -1119,6 +1243,8 @@ describe('SessionScreen across a column move', () => {
         });
 
         expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        // The quiet window has its own spent marker for the same reason.
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
         expect(screen.getByTestId('session-ended-state')).toBeTruthy();
       } finally {
         jest.useRealTimers();
@@ -1126,22 +1252,28 @@ describe('SessionScreen across a column move', () => {
     });
 
     it('clears the switching state when the successor session binds', () => {
-      seedRoledBoard('sess-a', 'lane-doing');
-      renderSessionScreen();
-      act(() => {
-        pushSessionEnded('sess-a', { spawnProgressLabel: 'Starting new session...' });
-      });
-      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Starting new session...' });
+        });
+        passQuietDeadline();
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
 
-      // The desktop spawned the successor and the settled snapshot carries
-      // it, still in the same column - no move involved.
-      act(() => {
-        seedRoledBoard('sess-b', 'lane-doing');
-      });
+        // The desktop spawned the successor and the settled snapshot carries
+        // it, still in the same column - no move involved.
+        act(() => {
+          seedRoledBoard('sess-b', 'lane-doing');
+        });
 
-      expect(screen.queryByTestId('session-switching-state')).toBeNull();
-      expect(screen.queryByTestId('session-ended-state')).toBeNull();
-      expect(openSessionScreenMock).toHaveBeenCalledWith('sess-b');
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+        expect(openSessionScreenMock).toHaveBeenCalledWith('sess-b');
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('replaces itself with the completed-task view rather than showing the switching scrim, for an archived task', () => {
@@ -1171,6 +1303,7 @@ describe('SessionScreen across a column move', () => {
       });
 
       expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
       expect(mockReplace).toHaveBeenCalledWith({
         pathname: '/completed-task',
         params: { taskId: 'task-1', projectId: 'project-1' },
@@ -1184,18 +1317,25 @@ describe('SessionScreen across a column move', () => {
      * the board.
      */
     it('opens the switching state off lastBoundSessionId with no sessionId param', () => {
-      mockParams = { taskId: 'task-1', projectId: 'project-1' };
-      seedRoledBoard('sess-a', 'lane-doing');
-      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
-      renderSessionScreen();
-      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      jest.useFakeTimers();
+      try {
+        mockParams = { taskId: 'task-1', projectId: 'project-1' };
+        seedRoledBoard('sess-a', 'lane-doing');
+        useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+        renderSessionScreen();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
 
-      act(() => {
-        pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
-      });
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
+        });
+        expectQuietVeilOnly();
+        passQuietDeadline();
 
-      expect(screen.queryByTestId('session-ended-state')).toBeNull();
-      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     /**
@@ -1213,17 +1353,23 @@ describe('SessionScreen across a column move', () => {
      * still open the SWITCHING overlay, never fall through to the ended one.
      */
     it('opens the switching state (with the generic caption, not the raw text) for an over-cap label from the desktop', () => {
-      seedRoledBoard('sess-a', 'lane-doing');
-      renderSessionScreen();
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
 
-      act(() => {
-        pushSessionEnded('sess-a', { spawnProgressLabel: 'A'.repeat(46) });
-      });
+        act(() => {
+          pushSessionEnded('sess-a', { spawnProgressLabel: 'A'.repeat(46) });
+        });
+        passQuietDeadline();
 
-      expect(screen.queryByTestId('session-ended-state')).toBeNull();
-      expect(screen.getByTestId('session-switching-state')).toBeTruthy();
-      expect(screen.getByText('The desktop is starting a new session.')).toBeTruthy();
-      expect(screen.queryByText('A'.repeat(46))).toBeNull();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+        expect(screen.getByText('The desktop is starting a new session.')).toBeTruthy();
+        expect(screen.queryByText('A'.repeat(46))).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 
@@ -1264,12 +1410,13 @@ describe('SessionScreen across a column move', () => {
         act(() => {
           pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
         });
+        passQuietDeadline();
         expect(screen.getByTestId('session-switching-state')).toBeTruthy();
 
         // Still open just under 20s from the (effectively simultaneous)
         // opening instant.
         act(() => {
-          jest.advanceTimersByTime(19_999);
+          jest.advanceTimersByTime(19_999 - (SESSION_SWAP_QUIET_MS + 1));
         });
         expect(screen.getByTestId('session-switching-state')).toBeTruthy();
 
@@ -1318,16 +1465,304 @@ describe('SessionScreen across a column move', () => {
         expect(screen.queryByTestId('session-switching-state')).toBeNull();
         expect(screen.queryByTestId('session-ended-state')).toBeNull();
 
-        // Only NOW does the labelled ended push arrive.
+        // Only NOW does the labelled ended push arrive: the quiet window
+        // opens fresh (nothing had spent it), and the label latch reveals at
+        // its deadline.
         act(() => {
           pushSessionEnded('sess-a', { spawnProgressLabel: 'Switching model...' });
         });
+        expectQuietVeilOnly();
+        passQuietDeadline();
 
         expect(screen.getByTestId('session-switching-state')).toBeTruthy();
         expect(screen.queryByTestId('session-ended-state')).toBeNull();
       } finally {
         jest.useRealTimers();
       }
+    });
+  });
+
+  /**
+   * THE QUIET WINDOW. Every swap kind - a column move, a same-column respawn
+   * with a label, an unlabelled end - opens ONE silent surface over the last
+   * frame, holds it across the successor's bind, and lets go only once the
+   * successor has painted. The text surfaces the two blocks above pin are
+   * now the long-gap reveal, past SESSION_SWAP_QUIET_MS.
+   */
+  describe('the quiet swap window (the veil)', () => {
+    /** The unlabelled column-move swap the desktop actually produces (kangentic #682's third row). */
+    it('shows the veil and nothing else for an unlabelled end, with the footer held in place and inert', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+
+      expectQuietVeilOnly();
+      const inputBar = screen.getByTestId('stub-session-input-bar');
+      expect(inputBar.props.accessibilityLabel).toBe('terminal');
+      expect(inputBar.props.accessibilityState).toEqual({ disabled: true });
+    });
+
+    /**
+     * The bind is a board fact that lands a round trip before the successor's
+     * first frame exists. Letting go at the bind is what showed the old frame,
+     * an empty grid and the new frame in sequence; the window must outlive
+     * it and close on the paint report alone.
+     */
+    it('survives the successor binding and releases only once the successor has painted', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+      expectQuietVeilOnly();
+
+      act(() => {
+        seedRoledBoard('sess-b', 'lane-doing');
+      });
+      expectQuietVeilOnly();
+      // The panes and footer are on the successor now, and the footer is live
+      // again: keys reach a session that exists. (includeHiddenElements: the
+      // veil hides the pane subtree from assistive technology, deliberately.)
+      expect(
+        screen.getByTestId('stub-terminal-tab', { includeHiddenElements: true }).props.accessibilityLabel,
+      ).toBe('sess-b');
+      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityState).toEqual({ disabled: false });
+
+      act(() => {
+        useTerminalUiStore.getState().markTerminalPainted('sess-b');
+      });
+
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+      expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.queryByTestId('session-ended-state')).toBeNull();
+
+      // A later render of the same shape must not re-open it.
+      act(() => {
+        seedRoledBoard('sess-b', 'lane-doing');
+      });
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    });
+
+    it('closes silently at the deadline when a successor is bound but has not painted', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        act(() => {
+          seedRoledBoard('sess-b', 'lane-doing');
+        });
+        expectQuietVeilOnly();
+
+        passQuietDeadline();
+
+        // No veil, and no text either: sessionEnded is false for the
+        // successor, so nothing can claim the session is over.
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+        const inputBar = screen.getByTestId('stub-session-input-bar');
+        expect(inputBar.props.accessibilityLabel).toBe('terminal');
+        expect(inputBar.props.accessibilityState).toEqual({ disabled: false });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * A -> B -> C: the successor dies before it paints. The window re-keys to
+     * B and its deadline restarts, so the reveal (the label latch B opened)
+     * comes SESSION_SWAP_QUIET_MS after B's end, not after A's.
+     */
+    it("re-keys to a successor that ends while awaiting paint, restarting the deadline from that end", () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        act(() => {
+          jest.advanceTimersByTime(3_000);
+          seedRoledBoard('sess-b', 'lane-doing');
+        });
+        act(() => {
+          jest.advanceTimersByTime(1_000);
+          pushSessionEnded('sess-b', { spawnProgressLabel: 'Switching model...' });
+        });
+        expectQuietVeilOnly();
+
+        // Past A's original deadline: still quiet, because the window is B's now.
+        act(() => {
+          jest.advanceTimersByTime(SESSION_SWAP_QUIET_MS + 1 - 4_000);
+        });
+        expectQuietVeilOnly();
+
+        // Past B's deadline: the reveal, and it describes B (its label latch).
+        act(() => {
+          jest.advanceTimersByTime(4_000);
+        });
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /** Diffs outlive the session: the veil yields to Changes the way the two text overlays do, and comes back. */
+    it('yields to Changes and returns with the mode, keeping the window open underneath', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+      expectQuietVeilOnly();
+
+      fireEvent.press(screen.getByTestId('session-mode-changes'));
+
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+      expect(screen.getByTestId('session-pane-changes').props.accessibilityElementsHidden).toBe(false);
+
+      fireEvent.press(screen.getByTestId('session-mode-terminal'));
+
+      expectQuietVeilOnly();
+    });
+
+    /**
+     * In chat mode no paint can ever arrive: the terminal pane skips seeds
+     * while it is not the visible page. "Settled" there is the successor's
+     * transcript window landing.
+     */
+    it('settles in chat mode on the successor transcript window, not on a terminal paint', () => {
+      mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1', mode: 'chat' };
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+      act(() => {
+        seedRoledBoard('sess-b', 'lane-doing');
+      });
+      expectQuietVeilOnly();
+
+      act(() => {
+        useTranscriptStore.getState().retainSession('sess-b');
+        useTranscriptStore
+          .getState()
+          .applyWindow('sess-b', { revision: 1, totalEntries: 0, startIndex: 0, entries: [] });
+      });
+
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    });
+
+    /**
+     * The veil carries no text, so the announcement IS its accessibility
+     * story: once per window, on the window opening - a Changes round-trip
+     * remounts the veil and must not announce again. And while it is up the
+     * panes leave the accessibility tree, as under the two text overlays.
+     */
+    it('announces once per window and hides the panes from assistive technology while up', () => {
+      const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        expect(screen.getByTestId('session-panes').props.accessibilityElementsHidden).toBe(false);
+
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        expect(announceSpy).toHaveBeenCalledTimes(1);
+        expect(announceSpy).toHaveBeenCalledWith('Switching session, please wait');
+        const panes = screen.getByTestId('session-panes', { includeHiddenElements: true });
+        expect(panes.props.accessibilityElementsHidden).toBe(true);
+        expect(panes.props.importantForAccessibility).toBe('no-hide-descendants');
+
+        fireEvent.press(screen.getByTestId('session-mode-changes'));
+        fireEvent.press(screen.getByTestId('session-mode-terminal'));
+        expectQuietVeilOnly();
+        expect(announceSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        announceSpy.mockRestore();
+      }
+    });
+
+    /**
+     * Under the sessions projection the task leaves the board for the whole
+     * gap. The title used to fall back to the literal "Task" and the number
+     * vanished: more text appearing and disappearing mid-swap.
+     */
+    it('holds the header title and number while the sessions projection has dropped the task', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+      renderSessionScreen();
+      expect(screen.getByText('Fix the login bug')).toBeTruthy();
+      expect(screen.getByTestId('task-header-display-id')).toBeTruthy();
+
+      act(() => {
+        pushSessionEnded('sess-a');
+        seedBoardWithoutTask();
+        useActivityStore.getState().removeSession('sess-a');
+      });
+
+      expectQuietVeilOnly();
+      expect(screen.getByText('Fix the login bug')).toBeTruthy();
+      expect(screen.queryByText('Task')).toBeNull();
+      expect(screen.getByTestId('task-header-display-id')).toBeTruthy();
+    });
+
+    /**
+     * Under the Board tab's full projection the located task reports
+     * session_id null for the gap. Resolving that to a null sessionId used to
+     * swap the terminal pane for a placeholder (destroying the WebView) and
+     * ChatPane for its empty state; the panes stay on the last bound session.
+     */
+    it('keeps the panes on the last bound session when the full projection reports the task sessionless', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        seedRoledBoard(null, 'lane-doing');
+      });
+
+      expectQuietVeilOnly();
+      // includeHiddenElements: the veil hides the pane subtree from assistive
+      // technology, deliberately; the question here is what is MOUNTED.
+      expect(
+        screen.getByTestId('stub-terminal-tab', { includeHiddenElements: true }).props.accessibilityLabel,
+      ).toBe('sess-a');
+      expect(screen.getByTestId('stub-chat-pane', { includeHiddenElements: true }).props.accessibilityLabel).toBe(
+        'sess-a',
+      );
+      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityState).toEqual({ disabled: true });
+    });
+
+    /**
+     * Under the sessions projection with a nav param the dead id stays
+     * RESOLVED (the param bridges the gap), so "suspended" cannot be derived
+     * from a null sessionId: it is the footer pointing at the session whose
+     * end opened the window.
+     */
+    it('suspends the footer while it points at the dead session, even when the param keeps that id resolved', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+      renderSessionScreen();
+      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityState).toEqual({ disabled: false });
+
+      act(() => {
+        pushSessionEnded('sess-a');
+        seedBoardWithoutTask();
+      });
+
+      expectQuietVeilOnly();
+      const inputBar = screen.getByTestId('stub-session-input-bar');
+      expect(inputBar.props.accessibilityLabel).toBe('terminal');
+      expect(inputBar.props.accessibilityState).toEqual({ disabled: true });
     });
   });
 
@@ -1349,6 +1784,7 @@ describe('SessionScreen across a column move', () => {
       });
 
       expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
       expect(screen.getByTestId('session-ended-state')).toBeTruthy();
     });
 
@@ -1369,6 +1805,7 @@ describe('SessionScreen across a column move', () => {
       });
 
       expect(screen.queryByTestId('session-switching-state')).toBeNull();
+      expect(screen.queryByTestId('session-swap-veil')).toBeNull();
       expect(screen.getByTestId('session-ended-state')).toBeTruthy();
       expect(mockReplace).not.toHaveBeenCalled();
     });

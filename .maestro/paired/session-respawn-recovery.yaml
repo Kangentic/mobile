@@ -4,9 +4,10 @@ appId: com.kangentic.mobile
 # /respawn makes the stub end the current session, sit sessionless for a real
 # gap (STUB_RESPAWN_GAP_MS), then swap the task to a fresh sessionId - the
 # same suspend-then-respawn shape a real desktop-driven model/agent/effort
-# change produces. During the gap the screen must show the "Switching
-# session" overlay, never the "Session ended" one; once the successor lands,
-# its transcript marker appears and the switching overlay clears.
+# change produces. During the gap the screen must show the silent swap veil
+# and NEITHER text overlay (the gap sits inside SESSION_SWAP_QUIET_MS, pinned
+# by tests/unit/sessionRespawnGapTiming.test.ts); once the successor lands,
+# its transcript marker appears and the veil clears.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
@@ -33,20 +34,24 @@ appId: com.kangentic.mobile
 - tapOn:
     id: "composer-send"
 # The gap: the task is sessionless while the stub holds STUB_RESPAWN_GAP_MS
-# before installing the successor. By testID, never copy - the label text is
-# desktop-authored and is the component test's job, not this flow's.
+# before installing the successor. The veil carries no text at all, so this
+# is by testID out of necessity as well as policy. The two text overlays are
+# asserted ABSENT: a swap this short must never reveal either.
 #
 # TRIAGE NOTE: this is the one assertion here on a TRANSIENT state, visible
-# only for the stub's 6s gap. A starved emulator can poll first after the
-# successor has already bound, which burns the full timeout and reports
-# "never visible" - indistinguishable from the real regression. Check process
-# state and emulator load BEFORE reading a failure here as a product bug (the
-# same trap the google_apis image set off in the developer guide), and never
-# just raise the timeout: a longer wait cannot see a state that has passed.
+# for the stub's 6s gap plus the successor's bind-to-paint round trip. A
+# starved emulator can poll first after the successor has already painted,
+# which burns the full timeout and reports "never visible" - indistinguishable
+# from the real regression. Check process state and emulator load BEFORE
+# reading a failure here as a product bug (the same trap the google_apis
+# image set off in the developer guide), and never just raise the timeout: a
+# longer wait cannot see a state that has passed.
 - extendedWaitUntil:
     visible:
-      id: "session-switching-state"
+      id: "session-swap-veil"
     timeout: 10000
+- assertNotVisible:
+    id: "session-switching-state"
 - assertNotVisible:
     id: "session-ended-state"
 # Anchored regex: the markdown renderer can split the marker across text
@@ -56,6 +61,10 @@ appId: com.kangentic.mobile
     timeout: 25000
 - assertNotVisible:
     id: "session-ended-state"
+# In chat mode the window settles on the successor's transcript window, which
+# is what just rendered the marker above - so the veil has let go by now.
+- assertNotVisible:
+    id: "session-swap-veil"
 # Back to the lens this flow is actually named for. Everything above runs in
 # CHAT, so for the whole life of the black-terminal bug (the pane lost its feed
 # subscription on every session swap, src/state/terminalFeed.ts) this flow
@@ -81,8 +90,10 @@ appId: com.kangentic.mobile
 - assertNotVisible:
     id: "session-ended-state"
 # The successor's marker text is already visible above, which means it has
-# bound and the switching window has closed (SessionScreen resets both swap
-# latches the instant a successor binds) - so by this point in the flow the
-# scrim should be gone too, not merely never-opened.
+# bound and the quiet window has closed - so by this point in the flow every
+# swap surface should be gone, not merely never-opened. The text one never
+# opened at all (asserted in the gap); the veil opened and let go.
 - assertNotVisible:
     id: "session-switching-state"
+- assertNotVisible:
+    id: "session-swap-veil"
