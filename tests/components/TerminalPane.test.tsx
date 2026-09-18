@@ -20,6 +20,14 @@ jest.mock('@/connection/actions', () => ({
   refreshTerminalStream: jest.fn(),
 }));
 
+// The real module is a hard no-op without EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1
+// (never set here), so mocked directly to observe the 'terminal-renderer' call's
+// exact field shape - the whole point of the renderer report being routed through
+// the trace rather than the bare console.log it replaced.
+jest.mock('@/devsupport/connectionTrace', () => ({
+  traceConnection: jest.fn(),
+}));
+
 // The settings store persists the remembered fit size through the secure
 // store; an in-memory stand-in keeps the component tier free of the native
 // module and lets a test read back what was written.
@@ -160,6 +168,7 @@ const actionsMock = jest.requireMock<{ writeTerminal: jest.Mock; refreshTerminal
 );
 const directKeyInputMock = jest.requireMock<DirectKeyInputMockModule>('@/components/terminal/DirectKeyInput');
 const gestureHandlerMock = jest.requireMock<GestureHandlerMockModule>('react-native-gesture-handler');
+const connectionTraceMock = jest.requireMock<{ traceConnection: jest.Mock }>('@/devsupport/connectionTrace');
 
 async function renderPaneAndReady(isActive = true): Promise<ReturnType<typeof render>> {
   const result = render(
@@ -286,6 +295,31 @@ describe('TerminalPane (faithful mirror)', () => {
     postFromWebView(JSON.stringify({ type: 'modes', applicationCursorKeys: true }));
 
     expect(useTerminalUiStore.getState().applicationCursorModeBySessionId['sess-1']).toBe(true);
+  });
+
+  /**
+   * The renderer report used to be a bare `console.log` that put the session
+   * id into every release build's logcat on every terminal open - exactly
+   * what the connection trace's own convention (phases, states and
+   * milliseconds, never an identifier) exists to avoid. Asserted with
+   * `toHaveBeenCalledWith` rather than inspecting one field, so a regression
+   * that widens the fields object to include `sessionId` (or anything else)
+   * fails here even though the `renderer` value itself would still read
+   * correctly.
+   *
+   * Mutation seen failing: adding `sessionId` back into the traceConnection
+   * call's fields left the call `('terminal-renderer', { renderer: 'dom',
+   * sessionId: 'sess-1' })` instead of `('terminal-renderer', { renderer:
+   * 'dom' })` - "expected 'traceConnection' to have been called with
+   * ...received call did not match".
+   */
+  it('traces a renderer report with only the renderer, never the session id', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
+
+    postFromWebView(JSON.stringify({ type: 'renderer', renderer: 'dom' }));
+
+    expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-renderer', { renderer: 'dom' });
   });
 
   /**

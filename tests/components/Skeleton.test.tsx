@@ -155,5 +155,38 @@ describe('Skeleton', () => {
         jest.useRealTimers();
       }
     });
+
+    /**
+     * The bound's own `setTimeout` must not outlive the block that armed it:
+     * a skeleton that unmounts before `holdAfterMs` (the load it was waiting
+     * for landed, or the screen navigated away) would otherwise leave a
+     * pending timer for as long as `holdAfterMs` after the component is gone.
+     * Reduced motion is forced on so the static branch renders and
+     * `PulsingBlock` (which owns its own Reanimated-side timers) never
+     * mounts, keeping the pending-timer count attributable to this one
+     * `setTimeout` alone.
+     *
+     * Mutation seen failing: removing the `return () => clearTimeout(handle)`
+     * cleanup from Skeleton's effect left one pending timer after unmount
+     * instead of zero - "expected 1 to be 0".
+     */
+    it('clears the holdAfterMs timer on unmount, leaving no pending timer', () => {
+      jest.useFakeTimers();
+      jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
+      try {
+        const { unmount } = render(
+          <ThemeProvider>
+            <Skeleton testID="loading-line" />
+          </ThemeProvider>,
+        );
+        expect(jest.getTimerCount()).toBe(1);
+
+        unmount();
+
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 });
