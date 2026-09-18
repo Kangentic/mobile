@@ -46,12 +46,15 @@ export const ENDED_ROW_GRACE_MS = 8_000;
 
 /**
  * One session end, in flight: the desktop's phase label when it sent one
- * (null for an unlabelled end), and when the ending session reported it.
- * Read through `selectTaskRespawn`, which applies the window.
+ * (null for an unlabelled end), when the ending session reported it, and
+ * WHICH session ended - so the successor's `registerSession` can find the
+ * ghost entry and take over its place on the Home feed. Read through
+ * `selectTaskRespawn`, which applies the window.
  */
 export interface RespawnInFlight {
   label: string | null;
   reportedAt: number;
+  endedSessionId: string;
 }
 
 /** The retention window a given end earns: a labelled one is explicit desktop intent, an unlabelled one is a bet. */
@@ -262,6 +265,58 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
 }
 
 /**
+ * The entry a freshly registered session starts from. Ordinarily `emptyEntry`;
+ * for a SUCCESSOR (a session registering for a task whose previous session
+ * just ended, and whose ghost entry is still retained) it takes over the
+ * ghost's place on the Home feed instead of starting from nothing.
+ *
+ * Why: the feed's FlashList is keyed on the session id and ordered by
+ * `enteredSectionAt`, so a successor built from `emptyEntry` is a NEW row
+ * that lands at the top of Idle with the task description as its body, then
+ * jumps to the top of Working a round trip later when its snapshot says it is
+ * thinking - two position changes and a body change inside the swap, on the
+ * row that is supposed to show nothing new. Inheriting the ghost's section,
+ * ordering key, preview, usage and unread badge makes the bind a same-slot
+ * remount with the same body; `applySnapshot` then leaves `enteredSectionAt`
+ * alone when the section it reports matches.
+ *
+ * What is NOT inherited, and why: a pending prompt (`'permission'` maps to
+ * `'idle'`, `awaitedPromptId` stays null) belongs to the agent that died and
+ * can never be answered - and `localNotifier` treats a NEW entry in
+ * 'permission' as a fresh prompt, so inheriting it verbatim would push
+ * "Agent needs your input" for a dead question. `reason`, `feedStatus` and
+ * `sessionStatus` are the successor's own liveness and stay fresh. One
+ * consequence to know: a successor inherited as 'thinking' whose snapshot
+ * then reports 'idle' is a thinking-to-idle edge, which arms the notifier's
+ * 45s idle settle where a fresh entry armed nothing. That is the agent going
+ * idle after work the user was watching, so it is the honest reading.
+ *
+ * Nothing seeds when the successor id equals the ended id (the desktop never
+ * reuses one across a swap; a queue promotion does, but that never ends) or
+ * when the ghost has already been pruned.
+ */
+function successorEntry(
+  sessionId: string,
+  taskId: string,
+  projectId: string,
+  state: Pick<ActivityStoreState, 'bySessionId'>,
+  respawnInFlight: RespawnInFlight | undefined,
+): SessionActivityEntry {
+  const fresh = emptyEntry(sessionId, taskId, projectId);
+  if (respawnInFlight === undefined || respawnInFlight.endedSessionId === sessionId) return fresh;
+  const ghost = state.bySessionId[respawnInFlight.endedSessionId];
+  if (ghost === undefined || ghost.taskId !== taskId) return fresh;
+  return {
+    ...fresh,
+    state: ghost.state === 'permission' ? 'idle' : ghost.state,
+    enteredSectionAt: ghost.enteredSectionAt,
+    messagePreview: ghost.messagePreview,
+    usage: ghost.usage,
+    unreadCount: ghost.unreadCount,
+  };
+}
+
+/**
  * Reads a `session-ended` payload's optional `spawnProgressLabel` field
  * (protocol 0.14.0+), normalising "absent" to null so callers have one empty
  * case rather than two. Absent from a pre-0.14.0 desktop, and never sent as
@@ -316,6 +371,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // registers every live session before it prunes, so by the time the
       // prune loop asks "is a respawn in flight for this task?" the answer is
       // already no. One snapshot, no double row, no flicker.
+      const respawnInFlight = state.respawnByTaskId[taskId];
       const respawnByTaskId = clearTaskRespawn(state.respawnByTaskId, taskId);
       const respawnChanged = respawnByTaskId !== state.respawnByTaskId;
       const existing = state.bySessionId[sessionId];
@@ -329,7 +385,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         };
       }
       return {
-        bySessionId: { ...state.bySessionId, [sessionId]: emptyEntry(sessionId, taskId, projectId) },
+        bySessionId: { ...state.bySessionId, [sessionId]: successorEntry(sessionId, taskId, projectId, state, respawnInFlight) },
         respawnByTaskId,
       };
     }),
@@ -393,7 +449,10 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // label, so the two maps cannot disagree about what the desktop said.
       const respawnByTaskId: Record<string, RespawnInFlight> =
         payload.type === 'session-ended'
-          ? { ...state.respawnByTaskId, [event.taskId]: { label: spawnProgressLabel, reportedAt: Date.now() } }
+          ? {
+              ...state.respawnByTaskId,
+              [event.taskId]: { label: spawnProgressLabel, reportedAt: Date.now(), endedSessionId: event.sessionId },
+            }
           : state.respawnByTaskId;
       if (!existing) {
         if (
