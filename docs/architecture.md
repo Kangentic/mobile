@@ -569,13 +569,25 @@ transcript window lands, and never in changes mode, where the veil merely yields
 finally paints the successor keeps the predecessor's cell size (`keepFont`), so a shorter grid
 comes up at the same resolution, centred, rather than zoomed to fill the height; the fit button
 and a desktop grid change fit again. Past
-`SESSION_SWAP_QUIET_MS` with the dead session still bound, the two text surfaces reveal exactly as
-before: `SessionSwitchingState` ("Switching session", with the desktop's label) when a column or
-label latch says a successor is coming, `SessionEndedState` otherwise, and the 20 s
-`SESSION_SWAP_GRACE_MS` fallback to the ended state stands. Every normal move never reaches them;
-they exist because a desktop can genuinely stall a spawn and the diff is still worth reading. An
-end handled without a window (a move to To Do or Done, an archived task) is marked spent at once,
-or a reset task dropped by the sessions projection would get a veil OVER its ended state.
+`SESSION_SWAP_QUIET_MS` with the dead session still bound, ONE text surface reveals over the same
+scrim: `SessionWaitingState`, a card and not a verdict ("Waiting for the desktop" / "This screen
+updates as soon as it reports a session for this task."), with "Read transcript" raised as the
+primary and "Move task" outlined beneath it, and the mode switcher still on its usual footer row
+under the card with the composer and quick keys hidden (`switcherOnly` on `SessionInputBar`). The
+card shows in terminal mode only: "Read transcript" is a tap to Chat, where the dead session's
+transcript is still readable, and Changes has the diff. It replaced two surfaces ("Switching
+session" with the desktop's label when a column or label latch promised a successor, "Session
+ended" otherwise) and the 20 s fallback between them, which was the phone changing its verdict on
+a clock; from here the phone cannot tell a stalled spawn from a park or from its own updates not
+arriving, and the last is the likeliest on a phone. The label latch went with them, and the label
+is rendered nowhere; the column latch stays for the move opener, still bounded by
+`SESSION_SWAP_GRACE_MS`. The veil leaves by the same 220 ms crossfade it arrives by. Every normal
+move never reaches the card. A move to To Do or Done leaves the screen instead, back to wherever
+the task was opened from (on the column role the instant the move is confirmed on the phone, or
+on the archive page for a desktop-made move under the sessions projection): neither promises a
+successor, so no card would be honest, and the old completed-task redirect pushed a screen at a
+user who had just confirmed a move. An end handled that way is marked spent at once, or a reset
+task dropped by the sessions projection would get a veil over its own exit.
 
 Nothing else on that screen changes during the window. The panes and the footer are fed
 `sessionId ?? lastBoundSessionId`, so neither board projection unmounts the xterm WebView or flashes
@@ -608,8 +620,9 @@ isolated column's session ending, the main one resuming), so its first snapshot 
 (`inheritedPreview`) and the row peeks the successor's own transcript, while a preview the successor
 pushes itself is its own. The one consequence worth knowing: a successor inherited as thinking whose snapshot
 reports idle is a thinking-to-idle edge, which arms the notifier's 45 s idle settle where a fresh
-entry armed nothing. The desktop's phase label is rendered on the session screen's long-gap reveal
-only. The elapsed-wait label on a needs-you row goes with `feedStatus: 'live'` at the end, since a
+entry armed nothing. The desktop's phase label is rendered nowhere on the phone; it only lengthens
+the row's retention window and marks the connection trace. The elapsed-wait label on a needs-you
+row goes with `feedStatus: 'live'` at the end, since a
 dead prompt's wait is not held. `tests/unit/sessionRespawnGapTiming.test.ts` pins the two list
 windows to the two session-screen windows and both rigs' respawn gap inside the quiet one.
 

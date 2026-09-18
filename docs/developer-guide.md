@@ -1800,7 +1800,7 @@ at all.
 
 **Holding the veil for its full deadline.** `kangentic_send_session_message` with `/exit` ends the
 session with no label and no successor, which is the one way to see the long-gap reveal live
-(veil for 8.0 s, then the ended text) and to measure the pulse: `dumpsys gfxinfo <pkg> reset`,
+(veil for 8.0 s, then the waiting card) and to measure the pulse: `dumpsys gfxinfo <pkg> reset`,
 `top -b -n 5 -d 2 -o CMD,%CPU -p <pid>` in the background, send the exit, read `gfxinfo` again
 40 s later, then flip Settings > Retention probe to "No looping motion" and repeat in the same
 process. Measured that way: 501 frames rendered across the window with the pulse against 36

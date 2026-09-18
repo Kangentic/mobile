@@ -28,7 +28,15 @@ export interface MotionPresets {
   sheetSlideOut: ComplexAnimationBuilder;
   bannerIn: ComplexAnimationBuilder;
   bannerOut: ComplexAnimationBuilder;
+  /**
+   * A layer arriving over, or leaving from over, content the eye is already
+   * following (the swap veil over a terminal frame). Symmetric on purpose:
+   * the base duration on the standard curve both ways, because what the user
+   * watches is the frame underneath, not the layer. The banner pair is the
+   * asymmetric one, for an element that IS the thing being watched.
+   */
   crossfadeIn: ComplexAnimationBuilder;
+  crossfadeOut: ComplexAnimationBuilder;
 }
 
 /**
@@ -56,6 +64,7 @@ export function useMotionPresets(): MotionPresets {
       bannerIn: FadeIn.duration(durations.fast).easing(decelerate).reduceMotion(ReduceMotion.System),
       bannerOut: FadeOut.duration(durations.fast).easing(accelerate).reduceMotion(ReduceMotion.System),
       crossfadeIn: FadeIn.duration(durations.base).easing(standard).reduceMotion(ReduceMotion.System),
+      crossfadeOut: FadeOut.duration(durations.base).easing(standard).reduceMotion(ReduceMotion.System),
     };
   }, [theme.motion]);
 }
