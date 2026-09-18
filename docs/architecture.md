@@ -113,7 +113,7 @@ decides *what* it may do:
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
 is being approved, and the desktop enforces that the response binds to a specific outstanding
 prompt id (`${sessionId}:${toolUseId}`, also covering `AskUserQuestion`/`ExitPlanMode` pauses,
-which ride the same permission machinery). The default pairing grant is ALL TEN verbs
+which ride the same permission machinery). The default pairing grant is ALL ELEVEN verbs
 (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts`): pairing proves
 possession of both devices, so pairing is the approval, and the desktop's Mobile Devices
 settings narrow a device per-verb after the fact. The `board-tool-*` surface is NOT

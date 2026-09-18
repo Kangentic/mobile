@@ -94,12 +94,13 @@ export const DEFAULT_PAIRING_CAPABILITIES: CapabilityVerb[] = [...CAPABILITY_VER
 The rationale is recorded there: the phone is an extension of the user's own desktop, and the
 QR scan plus SAS comparison already proves physical possession of both devices. What stays
 true regardless is the real guardrail: the protocol defines no shell, file, or
-arbitrary-command verb at all, so "full access" means those ten and never more.
+arbitrary-command verb at all, so "full access" means those eleven and never more.
 
 > **Doc bug (fixed 2026-08-02):** the mobile repo's `CLAUDE.md`, `docs/security.md`, and
 > `docs/architecture.md` all stated the default grant was "the read-only four plus
-> `register-push`". All three now match the desktop's actual code (all ten verbs by default;
-> the allowlist narrows after the fact).
+> `register-push`". All three now match the desktop's actual code (every verb by default, ten
+> at the time and eleven since protocol 0.15.0 added `start-session`; the allowlist narrows
+> after the fact).
 
 ## Ownership model
 

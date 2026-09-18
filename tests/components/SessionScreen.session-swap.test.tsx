@@ -3,8 +3,10 @@ import { AccessibilityInfo, StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { ActivityEventPayload } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
+import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { SESSION_SWAP_QUIET_MS, SessionScreen } from '@/screens/task/SessionScreen';
 import {
+  SESSION_SWAP_SETTLED_ANNOUNCEMENT,
   SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
   SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL,
 } from '@/screens/task/SessionSwapVeil';
@@ -14,6 +16,7 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { boardColumnFixture, boardTaskFixture, userEntryFixture } from '@/devsupport/desktopFixtures';
+import type { RetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { closeSessionScreen, loadArchivedTasks, openSessionScreen } from '@/connection/actions';
 
 jest.mock('react-native-safe-area-context', () =>
@@ -39,6 +42,16 @@ jest.mock('expo-router', () => ({
   // focused for its whole life, so a plain effect is the faithful stand-in.
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   useFocusEffect: (effect: () => void | (() => void)) => require('react').useEffect(effect, [effect]),
+}));
+
+// Controllable stand-in for the retention probe, read by both SessionScreen
+// (the 'no-swap-veil' arm) and ScreenMotion (the 'no-motion' arm). Defaults to
+// 'off', the same value the real module always returns in a test process
+// (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE is unset here), so every test that
+// does not touch this variable is unaffected.
+let mockRetentionProbeVariant: RetentionProbeVariant = 'off';
+jest.mock('@/devsupport/retentionProbe', () => ({
+  getRetentionProbeVariant: () => mockRetentionProbeVariant,
 }));
 
 jest.mock('@/connection/actions', () => ({
@@ -1958,6 +1971,130 @@ describe('SessionScreen across a column move', () => {
         jest.useRealTimers();
         announceSpy.mockRestore();
       }
+    });
+
+    /**
+     * Every announcement is gated on `swapContextRef.current.focused`, synced
+     * from `useScreenFocusActive()` every render. The context defaults to
+     * `true`, so a revert of the guard passes every OTHER test in this file
+     * without comment - this pair is what actually pins it, driving a full
+     * swap (end, past-deadline waiting, successor bind and paint) through
+     * `ScreenMotionOverride` on both sides of the gate.
+     */
+    it('announces nothing across a full swap while the screen is unfocused', () => {
+      const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        render(
+          <ThemeProvider>
+            <ScreenMotionOverride active={false}>
+              <SessionScreen />
+            </ScreenMotionOverride>
+          </ThemeProvider>,
+        );
+
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        expectQuietVeilOnly();
+
+        passQuietDeadline();
+        expectWaitingVeil();
+
+        act(() => {
+          seedRoledBoard('sess-b', 'lane-doing');
+        });
+        act(() => {
+          useTerminalUiStore.getState().markTerminalPainted('sess-b');
+        });
+        expectNoSwapSurface();
+
+        expect(announceSpy).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+        announceSpy.mockRestore();
+      }
+    });
+
+    /** The same drive, focused through the override: proves the gate, not a broken spy. */
+    it('makes every swap announcement across the same full swap while explicitly focused', () => {
+      const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        render(
+          <ThemeProvider>
+            <ScreenMotionOverride active={true}>
+              <SessionScreen />
+            </ScreenMotionOverride>
+          </ThemeProvider>,
+        );
+
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        expectQuietVeilOnly();
+
+        passQuietDeadline();
+        expectWaitingVeil();
+
+        act(() => {
+          seedRoledBoard('sess-b', 'lane-doing');
+        });
+        act(() => {
+          useTerminalUiStore.getState().markTerminalPainted('sess-b');
+        });
+        expectNoSwapSurface();
+
+        expect(announceSpy.mock.calls.map((call) => call[0])).toEqual([
+          SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
+          SESSION_SWAP_WAITING_ACCESSIBILITY_LABEL,
+          SESSION_SWAP_SETTLED_ANNOUNCEMENT,
+        ]);
+      } finally {
+        jest.useRealTimers();
+        announceSpy.mockRestore();
+      }
+    });
+
+    /**
+     * The retention probe's 'no-swap-veil' arm (src/devsupport/retentionProbe.ts):
+     * a dead session's terminal pane stays bare, deliberately, so what the
+     * WebView does after the PTY dies can be measured on its own. Paired with
+     * the sibling below so the suppression is proven against a variant that
+     * still shows the veil, not against a mock that always returns it.
+     */
+    it("bares the dead pane with no veil under the retention probe's no-swap-veil arm", () => {
+      mockRetentionProbeVariant = 'no-swap-veil';
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+        expect(screen.getByTestId('session-panes')).toBeTruthy();
+        expect(screen.getByTestId('session-pane-terminal')).toBeTruthy();
+      } finally {
+        mockRetentionProbeVariant = 'off';
+      }
+    });
+
+    it('shows the swap veil for the same sequence under the default retention probe variant', () => {
+      seedRoledBoard('sess-a', 'lane-doing');
+      renderSessionScreen();
+
+      act(() => {
+        pushSessionEnded('sess-a');
+      });
+
+      expectQuietVeilOnly();
+      // Contrast with the probe arm above: under the shipped default the
+      // panes ARE hidden from a plain query, because the veil covers them.
+      expect(screen.queryByTestId('session-panes')).toBeNull();
     });
 
     /**

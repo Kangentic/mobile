@@ -337,7 +337,9 @@ export function SessionScreen(): React.JSX.Element {
    */
   const taskLeftForRole =
     lastBoundSessionId !== null && (isDoneRole(locatedColumnRole) || isTodoRole(locatedColumnRole));
-  const maybeArchived = sessionEnded || (!taskLocated && lastBoundSessionId !== null);
+  // A reason to LOOK for the archive row, not a verdict: `taskArchived` below
+  // is the verdict, once the page has come back.
+  const archiveWorthChecking = sessionEnded || (!taskLocated && lastBoundSessionId !== null);
   /**
    * Not a single one-shot: the first look can legitimately be too early.
    * Moving to Done writes the task into the done column optimistically, so
@@ -348,7 +350,7 @@ export function SessionScreen(): React.JSX.Element {
    * tick as the archive row) is a second, decisive look.
    */
   const archiveFetchKey =
-    maybeArchived && projectId !== null ? `${projectId}:${taskLocated ? 'located' : 'gone'}` : null;
+    archiveWorthChecking && projectId !== null ? `${projectId}:${taskLocated ? 'located' : 'gone'}` : null;
   // A ref, not state: this only guards the fetch from repeating, and nothing
   // renders from it. As state it is a setState inside an effect - a cascading
   // render for no visible change, and an eslint error.
@@ -532,6 +534,11 @@ export function SessionScreen(): React.JSX.Element {
         : sessionEnded
           ? 'ended'
           : 'moving';
+  // Not a synonym for quietWindowCleared: a successor binding out of the
+  // waiting phase ends the PHASE (the footer comes back to life, the deadline
+  // restarts) but leaves the PANE cleared until the window closes. The two
+  // diverge exactly there, and the render below reads each for its own
+  // concern.
   const quietWindowWaiting = quietWindowPhase === 'waiting';
   // Read at fire time by the effects below (synced every render), so they can
   // key on the window alone: an announcement keyed on the label or the focus
@@ -557,6 +564,12 @@ export function SessionScreen(): React.JSX.Element {
   // successor that binds out of the waiting phase and never paints. Moving
   // (the end never came): closes WITHOUT being spent, so the end can open its
   // own. Waiting: no timer at all.
+  //
+  // Mostly timings for the connection trace, but NOT trace-only: `bindAt` is
+  // how the deadline tells "a successor has bound since this window opened"
+  // from "still waiting on the dead session", and `deadlineFor` is what keeps
+  // a deadline-spent window from announcing "Session ready". Neither can go
+  // with the trace.
   const swapTraceRef = useRef({
     openedAt: 0,
     endedAt: null as number | null,
