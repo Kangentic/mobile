@@ -157,18 +157,21 @@ software matches, with no repeat of the QR/SAS ceremony.
 ## Authorization
 
 The encrypted channel proves *which* device is talking; a desktop-enforced capability allowlist
-decides *what* it may do (see `docs/architecture.md` for the ten-verb table). **There is no
+decides *what* it may do (see `docs/architecture.md` for the eleven-verb table). **There is no
 shell, file-read, or arbitrary-command verb in the protocol at all: it is absent, not filtered.**
 This follows the lesson of Chrome Remote Desktop and VS Code tunnels, which are identity-gated
 but capability-unscoped, and of the SSH forced-command pattern, which shows that a filter on an
 otherwise-general command channel is the wrong shape.
 
-The default pairing grant is **all ten verbs** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's
-`pairing-service.ts` spreads `CAPABILITY_VERBS` whole). This is deliberate: the pairing ceremony
+The default pairing grant is **all eleven verbs** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's
+`pairing-service.ts` spreads `CAPABILITY_VERBS` whole; a device paired before `start-session`
+existed is re-granted on the desktop's next bridge start). This is deliberate: the pairing ceremony
 proves possession of both devices, so pairing is the approval, and the per-verb allowlist in the
 desktop's Mobile Devices settings exists to NARROW a device after the fact rather than as a
 default-deny gate. The load-bearing guarantee is the previous paragraph's - the verbs a grant
-can contain are the ten above, with no shell, file, or arbitrary-command verb to grant.
+can contain are the eleven above, with no shell, file, or arbitrary-command verb to grant.
+`start-session` starts or resumes the agent the desktop would have started for that task anyway
+(the desktop's own Resume button, reachable from the phone), never a shell.
 `interactive-terminal` is deliberately
 raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
 already running, never a new shell. Its resize/release actions (the phone sizing that PTY to the
