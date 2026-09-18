@@ -4,9 +4,16 @@ appId: com.kangentic.mobile
 # The session header's current-column chip: shows where the task sits, tap
 # opens the move-task sheet (the same sheet board-move.yaml reaches through
 # the long-press actions hop). stub-task-1 starts in Doing every flow (the
-# stub restores its canned board on session establish), so moving it to
-# To Do must re-label the chip (optimistic write + the stub's task-updated
-# re-snapshot) and land the card in the To Do column on the board.
+# stub restores its canned board on session establish). A move to a column
+# whose role is To Do or Done LEAVES the session screen, back to wherever
+# the task was opened from: neither destination promises a successor
+# session, so there is nothing for the screen to wait for (leaveScreen in
+# src/screens/task/SessionScreen.tsx; docs/architecture.md, "Transitional
+# states"). The sheet writes the task into the target column optimistically,
+# so the leave follows the confirm at once. This flow therefore enters from
+# the Agents feed, which makes the feed the deterministic landing spot, and
+# proves the move landed on the board rather than on a chip that no longer
+# exists.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
 - extendedWaitUntil:
@@ -58,17 +65,20 @@ appId: com.kangentic.mobile
     notVisible:
       id: "move-task-sheet"
     timeout: 10000
-# The chip re-labels to the target column. Text, not id: the chip's testID is
-# stable across the move and the label is stub fixture DATA, not app copy -
-# the same carve-out other flows document for asserting stub-authored
-# content. The stub's canned transcript and terminal frames contain no
-# "To Do", so the match cannot land on pane content.
+# The session screen leaves on the To Do role. The pop is focus-gated on the
+# sheet's own dismissal (the sheet closes itself with router.back() on
+# success; an unguarded pop from underneath raced it), so wait for the
+# origin to be back first: the pop is the step that takes time, and the two
+# trees can briefly coexist mid-transition. Only then assert the session
+# screen is gone. No `back` step: there is nothing left to go back from, and
+# Back on the root tab would background the app before the Board taps.
 - extendedWaitUntil:
     visible:
-      text: "To Do"
+      id: "triage-home-list"
     timeout: 15000
+- assertNotVisible:
+    id: "session-screen"
 # And the board agrees: the card sits in the To Do column now.
-- back
 - tapOn:
     text: "Board"
 - tapOn:
