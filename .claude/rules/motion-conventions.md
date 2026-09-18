@@ -91,11 +91,20 @@ measurement commands.
 idle screen costs, not just what it looks like: the idle release build rendered 6131 frames in 51
 seconds (continuous 120 Hz) because per-row spinners never end. That is a battery and thermal cost
 no jank metric reports - `dumpsys gfxinfo` will call it perfectly smooth. The one sanctioned
-exception is the session screen's swap veil once its wait has outlived the quiet deadline
-(`src/screens/task/SessionSwapVeil.tsx`): a decision taken on 2026-09-18 to mirror the desktop's
-own launch overlay, measured on the release build at about 11% of a core against 5% static, and
-gated by the route's `ScreenMotionProvider` (a pushed route or a backgrounded app stops it) and by
-OS reduced motion. Anything else that loops must still stop on its own.
+exception is the session screen's wait cursor once the swap veil has outlived the quiet deadline
+(`src/screens/task/SessionSwapVeil.tsx`, `BlinkingBlock`): a decision taken on 2026-09-18 to mirror
+the desktop's own launch overlay, allowed ONLY because it is a two-state toggle on a JS interval
+that draws two frames a second. It was first built as a Reanimated breath on the same cell-sized
+view, on the argument that a frame's damage was one cell rather than a full screen. Measured on the
+release build (emulator, every arm in one process, 2026-09-18), that breath drew 57 frames a second
+at 24-28% of a core, the same as the full-screen scrim breath had, while the veil held static drew
+0 frames at 1.5-4%. **A frame costs a frame however small the view that changed: there is no cheap
+tween.** An earlier revision of this paragraph quoted the pulse at 11% against 5% static; those were
+single samples over windows that were mostly static, and they are retracted. The blink is still
+gated by the route's `ScreenMotionProvider` (a pushed route stops it), by OS reduced motion, and by
+the OS itself once the app is backgrounded (measured: 4-8% and zero frames with the veil up). The
+blink as shipped measured 1.6 frames a second at 10-12%, against a live idle terminal at 11-12.5%
+in the same process. Anything else that loops must still stop on its own.
 
 **But do not read that as "Reanimated is idle when nothing animates".** It is not, and the
 difference matters when you go looking for a cost. `scheduledMapperRun` in

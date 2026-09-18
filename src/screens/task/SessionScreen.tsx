@@ -746,6 +746,18 @@ export function SessionScreen(): React.JSX.Element {
   // every mode, since keys and messages have nowhere to go.
   const footerSuspended = quietWindowOpen && !quietWindowWaiting && displaySessionId === quietWindowSessionId;
   const footerSwitcherOnly = quietWindowWaiting;
+  // The terminal pane is HIDDEN, not merely covered, while the wait is on
+  // with nothing bound. Measured on the release build (emulator, 2026-09-18):
+  // once a session has ended its page keeps the WebView painting at the full
+  // frame rate for as long as the pane is drawn, about 58 frames a second
+  // and 30 points of a core, whatever the veil above it does (the same with
+  // the veil static under OS reduced motion), while a live idle terminal
+  // draws nothing and the pane at opacity 0 draws nothing. The cause in the
+  // page is not identified; the cleared veil covers the pane completely, so
+  // hiding it changes nothing visible, and it comes back at the bind so the
+  // successor's seed paints and lifts the veil. The quiet phase keeps the
+  // pane drawn: its eight seconds are bounded and the last frame must show.
+  const terminalPaneShown = mode === 'terminal' && !quietWindowWaiting;
 
   return (
     <Screen testID="session-screen">
@@ -789,7 +801,7 @@ export function SessionScreen(): React.JSX.Element {
             testID="session-panes"
           >
             <View
-              style={[styles.pane, mode === 'terminal' ? styles.paneVisible : styles.paneHidden]}
+              style={[styles.pane, terminalPaneShown ? styles.paneVisible : styles.paneHidden]}
               pointerEvents={mode === 'terminal' ? 'auto' : 'none'}
               // A hidden pane is still in the view tree, so it has to be taken
               // out of the accessibility tree explicitly - otherwise a screen

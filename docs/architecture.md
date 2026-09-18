@@ -581,9 +581,17 @@ the desktop to report a session" once. The header's column chip is the move affo
 always. A successor that binds out of the waiting phase paints under the cleared pane (the empty
 layer stays for the life of the window, so the dead frame never reappears) and the scrim lifts on
 its first non-blank paint; a bound successor that never paints is uncovered by a fresh deadline
-counted from the bind. The pulse therefore no longer stops on a clock, which motion-conventions.md
-records as its one sanctioned exception (measured on the release build at about 11% of a core
-against 5% static; the route's `ScreenMotionProvider` and OS reduced motion still gate it).
+counted from the bind. The cursor blinks for as long as the wait lasts, which motion-conventions.md
+records as its one sanctioned perpetual motion, and it is allowed only because it is a two-state
+toggle on a JS interval (`BlinkingBlock`) that draws two frames a second, not a tween: measured on
+the release build (emulator, every arm in one process, 2026-09-18), a breathing cursor on the same
+cell-sized view drew 57 frames a second at 24-28% of a core, no cheaper than the full-screen scrim
+breath, while the veil held static drew 0 frames at 1.5-4%. The pane under the cleared veil is
+hidden outright (opacity 0) rather than merely covered, because a dead session's page keeps the
+WebView painting at the full frame rate for as long as the pane is drawn, whatever the veil does
+(measured: about 58 frames a second and 30 points of a core with the veil static), and at opacity 0
+it draws nothing; it comes back at the bind so the successor's seed can paint and lift the veil.
+The route's `ScreenMotionProvider` and OS reduced motion still gate the blink.
 
 This replaced, in two steps on 2026-09-18, the two text surfaces ("Switching session" with the
 desktop's label when a column or label latch promised a successor, "Session ended" otherwise) with
@@ -612,7 +620,8 @@ wait") and one on the settle ("Session ready", never at the deadline) are its wh
 story. The pulse is the one looping animation on the screen and is allowed because it is bounded
 by the quiet threshold, gated by the session route's `ScreenMotionProvider`, and registers one
 Reanimated mapper only while mounted (`PulsingBlock`, shared with the loading Skeleton; the static
-branch under reduced motion registers none).
+branch under reduced motion registers none). Past the deadline the scrim is static and the wait
+cursor's blink registers no mapper at all (`BlinkingBlock`, a JS interval).
 
 **The Home feed row, the board card and `TaskHeader`** keep their place and their last content, and
 only the glyph changes. `reconcileSessionsFromBoards` used to prune the activity entry for any

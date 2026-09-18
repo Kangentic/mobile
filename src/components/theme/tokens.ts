@@ -146,6 +146,27 @@ export interface MotionTokens {
     opacityMin: number;
     opacityMax: number;
   };
+  /**
+   * The wait cursor: one cell-sized block blinking at the empty terminal's
+   * origin once the swap veil has cleared the pane, the terminal's own idiom
+   * for waiting with nothing to show. A BLINK, not a breath: a two-state
+   * toggle committed on a JS interval, never a tween, because a tween draws a
+   * whole window frame per vsync however small the view that changed.
+   * Measured on the release build (emulator, 2026-09-18, pane hidden under
+   * the veil): a breathing cursor drew 57 frames a second at 24-28% of a
+   * core, the same cost the full-screen scrim breath had, while the same veil
+   * held static drew nothing at 1.5-4%. The scrim itself holds static there
+   * for the same reason, and because its breath over the empty grid moves
+   * each channel by less than one unit (the two backgrounds are three units
+   * apart). `intervalMs` is a half-period, lit for one and dim for the next,
+   * xterm.js's own cursor cadence; the dim state stays faintly visible so the
+   * grid's origin never vanishes.
+   */
+  waitCursorBlink: {
+    intervalMs: number;
+    opacityMin: number;
+    opacityMax: number;
+  };
 }
 
 export interface TypographyToken {
@@ -216,6 +237,11 @@ export const motionTokens: MotionTokens = {
     durationMs: 1200,
     opacityMin: 0.4,
     opacityMax: 0.8,
+  },
+  waitCursorBlink: {
+    intervalMs: 600,
+    opacityMin: 0.15,
+    opacityMax: 1,
   },
   // Design values, tuned by eye on a release build rather than measured: the
   // max is the switching overlay's own scrim opacity, the min keeps the frame
