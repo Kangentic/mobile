@@ -3,7 +3,7 @@
  * after a transport drop + fresh handshake, rejection pruning, and the
  * debounced board refresh. Runs over the real loopback + stub initiator.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   generateX25519KeyPair,
   type CapabilityRequestMessage,
@@ -18,6 +18,20 @@ import { SUBSCRIBE_FAN_OUT_CONCURRENCY, SubscriptionManager, type SubscriptionSn
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+
+/**
+ * The real connectionTrace module is a hard no-op without
+ * EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1 (never set in this suite), so
+ * every test above ran with `traceConnection` doing nothing observable.
+ * Mocked here so the `board-subscribe` call's shape can be asserted, the
+ * same pattern connectionManagerTraceCallSites.test.ts uses. Safe against
+ * every OTHER test in this file: none reads or asserts on a trace call, so
+ * replacing the no-op body with a spy changes nothing they check.
+ */
+const connectionTraceMocks = vi.hoisted(() => ({
+  traceConnection: vi.fn<(event: string, fields?: Record<string, unknown>) => void>(),
+}));
+vi.mock('@/devsupport/connectionTrace', () => connectionTraceMocks);
 
 interface Harness {
   session: SessionManager;
@@ -115,6 +129,10 @@ async function flushLoopbackFakeTimers(rounds = 6): Promise<void> {
 }
 
 describe('SubscriptionManager', () => {
+  beforeEach(() => {
+    connectionTraceMocks.traceConnection.mockClear();
+  });
+
   /**
    * Board task #70. A subscribe in flight across a rekey is sealed under keys
    * the desktop has just retired, so nothing ever answers it and the board
@@ -470,6 +488,184 @@ describe('SubscriptionManager', () => {
           (request) => request.verb === 'read-board' && (request.payload as { action?: string }).action !== 'unsubscribe',
         ).length;
         expect(subscribesAfterReAdd - countBeforeReAdd).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * The `board-subscribe` trace line's shape on the timeout path: `outcome`
+     * is 'failed' (not a desktop rejection), `view` is the projection that was
+     * asked for, `ms` is a real elapsed duration, and `retry` reports whether
+     * a retry was actually armed - read from `willRetry`, not hardcoded, so a
+     * regression that always logs `retry: true` (or always false) cannot pass
+     * this by accident.
+     *
+     * Mutation seen failing: hardcoding `retry: true` in the traceConnection
+     * call left this test green (the timeout path DOES retry), so the
+     * discriminating half is the rejection test below, which hardcodes the
+     * opposite value and catches it there instead.
+     */
+    it('traces a timed-out board subscribe as failed, with the view and a real duration, and reports that it will retry', async () => {
+      vi.useFakeTimers();
+      try {
+        const { stub, manager } = await harness((request) => {
+          const payload = request.payload as { view?: ReadBoardView };
+          if (request.verb === 'read-board' && payload.view === 'full') return null;
+          return defaultResponder(request);
+        });
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(['project-1']));
+        await flushLoopbackFakeTimers();
+        manager.setBoardWantsFull('project-1');
+        await flushLoopbackFakeTimers();
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        await flushLoopbackFakeTimers();
+
+        const traceCall = connectionTraceMocks.traceConnection.mock.calls.find(([event]) => event === 'board-subscribe');
+        expect(traceCall?.[1]).toEqual({ outcome: 'failed', view: 'full', ms: expect.any(Number), retry: true });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * The rejection path: `outcome` is 'rejected' and `retry` is false,
+     * because a desktop-refused subscribe is an answer, not a transient
+     * failure. Mutation seen failing: hardcoding `retry: true` in the
+     * traceConnection call made this read `{ ..., retry: true }` instead of
+     * `{ ..., retry: false }` - "expected { ...retry: true } to deeply equal
+     * { ...retry: false }".
+     */
+    it('traces a rejected board subscribe as rejected, and reports that it will not retry', async () => {
+      const { stub, manager } = await harness((request) => {
+        const payload = request.payload as { view?: ReadBoardView };
+        if (request.verb === 'read-board' && payload.view === 'full') {
+          return { type: 'capability-response', requestId: request.requestId, ok: false, error: 'No such project' };
+        }
+        return defaultResponder(request);
+      });
+      stub.beginHandshake();
+      await flushLoopback();
+      manager.setDesiredBoards(new Set(['project-1']));
+      await flushLoopback();
+      manager.setBoardWantsFull('project-1');
+      await flushLoopback();
+
+      const traceCall = connectionTraceMocks.traceConnection.mock.calls.find(([event]) => event === 'board-subscribe');
+      expect(traceCall?.[1]).toEqual({ outcome: 'rejected', view: 'full', ms: expect.any(Number), retry: false });
+    });
+  });
+
+  /**
+   * Retry timers are keyed state kept alongside `pendingBoardViewByProjectId`
+   * and `activeBoardIds`, both of which `onEstablished` and `dispose` reset.
+   * The two tests below cover the pair of clears the fan-out cap's own tests
+   * (above) do not reach.
+   */
+  describe('armed board retry timers are cleared, not merely orphaned', () => {
+    /**
+     * A retry timer armed by a timeout, still waiting out its
+     * BOARD_RETRY_DELAY_MS when a fresh handshake lands, must not fire into
+     * the NEW subscription `onEstablished` already re-issued. Unlike
+     * `dispose()` (see the next test), nothing else guards this: once
+     * re-established the session is established, the project is still
+     * desired, and the re-issued subscribe has already LANDED (clearing
+     * `pendingBoardViewByProjectId`), so a leaked timer's retry passes every
+     * guard `subscribeBoard` has and goes out as a genuine THIRD request.
+     *
+     * Mutation seen failing: deleting the two `boardRetryTimers` clear lines
+     * from `onEstablished` left the full-board request count at 3 instead of
+     * 2 after the leaked timer's delay elapsed - "expected 3 to be 2".
+     */
+    it('does not let a retry timer armed before a re-establish fire into the fresh subscription', async () => {
+      vi.useFakeTimers();
+      try {
+        let answerSuccessfully = false;
+        const { session, stub, manager, requests } = await harness((request) => {
+          const payload = request.payload as { view?: ReadBoardView };
+          if (request.verb === 'read-board' && payload.view === 'full' && !answerSuccessfully) return null;
+          return defaultResponder(request);
+        });
+        const fullRequests = (): CapabilityRequestMessage[] =>
+          requests.filter((request) => request.verb === 'read-board' && (request.payload as { view?: ReadBoardView }).view === 'full');
+
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(['project-1']));
+        await flushLoopbackFakeTimers();
+        manager.setBoardWantsFull('project-1');
+        await flushLoopbackFakeTimers();
+
+        // CapabilityClient's own 10s timeout arms the retry timer, due at
+        // +2s (BOARD_RETRY_DELAY_MS) from this instant.
+        await vi.advanceTimersByTimeAsync(10_000);
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(1);
+
+        // A fresh handshake lands well inside the retry delay, and this time
+        // the desktop answers - onEstablished's own re-issue must be the
+        // one that lands, not a coincidence of the leaked timer firing early.
+        answerSuccessfully = true;
+        session.reset();
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(2);
+        const countAfterReestablish = fullRequests().length;
+
+        // The leaked timer's original deadline (+2s from the 10s timeout,
+        // i.e. absolute 12s) has not passed yet, so nothing has changed.
+        // Advancing past it is the actual assertion: a timer the onEstablished
+        // clear failed to cancel fires here and issues a third request.
+        await vi.advanceTimersByTimeAsync(2_000);
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(countAfterReestablish);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * `dispose()`'s own clear is defence in depth rather than the only thing
+     * standing between a leaked timer and a duplicate request:
+     * `enqueueBoardSubscribe`'s `this.disposed` guard already no-ops a retry
+     * that fires after dispose, so the OUTCOME (nothing reaches the wire) is
+     * covered by that guard regardless of this clear, the same honesty the
+     * fan-out queue's own dispose test states about itself. What only this
+     * clear controls is whether the timer handle itself is still pending -
+     * checked directly through vitest's fake-timer count rather than through
+     * an outcome the disposed guard already secures.
+     *
+     * Mutation seen failing: deleting the two `boardRetryTimers` clear lines
+     * from `dispose()` left one pending timer after dispose instead of zero -
+     * "expected 1 to be 0".
+     */
+    it('cancels a pending retry timer handle on dispose, not merely orphaning it behind the disposed guard', async () => {
+      vi.useFakeTimers();
+      try {
+        const { stub, manager } = await harness((request) => {
+          const payload = request.payload as { view?: ReadBoardView };
+          if (request.verb === 'read-board' && payload.view === 'full') return null;
+          return defaultResponder(request);
+        });
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(['project-1']));
+        await flushLoopbackFakeTimers();
+        manager.setBoardWantsFull('project-1');
+        await flushLoopbackFakeTimers();
+        await vi.advanceTimersByTimeAsync(10_000);
+        await flushLoopbackFakeTimers();
+
+        // Quiescent: the timed-out request has settled and its retry timer is
+        // the only thing pending.
+        expect(vi.getTimerCount()).toBe(1);
+
+        manager.dispose();
+
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
         vi.useRealTimers();
       }
