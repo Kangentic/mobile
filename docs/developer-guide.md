@@ -1754,6 +1754,61 @@ Noise session is established, `offline` means the desktop is parked with no peer
 emulator's airplane mode is a black hole, not a disconnect: use it to reproduce a stall, never a
 socket death.
 
+### Measuring a session swap
+
+The swap veil (task #80, `docs/architecture.md` "Transitional states") is held until the
+successor has painted and revealed by a deadline, `SESSION_SWAP_QUIET_MS`, that has to sit above
+the real gap and below a user's patience. The gap is a phone-side number, not the desktop's own
+`task:move` timing, so it is measured here: the same flagged release build as above on the
+emulator (`kangentic_pixel`), paired to the real desktop over the hosted relay, the session screen
+open in terminal mode, and a scratch task in an active column driven back and forth with
+`kangentic_move_task` (never into the Tests or Merge columns, which run `/pull-request` and
+`/merge-pull-request`). After each move:
+
+```
+adb -s emulator-5554 logcat -d -s ReactNativeJS -e "session-swap|terminal-init|terminal-painted"
+```
+
+`ended` to `settled` is the phone-visible gap; `ended` to `bind` is how long the task sat
+sessionless; `terminal-init` says which path posted the successor's init and whether it kept the
+cell size. Measured 2026-09-18, ten moves across Executing, Code Review and Planning in both
+directions (this desktop labels every column move, resumes the suspended isolated session on
+re-entry rather than spawning fresh, and re-spawns the main conversation under a new session id
+with the destination column's model):
+
+| Phase | Ten moves |
+|---|---|
+| `ended` to `bind` | 360-535 ms, median 405 ms |
+| `ended` to `settled` | 730, 740, 743, 750, 989, 994, 1103, 2324, 2404, 2466 ms: median 0.99 s, ninth of ten 2.40 s |
+| `bind` to `settled` | 323-1974 ms |
+
+So 8 s covers the slowest observed swap three times over, and `ENDED_ROW_GRACE_MS` on the Home
+feed is pinned equal to it. The stub rig's 6 s gap is the control below the threshold.
+
+**Record the screen as well as the trace.** The trace alone passed the one real defect this run
+found: `terminal-painted` reported the successor on screen and the veil let go, and only the
+recording showed a second of black grid AFTER that, where the seed's own re-init reset a frame the
+first live chunk had built (fixed by holding for the seed, `hasSeed` in `terminalFeed.ts`). Start
+`adb shell screenrecord --time-limit 30 /sdcard/swap.mp4` from PowerShell (Git Bash rewrites the
+`/sdcard` path into a Windows one and screenrecord refuses it), pull it, and tile it with
+`ffmpeg -vf "fps=4,scale=200:-1,tile=8x8"`; a dimmed floating button tells a veiled frame from a
+naked one at contact-sheet size, and a screenshot is too slow to catch a one-to-three-second swap
+at all.
+
+**Holding the veil for its full deadline.** `kangentic_send_session_message` with `/exit` ends the
+session with no label and no successor, which is the one way to see the long-gap reveal live
+(veil for 8.0 s, then the ended text) and to measure the pulse: `dumpsys gfxinfo <pkg> reset`,
+`top -b -n 5 -d 2 -o CMD,%CPU -p <pid>` in the background, send the exit, read `gfxinfo` again
+40 s later, then flip Settings > Retention probe to "No looping motion" and repeat in the same
+process. Measured that way: 501 frames rendered across the window with the pulse against 36
+static, i.e. about 465 extra frames or ~58 fps for the 8 s the veil was up (the emulator's 60 Hz
+rate), and `top` at roughly 11 % against 5 % during the quiet part of the window with the idle
+terminal at 4-8 % (one sample per arm; the two spikes in each arm coincide with the exit event
+and the reveal). The cost is bounded by the deadline and is typically one to two and a half
+seconds per swap. A same-column labelled respawn could not be produced from the MCP
+(`kangentic_update_task model` on a running session applies at the next spawn), so that kind is
+covered by the stub rig's `/respawn` and the component tests only.
+
 ### Measuring the cold launch
 
 Task #70 above measured the reconnect from AppState `active` onward. Everything BEFORE that -
