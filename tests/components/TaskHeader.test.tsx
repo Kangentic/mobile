@@ -204,11 +204,10 @@ describe('TaskHeader status glyph', () => {
   });
 
   /**
-   * A respawn is task-keyed, so the header finds it without a session id of
-   * its own - but only where a glyph already existed. The guard stays on
-   * `activityEntry` deliberately: during the gap this screen shows the full
-   * "Switching session" overlay, and a header glyph appearing where there was
-   * none would be a second, weaker signal saying the same thing.
+   * A swap is task-keyed, so the header finds it without a session id of its
+   * own - but only where a glyph already existed. The guard stays on
+   * `activityEntry` deliberately: a swap may change the glyph but never
+   * conjure one where the header had nothing bound.
    */
   it('shows the starting ring for a respawning task that still has its outgoing entry', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
@@ -217,6 +216,27 @@ describe('TaskHeader status glyph', () => {
       sessionId: 'sess-1',
       taskId: 'task-1',
       payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+    });
+
+    renderTaskHeader({ sessionId: 'sess-1' });
+
+    expect(renderedStatusTone()).toBe('starting');
+  });
+
+  /**
+   * The desktop's column-move swap arrives with NO label. The header must
+   * read it exactly like the labelled one, or a Code Review move would draw
+   * the idle envelope while the feed drew the starting ring for the same
+   * task. The label-only store write fails this with 'idle', which is the
+   * right reason.
+   */
+  it('shows the starting ring for a task whose session ended without a label', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'session-ended', intentional: true },
     });
 
     renderTaskHeader({ sessionId: 'sess-1' });

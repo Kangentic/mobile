@@ -2,7 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { BoardScreen } from '@/screens/BoardScreen';
-import { useActivityStore } from '@/state/activityStore';
+import { ENDED_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
@@ -283,6 +283,71 @@ describe('BoardScreen', () => {
     );
 
     expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
+  });
+
+  /**
+   * The desktop's column-move swap arrives with NO label and cannot be told
+   * from a park when the push lands, so the card wears the starting glyph for
+   * it exactly as for a labelled respawn - for the short window the store
+   * grants an unlabelled end. The label-only store write fails the first
+   * test; a store with no window at all fails the second.
+   */
+  it('shows a starting glyph for a sessionless task whose session ended without a label', () => {
+    useBoardStore.setState((state) => ({
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        'project-1': {
+          ...state.boardsByProjectId['project-1'],
+          tasksById: { 'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, null) },
+        },
+      },
+    }));
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'session-ended', intentional: true },
+    });
+
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+  });
+
+  it('shows no glyph once an unlabelled end has outlived its short grace', () => {
+    jest.useFakeTimers();
+    try {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': {
+            ...state.boardsByProjectId['project-1'],
+            tasksById: { 'task-1': baseTask('task-1', 'Fix the login bug', 'lane-todo', 0, null) },
+          },
+        },
+      }));
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'session-ended', intentional: true },
+      });
+      jest.advanceTimersByTime(ENDED_ROW_GRACE_MS);
+
+      render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+
+      expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   /**

@@ -15,7 +15,7 @@ import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
 import {
   isStartingSession,
-  selectTaskRespawnLabel,
+  selectTaskRespawn,
   selectTriageRows,
   selectWaitingSince,
   sectionForEntry,
@@ -34,7 +34,6 @@ import {
 } from '@/connection/actions';
 import { buildPendingPromptSummary, collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { createBoundedTaskQueue, type BoundedTaskQueue } from '@/lib/boundedTaskQueue';
-import { renderableSpawnLabel } from '@/lib/spawnLabel';
 import { subscribeToMemoryPressure } from '@/observability/memoryPressure';
 import { MapperLoad } from '@/devsupport/MapperLoad';
 import { useConcurrencyProbeDepth } from '@/devsupport/concurrencyProbe';
@@ -274,9 +273,8 @@ export function TriageHomeScreen(): React.JSX.Element {
         // read-stream subscription down, so this would be a request that can
         // only fail. Such an entry used to be pruned within a few hundred ms
         // and the loop rarely saw one - it is now RETAINED for the length of a
-        // respawn (see reconcileSessionsFromBoards), so without this every
-        // respawn would enqueue a doomed peek. The row shows its switching
-        // caption instead of a snippet anyway.
+        // swap (see reconcileSessionsFromBoards), so without this every swap
+        // would enqueue a doomed peek. The row keeps the body it already had.
         if (entry.feedStatus === 'ended') continue;
         // Already pushed by a 0.8.0+ desktop: warming it would re-fetch, over
         // the wire, the exact line we were just handed for free.
@@ -615,17 +613,20 @@ const ActivityRow = React.memo(function ActivityRow({
   /**
    * The two transitional states, both TASK-keyed rather than section-derived.
    *
-   * A respawn leaves the task sessionless for several seconds, and this row
-   * only still exists because reconcileSessionsFromBoards retains it for
-   * exactly that window - without this the row vanished and came back.
+   * A swap (labelled or not) leaves the task sessionless for several seconds,
+   * and this row only still exists because reconcileSessionsFromBoards retains
+   * it for exactly that window - without this the row vanished and came back.
+   * The swap changes the GLYPH and nothing else on this row: the body keeps
+   * whatever it showed, because a caption that appeared and disappeared inside
+   * a two-second gap was itself the flash this exists to remove.
    *
    * A queued session is the quieter of the two: the desktop holds a
    * placeholder with no PTY, so it never reports thinking and its entry sits
    * at `state: 'idle'`, indistinguishable from an agent that finished its
    * work. `sessionStatus` is the only thing that separates them.
    */
-  const respawnLabel = useActivityStore((state) => selectTaskRespawnLabel(state, entry.taskId));
-  const starting = isStartingSession(respawnLabel, entry.sessionStatus);
+  const respawn = useActivityStore((state) => selectTaskRespawn(state, entry.taskId));
+  const starting = isStartingSession(respawn, entry.sessionStatus);
 
   // Desktop-parity status treatment: green spinner while the agent works,
   // the yellow mail envelope for EVERY idle session (a pending prompt is
@@ -691,9 +692,11 @@ const ActivityRow = React.memo(function ActivityRow({
    */
   const previewPushedByDesktop = !isPermission && entry.messagePreview !== null;
   useEffect(() => {
-    // Nothing to fetch, and for a respawn nothing that COULD be fetched: the
-    // caption below takes the body outright, and a retained ghost's session is
-    // gone desktop-side, so a peek would retry-loop against a dead id.
+    // Nothing to fetch, and for a swap nothing that COULD be fetched: a
+    // retained ghost's session is gone desktop-side, so a peek would
+    // retry-loop against a dead id. The body it already resolved stays (it is
+    // per-mount state this early return leaves untouched), which is exactly
+    // what the row should show through the gap.
     if (starting) return undefined;
     if (previewPushedByDesktop) return undefined;
     let cancelled = false;
@@ -772,24 +775,18 @@ const ActivityRow = React.memo(function ActivityRow({
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
   /**
-   * The transitional states take the body outright, ahead of every source
-   * below, because all of those describe work this session is NOT currently
-   * doing: a respawn's snippet belongs to the agent that just ended, and a
-   * queued session has produced no output at all. The caption is the only
-   * honest line available, and it is what makes the state legible - the muted
-   * glyph alone says "not running" without saying why.
+   * ONLY the queued state takes the body outright: a queued session has
+   * produced no output at all, can sit for minutes, and the muted glyph alone
+   * says "not running" without saying why. Derived as "starting for a reason
+   * that is not a swap" rather than by re-reading `sessionStatus`, so this row
+   * and `isStartingSession` cannot drift.
    *
-   * The label is the desktop's own phase text and is untrusted display text,
-   * so it goes through the same sanitizer the switching overlay uses. A
-   * rejected label degrades to the generic line rather than truncating.
-   * One clause each: the glyph carries the state, so per ui-copy-brevity.md
-   * the caption carries only what the glyph cannot.
+   * A swap deliberately does NOT: it lasts a second or two, and a caption that
+   * appeared and disappeared inside it (the desktop's phase label, once shown
+   * here) was itself text flashing mid-swap. The row keeps the body it had;
+   * the glyph carries the state.
    */
-  const startingBodyText = !starting
-    ? null
-    : respawnLabel !== null
-      ? (renderableSpawnLabel(respawnLabel) ?? 'Starting a new session')
-      : 'Waiting for a free slot';
+  const queuedBodyText = starting && respawn === null ? 'Waiting for a free slot' : null;
   /**
    * Body preference, cheapest first:
    *   1. the desktop's pushed preview (protocol 0.8.0+) - already on a feed
@@ -803,7 +800,7 @@ const ActivityRow = React.memo(function ActivityRow({
    *      the feed revealed with every body empty and filled them a beat later,
    *      which read as a second load.
    */
-  const bodyText = startingBodyText ?? (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
+  const bodyText = queuedBodyText ?? (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
 
   return (
     <>

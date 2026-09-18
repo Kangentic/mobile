@@ -493,4 +493,44 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
     },
     12_000,
   );
+
+  /**
+   * The shape of the desktop's own column-move swap (suspend, then resume,
+   * with NO label): the phone must go quiet on it exactly as on a labelled
+   * respawn, and dev:mock needs a way to produce it. Same successor mechanics
+   * as /respawn; the one difference is the absent field.
+   */
+  it(
+    '/respawn-quiet sends no spawnProgressLabel on the outgoing session-ended, and still installs a successor',
+    async () => {
+      await controller.verbs.sendUserMessage(MOCK_STREAMING_SESSION_ID, '/respawn-quiet');
+
+      await waitUntil(
+        () =>
+          eventsFor('activity', MOCK_STREAMING_SESSION_ID).some(
+            (event) => event.kind === 'activity' && event.payload.type === 'session-ended',
+          ),
+        { label: 'the outgoing session receives session-ended' },
+      );
+      const endedEvent = eventsFor('activity', MOCK_STREAMING_SESSION_ID).find(
+        (event) => event.kind === 'activity' && event.payload.type === 'session-ended',
+      );
+      if (!endedEvent || endedEvent.kind !== 'activity') {
+        throw new Error('expected a session-ended activity event for the outgoing session');
+      }
+      expect(extractSpawnProgressLabel(endedEvent.payload)).toBeNull();
+
+      const deadline = Date.now() + 8000;
+      let successorSessionId: string | null = null;
+      while (Date.now() < deadline && successorSessionId === null) {
+        const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+        const task = snapshot.tasks.find((candidate) => candidate.id === 'mock-task-1');
+        if (task?.session_id) successorSessionId = task.session_id;
+        else await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(successorSessionId).not.toBeNull();
+      expect(successorSessionId).not.toBe(MOCK_STREAMING_SESSION_ID);
+    },
+    12_000,
+  );
 });

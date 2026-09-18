@@ -1,12 +1,7 @@
 import type { ActivityEvent, TranscriptEvent, Unsubscribe } from '@kangentic/protocol';
 import type { FeedRouter, SubscriptionManager, SubscriptionSnapshotSinks } from '@/channel';
 import { traceConnection } from '@/devsupport/connectionTrace';
-import {
-  RESPAWN_ROW_GRACE_MS,
-  extractSpawnProgressLabel,
-  selectTaskRespawnLabel,
-  useActivityStore,
-} from '@/state/activityStore';
+import { extractSpawnProgressLabel, respawnGraceMs, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
@@ -41,15 +36,18 @@ function sessionOwnerFor(sessionId: string): { taskId: string; projectId: string
  * sessions no board claims anymore, and re-declare the desired stream set.
  *
  * The prune has ONE exception, and it is the whole fix for the vanishing
- * respawn row: a task the desktop said it is respawning keeps its entry, so
- * the Home feed can go on drawing the row (captioned "Switching model...")
- * instead of dropping it for the several seconds the task is sessionless.
+ * swap row: a task whose session just ended keeps its entry, labelled or not,
+ * so the Home feed can go on drawing the row exactly as it was (its last body,
+ * the starting glyph) instead of dropping it for the several seconds the task
+ * is sessionless. The desktop's column-move swap arrives with no label and is
+ * indistinguishable from a park when it lands, so both are kept; the window
+ * (`respawnGraceMs`, short for an unlabelled end) is what bounds a park.
  *
  * Ordering makes that safe without any extra bookkeeping. The register loop
- * runs FIRST and `registerSession` clears the task's respawn fact, so by the
- * time the prune loop asks `selectTaskRespawnLabel`, the snapshot that
- * installs the successor has already answered "no respawn in flight" and the
- * ghost is released in that same pass. One snapshot, never two rows.
+ * runs FIRST and `registerSession` clears the task's end fact, so by the time
+ * the prune loop asks `selectTaskRespawn`, the snapshot that installs the
+ * successor has already answered "nothing in flight" and the ghost is
+ * released in that same pass. One snapshot, never two rows.
  */
 function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
   const boardState = useBoardStore.getState();
@@ -65,7 +63,7 @@ function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
   for (const sessionId of Object.keys(useActivityStore.getState().bySessionId)) {
     if (liveSessionIds.has(sessionId)) continue;
     const entry = useActivityStore.getState().bySessionId[sessionId];
-    if (entry !== undefined && selectTaskRespawnLabel(useActivityStore.getState(), entry.taskId) !== null) {
+    if (entry !== undefined && selectTaskRespawn(useActivityStore.getState(), entry.taskId) !== null) {
       continue;
     }
     useActivityStore.getState().removeSession(sessionId);
@@ -219,21 +217,24 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
         return;
       }
       useActivityStore.getState().applyActivityEvent(event);
-      // A respawn that never lands must not leave its row on screen forever.
-      // The retention above releases the ghost on the board snapshot carrying
-      // the successor - but board snapshots are EVENT-driven, not periodic, so
-      // on a quiet desktop a failed respawn would see no further snapshot and
-      // the row would sit there indefinitely. This is the only thing that
-      // re-runs the prune on a clock.
+      // An end with no successor (a park, or a respawn that dies) must not
+      // leave its row on screen forever. The retention above releases the
+      // ghost on the board snapshot carrying the successor - but board
+      // snapshots are EVENT-driven, not periodic, so on a quiet desktop a park
+      // would see no further snapshot and the row would sit there
+      // indefinitely. This is the only thing that re-runs the prune on a
+      // clock, and it arms on EVERY end, since every end is now retained.
       //
       // Deliberately re-runs the existing reconcile rather than removing the
       // entry directly, so `removeSession` keeps exactly one caller and the
-      // retention rule is evaluated in one place. By the deadline
-      // `selectTaskRespawnLabel` reports no respawn in flight, so the pass
-      // prunes normally. No early cancel when the successor lands: that pass
-      // is already a no-op, and one extra reconcile per respawn is cheaper
-      // than the bookkeeping to avoid it.
-      if (extractSpawnProgressLabel(event.payload) === null) return;
+      // retention rule is evaluated in one place. The deadline is the same
+      // per-record window the selector applies (`respawnGraceMs`, read off the
+      // same extracted label the store recorded), so by the time it fires
+      // `selectTaskRespawn` reports nothing in flight and the pass prunes
+      // normally. No early cancel when the successor lands: that pass is
+      // already a no-op, and one extra reconcile per swap is cheaper than the
+      // bookkeeping to avoid it.
+      if (event.payload.type !== 'session-ended') return;
       const respawnedTaskId = event.taskId;
       const pendingSweep = respawnSweepTimers.get(respawnedTaskId);
       if (pendingSweep !== undefined) clearTimeout(pendingSweep);
@@ -242,7 +243,7 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
         setTimeout(() => {
           respawnSweepTimers.delete(respawnedTaskId);
           reconcileSessionsFromBoards(subscriptions);
-        }, RESPAWN_ROW_GRACE_MS),
+        }, respawnGraceMs({ label: extractSpawnProgressLabel(event.payload) })),
       );
     }),
     feed.on('board', (event) => {

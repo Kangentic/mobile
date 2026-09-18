@@ -3185,15 +3185,17 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * the phone's endedSessionIds set and wedges the screen on the ended state
    * forever, since that id can then never "end" again.
    *
-   * The ended push CARRIES the spawn-progress label, and must: this mock's
-   * own boardSnapshot() applies the `view: 'sessions'` filter, so during the
-   * gap the sessionless task leaves the board entirely and neither of
-   * SessionScreen's swap-window openers can fire off the column. Without the
-   * label, dev:mock would render "Session ended" for the whole gap - the
-   * exact regression this screen's spawn-label window exists to prevent, put
-   * back into the rig that is supposed to demonstrate the fix.
+   * The ended push carries the spawn-progress label by default (`/respawn`,
+   * the same-column model switch a real desktop labels), or none at all
+   * (`/respawn-quiet`, the shape of the desktop's column-move swap, which
+   * suspends and resumes without one). The phone goes quiet on BOTH: the
+   * label only decides what the session screen's long-gap reveal says, past
+   * SESSION_SWAP_QUIET_MS, and this mock's gap sits inside that window. Both
+   * commands exist so dev:mock can show each swap kind, and so the unlabelled
+   * one (the column move, the swap most moves actually produce) is
+   * exercisable on device without a real desktop.
    */
-  function respawnActiveSession(): void {
+  function respawnActiveSession(spawnProgressLabel: string | null = 'Switching model...'): void {
     const endedSessionId = activeSessionId;
     pendingPromptId = null;
     pendingTickResult = null;
@@ -3202,7 +3204,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         kind: 'activity',
         sessionId: endedSessionId,
         taskId: MOCK_TASK_ID,
-        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+        payload:
+          spawnProgressLabel === null
+            ? { type: 'session-ended', intentional: true }
+            : { type: 'session-ended', intentional: true, spawnProgressLabel },
       });
     }
     activeSessionId = null;
@@ -3677,6 +3682,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         // real desktop only hits on a model switch or process exit.
         if (payload.text.trim() === '/respawn') {
           respawnActiveSession();
+          return ok(request, { delivered: true });
+        }
+        if (payload.text.trim() === '/respawn-quiet') {
+          respawnActiveSession(null);
           return ok(request, { delivered: true });
         }
         if (payload.text.trim() === '/end-session') {

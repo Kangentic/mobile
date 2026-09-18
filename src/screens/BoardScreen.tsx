@@ -16,7 +16,7 @@ import {
   useBoardStore,
   type ProjectBoard,
 } from '@/state/boardStore';
-import { useActivityStore, isStartingSession, sectionForEntry, selectTaskRespawnLabel } from '@/state/activityStore';
+import { useActivityStore, isStartingSession, sectionForEntry, selectTaskRespawn } from '@/state/activityStore';
 import { ARCHIVED_PAGE_SIZE, loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
 import { reportHandledError } from '@/observability/crashReporting';
 
@@ -427,11 +427,12 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
   }, [router, task.id, task.session_id, task.archived_at, projectId]);
 
   // Task-keyed, not session-keyed, and that is the entire point: during a
-  // respawn the task's session_id is null, so `activityEntry` above is null
-  // and this card used to show no status at all for the several seconds the
-  // desktop was handing the work to a new agent.
-  const respawnLabel = useActivityStore((state) => selectTaskRespawnLabel(state, task.id));
-  const starting = isStartingSession(respawnLabel, activityEntry?.sessionStatus);
+  // swap the task's session_id is null, so `activityEntry` above is null and
+  // this card used to show no status at all for the several seconds the
+  // desktop was handing the work to a new agent. Labelled or not: the glyph
+  // is the one thing on this card a swap may change.
+  const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
+  const starting = isStartingSession(respawn, activityEntry?.sessionStatus);
 
   // Desktop TaskCard parity: spinner while thinking, mail while the
   // session waits on the user (permission or idle). 'starting' outranks both -
