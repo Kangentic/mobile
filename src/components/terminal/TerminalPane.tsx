@@ -9,11 +9,12 @@ import {
   encodeHostMessage,
   type HostToTerminalMessage,
 } from '@/terminal/terminalBridge';
-import { parseColsFromScrollback } from '@/terminal/liveTail';
+import { hasVisibleContent, parseColsFromScrollback } from '@/terminal/liveTail';
 import { buildModeRestoreSequence } from '@/terminal/modeRestore';
 import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
+import { traceConnection } from '@/devsupport/connectionTrace';
 import type { InspectTerminalHandle, InspectTerminalWriteStats } from '@/devsupport/inspectState';
-import { getBufferedData, getTerminalDimensions, hasBufferedFrame, subscribeChunks } from '@/state/terminalFeed';
+import { getBufferedData, getTerminalDimensions, hasPaintableFrame, subscribeChunks } from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { refreshTerminalStream, writeTerminal } from '@/connection/actions';
@@ -308,9 +309,38 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     };
   }, []);
 
+  /**
+   * THE HOLD RULE: never post an init that would replace a painted frame with
+   * a blank grid.
+   *
+   * Four refs carry it. `initSeqRef` stamps every init so the page's
+   * 'painted' report can be attributed to the init it answers;
+   * `lastInitSessionIdRef` is which session that init was for.
+   * `displayedFrameSessionIdRef` is the session whose PAINTABLE bytes were
+   * last posted (null on a fresh page, where there is nothing to protect).
+   * `heldInitSessionIdRef` is a session whose init is deferred until its ring
+   * carries visible glyphs - the seed, swap and re-activation paths all route
+   * through postInitOrHold, and the chunk listener releases the hold.
+   *
+   * Why a hold and not a byte-count gate: a fresh PTY's first seed is often
+   * escape-only (the alternate-screen switch, a clear), which has bytes and
+   * paints nothing. The previous gate counted dims as a frame and posted an
+   * empty grid over the dead session's last frame on every column move.
+   */
+  const initSeqRef = useRef(0);
+  const lastInitSessionIdRef = useRef<string | null>(null);
+  const displayedFrameSessionIdRef = useRef<string | null>(null);
+  const heldInitSessionIdRef = useRef<string | null>(null);
+
   const postInit = useCallback(() => {
     lastInitPostAtRef.current = Date.now();
+    initSeqRef.current += 1;
+    lastInitSessionIdRef.current = sessionId;
+    heldInitSessionIdRef.current = null;
     const scrollback = getBufferedData(sessionId);
+    // The RAW ring decides, not the mode-restore-prefixed string below: the
+    // prefix is escape sequences by construction and would count as content.
+    if (hasVisibleContent(scrollback)) displayedFrameSessionIdRef.current = sessionId;
     const ptyDimensions = getTerminalDimensions(sessionId);
     // Put the terminal back into the modes the desktop's TUI set once at
     // startup BEFORE replaying the tail. The feed is a ring, so those DECSETs
@@ -323,6 +353,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     );
     postToTerminal({
       type: 'init',
+      seq: initSeqRef.current,
       scrollback: modeRestore + scrollback,
       // The desktop's exact grid. When the dims have not arrived yet (e.g.
       // mid-reconnect, before the snapshot lands) infer cols from content and
@@ -334,6 +365,22 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       cleanFeed: cleanFeedEnabled,
     });
   }, [postToTerminal, sessionId, theme, cleanFeedEnabled]);
+
+  /**
+   * Init now, or hold until this session's ring can paint something. With a
+   * frame on screen, an init from a ring with no visible bytes is the blank
+   * grid this pane exists to never show; the chunk listener posts the deferred
+   * init the moment glyphs arrive, replaying the whole ring. A fresh page
+   * (nothing displayed yet) always inits: an empty grid is the honest state
+   * there, and the page's 'ready' depends on it.
+   */
+  const postInitOrHold = useCallback(() => {
+    if (displayedFrameSessionIdRef.current !== null && !hasPaintableFrame(sessionId)) {
+      heldInitSessionIdRef.current = sessionId;
+      return;
+    }
+    postInit();
+  }, [postInit, sessionId]);
 
   const flushPendingChunks = useCallback(() => {
     const joinedData = pendingChunksRef.current.join('');
@@ -366,10 +413,26 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       }
       if (event.kind === 'seed') {
         // A fresh read-stream subscribe replaced the buffer: drop anything
-        // queued and re-init the terminal from the new scrollback.
+        // queued and re-init the terminal from the new scrollback - unless
+        // that scrollback paints nothing, in which case the frame on screen
+        // stays until it does (postInitOrHold).
         pendingChunksRef.current = [];
         clearFlushTimer();
-        postInit();
+        postInitOrHold();
+        return;
+      }
+      if (heldInitSessionIdRef.current === sessionId) {
+        // A held init: never WRITE into the frame on screen (it belongs to
+        // another session, or to this one before its blank re-seed). The ring
+        // already holds this chunk; once the ring can paint, the deferred
+        // init replays all of it. The chunk alone decides - the ring had no
+        // visible bytes when the hold began, so only what arrived since can
+        // change the answer.
+        if (hasVisibleContent(event.data)) {
+          pendingChunksRef.current = [];
+          clearFlushTimer();
+          postInit();
+        }
         return;
       }
       pendingChunksRef.current.push(event.data);
@@ -393,20 +456,22 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       clearFlushTimer();
       flushPendingChunks();
     };
-  }, [terminalReady, sessionId, postInit, flushPendingChunks, clearFlushTimer, postToTerminal]);
+  }, [terminalReady, sessionId, postInit, postInitOrHold, flushPendingChunks, clearFlushTimer, postToTerminal]);
 
   // Pause/resume rendering with tab visibility. When the terminal becomes the
   // visible page again, drop any queued writes and re-seed from the ring so the
-  // WebView jumps straight to the latest frame it missed while paused.
+  // WebView jumps straight to the latest frame it missed while paused. Through
+  // the hold: a pane that swapped sessions while hidden must not come back to
+  // an empty successor grid.
   useEffect(() => {
     const wasActive = isActiveRef.current;
     isActiveRef.current = isActive;
     if (isActive && !wasActive && terminalReady) {
       pendingChunksRef.current = [];
       clearFlushTimer();
-      postInit();
+      postInitOrHold();
     }
-  }, [isActive, terminalReady, postInit, clearFlushTimer]);
+  }, [isActive, terminalReady, postInitOrHold, clearFlushTimer]);
 
   // Coming back from the background can leave the mirror with holes: the
   // WebView survives (no 'ready', so nothing re-inits) but its renderer has
@@ -435,15 +500,15 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   // normally arrives before its first snapshot does - SessionScreen retains
   // the new ring and asks the desktop for it, and the answer is a round trip
   // away - so an unconditional init here posts an EMPTY grid, which is the
-  // black terminal this whole path is about. Holding the dead session's last
-  // frame until the successor's seed arrives (which re-inits through the
-  // subscribe callback's 'seed' branch above) is stale for a moment and
-  // correct-looking throughout; SessionScreen's switching overlay is what
-  // says so, and what times out if no successor ever arrives.
+  // black terminal this whole path is about. postInitOrHold keeps the dead
+  // session's last frame until the successor's ring can paint (the chunk
+  // listener releases the hold); SessionScreen's swap veil covers that frame
+  // and lets go once the page reports the successor painted.
   //
-  // The two halves of the key are tracked separately because a clean-feed
-  // flip MUST post even with an empty ring: the flag only takes effect at
-  // init, so skipping it would leave the WebView's parser in the wrong mode.
+  // A clean-feed flip goes through the same hold. The flag only takes effect
+  // at init, and on a fresh page (nothing displayed) it posts at once; with a
+  // frame on screen and an empty ring, the deferred init carries the flag
+  // when it lands, so the parser still comes up in the right mode.
   const previousSessionIdRef = useRef(sessionId);
   const previousCleanFeedRef = useRef(cleanFeedEnabled);
   useEffect(() => {
@@ -453,11 +518,10 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     previousSessionIdRef.current = sessionId;
     previousCleanFeedRef.current = cleanFeedEnabled;
     if (!terminalReady) return;
-    if (sessionChanged && !cleanFeedChanged && !hasBufferedFrame(sessionId)) return;
     pendingChunksRef.current = [];
     clearFlushTimer();
-    postInit();
-  }, [sessionId, cleanFeedEnabled, terminalReady, postInit, clearFlushTimer]);
+    postInitOrHold();
+  }, [sessionId, cleanFeedEnabled, terminalReady, postInitOrHold, clearFlushTimer]);
 
   // Drop this session's DECCKM + reading-view state on unmount. There is
   // nothing to release - the mirror never resized the PTY.
@@ -491,8 +555,28 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       const message = decodeTerminalMessage(event.nativeEvent.data);
       if (message === null) return;
       if (message.type === 'ready') {
+        // A fresh page (first load, or the remount after a killed renderer)
+        // displays nothing yet, so there is no frame for the hold to protect:
+        // init unconditionally, even from an empty ring.
+        displayedFrameSessionIdRef.current = null;
+        heldInitSessionIdRef.current = null;
         postInit();
         setTerminalReady(true);
+        return;
+      }
+      if (message.type === 'painted') {
+        // Attributed by seq, never by the currently bound session: a late
+        // report for the dead session's init must not be credited to the
+        // successor. Only a NON-BLANK paint counts as the frame being on
+        // screen; a blank one just says the page is up and waiting for bytes.
+        if (message.seq !== null && message.seq !== initSeqRef.current) return;
+        traceConnection('terminal-painted', {
+          blank: message.blank,
+          sinceInitMs: Date.now() - lastInitPostAtRef.current,
+        });
+        if (!message.blank && lastInitSessionIdRef.current !== null) {
+          useTerminalUiStore.getState().markTerminalPainted(lastInitSessionIdRef.current);
+        }
         return;
       }
       if (message.type === 'modes') {

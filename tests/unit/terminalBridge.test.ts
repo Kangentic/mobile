@@ -12,6 +12,7 @@ describe('host -> terminal round-trip', () => {
   it('round-trips an init message with known dims and with unknown dims (legacy)', () => {
     const knownDims: HostToTerminalMessage = {
       type: 'init',
+      seq: 1,
       scrollback: 'previous output\x1b[32m colored\x1b[0m\n',
       cols: 96,
       rows: 30,
@@ -23,6 +24,7 @@ describe('host -> terminal round-trip', () => {
 
     const legacy: HostToTerminalMessage = {
       type: 'init',
+      seq: 2,
       scrollback: 'plain',
       cols: 80,
       rows: null,
@@ -127,6 +129,22 @@ describe('terminal -> host round-trip', () => {
   it('round-trips the refit host message (snap back to the fitted view)', () => {
     expect(decodeHostMessage(encodeHostMessage({ type: 'refit' }))).toEqual({ type: 'refit' });
   });
+
+  it('round-trips a painted report, with and without an init seq to attribute it to', () => {
+    const attributed: TerminalToHostMessage = { type: 'painted', seq: 4, blank: false };
+    expect(decodeTerminalMessage(encodeTerminalMessage(attributed))).toEqual(attributed);
+    const unattributed: TerminalToHostMessage = { type: 'painted', seq: null, blank: true };
+    expect(decodeTerminalMessage(encodeTerminalMessage(unattributed))).toEqual(unattributed);
+  });
+
+  /** A page from a build that predates the seq echo still reports; the host treats an unknown seq as current. */
+  it('defaults the painted seq to null when an older page omits it', () => {
+    expect(decodeTerminalMessage(JSON.stringify({ type: 'painted', blank: true }))).toEqual({
+      type: 'painted',
+      seq: null,
+      blank: true,
+    });
+  });
 });
 
 describe('decodeTerminalMessage - malformed input', () => {
@@ -159,6 +177,11 @@ describe('decodeTerminalMessage - malformed input', () => {
     expect(decodeTerminalMessage('{"type":"clean-lines","lines":"a","reset":false}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"clean-lines","lines":[]}')).toBeNull();
   });
+
+  it('returns null for a painted report whose blank flag is missing or not a boolean', () => {
+    expect(decodeTerminalMessage('{"type":"painted","seq":1}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"painted","seq":1,"blank":"no"}')).toBeNull();
+  });
 });
 
 describe('decodeHostMessage - malformed input', () => {
@@ -180,6 +203,12 @@ describe('decodeHostMessage - malformed input', () => {
       decodeHostMessage('{"type":"init","scrollback":"x","cols":80,"rows":null,"fontSizePx":13,"theme":[]}'),
     ).toBeNull();
     expect(decodeHostMessage('{"type":"init","scrollback":"x","fontSizePx":13,"theme":{}}')).toBeNull();
+    // No seq: the page could not attribute its painted report to this init.
+    expect(
+      decodeHostMessage(
+        '{"type":"init","scrollback":"x","cols":80,"rows":null,"fontSizePx":13,"theme":{},"cleanFeed":false}',
+      ),
+    ).toBeNull();
   });
 
   it('returns null for write, set-font-size, and resize messages with wrong field types', () => {

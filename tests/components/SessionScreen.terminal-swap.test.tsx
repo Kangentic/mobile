@@ -3,7 +3,14 @@ import { act, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
-import { getTerminalFeedStats, hasBufferedFrame, resetTerminalFeed, retainTerminal, seedScrollback } from '@/state/terminalFeed';
+import {
+  appendChunk,
+  getTerminalFeedStats,
+  hasPaintableFrame,
+  resetTerminalFeed,
+  retainTerminal,
+  seedScrollback,
+} from '@/state/terminalFeed';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -280,16 +287,72 @@ describe('SessionScreen terminal pane across a session swap', () => {
   });
 
   /**
-   * The swap effect's gate (`if (sessionChanged && !cleanFeedChanged &&
-   * !hasBufferedFrame(sessionId)) return;`) is deliberately split into two
-   * independently-tracked halves: a SESSION swap holds an empty-ring re-init
-   * back until the successor's seed arrives (the tests above), but a
-   * CLEAN-FEED flip must always post, because the flag only takes effect at
-   * init - skipping it would leave the WebView's parser stuck in the wrong
-   * mode. Folding both into one shared `!hasBufferedFrame` gate (e.g.
-   * `if ((sessionChanged || cleanFeedChanged) && !hasBufferedFrame(...))
-   * return;`) would swallow this init exactly when the ring is empty, which is
-   * the ordinary case for a session whose agent has no structured transcript.
+   * A fresh `--resume` PTY does not seed a frame: its read-stream snapshot
+   * lands EMPTY, and its first chunk is the alternate-screen switch plus a
+   * clear, which has bytes and paints nothing. Both used to reach the WebView
+   * (the seed as an empty init, the chunk as a write into the dead session's
+   * grid), so the user saw the old frame, a blank grid, then the TUI's first
+   * paint. The hold keeps the old frame until the successor's ring can draw a
+   * glyph, then inits ONCE from the whole ring - no blank interval, no write
+   * of the successor's bytes into the predecessor's frame.
+   */
+  it('holds the successor init through an empty seed and an escape-only chunk, then inits once from the whole ring', async () => {
+    jest.useFakeTimers();
+    try {
+      seedTaskWithSession('sess-a');
+      render(
+        <ThemeProvider>
+          <SessionScreen />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      act(() => {
+        seedScrollback('sess-a', 'ORIGINAL FRAME');
+      });
+      act(() => {
+        seedTaskWithSession('sess-b');
+      });
+      const postCountAfterSwap = webViewMock.__postMessageMock.mock.calls.length;
+
+      act(() => {
+        seedScrollback('sess-b', '');
+      });
+      act(() => {
+        appendChunk('sess-b', '\x1b[?1049h\x1b[H\x1b[2J');
+      });
+      // Past the chunk batch timer (CHUNK_BATCH_INTERVAL_MS is 32ms): a chunk
+      // merely queued would flush as a write here, into the OLD frame.
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+      // Nothing reached the WebView: no empty init, no write into the old frame.
+      expect(webViewMock.__postMessageMock.mock.calls.length).toBe(postCountAfterSwap);
+
+      act(() => {
+        appendChunk('sess-b', 'hello');
+      });
+      const postsSinceSwap = decodedPosts().slice(postCountAfterSwap);
+      expect(postsSinceSwap).toHaveLength(1);
+      expect(postsSinceSwap[0]?.type).toBe('init');
+      if (postsSinceSwap[0]?.type === 'init') {
+        // The whole ring, escape prefix included: the deferred init replays it.
+        expect(postsSinceSwap[0].scrollback).toContain('\x1b[?1049h\x1b[H\x1b[2Jhello');
+      }
+      expect(blankInitPostsSince(postCountAfterSwap)).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
+   * The hold protects a PAINTED frame. On a fresh page nothing is displayed,
+   * so a CLEAN-FEED flip must still post even with an empty ring: the flag
+   * only takes effect at init, and skipping it would leave the WebView's
+   * parser stuck in the wrong mode. A hold that keyed on "ring empty" alone
+   * (rather than "ring empty AND a frame on screen") would swallow this init
+   * exactly when the ring is empty, which is the ordinary case for a session
+   * whose agent has no structured transcript.
    */
   it('re-inits on a clean-feed flip even with an empty ring, on the SAME session', async () => {
     seedTaskWithSession('sess-a');
@@ -303,7 +366,7 @@ describe('SessionScreen terminal pane across a session swap', () => {
 
     // The precondition that makes this case distinct from the swap tests
     // above: nothing has ever seeded this session's ring.
-    expect(hasBufferedFrame('sess-a')).toBe(false);
+    expect(hasPaintableFrame('sess-a')).toBe(false);
 
     const postCountBeforeFlip = webViewMock.__postMessageMock.mock.calls.length;
 

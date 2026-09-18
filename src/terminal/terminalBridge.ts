@@ -21,6 +21,13 @@
 export type HostToTerminalMessage =
   | {
       type: 'init';
+      /**
+       * The host's own init counter, monotonic per pane. The page echoes it on
+       * every 'painted' report so the host can tell which init a report
+       * answers (a double swap inside one frame would otherwise credit the
+       * dead session's late report to the successor).
+       */
+      seq: number;
       scrollback: string;
       cols: number;
       /** The PTY's rows, or null when the desktop never reported dims (legacy inference). */
@@ -98,7 +105,17 @@ export type TerminalToHostMessage =
    */
   | { type: 'clean-lines'; lines: string[]; reset: boolean }
   /** A clean tap on the terminal (no drag, no pinch): the host toggles the soft keyboard for direct typing. */
-  | { type: 'tapped' };
+  | { type: 'tapped' }
+  /**
+   * The first PAINT after an init: reported once when the init's seed has
+   * flushed (blank or not), then once more on the first write that leaves
+   * visible glyphs, after which the page stays quiet until the next init.
+   * `seq` echoes the init's counter (null from an older page). The host's
+   * session-swap veil releases on the first `blank: false` for the successor.
+   * One animation frame after the parse flush, so "painted" is inferred from
+   * the renderer's ordering rather than measured.
+   */
+  | { type: 'painted'; seq: number | null; blank: boolean };
 
 export function encodeHostMessage(message: HostToTerminalMessage): string {
   return JSON.stringify(message);
@@ -182,6 +199,13 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
   if (parsedObject.type === 'tapped') {
     return { type: 'tapped' };
   }
+  if (parsedObject.type === 'painted' && typeof parsedObject.blank === 'boolean') {
+    return {
+      type: 'painted',
+      seq: isFiniteNumber(parsedObject.seq) ? parsedObject.seq : null,
+      blank: parsedObject.blank,
+    };
+  }
   return null;
 }
 
@@ -214,6 +238,7 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
   }
   if (
     parsedObject.type === 'init' &&
+    isFiniteNumber(parsedObject.seq) &&
     typeof parsedObject.scrollback === 'string' &&
     isFiniteNumber(parsedObject.cols) &&
     (parsedObject.rows === null || isFiniteNumber(parsedObject.rows)) &&
@@ -223,6 +248,7 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
   ) {
     return {
       type: 'init',
+      seq: parsedObject.seq,
       scrollback: parsedObject.scrollback,
       cols: parsedObject.cols,
       rows: parsedObject.rows === null ? null : parsedObject.rows,

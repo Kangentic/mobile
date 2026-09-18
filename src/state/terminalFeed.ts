@@ -1,4 +1,5 @@
 import type { TerminalDimensionsWire, Unsubscribe } from '@kangentic/protocol';
+import { hasVisibleContent } from '@/terminal/liveTail';
 
 /**
  * Per-session raw PTY buffering, deliberately NOT a Zustand store: chunks
@@ -111,14 +112,17 @@ export function getBufferedData(sessionId: string): string {
 
 /**
  * True when re-initialising the WebView from this session would paint
- * something: the ring exists and holds bytes or a known grid. False for a
- * successor whose first snapshot has not landed yet, where an init would
- * paint an EMPTY grid over a perfectly good last frame.
+ * visible glyphs: the ring exists and its bytes carry printable content once
+ * every escape sequence is stripped. False for a successor whose first
+ * snapshot has not landed, AND for one whose seed is escape-only (a fresh
+ * PTY's alternate-screen switch), where an init would paint an EMPTY grid
+ * over a perfectly good last frame. A known grid alone does not count: dims
+ * land before the seed, and an init on dims alone is exactly that blank.
  */
-export function hasBufferedFrame(sessionId: string): boolean {
+export function hasPaintableFrame(sessionId: string): boolean {
   const ring = ringsBySessionId.get(sessionId);
-  if (!ring) return false;
-  return ring.chunks.length > 0 || ring.dims !== null;
+  if (!ring || ring.chunks.length === 0) return false;
+  return hasVisibleContent(ring.chunks.join(''));
 }
 
 /**

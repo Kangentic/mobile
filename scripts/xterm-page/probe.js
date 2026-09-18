@@ -91,6 +91,11 @@
       verticalOffsetPx: verticalOffsetPx,
       flingStats: JSON.parse(JSON.stringify(flingStats)),
       initCounts: JSON.parse(JSON.stringify(initCounts)),
+      // The paint report's state: which init it answers for, whether it is
+      // still waiting on glyphs, and how many reports went out each way.
+      activeInitSeq: activeInitSeq,
+      awaitingNonBlankPaint: awaitingNonBlankPaint,
+      paintReportCounts: JSON.parse(JSON.stringify(paintReportCounts)),
       netHistoryUnits: netHistoryUnits,
       jumpRepaintCount: jumpRepaintCount,
       lastJumpAt: lastJumpAt,

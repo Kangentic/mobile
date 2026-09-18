@@ -430,6 +430,17 @@ export function stripAnsiPreservingLayout(text: string): string {
 }
 
 /**
+ * Whether the bytes would put any visible glyph on a grid: stripped of every
+ * escape sequence and control byte, something printable remains. The RN-side
+ * half of the terminal pane's hold rule (TerminalPane's postInitOrHold): a
+ * fresh PTY's first seed is often escape-only (the alternate-screen switch, a
+ * clear) and paints a blank grid, so byte length alone says nothing.
+ */
+export function hasVisibleContent(bytes: string): boolean {
+  return stripAnsiPreservingLayout(bytes).trim().length > 0;
+}
+
+/**
  * Box-drawing and block glyphs that make up TUI borders/frames, not
  * content, plus the wider dash/rule family (em/en dashes, horizontal
  * bars, minus, ellipses) that agent TUIs and rendered markdown use for
