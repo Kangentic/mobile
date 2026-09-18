@@ -134,8 +134,23 @@ export function SessionScreen(): React.JSX.Element {
   const paramSessionId = params.sessionId && params.sessionId.length > 0 ? params.sessionId : null;
   // The board is authoritative once it has located the task (a respawn swaps
   // the task's session_id under a mounted screen); the param only bridges the
-  // gap before the first board snapshot. See sessionResolution.ts.
-  const sessionId = resolveCurrentSessionId({ taskLocated, locatedSessionId, paramSessionId });
+  // gap before the FIRST board snapshot. See sessionResolution.ts.
+  //
+  // "First" is load-bearing: the sessions projection drops the task for the
+  // whole of every later swap, and re-trusting the param there rebinds the
+  // session this screen was OPENED with - after a few swaps a long-dead id,
+  // which re-subscribed a corpse and re-keyed the quiet window (seen in the
+  // release-build trace of 2026-09-18 as a second `ended` line 29 ms after
+  // the first). Once located, a later "not located" resolves to null, exactly
+  // as the full projection's sessionless task does, and the panes stay on
+  // lastBoundSessionId below. Render-time state, the pattern this file uses.
+  const [everLocated, setEverLocated] = useState(false);
+  if (taskLocated && !everLocated) setEverLocated(true);
+  const sessionId = resolveCurrentSessionId({
+    taskLocated: taskLocated || everLocated,
+    locatedSessionId,
+    paramSessionId,
+  });
 
   // Mode priority: an explicit route param (needs-you rows land on chat)
   // beats the task's remembered lens beats the terminal default. The
