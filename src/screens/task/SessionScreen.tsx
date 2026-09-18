@@ -68,10 +68,18 @@ const SESSION_SWAP_GRACE_MS = 20_000;
  * MOCK_RESPAWN_GAP_MS) must sit at least 2s inside it so a rig swap stays
  * silent, and it must leave at least 5s before SESSION_SWAP_GRACE_MS so a text
  * phase exists before the ended fallback; tests/unit/sessionRespawnGapTiming
- * .test.ts pins both. The value is set from the connection trace's
- * `session-swap` timeline on a release build (see docs/developer-guide.md);
- * the Home feed's ENDED_ROW_GRACE_MS is kept equal to it, so a swap that goes
- * quiet here goes quiet on the list surfaces for the same span.
+ * .test.ts pins both.
+ *
+ * MEASURED (release build, x86_64 emulator, the real desktop over the hosted
+ * relay, 2026-09-18, ten column moves across Executing, Code Review and
+ * Planning, terminal mode): the connection trace's `session-swap` timeline
+ * put ended-to-settled at 730-2466 ms, median 0.99 s, ninth of ten 2.40 s;
+ * ended-to-bind at 360-535 ms. 8 s covers the slowest observed swap three
+ * times over while still revealing a genuinely stalled spawn inside the
+ * time a user would wait. See "Measuring a session swap" in
+ * docs/developer-guide.md for the procedure. The Home feed's
+ * ENDED_ROW_GRACE_MS is kept equal to it, so a swap that goes quiet here
+ * goes quiet on the list surfaces for the same span.
  */
 export const SESSION_SWAP_QUIET_MS = 8_000;
 
