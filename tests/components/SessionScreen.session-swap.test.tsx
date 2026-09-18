@@ -879,13 +879,13 @@ describe('SessionScreen across a column move', () => {
       // The switcher is still there beneath the veil, on the same lens; only
       // the keys are gone.
       expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('terminal');
-      // And the pane under the cleared veil is HIDDEN, not just covered: a
-      // dead session's page keeps the WebView painting at the full frame
-      // rate for as long as the pane is drawn (measured, see SessionScreen).
+      // The pane under the cleared veil stays drawn: the veil's empty layer
+      // is opaque over it, and a drawn dead pane costs nothing (measured, see
+      // the terminalPaneShown comment in SessionScreen).
       expect(
         StyleSheet.flatten(screen.getByTestId('session-pane-terminal', { includeHiddenElements: true }).props.style)
           .opacity,
-      ).toBe(0);
+      ).toBe(1);
     } finally {
       jest.useRealTimers();
     }
@@ -958,12 +958,6 @@ describe('SessionScreen across a column move', () => {
       const inputBar = screen.getByTestId('stub-session-input-bar');
       expect(inputBar.props.accessibilityValue).toEqual({ text: 'full' });
       expect(inputBar.props.accessibilityState).toEqual({ disabled: false });
-      // The pane comes back at the bind, under the still-cleared veil, so the
-      // successor's seed can paint and lift it.
-      expect(
-        StyleSheet.flatten(screen.getByTestId('session-pane-terminal', { includeHiddenElements: true }).props.style)
-          .opacity,
-      ).toBe(1);
 
       act(() => {
         useTerminalUiStore.getState().markTerminalPainted('sess-b');

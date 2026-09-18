@@ -30,7 +30,8 @@ export type RetentionProbeVariant =
   | 'single-markdown'
   | 'markdown-empty'
   | 'no-motion'
-  | 'extra-mappers';
+  | 'extra-mappers'
+  | 'no-swap-veil';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -65,6 +66,16 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'extra-mappers',
     label: 'Extra idle mappers',
     description: 'Mounts N clean animated mappers per feed row',
+  },
+  {
+    // The arm the swap-veil investigation lacked: a DEAD session's terminal
+    // pane drawn bare with no veil over it, so what the WebView does after
+    // the PTY dies is measured on its own (2026-09-18: 18 frames in 45 s,
+    // nothing) rather than inferred from a veil that turned out not to be
+    // static. Pair it with 'no-motion' for the veil held genuinely still.
+    variant: 'no-swap-veil',
+    label: 'No swap veil',
+    description: 'A dead terminal stays bare',
   },
 ];
 

@@ -1,11 +1,11 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react-native';
+import { act, render, screen } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider, Skeleton, SkeletonCard, SkeletonRow, darkTerminalTheme } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 
-const { opacityMin, opacityMax } = darkTerminalTheme.motion.skeletonPulse;
+const { opacityMin, opacityMax, holdAfterMs } = darkTerminalTheme.motion.skeletonPulse;
 
 describe('Skeleton', () => {
   afterEach(() => {
@@ -111,6 +111,49 @@ describe('Skeleton', () => {
       const flattenedStyle = StyleSheet.flatten(screen.getByTestId('loading-line').props.style);
       expect(flattenedStyle.opacity).toBe(opacityMax);
       expect(animatedStyleSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The pulse is bounded (`skeletonPulse.holdAfterMs`): a skeleton still on
+   * screen that long has outlived any load that is going to land, and a tween
+   * keeps the whole app drawing at full frame rate for as long as it runs
+   * (measured: a stranded board's skeleton at 60 frames a second for ninety
+   * seconds). Past the bound the static branch is what renders, so the mapper
+   * PulsingBlock owned is unmounted with it, and the block rests at the mid
+   * opacity exactly as it does under reduced motion.
+   */
+  describe('the pulse stops on its own', () => {
+    it('rests at the mid opacity once holdAfterMs has passed, and stays there', () => {
+      jest.useFakeTimers();
+      try {
+        render(
+          <ThemeProvider>
+            <ScreenMotionOverride active={true}>
+              <Skeleton testID="loading-line" />
+            </ScreenMotionOverride>
+          </ThemeProvider>,
+        );
+        const opacity = (): number => StyleSheet.flatten(screen.getByTestId('loading-line').props.style).opacity as number;
+        expect(opacity()).toBe(opacityMax);
+
+        act(() => {
+          jest.advanceTimersByTime(holdAfterMs - 1);
+        });
+        expect(opacity()).toBe(opacityMax);
+
+        act(() => {
+          jest.advanceTimersByTime(1);
+        });
+        expect(opacity()).toBe((opacityMin + opacityMax) / 2);
+
+        act(() => {
+          jest.advanceTimersByTime(holdAfterMs * 3);
+        });
+        expect(opacity()).toBe((opacityMin + opacityMax) / 2);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });

@@ -323,6 +323,160 @@ describe('SubscriptionManager', () => {
   });
 
   /**
+   * Seen on the release build (2026-09-18): switching the Board tab to another
+   * project left it on its skeleton for two minutes, until leaving the tab and
+   * coming back re-issued the upgrade, which then landed in four seconds. The
+   * upgrade request has CapabilityClient's 10 s timeout and had NO retry: a
+   * desktop that answered late once stranded the screen until a refocus, with
+   * nothing on screen saying so. Streams already retry once through the queue
+   * (`subscribeStream`'s catch); boards now do the same.
+   */
+  describe('a board subscribe that times out is retried once', () => {
+    it('re-issues a full-board upgrade after a timeout without waiting for a refocus', async () => {
+      vi.useFakeTimers();
+      try {
+        let heldFullRequests = 0;
+        const { stub, manager, requests, sinkCalls } = await harness((request) => {
+          const payload = request.payload as { view?: ReadBoardView };
+          if (request.verb === 'read-board' && payload.view === 'full' && heldFullRequests === 0) {
+            heldFullRequests += 1;
+            return null;
+          }
+          return defaultResponder(request);
+        });
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(['project-1']));
+        await flushLoopbackFakeTimers();
+        expect(sinkCalls.boardSnapshots).toEqual(['project-1']);
+
+        manager.setBoardWantsFull('project-1');
+        await flushLoopbackFakeTimers();
+        const fullRequests = (): CapabilityRequestMessage[] =>
+          requests.filter((request) => request.verb === 'read-board' && (request.payload as { view?: ReadBoardView }).view === 'full');
+        expect(fullRequests()).toHaveLength(1);
+
+        // The desktop never answers: CapabilityClient's own 10 s timeout fires,
+        // and the retry timer is armed. Nothing has gone out yet.
+        await vi.advanceTimersByTimeAsync(10_000);
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(1);
+
+        // BOARD_RETRY_DELAY_MS later the upgrade goes out again, on its own,
+        // and this time it lands.
+        await vi.advanceTimersByTimeAsync(2_000);
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(2);
+        expect(sinkCalls.boardSnapshots).toEqual(['project-1', 'project-1']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('retries once and only once, so a desktop that never answers is not polled forever', async () => {
+      vi.useFakeTimers();
+      try {
+        const { stub, manager, requests } = await harness((request) => {
+          const payload = request.payload as { view?: ReadBoardView };
+          if (request.verb === 'read-board' && payload.view === 'full') return null;
+          return defaultResponder(request);
+        });
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(['project-1']));
+        await flushLoopbackFakeTimers();
+        manager.setBoardWantsFull('project-1');
+        await flushLoopbackFakeTimers();
+        const fullRequests = (): CapabilityRequestMessage[] =>
+          requests.filter((request) => request.verb === 'read-board' && (request.payload as { view?: ReadBoardView }).view === 'full');
+
+        await vi.advanceTimersByTimeAsync(12_000);
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(2);
+
+        // The retry times out too. No third attempt: from here the recoveries
+        // are the existing ones (a refocus, a board event, a reconnect).
+        await vi.advanceTimersByTimeAsync(30_000);
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not retry a subscribe the desktop rejected', async () => {
+      vi.useFakeTimers();
+      try {
+        const { stub, manager, requests } = await harness((request) => {
+          const payload = request.payload as { view?: ReadBoardView };
+          if (request.verb === 'read-board' && payload.view === 'full') {
+            return { type: 'capability-response', requestId: request.requestId, ok: false, error: 'No such project' };
+          }
+          return defaultResponder(request);
+        });
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(['project-1']));
+        await flushLoopbackFakeTimers();
+        manager.setBoardWantsFull('project-1');
+        await flushLoopbackFakeTimers();
+        const fullRequests = (): CapabilityRequestMessage[] =>
+          requests.filter((request) => request.verb === 'read-board' && (request.payload as { view?: ReadBoardView }).view === 'full');
+        expect(fullRequests()).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(15_000);
+        await flushLoopbackFakeTimers();
+        expect(fullRequests()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * A leaked retry timer is invisible while the board stays dropped (the
+     * timer's own desired-set check refuses it), so the board is dropped and
+     * re-added inside the retry delay: the re-add issues exactly one subscribe
+     * of its own, and a timer that dropBoard failed to clear would fire into
+     * that fresh subscription and issue a second. Mutation seen failing:
+     * skipping the clear in dropBoard (two subscribes after the re-add).
+     */
+    it('drops the armed retry when the board is no longer wanted', async () => {
+      vi.useFakeTimers();
+      try {
+        const { stub, manager, requests } = await harness((request) => {
+          const payload = request.payload as { view?: ReadBoardView };
+          if (request.verb === 'read-board' && payload.view === 'full') return null;
+          return defaultResponder(request);
+        });
+        stub.beginHandshake();
+        await flushLoopbackFakeTimers();
+        manager.setDesiredBoards(new Set(['project-1']));
+        await flushLoopbackFakeTimers();
+        manager.setBoardWantsFull('project-1');
+        await flushLoopbackFakeTimers();
+        await vi.advanceTimersByTimeAsync(10_000);
+        await flushLoopbackFakeTimers();
+
+        manager.setDesiredBoards(new Set());
+        await flushLoopbackFakeTimers();
+        const countBeforeReAdd = requests.filter(
+          (request) => request.verb === 'read-board' && (request.payload as { action?: string }).action !== 'unsubscribe',
+        ).length;
+        manager.setDesiredBoards(new Set(['project-1']));
+        await vi.advanceTimersByTimeAsync(5_000);
+        await flushLoopbackFakeTimers();
+
+        const subscribesAfterReAdd = requests.filter(
+          (request) => request.verb === 'read-board' && (request.payload as { action?: string }).action !== 'unsubscribe',
+        ).length;
+        expect(subscribesAfterReAdd - countBeforeReAdd).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  /**
    * `refreshStream`, `refreshBoard`, `setStreamWantsTerminal` and
    * `setBoardWantsFull` are each one request caused by a user action with a
    * screen waiting on the answer, and deliberately bypass `subscribeQueue`.

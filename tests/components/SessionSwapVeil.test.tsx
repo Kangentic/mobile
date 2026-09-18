@@ -126,11 +126,11 @@ describe('SessionSwapVeil', () => {
 
     /**
      * The performance finding behind the cursor's shape, measured on the
-     * release build (emulator, 2026-09-18) with the pane hidden under the
-     * cleared veil: a tweened breath on the cell-sized cursor drew a whole
-     * window frame per vsync (57 a second at 24-28% of a core), the same cost
-     * the full-screen scrim breath had, while the identical veil held static
-     * drew nothing (1.5-4%). A frame costs what it costs however small the
+     * release build (emulator, 2026-09-18): a tweened breath on the
+     * cell-sized cursor drew a whole window frame per vsync (57 a second at
+     * 24-28% of a core), the same cost the full-screen scrim breath had,
+     * while the identical veil held still drew nothing (1.5-4%). A frame
+     * costs what it costs however small the
      * view that changed. So once the pane has cleared the scrim is the static
      * branch and the cursor is a two-state toggle on a JS interval: NO
      * Reanimated mapper in the waiting phase at all, one commit per

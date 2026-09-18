@@ -25,7 +25,7 @@ export interface BlinkingBlockProps {
  * release build (emulator, 2026-09-18) the swap veil's cell-sized cursor
  * breathing under `PulsingBlock` drew 57 frames a second at 24-28% of a
  * core, the same cost its full-screen scrim breath had, while the identical
- * veil held static drew nothing at 1.5-4%. A stepped Reanimated animation
+ * veil held still drew nothing at 1.5-4%. A stepped Reanimated animation
  * would still walk a mapper every vsync. This commits one React update per
  * half-period, one frame each, and registers no mapper at all.
  *

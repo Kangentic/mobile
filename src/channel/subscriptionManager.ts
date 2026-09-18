@@ -6,6 +6,7 @@ import type {
   ReadStreamResponsePayload,
   Unsubscribe,
 } from '@kangentic/protocol';
+import { traceConnection } from '@/devsupport/connectionTrace';
 import { createBoundedTaskQueue } from '../lib/boundedTaskQueue';
 import type { SessionManager } from './sessionManager';
 import { CapabilityError, type VerbClient } from './verbClient';
@@ -13,6 +14,14 @@ import { CapabilityError, type VerbClient } from './verbClient';
 const BOARD_REFRESH_DEBOUNCE_MS = 300;
 const DIFF_REFRESH_DEBOUNCE_MS = 500;
 const STREAM_RETRY_DELAY_MS = 2000;
+/**
+ * Same shape as the stream retry, added 2026-09-18 after the Board tab sat on
+ * its skeleton for two minutes: the project switch's full-board upgrade hit
+ * CapabilityClient's 10 s timeout once, and nothing re-issued it until the tab
+ * was left and re-entered (the refocus retry in setBoardWantsFull), which then
+ * landed in four seconds. One retry, queued, never for a rejection.
+ */
+const BOARD_RETRY_DELAY_MS = 2000;
 
 /**
  * How many subscribe requests may be in flight at once.
@@ -136,6 +145,7 @@ export class SubscriptionManager {
   private readonly boardRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly diffRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly streamRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly boardRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   private readonly subscribeQueue = createBoundedTaskQueue(SUBSCRIBE_FAN_OUT_CONCURRENCY);
   /**
@@ -348,6 +358,8 @@ export class SubscriptionManager {
     this.diffRefreshTimers.clear();
     for (const timer of this.streamRetryTimers.values()) clearTimeout(timer);
     this.streamRetryTimers.clear();
+    for (const timer of this.boardRetryTimers.values()) clearTimeout(timer);
+    this.boardRetryTimers.clear();
   }
 
   /**
@@ -384,13 +396,13 @@ export class SubscriptionManager {
     });
   }
 
-  private enqueueBoardSubscribe(projectId: string): void {
+  private enqueueBoardSubscribe(projectId: string, isRetry = false): void {
     if (this.disposed || this.queuedBoardIds.has(projectId)) return;
     this.queuedBoardIds.add(projectId);
     this.subscribeQueue.enqueue(async () => {
       this.queuedBoardIds.delete(projectId);
       if (this.disposed || !this.session.isEstablished || !this.desiredBoardIds.has(projectId)) return;
-      await this.subscribeBoard(projectId);
+      await this.subscribeBoard(projectId, { isRetry });
     });
   }
 
@@ -403,8 +415,11 @@ export class SubscriptionManager {
     this.activeDiffTaskIds.clear();
     // Anything still pending was issued on the previous session's keys; the
     // controller rejected it, and the catch below clears it as it settles. A
-    // fresh handshake starts from nothing in flight.
+    // fresh handshake starts from nothing in flight, and every board is
+    // re-issued below, so an armed retry would only duplicate that.
     this.pendingBoardViewByProjectId.clear();
+    for (const timer of this.boardRetryTimers.values()) clearTimeout(timer);
+    this.boardRetryTimers.clear();
     // The biggest fan-out there is: every board and every live session at
     // once, on a path that also runs after a transport drop, so it is exactly
     // the cold-start storm repeated on every reconnect. Hence the cap.
@@ -492,10 +507,11 @@ export class SubscriptionManager {
    * upgrade) asks for the same thing an in-flight request already asked for,
    * and is deduplicated.
    */
-  private async subscribeBoard(projectId: string, options: { force?: boolean } = {}): Promise<void> {
+  private async subscribeBoard(projectId: string, options: { force?: boolean; isRetry?: boolean } = {}): Promise<void> {
     const view = this.boardViewByProjectId.get(projectId) ?? 'sessions';
     if (!options.force && this.pendingBoardViewByProjectId.get(projectId) === view) return;
     this.pendingBoardViewByProjectId.set(projectId, view);
+    const issuedAt = Date.now();
     try {
       const snapshot = await this.verbs.readBoardSubscribe(projectId, { view });
       if (this.pendingBoardViewByProjectId.get(projectId) === view) this.pendingBoardViewByProjectId.delete(projectId);
@@ -514,11 +530,32 @@ export class SubscriptionManager {
       this.activeBoardIds.add(projectId);
       this.activeBoardViewByProjectId.set(projectId, view);
       this.sinks.onBoardSnapshot(snapshot);
-    } catch {
-      // Board subscribe failures are recovered by the next reconcile
-      // (established, refreshBoard, a desired-set change, or the Board tab
-      // re-focusing, which re-issues an upgrade that has not landed).
+    } catch (error) {
       if (this.pendingBoardViewByProjectId.get(projectId) === view) this.pendingBoardViewByProjectId.delete(projectId);
+      if (this.disposed || !this.desiredBoardIds.has(projectId)) return;
+      // A rejection is an answer (the desktop said no) and is not retried. A
+      // timeout or a transport failure is retried ONCE, after a beat and
+      // through the queue so a mass timeout on the cold-start fan-out cannot
+      // become a second uncapped storm, exactly as subscribeStream does.
+      // Beyond that the recoveries are the existing ones: established,
+      // refreshBoard, a desired-set change, or the Board tab re-focusing,
+      // which re-issues an upgrade that has not landed.
+      const rejected = error instanceof CapabilityError;
+      const willRetry = !rejected && !options.isRetry && !this.boardRetryTimers.has(projectId);
+      traceConnection('board-subscribe', {
+        outcome: rejected ? 'rejected' : 'failed',
+        view,
+        ms: Date.now() - issuedAt,
+        retry: willRetry,
+      });
+      if (!willRetry) return;
+      this.boardRetryTimers.set(
+        projectId,
+        setTimeout(() => {
+          this.boardRetryTimers.delete(projectId);
+          if (this.session.isEstablished && this.desiredBoardIds.has(projectId)) this.enqueueBoardSubscribe(projectId, true);
+        }, BOARD_RETRY_DELAY_MS),
+      );
     }
   }
 
@@ -567,6 +604,11 @@ export class SubscriptionManager {
     if (refreshTimer) {
       clearTimeout(refreshTimer);
       this.boardRefreshTimers.delete(projectId);
+    }
+    const retryTimer = this.boardRetryTimers.get(projectId);
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      this.boardRetryTimers.delete(projectId);
     }
     // The project left the desired set entirely; a later re-add starts back at
     // the feed projection and the Board tab upgrades it again if opened. Both

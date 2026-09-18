@@ -130,10 +130,21 @@ export interface MotionTokens {
   };
   /** Pressed-state scale for touchables (PressScale wraps Card/Button/IconButton later). */
   pressedScale: number;
+  /**
+   * The loading placeholder's pulse. `holdAfterMs` bounds it: a skeleton that
+   * has been on screen that long stops pulsing and rests at the mid opacity,
+   * still reading as "loading". A load normally lands in a second or two, but
+   * a stalled one does not, and a tween draws a whole window frame per vsync
+   * for as long as it runs (measured 2026-09-18 on the release build: a board
+   * stranded on its skeleton drew 60 frames a second for the ninety seconds
+   * the stall lasted, read off the emulator's per-second frame stats). The
+   * bound is the same shape as the swap veil's quiet deadline.
+   */
   skeletonPulse: {
     durationMs: number;
     opacityMin: number;
     opacityMax: number;
+    holdAfterMs: number;
   };
   /**
    * The session screen's swap veil: a scrim over the last terminal frame that
@@ -152,10 +163,10 @@ export interface MotionTokens {
    * for waiting with nothing to show. A BLINK, not a breath: a two-state
    * toggle committed on a JS interval, never a tween, because a tween draws a
    * whole window frame per vsync however small the view that changed.
-   * Measured on the release build (emulator, 2026-09-18, pane hidden under
-   * the veil): a breathing cursor drew 57 frames a second at 24-28% of a
-   * core, the same cost the full-screen scrim breath had, while the same veil
-   * held static drew nothing at 1.5-4%. The scrim itself holds static there
+   * Measured on the release build (emulator, 2026-09-18): a breathing cursor
+   * drew 57 frames a second at 24-28% of a core, the same cost the
+   * full-screen scrim breath had, while the same veil held still drew
+   * nothing at 1.5-4%. The scrim itself holds static there
    * for the same reason, and because its breath over the empty grid moves
    * each channel by less than one unit (the two backgrounds are three units
    * apart). `intervalMs` is a half-period, lit for one and dim for the next,
@@ -237,6 +248,9 @@ export const motionTokens: MotionTokens = {
     durationMs: 1200,
     opacityMin: 0.4,
     opacityMax: 0.8,
+    // Well past any load that is going to land (a full board reads in under
+    // five seconds on the hosted relay; the capability timeout is ten).
+    holdAfterMs: 10_000,
   },
   waitCursorBlink: {
     intervalMs: 600,

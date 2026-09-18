@@ -33,7 +33,12 @@ act on a performance number sourced from a dev client, including your own impres
 **A number needs a control taken the same way.** Same install, same content, same process age,
 same navigation. An A/B whose two arms differ in anything else measures that instead. A setting
 that needs a restart (reduced motion, an `EXPO_PUBLIC_*` flag) means force-stopping and relaunching
-BOTH arms, not just the one that needed it.
+BOTH arms, not just the one that needed it. **And check that the switch you flipped is the one the
+code reads.** Reanimated's `useReducedMotion` reads Android's TRANSITION animation scale
+(`settings put global transition_animation_scale 0`), not the animator duration scale; an arm
+that zeroed the wrong one on 2026-09-18 measured a "static" veil that was still breathing, and the
+60 fps it showed was read as a WebView defect and fixed for a few hours before the per-second
+frame log gave the tween away. Confirm a control is static by its frame count, not by the setting.
 
 **Sample long enough to quote a range, and never conclude inside it.** This app streams
 continuously under the demo peer, so its load swings. The same condition read 22-46% and 65-86%

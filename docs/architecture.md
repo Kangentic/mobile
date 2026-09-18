@@ -586,11 +586,12 @@ records as its one sanctioned perpetual motion, and it is allowed only because i
 toggle on a JS interval (`BlinkingBlock`) that draws two frames a second, not a tween: measured on
 the release build (emulator, every arm in one process, 2026-09-18), a breathing cursor on the same
 cell-sized view drew 57 frames a second at 24-28% of a core, no cheaper than the full-screen scrim
-breath, while the veil held static drew 0 frames at 1.5-4%. The pane under the cleared veil is
-hidden outright (opacity 0) rather than merely covered, because a dead session's page keeps the
-WebView painting at the full frame rate for as long as the pane is drawn, whatever the veil does
-(measured: about 58 frames a second and 30 points of a core with the veil static), and at opacity 0
-it draws nothing; it comes back at the bind so the successor's seed can paint and lift the veil.
+breath, while the veil held still drew 0 frames at 1.5-4%. The pane under the cleared veil stays
+drawn: a dead session's page draws nothing on its own (bare, 18 frames in 45 s) and nothing under a
+veil held still (12 in 49 s), so there is nothing to hide from. A claim that it kept the WebView
+painting at 60 fps stood for a few hours on 2026-09-18 and rested on an arm whose "static" veil was
+still breathing, because Reanimated reads the OS transition scale as reduced motion and the arm
+had zeroed the animator scale; the developer guide's measurement table records the retraction.
 The route's `ScreenMotionProvider` and OS reduced motion still gate the blink.
 
 This replaced, in two steps on 2026-09-18, the two text surfaces ("Switching session" with the
