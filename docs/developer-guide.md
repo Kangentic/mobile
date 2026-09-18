@@ -1800,18 +1800,40 @@ at all.
 
 **Holding the veil for its full deadline.** `kangentic_send_session_message` with `/exit` ends the
 session with no label and no successor, which is the one way to see the waiting phase live
-(veil over the last frame for 8.0 s, then the same veil over the empty terminal with the footer
-down to the switcher) and to measure the pulse: `dumpsys gfxinfo <pkg> reset`,
-`top -b -n 5 -d 2 -o CMD,%CPU -p <pid>` in the background, send the exit, read `gfxinfo` again
-40 s later, then flip Settings > Retention probe to "No looping motion" and repeat in the same
-process. Measured that way: 501 frames rendered across the window with the pulse against 36
-static, i.e. about 465 extra frames or ~58 fps for the 8 s the veil was up (the emulator's 60 Hz
-rate), and `top` at roughly 11 % against 5 % during the quiet part of the window with the idle
-terminal at 4-8 % (one sample per arm; the two spikes in each arm coincide with the exit event
-and the reveal). The cost is bounded by the deadline and is typically one to two and a half
-seconds per swap. A same-column labelled respawn could not be produced from the MCP
-(`kangentic_update_task model` on a running session applies at the next spawn), so that kind is
-covered by the stub rig's `/respawn` and the component tests only.
+(veil over the last frame for 8.0 s, then the empty terminal with a blinking cursor at its origin
+and the footer down to the switcher) and to measure it: `dumpsys gfxinfo <pkg> reset`,
+`top -b -n 5 -d 2 -o CMD,%CPU -p <pid>`, read `gfxinfo` again, one arm per phase, every arm in the
+same process. Measured 2026-09-18 on the flagged release build (x86_64 emulator, the real desktop
+over the hosted relay), in the order the wrong answers were ruled out:
+
+| Arm | Frames | `top`, five samples |
+|---|---|---|
+| Live idle terminal (control) | 0 in 27 s | 7-10% |
+| Quiet phase: veil breathing over the dead frame | ~60/s | 20-31% |
+| Waiting phase, veil static under OS reduced motion, pane DRAWN (own process, own control) | ~60/s | 29-36% |
+| Waiting phase, pane hidden, cursor breathing (`PulsingBlock`) | 57/s over 55 min | 24-28% |
+| Waiting phase, pane hidden, veil static (blurred under the move sheet) | 0 in 20 s | 1.5-4% |
+| Changes lens in the same window | 0 | 0-4% |
+| Backgrounded with the veil up | 0 | 4-8% |
+| Waiting phase as shipped: pane hidden, cursor blinking (`BlinkingBlock`); its own process, live idle control 11-12.5% | 42 in 25.8 s (1.6/s) | 10-12% |
+
+Two causes, both fixed at the source. A dead session's page keeps the WebView painting at the full
+frame rate for as long as the pane is drawn, whatever the veil above it does, and at opacity 0 it
+draws nothing: so `SessionScreen` hides the terminal pane through the waiting phase (the cleared
+veil is opaque over it) and restores it at the bind so the successor's seed can paint. And a
+Reanimated tween draws a whole window frame per vsync however small the view that changed, so the
+wait cursor is a two-state toggle on a JS interval (`BlinkingBlock`), two frames a second. An
+earlier revision of this paragraph reported the pulse at "roughly 11% against 5%" from one sample
+per arm over windows that were mostly static; that number is retracted, and so is the cursor's
+original justification (that one cell of damage is cheaper than three full-screen layers), which
+was inferred and measured false. Two traps: `useReducedMotion` reads the OS animator scale once at
+app start, so `settings put global animator_duration_scale 0` needs a force-stop and relaunch, and
+both arms of the A/B then belong in that new process; and the pane at opacity 0 is what stops the
+WebView, so any control arm must say whether the pane was drawn. The cost of the quiet-phase breath
+is bounded by the deadline and is typically one to two and a half seconds per swap. A same-column
+labelled respawn could not be produced from the MCP (`kangentic_update_task model` on a running
+session applies at the next spawn), so that kind is covered by the stub rig's `/respawn` and the
+component tests only.
 
 ### Measuring the cold launch
 

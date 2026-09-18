@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react-native';
+import { act, render, screen } from '@testing-library/react-native';
 import { StyleSheet, Text } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
@@ -94,12 +94,13 @@ describe('SessionSwapVeil', () => {
 
   /**
    * The waiting phase: the same veil, with the empty terminal painted UNDER
-   * its scrim in place of the dead session's last frame, the waiting label,
-   * and still nothing to read. The desktop's launch overlay is a spinner
-   * over a blank terminal area; this is the phone's version of blank.
+   * its scrim in place of the dead session's last frame, the scrim held
+   * STILL, a cursor breathing above it at the grid's origin, the waiting
+   * label, and still nothing to read. The desktop's launch overlay is a
+   * spinner over a blank terminal area; this is the terminal's own version.
    */
   describe('the waiting phase', () => {
-    it('paints the empty terminal under the scrim, carries the waiting label, and still renders no text', () => {
+    it('paints the empty terminal under a static scrim with a cursor above it, and still renders no text', () => {
       render(
         <ThemeProvider>
           <SessionSwapVeil waiting />
@@ -113,14 +114,114 @@ describe('SessionSwapVeil', () => {
         darkTerminalTheme.colors.terminalBackground,
       );
       expect(emptyLayer.props.pointerEvents).toBe('none');
-      // Painted BEFORE the scrim, so the scrim dims the empty terminal and
-      // not the other way round.
+      // Painted in this order: the empty terminal, the scrim that dims it,
+      // then the cursor ABOVE the scrim so the scrim does not dim it away.
       const layerOrder = veil.children.map((child) => (typeof child === 'string' ? child : child.props.testID));
-      expect(layerOrder).toEqual(['session-swap-veil-empty', 'session-swap-veil-scrim']);
+      expect(layerOrder).toEqual(['session-swap-veil-empty', 'session-swap-veil-scrim', 'session-swap-veil-cursor']);
+      const cursorStyle = StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style);
+      expect(cursorStyle.backgroundColor).toBe(darkTerminalTheme.colors.textSecondary);
+      expect(cursorStyle.opacity).toBe(darkTerminalTheme.motion.waitCursorBlink.opacityMax);
       expect(screen.UNSAFE_queryAllByType(Text)).toHaveLength(0);
     });
 
-    it('paints no empty layer through the quiet phase, where the last frame is the point', () => {
+    /**
+     * The performance finding behind the cursor's shape, measured on the
+     * release build (emulator, 2026-09-18) with the pane hidden under the
+     * cleared veil: a tweened breath on the cell-sized cursor drew a whole
+     * window frame per vsync (57 a second at 24-28% of a core), the same cost
+     * the full-screen scrim breath had, while the identical veil held static
+     * drew nothing (1.5-4%). A frame costs what it costs however small the
+     * view that changed. So once the pane has cleared the scrim is the static
+     * branch and the cursor is a two-state toggle on a JS interval: NO
+     * Reanimated mapper in the waiting phase at all, one commit per
+     * half-period, lit then dim.
+     */
+    it('holds the scrim static once cleared, registers no mapper, and blinks the cursor on the interval', () => {
+      jest.useFakeTimers();
+      const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+      const { intervalMs, opacityMin: cursorMin, opacityMax: cursorMax } = darkTerminalTheme.motion.waitCursorBlink;
+
+      try {
+        render(
+          <ThemeProvider>
+            <ScreenMotionOverride active={true}>
+              <SessionSwapVeil waiting />
+            </ScreenMotionOverride>
+          </ThemeProvider>,
+        );
+
+        const scrimStyle = StyleSheet.flatten(screen.getByTestId('session-swap-veil-scrim').props.style);
+        expect(scrimStyle.opacity).toBe((opacityMin + opacityMax) / 2);
+        expect(animatedStyleSpy).not.toHaveBeenCalled();
+
+        const cursorOpacity = (): number =>
+          StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style).opacity as number;
+        expect(cursorOpacity()).toBe(cursorMax);
+        act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(cursorMin);
+        act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(cursorMax);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('rests the cursor at its mid opacity, never toggling, under OS reduced motion', () => {
+      jest.useFakeTimers();
+      jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
+      const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+      const { intervalMs, opacityMin: cursorMin, opacityMax: cursorMax } = darkTerminalTheme.motion.waitCursorBlink;
+
+      try {
+        render(
+          <ThemeProvider>
+            <SessionSwapVeil waiting />
+          </ThemeProvider>,
+        );
+
+        const cursorOpacity = (): number =>
+          StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style).opacity as number;
+        expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
+        act(() => {
+          jest.advanceTimersByTime(intervalMs * 2);
+        });
+        expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
+        expect(animatedStyleSpy).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('rests the cursor at its mid opacity, never toggling, while the screen is blurred', () => {
+      jest.useFakeTimers();
+      const { intervalMs, opacityMin: cursorMin, opacityMax: cursorMax } = darkTerminalTheme.motion.waitCursorBlink;
+
+      try {
+        render(
+          <ThemeProvider>
+            <ScreenMotionOverride active={false}>
+              <SessionSwapVeil waiting />
+            </ScreenMotionOverride>
+          </ThemeProvider>,
+        );
+
+        const cursorOpacity = (): number =>
+          StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style).opacity as number;
+        expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
+        act(() => {
+          jest.advanceTimersByTime(intervalMs * 2);
+        });
+        expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('paints no empty layer and no cursor through the quiet phase, where the last frame is the point', () => {
       render(
         <ThemeProvider>
           <SessionSwapVeil />
@@ -128,6 +229,7 @@ describe('SessionSwapVeil', () => {
       );
 
       expect(screen.queryByTestId('session-swap-veil-empty')).toBeNull();
+      expect(screen.queryByTestId('session-swap-veil-cursor')).toBeNull();
       expect(screen.getByTestId('session-swap-veil').props.accessibilityLabel).toBe(
         SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL,
       );
