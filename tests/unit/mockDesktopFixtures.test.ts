@@ -748,8 +748,11 @@ describe('ending or respawning the streaming session stops its terminal replay',
     expect(body).toContain('stopTerminalPlayback();');
   });
 
-  it('stops the replay in respawnActiveSession (the /respawn command)', () => {
-    const body = functionBody('function respawnActiveSession(): void {', 'function raiseQuestionPrompt(');
+  it('stops the replay in respawnActiveSession (the /respawn and /respawn-quiet commands)', () => {
+    // The marker stops at the opening parenthesis: the signature took a
+    // nullable label with the quiet respawn, and a marker that spells the
+    // parameter list breaks on the next one too.
+    const body = functionBody('function respawnActiveSession(', 'function raiseQuestionPrompt(');
     expect(body).toContain('stopTerminalPlayback();');
   });
 });
