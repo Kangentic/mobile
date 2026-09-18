@@ -738,6 +738,110 @@ describe('activityStore', () => {
 
       expect(useActivityStore.getState().respawnByTaskId).toBe(before);
     });
+
+    /**
+     * THE SUCCESSOR TAKES THE GHOST'S PLACE. The feed is keyed on the session
+     * id and ordered by `enteredSectionAt`, so a successor built from scratch
+     * is a new row at the top of Idle with a fresh body, then a second jump
+     * to Working when its snapshot lands: two moves and a body change inside
+     * the swap. Inheriting the ghost's section, ordering key, preview, usage
+     * and unread badge makes the bind a same-slot remount with the same body.
+     * A plain `emptyEntry` fails every inherited field here.
+     */
+    describe('the successor inherits the ghost row', () => {
+      it("inherits the ghost's section, ordering key, preview, usage and unread count, with fresh liveness", () => {
+        vi.useFakeTimers();
+        try {
+          vi.setSystemTime(1_000);
+          useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+          useActivityStore.getState().applySnapshot(
+            'sess-old',
+            'task-7',
+            'project-1',
+            streamSnapshotFixture({ activity: { state: 'thinking', reason: null } }),
+          );
+          useActivityStore
+            .getState()
+            .applyActivityEvent(activityEvent('sess-old', { type: 'message-preview', text: 'Halfway through the refactor.' }, 'task-7'));
+          useActivityStore
+            .getState()
+            .applyActivityEvent(activityEvent('sess-old', { type: 'event', event: { ts: 1, type: 'tool_start' } }, 'task-7'));
+          useActivityStore
+            .getState()
+            .applyActivityEvent(activityEvent('sess-old', { type: 'event', event: { ts: 2, type: 'tool_start' } }, 'task-7'));
+          useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
+
+          vi.setSystemTime(5_000);
+          useActivityStore.getState().registerSession('sess-new', 'task-7', 'project-1');
+
+          const successor = useActivityStore.getState().bySessionId['sess-new'];
+          const ghost = useActivityStore.getState().bySessionId['sess-old'];
+          expect(successor.state).toBe('thinking');
+          expect(successor.enteredSectionAt).toBe(ghost.enteredSectionAt);
+          expect(successor.enteredSectionAt).toBeLessThan(5_000);
+          expect(successor.messagePreview).toBe('Halfway through the refactor.');
+          expect(successor.usage).toEqual(ghost.usage);
+          expect(successor.unreadCount).toBe(2);
+          // Liveness is the successor's own.
+          expect(successor.feedStatus).toBe('pending');
+          expect(successor.sessionStatus).toBeNull();
+          expect(successor.endedIntentionally).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      /**
+       * A pending prompt belongs to the agent that died and can never be
+       * answered; inherited verbatim it would also read to localNotifier as a
+       * brand-new prompt on a brand-new entry, and push "Agent needs your
+       * input" for a dead question. Copying `state` unchanged fails this.
+       */
+      it('never inherits a dead prompt: permission becomes idle with no awaited prompt', () => {
+        useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+        useActivityStore
+          .getState()
+          .applyActivityEvent(activityEvent('sess-old', { type: 'permission', promptId: 'sess-old:tool-1', pending: true }, 'task-7'));
+        useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
+
+        useActivityStore.getState().registerSession('sess-new', 'task-7', 'project-1');
+
+        const successor = useActivityStore.getState().bySessionId['sess-new'];
+        expect(successor.state).toBe('idle');
+        expect(successor.awaitedPromptId).toBeNull();
+        expect(successor.awaitedPromptOptions).toBeNull();
+      });
+
+      /**
+       * The control: a session registering for a task with NO end in flight
+       * is an ordinary fresh entry, even when another entry for that task
+       * happens to exist. Seeding off "any same-task entry" would pass the
+       * tests above and fail this one.
+       */
+      it('registers a fresh entry when no end is in flight for the task', () => {
+        vi.useFakeTimers();
+        try {
+          vi.setSystemTime(1_000);
+          useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+          useActivityStore.getState().applySnapshot(
+            'sess-old',
+            'task-7',
+            'project-1',
+            streamSnapshotFixture({ activity: { state: 'thinking', reason: null } }),
+          );
+
+          vi.setSystemTime(5_000);
+          useActivityStore.getState().registerSession('sess-new', 'task-7', 'project-1');
+
+          const successor = useActivityStore.getState().bySessionId['sess-new'];
+          expect(successor.state).toBe('idle');
+          expect(successor.enteredSectionAt).toBe(5_000);
+          expect(successor.messagePreview).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
   });
 
   it('applyActivityEvent dispatches on payload type', () => {

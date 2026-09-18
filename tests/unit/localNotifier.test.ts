@@ -131,6 +131,28 @@ describe('startLocalNotifier', () => {
     vi.useRealTimers();
   });
 
+  /**
+   * A successor session inherits its ghost's Home-feed row (activityStore's
+   * successorEntry), and a NEW entry has no previous snapshot here - so a
+   * ghost's pending prompt inherited verbatim would read as a fresh prompt
+   * and push "Agent needs your input" for a question the dead agent asked.
+   * The store maps it to idle; this pins that the notifier stays silent.
+   * Copying the ghost's state unchanged fails this with one call.
+   */
+  it('does not fire input-required for a successor whose ghost was awaiting a prompt', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    displayNotification.mockClear();
+
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(true));
+    useActivityStore.getState().registerSession('sess-2', 'task-1', 'project-1');
+
+    expect(displayNotification).not.toHaveBeenCalled();
+  });
+
   it('fires on a background transition into permission, on the needs-attention channel with the task title', () => {
     seedSession();
     stopNotifier = startLocalNotifier();

@@ -21,7 +21,7 @@ import type { SubscriptionManager } from '@/channel/subscriptionManager';
 import { bindFeedToStores, createSnapshotSinks } from '@/connection/storeFeed';
 import { FeedRouter } from '@/channel/feedRouter';
 import type { SessionManager } from '@/channel/sessionManager';
-import { ENDED_ROW_GRACE_MS, RESPAWN_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
+import { ENDED_ROW_GRACE_MS, RESPAWN_ROW_GRACE_MS, selectTriageRows, useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 
@@ -203,5 +203,55 @@ describe('reconcileSessionsFromBoards keeps a respawning task on screen', () => 
     vi.advanceTimersByTime(RESPAWN_ROW_GRACE_MS * 2);
 
     expect(hasRow(OLD_SESSION_ID)).toBe(true);
+  });
+
+  /**
+   * The successor takes the ghost's SLOT, through the real reconciler: the
+   * snapshot that installs it registers the successor (which inherits the
+   * ghost's section and ordering key) before pruning the ghost, so the feed
+   * order comes out with the successor exactly where the ghost was. A
+   * successor built from scratch lands in Idle (it never inherits
+   * 'thinking'), and one that inherited the state but not the ordering key
+   * would sort ABOVE the other task, having "entered" Working just now.
+   */
+  it("puts the successor in the ghost's slot of the feed order, not at the top", () => {
+    const OTHER_TASK_ID = 'task-other';
+    const OTHER_SESSION_ID = 'sess-other';
+    const publishBothTasks = (respawningSessionId: string | null): void => {
+      sinks.onBoardSnapshot(
+        boardSnapshotFixture({
+          projectId: PROJECT_ID,
+          view: 'sessions',
+          tasks: [
+            ...(respawningSessionId === null ? [] : [boardTaskFixture({ id: TASK_ID, session_id: respawningSessionId })]),
+            boardTaskFixture({ id: OTHER_TASK_ID, session_id: OTHER_SESSION_ID }),
+          ],
+        }),
+      );
+    };
+    const pushThinking = (sessionId: string, taskId: string): void => {
+      if (!deliverMessage) throw new Error('feed not wired');
+      deliverMessage({
+        type: 'event',
+        event: { kind: 'activity', sessionId, taskId, payload: { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } } },
+      });
+    };
+
+    vi.setSystemTime(1_000);
+    publishBothTasks(OLD_SESSION_ID);
+    pushThinking(OLD_SESSION_ID, TASK_ID);
+    vi.setSystemTime(2_000);
+    pushThinking(OTHER_SESSION_ID, OTHER_TASK_ID);
+    const workingBefore = selectTriageRows(useActivityStore.getState()).find((rows) => rows.section === 'working');
+    expect(workingBefore?.entries.map((entry) => entry.sessionId)).toEqual([OTHER_SESSION_ID, OLD_SESSION_ID]);
+
+    vi.setSystemTime(9_000);
+    pushRespawnEnded(null);
+    publishBothTasks(null);
+    publishBothTasks(NEW_SESSION_ID);
+
+    const workingAfter = selectTriageRows(useActivityStore.getState()).find((rows) => rows.section === 'working');
+    expect(workingAfter?.entries.map((entry) => entry.sessionId)).toEqual([OTHER_SESSION_ID, NEW_SESSION_ID]);
+    expect(hasRow(OLD_SESSION_ID)).toBe(false);
   });
 });
