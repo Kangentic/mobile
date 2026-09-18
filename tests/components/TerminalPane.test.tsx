@@ -342,7 +342,9 @@ describe('TerminalPane (faithful mirror)', () => {
   it('pauses WebView writes while inactive and re-seeds on becoming active', async () => {
     retainTerminal('sess-1');
     setTerminalDimensions('sess-1', { cols: 80, rows: 24 });
-    appendChunk('sess-1', 'first');
+    // Seeded, the way a ring the screen opened always is: a re-init over a
+    // painted frame waits for the snapshot (see the hold rule below).
+    seedScrollback('sess-1', 'first');
     const result = await renderPaneAndReady(true);
 
     // Go inactive (user switched to another tab).
@@ -558,7 +560,7 @@ describe('TerminalPane (faithful mirror)', () => {
    */
   it('replays the stored sticky-mode restore sequence ahead of the ring on the next re-seed', async () => {
     retainTerminal('sess-1');
-    appendChunk('sess-1', 'ring-bytes');
+    seedScrollback('sess-1', 'ring-bytes');
     const result = await renderPaneAndReady();
 
     // A REAL mode transition (not a baseline): the desktop's TUI entered the
@@ -645,13 +647,102 @@ describe('TerminalPane (faithful mirror)', () => {
   describe('the hold rule and the paint report', () => {
     it('stamps every init with a monotonically increasing seq', async () => {
       retainTerminal('sess-1');
-      appendChunk('sess-1', 'hello');
+      seedScrollback('sess-1', 'hello');
       const result = await renderPaneAndReady();
       rerenderPane(result, false);
       rerenderPane(result, true);
 
       const initSeqs = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.seq] : []));
       expect(initSeqs).toEqual([1, 2]);
+    });
+
+    /**
+     * The seed half of the hold. The desktop pushes live output the moment a
+     * subscription exists and answers the subscribe with the scrollback a beat
+     * later, so a successor's first visible chunk can land BEFORE its seed. An
+     * init built from that chunk painted, the veil let go, and the seed's own
+     * init then reset the grid and replayed it: a black grid for about a
+     * second, in the open, measured live on a column move. Chunks that beat
+     * the seed must therefore never release the hold; the seed inits.
+     */
+    it('holds visible chunks that arrive before the seed, then inits once from the seed', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        seedScrollback('sess-1', 'painted frame');
+        const result = await renderPaneAndReady();
+        // Away and back with the ring released underneath: the pane comes back
+        // to a fresh, unseeded ring with the old frame still on screen - the
+        // same shape as a successor's ring right after a swap. Live output has
+        // ALREADY landed in it by the time the pane looks (the re-init path's
+        // own check), and more lands while the hold is up (the chunk path's).
+        rerenderPane(result, false);
+        releaseTerminal('sess-1');
+        retainTerminal('sess-1');
+        appendChunk('sess-1', 'early live output');
+        webViewMock.__postMessageMock.mockClear();
+        rerenderPane(result, true);
+        expect(decodedPosts()).toEqual([]);
+
+        act(() => appendChunk('sess-1', 'more live output'));
+        act(() => {
+          jest.advanceTimersByTime(100);
+        });
+        // Glyphs twice over, but no snapshot yet: nothing may reach the WebView.
+        expect(decodedPosts()).toEqual([]);
+
+        act(() => seedScrollback('sess-1', 'the snapshot'));
+        const posts = decodedPosts();
+        expect(posts).toHaveLength(1);
+        expect(posts[0]?.type).toBe('init');
+        if (posts[0]?.type === 'init') expect(posts[0].scrollback).toBe('the snapshot');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * The cell size survives every re-init over a painted frame: the page is
+     * told to keep its font (and line height) rather than fit the new grid's
+     * rows to the viewport, so a shorter successor comes up at the same
+     * resolution, centred. Only a fresh page - nothing on screen to keep - and
+     * the fit button fit anew.
+     */
+    it('keeps the cell size on a re-init over a painted frame, and fits on a fresh page', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      const result = await renderPaneAndReady();
+      rerenderPane(result, false);
+      rerenderPane(result, true);
+
+      const keepFontByInit = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.keepFont] : []));
+      expect(keepFontByInit).toEqual([false, true]);
+    });
+
+    it('fits the font again on the fit button, through its re-seed, while a later re-seed keeps the size', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        seedScrollback('sess-1', 'hello');
+        await renderPaneAndReady();
+        act(() => {
+          jest.advanceTimersByTime(10);
+        });
+        webViewMock.__postMessageMock.mockClear();
+
+        fireEvent.press(screen.getByTestId('terminal-refit'));
+        act(() => {
+          jest.advanceTimersByTime(10);
+          seedScrollback('sess-1', 'fresh seed');
+        });
+        // An unrelated re-seed after the button's own: back to keeping.
+        act(() => seedScrollback('sess-1', 'later seed'));
+
+        const keepFontByInit = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.keepFont] : []));
+        expect(keepFontByInit).toEqual([false, true]);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('marks the session painted only on a non-blank report that answers the latest init', async () => {

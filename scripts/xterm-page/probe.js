@@ -96,6 +96,7 @@
       activeInitSeq: activeInitSeq,
       awaitingNonBlankPaint: awaitingNonBlankPaint,
       paintReportCounts: JSON.parse(JSON.stringify(paintReportCounts)),
+      lastInitKeepFont: lastInitKeepFont,
       netHistoryUnits: netHistoryUnits,
       jumpRepaintCount: jumpRepaintCount,
       lastJumpAt: lastJumpAt,

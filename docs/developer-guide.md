@@ -1678,10 +1678,18 @@ and `probe-skipped` (the A/B switch turned off), `probe-start` / `probe-ok` / `p
 foreground liveness probe and its verdict), `established`, `bootstrap-start`,
 `bootstrap-restart` (a bootstrap lost to a rekey, restarted), `project-list`, `board-snapshot`
 (one per board, with its projection and task count), `wake-source` and `ceiling-timer` (the
-keepalive's two enforcement routes). What a line may carry is event names, transport states,
-relay close codes, counts, millisecond deltas, and coarse boolean state (`paired`, `cached`,
-`established`, the keepalive flag). No content and no identifiers, so the log is safe to paste
-into a task.
+keepalive's two enforcement routes), and the session swap's own timeline: `session-swap` with
+`phase=ended` (the bound session's end opened the quiet window, with `hasLabel` and `located`),
+`phase=bind` (the successor bound, `sinceEndedMs`), `phase=settled` (the veil let go, with the
+`mode` it settled in, `sinceEndedMs` and `sinceBindMs`) or `phase=deadline` (the quiet threshold
+passed first, with `bound`), plus two from the terminal pane: `terminal-init` on every init it
+posts (`reason`, one of `ready`, `seed`, `chunk-release`, `swap`, `clean-feed` or `reactivate`;
+the grid's `cols` and `rows`, `n/a` before the desktop reports one; `fontSizePx`; and `keepFont`,
+whether that init kept the cell size or fit the font) and `terminal-painted` on every paint
+report the WebView sends (`blank` and `sinceInitMs`). What a line may carry is event names, transport
+states, relay close codes, counts, millisecond deltas, and coarse boolean state (`paired`,
+`cached`, `established`, the keepalive flag). No content and no identifiers, so the log is safe to
+paste into a task.
 
 **Cold-launch-only events**, emitted once per process before any of the above, in the order they
 actually fire: `startup-origin` (the raw `rnStartupTiming` fields plus the clock-conversion

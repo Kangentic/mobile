@@ -346,6 +346,60 @@ describe('SessionScreen terminal pane across a session swap', () => {
   });
 
   /**
+   * The other order the same swap arrives in: the successor's live output
+   * beats its snapshot. The desktop pushes chunks the moment the subscription
+   * exists and serialises the scrollback a beat later, so a frame built from
+   * the early chunks paints, the veil lets go on it, and then the seed's own
+   * init resets the grid and replays - measured live as a black grid for about
+   * a second on a column move (Executing to Planning, 2026-09-18). The hold
+   * waits for the seed: the successor's first init is its last, and it keeps
+   * the predecessor's cell size.
+   */
+  it('holds the successor init through visible chunks that beat its seed, then inits once from the seed', async () => {
+    jest.useFakeTimers();
+    try {
+      seedTaskWithSession('sess-a');
+      render(
+        <ThemeProvider>
+          <SessionScreen />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      act(() => {
+        seedScrollback('sess-a', 'ORIGINAL FRAME');
+      });
+      act(() => {
+        seedTaskWithSession('sess-b');
+      });
+      const postCountAfterSwap = webViewMock.__postMessageMock.mock.calls.length;
+
+      act(() => {
+        appendChunk('sess-b', 'Claude Code v2 booting');
+      });
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+      // Glyphs arrived, but the snapshot that will replace them has not:
+      // nothing reached the WebView, so nothing will be torn down later.
+      expect(webViewMock.__postMessageMock.mock.calls.length).toBe(postCountAfterSwap);
+
+      act(() => {
+        seedScrollback('sess-b', 'SUCCESSOR FRAME');
+      });
+      const postsSinceSwap = decodedPosts().slice(postCountAfterSwap);
+      expect(postsSinceSwap).toHaveLength(1);
+      expect(postsSinceSwap[0]?.type).toBe('init');
+      if (postsSinceSwap[0]?.type === 'init') {
+        expect(postsSinceSwap[0].scrollback).toContain('SUCCESSOR FRAME');
+        expect(postsSinceSwap[0].keepFont).toBe(true);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
    * The hold protects a PAINTED frame. On a fresh page nothing is displayed,
    * so a CLEAN-FEED flip must still post even with an empty ring: the flag
    * only takes effect at init, and skipping it would leave the WebView's

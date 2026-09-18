@@ -31,6 +31,14 @@ interface TerminalRing {
   totalBytes: number;
   /** The PTY grid the buffered bytes are laid out for; null until the desktop reports one (or never, pre-0.4.0). */
   dims: TerminalDimensionsWire | null;
+  /**
+   * Whether a read-stream snapshot has landed in this ring since it was
+   * retained. Live chunks can arrive BEFORE the snapshot that answers the
+   * subscribe (the desktop pushes output the moment the subscription exists
+   * and serialises the scrollback a beat later), and a frame built from those
+   * chunks alone is replaced the moment the seed lands - see hasSeed.
+   */
+  seeded: boolean;
 }
 
 const ringsBySessionId = new Map<string, TerminalRing>();
@@ -72,7 +80,7 @@ function evictPastCapacity(ring: TerminalRing): void {
 
 export function retainTerminal(sessionId: string): void {
   if (!ringsBySessionId.has(sessionId)) {
-    ringsBySessionId.set(sessionId, { chunks: [], totalBytes: 0, dims: null });
+    ringsBySessionId.set(sessionId, { chunks: [], totalBytes: 0, dims: null, seeded: false });
   }
 }
 
@@ -91,8 +99,24 @@ export function seedScrollback(sessionId: string, scrollback: string): void {
   if (!ring) return;
   ring.chunks = scrollback.length > 0 ? [scrollback] : [];
   ring.totalBytes = scrollback.length;
+  ring.seeded = true;
   evictPastCapacity(ring);
   emit(sessionId, { kind: 'seed', data: scrollback });
+}
+
+/**
+ * True once a read-stream snapshot has landed in this session's ring (empty
+ * or not) since it was retained. The terminal pane's hold rule waits for it
+ * before re-initialising over a painted frame: every retained ring is
+ * subscribed and gets a seed a round trip later (openSessionScreen retains
+ * and refreshes in that order), and an init built from the live chunks that
+ * beat it is torn down and rebuilt when it lands - a reset to blank and a
+ * second replay, exposed on screen once the swap veil has let go. Measured
+ * live on a column move: the seed's re-init landed 0.4-0.6 s after the
+ * chunk-built frame and showed a black grid for about a second.
+ */
+export function hasSeed(sessionId: string): boolean {
+  return ringsBySessionId.get(sessionId)?.seeded === true;
 }
 
 /** No-op unless the session is retained. */
@@ -179,6 +203,7 @@ export interface TerminalFeedStats {
   chunks: number;
   totalBytes: number;
   dims: TerminalDimensionsWire | null;
+  seeded: boolean;
   listeners: number;
 }
 
@@ -193,6 +218,7 @@ export function getTerminalFeedStats(): TerminalFeedStats[] {
     chunks: ring.chunks.length,
     totalBytes: ring.totalBytes,
     dims: ring.dims ? { ...ring.dims } : null,
+    seeded: ring.seeded,
     listeners: listenersBySessionId.get(sessionId)?.size ?? 0,
   }));
 }

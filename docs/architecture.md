@@ -129,7 +129,7 @@ app/              # expo-router route wrappers (thin - render the src/screens/ i
                   #   opens the move-task sheet); changes = the diff destination;
                   #   file-diff.tsx hosts the per-file diff on the stack
 src/
-  screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen + lenses),
+  screens/        # TriageHome (+ home/ empty states), Board, task/ (SessionScreen + lenses),
                   #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
   components/      # Design system + conversation/ cells and prompt cards, terminal/ pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells
@@ -328,8 +328,13 @@ inline-only), fed the scrollback snapshot plus live PTY chunks over a small post
 (`src/terminal/terminalBridge.ts`). The desktop reports its PTY grid (`ptyDimensions` on the
 snapshot, `terminal-resize` events on change), so the phone renders at the exact grid the bytes
 were laid out for instead of inferring a width. It is a **faithful read-only mirror**: it renders
-that grid 1:1 with horizontal pan, follow-the-cursor and pinch-zoom, and sizes the font so the
-grid's ROWS fill the phone's height (a wider-than-screen grid then overflows and pans). It
+that grid 1:1 with horizontal pan, follow-the-cursor and pinch-zoom, and sizes the font ONCE, on
+first open, so the grid's ROWS fill the phone's height (a wider-than-screen grid then overflows
+and pans). Every later re-init over a painted frame - a session swap, a lens switch back, a
+re-seed - keeps that cell size (`keepFont` on the bridge's `init`): a successor whose PTY is
+shorter renders at the same resolution, centred, instead of zooming to fill the height and jumping
+back when the desktop rests it at its detail grid. The fit button, a fresh page and a desktop grid
+change fit again, and the page still steps the font down when a taller grid would overflow. It
 **never resizes the desktop PTY** - a shared session must not be reshaped by the phone, so the
 only thing sent upstream is typed input. The protocol carries `resize` and `release-size` actions
 on the `interactive-terminal` verb, but they exist for the desktop: `src/channel/verbClient.ts`
@@ -524,39 +529,91 @@ the one exclusion: a session cancelled OUT of the queue never ran, so calling it
 be a lie. All of that is wider than the `'suspended'` clause above on purpose - a parked session's
 entry can legitimately carry a stale `'idle'`, so only positive proof of work retires that one.
 
-### Transitional states on the Home feed and the board card
+### Transitional states: the session swap and the queued session
 
-Two states are neither working nor idle, and both used to be invisible on the list surfaces.
+On most column moves the desktop suspends the task's session and spawns or resumes a successor: a
+fresh isolated spawn (Executing to Code Review), a `--resume` of the main session (Code Review to
+Tests), or the same session restarted in place. On the wire every one is a **session swap**: a
+`session-ended` push for the old session (carrying a spawn-progress label for a same-column
+respawn, and NO label for the desktop's own column-move suspend-then-resume), the task
+sessionless for one to four seconds, then a board snapshot with the successor's id, and a round
+trip later its first frame. The phone presents every swap kind the same way, and shows nothing new
+to read on any surface while it is in flight.
 
-A **respawn** leaves the task sessionless for several seconds. `reconcileSessionsFromBoards` prunes
-the activity entry for any session no board claims, and the Home feed builds its rows from
-`bySessionId` alone, so the row vanished for the gap and then reappeared under the successor's id;
-the board card, keyed on `task.session_id`, lost its status glyph the same way. The fix is a
-task-keyed `respawnByTaskId`, written from the same `session-ended` payload as the session-keyed
-`spawnProgressLabelBySessionId` (which serves `SessionScreen`, the one consumer that still has a
-session id to key on). The reconciler keeps an entry alive while its task has a respawn in flight,
-and `registerSession` clears the fact - so the single snapshot that installs the successor also
-releases the retained row, in that order, with no window in which the task owns two rows. A respawn
-that never lands is bounded by `RESPAWN_ROW_GRACE_MS` (20s, matching `SessionScreen`'s
-`SESSION_SWAP_GRACE_MS`) plus a timer in `storeFeed` that re-runs the prune: board snapshots are
-event-driven, so on a quiet desktop nothing else would ever clear it.
+**The session screen** shows one silent surface, `SessionSwapVeil`: the last terminal frame under a
+scrim that breathes slowly, with no title, caption or button. It opens on ANY end of the bound
+session (a labelled or unlabelled `session-ended`, the full-projection board reporting the task
+sessionless, a refused feed past its grace), keyed on the session that ended in the same
+id-not-boolean shape as the two older latches, and it is NOT reset by the successor's bind. The
+bind is a board fact that lands before the successor's frame exists, and letting go there is what
+showed the old frame, an empty grid and the new frame in sequence. The window closes silently once
+the successor has **settled**: in terminal mode when the WebView reports a non-blank paint for it
+(the page's `painted` bridge message, attributed to the init it answers by a host `seq`; the pane's
+own hold rule never posts an init that would replace a painted frame with a blank grid, nor one
+built from live chunks the successor's seed has yet to replace, so an escape-only first seed waits
+for the first chunk with glyphs and an early chunk waits for the seed - the chunk-built frame used
+to paint, release the veil, and then be reset and replayed by the seed's own init, a black grid for
+about a second in the open, measured on the release build 2026-09-18), in chat mode when its
+transcript window lands, and never in changes mode, where the veil merely yields. The init that
+finally paints the successor keeps the predecessor's cell size (`keepFont`), so a shorter grid
+comes up at the same resolution, centred, rather than zoomed to fill the height; the fit button
+and a desktop grid change fit again. Past
+`SESSION_SWAP_QUIET_MS` with the dead session still bound, the two text surfaces reveal exactly as
+before: `SessionSwitchingState` ("Switching session", with the desktop's label) when a column or
+label latch says a successor is coming, `SessionEndedState` otherwise, and the 20 s
+`SESSION_SWAP_GRACE_MS` fallback to the ended state stands. Every normal move never reaches them;
+they exist because a desktop can genuinely stall a spawn and the diff is still worth reading. An
+end handled without a window (a move to To Do or Done, an archived task) is marked spent at once,
+or a reset task dropped by the sessions projection would get a veil OVER its ended state.
 
-A **queued** session is the durable one. The desktop's placeholder has no PTY, so it never reports
-thinking and its entry sits at `state: 'idle'` - indistinguishable from an agent that finished its
-work, which is exactly why it was invisible.
+Nothing else on that screen changes during the window. The panes and the footer are fed
+`sessionId ?? lastBoundSessionId`, so neither board projection unmounts the xterm WebView or flashes
+the chat empty state; the footer stays mounted and inert (pointer events off, hidden from
+assistive technology, no dimming) while it points at the dead session and is live again at the
+bind; the header holds its last located title and number while the task is off the board. The
+veil carries no text, so one `announceForAccessibility` per window is its whole accessibility
+story. The pulse is the one looping animation on the screen and is allowed because it is bounded
+by the quiet threshold, gated by the session route's `ScreenMotionProvider`, and registers one
+Reanimated mapper only while mounted (`PulsingBlock`, shared with the loading Skeleton; the static
+branch under reduced motion registers none).
+
+**The Home feed row, the board card and `TaskHeader`** keep their place and their last content, and
+only the glyph changes. `reconcileSessionsFromBoards` used to prune the activity entry for any
+session no board claims, so the row vanished for the gap and reappeared under the successor's id,
+and the card lost its glyph; a labelled end was retained but re-captioned with the label, which
+was text appearing and disappearing inside a two-second gap. Now `respawnByTaskId` is written on
+EVERY `session-ended` (label nullable, plus the ended session's id), `selectTaskRespawn` applies a
+per-record window (`RESPAWN_ROW_GRACE_MS`, 20 s, when the desktop said a successor is coming;
+`ENDED_ROW_GRACE_MS`, equal to the session screen's quiet window, when it said nothing, since an
+unlabelled end cannot be told from a park when it lands and the window is what keeps a park from
+lingering), the reconciler retains on that selector, and the clock sweep in `storeFeed` arms on
+every end with the matching deadline. `registerSession` clears the fact, so the single snapshot
+that installs the successor also releases the ghost, in that order; and the successor entry is
+seeded from the ghost (its section, ordering key, message preview, usage and unread badge, never a
+dead prompt, which maps to idle), so the bind is a same-slot remount rather than a new row at the
+top of Idle. The one consequence worth knowing: a successor inherited as thinking whose snapshot
+reports idle is a thinking-to-idle edge, which arms the notifier's 45 s idle settle where a fresh
+entry armed nothing. The desktop's phase label is rendered on the session screen's long-gap reveal
+only. The elapsed-wait label on a needs-you row goes with `feedStatus: 'live'` at the end, since a
+dead prompt's wait is not held. `tests/unit/sessionRespawnGapTiming.test.ts` pins the two list
+windows to the two session-screen windows and both rigs' respawn gap inside the quiet one.
+
+A **queued** session is the durable transitional state. The desktop's placeholder has no PTY, so
+it never reports thinking and its entry sits at `state: 'idle'` - indistinguishable from an agent
+that finished its work, which is exactly why it was invisible.
 
 Both render as a fourth `AgentStatusKind`, `'starting'`: the agent ring drawn STILL and in the muted
-`statusIdle` tone, plus a caption in the feed row's body (the desktop's own phase label, or
-"Waiting for a free slot"). All three surfaces that draw a session's status read the same two
-signals - the Home feed row, the board card, and `TaskHeader` - so one task cannot report two
-different states on two screens at once. The header keeps its existing `activityEntry` guard, so a
-transitional state adds no glyph where there was none: during a respawn gap the session screen
-already says more than a glyph could, through the "Switching session" overlay. Deliberately **not** a fourth `TriageSection` - `sectionForEntry` stays
-a pure function of `entry.state`, which keeps both states structurally unable to reach
-`endedSessionIds` or `SessionScreen`'s `sessionEnded`, and keeps a respawning row in its existing
-section rather than bouncing it through a new one twice in five seconds. The ring is static because
-a queued session can sit for minutes and a never-ending animation holds the app drawing at full
-frame rate; rendering it through the hookless path also registers no Reanimated mapper.
+`statusIdle` tone. The queued row alone also carries a caption ("Waiting for a free slot"), derived
+as "starting for a reason that is not a swap" so the row and the shared `isStartingSession`
+predicate cannot drift. All three surfaces read the same two signals, so one task cannot report
+two different states on two screens at once. The header keeps its existing `activityEntry` guard,
+so a transitional state adds no glyph where there was none. Deliberately **not** a fourth
+`TriageSection` - `sectionForEntry` stays a pure function of `entry.state`, which keeps both states
+structurally unable to reach `endedSessionIds` or `SessionScreen`'s `sessionEnded`, and keeps a
+swapping row in its existing section rather than bouncing it through a new one twice in five
+seconds. The ring is static because a queued session can sit for minutes and a never-ending
+animation holds the app drawing at full frame rate; rendering it through the hookless path also
+registers no Reanimated mapper.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`

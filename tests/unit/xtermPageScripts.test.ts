@@ -1778,6 +1778,308 @@ describe('generated xterm.html', () => {
   });
 
   /**
+   * KEEPING THE CELL SIZE across a re-init. refit.js is one function; run it
+   * whole against spies for the font fit, the geometry pass and the measured
+   * height fit, with frames inline. The host asks for `keepFont` on every
+   * re-init over a painted frame (a session swap, a lens switch back, a
+   * re-seed), and the page then must neither re-fit the font nor reset the
+   * line-height stretch, and must run the height fit with stretching LOCKED -
+   * the successor's grid is laid out in the cells already on screen. The
+   * window 'resize' listener calls refit with an Event, which must read as an
+   * ordinary fit.
+   */
+  function buildRefitHarness(initialLineHeight: number): {
+    refit: (keepFont?: unknown) => void;
+    autoFitCalls: () => number;
+    lineHeight: () => number;
+    heightFitCalls: () => { passes: number; stretchLocked: boolean; generation: number }[];
+  } {
+    const source = pageModule('refit.js');
+    assertInjectionsAreAlive('refit.js', source, [
+      'terminal',
+      'pinnedToStart',
+      'autoFitFontToScreen',
+      'applyGeometry',
+      'heightFitGeneration',
+      'HEIGHT_FIT_PASSES',
+      'requestAnimationFrame',
+      'fitGridHeightToViewport',
+      'manualPanUntil',
+      'clampHorizontalPan',
+    ]);
+    const terminal = { options: { lineHeight: initialLineHeight } };
+    let autoFitCalls = 0;
+    const heightFitCalls: { passes: number; stretchLocked: boolean; generation: number }[] = [];
+    const build = new Function(
+      'terminal',
+      'autoFitFontToScreen',
+      'applyGeometry',
+      'fitGridHeightToViewport',
+      'clampHorizontalPan',
+      'requestAnimationFrame',
+      `var pinnedToStart = false;
+       var heightFitGeneration = 0;
+       var HEIGHT_FIT_PASSES = 4;
+       var manualPanUntil = 0;
+       ${source}
+       return { refit: refit };`,
+    ) as (...dependencies: unknown[]) => { refit: (keepFont?: unknown) => void };
+    const built = build(
+      terminal,
+      () => {
+        autoFitCalls += 1;
+      },
+      () => undefined,
+      (passes: number, stretchLocked: boolean, generation: number) => {
+        heightFitCalls.push({ passes, stretchLocked, generation });
+      },
+      () => undefined,
+      (callback: () => void) => callback(),
+    );
+    return {
+      refit: built.refit,
+      autoFitCalls: () => autoFitCalls,
+      lineHeight: () => terminal.options.lineHeight,
+      heightFitCalls: () => heightFitCalls,
+    };
+  }
+
+  describe('refit.js keepFont', () => {
+    it('fits the font, resets the stretch and runs the height fit unlocked by default', () => {
+      const harness = buildRefitHarness(1.19);
+
+      harness.refit();
+
+      expect(harness.autoFitCalls()).toBe(1);
+      expect(harness.lineHeight()).toBe(1);
+      expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: false, generation: 1 }]);
+    });
+
+    it('keeps the font and the stretch, and locks stretching in the height fit, when asked to keep the cell size', () => {
+      const harness = buildRefitHarness(1.19);
+
+      harness.refit(true);
+
+      expect(harness.autoFitCalls()).toBe(0);
+      expect(harness.lineHeight()).toBe(1.19);
+      expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: true, generation: 1 }]);
+    });
+
+    it('treats the window resize listener\'s Event argument as an ordinary fit', () => {
+      const harness = buildRefitHarness(1.19);
+
+      harness.refit({ type: 'resize' });
+
+      expect(harness.autoFitCalls()).toBe(1);
+      expect(harness.lineHeight()).toBe(1);
+      expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: false, generation: 1 }]);
+    });
+  });
+
+  /**
+   * softReinit, sliced from lifecycle.js and run against spies: the in-place
+   * re-init is where a keepFont init must leave the font and line height
+   * exactly as the previous frame had them, and a plain init must start the
+   * fit from the clean slate a constructed terminal has.
+   */
+  function buildSoftReinitHarness(initialLineHeight: number): {
+    softReinit: (initMessage: Record<string, unknown>) => void;
+    autoFitCalls: () => number;
+    options: () => { lineHeight: number; fontSize: number; theme: unknown };
+    seedCalls: () => unknown[];
+  } {
+    const source = pageModule('lifecycle.js');
+    const softReinitSource = source.slice(source.indexOf('function softReinit('), source.indexOf('function applyFontSize('));
+    expect(softReinitSource).toContain('function softReinit(');
+    assertInjectionsAreAlive('lifecycle.js (softReinit slice)', softReinitSource, [
+      'initCounts',
+      'resetSessionViewState',
+      'terminal',
+      'currentFontSizePx',
+      'autoFitFontToScreen',
+      'applyGeometry',
+      'seedAndSettle',
+    ]);
+    const terminal = {
+      options: { lineHeight: initialLineHeight, fontSize: 0, theme: null as unknown },
+      reset: () => undefined,
+    };
+    let autoFitCalls = 0;
+    const seedCalls: unknown[] = [];
+    const build = new Function(
+      'terminal',
+      'resetSessionViewState',
+      'autoFitFontToScreen',
+      'applyGeometry',
+      'seedAndSettle',
+      `var initCounts = { hard: 0, soft: 0 };
+       var currentFontSizePx = 9;
+       ${softReinitSource}
+       return { softReinit: softReinit };`,
+    ) as (...dependencies: unknown[]) => { softReinit: (initMessage: Record<string, unknown>) => void };
+    const built = build(
+      terminal,
+      () => undefined,
+      () => {
+        autoFitCalls += 1;
+      },
+      () => undefined,
+      (initMessage: unknown) => {
+        seedCalls.push(initMessage);
+      },
+    );
+    return {
+      softReinit: built.softReinit,
+      autoFitCalls: () => autoFitCalls,
+      options: () => terminal.options,
+      seedCalls: () => seedCalls,
+    };
+  }
+
+  describe('lifecycle.js softReinit keepFont', () => {
+    it('starts a plain re-init from line height 1 and re-fits the font', () => {
+      const harness = buildSoftReinitHarness(1.19);
+
+      harness.softReinit({ keepFont: false, theme: { background: '#000' }, scrollback: 'x' });
+
+      expect(harness.autoFitCalls()).toBe(1);
+      expect(harness.options().lineHeight).toBe(1);
+      expect(harness.options().fontSize).toBe(9);
+      expect(harness.seedCalls()).toHaveLength(1);
+    });
+
+    it('leaves the line height and skips the font fit on a keepFont re-init', () => {
+      const harness = buildSoftReinitHarness(1.19);
+
+      harness.softReinit({ keepFont: true, theme: { background: '#000' }, scrollback: 'x' });
+
+      expect(harness.autoFitCalls()).toBe(0);
+      expect(harness.options().lineHeight).toBe(1.19);
+      // The host's copy of the current size, re-capped by resetSessionViewState.
+      expect(harness.options().fontSize).toBe(9);
+      expect(harness.seedCalls()).toHaveLength(1);
+    });
+  });
+
+  /**
+   * seedAndSettle, sliced from lifecycle.js, with terminal.write capturing its
+   * callbacks so the test can fire them in xterm's order. Two things live
+   * here: the settle refit inherits the init's keepFont, and a seed whose init
+   * was superseded before its bytes flushed does nothing - xterm flushes
+   * asynchronously, so two inits inside one frame fire the FIRST seed's
+   * callback after the second init has re-armed the paint report, and it used
+   * to report the second init's seq against a grid its bytes never reached
+   * (a doubled blank report in the live trace) and re-apply a geometry the
+   * second init owned.
+   */
+  function buildSeedAndSettleHarness(): {
+    seedAndSettle: (initMessage: Record<string, unknown>) => void;
+    setActiveInitSeq: (seq: number) => void;
+    writeCallbacks: () => (() => void)[];
+    flushCalls: () => unknown[];
+    geometryCalls: () => number;
+    refitCalls: () => unknown[];
+  } {
+    const source = pageModule('lifecycle.js');
+    const seedSource = source.slice(source.indexOf('function seedAndSettle('), source.indexOf('function createTerminal('));
+    expect(seedSource).toContain('function seedAndSettle(');
+    assertInjectionsAreAlive('lifecycle.js (seedAndSettle slice)', seedSource, [
+      'activeInitSeq',
+      'terminal',
+      'applyGeometry',
+      'afterWriteFlushed',
+      'cleanFeedWrite',
+      'reportModesIfFlipped',
+      'reportPaintedIfAwaiting',
+      'requestAnimationFrame',
+      'refit',
+    ]);
+    const writeCallbacks: (() => void)[] = [];
+    const flushCalls: unknown[] = [];
+    const refitCalls: unknown[] = [];
+    let geometryCalls = 0;
+    const terminal = {
+      write: (_data: string, callback: () => void) => {
+        writeCallbacks.push(callback);
+      },
+    };
+    const build = new Function(
+      'terminal',
+      'applyGeometry',
+      'afterWriteFlushed',
+      'cleanFeedWrite',
+      'reportModesIfFlipped',
+      'reportPaintedIfAwaiting',
+      'requestAnimationFrame',
+      'refit',
+      `var activeInitSeq = null;
+       ${seedSource}
+       return {
+         seedAndSettle: seedAndSettle,
+         setActiveInitSeq: function (seq) { activeInitSeq = seq; },
+       };`,
+    ) as (...dependencies: unknown[]) => {
+      seedAndSettle: (initMessage: Record<string, unknown>) => void;
+      setActiveInitSeq: (seq: number) => void;
+    };
+    const built = build(
+      terminal,
+      () => {
+        geometryCalls += 1;
+      },
+      (afterInit: unknown) => {
+        flushCalls.push(afterInit);
+      },
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      (callback: () => void) => callback(),
+      (keepFont: unknown) => {
+        refitCalls.push(keepFont);
+      },
+    );
+    return {
+      seedAndSettle: built.seedAndSettle,
+      setActiveInitSeq: built.setActiveInitSeq,
+      writeCallbacks: () => writeCallbacks,
+      flushCalls: () => flushCalls,
+      geometryCalls: () => geometryCalls,
+      refitCalls: () => refitCalls,
+    };
+  }
+
+  describe('lifecycle.js seedAndSettle', () => {
+    it("hands the init's keepFont to the settle refit", () => {
+      const harness = buildSeedAndSettleHarness();
+
+      harness.setActiveInitSeq(1);
+      harness.seedAndSettle({ scrollback: 'frame', keepFont: true });
+      harness.seedAndSettle({ scrollback: 'frame' });
+
+      expect(harness.refitCalls()).toEqual([true, false]);
+    });
+
+    it('ignores the flush of a seed whose init was superseded, and settles the live one', () => {
+      const harness = buildSeedAndSettleHarness();
+
+      harness.setActiveInitSeq(1);
+      harness.seedAndSettle({ scrollback: 'first' });
+      harness.setActiveInitSeq(2);
+      harness.seedAndSettle({ scrollback: 'second' });
+      expect(harness.writeCallbacks()).toHaveLength(2);
+
+      // xterm's queue is FIFO: the superseded seed flushes first.
+      harness.writeCallbacks()[0]?.();
+      expect(harness.flushCalls()).toEqual([]);
+      expect(harness.geometryCalls()).toBe(0);
+
+      harness.writeCallbacks()[1]?.();
+      expect(harness.flushCalls()).toEqual([true]);
+      expect(harness.geometryCalls()).toBe(1);
+    });
+  });
+
+  /**
    * reportModesIfFlipped, run against a fake terminal whose modes/buffer are
    * mutable so the harness can drive a baseline report and then a flip. The
    * module's OTHER functions (the paint report, afterWriteFlushed) are never

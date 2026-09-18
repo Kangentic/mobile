@@ -32,6 +32,11 @@
   var awaitingNonBlankPaint = false;
   // Probe counters: how many paint reports went out blank vs painted.
   var paintReportCounts = { blank: 0, painted: 0 };
+  // Whether the last init asked to KEEP the cell size (a re-init over a
+  // painted frame: a session swap, a lens switch back, a re-seed) rather than
+  // fit the font to its grid. For the probe; the decision itself is the
+  // host's (TerminalPane's keepFont).
+  var lastInitKeepFont = false;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
   // not fight the user's finger; auto-pan resumes after the pause.
   var MANUAL_PAN_PAUSE_MS = 4000;

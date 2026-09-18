@@ -3,8 +3,16 @@
   // settle (window.innerHeight is not always final the instant the terminal is
   // created, which left the initial fit stale until a manual reload), the soft
   // keyboard, and rotation - so the fit is never left stale.
-  function refit() {
+  //
+  // `keepFont === true` (only from an init that keeps the cell size, see
+  // softReinit) skips the font fit and the line-height reset and runs the
+  // measured height fit with stretching LOCKED: the grid is laid out in the
+  // cells already on screen, centred when shorter, and only stepped down
+  // when it would overflow. Strictly `=== true` because the window 'resize'
+  // listener hands this function an Event.
+  function refit(keepFont) {
     if (!terminal) return;
+    var keep = keepFont === true;
     // Every refit is a RE-ORIENTATION - a keyboard opening or closing, a
     // rotation, the reset button - and the reader re-orients at the LEFT
     // edge, where every line, prompt, and tree begins. Re-pinning reuses the
@@ -14,23 +22,25 @@
     // dropping the reader into the middle of text after every keyboard
     // open/close ("disorienting in resize events").
     pinnedToStart = true;
-    autoFitFontToScreen();
-    // The fit chain below must start from the same clean slate a constructed
-    // terminal does (the rule softReinit already follows): autoFitFontToScreen
-    // just reset the FONT, and a line-height stretch left over from the
-    // PREVIOUS chain makes the new font x old stretch overflow. The chain then
-    // misreads that as its own stretch overshooting, hands it back, and LOCKS
-    // stretching - so once its font correction lands, nothing can reclaim the
-    // slack. Caught live by the fit trace on a fresh open of a parked 210x48
-    // session: settled at line height 1 with a 530px grid in a 635px viewport,
-    // stretchLocked by a giveback of the prior chain's 1.194.
-    terminal.options.lineHeight = 1;
+    if (!keep) {
+      autoFitFontToScreen();
+      // The fit chain below must start from the same clean slate a constructed
+      // terminal does (the rule softReinit already follows): autoFitFontToScreen
+      // just reset the FONT, and a line-height stretch left over from the
+      // PREVIOUS chain makes the new font x old stretch overflow. The chain then
+      // misreads that as its own stretch overshooting, hands it back, and LOCKS
+      // stretching - so once its font correction lands, nothing can reclaim the
+      // slack. Caught live by the fit trace on a fresh open of a parked 210x48
+      // session: settled at line height 1 with a 530px grid in a 635px viewport,
+      // stretchLocked by a giveback of the prior chain's 1.194.
+      terminal.options.lineHeight = 1;
+    }
     applyGeometry();
     heightFitGeneration += 1;
     var generation = heightFitGeneration;
     // Measure AFTER the font/geometry pass paints, then true up the height.
     requestAnimationFrame(function () {
-      fitGridHeightToViewport(HEIGHT_FIT_PASSES, false, generation);
+      fitGridHeightToViewport(HEIGHT_FIT_PASSES, keep, generation);
       manualPanUntil = 0;
       // pinnedToStart makes this snap the pan to column 0. The VERTICAL
       // follow deliberately does NOT run here: the fit above is still
