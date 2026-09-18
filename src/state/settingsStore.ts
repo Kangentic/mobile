@@ -16,6 +16,17 @@ const SESSION_MODE_HINT_STORAGE_KEY = 'settings.hasSeenSessionModeHint';
 const HAPTICS_ENABLED_STORAGE_KEY = 'settings.hapticsEnabled';
 const BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY = 'settings.backgroundNotificationsMode';
 const PREFERRED_SESSION_LENS_STORAGE_KEY = 'settings.preferredSessionLensByTaskId';
+const TERMINAL_FIT_FONT_STORAGE_KEY = 'settings.terminalFitFontPx';
+/** The terminal pane's own pinch bounds (TerminalPane.tsx); a stored size outside them is treated as unset. */
+const TERMINAL_FIT_FONT_MIN_PX = 6;
+const TERMINAL_FIT_FONT_MAX_PX = 56;
+
+function parseTerminalFitFont(value: string | null): number | null {
+  if (value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < TERMINAL_FIT_FONT_MIN_PX || parsed > TERMINAL_FIT_FONT_MAX_PX) return null;
+  return parsed;
+}
 /**
  * v2 because the DEFAULT for one category changed (spawn-stalled went off), and
  * a default change alone could not reach the installs that needed it:
@@ -164,6 +175,17 @@ interface SettingsStoreState {
   backgroundNotificationsMode: BackgroundNotificationsMode;
   /** Last lens the user chose per task (terminal is the unset default). */
   preferredSessionLensByTaskId: Record<string, PreferredSessionLens>;
+  /**
+   * The cell size the terminal mirror last FITTED, in px, or null before the
+   * first fit. Every open of a session screen starts at this size rather than
+   * re-fitting to whatever grid the desktop happens to report at that moment:
+   * a task opened while the desktop shows it in a short panel used to come up
+   * zoomed in and then jump when the desktop rested it at its detail grid.
+   * Written by the page's own fit reports (first open, the fit button, a
+   * desktop grid change), never by a pinch, which is a temporary zoom. Scoped
+   * to the desktop like the lens map: its rest grid is what the size fits.
+   */
+  terminalFitFontPx: number | null;
   /** Per-category push + local-notification opt-in; see PUSH_CATEGORY_DEFAULTS. */
   pushCategoriesEnabled: Record<PushCategory, boolean>;
   /** The one Agents-feed section (by title) the user has collapsed, or null if both are expanded. */
@@ -186,12 +208,13 @@ interface SettingsStoreState {
   setHapticsEnabled: (enabled: boolean) => Promise<void>;
   setBackgroundNotificationsMode: (mode: BackgroundNotificationsMode) => Promise<void>;
   setPreferredSessionLens: (taskId: string, lens: PreferredSessionLens) => Promise<void>;
+  setTerminalFitFontPx: (fontSizePx: number) => Promise<void>;
   setPushCategoryEnabled: (category: PushCategory, enabled: boolean) => Promise<void>;
   toggleTriageSectionCollapsed: (title: string) => Promise<void>;
   markNotificationPermissionRequested: () => Promise<void>;
-  /** Clears preferences keyed by the desktop's own task IDs (currently just
-   * preferredSessionLensByTaskId), which go stale on unpair or a new
-   * pairing - the desktop's task IDs mean nothing to a different desktop. */
+  /** Clears preferences that belong to the paired desktop (the lens map, keyed
+   * by its task IDs, and the terminal fit size, which fits its rest grid);
+   * both go stale on unpair or a new pairing. */
   clearDesktopScopedPreferences: () => Promise<void>;
 }
 
@@ -207,6 +230,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   hapticsEnabled: true,
   backgroundNotificationsMode: 'foreground-service',
   preferredSessionLensByTaskId: {},
+  terminalFitFontPx: null,
   pushCategoriesEnabled: defaultPushCategoriesEnabled(),
   collapsedTriageSection: null,
   hasRequestedNotificationPermission: false,
@@ -239,6 +263,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedLegacyPushCategoriesEnabled,
       storedCollapsedTriageSection,
       storedNotificationPermissionRequested,
+      storedTerminalFitFont,
     ] = await Promise.all([
       readSetting(DICTATION_MODE_STORAGE_KEY),
       readSetting(SESSION_MODE_HINT_STORAGE_KEY),
@@ -249,6 +274,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       readSetting(PUSH_CATEGORIES_ENABLED_LEGACY_STORAGE_KEY),
       readSetting(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
       readSetting(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
+      readSetting(TERMINAL_FIT_FONT_STORAGE_KEY),
     ]);
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
@@ -269,6 +295,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
           : parsePushCategoriesEnabled(storedLegacyPushCategoriesEnabled, true),
       collapsedTriageSection: parseCollapsedTriageSection(storedCollapsedTriageSection),
       hasRequestedNotificationPermission: storedNotificationPermissionRequested === 'true',
+      terminalFitFontPx: parseTerminalFitFont(storedTerminalFitFont),
       hydrated: true,
     });
   },
@@ -314,6 +341,13 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     await SecureStore.setItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY, JSON.stringify(nextMap));
   },
 
+  setTerminalFitFontPx: async (fontSizePx) => {
+    const next = parseTerminalFitFont(String(fontSizePx));
+    if (next === null || next === get().terminalFitFontPx) return;
+    set({ terminalFitFontPx: next });
+    await SecureStore.setItemAsync(TERMINAL_FIT_FONT_STORAGE_KEY, String(next));
+  },
+
   setPushCategoryEnabled: async (category, enabled) => {
     const nextMap = { ...get().pushCategoriesEnabled, [category]: enabled };
     set({ pushCategoriesEnabled: nextMap });
@@ -329,7 +363,12 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   },
 
   clearDesktopScopedPreferences: async () => {
-    set({ preferredSessionLensByTaskId: {} });
-    await SecureStore.setItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY, JSON.stringify({}));
+    set({ preferredSessionLensByTaskId: {}, terminalFitFontPx: null });
+    await Promise.all([
+      SecureStore.setItemAsync(PREFERRED_SESSION_LENS_STORAGE_KEY, JSON.stringify({})),
+      // An empty string reads back as "unset" (parseTerminalFitFont); the
+      // store never deletes keys, so this is the one shape every reader knows.
+      SecureStore.setItemAsync(TERMINAL_FIT_FONT_STORAGE_KEY, ''),
+    ]);
   },
 }));

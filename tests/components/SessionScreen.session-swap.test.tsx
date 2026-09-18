@@ -1693,6 +1693,125 @@ describe('SessionScreen across a column move', () => {
     });
 
     /**
+     * THE MOVE OPENER. The board reports a column move seconds before the
+     * session ends (the desktop interrupts the agent and waits for a running
+     * tool first; measured at eight seconds once). The veil opens on the move
+     * itself, on the live session, and the end keeps the same window open.
+     * The deadline counts from the END: a move that took seven seconds to end
+     * still gets its full quiet window after the end.
+     */
+    it('opens the veil on the column move itself and counts the deadline from the end that follows', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+
+        act(() => {
+          moveTaskToColumn('lane-review');
+        });
+        // Live session, veiled already, footer held and inert.
+        expectQuietVeilOnly();
+        expect(screen.getByTestId('stub-session-input-bar').props.accessibilityState).toEqual({ disabled: true });
+
+        act(() => {
+          jest.advanceTimersByTime(SESSION_SWAP_QUIET_MS - 1000);
+        });
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        expectQuietVeilOnly();
+
+        // Seven seconds after the move but only one after the end: still quiet.
+        act(() => {
+          jest.advanceTimersByTime(SESSION_SWAP_QUIET_MS - 1000);
+        });
+        expectQuietVeilOnly();
+
+        act(() => {
+          jest.advanceTimersByTime(1001);
+        });
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * A move whose end never comes inside the window is still a live session
+     * worth reading: the veil drops without the window being spent, the
+     * footer comes back, and the end that eventually arrives opens a full
+     * window of its own rather than finding its session already used up.
+     */
+    it('drops the veil when a move outlives the window with the session still alive, and re-veils on the end', () => {
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        act(() => {
+          moveTaskToColumn('lane-review');
+        });
+        expectQuietVeilOnly();
+
+        passQuietDeadline();
+        expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+        expect(screen.queryByTestId('session-switching-state')).toBeNull();
+        expect(screen.queryByTestId('session-ended-state')).toBeNull();
+        expect(screen.getByTestId('stub-session-input-bar').props.accessibilityState).toEqual({ disabled: false });
+
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        expectQuietVeilOnly();
+
+        passQuietDeadline();
+        expect(screen.getByTestId('session-switching-state')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * The other half of the veil's accessibility story: a screen reader user
+     * who heard the wait begin also hears it end. Only on a settle - the
+     * text surface that reveals at the deadline is readable on its own.
+     */
+    it('announces the wait over when the successor settles, and not at the deadline', () => {
+      const announceSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+      jest.useFakeTimers();
+      try {
+        seedRoledBoard('sess-a', 'lane-doing');
+        renderSessionScreen();
+        act(() => {
+          pushSessionEnded('sess-a');
+        });
+        act(() => {
+          seedRoledBoard('sess-b', 'lane-doing');
+        });
+        act(() => {
+          useTerminalUiStore.getState().markTerminalPainted('sess-b');
+        });
+        expect(announceSpy.mock.calls.map((call) => call[0])).toEqual(['Switching session, please wait', 'Session ready']);
+
+        // A second swap that stalls: the deadline reveals text and says nothing.
+        act(() => {
+          pushSessionEnded('sess-b');
+        });
+        passQuietDeadline();
+        expect(screen.getByTestId('session-ended-state')).toBeTruthy();
+        expect(announceSpy.mock.calls.map((call) => call[0])).toEqual([
+          'Switching session, please wait',
+          'Session ready',
+          'Switching session, please wait',
+        ]);
+      } finally {
+        jest.useRealTimers();
+        announceSpy.mockRestore();
+      }
+    });
+
+    /**
      * Under the sessions projection the task leaves the board for the whole
      * gap. The title used to fall back to the literal "Task" and the number
      * vanished: more text appearing and disappearing mid-swap.

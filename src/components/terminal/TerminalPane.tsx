@@ -22,6 +22,7 @@ import {
   subscribeChunks,
 } from '@/state/terminalFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { refreshTerminalStream, writeTerminal } from '@/connection/actions';
 import { DirectKeyInput, type DirectKeyInputHandle } from './DirectKeyInput';
@@ -371,9 +372,19 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       initSeqRef.current += 1;
       lastInitSessionIdRef.current = sessionId;
       heldInitSessionIdRef.current = null;
-      // Keep the cell size whenever a frame is already on screen; only a fresh
-      // page (nothing displayed) or the fit button's own re-seed fits anew.
-      const keepFont = displayedFrameSessionIdRef.current !== null && !fitOnNextInitRef.current;
+      // Keep the cell size whenever a frame is already on screen, and on a
+      // fresh page whenever the mirror has fitted once before (the remembered
+      // size, per desktop): every open comes up at the same resolution, not
+      // at whatever grid the desktop reports this second. Only the very first
+      // open and the fit button's own re-seed fit anew.
+      const rememberedFontSizePx = useSettingsStore.getState().terminalFitFontPx;
+      if (reason === 'ready' && rememberedFontSizePx !== null && !fitOnNextInitRef.current) {
+        fontSizePxRef.current = rememberedFontSizePx;
+        pinchBaseFontSizeRef.current = rememberedFontSizePx;
+      }
+      const keepFont =
+        !fitOnNextInitRef.current &&
+        (displayedFrameSessionIdRef.current !== null || (reason === 'ready' && rememberedFontSizePx !== null));
       fitOnNextInitRef.current = false;
       const scrollback = getBufferedData(sessionId);
       // The RAW ring decides, not the mode-restore-prefixed string below: the
@@ -662,10 +673,19 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       }
       if (message.type === 'font-size') {
         // The glue fit the font to the screen; keep the pinch baseline in sync
-        // so the first pinch does not jump.
+        // so the first pinch does not jump, and remember the size so the next
+        // open starts there. Only a FIT reports this message (the auto fit,
+        // the height fit's step, a texture cap); a pinch is driven from here
+        // and never reported back, so a temporary zoom is never remembered.
         const syncedFontSize = clampTerminalFontSize(Math.round(message.fontSizePx));
         fontSizePxRef.current = syncedFontSize;
         pinchBaseFontSizeRef.current = syncedFontSize;
+        void useSettingsStore
+          .getState()
+          .setTerminalFitFontPx(syncedFontSize)
+          .catch(() => {
+            // A failed Keychain write costs the next open one fit; nothing to surface.
+          });
         return;
       }
       if (message.type === 'renderer') {

@@ -329,12 +329,15 @@ inline-only), fed the scrollback snapshot plus live PTY chunks over a small post
 snapshot, `terminal-resize` events on change), so the phone renders at the exact grid the bytes
 were laid out for instead of inferring a width. It is a **faithful read-only mirror**: it renders
 that grid 1:1 with horizontal pan, follow-the-cursor and pinch-zoom, and sizes the font ONCE, on
-first open, so the grid's ROWS fill the phone's height (a wider-than-screen grid then overflows
-and pans). Every later re-init over a painted frame - a session swap, a lens switch back, a
-re-seed - keeps that cell size (`keepFont` on the bridge's `init`): a successor whose PTY is
-shorter renders at the same resolution, centred, instead of zooming to fill the height and jumping
-back when the desktop rests it at its detail grid. The fit button, a fresh page and a desktop grid
-change fit again, and the page still steps the font down when a taller grid would overflow. It
+the very first open, so the grid's ROWS fill the phone's height (a wider-than-screen grid then
+overflows and pans). That fitted size is remembered per desktop (`terminalFitFontPx` in the
+settings store, written by the page's own fit reports and never by a pinch) and every later open
+starts from it; every re-init over a painted frame - a session swap, a lens switch back, a
+re-seed - keeps the cell size too (`keepFont` on the bridge's `init`). So a successor whose PTY is
+shorter, or a task opened while the desktop shows it in a short panel, renders at the same
+resolution, centred, instead of zooming to fill the height and jumping back when the desktop rests
+it at its detail grid. The fit button and a desktop grid change fit again, and the page still steps
+the font down when a taller grid would overflow. It
 **never resizes the desktop PTY** - a shared session must not be reshaped by the phone, so the
 only thing sent upstream is typed input. The protocol carries `resize` and `release-size` actions
 on the `interactive-terminal` verb, but they exist for the desktop: `src/channel/verbClient.ts`
@@ -541,13 +544,21 @@ trip later its first frame. The phone presents every swap kind the same way, and
 to read on any surface while it is in flight.
 
 **The session screen** shows one silent surface, `SessionSwapVeil`: the last terminal frame under a
-scrim that breathes slowly, with no title, caption or button. It opens on ANY end of the bound
-session (a labelled or unlabelled `session-ended`, the full-projection board reporting the task
-sessionless, a refused feed past its grace), keyed on the session that ended in the same
-id-not-boolean shape as the two older latches, and it is NOT reset by the successor's bind. The
-bind is a board fact that lands before the successor's frame exists, and letting go there is what
-showed the old frame, an empty grid and the new frame in sequence. The window closes silently once
-the successor has **settled**: in terminal mode when the WebView reports a non-blank paint for it
+scrim that breathes slowly, with no title, caption or button. It opens on the column move itself,
+the moment the column latch opens on the live session, because the board reports a move seconds
+before the desktop has interrupted the agent and suspended it (eight seconds once, measured, while
+a typecheck finished), and the screen used to show that interruption. It also opens on ANY end of
+the bound session (a labelled or unlabelled `session-ended`, the full-projection board reporting
+the task sessionless, a refused feed past its grace), keyed on the session in the same
+id-not-boolean shape as the two older latches; an end inside a move-opened window keeps that window
+and restarts its deadline from the end, and a move whose end never comes drops the veil at the
+deadline without spending the window. It is NOT reset by the successor's bind. The bind is a board
+fact that lands before the successor's frame exists, and letting go there is what showed the old
+frame, an empty grid and the new frame in sequence. Under the scrim the page keeps a text copy of
+the old frame over the grid from the successor's re-init until its first non-blank paint
+(`holdFrameSnapshot` in `scripts/xterm-page/lifecycle.js`), so a resume whose snapshot parses
+blank never shows a black grid through the veil's floor. The window closes silently once the
+successor has **settled**: in terminal mode when the WebView reports a non-blank paint for it
 (the page's `painted` bridge message, attributed to the init it answers by a host `seq`; the pane's
 own hold rule never posts an init that would replace a painted frame with a blank grid, nor one
 built from live chunks the successor's seed has yet to replace, so an escape-only first seed waits
@@ -571,7 +582,8 @@ Nothing else on that screen changes during the window. The panes and the footer 
 the chat empty state; the footer stays mounted and inert (pointer events off, hidden from
 assistive technology, no dimming) while it points at the dead session and is live again at the
 bind; the header holds its last located title and number while the task is off the board. The
-veil carries no text, so one `announceForAccessibility` per window is its whole accessibility
+veil carries no text, so one `announceForAccessibility` per window ("Switching session, please
+wait") and one on the settle ("Session ready", never at the deadline) are its whole accessibility
 story. The pulse is the one looping animation on the screen and is allowed because it is bounded
 by the quiet threshold, gated by the session route's `ScreenMotionProvider`, and registers one
 Reanimated mapper only while mounted (`PulsingBlock`, shared with the loading Skeleton; the static
@@ -591,7 +603,10 @@ every end with the matching deadline. `registerSession` clears the fact, so the 
 that installs the successor also releases the ghost, in that order; and the successor entry is
 seeded from the ghost (its section, ordering key, message preview, usage and unread badge, never a
 dead prompt, which maps to idle), so the bind is a same-slot remount rather than a new row at the
-top of Idle. The one consequence worth knowing: a successor inherited as thinking whose snapshot
+top of Idle. The preview is only borrowed: the successor may be a different conversation (an
+isolated column's session ending, the main one resuming), so its first snapshot hands the line back
+(`inheritedPreview`) and the row peeks the successor's own transcript, while a preview the successor
+pushes itself is its own. The one consequence worth knowing: a successor inherited as thinking whose snapshot
 reports idle is a thinking-to-idle edge, which arms the notifier's 45 s idle settle where a fresh
 entry armed nothing. The desktop's phase label is rendered on the session screen's long-gap reveal
 only. The elapsed-wait label on a needs-you row goes with `feedStatus: 'live'` at the end, since a

@@ -37,6 +37,8 @@
   // fit the font to its grid. For the probe; the decision itself is the
   // host's (TerminalPane's keepFont).
   var lastInitKeepFont = false;
+  // How many frame holds have been raised (see holdFrameSnapshot). Probe only.
+  var frameHoldCount = 0;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
   // not fight the user's finger; auto-pan resumes after the pause.
   var MANUAL_PAN_PAUSE_MS = 4000;

@@ -797,6 +797,45 @@ describe('activityStore', () => {
        * brand-new prompt on a brand-new entry, and push "Agent needs your
        * input" for a dead question. Copying `state` unchanged fails this.
        */
+      /**
+       * The borrowed line is only for the gap. The successor may be a different
+       * conversation (an isolated column's session ending, the main one
+       * resuming), so its first snapshot hands the preview back - null re-arms
+       * the Home row's peek of the successor's OWN transcript - while a preview
+       * the successor pushes itself is its own and survives the snapshot.
+       * Seen live: a resumed session that stayed idle wore the dead review
+       * agent's sentence for minutes.
+       */
+      it("hands a borrowed preview back on the successor's first snapshot", () => {
+        useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+        useActivityStore
+          .getState()
+          .applyActivityEvent(activityEvent('sess-old', { type: 'message-preview', text: 'The review agent said this.' }, 'task-7'));
+        useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
+        useActivityStore.getState().registerSession('sess-new', 'task-7', 'project-1');
+        expect(useActivityStore.getState().bySessionId['sess-new'].messagePreview).toBe('The review agent said this.');
+
+        useActivityStore.getState().applySnapshot('sess-new', 'task-7', 'project-1', streamSnapshotFixture());
+
+        expect(useActivityStore.getState().bySessionId['sess-new'].messagePreview).toBeNull();
+      });
+
+      it('keeps a preview the successor pushed itself through its snapshot', () => {
+        useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
+        useActivityStore
+          .getState()
+          .applyActivityEvent(activityEvent('sess-old', { type: 'message-preview', text: 'The review agent said this.' }, 'task-7'));
+        useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
+        useActivityStore.getState().registerSession('sess-new', 'task-7', 'project-1');
+        useActivityStore
+          .getState()
+          .applyActivityEvent(activityEvent('sess-new', { type: 'message-preview', text: 'The successor said this.' }, 'task-7'));
+
+        useActivityStore.getState().applySnapshot('sess-new', 'task-7', 'project-1', streamSnapshotFixture());
+
+        expect(useActivityStore.getState().bySessionId['sess-new'].messagePreview).toBe('The successor said this.');
+      });
+
       it('never inherits a dead prompt: permission becomes idle with no awaited prompt', () => {
         useActivityStore.getState().registerSession('sess-old', 'task-7', 'project-1');
         useActivityStore

@@ -155,6 +155,16 @@ export class SubscriptionManager {
    */
   private readonly queuedStreamIds = new Set<string>();
   private readonly queuedBoardIds = new Set<string>();
+  /**
+   * Stream subscribes that have been SENT and not yet answered. A reconcile
+   * that lands inside that window (a board snapshot re-listing the session
+   * the screen just opened) must not issue a second copy of a request the
+   * desktop is already answering. Measured on a release build: every column
+   * move seeded the successor's terminal twice, 30 to 45 ms apart, one from
+   * the reconcile's queue and one from the screen's terminal flip, and the
+   * page replayed a full ring for each.
+   */
+  private readonly inFlightStreamIds = new Set<string>();
   private disposed = false;
 
   constructor(options: SubscriptionManagerOptions) {
@@ -174,7 +184,11 @@ export class SubscriptionManager {
     }
     if (!this.session.isEstablished) return;
     for (const sessionId of this.desiredStreamIds) {
-      if (!this.activeStreamIds.has(sessionId) && !this.streamRetryTimers.has(sessionId)) {
+      if (
+        !this.activeStreamIds.has(sessionId) &&
+        !this.inFlightStreamIds.has(sessionId) &&
+        !this.streamRetryTimers.has(sessionId)
+      ) {
         this.enqueueStreamSubscribe(sessionId);
       }
     }
@@ -258,6 +272,10 @@ export class SubscriptionManager {
     if (wantsTerminal) this.terminalStreamIds.add(sessionId);
     else this.terminalStreamIds.delete(sessionId);
     if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return false;
+    // A reconcile's copy still waiting in the queue is superseded by this
+    // direct one: it would read the same flag when it started and answer the
+    // same question a second time (the successor seeded twice per swap).
+    this.queuedStreamIds.delete(sessionId);
     void this.subscribeStream(sessionId);
     return true;
   }
@@ -277,6 +295,8 @@ export class SubscriptionManager {
    */
   refreshStream(sessionId: string): void {
     if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return;
+    // Same supersession as setStreamWantsTerminal: one answer is enough.
+    this.queuedStreamIds.delete(sessionId);
     void this.subscribeStream(sessionId);
   }
 
@@ -350,7 +370,10 @@ export class SubscriptionManager {
     if (this.disposed || this.queuedStreamIds.has(sessionId)) return;
     this.queuedStreamIds.add(sessionId);
     this.subscribeQueue.enqueue(async () => {
-      this.queuedStreamIds.delete(sessionId);
+      // Superseded while waiting: a direct subscribe for this id (the screen's
+      // terminal flip or refresh) already went out carrying the current flag,
+      // so this copy has nothing left to ask. `delete` doubles as the check.
+      if (!this.queuedStreamIds.delete(sessionId)) return;
       // The isEstablished half is belt-and-braces: `SessionManager.send`
       // throws on a dead session anyway, so omitting it puts nothing on the
       // wire either. What it buys is that the task no-ops instead of throwing
@@ -420,8 +443,11 @@ export class SubscriptionManager {
 
   private async subscribeStream(sessionId: string, isRetry = false): Promise<void> {
     const wantsTerminal = this.terminalStreamIds.has(sessionId);
+    this.inFlightStreamIds.add(sessionId);
     try {
-      const snapshot = await this.verbs.readStreamSubscribe(sessionId, { terminal: wantsTerminal });
+      const snapshot = await this.verbs.readStreamSubscribe(sessionId, { terminal: wantsTerminal }).finally(() => {
+        this.inFlightStreamIds.delete(sessionId);
+      });
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
       // Same staleness guard as subscribeBoard. Opening and immediately
       // closing a session screen flips the flag twice, so two subscribes are

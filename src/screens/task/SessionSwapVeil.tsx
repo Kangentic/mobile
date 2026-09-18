@@ -13,6 +13,14 @@ import { useScreenMotionActive } from '@/components/motion/ScreenMotion';
 export const SESSION_SWAP_VEIL_ACCESSIBILITY_LABEL = 'Switching session, please wait';
 
 /**
+ * Announced once when the swap SETTLES (the successor painted, or its
+ * transcript landed), so a screen reader user who heard the label above
+ * also hears that the wait is over. Never at the deadline: the text surface
+ * that reveals there is readable on its own.
+ */
+export const SESSION_SWAP_SETTLED_ANNOUNCEMENT = 'Session ready';
+
+/**
  * The ONE silent transitional surface for a session swap.
  *
  * On most column moves the desktop suspends the task's session and spawns or
