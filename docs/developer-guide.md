@@ -1685,11 +1685,22 @@ move-opened window, the end arriving, with `sinceMoveMs`), `phase=bind` (the suc
 `sinceEndedMs` and `sinceMoveMs`), `phase=settled` (the veil let go, with the `mode` it settled
 in, `sinceEndedMs`, `sinceMoveMs` and `sinceBindMs`) or `phase=deadline` (the quiet threshold
 passed first, with `bound` and `ended`; `ended=false` is a move whose end never came, which drops
-the veil without spending the window), plus two from the terminal pane: `terminal-init` on every init it
+the veil without spending the window), plus three from the terminal pane: `terminal-init` on every init it
 posts (`reason`, one of `ready`, `seed`, `chunk-release`, `swap`, `clean-feed` or `reactivate`;
 the grid's `cols` and `rows`, `n/a` before the desktop reports one; `fontSizePx`; and `keepFont`,
-whether that init kept the cell size or fit the font) and `terminal-painted` on every paint
-report the WebView sends (`blank` and `sinceInitMs`). What a line may carry is event names, transport
+whether that init kept the cell size or fit the font), `terminal-painted` on every paint
+report the WebView sends (`blank` and `sinceInitMs`), and `terminal-renderer` on the page's
+renderer report (`webgl` or `dom`; until 2026-09-18 this was a bare console.log carrying the
+session id into release logcat); and one from the subscription manager, `board-subscribe`, on a
+board read that did not land (`outcome`, `rejected` when the desktop answered no or `failed` for
+a timeout or transport failure; `view`; `ms` since it was issued; and `retry`, whether the one
+queued retry was armed). A Board tab stranded on its skeleton is diagnosed from that line: a
+`failed` at ~10000 ms is the capability timeout, and the retry that follows it is what used to
+need a tab refocus. The stall was seen once (2026-09-18, a project switch on the release build,
+two minutes on the skeleton until a tab bounce re-issued the upgrade, which then landed in four
+seconds); fifteen deliberate first-time switches across three processes afterwards all landed
+within a few seconds and none failed, so the retry and this line stand on the one observation
+and the mechanism rather than on a reproduction. What a line may carry is event names, transport
 states, relay close codes, counts, millisecond deltas, and coarse boolean state (`paired`,
 `cached`, `established`, the keepalive flag). No content and no identifiers, so the log is safe to
 paste into a task.
@@ -1808,32 +1819,39 @@ over the hosted relay), in the order the wrong answers were ruled out:
 
 | Arm | Frames | `top`, five samples |
 |---|---|---|
-| Live idle terminal (control) | 0 in 27 s | 7-10% |
+| Live idle terminal (control; 2.5-12% across four processes) | 0 in 27 s | 7-10% |
 | Quiet phase: veil breathing over the dead frame | ~60/s | 20-31% |
-| Waiting phase, veil static under OS reduced motion, pane DRAWN (own process, own control) | ~60/s | 29-36% |
+| Waiting phase with the animator scale zeroed and relaunched, believed static, pane drawn (see below) | ~60/s | 29-36% |
 | Waiting phase, pane hidden, cursor breathing (`PulsingBlock`) | 57/s over 55 min | 24-28% |
-| Waiting phase, pane hidden, veil static (blurred under the move sheet) | 0 in 20 s | 1.5-4% |
+| Waiting phase, pane hidden, veil held still (blurred under the move sheet) | 0 in 20 s | 1.5-4% |
 | Changes lens in the same window | 0 | 0-4% |
 | Backgrounded with the veil up | 0 | 4-8% |
-| Waiting phase as shipped: pane hidden, cursor blinking (`BlinkingBlock`); its own process, live idle control 11-12.5% | 42 in 25.8 s (1.6/s) | 10-12% |
+| Waiting phase, pane hidden, cursor blinking (`BlinkingBlock`); live control 11-12.5% in that process | 42 in 25.8 s (1.6/s) | 10-12% |
+| Dead pane drawn BARE, no veil (retention probe `no-swap-veil`); control 2.5-8% | 18 in 45 s | 2.5-4% |
+| Dead pane drawn under the veil held still by the probe; control 2-4% | 12 in 49 s | 2-4.5% |
 
-Two causes, both fixed at the source. A dead session's page keeps the WebView painting at the full
-frame rate for as long as the pane is drawn, whatever the veil above it does, and at opacity 0 it
-draws nothing: so `SessionScreen` hides the terminal pane through the waiting phase (the cleared
-veil is opaque over it) and restores it at the bind so the successor's seed can paint. And a
-Reanimated tween draws a whole window frame per vsync however small the view that changed, so the
-wait cursor is a two-state toggle on a JS interval (`BlinkingBlock`), two frames a second. An
-earlier revision of this paragraph reported the pulse at "roughly 11% against 5%" from one sample
-per arm over windows that were mostly static; that number is retracted, and so is the cursor's
-original justification (that one cell of damage is cheaper than three full-screen layers), which
-was inferred and measured false. Two traps: `useReducedMotion` reads the OS animator scale once at
-app start, so `settings put global animator_duration_scale 0` needs a force-stop and relaunch, and
-both arms of the A/B then belong in that new process; and the pane at opacity 0 is what stops the
-WebView, so any control arm must say whether the pane was drawn. The cost of the quiet-phase breath
-is bounded by the deadline and is typically one to two and a half seconds per swap. A same-column
-labelled respawn could not be produced from the MCP (`kangentic_update_task model` on a running
-session applies at the next spawn), so that kind is covered by the stub rig's `/respawn` and the
-component tests only.
+One cause, fixed at the source: a Reanimated tween draws a whole window frame per vsync however
+small the view that changed, so the wait cursor is a two-state toggle on a JS interval
+(`BlinkingBlock`), two frames a second. Three retractions, in the order they were made. The morning's
+"roughly 11% against 5%" came from one sample per arm over windows that were mostly static. The
+cursor's original justification, that one cell of damage is cheaper than three full-screen layers,
+was inferred and measured false. And the third row above was read, for a few hours, as "a dead
+session's page keeps the WebView painting at 60 fps whatever the veil does", which put a hide-the-
+pane fix into `SessionScreen` and this paragraph; it was wrong because that arm's veil was not
+static at all. **Reanimated reads the OS TRANSITION scale as reduced motion**
+(`Settings.Global.TRANSITION_ANIMATION_SCALE`, `NativeProxy.kt`), not the animator scale the arm
+had zeroed, so the scrim kept breathing and the cursor kept tweening under a "reduced motion" that
+never engaged. With the veil genuinely still (the probe's `no-motion` gate) the drawn dead pane
+costs nothing, bare or veiled, and the pane stays drawn. The per-second `EGL_emulation
+app_time_stats` lines in logcat are what exposed it: 60 frames a second for exactly the eight
+quiet seconds, then one frame every 616 ms, the blink's own cadence in a mode that should have held
+it still. To force reduced motion for a measurement: `settings put global
+transition_animation_scale 0`, force-stop, relaunch, and put the scale back to 1 afterwards; and
+`useReducedMotion` reads it once at app start, so both arms of the A/B belong in that new process.
+The cost of the quiet-phase breath is bounded by the deadline and is typically one to two and a
+half seconds per swap. A same-column labelled respawn could not be produced from the MCP
+(`kangentic_update_task model` on a running session applies at the next spawn), so that kind is
+covered by the stub rig's `/respawn` and the component tests only.
 
 ### Measuring the cold launch
 

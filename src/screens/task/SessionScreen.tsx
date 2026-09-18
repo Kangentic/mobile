@@ -4,6 +4,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Screen } from '@/components';
 import { useScreenFocusActive } from '@/components/motion/ScreenMotion';
 import { traceConnection } from '@/devsupport/connectionTrace';
+import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { findArchivedTaskById, findTaskById, isDoneRole, isTodoRole, useBoardStore } from '@/state/boardStore';
 import { selectSessionEnded, selectSessionSpawnProgressLabel, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -731,8 +732,12 @@ export function SessionScreen(): React.JSX.Element {
    * alone.
    */
   const overlaysYieldToChanges = mode === 'changes';
+  // The retention probe's 'no-swap-veil' arm: the dead pane drawn bare, no
+  // veil over it, so what the WebView does after the PTY dies can be measured
+  // on its own. Inert (dead code) outside a probe build.
+  const probeBaresSwap = getRetentionProbeVariant() === 'no-swap-veil';
   const showQuietVeil =
-    quietWindowOpen && !leaveScreen && (quietWindowCleared ? mode === 'terminal' : !overlaysYieldToChanges);
+    quietWindowOpen && !leaveScreen && !probeBaresSwap && (quietWindowCleared ? mode === 'terminal' : !overlaysYieldToChanges);
   // The veil occludes the panes, visually and for assistive technology.
   const overlayCoversPanes = showQuietVeil;
   // The footer never leaves. A footer that blinked out the instant the
@@ -746,18 +751,16 @@ export function SessionScreen(): React.JSX.Element {
   // every mode, since keys and messages have nowhere to go.
   const footerSuspended = quietWindowOpen && !quietWindowWaiting && displaySessionId === quietWindowSessionId;
   const footerSwitcherOnly = quietWindowWaiting;
-  // The terminal pane is HIDDEN, not merely covered, while the wait is on
-  // with nothing bound. Measured on the release build (emulator, 2026-09-18):
-  // once a session has ended its page keeps the WebView painting at the full
-  // frame rate for as long as the pane is drawn, about 58 frames a second
-  // and 30 points of a core, whatever the veil above it does (the same with
-  // the veil static under OS reduced motion), while a live idle terminal
-  // draws nothing and the pane at opacity 0 draws nothing. The cause in the
-  // page is not identified; the cleared veil covers the pane completely, so
-  // hiding it changes nothing visible, and it comes back at the bind so the
-  // successor's seed paints and lifts the veil. The quiet phase keeps the
-  // pane drawn: its eight seconds are bounded and the last frame must show.
-  const terminalPaneShown = mode === 'terminal' && !quietWindowWaiting;
+  // The terminal pane stays DRAWN under the veil for the whole window. For a
+  // few hours on 2026-09-18 it was hidden through the waiting phase, on a
+  // measurement that said a dead session's page kept the WebView painting at
+  // 60 fps under a static veil; that "static" veil was still breathing (the
+  // OS setting used to force reduced motion was the animator scale, and
+  // Reanimated reads the transition scale), and with the veil actually held
+  // still the drawn dead pane measured 12 frames in 49 s. The retention
+  // probe's 'no-swap-veil' arm (the dead pane bare) measured 18 in 45 s.
+  // There is nothing to hide from; the change was reverted the same day.
+  const terminalPaneShown = mode === 'terminal';
 
   return (
     <Screen testID="session-screen">

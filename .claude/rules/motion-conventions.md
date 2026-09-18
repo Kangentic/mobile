@@ -104,7 +104,11 @@ single samples over windows that were mostly static, and they are retracted. The
 gated by the route's `ScreenMotionProvider` (a pushed route stops it), by OS reduced motion, and by
 the OS itself once the app is backgrounded (measured: 4-8% and zero frames with the veil up). The
 blink as shipped measured 1.6 frames a second at 10-12%, against a live idle terminal at 11-12.5%
-in the same process. Anything else that loops must still stop on its own.
+in the same process. Anything else that loops must still stop on its own, and "on its own" has to
+include the case where what it is waiting for never comes: the loading skeleton's pulse is bounded
+by `skeletonPulse.holdAfterMs` (10 s, then the static branch) because a board stranded on its
+skeleton by a lost subscribe was measured drawing 60 frames a second for the ninety seconds the
+stall lasted, and nothing about a stall stops a tween.
 
 **But do not read that as "Reanimated is idle when nothing animates".** It is not, and the
 difference matters when you go looking for a cost. `scheduledMapperRun` in

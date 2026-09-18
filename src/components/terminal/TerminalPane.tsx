@@ -691,8 +691,11 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
       if (message.type === 'renderer') {
         // Observability, mirroring the desktop's renderer report: WebGL is the
         // fast path; a 'dom' report means WebGL was unavailable or its context
-        // was lost. Logged for now; a future devtools surface can read it.
-        console.log(`[terminal] renderer for ${sessionId}: ${message.renderer}`);
+        // was lost. On the flag-gated connection trace, and WITHOUT the session
+        // id: this used to be a bare console.log that put the id into every
+        // release build's logcat on every terminal open, which the trace's own
+        // rule (phases and milliseconds, never an identifier) exists to avoid.
+        traceConnection('terminal-renderer', { renderer: message.renderer });
         return;
       }
       if (message.type === 'clean-lines') {

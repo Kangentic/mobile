@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, type DimensionValue, type StyleProp, type ViewStyle } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeProvider';
@@ -23,6 +23,14 @@ export interface SkeletonProps {
  * on that branch. A loading container renders a fixed set of these, so the
  * count is not one.
  *
+ * The pulse is also BOUNDED (`skeletonPulse.holdAfterMs`): a skeleton still
+ * on screen that long has outlived any load that is going to land, and a
+ * tween keeps the whole app drawing at full frame rate for as long as it
+ * runs. Measured 2026-09-18 on the release build: a board stranded on its
+ * skeleton by a lost subscribe drew 60 frames a second for the ninety seconds
+ * the stall lasted. Past the bound this takes the same static branch as
+ * reduced motion, which unmounts the mapper with the pulse.
+ *
  * FlashList hard rule: skeletons never render inside a recycled renderItem;
  * loading branches render a fixed set of them at the container level.
  */
@@ -30,8 +38,17 @@ export function Skeleton({ width = '100%', height = 14, borderRadius, style, tes
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
   const screenMotionActive = useScreenMotionActive();
-  const { durationMs, opacityMin, opacityMax } = theme.motion.skeletonPulse;
+  const { durationMs, opacityMin, opacityMax, holdAfterMs } = theme.motion.skeletonPulse;
   const restingOpacity = (opacityMin + opacityMax) / 2;
+  const [pulseExpired, setPulseExpired] = useState(false);
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setPulseExpired(true);
+    }, holdAfterMs);
+    return () => {
+      clearTimeout(handle);
+    };
+  }, [holdAfterMs]);
   const baseStyle: ViewStyle = {
     width,
     height,
@@ -41,8 +58,8 @@ export function Skeleton({ width = '100%', height = 14, borderRadius, style, tes
 
   // A pulse nobody can see costs the same as one they can. Resting at the mid
   // opacity is exactly what reduced motion does, so a blurred skeleton still
-  // reads as "loading".
-  if (reducedMotion || !screenMotionActive) {
+  // reads as "loading", and so does one that has outlived its bound.
+  if (reducedMotion || !screenMotionActive || pulseExpired) {
     return <View testID={testID} style={[baseStyle, { opacity: restingOpacity }, style]} />;
   }
 

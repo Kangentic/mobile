@@ -68,18 +68,25 @@ export interface SessionSwapVeilProps {
  * units apart, so over the empty grid the full swing moves each channel by
  * less than one unit. And a tween costs a whole window frame per vsync
  * however small the view that changed. Measured on the release build
- * (emulator, 2026-09-18, the pane hidden under this veil, the same process
- * for every arm): the full-screen scrim breath drew about 60 frames a second
- * at 20-31% of a core; a cell-sized cursor breathing under `PulsingBlock`
- * drew 57 a second at 24-28%, no cheaper at all; the same veil held static
- * (blurred under the move sheet) drew 0 frames at 1.5-4%, the Changes lens
- * beside it 0-4%. An earlier revision of this comment claimed the cursor was
- * cheap because a frame's damage was one cell rather than three full-screen
- * layers; that was inferred, not measured, and it was wrong. So the cursor
- * is `BlinkingBlock`: a two-state toggle on a JS interval, one commit per
- * half-period, no Reanimated mapper in the waiting phase at all. Measured
- * the same way once shipped: 42 frames in 25.8 s (1.6 a second) at 10-12%,
- * against a live idle terminal at 11-12.5% in the same process.
+ * (emulator, 2026-09-18, the same process for every arm): the full-screen
+ * scrim breath drew about 60 frames a second at 20-31% of a core; a
+ * cell-sized cursor breathing under `PulsingBlock` drew 57 a second at
+ * 24-28%, no cheaper at all; the same veil held still (blurred under the
+ * move sheet) drew 0 frames at 1.5-4%, the Changes lens beside it 0-4%. An
+ * earlier revision of this comment claimed the cursor was cheap because a
+ * frame's damage was one cell rather than three full-screen layers; that was
+ * inferred, not measured, and it was wrong. So the cursor is `BlinkingBlock`:
+ * a two-state toggle on a JS interval, one commit per half-period, no
+ * Reanimated mapper in the waiting phase at all. Measured the same way once
+ * shipped: 42 frames in 25.8 s (1.6 a second) at 10-12%, against a live idle
+ * terminal at 11-12.5% in the same process.
+ *
+ * The pane under this veil stays drawn. A claim that a dead session's page
+ * kept the WebView painting at 60 fps under a static veil lived here for a
+ * few hours; the veil in that arm was still breathing (Reanimated reads the
+ * OS TRANSITION scale as reduced motion, and the arm had zeroed the animator
+ * scale), and with the veil genuinely still the drawn dead pane measured 12
+ * frames in 49 s, bare 18 in 45 s. Nothing to hide from.
  *
  * It leaves by the crossfade it arrived by (`crossfadeOut`, the base
  * duration on the standard curve): what the eye follows at the reveal is the
@@ -98,13 +105,6 @@ export interface SessionSwapVeilProps {
  * mapper and only while mounted (`PulsingBlock` is the branch that animates;
  * the other branch is a plain View). Opacity only, on absolutely positioned
  * views with no children.
- *
- * The pane under the cleared veil is HIDDEN by SessionScreen, not merely
- * covered: a dead session's page keeps the WebView painting at the full
- * frame rate for as long as the pane is drawn (measured: about 58 frames a
- * second and 30 points of a core, with this veil static), while the pane at
- * opacity 0 draws nothing. The cleared veil is opaque over it, so hiding it
- * changes nothing visible.
  *
  * The root keeps the default `pointerEvents`: it must swallow a tap on the
  * covered pane (a tap on the WebView toggles the keyboard for a dead PTY). It
