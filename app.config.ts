@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.7.0',
+  version: '0.8.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -150,7 +150,20 @@ const config: ExpoConfig = {
     // waiting and no longer hides a queued or mid-respawn session, task cards
     // carry PR merge readiness, and the handled-error door reports caught
     // failures to Sentry.
-    buildNumber: '14',
+    //
+    // 15 is the v0.8.0 release cut 2026-09-19. 14 is spent, tagged ios-b14.
+    // Nothing in this release is iOS-only; it is the session-swap work, all
+    // cross-platform: a column move now veils the session and holds the last
+    // frame until the successor has painted, a successor takes over its
+    // ghost's Home row instead of starting fresh, the terminal waits for the
+    // successor's seed before its first init and keeps its cell size across
+    // re-inits, a waiting card sits past the deadline with a leave for Done
+    // and To Do, a timed-out board read is retried, the phone answers desktop
+    // heartbeats so liveness can be probed without a rekey, and every relay
+    // dial carries role=mobile for the relay's waiting-peer gauge. Native
+    // dependencies moved with the SDK 57 drift (seven expo packages), so this
+    // is a new native build on both platforms, not a JS-only change.
+    buildNumber: '15',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -344,13 +357,27 @@ const config: ExpoConfig = {
     // states (queued and mid-respawn) that the feed and board card used to
     // hide, PR merge readiness on task cards, and the handled-error door.
     //
+    // 13 is the v0.8.0 release cut 2026-09-19, going to the INTERNAL track. 12
+    // is spent, tagged android-vc12. The one Android-specific item is the
+    // expo-task-manager patch re-pinned at 57.0.19 with the SDK 57 drift, so
+    // the headless push task's null-loader guard still ships (without it a
+    // push to a killed app throws and the process gets marked am_proc_bad).
+    // The rest is cross-platform session-swap work: the veil and held frame
+    // through a column move, a successor taking over its ghost's Home row, the
+    // terminal waiting for the successor's seed and keeping its cell size, the
+    // waiting card past the deadline, a retried board read, answered desktop
+    // heartbeats, and role=mobile on every relay dial. The dead pane is hidden
+    // through the wait and the cursor blinks on a JS interval; both were
+    // measured on a release build on an x86_64 emulator against a same-process
+    // control (the developer guide's measurement table carries the numbers).
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 12,
+    versionCode: 13,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
