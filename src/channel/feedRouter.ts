@@ -9,8 +9,8 @@ type BridgeEventKind = BridgeEvent['kind'];
  * guard, envelope AND payload shape) is the trust boundary: a malformed
  * event is dropped silently, the same drop-quietly posture SessionManager
  * takes toward malformed frames. Heartbeats and capability-responses pass
- * through untouched (CapabilityClient owns responses; nothing owns
- * heartbeats).
+ * through untouched (CapabilityClient owns responses; SessionManager owns
+ * heartbeats, answering each one before the fan-out reaches here).
  */
 export class FeedRouter {
   private readonly listenersByKind = new Map<BridgeEventKind, Set<(event: BridgeEvent) => void>>();

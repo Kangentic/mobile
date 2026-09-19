@@ -90,7 +90,7 @@ describe('FeedRouter', () => {
     expect((received[0] as TerminalEvent).payload.data).toBe('good');
   });
 
-  it('ignores heartbeats and unsubscribe stops delivery', async () => {
+  it('does not route heartbeats (the session answers them itself) and unsubscribe stops delivery', async () => {
     const { session, stub } = await establishedPair();
     const router = new FeedRouter(session);
     const received: string[] = [];

@@ -76,7 +76,17 @@ and to every later peer-initiated rekey.
 - No state-changing command may ride the first Noise message (it is replayable pre-ephemeral).
 - Sessions rekey roughly every 2 minutes (WireGuard's `REKEY_AFTER_TIME`) for bounded
   post-compromise security.
-- Per-direction 64-bit counter nonces reject anything at or below the last seen value.
+- Per-direction 64-bit counter nonces are implicit and strictly sequential: a frame opens only
+  under the exact counter the receiver expects next, so a replayed, reordered, or skipped frame
+  fails to authenticate and is dropped. A sealed frame that never leaves the phone therefore
+  desyncs that direction until the next handshake, which is why `SessionManager.sendBestEffort`
+  refuses to seal when the transport cannot carry the frame.
+- The desktop may send a `heartbeat` message on an established session; the phone answers it
+  with a `heartbeat` of its own, sealed best-effort inside the frame handler under the streams
+  the probe arrived on (`SessionManager.handleApplicationFrame`). That is the cheap liveness
+  probe a rekey is not: one frame each way, no verb dispatch, and a request in flight survives
+  it, where a request sealed under keys a rekey just retired is lost. The phone answers and
+  never originates one, which is what rules out an echo loop between the two peers.
 - A **deliberate** teardown (unpairing, on either side) seals an empty `FrameTag.Final` frame
   before the socket closes, and receiving one is acted on as revocation: the desktop drops the
   phone from its roster immediately, and the phone clears its pairing and returns to the
