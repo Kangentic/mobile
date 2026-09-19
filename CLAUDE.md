@@ -93,7 +93,7 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   .github/actions/setup-node-deps/action.yml now hashes
                               #   `patches/**` too, so a patch change misses the cache on its own
                               #   and no lockfile bump is needed. Keep those two in step.
-                              #   expo-task-manager+57.0.17.patch guards a null HeadlessAppLoader
+                              #   expo-task-manager+57.0.19.patch guards a null HeadlessAppLoader
                               #   at TaskService.executeTask:426, the one call site of three in
                               #   that file that did not. It returns null silently when the
                               #   WeakReference<Context> is empty, which is the normal state of a
@@ -103,6 +103,15 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   from JS, which never starts on that path). Upstream has the same
                               #   fix open as expo/expo PR #46449 (since 2026-06, blocked) with
                               #   issues #46589 and #49216; drop this patch when that ships.
+                              #   Re-pinned from 57.0.17 to 57.0.19 on 2026-09-18 when the SDK
+                              #   drift gate moved the package: the call site was still unguarded
+                              #   there, the hunk applied unchanged, and the file was renamed (the
+                              #   regenerate path, `patch-package expo-task-manager`, cannot run
+                              #   where install scripts are blocked). Do the same on every bump:
+                              #   check the call site, re-apply, rename in the SAME commit as the
+                              #   lockfile, because CI's cache key hashes patches/** and a stale
+                              #   name is a mismatch warning today and a silent drop when the
+                              #   hunk stops applying.
                               #   THE PATCH IS INERT WITHOUT `expo.autolinking.buildFromSource` in
                               #   package.json naming BOTH expo-task-manager and
                               #   unimodules-app-loader: the module ships a prebuilt AAR and is not
