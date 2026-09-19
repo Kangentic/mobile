@@ -14,7 +14,7 @@
  * `extraProguardRules` comment in app.config.ts for the full incident.
  *
  * `buildFromSource` is the other half: it is what makes
- * `patches/expo-task-manager+57.0.17.patch` actually reach the APK. Both
+ * `patches/expo-task-manager+57.0.19.patch` actually reach the APK. Both
  * `expo-task-manager` and `unimodules-app-loader` have to be named, because
  * expo-task-manager's build.gradle references
  * `project(':unimodules-app-loader')`, which only exists as a source project
