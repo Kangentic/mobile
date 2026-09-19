@@ -76,10 +76,17 @@ export function isRedialableTransport(transport: Transport): transport is Redial
  * The relay WebSocket client, implementing the protocol's Transport
  * interface (@kangentic/protocol) so a future WebRTC data channel can slot
  * in behind the exact same seam (Phase 4). Dials
- * `${relayUrl}?slot=<slotId>` and reconnects with capped exponential
- * backoff; the desktop's RelayClient
- * (src/main/mobile-bridge/transport/relay-client.ts) is the wire contract
- * this mirrors.
+ * `${relayUrl}?slot=<slotId>&role=mobile` and reconnects with capped
+ * exponential backoff; the desktop's RelayClient
+ * (src/main/mobile-bridge/transport/relay-client.ts, which dials the same
+ * shape with `role=desktop`) is the wire contract this mirrors.
+ *
+ * `role` is a metrics hint: the relay attributes its waiting-peer gauge by
+ * it, so a dashboard can tell a phone's parked socket from a desktop's. It is
+ * authenticated by nothing, can never cause a rejection (absent, misspelled
+ * and oversized all collapse to 'unknown'), and nothing in pairing, routing,
+ * caps or rate limiting reads it (kangentic-relay's src/guards/peerRole.ts).
+ * Every dial carries it because every dial goes through dial() below.
  */
 export class RelayTransport implements RedialableTransport {
   private readonly relayUrl: string;
@@ -194,7 +201,11 @@ export class RelayTransport implements RedialableTransport {
     traceConnection('dial', { stateBefore: this.currentState });
     this.setState(this.currentState === 'idle' ? 'connecting' : 'reconnecting');
     const separator = this.relayUrl.includes('?') ? '&' : '?';
-    const url = `${this.relayUrl}${separator}slot=${encodeURIComponent(this.slotId)}`;
+    // `slot` is always present, so `role` always joins with '&'. String
+    // concatenation rather than URL.searchParams on purpose: this runs on
+    // Hermes, not the desktop's Node, and the relay reads each parameter
+    // independently (url.searchParams.get) so the spelling is all that matters.
+    const url = `${this.relayUrl}${separator}slot=${encodeURIComponent(this.slotId)}&role=mobile`;
 
     return new Promise<void>((resolve, reject) => {
       const settle = () => {

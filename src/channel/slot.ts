@@ -5,7 +5,8 @@ export type SlotContext =
   | { kind: 'session'; desktopStaticPublicKey: Uint8Array; phoneStaticPublicKey: Uint8Array };
 
 /**
- * Derives the relay slot id both peers dial with (`${relayUrl}?slot=<hex>`).
+ * Derives the relay slot id both peers dial with, the `slot` query parameter
+ * of the dial URL (relayTransport.ts owns the rest of that URL).
  * The relay treats the slot as an opaque rendezvous key - it never learns
  * its cryptographic meaning.
  *
