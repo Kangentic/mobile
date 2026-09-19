@@ -324,4 +324,63 @@ describe('RelayTransport reconnect ladder', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(socketCount()).toBe(2);
   });
+
+  /**
+   * The dial URL is the relay's wire contract: `slot` is the rendezvous label
+   * and `role=mobile` is the metrics hint the relay attributes its
+   * waiting-peer gauge by (kangentic-relay's src/guards/peerRole.ts, an exact
+   * literal match that collapses anything else to 'unknown'). Neither client
+   * sent a role during the 2026-09-18 router-restart incident, so the
+   * dashboard could not tell the phone's parked socket from the desktop's.
+   * Pinned on all three dial paths - the first dial, a ladder rung and the
+   * foreground kick - because they only share the value by all going through
+   * dial(); a second construction site would drift silently. The URL is
+   * string-built (no `new URL()` normalisation, so no slash is inserted after
+   * a bare host), and the one branch in that build is the separator: a relay
+   * address that already carries a query string joins `slot` with '&', and
+   * `role` has to land correctly on that branch too.
+   *
+   * Mutation seen failing: dropping `&role=mobile` from the template literal
+   * in dial() fails the first assertion (Expected
+   * "ws://relay.test?slot=aaa...&role=mobile", Received
+   * "ws://relay.test?slot=aaa...").
+   */
+  it('dials ?slot=<id>&role=mobile on the first dial, a reconnect rung and the foreground kick', async () => {
+    const expectedUrl = `ws://relay.test?slot=${'a'.repeat(32)}&role=mobile`;
+
+    const transport = await connectAndOpen();
+    expect(latestSocket().url).toBe(expectedUrl);
+
+    // A ladder rung.
+    latestSocket().fail(1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(socketCount()).toBe(2);
+    expect(latestSocket().url).toBe(expectedUrl);
+
+    // The foreground kick, mid-backoff (the ladder is at 1000 ms now).
+    latestSocket().fail(1006);
+    expect(socketCount()).toBe(2);
+    transport.redialNow();
+    expect(socketCount()).toBe(3);
+    expect(latestSocket().url).toBe(expectedUrl);
+  });
+
+  /**
+   * The separator branch is the one part of the URL build the test above
+   * cannot see: `ws://relay.test` carries no query string, so a separator
+   * hard-coded to '?' is right there by accident. This relay address already
+   * has one, so only the '&' branch passes.
+   *
+   * Mutation seen failing: replacing the separator ternary in dial() with
+   * `const separator = '?'` fails this test alone (Expected
+   * "ws://relay.test/path?x=1&slot=aaa...&role=mobile", Received
+   * "ws://relay.test/path?x=1?slot=aaa...&role=mobile") while the test above
+   * stays green, which is why this one exists.
+   */
+  it('appends role after slot with & when the relay address already has a query string', async () => {
+    const transport = new RelayTransport({ relayUrl: 'ws://relay.test/path?x=1', slotId: 'a'.repeat(32) });
+    void transport.connect().catch(() => {});
+    expect(latestSocket().url).toBe(`ws://relay.test/path?x=1&slot=${'a'.repeat(32)}&role=mobile`);
+    transport.close();
+  });
 });

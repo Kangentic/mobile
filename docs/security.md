@@ -128,8 +128,14 @@ the wire.
 
 ## Relay slots
 
-A slot id is the rendezvous label two peers dial to find each other (`${relayUrl}?slot=<hex>`).
-Both are derived in `@kangentic/protocol` and mirrored by `src/channel/slot.ts`, which the
+A slot id is the rendezvous label two peers dial to find each other
+(`${relayUrl}?slot=<hex>&role=mobile`; the desktop dials the same shape with `role=desktop`).
+`role` is the other parameter this client sends: a fixed literal the relay uses to attribute
+its waiting-peer gauge, so a dashboard can tell a parked phone from a parked desktop. It is
+client-supplied and authenticated by nothing, carries nothing secret, can never cause a
+rejection (absent, misspelled and oversized all read as `unknown`), and nothing in pairing,
+routing, caps or rate limiting reads it (`kangentic-relay`'s `src/guards/peerRole.ts`). Both
+slots are derived in `@kangentic/protocol` and mirrored by `src/channel/slot.ts`, which the
 desktop matches byte for byte:
 
 | Slot | Derivation | Shape |
@@ -281,6 +287,13 @@ encoded JSON and far larger. A relay operator can therefore tell a deliberate un
 either side - from a dropped socket by length alone, without breaking anything. That is a departure signal, not
 content, and it is information the operator would get from the slot going quiet moments later
 anyway - but it is newly precise, so it is stated here rather than implied.
+
+The `role` query parameter (see Relay slots) is the same kind of signal. It tells the operator
+which end of a slot is the phone and which the desktop at WebSocket-upgrade time, in the access
+log, before any handshake byte; the operator would learn the same thing one round trip later from
+which peer sends the first KK message, since the desktop always initiates. It is a fixed literal
+with no per-device entropy, so it cannot correlate a phone across slots or sessions - but it
+moves the peer-type signal earlier, so it is named here too.
 
 ## Push privacy
 
