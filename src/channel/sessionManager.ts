@@ -31,6 +31,9 @@ export interface SessionManagerOptions {
  * completes synchronously within one onFrame call (KK is exactly two
  * messages), so there is no persistent in-progress handshake state to
  * track between frames.
+ *
+ * It also answers the desktop's heartbeats (handleApplicationFrame), so the
+ * desktop can probe liveness with one sealed frame instead of a rekey.
  */
 export class SessionManager {
   private readonly identity: X25519KeyPair;
@@ -104,9 +107,8 @@ export class SessionManager {
    *
    * Deliberately NOT a tag parameter on send(): a Final carries no
    * BridgeMessage (its plaintext is empty, and decodeMessage throws on empty
-   * bytes), send() throws by contract when unestablished - the opposite of
-   * what a teardown path needs - and MAX_FRAME_LENGTH is vacuous for zero
-   * bytes. Three of send()'s four behaviours are wrong here.
+   * bytes), and a teardown needs the never-throws, unestablished-tolerant
+   * send that sendBestEffort documents, not send()'s contract.
    *
    * Never throws. It runs as the first line of a dispose chain, and an
    * escaping error would abandon the rest of that teardown with the transport
@@ -114,13 +116,25 @@ export class SessionManager {
    * documents around its teardownThisAttempt.
    */
   sendFinalFrame(): void {
+    this.sendBestEffort(new Uint8Array(0), FrameTag.Final);
+  }
+
+  /**
+   * The never-throws send that sendFinalFrame and the heartbeat reply share:
+   * both fire from a path that must survive whatever the transport is doing
+   * (a dispose chain, the inbound frame handler). No MAX_FRAME_LENGTH check,
+   * vacuous for the zero-byte Final and the ~20-byte heartbeat, and no throw
+   * when unestablished - a frame with no streams to seal it under is simply
+   * not sent.
+   */
+  private sendBestEffort(plaintext: Uint8Array, tag?: FrameTag): void {
     if (!this.streams) return;
     // Only seal when the frame can actually leave: seal advances this
     // direction's counter, and burning a counter slot on a frame the
     // transport rejects desyncs us from the desktop's receive counter.
     if (this.transport.state !== 'connected') return;
     try {
-      const frame = this.streams.send.seal(new Uint8Array(0), FrameTag.Final);
+      const frame = this.streams.send.seal(plaintext, tag);
       this.transport.send(wrapSessionFrame(SessionFrameKind.Application, frame));
     } catch {
       // The socket dropped between the state check and the send. Nothing
@@ -222,6 +236,19 @@ export class SessionManager {
     } catch {
       return;
     }
+    // A desktop heartbeat is a liveness probe, answered here rather than by
+    // a subscriber: only this frame handler can seal the reply under the very
+    // streams that just opened the probe (a rekey between open and reply is
+    // impossible inside one synchronous call), and only this layer holds the
+    // two guards the reply needs. It is the cheap probe the rekey is not: one
+    // sealed frame, no verb dispatch, and a request in flight survives it,
+    // where a request sealed under keys a rekey just retired is lost
+    // (connectionManager.ts's onRekey). Sent BEFORE the fan-out so a throwing
+    // listener cannot suppress the liveness answer. The phone ANSWERS
+    // heartbeats and never originates one - that asymmetry is what makes an
+    // echo loop impossible; two peers that both auto-replied would ping-pong
+    // at wire speed.
+    if (message.type === 'heartbeat') this.sendBestEffort(encodeMessage({ type: 'heartbeat' }));
     for (const listener of this.messageListeners) listener(message);
   }
 }

@@ -63,8 +63,9 @@ the wire.
   pre-ephemeral, so nothing that changes state may ride it.
 - **Rekeying:** sessions rekey roughly every 2 minutes (WireGuard's `REKEY_AFTER_TIME`), bounding
   the damage of a compromised session key.
-- **Replay protection:** per-direction 64-bit counter nonces reject anything at or below the last
-  seen value.
+- **Replay protection:** per-direction 64-bit counter nonces are implicit and strictly
+  sequential, so a frame opens only under the exact counter the receiver expects next; a
+  replayed, reordered, or skipped frame fails to authenticate and is dropped.
 - **A goodbye is a courtesy, not a proof.** A `FrameTag.Final`-tagged frame is only ever sent on
   a deliberate unpair - the phone's own Unpair button, or the desktop revoking the device - and
   never on quit, sleep, backgrounding, or reconnect. That exclusivity is what lets a received
@@ -73,6 +74,11 @@ the wire.
   and the desktop drops the device from its roster. A Final's *absence* still proves nothing:
   anyone who can drop the socket can suppress it. The desktop's presence probing stays
   load-bearing, and a missing Final must never be read as evidence a device is still there.
+  An answered `heartbeat` is one such proof of presence: the phone replies only from an
+  established session, so only the paired desktop can elicit one. It shows the relay nothing a
+  rekey reply did not already show it in kind - that the phone's app layer is alive - but at the
+  desktop's probe cadence rather than the ~2 minute rekey, and as a constant-length frame pair;
+  see the relay metadata honesty statement below.
 - **No Double Ratchet.** Double Ratchet solves offline, asynchronous message queuing, which this
   interactive link does not have; adding it would be unjustified complexity.
 - **Relay scheme enforcement:** the relay address arrives inside a scanned QR, so it is

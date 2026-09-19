@@ -1095,6 +1095,10 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     // The current in-progress KK handshake (reassigned on each re-initiation),
     // read by the persistent frame handler below.
     let handshake = null;
+    // Whether the phone's first heartbeat reply of this key epoch has been
+    // logged: one line per establish proves the reply path works over a real
+    // relay without a line every 5s.
+    let heartbeatAnswerLogged = false;
 
     // The desktop always INITIATES the KK handshake: once on connect and
     // then on its ~2-minute rekey timer. Phone reloads are recovered by the
@@ -1130,6 +1134,7 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
         // carried board mutations AND a killed session across flows, so a
         // suite run contaminated itself from the first mutating flow onward.
         resetStubFixture();
+        heartbeatAnswerLogged = false;
         console.log('[session] established');
         return;
       }
@@ -1155,7 +1160,15 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
       }
       if (message.type === 'capability-request') {
         answerCapabilityRequest(message);
-      } else if (message.type !== 'heartbeat') {
+      } else if (message.type === 'heartbeat') {
+        // The phone answers every heartbeat this script sends
+        // (SessionManager.handleApplicationFrame); the real desktop ignores
+        // the reply today and will count it once it probes on its own timer.
+        if (!heartbeatAnswerLogged) {
+          heartbeatAnswerLogged = true;
+          console.log('[session] phone answered a heartbeat');
+        }
+      } else {
         console.log('[session] received:', message);
       }
     });

@@ -1,62 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { generateX25519KeyPair, type Transport, type TransportState, type Unsubscribe } from '@kangentic/protocol';
+import { generateX25519KeyPair } from '@kangentic/protocol';
 import { ChannelController } from '@/channel';
-import { createLoopbackPair, type LoopbackTransport } from '@/devsupport/loopbackTransport';
+import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { flushMicrotasks, waitUntil } from '../helpers/async';
+import { ArmableTransport } from '../helpers/transports';
 
 interface ControllerRig {
   controller: ChannelController;
   desktop: StubSessionInitiator;
-}
-
-/**
- * Wraps a real (connected) LoopbackTransport and, once armed, makes exactly
- * ONE send() throw instead of forwarding - "the socket dropped between the
- * state check and the send" that sendFinalFrame's own doc comment names.
- * Deliberately the inverse of sessionManager.test.ts's FlappableTransport,
- * which throws while NOT connected; this one throws while `state` still
- * reads 'connected', which is the only way to drive sendFinalFrame's seal
- * call to succeed and its transport.send() call to fail.
- */
-class ArmableTransport implements Transport {
-  private armed = false;
-  closeCalled = false;
-
-  constructor(private readonly inner: LoopbackTransport) {}
-
-  get state(): TransportState {
-    return this.inner.state;
-  }
-
-  armThrowOnNextSend(): void {
-    this.armed = true;
-  }
-
-  async connect(): Promise<void> {
-    await this.inner.connect();
-  }
-
-  send(frame: Uint8Array): void {
-    if (this.armed) {
-      this.armed = false;
-      throw new Error('ArmableTransport: simulated socket drop between the state check and the send');
-    }
-    this.inner.send(frame);
-  }
-
-  close(): void {
-    this.closeCalled = true;
-    this.inner.close();
-  }
-
-  onFrame(listener: (frame: Uint8Array) => void): Unsubscribe {
-    return this.inner.onFrame(listener);
-  }
-
-  onStateChange(listener: (state: TransportState) => void): Unsubscribe {
-    return this.inner.onStateChange(listener);
-  }
 }
 
 /**
