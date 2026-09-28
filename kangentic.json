@@ -24,7 +24,7 @@
       "name": "Executing",
       "icon": "square-terminal",
       "autoSpawn": true,
-      "modelOverride": "claude-sonnet-5",
+      "modelOverride": "claude-opus-5-5",
       "effortOverride": "high"
     },
     {
@@ -33,11 +33,20 @@
       "icon": "code",
       "color": "#f59e0b",
       "autoSpawn": true,
-      "autoCommand": "/code-review {{baseBranch}}",
       "modelOverride": "claude-opus-5",
       "effortOverride": "high",
       "sessionTarget": "isolated",
-      "sessionSpawnStrategy": "always_spawn_new"
+      "sessionSpawnStrategy": "always_spawn_new",
+      "automations": {
+        "onEnter": [
+          {
+            "name": "Message",
+            "type": "send_message",
+            "message": "/code-review {{baseBranch}}",
+            "mode": "immediate"
+          }
+        ]
+      }
     },
     {
       "id": "91ad5825-f506-4020-91b2-207b28124eb7",
@@ -45,9 +54,18 @@
       "icon": "flask-conical",
       "color": "#06b6d4",
       "autoSpawn": true,
-      "autoCommand": "/pull-request",
-      "modelOverride": "claude-sonnet-5",
-      "effortOverride": "high"
+      "modelOverride": "claude-sonnet-5-5",
+      "effortOverride": "high",
+      "automations": {
+        "onEnter": [
+          {
+            "name": "Message",
+            "type": "send_message",
+            "message": "/pull-request",
+            "mode": "immediate"
+          }
+        ]
+      }
     },
     {
       "id": "ed8a6c51-e609-4a87-b2db-bbe6770c5acc",
@@ -55,9 +73,18 @@
       "icon": "merge",
       "color": "#F97316",
       "autoSpawn": true,
-      "autoCommand": "/merge-pull-request",
-      "modelOverride": "claude-sonnet-5",
-      "effortOverride": "high"
+      "modelOverride": "claude-sonnet-5-5",
+      "effortOverride": "high",
+      "automations": {
+        "onEnter": [
+          {
+            "name": "Message",
+            "type": "send_message",
+            "message": "/merge-pull-request",
+            "mode": "immediate"
+          }
+        ]
+      }
     },
     {
       "id": "857923ef-41f9-4905-b4e5-11790bc9dc70",
@@ -65,39 +92,6 @@
       "role": "done",
       "icon": "circle-check-big",
       "color": "#10b981"
-    }
-  ],
-  "actions": [
-    {
-      "id": "4d4040fd-4dc4-4a5a-b678-96bc2e13b8b6",
-      "name": "Kill Session",
-      "type": "kill_session",
-      "config": {}
-    },
-    {
-      "id": "540db101-d43d-421b-81a7-1103e39b9368",
-      "name": "Start Planning Agent",
-      "type": "spawn_agent",
-      "config": {
-        "promptTemplate": "{{task_xml}}{{attachments}}"
-      }
-    }
-  ],
-  "transitions": [
-    {
-      "from": "*",
-      "to": "Done",
-      "actions": [
-        "Kill Session"
-      ]
-    },
-    {
-      "from": "*",
-      "to": "Planning",
-      "actions": [
-        "Kill Session",
-        "Start Planning Agent"
-      ]
     }
   ],
   "_modifiedBy": "7ef4fd0cb484"
