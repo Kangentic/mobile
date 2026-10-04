@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TERMINAL_FIT_TRIGGERS } from '@/terminal/terminalBridge';
+import { TERMINAL_FIT_TRIGGERS, decodeTerminalMessage } from '@/terminal/terminalBridge';
 
 /**
  * Every <script> block in the generated xterm.html must PARSE: the page's
@@ -537,6 +537,288 @@ describe('generated xterm.html', () => {
     expect(applyFontSizeBody).toContain('function applyFontSize(');
     expect(applyFontSizeBody).toContain('heightFitGeneration += 1');
     expect(applyFontSizeBody).toContain('pinchOverrideFontPx = capped');
+  });
+
+  /**
+   * applyFontSize, sliced from lifecycle.js (the last function in the module)
+   * and run against spies: the page's one entry point for a pinch. The case
+   * above only reads its source text; these run it. `reportFit` is defined in
+   * the prelude so it can read the page's own `currentFontSizePx` at the moment
+   * it is called, which is what the host's pinch baseline is taken from.
+   */
+  function buildApplyFontSizeHarness(options: {
+    hasTerminal?: boolean;
+    knownRows: number | null;
+    capFontPx: (fontPx: number) => number;
+    /** The painted grid's height, or null when there is no .xterm-screen element. */
+    screenHeightPx: number | null;
+  }): {
+    applyFontSize: (fontSizePx: number) => void;
+    runFrames: () => void;
+    state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; heightFitGeneration: number };
+    terminalFontSizePx: () => number;
+    fitReports: () => { source: string; fontSizePx: number; gridHeightPx: number }[];
+    geometryCalls: () => number;
+    followCalls: () => unknown[];
+    capRequests: () => { fontPx: number; cols: number; rows: number | null }[];
+  } {
+    const source = pageModule('lifecycle.js');
+    const applyFontSizeSource = source.slice(source.indexOf('function applyFontSize('));
+    expect(applyFontSizeSource).toContain('function applyFontSize(');
+    assertInjectionsAreAlive('lifecycle.js (applyFontSize slice)', applyFontSizeSource, [
+      'terminal',
+      'textureCappedFontPx',
+      'knownCols',
+      'knownRows',
+      'pinchOverrideFontPx',
+      'currentFontSizePx',
+      'reportFit',
+      'applyGeometry',
+      'heightFitGeneration',
+      'requestAnimationFrame',
+      'followCursorVertically',
+    ]);
+    const terminal = { rows: 40, options: { fontSize: 0 } };
+    const capRequests: { fontPx: number; cols: number; rows: number | null }[] = [];
+    const fitReports: { source: string; fontSizePx: number; gridHeightPx: number }[] = [];
+    const frames: (() => void)[] = [];
+    const followCalls: unknown[] = [];
+    let geometryCalls = 0;
+    const fakeDocument = {
+      querySelector: (selector: string) =>
+        selector === '.xterm-screen' && options.screenHeightPx !== null
+          ? { getBoundingClientRect: () => ({ height: options.screenHeightPx }) }
+          : null,
+    };
+    const build = new Function(
+      'terminal',
+      'textureCappedFontPx',
+      'document',
+      'onFitReport',
+      'applyGeometry',
+      'requestAnimationFrame',
+      'followCursorVertically',
+      'initialState',
+      `var knownCols = 120;
+       var knownRows = initialState.knownRows;
+       var pinchOverrideFontPx = null;
+       var currentFontSizePx = 11;
+       var heightFitGeneration = 4;
+       function reportFit(source, gridHeightPx) {
+         onFitReport({ source: source, fontSizePx: currentFontSizePx, gridHeightPx: gridHeightPx });
+       }
+       ${applyFontSizeSource}
+       return {
+         applyFontSize: applyFontSize,
+         state: function () {
+           return { pinchOverrideFontPx: pinchOverrideFontPx, currentFontSizePx: currentFontSizePx,
+                    heightFitGeneration: heightFitGeneration };
+         },
+       };`,
+    ) as (...dependencies: unknown[]) => {
+      applyFontSize: (fontSizePx: number) => void;
+      state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; heightFitGeneration: number };
+    };
+    const built = build(
+      options.hasTerminal === false ? null : terminal,
+      (fontPx: number, cols: number, rows: number | null) => {
+        capRequests.push({ fontPx, cols, rows });
+        return options.capFontPx(fontPx);
+      },
+      fakeDocument,
+      (report: { source: string; fontSizePx: number; gridHeightPx: number }) => {
+        fitReports.push(report);
+      },
+      () => {
+        geometryCalls += 1;
+      },
+      (callback: () => void) => {
+        frames.push(callback);
+      },
+      (force: unknown) => {
+        followCalls.push(force);
+      },
+      { knownRows: options.knownRows },
+    );
+    return {
+      applyFontSize: built.applyFontSize,
+      runFrames: () => {
+        for (const frame of frames.splice(0)) frame();
+      },
+      state: built.state,
+      terminalFontSizePx: () => terminal.options.fontSize,
+      fitReports: () => fitReports,
+      geometryCalls: () => geometryCalls,
+      followCalls: () => followCalls,
+      capRequests: () => capRequests,
+    };
+  }
+
+  describe('lifecycle.js applyFontSize', () => {
+    /**
+     * Mutations that redden this, each on its own: drop `pinchOverrideFontPx =
+     * capped;` (the next refit would re-fit under the user's finger), or drop
+     * `heightFitGeneration += 1;` (a fit still converging keeps stepping the
+     * font after the pinch).
+     */
+    it('takes the size for the user: records the pinch, applies it, cancels an in-flight fit and follows the cursor', () => {
+      const harness = buildApplyFontSizeHarness({ knownRows: 30, capFontPx: (fontPx) => fontPx, screenHeightPx: 700 });
+
+      harness.applyFontSize(20);
+
+      expect(harness.state()).toEqual({ pinchOverrideFontPx: 20, currentFontSizePx: 20, heightFitGeneration: 5 });
+      expect(harness.terminalFontSizePx()).toBe(20);
+      expect(harness.geometryCalls()).toBe(1);
+      // The cap is asked about the grid the pinch is over.
+      expect(harness.capRequests()).toEqual([{ fontPx: 20, cols: 120, rows: 30 }]);
+      // Not capped, so the host's pinch baseline needs no correction.
+      expect(harness.fitReports()).toEqual([]);
+      // The follow is forced, and waits for the frame that paints the new cell.
+      expect(harness.followCalls()).toEqual([]);
+      harness.runFrames();
+      expect(harness.followCalls()).toEqual([true]);
+    });
+
+    /**
+     * The texture cap can refuse a pinch's size, and the host's baseline (the
+     * next pinch starts from it) must follow the CAPPED size, not the one the
+     * fingers asked for. The report carries the measured grid, and the capped
+     * size is already in place when it is taken.
+     *
+     * Mutation that reddens this: neuter the `if (capped !== fontSizePx)` report
+     * (or move it above the `currentFontSizePx = capped` assignment).
+     */
+    it('reports the capped size to the host when the texture limit clamps a pinch', () => {
+      const harness = buildApplyFontSizeHarness({
+        knownRows: 30,
+        capFontPx: (fontPx) => Math.min(fontPx, 14),
+        screenHeightPx: 396,
+      });
+
+      harness.applyFontSize(30);
+
+      expect(harness.state()).toMatchObject({ pinchOverrideFontPx: 14, currentFontSizePx: 14 });
+      expect(harness.terminalFontSizePx()).toBe(14);
+      expect(harness.fitReports()).toEqual([{ source: 'texture-cap', fontSizePx: 14, gridHeightPx: 396 }]);
+    });
+
+    it('still reports a clamped pinch when the page has no painted grid to measure', () => {
+      const harness = buildApplyFontSizeHarness({
+        knownRows: null,
+        capFontPx: (fontPx) => Math.min(fontPx, 14),
+        screenHeightPx: null,
+      });
+
+      harness.applyFontSize(30);
+
+      expect(harness.fitReports()).toEqual([{ source: 'texture-cap', fontSizePx: 14, gridHeightPx: 0 }]);
+      // Unknown rows (the desktop has not reported its grid) ask the cap about the terminal's own.
+      expect(harness.capRequests()).toEqual([{ fontPx: 30, cols: 120, rows: 40 }]);
+    });
+
+    it('does nothing before a terminal exists', () => {
+      const harness = buildApplyFontSizeHarness({
+        hasTerminal: false,
+        knownRows: 30,
+        capFontPx: (fontPx) => fontPx,
+        screenHeightPx: 700,
+      });
+
+      harness.applyFontSize(20);
+      harness.runFrames();
+
+      expect(harness.state()).toEqual({ pinchOverrideFontPx: null, currentFontSizePx: 11, heightFitGeneration: 4 });
+      expect(harness.geometryCalls()).toBe(0);
+      expect(harness.followCalls()).toEqual([]);
+    });
+  });
+
+  /**
+   * The fit report crosses the WebView bridge as JSON, and the host decodes
+   * every field past `fontSizePx` to a DEFAULT when it is missing (so an older
+   * page still works). That tolerance makes a renamed or mistyped key on either
+   * side invisible: the report still arrives, the field just decodes to null
+   * and the release-build trace silently loses it. So this runs the page's real
+   * reportFit with a distinct value in every field and requires the host's real
+   * decoder to give every one back.
+   *
+   * Mutation that reddens this: rename one key in reportFit's payload (e.g.
+   * `innerWidthPx` to `innerWidth`), or swap two of its values.
+   */
+  it('posts a fit report the host decodes with every diagnostic field intact', () => {
+    const fullSource = pageModule('fontGeometry.js');
+    const reportFitSource = fullSource.slice(fullSource.indexOf('function reportFit('), fullSource.indexOf('function applyGeometry('));
+    expect(reportFitSource).toContain('function reportFit(');
+    assertInjectionsAreAlive('fontGeometry.js (reportFit slice)', reportFitSource, [
+      'postToHost',
+      'currentFontSizePx',
+      'activeFitTrigger',
+      'knownCols',
+      'knownRows',
+      'terminal',
+      'fitViewportHeight',
+      'maxGlTextureSize',
+    ]);
+    const posted: unknown[] = [];
+    const build = new Function(
+      'window',
+      'postToHost',
+      `var currentFontSizePx = 11;
+       var activeFitTrigger = 'fit-height';
+       var knownCols = 120;
+       var knownRows = 30;
+       var terminal = { options: { lineHeight: 1.194 } };
+       var maxGlTextureSize = 4096;
+       function fitViewportHeight() { return 635.4; }
+       ${reportFitSource}
+       return { reportFit: reportFit };`,
+    ) as (...dependencies: unknown[]) => { reportFit: (reportSource: string, gridHeightPx: number) => void };
+    const built = build({ innerHeight: 640, innerWidth: 411, devicePixelRatio: 2.625 }, (message: unknown) => {
+      posted.push(message);
+    });
+
+    built.reportFit('settled', 396.6);
+
+    expect(posted).toHaveLength(1);
+    expect(decodeTerminalMessage(JSON.stringify(posted[0]))).toEqual({
+      type: 'font-size',
+      fontSizePx: 11,
+      source: 'settled',
+      trigger: 'fit-height',
+      cols: 120,
+      rows: 30,
+      lineHeight: 1.194,
+      fitHeightPx: 635,
+      innerHeightPx: 640,
+      innerWidthPx: 411,
+      gridHeightPx: 397,
+      devicePixelRatio: 2.625,
+      maxTextureSize: 4096,
+    });
+  });
+
+  /**
+   * The source literal is the same kind of string-typed seam as the trigger
+   * (scanned above): the page names it at its reportFit call sites, the host
+   * decodes it through a closed set, and a rename on either side degrades the
+   * report to 'unknown' without anything else failing.
+   *
+   * Mutation that reddens this: rename one source literal in a page script
+   * (e.g. 'texture-cap' to 'texture_cap' in lifecycle.js).
+   */
+  it('names only fit sources the host decodes (page reportFit literals against decodeTerminalMessage)', () => {
+    const namedSources = new Set<string>();
+    for (const fileName of readdirSync(pageModulesDir)) {
+      for (const match of pageModule(fileName).matchAll(/\breportFit\(\s*'([^']+)'/g)) namedSources.add(match[1]);
+    }
+    for (const namedSource of namedSources) {
+      const decoded = decodeTerminalMessage(JSON.stringify({ type: 'font-size', fontSizePx: 11, source: namedSource }));
+      expect(decoded?.type === 'font-size' ? decoded.source : null, `source '${namedSource}'`).toBe(namedSource);
+    }
+    // So a broken pattern cannot pass by finding nothing: the settle and the cap.
+    expect([...namedSources], "the scan should find the 'settled' and 'texture-cap' call sites (reworded? update this scan)").toEqual(
+      expect.arrayContaining(['settled', 'texture-cap']),
+    );
   });
 
   it('runs the height fit from the refit pass, not the geometry pass', () => {
@@ -3448,6 +3730,47 @@ describe('generated xterm.html', () => {
 
       expect(atlasClears).toEqual([1]);
       expect(refreshes).toEqual([[0, 47]]);
+      expect(harness.refitTriggers()).toEqual([]);
+    });
+
+    /**
+     * The page falls back to the DOM renderer when WebGL is unavailable (the
+     * 'renderer' report says which), and an older addon may lack
+     * clearTextureAtlas. The repaint must still redraw every row on those pages
+     * rather than throw out of the message handler.
+     *
+     * Mutation that reddens these: drop the `webglAddon &&` or the
+     * `typeof webglAddon.clearTextureAtlas === 'function'` half of the guard.
+     */
+    it.each([
+      ['no WebGL addon (the DOM renderer)', null],
+      ['an addon without clearTextureAtlas', {}],
+    ])('still redraws every row on a page with %s', (_description, webglAddon) => {
+      const refreshes: [number, number][] = [];
+      const harness = buildDispatchHarness({
+        terminal: { rows: 48, refresh: (start: number, end: number) => refreshes.push([start, end]) },
+        webglAddon,
+      });
+
+      expect(() => harness.onHostMessage(JSON.stringify({ type: 'repaint' }))).not.toThrow();
+
+      expect(refreshes).toEqual([[0, 47]]);
+    });
+
+    /**
+     * The host never posts a non-positive or non-numeric height, but the page
+     * is the second guard: an adopted zero would make the fit chain fit a pane
+     * of no height, and a numeric string would pass a bare `> 0`.
+     *
+     * Mutation that reddens this: drop `message.fitHeightPx > 0` (zero, negative)
+     * or the `typeof ... === 'number'` check (the string) from the branch.
+     */
+    it.each([[0], [-20], ['635'], [null]])('ignores a fit-height of %j and keeps the one it has', (badHeight) => {
+      const harness = buildDispatchHarness({ terminal: {}, hostFitHeightPx: 500 });
+
+      harness.onHostMessage(JSON.stringify({ type: 'fit-height', fitHeightPx: badHeight }));
+
+      expect(harness.fitState().hostFitHeightPx).toBe(500);
       expect(harness.refitTriggers()).toEqual([]);
     });
 

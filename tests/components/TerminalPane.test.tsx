@@ -1018,6 +1018,95 @@ describe('TerminalPane (faithful mirror)', () => {
     });
 
     /**
+     * A layout event with no size in it (a collapsed or not-yet-laid-out box)
+     * says nothing about the Terminal lens, and recording it would tell the page
+     * to fit a pane of zero height. The last real height has to stand, both for
+     * the live page and for the next init that carries it.
+     *
+     * Mutation that reddens this: delete the `if (!(width > 0) || !(height > 0))
+     * return;` guard from onWebViewLayout (a fit-height of 0 is posted).
+     */
+    it('ignores a layout that carries no size, and keeps the last real fit height', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      const result = render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 635);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      webViewMock.__postMessageMock.mockClear();
+
+      layoutWebView(0, 0);
+      layoutWebView(411, 0);
+      layoutWebView(0, 635);
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
+
+      // The consumer of the stored height: the re-init on becoming active again.
+      rerenderPane(result, false);
+      rerenderPane(result, true);
+      const reinit = decodedPosts().find((message) => message?.type === 'init');
+      expect(reinit?.type === 'init' ? reinit.fitHeightPx : 'no init').toBe(635);
+    });
+
+    /**
+     * The fit height is for a LIVE page. Before the page reports ready the
+     * measurement is only recorded (the ready init carries it), so nothing is
+     * posted at a page that has not loaded.
+     *
+     * Mutation that reddens this: post fit-height from onWebViewLayout
+     * regardless of the ready flag.
+     */
+    it('records a layout that lands before the page is ready without posting it', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+
+      layoutWebView(411, 635);
+
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      const firstInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(635);
+    });
+
+    /**
+     * The mirror image of the same-tick ready race above: a layout that lands in
+     * the same tick as the OS killing the renderer finds a page that is gone,
+     * and the passive effect that would clear the ready flag has not run yet,
+     * so recoverWebView has to clear it itself. The height is still recorded,
+     * and the remounted page's ready init carries it.
+     *
+     * Mutation that reddens this: delete `terminalReadyRef.current = false;`
+     * from recoverWebView.
+     */
+    it('posts nothing at a page whose renderer was just lost, and hands the height to the remounted one', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      layoutWebView(411, 635);
+      webViewMock.__postMessageMock.mockClear();
+
+      act(() => {
+        const liveProps = webViewMock.__capturedProps.current;
+        liveProps?.onRenderProcessGone?.();
+        liveProps?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 411, height: 650 } } });
+      });
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
+
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      const remountedInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(remountedInit?.type === 'init' ? remountedInit.fitHeightPx : 'no init').toBe(650);
+    });
+
+    /**
      * Nothing about the size is remembered any more: a fit report only keeps
      * the pinch baseline on the size the page shows (so the next pinch starts
      * from it rather than jumping) and feeds the release-build trace.
@@ -1341,6 +1430,54 @@ describe('TerminalPane (faithful mirror)', () => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(3);
+        expect(connectionTraceMock.traceConnection).toHaveBeenLastCalledWith('terminal-recovery', {
+          action: 'refresh',
+          attempt: 1,
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * A new SESSION is a new episode too, even when the old one never ended: a
+     * predecessor that burned both repairs without ever painting must not leave
+     * its successor (the desktop respawned the task) with no repair at all. The
+     * trace's `attempt: 1` is what proves the budget was reset, rather than
+     * merely that some call went out.
+     *
+     * Mutation that reddens this: delete `if (sessionChanged)
+     * blankRecoveryAttemptsRef.current = 0;` from the session-swap effect.
+     */
+    it('gives a swapped-in session its own repair budget, even when the predecessor spent both', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        const result = await renderPaneAndReady();
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+
+        // The predecessor spends its whole budget and never paints.
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS * 5);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(2);
+
+        // Nothing was ever displayed, so the swap posts its init at once (seq 2)
+        // rather than holding; the page answers it honestly blank.
+        retainTerminal('sess-2');
+        result.rerender(
+          <ThemeProvider>
+            <TerminalPane sessionId="sess-2" isActive />
+          </ThemeProvider>,
+        );
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 2, blank: true }));
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS);
+        });
+
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(3);
+        expect(actionsMock.refreshTerminalStream).toHaveBeenLastCalledWith('sess-2');
         expect(connectionTraceMock.traceConnection).toHaveBeenLastCalledWith('terminal-recovery', {
           action: 'refresh',
           attempt: 1,
