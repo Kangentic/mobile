@@ -1,6 +1,8 @@
 import type { JsonValue, ReadDiffScope } from '@kangentic/protocol';
 import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
+import { traceConnection } from '@/devsupport/connectionTrace';
 import { useActivityStore } from '@/state/activityStore';
+import { useChannelStore } from '@/state/channelStore';
 import { isDoneColumn, useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
@@ -241,16 +243,22 @@ export async function loadOlderTranscript(sessionId: string): Promise<void> {
  */
 export function openSessionScreen(sessionId: string): void {
   useTranscriptStore.getState().retainSession(sessionId);
+  // This is the only screen that renders PTY bytes, so it is the only place
+  // that asks for them, and the retention IS the ask: every SubscriptionManager
+  // reads it at subscribe time (isTerminalWanted). Recorded BEFORE any
+  // connection is consulted, because there may not be one yet: on a
+  // cold-launch notification tap this runs ahead of the first connection,
+  // which then subscribes this session with live PTY bytes on its own.
   retainTerminal(sessionId);
   useActivityStore.getState().markRead(sessionId);
   const connection = getActiveConnection();
-  // This is the only screen that renders PTY bytes, so it is the only place
-  // that asks for them. The flip already re-subscribes, and that IS the fetch
-  // of the fresh scrollback the terminal seeds itself from - so only ask for
-  // a refresh when the flag was already set (reopening a screen that never
-  // closed), or the open costs two round trips and seeds the WebView twice.
-  const resubscribed = connection?.subscriptions.setStreamWantsTerminal(sessionId, true) ?? false;
-  if (!resubscribed) connection?.subscriptions.refreshStream(sessionId);
+  traceConnection('session-open', {
+    hasConnection: connection !== null,
+    established: useChannelStore.getState().established,
+  });
+  // One re-subscribe, and that IS the fetch of the fresh scrollback the
+  // terminal seeds itself from, now carrying terminal: true.
+  connection?.subscriptions.refreshStream(sessionId);
   void loadTranscriptTail(sessionId).catch(() => {
     // Not connected yet or a transient failure: the store keeps
     // needsTailFetch set, and the screen retries when it sees the flag.
@@ -269,11 +277,17 @@ export function openProjectBoard(projectId: string): void {
 export function closeSessionScreen(sessionId: string): void {
   // Transcript retention is LRU-capped rather than released on close, so
   // backing out and returning is instant; the terminal ring is released
-  // (raw PTY bytes are the heavy part).
-  releaseTerminal(sessionId);
-  // Stop the desktop SENDING those bytes too. Releasing the ring only stopped
-  // us keeping them; the relay was still carrying every one.
-  getActiveConnection()?.subscriptions.setStreamWantsTerminal(sessionId, false);
+  // (raw PTY bytes are the heavy part) - but only by the LAST screen holding
+  // it. A second screen on the same session (one buried under a sheet, then
+  // a notification tap for that task) used to delete the survivor's ring and
+  // switch the desktop to list-only here, leaving the survivor's mirror with
+  // no bytes and nothing to repaint from until it remounted.
+  if (releaseTerminal(sessionId)) {
+    // Stop the desktop SENDING those bytes too: the re-subscribe reads the
+    // released retention and goes list-only. Releasing the ring only stops
+    // us keeping them; the relay would still carry every one.
+    getActiveConnection()?.subscriptions.refreshStream(sessionId);
+  }
   useActivityStore.getState().markRead(sessionId);
 }
 

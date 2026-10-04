@@ -37,8 +37,12 @@ jumps whenever a desktop window changes.
 >   mirrored view + Resume Control, the grace-period question, the column setting, portrait
 >   lock (a mirror actually *benefits* from landscape), and every desktop-side risk this doc
 >   spent its second half containing.
-> - **Kept:** the resting-grid park (desktop-only, independently motivated - it fixes the
->   agent's own 14-row letterbox, not a mobile problem), and all of Stage 1.
+> - **Kept:** the resting-grid park, and all of Stage 1. (Corrected 2026-10: this line first
+>   called the park "desktop-only, independently motivated", a fix for the agent's own 14-row
+>   letterbox rather than a mobile problem. It is neither. The desktop parks a session only
+>   while a phone streams it with `terminal: true` (`MobileTerminalProbe.hasStreamSubscriber`
+>   in the kangentic repo's `src/main/pty/session-manager.ts`), and an unwatched agent keeps
+>   whatever grid the last desktop surface left.)
 > - **What decided it:** the user's own criteria. Desktop-protectiveness (the mirror sends
 >   nothing but keystrokes, so the desktop cannot be reshaped by a phone bug); KISS ("honestly
 >   the simpler the better"); and the measured 4-131ms input-to-repaint round trip, which makes
@@ -213,8 +217,10 @@ revoke sends the session's Final goodbye and the phone clears its own pairing in
 
 When the phone cannot hold the grid (session not running, resize rejected, or the gap between
 opening the lens and the desktop acknowledging), it renders whatever grid exists. That is the
-mirror path, and the measured height fit plus short-grid centring is what makes it degrade
-gracefully instead of clipping the last row.
+mirror path, and the measured height fit is what makes it degrade gracefully instead of
+clipping the last row. (Superseded detail, 2026-10: a short grid is no longer centred. Every
+grid of 48 rows or fewer renders in one reference cell pinned top-left; see the terminal
+section of `docs/architecture.md`.)
 
 Keep that work. It is the floor under the new behaviour.
 

@@ -252,7 +252,7 @@ describe('settingsStore - collapsed triage section', () => {
 describe('settingsStore - clearDesktopScopedPreferences', () => {
   beforeEach(() => {
     storedValues.clear();
-    useSettingsStore.setState({ preferredSessionLensByTaskId: {}, terminalFitFontPx: null });
+    useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
   });
 
   it('resets preferredSessionLensByTaskId and persists the empty map', async () => {
@@ -262,54 +262,24 @@ describe('settingsStore - clearDesktopScopedPreferences', () => {
     expect(useSettingsStore.getState().preferredSessionLensByTaskId).toEqual({});
     expect(storedValues.get('settings.preferredSessionLensByTaskId')).toBe('{}');
   });
-
-  it('forgets the terminal fit size, which fits the old desktop, and persists the unset', async () => {
-    await useSettingsStore.getState().setTerminalFitFontPx(11);
-    await useSettingsStore.getState().clearDesktopScopedPreferences();
-
-    expect(useSettingsStore.getState().terminalFitFontPx).toBeNull();
-    expect(storedValues.get('settings.terminalFitFontPx')).toBe('');
-  });
 });
 
 /**
- * The terminal mirror's remembered cell size: every open of a session screen
- * starts at the size the mirror last fitted, so a task opened while the
- * desktop shows it in a short panel no longer comes up zoomed in.
+ * The terminal mirror no longer remembers a cell size: the page renders every
+ * grid in one reference cell it computes itself (scripts/xterm-page/state.js).
+ * A size an older build stored is dead data - read by nothing, so it can never
+ * steer a fit again.
  */
-describe('settingsStore - terminal fit size', () => {
+describe('settingsStore - no remembered terminal size', () => {
   beforeEach(() => {
     storedValues.clear();
-    useSettingsStore.setState({ terminalFitFontPx: null });
   });
 
-  it('remembers a fitted size and persists it', async () => {
-    await useSettingsStore.getState().setTerminalFitFontPx(11);
-
-    expect(useSettingsStore.getState().terminalFitFontPx).toBe(11);
-    expect(storedValues.get('settings.terminalFitFontPx')).toBe('11');
-  });
-
-  it('hydrate restores a stored size and treats an unset, malformed or out-of-range one as none', async () => {
-    storedValues.set('settings.terminalFitFontPx', '9');
+  it('hydrates without reading or exposing a stored terminal size', async () => {
+    storedValues.set('settings.terminalFitFontPx', '6');
     await useSettingsStore.getState().hydrate();
-    expect(useSettingsStore.getState().terminalFitFontPx).toBe(9);
 
-    for (const stored of ['', 'eleven', '3', '99', '11.5']) {
-      storedValues.set('settings.terminalFitFontPx', stored);
-      await useSettingsStore.getState().hydrate();
-      expect(useSettingsStore.getState().terminalFitFontPx).toBeNull();
-    }
-  });
-
-  it('ignores a size outside the pinch bounds and an unchanged one', async () => {
-    await useSettingsStore.getState().setTerminalFitFontPx(11);
-    await useSettingsStore.getState().setTerminalFitFontPx(2);
-    expect(useSettingsStore.getState().terminalFitFontPx).toBe(11);
-
-    storedValues.clear();
-    await useSettingsStore.getState().setTerminalFitFontPx(11);
-    expect(storedValues.has('settings.terminalFitFontPx')).toBe(false);
+    expect(Object.keys(useSettingsStore.getState())).not.toContain('terminalFitFontPx');
   });
 });
 

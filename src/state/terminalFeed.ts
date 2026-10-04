@@ -39,6 +39,12 @@ interface TerminalRing {
    * chunks alone is replaced the moment the seed lands - see hasSeed.
    */
   seeded: boolean;
+  /**
+   * How many mounted session screens hold this ring (see retainTerminal).
+   * Always at least 1 while the ring exists: the ring is created by the first
+   * retain and deleted by the last release.
+   */
+  retainCount: number;
 }
 
 const ringsBySessionId = new Map<string, TerminalRing>();
@@ -78,17 +84,48 @@ function evictPastCapacity(ring: TerminalRing): void {
   }
 }
 
+/**
+ * One mounted session screen's hold on a session's terminal. REFERENCE
+ * COUNTED, because two screens can be mounted on one session (a screen buried
+ * under a sheet or a diff, then a notification tap for the same task): the
+ * first retain creates the ring, every later one only counts.
+ *
+ * Retention is also the "wants live PTY bytes" fact every SubscriptionManager
+ * reads at subscribe time (isTerminalRetained, injected as isTerminalWanted).
+ * That is why it lives here, in module state that outlives every connection:
+ * the flag used to live on the manager, which is rebuilt per connection, so a
+ * session screen that stayed mounted across a rebuild was re-subscribed
+ * list-only and its mirror froze or went black.
+ */
 export function retainTerminal(sessionId: string): void {
-  if (!ringsBySessionId.has(sessionId)) {
-    ringsBySessionId.set(sessionId, { chunks: [], totalBytes: 0, dims: null, seeded: false });
+  const ring = ringsBySessionId.get(sessionId);
+  if (ring) {
+    ring.retainCount += 1;
+    return;
   }
+  ringsBySessionId.set(sessionId, { chunks: [], totalBytes: 0, dims: null, seeded: false, retainCount: 1 });
 }
 
-/** Drops the buffered bytes. Subscribers keep their listeners - see listenersBySessionId. */
-export function releaseTerminal(sessionId: string): void {
+/**
+ * Releases one hold. Only the LAST release drops the buffered bytes, and only
+ * it returns true - the caller's cue to tell the desktop to stop sending PTY
+ * bytes. A release for a session with no ring (resetTerminalFeed wiped it
+ * under a mounted screen) is a no-op that returns false. Subscribers keep
+ * their listeners either way - see listenersBySessionId.
+ */
+export function releaseTerminal(sessionId: string): boolean {
+  const ring = ringsBySessionId.get(sessionId);
+  if (!ring) return false;
+  ring.retainCount -= 1;
+  if (ring.retainCount > 0) return false;
   ringsBySessionId.delete(sessionId);
+  return true;
 }
 
+/**
+ * True while at least one mounted session screen holds the session: the
+ * ring exists, and the desktop is asked for live PTY bytes on every subscribe.
+ */
 export function isTerminalRetained(sessionId: string): boolean {
   return ringsBySessionId.has(sessionId);
 }
@@ -204,6 +241,8 @@ export interface TerminalFeedStats {
   totalBytes: number;
   dims: TerminalDimensionsWire | null;
   seeded: boolean;
+  /** Mounted session screens holding the ring; a count that never returns to zero is a leak (the desktop keeps streaming). */
+  retainCount: number;
   listeners: number;
 }
 
@@ -219,6 +258,7 @@ export function getTerminalFeedStats(): TerminalFeedStats[] {
     totalBytes: ring.totalBytes,
     dims: ring.dims ? { ...ring.dims } : null,
     seeded: ring.seeded,
+    retainCount: ring.retainCount,
     listeners: listenersBySessionId.get(sessionId)?.size ?? 0,
   }));
 }
@@ -233,23 +273,31 @@ export function getUnbufferedListenerSessionIds(): string[] {
 }
 
 /**
- * Drops buffered PTY bytes for every session nobody is watching, and returns
- * how many rings went. Called on an OS memory warning
+ * Drops buffered PTY bytes for every session nobody holds or watches, and
+ * returns how many rings went. Called on an OS memory warning
  * (`src/observability/memoryPressure.ts`).
  *
- * A listener is the discriminator rather than "retained", because a mounted
- * TerminalPane is precisely what subscribes: a ring with no listener is
- * scrollback nothing on screen is reading, and the desktop re-seeds it on the
- * next read-stream subscribe. A watched session keeps its ring untouched -
- * shedding that one would blank a terminal the user is looking at, which is a
- * worse outcome than the pressure.
+ * A RETAINED ring is never shed. It used to be, whenever no listener was
+ * attached, on the theory that the desktop re-seeds it on the next subscribe -
+ * but a DELETED ring is never re-seeded (seedScrollback no-ops on a missing
+ * ring) and stops reading as retained, so the screen's want for terminal
+ * bytes went with it. And a mounted pane has no listener for routine windows:
+ * before its WebView reports ready, and across recoverWebView after the OS
+ * killed the renderer. Android 14+ delivers TRIM_MEMORY_UI_HIDDEN on every app
+ * switch and memoryShed classes it as 'backgrounded', so a shed landing in one
+ * of those windows was ordinary, and it left a terminal black until the
+ * screen remounted.
  *
- * Idempotent, as every memory-pressure listener must be: with nothing
- * unwatched to drop it does nothing and reports 0.
+ * INERT IN PRODUCTION, and said so rather than hidden: every ring is created
+ * by retainTerminal and deleted by the last releaseTerminal, so every ring
+ * that exists is retained and this always returns 0. Re-aiming it (at rings
+ * held only by screens buried in the navigation stack, say) is a separate
+ * decision. Idempotent, as every memory-pressure listener must be.
  */
 export function shedUnwatchedTerminalRings(): number {
   let shedCount = 0;
-  for (const sessionId of [...ringsBySessionId.keys()]) {
+  for (const [sessionId, ring] of [...ringsBySessionId.entries()]) {
+    if (ring.retainCount > 0) continue;
     const listeners = listenersBySessionId.get(sessionId);
     if (listeners !== undefined && listeners.size > 0) continue;
     ringsBySessionId.delete(sessionId);

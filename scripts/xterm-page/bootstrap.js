@@ -88,18 +88,20 @@
           // with the 105px of slack split into a 52px top pad, reported as
           // "the bottom of the terminal is pushed up ~50px" after dismissing
           // the keyboard. One refit against the SETTLED viewport always
-          // completes, so this guarantees exactly that.
+          // completes, so this guarantees exactly that. Both go through
+          // onViewportChange, which runs the chain only when the fit inputs
+          // moved: a keyboard open or close only re-orients.
           if (settleRefitTimer !== null) clearTimeout(settleRefitTimer);
           settleRefitTimer = setTimeout(function () {
             settleRefitTimer = null;
             viewportSettleRefits += 1;
-            refit();
+            onViewportChange('ro-settle');
           }, VIEWPORT_SETTLE_REFIT_MS);
           if (refitScheduled) return;
           refitScheduled = true;
           requestAnimationFrame(function () {
             refitScheduled = false;
-            refit();
+            onViewportChange('ro-raf');
           });
         });
         viewportObserver.observe(container);

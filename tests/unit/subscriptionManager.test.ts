@@ -37,6 +37,13 @@ interface Harness {
   session: SessionManager;
   stub: StubSessionInitiator;
   manager: SubscriptionManager;
+  /**
+   * The sessions a mounted session screen holds the terminal for - what
+   * production injects as `isTerminalWanted` (terminalFeed's retention). A
+   * test adds or removes an id the way openSessionScreen / closeSessionScreen
+   * retain and release, then calls `refreshStream` as they do.
+   */
+  terminalWantedSessionIds: Set<string>;
   requests: CapabilityRequestMessage[];
   sinkCalls: {
     streamSnapshots: string[];
@@ -73,6 +80,8 @@ function defaultResponder(request: CapabilityRequestMessage): CapabilityResponse
 
 async function harness(
   respond: (request: CapabilityRequestMessage) => CapabilityResponseMessage | null = defaultResponder,
+  /** Replaces individual sinks (a throwing one, say); a replaced sink no longer records into `sinkCalls`. */
+  sinkOverrides: Partial<SubscriptionSnapshotSinks> = {},
 ): Promise<Harness> {
   const [phoneTransport, desktopTransport] = createLoopbackPair();
   await phoneTransport.connect();
@@ -109,10 +118,27 @@ async function harness(
     onBoardSnapshot: (snapshot) => sinkCalls.boardSnapshots.push(snapshot.projectId),
     onDiffFileList: (taskId) => sinkCalls.diffFileLists.push(taskId),
     onDiffFetchFailed: (taskId, scope) => sinkCalls.diffFetchFailures.push({ taskId, scope }),
+    ...sinkOverrides,
   };
   const verbs = new VerbClient(new CapabilityClient(session));
-  const manager = new SubscriptionManager({ session, verbs, sinks });
-  return { session, stub, manager, requests, sinkCalls };
+  const terminalWantedSessionIds = new Set<string>();
+  const manager = new SubscriptionManager({
+    session,
+    verbs,
+    sinks,
+    isTerminalWanted: (sessionId) => terminalWantedSessionIds.has(sessionId),
+  });
+  return { session, stub, manager, terminalWantedSessionIds, requests, sinkCalls };
+}
+
+function readStreamSubscribes(requests: CapabilityRequestMessage[]): CapabilityRequestMessage[] {
+  return requests.filter(
+    (request) => request.verb === 'read-stream' && (request.payload as { action?: string }).action !== 'unsubscribe',
+  );
+}
+
+function terminalFlag(request: CapabilityRequestMessage | undefined): boolean | undefined {
+  return (request?.payload as { terminal?: boolean } | undefined)?.terminal;
 }
 
 async function flushLoopback(rounds = 6): Promise<void> {
@@ -673,15 +699,16 @@ describe('SubscriptionManager', () => {
   });
 
   /**
-   * `refreshStream`, `refreshBoard`, `setStreamWantsTerminal` and
-   * `setBoardWantsFull` are each one request caused by a user action with a
-   * screen waiting on the answer, and deliberately bypass `subscribeQueue`.
-   * The fan-out cap exists for the STORMS - one request per project or per
-   * session, issued all at once - not for a single screen-driven refresh;
-   * putting these four behind it would make opening a session screen wait on
-   * up to `SUBSCRIBE_FAN_OUT_CONCURRENCY` unrelated background subscribes.
+   * `refreshStream` (which a session screen's open goes through, carrying
+   * the terminal), `refreshBoard` and `setBoardWantsFull` are each one request
+   * caused by a user action with a screen waiting on the answer, and
+   * deliberately bypass `subscribeQueue`. The fan-out cap exists for the
+   * STORMS - one request per project or per session, issued all at once - not
+   * for a single screen-driven refresh; putting these behind it would make
+   * opening a session screen wait on up to `SUBSCRIBE_FAN_OUT_CONCURRENCY`
+   * unrelated background subscribes.
    */
-  describe('the four screen-driven paths bypass the fan-out queue', () => {
+  describe('the screen-driven paths bypass the fan-out queue', () => {
     const saturatingSessionIds = Array.from({ length: SUBSCRIBE_FAN_OUT_CONCURRENCY + 2 }, (_, index) => `bypass-sess-${index}`);
     const saturatingProjectIds = Array.from({ length: SUBSCRIBE_FAN_OUT_CONCURRENCY + 2 }, (_, index) => `bypass-project-${index}`);
 
@@ -707,22 +734,25 @@ describe('SubscriptionManager', () => {
       expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(countBeforeRefresh + 1);
     });
 
-    it('setStreamWantsTerminal reaches the wire immediately while the stream queue is saturated', async () => {
-      const { stub, manager, requests } = await harness(holdEverything());
+    it('a session screen opening reaches the wire immediately, with the terminal, while the stream queue is saturated', async () => {
+      const { stub, manager, terminalWantedSessionIds, requests } = await harness(holdEverything());
       stub.beginHandshake();
       await flushLoopback();
       manager.setDesiredStreams(new Set(saturatingSessionIds));
       await flushLoopback();
 
       const stillQueuedSessionId = saturatingSessionIds[saturatingSessionIds.length - 1];
-      const countBeforeToggle = requests.filter((request) => request.verb === 'read-stream').length;
-      expect(countBeforeToggle).toBe(SUBSCRIBE_FAN_OUT_CONCURRENCY);
+      const countBeforeOpen = requests.filter((request) => request.verb === 'read-stream').length;
+      expect(countBeforeOpen).toBe(SUBSCRIBE_FAN_OUT_CONCURRENCY);
 
-      const issuedResubscribe = manager.setStreamWantsTerminal(stillQueuedSessionId, true);
+      // What openSessionScreen does: retain, then refresh.
+      terminalWantedSessionIds.add(stillQueuedSessionId);
+      manager.refreshStream(stillQueuedSessionId);
       await flushLoopback();
 
-      expect(issuedResubscribe).toBe(true);
-      expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(countBeforeToggle + 1);
+      const afterOpen = requests.filter((request) => request.verb === 'read-stream');
+      expect(afterOpen).toHaveLength(countBeforeOpen + 1);
+      expect(terminalFlag(afterOpen[afterOpen.length - 1])).toBe(true);
     });
 
     it('refreshBoard reaches the wire on its own debounce timer, not behind the saturated board queue', async () => {
@@ -827,7 +857,7 @@ describe('SubscriptionManager', () => {
    * false must actually be on the wire, not merely omitted.
    */
   it('subscribes streams list-only until a screen asks for the terminal', async () => {
-    const { stub, manager, requests } = await harness();
+    const { stub, manager, terminalWantedSessionIds, requests } = await harness();
     stub.beginHandshake();
     await flushLoopback();
 
@@ -836,38 +866,65 @@ describe('SubscriptionManager', () => {
 
     const subscribes = requests.filter((request) => request.verb === 'read-stream');
     expect(subscribes).toHaveLength(1);
-    expect((subscribes[0].payload as { terminal?: boolean }).terminal).toBe(false);
+    expect(terminalFlag(subscribes[0])).toBe(false);
 
-    manager.setStreamWantsTerminal('sess-1', true);
+    terminalWantedSessionIds.add('sess-1');
+    manager.refreshStream('sess-1');
     await flushLoopback();
 
     const afterOpen = requests.filter((request) => request.verb === 'read-stream');
     expect(afterOpen).toHaveLength(2);
-    expect((afterOpen[1].payload as { terminal?: boolean }).terminal).toBe(true);
+    expect(terminalFlag(afterOpen[1])).toBe(true);
+  });
+
+  /**
+   * The black-terminal regression. The want used to be a Set on THIS manager,
+   * which is rebuilt on every connection, so a session screen that stayed
+   * mounted across a rebuild - or opened before any connection existed, as a
+   * cold-launch notification tap does - was subscribed list-only by the new
+   * manager and its mirror froze or went black. Read through the injected
+   * getter at subscribe time, the very first request carries it.
+   *
+   * Mutation that reddens this: read `false` (or anything but the getter) for
+   * `wantsTerminal` in subscribeStream.
+   */
+  it('asks a session held before the manager existed for the terminal on its first subscribe', async () => {
+    const { stub, manager, terminalWantedSessionIds, requests } = await harness();
+    // The screen is already mounted; this manager knows nothing of it.
+    terminalWantedSessionIds.add('sess-1');
+    manager.setDesiredStreams(new Set(['sess-1']));
+
+    stub.beginHandshake();
+    await flushLoopback();
+
+    const subscribes = readStreamSubscribes(requests);
+    expect(subscribes).toHaveLength(1);
+    expect(terminalFlag(subscribes[0])).toBe(true);
   });
 
   /**
    * Measured on a release build: every column move seeded the successor's
    * terminal TWICE, 30 to 45 ms apart. The board snapshot's reconcile queued a
-   * subscribe for the new session and the screen's terminal flip issued a
-   * direct one before the queued copy had started; the copy then started,
-   * read the same flag, and the page replayed the whole ring a second time.
-   * The direct request supersedes the queued copy.
+   * subscribe for the new session and the screen's open issued a direct one
+   * before the queued copy had started; the copy then started, read the same
+   * want, and the page replayed the whole ring a second time. The direct
+   * request supersedes the queued copy.
    */
-  it('issues one subscribe, not two, when the terminal flip lands while the reconcile copy is still queued', async () => {
-    const { stub, manager, requests } = await harness();
+  it('issues one subscribe, not two, when the screen opens while the reconcile copy is still queued', async () => {
+    const { stub, manager, terminalWantedSessionIds, requests } = await harness();
     stub.beginHandshake();
     await flushLoopback();
 
     manager.setDesiredStreams(new Set(['sess-1']));
     // Synchronously, before the queue's microtask starts the copy: the shape
     // a board snapshot followed by the screen's open produces.
-    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(true);
+    terminalWantedSessionIds.add('sess-1');
+    manager.refreshStream('sess-1');
     await flushLoopback();
 
     const subscribes = requests.filter((request) => request.verb === 'read-stream');
     expect(subscribes).toHaveLength(1);
-    expect((subscribes[0].payload as { terminal?: boolean }).terminal).toBe(true);
+    expect(terminalFlag(subscribes[0])).toBe(true);
   });
 
   /**
@@ -896,71 +953,23 @@ describe('SubscriptionManager', () => {
   });
 
   it('drops back to list-only when the screen closes', async () => {
-    const { stub, manager, requests } = await harness();
+    const { stub, manager, terminalWantedSessionIds, requests } = await harness();
     stub.beginHandshake();
     await flushLoopback();
     manager.setDesiredStreams(new Set(['sess-1']));
-    manager.setStreamWantsTerminal('sess-1', true);
+    terminalWantedSessionIds.add('sess-1');
+    manager.refreshStream('sess-1');
     await flushLoopback();
     const countAfterOpen = requests.length;
 
-    manager.setStreamWantsTerminal('sess-1', false);
+    // What closeSessionScreen does on the LAST release.
+    terminalWantedSessionIds.delete('sess-1');
+    manager.refreshStream('sess-1');
     await flushLoopback();
 
     const afterClose = requests.slice(countAfterOpen).filter((request) => request.verb === 'read-stream');
     expect(afterClose).toHaveLength(1);
-    expect((afterClose[0].payload as { terminal?: boolean }).terminal).toBe(false);
-  });
-
-  /**
-   * openSessionScreen trusts this return value to decide whether it still
-   * needs its own refreshStream call (see tests/unit/openSessionScreen.test.ts):
-   * true means setStreamWantsTerminal's own re-subscribe already fetched a
-   * fresh frame, false means nothing was issued and the caller must ask
-   * itself. If this drifted to always-true (or always-false), the caller's
-   * own tests are mocking the return value and would never catch it - only
-   * asserting the REAL return value here does.
-   */
-  it('setStreamWantsTerminal returns true only when it actually issues a re-subscribe', async () => {
-    const { stub, manager } = await harness();
-    stub.beginHandshake();
-    await flushLoopback();
-    manager.setDesiredStreams(new Set(['sess-1']));
-    await flushLoopback();
-
-    // Changed, desired, and established: this call IS the re-subscribe.
-    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(true);
-    await flushLoopback();
-
-    // Same value as already set: nothing to do, nothing issued.
-    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(false);
-
-    // A session nobody has declared desired: the flag is recorded, but
-    // there is no active subscription to re-issue.
-    expect(manager.setStreamWantsTerminal('sess-2', true)).toBe(false);
-  });
-
-  it('setStreamWantsTerminal returns false for a desired stream before the handshake establishes', async () => {
-    const { manager } = await harness();
-    // Declared before any handshake - exactly the openSessionScreen case of
-    // opening a screen while still connecting.
-    manager.setDesiredStreams(new Set(['sess-1']));
-
-    expect(manager.setStreamWantsTerminal('sess-1', true)).toBe(false);
-  });
-
-  it('does not re-subscribe when the terminal mode is set to what it already is', async () => {
-    const { stub, manager, requests } = await harness();
-    stub.beginHandshake();
-    await flushLoopback();
-    manager.setDesiredStreams(new Set(['sess-1']));
-    await flushLoopback();
-    const countAfterSubscribe = requests.length;
-
-    manager.setStreamWantsTerminal('sess-1', false);
-    await flushLoopback();
-
-    expect(requests).toHaveLength(countAfterSubscribe);
+    expect(terminalFlag(afterClose[0])).toBe(false);
   });
 
   /**
@@ -1058,13 +1067,14 @@ describe('SubscriptionManager', () => {
   });
 
   /**
-   * The same race on the terminal flag: opening a session screen and closing it
-   * again before the first subscribe answers leaves two read-streams in flight
-   * with opposite `terminal` values.
+   * Two subscribes for one session overlap whenever a screen opens or closes
+   * while another request is on the wire, and the answers can land in either
+   * order. Only the NEWEST request's answer describes what was last asked; a
+   * late answer to an older one must not be applied over it.
    */
-  it('ignores a stream response whose terminal mode is no longer the one wanted', async () => {
+  it('ignores the answer to an older subscribe once a newer one for the session went out', async () => {
     const heldListOnlyRequests: CapabilityRequestMessage[] = [];
-    const { stub, manager, requests, sinkCalls } = await harness((request) => {
+    const { stub, manager, terminalWantedSessionIds, requests, sinkCalls } = await harness((request) => {
       if (request.verb === 'read-stream' && (request.payload as { terminal?: boolean }).terminal === false) {
         heldListOnlyRequests.push(request);
         return null;
@@ -1076,10 +1086,11 @@ describe('SubscriptionManager', () => {
 
     manager.setDesiredStreams(new Set(['sess-1']));
     // Same reason as the board test above: the queued list-only subscribe has
-    // to leave before the terminal flag flips, or the reconcile reads the new
-    // flag at drain time and never issues a list-only request to go stale.
+    // to leave before the want flips, or the reconcile reads the new want at
+    // drain time and never issues a list-only request to go stale.
     await flushLoopback();
-    manager.setStreamWantsTerminal('sess-1', true);
+    terminalWantedSessionIds.add('sess-1');
+    manager.refreshStream('sess-1');
     await flushLoopback();
 
     expect(requests.filter((request) => request.verb === 'read-stream')).toHaveLength(2);
@@ -1089,6 +1100,277 @@ describe('SubscriptionManager', () => {
     await flushLoopback();
 
     expect(sinkCalls.streamSnapshots).toEqual(['sess-1']);
+  });
+
+  /**
+   * The want can now change with NO subscribe going out: retention lives
+   * outside this manager, and a screen that opens while the session is not in
+   * the desired set (or before the handshake) has nothing to refresh. If the
+   * one request on the wire then answers with the old projection, dropping it
+   * silently left the session desired, inactive and on the wrong projection
+   * until the next board snapshot happened to re-list it. It re-asks instead.
+   *
+   * Mutation that reddens this: restore a bare `return` where subscribeStream
+   * finds the want changed.
+   */
+  it('re-asks with the current want when the newest answer was for the old one', async () => {
+    const heldListOnlyRequests: CapabilityRequestMessage[] = [];
+    const { stub, manager, terminalWantedSessionIds, requests, sinkCalls } = await harness((request) => {
+      if (request.verb === 'read-stream' && (request.payload as { terminal?: boolean }).terminal === false) {
+        heldListOnlyRequests.push(request);
+        return null;
+      }
+      return defaultResponder(request);
+    });
+    stub.beginHandshake();
+    await flushLoopback();
+    manager.setDesiredStreams(new Set(['sess-1']));
+    await flushLoopback();
+    expect(heldListOnlyRequests).toHaveLength(1);
+
+    // The want flips, and nothing issues a subscribe for it.
+    terminalWantedSessionIds.add('sess-1');
+    for (const held of heldListOnlyRequests) stub.send(defaultResponder(held));
+    await flushLoopback();
+
+    const subscribes = readStreamSubscribes(requests);
+    expect(subscribes.map(terminalFlag)).toEqual([false, true]);
+    // The list-only answer was not applied; the terminal one was.
+    expect(sinkCalls.streamSnapshots).toEqual(['sess-1']);
+  });
+
+  /**
+   * The re-ask is bounded to ONE per chain. A want that disagrees with every
+   * answer (seen when a mutation made the request ignore the getter) would
+   * otherwise re-issue forever and hammer the relay; the next screen open,
+   * close or reconcile asks again anyway.
+   *
+   * Mutation that reddens this (as a hang, then a timeout): drop the
+   * `!isReask` guard on the re-ask.
+   */
+  it('re-asks at most once when the want flips on every round trip', async () => {
+    const { stub, manager, terminalWantedSessionIds, requests } = await harness();
+    stub.beginHandshake();
+    await flushLoopback();
+
+    // Flip the want every time a subscribe goes out, so every answer is stale.
+    stub.setRequestHandler((request) => {
+      requests.push(request);
+      if (request.verb === 'read-stream') {
+        if (terminalWantedSessionIds.has('sess-1')) terminalWantedSessionIds.delete('sess-1');
+        else terminalWantedSessionIds.add('sess-1');
+      }
+      return defaultResponder(request);
+    });
+    manager.setDesiredStreams(new Set(['sess-1']));
+    await flushLoopback(20);
+
+    expect(readStreamSubscribes(requests)).toHaveLength(2);
+  });
+
+  /**
+   * Two overlapping subscribes for one session: an older list-only request,
+   * then a newer terminal one issued by a screen opening while the first is
+   * still on the wire. Both are held here, so each test decides which one the
+   * desktop answers (or refuses) first. `held` collects them in issue order.
+   */
+  async function overlappingStreamSubscribes(): Promise<{
+    stub: Harness['stub'];
+    manager: Harness['manager'];
+    requests: Harness['requests'];
+    sinkCalls: Harness['sinkCalls'];
+    held: CapabilityRequestMessage[];
+  }> {
+    const held: CapabilityRequestMessage[] = [];
+    const rig = await harness((request) => {
+      if (request.verb === 'read-stream') {
+        held.push(request);
+        return null;
+      }
+      return defaultResponder(request);
+    });
+    rig.stub.beginHandshake();
+    await flushLoopback();
+
+    rig.manager.setDesiredStreams(new Set(['sess-1']));
+    // The queued list-only copy has to leave before the want flips, or the
+    // reconcile reads the new want at drain time (see the test above).
+    await flushLoopback();
+    rig.terminalWantedSessionIds.add('sess-1');
+    rig.manager.refreshStream('sess-1');
+    await flushLoopback();
+
+    expect(held, 'precondition: both subscribes are on the wire').toHaveLength(2);
+    expect(terminalFlag(held[0]), 'precondition: the older one is list-only').toBe(false);
+    expect(terminalFlag(held[1]), 'precondition: the newer one carries the terminal').toBe(true);
+    return { stub: rig.stub, manager: rig.manager, requests: rig.requests, sinkCalls: rig.sinkCalls, held };
+  }
+
+  /**
+   * The OLDER answer lands first while the NEWER subscribe is still on the
+   * wire. Settling the older one must not clear the in-flight entry, which
+   * still belongs to the newer request: a reconcile in that window (here the
+   * desired set gaining a second session) sees the session as desired, not
+   * active (the older answer was stale, so it was not applied) and not in
+   * flight, and issues a duplicate subscribe the desktop answers with a
+   * second full ring replay.
+   *
+   * Mutation that reddens this: make `settle` delete the in-flight entry
+   * unconditionally (a third sess-1 subscribe goes out).
+   */
+  it('keeps the newer subscribe in flight when the older answer lands first, so a reconcile does not double up', async () => {
+    const { stub, manager, requests, sinkCalls, held } = await overlappingStreamSubscribes();
+    const subscribesFor = (sessionId: string): CapabilityRequestMessage[] =>
+      readStreamSubscribes(requests).filter((request) => (request.payload as { sessionId?: string }).sessionId === sessionId);
+
+    stub.send(defaultResponder(held[0]));
+    await flushLoopback();
+    // Stale: not applied.
+    expect(sinkCalls.streamSnapshots).toEqual([]);
+
+    manager.setDesiredStreams(new Set(['sess-1', 'sess-2']));
+    await flushLoopback();
+
+    // The reconcile ran (it asked for the new session) and left sess-1 alone.
+    expect(subscribesFor('sess-2')).toHaveLength(1);
+    expect(subscribesFor('sess-1')).toHaveLength(2);
+
+    // The newer answer is the one that counts.
+    stub.send(defaultResponder(held[1]));
+    await flushLoopback();
+    expect(sinkCalls.streamSnapshots).toEqual(['sess-1']);
+  });
+
+  /**
+   * A refusal of the OLDER request while a newer one is on the wire is moot:
+   * the newer one decides. Without the staleness check the CapabilityError
+   * path prunes the session from the desired set and reports it rejected
+   * (which would blank a session screen that is still asking), and the
+   * newer answer is then dropped as undesired.
+   *
+   * Mutation that reddens this and the transient case below: delete the
+   * `if (!isNewest) return;` line in subscribeStream's catch.
+   */
+  it('does not prune the session when the older subscribe is refused while a newer one is in flight', async () => {
+    const { stub, manager, sinkCalls, held } = await overlappingStreamSubscribes();
+
+    stub.send({ type: 'capability-response', requestId: held[0].requestId, ok: false, error: 'No such session: sess-1' });
+    await flushLoopback();
+
+    expect(sinkCalls.streamRejections).toEqual([]);
+    expect(manager.debugSnapshot().desiredStreams).toEqual(['sess-1']);
+
+    stub.send(defaultResponder(held[1]));
+    await flushLoopback();
+    expect(sinkCalls.streamSnapshots).toEqual(['sess-1']);
+  });
+
+  /**
+   * The same staleness rule on the transient path: the older request timing
+   * out must not arm the single retry while the newer one is still on the
+   * wire, or the retry goes out on top of it.
+   *
+   * Staggered on purpose. Sent at the same fake instant both requests share one
+   * 10 s deadline, and the NEWER one's own timeout then legitimately arms a
+   * retry, which would make a missing staleness check invisible. So the newer
+   * request goes out 5 s after the older, the older times out at 10 s, and the
+   * check is taken at 12.5 s: past the 2 s retry delay of the older's failure,
+   * before the newer's own timeout at 15 s.
+   */
+  it('does not arm a retry when the older subscribe times out while a newer one is in flight', async () => {
+    vi.useFakeTimers();
+    try {
+      const { stub, manager, terminalWantedSessionIds, requests } = await harness((request) =>
+        request.verb === 'read-stream' ? null : defaultResponder(request),
+      );
+      stub.beginHandshake();
+      await flushLoopbackFakeTimers();
+
+      manager.setDesiredStreams(new Set(['sess-1']));
+      await flushLoopbackFakeTimers();
+      await vi.advanceTimersByTimeAsync(5_000);
+      terminalWantedSessionIds.add('sess-1');
+      manager.refreshStream('sess-1');
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests), 'precondition: both subscribes are on the wire').toHaveLength(2);
+
+      // The older request's own 10 s deadline (CapabilityClient's default).
+      await vi.advanceTimersByTimeAsync(5_000);
+      // Past that failure's would-be retry (STREAM_RETRY_DELAY_MS, 2 s).
+      await vi.advanceTimersByTimeAsync(2_500);
+      await flushLoopbackFakeTimers();
+
+      expect(readStreamSubscribes(requests)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The snapshot sink throwing AFTER the subscribe succeeded is a transient
+   * failure like any other, and still gets its single retry. `settle` used to
+   * re-read the in-flight entry on every call, and the success path had
+   * already cleared it, so the catch saw its own request as not the newest and
+   * returned without arming the retry. The session was already marked active
+   * by then (before the sink ran) with no snapshot applied, and the reconcile
+   * skips active sessions, so nothing re-asked for it until a reconnect.
+   * `settle` now remembers its first answer.
+   *
+   * Mutation that reddens this: restore the non-memoized settle, which
+   * re-reads (and then finds missing) the entry on its second call.
+   */
+  it('still arms the single retry when the snapshot sink throws after the subscribe succeeded', async () => {
+    vi.useFakeTimers();
+    try {
+      let sinkCallCount = 0;
+      const { stub, manager, requests } = await harness(defaultResponder, {
+        onStreamSnapshot: () => {
+          sinkCallCount += 1;
+          if (sinkCallCount === 1) throw new Error('sink failed');
+        },
+      });
+      stub.beginHandshake();
+      await flushLoopbackFakeTimers();
+
+      manager.setDesiredStreams(new Set(['sess-1']));
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(1);
+      expect(sinkCallCount).toBe(1);
+
+      // STREAM_RETRY_DELAY_MS is 2 s: not a moment sooner...
+      await vi.advanceTimersByTimeAsync(1_999);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(1);
+
+      // ...and then the retry goes out and lands.
+      await vi.advanceTimersByTimeAsync(1);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(2);
+      expect(sinkCallCount).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The dev inspect bridge's view of "which sessions is the terminal asked
+   * for": exactly the DESIRED streams the injected getter says are wanted. A
+   * wanted session that is not desired (a screen for a session the board no
+   * longer lists) is not subscribed, so it is not reported.
+   *
+   * Mutation that reddens this: drop the `.filter` on `terminalStreams`.
+   */
+  it('lists in debugSnapshot().terminalStreams exactly the desired streams the terminal is wanted for', async () => {
+    const { manager, terminalWantedSessionIds } = await harness();
+    manager.setDesiredStreams(new Set(['sess-c', 'sess-a', 'sess-b']));
+    terminalWantedSessionIds.add('sess-b');
+    terminalWantedSessionIds.add('sess-not-desired');
+
+    expect(manager.debugSnapshot().desiredStreams).toEqual(['sess-a', 'sess-b', 'sess-c']);
+    expect(manager.debugSnapshot().terminalStreams).toEqual(['sess-b']);
+
+    terminalWantedSessionIds.add('sess-a');
+    expect(manager.debugSnapshot().terminalStreams).toEqual(['sess-a', 'sess-b']);
   });
 
   /**

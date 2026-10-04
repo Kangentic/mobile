@@ -395,14 +395,18 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   (`src/terminal/liveTail.ts`), replaced when the next transcript revision lands. The raw
   interactive terminal (xterm.js in a WebView, quick-key bar, `interactive-terminal` writes)
   renders at the desktop's reported PTY grid and is a **faithful read-only mirror**: it mirrors
-  that grid 1:1 with pan and pinch-zoom, sizing the font so the grid's rows fill the screen
-  height, and it **never resizes the desktop PTY** - a shared session must not be reshaped by the
+  that grid 1:1 with pan and pinch-zoom, in ONE reference cell (the cell at which a 210x48 grid
+  fills the Terminal lens's height) pinned top-left, so every task opens in the same text size at
+  the same position and the fit button always returns there; nothing is remembered across opens.
+  It **never resizes the desktop PTY** - a shared session must not be reshaped by the
   phone. Typed input is the only thing the phone sends. The protocol's `resize` / `release-size`
   actions exist for the desktop, not this client (`src/channel/verbClient.ts`); a phone-requested
   grid was built, live-tested, and removed the same day as LESS readable than the desktop's own
-  layout (see `docs/terminal-ownership-design.md`). Instead, the desktop rests unwatched
-  sessions at a detail-shaped 210x48 grid, so the mirror looks the same whether a desktop
-  surface shows the session or not.
+  layout (see `docs/terminal-ownership-design.md`). Instead, the desktop parks a session a
+  phone is streaming with `terminal: true`, and no desktop surface holds, at a detail-shaped
+  210x48 grid, so the mirror looks the same whether a desktop surface shows the session or
+  not. The park is a mobile feature: a session no phone streams keeps whatever grid the last
+  desktop surface left.
 - **E2E push:** payloads are ciphertext plus a generic placeholder only; decryption happens
   on-device (iOS Notification Service Extension / Android Notifee). Every failure degrades to
   the placeholder, never to plaintext. That is a floor on WHAT IS RENDERED, not a promise that

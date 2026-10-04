@@ -15,8 +15,21 @@
   // shift while fonts load), and letting them consume the budget starved the
   // stretch, settling fresh opens at line height 1 with a short centred grid
   // ("~80% of the TUI"). Steps are monotonic and floored at MIN_AUTO_FONT_PX,
-  // so the exemption cannot spin. The final pass only measures, so the
-  // centring below always runs against the settled grid.
+  // so the exemption cannot spin. The final pass only measures, and when it
+  // has to hand back an overshooting stretch blind, the settle waits one
+  // frame to measure the corrected grid, so it always records the grid that
+  // is actually on screen.
+  //
+  // THE FIT IS THE REFERENCE CELL'S, not this grid's: every decision below is
+  // made in REFERENCE-GRID terms. The measured grid height is scaled up to
+  // what the reference row count would measure at the same cell (xterm ceils
+  // every row the same way, so that is exact), and compared against the full
+  // fit height. So a 30-row grid takes precisely the decisions a 48-row grid
+  // takes - same font steps, same stretch, same giveback, the same tolerance -
+  // converges on the same cell, and sits pinned to the top with the
+  // terminal's own background below it. Scaling the TARGET down instead would
+  // apply the absolute pixel tolerance at a different scale per grid, and the
+  // two could settle a stretch step apart.
   function fitGridHeightToViewport(passesLeft, stretchLocked, generation) {
     if (!terminal || generation !== heightFitGeneration) return;
     var screen = document.querySelector('.xterm-screen');
@@ -24,17 +37,19 @@
       traceHeightFit('bail-no-screen', generation, passesLeft, 0);
       return;
     }
-    var screenHeight = screen.getBoundingClientRect().height;
-    if (!(screenHeight > 0) || terminal.rows < 1) {
-      traceHeightFit('bail-zero-measure', generation, passesLeft, screenHeight);
+    var measuredHeight = screen.getBoundingClientRect().height;
+    if (!(measuredHeight > 0) || terminal.rows < 1) {
+      traceHeightFit('bail-zero-measure', generation, passesLeft, measuredHeight);
       return;
     }
+    var referenceRows = Math.max(terminal.rows, referenceRowsForFit());
+    var screenHeight = measuredHeight * (referenceRows / terminal.rows);
     // fitViewportHeight, NOT window.innerHeight, for the same reason as
     // autoFitFontToScreen: measuring against the keyboard-shrunken window
     // would walk the font down a step per pass until the whole grid fit the
-    // strip above the keyboard. (centerGridVertically and the vertical follow
-    // keep reading the CURRENT innerHeight deliberately - centring and
-    // keeping the cursor visible are questions about what is on screen NOW.)
+    // strip above the keyboard. (The vertical follow keeps reading the
+    // CURRENT innerHeight deliberately - keeping the cursor visible is a
+    // question about what is on screen NOW.)
     var viewportHeight = fitViewportHeight() - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
     var currentLineHeight = terminal.options.lineHeight || 1;
     if (passesLeft <= 1) {
@@ -46,13 +61,21 @@
       // sliced off by exactly that extra pixel per row.
       if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX && currentLineHeight > 1.005) {
         terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+        traceHeightFit('final-giveback', generation, passesLeft, screenHeight);
+        // Settle on the NEXT frame's measurement: the one above is the
+        // overflowing grid this pass just corrected, and settling on it used
+        // to report a grid taller than the pane when none was on screen.
+        requestAnimationFrame(function () {
+          settleAfterFinalGiveback(generation);
+        });
+        return;
       }
       traceHeightFit('final', generation, passesLeft, screenHeight);
-      centerGridVertically(screenHeight);
+      settleFit(measuredHeight);
       followCursorVertically(true);
       return;
     }
-    var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
+    var baseCellHeight = screenHeight / referenceRows / currentLineHeight;
     if (!(baseCellHeight > 0)) return;
     var adjusted = false;
     var fontStepped = false;
@@ -70,12 +93,11 @@
         // after this step, and is how the leftover row gets reclaimed.
         currentFontSizePx -= 1;
         terminal.options.fontSize = currentFontSizePx;
-        postToHost({ type: 'font-size', fontSizePx: currentFontSizePx });
         adjusted = true;
         fontStepped = true;
       }
     } else if (!stretchLocked) {
-      var desiredLineHeight = viewportHeight / (terminal.rows * baseCellHeight);
+      var desiredLineHeight = viewportHeight / (referenceRows * baseCellHeight);
       var next = Math.max(1, Math.min(MAX_LINE_HEIGHT, desiredLineHeight));
       if (Math.abs(next - currentLineHeight) > 0.005) {
         terminal.options.lineHeight = next;
@@ -84,13 +106,13 @@
     }
     if (!adjusted) {
       traceHeightFit('settled', generation, passesLeft, screenHeight);
-      centerGridVertically(screenHeight);
+      settleFit(measuredHeight);
       // The fit has SETTLED: only now is the vertical follow computed against
       // real geometry. Forcing it from refit's first frame sampled the grid
       // MID-CONVERGENCE - on a 48-row grid the stretch transiently overflows
       // before the give-back, so the follow locked in a negative translate
       // that nothing cleared once the grid settled smaller, shifting the
-      // whole frame up past the centring pad ("pushed up more"). A 30-row
+      // whole frame up past the centring pad of the time ("pushed up more"). A 30-row
       // grid never overflows mid-fit, which is why the first verification
       // pass missed it.
       followCursorVertically(true);
@@ -102,24 +124,32 @@
     });
   }
 
-  // Height the fit cannot reach: a SHORT desktop grid (the desktop parks a
-  // session at whatever surface last showed it, and its bottom panel is a
-  // 14-row strip) cannot fill a phone at any font size the texture cap and the
-  // line-height ceiling allow. Pinned to the top, the whole leftover piles up
-  // underneath and reads as a terminal cut in half; split evenly it reads as a
-  // margin. Same argument as the horizontal auto margins, one axis over.
-  function centerGridVertically(screenHeight) {
-    var gridHost = document.getElementById('terminal');
-    if (!gridHost) return;
-    var slack = window.innerHeight - screenHeight;
-    var paddingTop = slack > 1 ? Math.floor(slack / 2) + 'px' : '0px';
-    if (gridHost.style.paddingTop !== paddingTop) gridHost.style.paddingTop = paddingTop;
+  // The last pass's blind giveback has painted: measure the corrected grid
+  // and settle on it. Measure only, never adjust - the budget is spent.
+  function settleAfterFinalGiveback(generation) {
+    if (!terminal || generation !== heightFitGeneration) return;
+    var screen = document.querySelector('.xterm-screen');
+    var measuredHeight = screen ? screen.getBoundingClientRect().height : 0;
+    traceHeightFit('final', generation, 0, measuredHeight);
+    settleFit(measuredHeight);
+    followCursorVertically(true);
   }
 
-  function centerGridFromMeasurement() {
-    var screen = document.querySelector('.xterm-screen');
-    if (!screen) return;
-    centerGridVertically(screen.getBoundingClientRect().height);
+  // A fit chain SETTLED: record the converged cell for this fit key, so the
+  // next init or refit of the same grid in the same pane applies it directly,
+  // and report it to the host. The grid stays PINNED TO THE TOP-LEFT: a grid
+  // shorter than the pane used to be centred, which moved its first row on
+  // every open of a differently shaped session - the maintainer's rule is the
+  // same position every time, so row 0 always sits at the top and the slack
+  // below a short grid is the terminal's own background (resetSessionViewState
+  // zeroes the padding on every init, and nothing sets it since).
+  function settleFit(measuredGridHeight) {
+    settledFit = {
+      key: currentFitKey(),
+      fontSizePx: currentFontSizePx,
+      lineHeight: terminal.options.lineHeight || 1,
+    };
+    reportFit('settled', measuredGridHeight);
   }
 
   // The GPU's max texture edge, probed once. A canvas wider (or taller) than

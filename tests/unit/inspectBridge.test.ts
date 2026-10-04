@@ -90,8 +90,11 @@ describe('buildInspectPayload', () => {
     // `seeded` is what the terminal pane's hold rule reads: a ring built from
     // chunks alone is replaced the moment the seed lands, so a ring reporting
     // chunks with seeded=false is a pane waiting on its scrollback.
+    // `retainCount` is how many mounted screens hold the ring: one that stays
+    // above zero with no screen on top is a leaked retention, which keeps the
+    // desktop streaming PTY bytes nobody reads.
     await expect(payloadFor('feed-stats')).resolves.toEqual({
-      rings: [{ sessionId: 'sess-1', chunks: 1, totalBytes: 11, dims: null, seeded: false, listeners: 0 }],
+      rings: [{ sessionId: 'sess-1', chunks: 1, totalBytes: 11, dims: null, seeded: false, listeners: 0, retainCount: 1 }],
       unbufferedListeners: ['sess-successor'],
     });
 

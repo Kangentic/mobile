@@ -56,7 +56,39 @@
       tapDirty = true;
       stopHistoryFling();
       applyVerticalOffset(0);
-      refit();
+      // And it ALWAYS lands on the fitted view: the pinch goes, and so does
+      // the converged cell, so the chain re-derives it from scratch rather
+      // than trusting a record the user is pressing the button to escape.
+      pinchOverrideFontPx = null;
+      settledFit = null;
+      // The host sends the ring's grid with the press. A page that inited
+      // before the desktop reported one (rows unknown) adopts it here, so the
+      // fit is for the real grid rather than a guess.
+      if (terminal && typeof message.cols === 'number' && typeof message.rows === 'number') {
+        knownCols = message.cols;
+        knownRows = message.rows;
+        if (cleanTerminal) cleanTerminal.resize(knownCols, knownRows);
+      }
+      refit('refit-msg');
+    } else if (message.type === 'fit-height') {
+      // The host measured the Terminal lens's own height (see hostFitHeightPx
+      // in state.js): a first measurement, or a rotation.
+      if (typeof message.fitHeightPx === 'number' && message.fitHeightPx > 0 && message.fitHeightPx !== hostFitHeightPx) {
+        hostFitHeightPx = message.fitHeightPx;
+        refit('fit-height');
+      }
+    } else if (message.type === 'repaint') {
+      // Back from the background: the renderer can come back with glyphs
+      // missing ("110 +" drawn as "10", "progress" as "p ogress", observed on
+      // a Pixel) and the frame STAYS that way. A refit used to repair it by
+      // relaying the whole frame out; with the fit deterministic a refit
+      // changes nothing, so the repaint is asked for directly: drop the WebGL
+      // glyph atlas, which is where a corrupted glyph lives, and redraw every
+      // row from the buffer.
+      if (terminal) {
+        if (webglAddon && typeof webglAddon.clearTextureAtlas === 'function') webglAddon.clearTextureAtlas();
+        terminal.refresh(0, terminal.rows - 1);
+      }
     } else if (message.type === 'scroll-latest') {
       scrollToLatest();
     } else if (message.type === 'pinch') {
@@ -87,11 +119,14 @@
       // here: the host only posts 'resize' when the dims actually changed
       // (terminalFeed's setTerminalDimensions has a same-dims guard).
       if (terminal && typeof message.cols === 'number' && typeof message.rows === 'number') {
+        // A different grid is a different picture: a pinch made over the old
+        // one does not carry over.
+        if (message.cols !== knownCols || message.rows !== knownRows) pinchOverrideFontPx = null;
         knownCols = message.cols;
         knownRows = message.rows;
         manualPanUntil = 0;
         if (cleanTerminal) cleanTerminal.resize(knownCols, knownRows);
-        refit();
+        refit('resize-msg');
       }
     }
   }
@@ -105,7 +140,9 @@
   document.addEventListener('message', handleMessageEvent);
 
   // The WebView viewport changes when the soft keyboard shows/hides or on
-  // rotation: re-fit the whole frame to the new viewport so it stays fully
-  // visible.
-  window.addEventListener('resize', refit);
+  // rotation. onViewportChange re-fits only when that moved the fit (a
+  // rotation); a keyboard only re-orients the frame (see refit.js).
+  window.addEventListener('resize', function () {
+    onViewportChange('window-resize');
+  });
 

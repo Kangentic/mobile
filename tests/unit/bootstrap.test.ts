@@ -24,7 +24,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
-import { resetTerminalFeed } from '@/state/terminalFeed';
+import { isTerminalRetained, resetTerminalFeed } from '@/state/terminalFeed';
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
@@ -105,6 +105,8 @@ describe('bootstrap over loopback', () => {
         if (!subscriptionsHolder) throw new Error('unresolved');
         return subscriptionsHolder;
       }),
+      // The production wiring (connectionManager.ts).
+      isTerminalWanted: isTerminalRetained,
     });
     subscriptionsHolder = subscriptions;
     bindFeedToStores(feed, subscriptions);
@@ -227,6 +229,8 @@ describe('bootstrap over loopback', () => {
         if (!subscriptionsHolder) throw new Error('unresolved');
         return subscriptionsHolder;
       }),
+      // The production wiring (connectionManager.ts).
+      isTerminalWanted: isTerminalRetained,
     });
     subscriptionsHolder = subscriptions;
     bindFeedToStores(feed, subscriptions);

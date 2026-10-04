@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { AppState, DeviceEventEmitter, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
@@ -13,7 +13,7 @@ import {
   setTerminalDimensions,
 } from '@/state/terminalFeed';
 import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
-import { useSettingsStore } from '@/state/settingsStore';
+import { useChannelStore } from '@/state/channelStore';
 
 jest.mock('@/connection/actions', () => ({
   writeTerminal: jest.fn().mockResolvedValue(undefined),
@@ -28,9 +28,9 @@ jest.mock('@/devsupport/connectionTrace', () => ({
   traceConnection: jest.fn(),
 }));
 
-// The settings store persists the remembered fit size through the secure
-// store; an in-memory stand-in keeps the component tier free of the native
-// module and lets a test read back what was written.
+// An in-memory stand-in keeps the component tier free of the native module and
+// lets a test read back what was written: the pane used to persist a
+// remembered fit size here, and nothing may be remembered across opens now.
 jest.mock('expo-secure-store', () => {
   const stored = new Map<string, string>();
   return {
@@ -148,6 +148,7 @@ interface WebViewMockModule {
   __capturedProps: {
     current: {
       onMessage?: (event: { nativeEvent: { data: string } }) => void;
+      onLayout?: (event: { nativeEvent: { layout: { x: number; y: number; width: number; height: number } } }) => void;
       onRenderProcessGone?: () => void;
       onContentProcessDidTerminate?: () => void;
     } | null;
@@ -195,6 +196,28 @@ function postFromWebView(data: string): void {
   });
 }
 
+/** Fires the WebView's onLayout, as the native layout pass would. */
+function layoutWebView(width: number, height: number): void {
+  act(() => {
+    webViewMock.__capturedProps.current?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width, height } } });
+  });
+}
+
+/**
+ * Fires a soft-keyboard event the way the native module does: React Native's
+ * Keyboard listens through a NativeEventEmitter, which delivers through the
+ * device event emitter.
+ */
+function emitKeyboardEvent(eventName: 'keyboardWillShow' | 'keyboardDidShow' | 'keyboardWillHide' | 'keyboardDidHide'): void {
+  act(() => {
+    DeviceEventEmitter.emit(eventName, {
+      duration: 0,
+      easing: 'keyboard',
+      endCoordinates: { screenX: 0, screenY: 380, width: 411, height: 300 },
+    });
+  });
+}
+
 function decodedPosts(): ReturnType<typeof decodeHostMessage>[] {
   return webViewMock.__postMessageMock.mock.calls.map((call) => decodeHostMessage(call[0] as string));
 }
@@ -229,7 +252,6 @@ describe('TerminalPane (faithful mirror)', () => {
       focusKeyboardRequestBySessionId: {},
       paintedSessionIds: {},
     });
-    useSettingsStore.setState({ terminalFitFontPx: null });
     appStateListeners.clear();
     jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener): NativeEventSubscription => {
       const appStateListener = listener as (nextStatus: AppStateStatus) => void;
@@ -421,30 +443,33 @@ describe('TerminalPane (faithful mirror)', () => {
    * Observed on a Pixel: after the app came back from the background the
    * mirror kept single characters missing mid-line ("110 +" drawn as "10")
    * and never recovered on its own, because the WebView survives and so
-   * nothing re-inits. The refit button repaired it completely, so the pane
-   * sends that same message itself on foreground.
+   * nothing re-inits. A refit used to repair it by relaying the frame out;
+   * with the fit deterministic a refit changes nothing, so the pane asks for
+   * the repaint directly. NOT a refit: a refit on every foreground is what
+   * used to undo a pinch and re-run the fit from scratch.
    */
-  it('refits on returning to the foreground, so a mirror with dropped glyphs repairs itself', async () => {
+  it('asks for a repaint, not a refit, on returning to the foreground', async () => {
     retainTerminal('sess-1');
     setTerminalDimensions('sess-1', { cols: 120, rows: 30 });
     await renderPaneAndReady(true);
     webViewMock.__postMessageMock.mockClear();
 
     act(() => emitAppState('background'));
-    expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
+    expect(decodedPosts().some((message) => message?.type === 'repaint')).toBe(false);
 
     act(() => emitAppState('active'));
-    expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(true);
+    expect(decodedPosts().some((message) => message?.type === 'repaint')).toBe(true);
+    expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
   });
 
-  it('does not refit a pane the user is not looking at', async () => {
+  it('does not repaint a pane the user is not looking at', async () => {
     retainTerminal('sess-1');
     const result = await renderPaneAndReady(true);
     rerenderPane(result, false);
     webViewMock.__postMessageMock.mockClear();
 
     act(() => emitAppState('active'));
-    expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
+    expect(decodedPosts().some((message) => message?.type === 'repaint')).toBe(false);
   });
 
   it('drops malformed WebView messages without posting or writing', async () => {
@@ -497,67 +522,35 @@ describe('TerminalPane (faithful mirror)', () => {
   });
 
   /**
-   * The reset button posts a fresh frame from the desktop first, then falls
-   * back to a LOCAL refit only if that stream refresh never produces a
-   * re-seed within REFIT_FALLBACK_DELAY_MS (700ms) - the offline path.
+   * The fit button restores the fitted view at ONCE, from any state. It used
+   * to wait on its stream refresh's re-seed (a one-shot any unrelated init
+   * could consume) and fall back to a local refit 700 ms later, which with the
+   * grid unknown could only stretch the line height. Now the refit goes out on
+   * the press, carrying the ring's grid so a page that inited before the
+   * desktop reported one fits the real grid; the fresh frame still follows.
+   *
+   * Mutation that reddens this: drop the dims from the posted refit, or defer it.
    */
-  it('falls back to a local refit when the stream refresh produces no re-seed within the fallback delay', async () => {
-    jest.useFakeTimers();
-    try {
-      retainTerminal('sess-1');
-      await renderPaneAndReady();
-      // Move the clock past the instant postInit() stamped during ready, so
-      // the fallback's `lastInitPostAtRef.current < pressedAt` comparison is
-      // not comparing against the exact same frozen millisecond.
-      act(() => {
-        jest.advanceTimersByTime(10);
-      });
-      webViewMock.__postMessageMock.mockClear();
+  it('posts a refit carrying the ring grid on the press, and asks for a fresh frame', async () => {
+    retainTerminal('sess-1');
+    setTerminalDimensions('sess-1', { cols: 120, rows: 30 });
+    await renderPaneAndReady();
+    webViewMock.__postMessageMock.mockClear();
 
-      fireEvent.press(screen.getByTestId('terminal-refit'));
-      expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
-      // No re-seed arrives - the stream refresh is fire-and-forget here.
-      expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
+    fireEvent.press(screen.getByTestId('terminal-refit'));
 
-      act(() => {
-        jest.advanceTimersByTime(700);
-      });
-
-      expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(true);
-    } finally {
-      jest.useRealTimers();
-    }
+    expect(decodedPosts()).toEqual([{ type: 'refit', cols: 120, rows: 30 }]);
+    expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
   });
 
-  it('does not fall back to a local refit when the stream refresh produces a re-seed before the fallback delay', async () => {
-    jest.useFakeTimers();
-    try {
-      retainTerminal('sess-1');
-      await renderPaneAndReady();
-      act(() => {
-        jest.advanceTimersByTime(10);
-      });
-      webViewMock.__postMessageMock.mockClear();
+  it('posts a refit with an unknown grid as nulls rather than skipping the press', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
+    webViewMock.__postMessageMock.mockClear();
 
-      fireEvent.press(screen.getByTestId('terminal-refit'));
-      expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
+    fireEvent.press(screen.getByTestId('terminal-refit'));
 
-      // The stream refresh's re-seed lands well inside the fallback delay.
-      act(() => {
-        jest.advanceTimersByTime(10);
-        seedScrollback('sess-1', 'fresh seed');
-      });
-      // The re-seed itself posts an init - proof the seed actually landed.
-      expect(decodedPosts().some((message) => message?.type === 'init')).toBe(true);
-
-      act(() => {
-        jest.advanceTimersByTime(700);
-      });
-
-      expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
-    } finally {
-      jest.useRealTimers();
-    }
+    expect(decodedPosts()).toEqual([{ type: 'refit', cols: null, rows: null }]);
   });
 
   /**
@@ -753,85 +746,300 @@ describe('TerminalPane (faithful mirror)', () => {
     });
 
     /**
-     * The cell size survives every re-init over a painted frame: the page is
-     * told to keep its font (and line height) rather than fit the new grid's
-     * rows to the viewport, so a shorter successor comes up at the same
-     * resolution, centred. Only a fresh page - nothing on screen to keep - and
-     * the fit button fit anew.
+     * A re-init over a painted frame HOLDS that frame until the new one paints
+     * (the swap's no-black-flash), and a re-init of the same session keeps a
+     * pinch. A fresh page has nothing to hold and no pinch to keep. The size
+     * itself is no longer the host's to send: the page owns the cell.
      */
-    it('keeps the cell size on a re-init over a painted frame, and fits on a fresh page', async () => {
+    it('holds the frame and keeps a pinch on a same-session re-init, never on a fresh page', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
       const result = await renderPaneAndReady();
       rerenderPane(result, false);
       rerenderPane(result, true);
 
-      const keepFontByInit = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.keepFont] : []));
-      expect(keepFontByInit).toEqual([false, true]);
+      const flagsByInit = decodedPosts().flatMap((message) =>
+        message?.type === 'init' ? [{ holdFrame: message.holdFrame, preservePinch: message.preservePinch }] : [],
+      );
+      expect(flagsByInit).toEqual([
+        { holdFrame: false, preservePinch: false },
+        { holdFrame: true, preservePinch: true },
+      ]);
     });
 
     /**
-     * The remembered cell size: a fresh page normally fits its font to the
-     * grid it is handed, which for a task the desktop is showing in a short
-     * panel means zoomed in, then a jump when the desktop rests it at its
-     * detail grid. Once the mirror has fitted anywhere, every later open
-     * starts at that size and keeps it, so the resolution is the same each
-     * time; the fit button still fits anew, and so does the very first open.
+     * The first frame of every open is the final cell: the WebView's layout
+     * is measured before the page reports ready, so the very first init
+     * carries the Terminal lens's height and the page never fits to its own
+     * provisional innerHeight and corrects a quarter second later.
+     *
+     * Mutation that reddens this: drop fitHeightPx from postInit's init.
      */
-    it('opens at the remembered fit size with keepFont, and fits anew when none is remembered', async () => {
-      useSettingsStore.setState({ terminalFitFontPx: 9 });
+    it('carries the measured Terminal lens height on the very first init', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      await renderPaneAndReady();
+      render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 635);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
 
-      const remembered = decodedPosts().find((message) => message?.type === 'init');
-      expect(remembered?.type === 'init' ? { fontSizePx: remembered.fontSizePx, keepFont: remembered.keepFont } : null).toEqual({
-        fontSizePx: 9,
-        keepFont: true,
-      });
-    });
-
-    it('remembers the size the page fitted, and never a pinch', async () => {
-      retainTerminal('sess-1');
-      seedScrollback('sess-1', 'hello');
-      await renderPaneAndReady();
       const firstInit = decodedPosts().find((message) => message?.type === 'init');
-      // The very first open fits, and starts from the default size.
-      expect(firstInit?.type === 'init' ? firstInit.keepFont : null).toBe(false);
-
-      postFromWebView(JSON.stringify({ type: 'font-size', fontSizePx: 10 }));
-      await waitFor(() => expect(useSettingsStore.getState().terminalFitFontPx).toBe(10));
-
-      // A pinch drives the page from here and is never reported back as a fit.
-      firePinchCallback('onUpdate', { numberOfTouches: 2, scale: 2 } as unknown as { numberOfTouches: number });
-      expect(decodedPosts().some((message) => message?.type === 'set-font-size')).toBe(true);
-      expect(useSettingsStore.getState().terminalFitFontPx).toBe(10);
+      expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(635);
     });
 
-    it('fits the font again on the fit button, through its re-seed, while a later re-seed keeps the size', async () => {
-      jest.useFakeTimers();
-      try {
-        retainTerminal('sess-1');
-        seedScrollback('sess-1', 'hello');
-        await renderPaneAndReady();
-        act(() => {
-          jest.advanceTimersByTime(10);
-        });
-        webViewMock.__postMessageMock.mockClear();
+    /**
+     * A layout that lands in the same tick as the page's 'ready', before the
+     * commit that 'ready' schedules has run its passive effects, must still
+     * reach the live page. The 'ready' handler posts the init (which carried no
+     * height: no layout had landed yet) and the layout handler then has a page
+     * to tell, but only if the ready flag the layout handler reads was written
+     * by the 'ready' handler itself. It used to be synced only by a passive
+     * effect, so this layout read false, was recorded and never posted, and the
+     * page sat on its own provisional height until the next unrelated layout.
+     *
+     * Both calls are inside ONE act(): React batches the setTerminalReady(true)
+     * and runs neither a render nor a passive effect until the callback
+     * returns, which is what makes the gap between the two calls real.
+     *
+     * Mutation that reddens this: delete `terminalReadyRef.current = true;` from
+     * the 'ready' branch of onWebViewMessage.
+     */
+    it('tells a page that just reported ready its fit height when a layout lands in the same tick', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
 
-        fireEvent.press(screen.getByTestId('terminal-refit'));
-        act(() => {
-          jest.advanceTimersByTime(10);
-          seedScrollback('sess-1', 'fresh seed');
-        });
-        // An unrelated re-seed after the button's own: back to keeping.
-        act(() => seedScrollback('sess-1', 'later seed'));
+      act(() => {
+        const liveProps = webViewMock.__capturedProps.current;
+        liveProps?.onMessage?.({ nativeEvent: { data: JSON.stringify({ type: 'ready' }) } });
+        liveProps?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 411, height: 635 } } });
+      });
 
-        const keepFontByInit = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.keepFont] : []));
-        expect(keepFontByInit).toEqual([false, true]);
-      } finally {
-        jest.useRealTimers();
-      }
+      // The precondition that makes this the race: the init the page got
+      // carried no height, so the post below is its only way to learn one.
+      const firstInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBeNull();
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
+        { type: 'fit-height', fitHeightPx: 635 },
+      ]);
+    });
+
+    /**
+     * THE CLIPPED STATUS LINE. A layout that is ever taller than the settled
+     * pane must not become the fit height for good: the first version kept a
+     * per-width maximum, and on a release build the first open of a 210x48
+     * session fitted to 693 against a 670 pane, cutting off the last row.
+     *
+     * Mutation that reddens this: keep the maximum of the heights instead of
+     * the latest.
+     */
+    it('fits the settled pane, not a taller layout that came before it', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 693);
+      layoutWebView(411, 670);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+
+      const firstInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(670);
+
+      // And after ready: a transient taller pane is followed back down.
+      webViewMock.__postMessageMock.mockClear();
+      layoutWebView(411, 693);
+      layoutWebView(411, 670);
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
+        { type: 'fit-height', fitHeightPx: 693 },
+        { type: 'fit-height', fitHeightPx: 670 },
+      ]);
+    });
+
+    /**
+     * iOS pads the screen on keyboardWillShow, BEFORE keyboardDidShow, so a
+     * gate on the Did events alone (Keyboard.isVisible()) would take the
+     * padded pane as the fit height there.
+     */
+    it("ignores a layout padded on iOS's keyboardWillShow, before keyboardDidShow", async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 635);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      webViewMock.__postMessageMock.mockClear();
+
+      emitKeyboardEvent('keyboardWillShow');
+      layoutWebView(411, 380);
+      emitKeyboardEvent('keyboardDidShow');
+      emitKeyboardEvent('keyboardWillHide');
+      layoutWebView(411, 635);
+      emitKeyboardEvent('keyboardDidHide');
+
+      expect(decodedPosts().some((message) => message?.type === 'fit-height')).toBe(false);
+    });
+
+    /**
+     * Only a layout the lens is actually read at becomes the fit height. The
+     * soft keyboard (a KeyboardAvoidingView pads the screen) is gated on its
+     * own events; a rotation is a new value; and a layout taken while another
+     * lens shows, or while the swap veil has dropped the quick-key row, is a
+     * different pane height entirely.
+     */
+    it('reports a rotation, and ignores the keyboard and layouts the lens is not read at', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      const result = render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive fitLayoutIsReference />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 635);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      webViewMock.__postMessageMock.mockClear();
+
+      // The keyboard opens (Android's order): same width, shorter. Not a fit
+      // height, and the closed pane after it is the same one as before.
+      emitKeyboardEvent('keyboardDidShow');
+      layoutWebView(411, 380);
+      emitKeyboardEvent('keyboardDidHide');
+      layoutWebView(411, 635);
+      // The veil's switcher-only phase: taller, but not a reference layout.
+      result.rerender(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive fitLayoutIsReference={false} />
+        </ThemeProvider>,
+      );
+      layoutWebView(411, 690);
+      expect(decodedPosts().some((message) => message?.type === 'fit-height')).toBe(false);
+
+      // Back to the reference footer, then a rotation: a new width's height.
+      result.rerender(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive fitLayoutIsReference />
+        </ThemeProvider>,
+      );
+      layoutWebView(845, 300);
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
+        { type: 'fit-height', fitHeightPx: 300 },
+      ]);
+    });
+
+    /**
+     * A pane that mounts under another lens (a push tap onto a remembered Chat
+     * lens) takes that lens's layout PROVISIONALLY. Chat's footer matches
+     * Terminal's, so the switch to Terminal fires no layout event, and this
+     * used to leave the page on its own running maximum (fitHeightPx=n/a on a
+     * release build).
+     *
+     * Mutation that reddens this: restore the isActive gate on the layout.
+     */
+    it('takes a layout from another lens provisionally, until the Terminal lens measures one', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      const result = render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive={false} />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 669);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+
+      const firstInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(669);
+
+      // The taller Changes pane, still provisional: the latest layout wins...
+      webViewMock.__postMessageMock.mockClear();
+      layoutWebView(411, 718);
+      // ...and the Terminal lens's own layout overrides it.
+      result.rerender(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      layoutWebView(411, 669);
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
+        { type: 'fit-height', fitHeightPx: 718 },
+        { type: 'fit-height', fitHeightPx: 669 },
+      ]);
+    });
+
+    /**
+     * Once the Terminal lens has measured, another lens's layout at the same
+     * width cannot move it (a composer grown with a multi-line draft shrinks
+     * the shared box), while a new width is a rotation and does.
+     *
+     * Mutation that reddens this: drop the authoritative-value guard.
+     */
+    it('keeps a Terminal-lens height against other lenses at the same width, but follows a rotation', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      const result = render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 669);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+      result.rerender(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive={false} />
+        </ThemeProvider>,
+      );
+      webViewMock.__postMessageMock.mockClear();
+
+      layoutWebView(411, 600);
+      expect(decodedPosts().some((message) => message?.type === 'fit-height')).toBe(false);
+
+      layoutWebView(845, 300);
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
+        { type: 'fit-height', fitHeightPx: 300 },
+      ]);
+    });
+
+    /**
+     * Nothing about the size is remembered any more: a fit report only keeps
+     * the pinch baseline on the size the page shows (so the next pinch starts
+     * from it rather than jumping) and feeds the release-build trace.
+     */
+    it('keeps the pinch baseline on the reported fit and traces it', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      postFromWebView(JSON.stringify({ type: 'font-size', fontSizePx: 10, source: 'settled', trigger: 'init' }));
+      expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith(
+        'terminal-fit',
+        expect.objectContaining({ source: 'settled', trigger: 'init', fontSizePx: 10 }),
+      );
+      // Nothing is remembered across opens: the fit is a pure function of the
+      // grid and the pane, so a fit report writes nothing anywhere.
+      const secureStore = jest.requireMock<{ __stored: Map<string, string> }>('expo-secure-store');
+      expect([...secureStore.__stored.keys()]).toEqual([]);
+
+      firePinchCallback('onUpdate', { numberOfTouches: 2, scale: 2 } as unknown as { numberOfTouches: number });
+      expect(decodedPosts()).toContainEqual({ type: 'set-font-size', fontSizePx: 20 });
     });
 
     it('marks the session painted only on a non-blank report that answers the latest init', async () => {
@@ -893,6 +1101,306 @@ describe('TerminalPane (faithful mirror)', () => {
       rerenderPane(result, true);
 
       expect(decodedPosts().some((message) => message?.type === 'init')).toBe(false);
+    });
+  });
+
+  /**
+   * A black terminal used to need the screen remounted (back out and re-open,
+   * or kill the app). The pane now checks every init after a deadline and
+   * repairs the one thing that is actually wrong. Mutations that redden these:
+   * drop the armBlankRecovery() call from postInit (both positive cases), or key
+   * the dead-page arm on a `blank` report instead of on silence (the negative).
+   */
+  describe('a path back from a black terminal', () => {
+    const RECOVERY_DELAY_MS = 5000;
+    // jest's react-native mock defines AppState.currentState as a function, not
+    // the status string the app reads; pin the foreground for these cases.
+    const appStateRecord = AppState as unknown as { currentState: unknown };
+    let originalCurrentState: unknown;
+
+    function foreground(): void {
+      appStateRecord.currentState = 'active';
+    }
+
+    function liveForegroundChannel(): void {
+      useChannelStore.setState({ established: true });
+      foreground();
+    }
+
+    beforeEach(() => {
+      originalCurrentState = appStateRecord.currentState;
+    });
+
+    afterEach(() => {
+      appStateRecord.currentState = originalCurrentState;
+      act(() => useChannelStore.getState().reset());
+    });
+
+    it('asks the desktop for a fresh frame when the ring never gets a seed, at most twice', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        // The page is alive and honestly blank: nothing ever arrived.
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('remounts the page when an init gets no paint report of any kind', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        seedScrollback('sess-1', 'the frame');
+        await renderPaneAndReady();
+        // No 'painted' report for init 1: the renderer is gone.
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS);
+        });
+
+        expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-recovery', { action: 'remount', attempt: 1 });
+        expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
+        // The remounted page reports ready and is re-inited from the ring.
+        webViewMock.__postMessageMock.mockClear();
+        postFromWebView(JSON.stringify({ type: 'ready' }));
+        const reinit = decodedPosts().find((message) => message?.type === 'init');
+        expect(reinit?.type === 'init' ? reinit.scrollback : null).toBe('the frame');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('leaves a healthy page alone when it reports blank over a seeded ring (a cleared screen)', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        seedScrollback('sess-1', 'old output\x1b[2J');
+        await renderPaneAndReady();
+        // The viewport really is blank after the clear; the page says so.
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
+        });
+
+        expect(connectionTraceMock.traceConnection).not.toHaveBeenCalledWith('terminal-recovery', expect.anything());
+        expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does nothing while the channel is down, and checks again once it is established', async () => {
+      jest.useFakeTimers();
+      try {
+        foreground();
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
+        });
+        expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
+
+        act(() => useChannelStore.setState({ established: true }));
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * Only the visible page repairs itself. A hidden terminal (the user is on
+     * Chat) has a WebView that paints nothing and a deadline that still fires;
+     * remounting it or asking the desktop for a frame on its behalf would spend
+     * the attempt budget and wire traffic on a surface nobody is looking at,
+     * and leave nothing for the moment it is shown. Both repairs are checked,
+     * and each ends on a positive control (the same pane, once shown, DOES
+     * repair, on attempt 1) so a deadline that never fired would not read as a
+     * pass.
+     *
+     * Mutation that reddens these: remove `!isActiveRef.current ||` from the
+     * guard at the top of runBlankRecovery.
+     */
+    it('never remounts a hidden pane whose page is silent, and still has its whole budget once shown', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        seedScrollback('sess-1', 'the frame');
+        const result = await renderPaneAndReady(false);
+        // No 'painted' report for init 1: the page is silent. Hidden, so it is
+        // nobody's problem.
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
+        });
+        expect(connectionTraceMock.traceConnection).not.toHaveBeenCalledWith('terminal-recovery', expect.anything());
+        expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
+
+        // Shown: the reactivate init re-arms the check, the page is still
+        // silent for it, and the repair runs with the attempts untouched.
+        rerenderPane(result, true);
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS);
+        });
+        expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-recovery', {
+          action: 'remount',
+          attempt: 1,
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('never asks the desktop for a frame on behalf of a hidden pane whose ring was never seeded', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        const result = await renderPaneAndReady(false);
+        // The page is alive and honestly blank: nothing ever arrived.
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
+        });
+        expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
+        expect(connectionTraceMock.traceConnection).not.toHaveBeenCalledWith('terminal-recovery', expect.anything());
+
+        // Shown: the reactivate init is seq 2, and the page answers it blank
+        // too, so the only thing wrong is the missing seed.
+        rerenderPane(result, true);
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 2, blank: true }));
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
+        expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-recovery', {
+          action: 'refresh',
+          attempt: 1,
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * The attempt budget belongs to an EPISODE, and a non-blank paint is what
+     * ends one: the frame is on screen, so whatever was wrong is over. Without
+     * the reset a pane that burned both attempts once could never repair
+     * itself again for the rest of its life, however many separate failures
+     * followed.
+     *
+     * Mutation that reddens this: delete `blankRecoveryAttemptsRef.current = 0;`
+     * from the `if (!message.blank)` block of the painted handler.
+     */
+    it('gives a later episode a fresh repair budget once a non-blank paint ended the earlier one', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+
+        // Episode one spends the whole budget (two attempts) and then stops,
+        // however long it is left.
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS * 5);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(2);
+
+        // The page finally paints real content for the current init: over.
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+
+        // A separate, later failure: back from the background re-arms the
+        // check while the ring is still unseeded.
+        act(() => emitAppState('active'));
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(3);
+        expect(connectionTraceMock.traceConnection).toHaveBeenLastCalledWith('terminal-recovery', {
+          action: 'refresh',
+          attempt: 1,
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * A hold waiting on a seed that never comes is the frozen half of the same
+     * failure, so the hold arms the check itself. The init that preceded it
+     * armed one too, so the test ends THAT episode first (a non-blank paint
+     * clears the pending deadline): only the hold's own arm is left to fire.
+     * The refresh is for the SUCCESSOR's ring, which is the one never seeded.
+     *
+     * Mutation that reddens this: remove the armBlankRecovery() call from the
+     * hold branch of postInitOrHold.
+     */
+    it('arms the deadline when an init is held, and asks for the successor frame when it fires', async () => {
+      jest.useFakeTimers();
+      try {
+        liveForegroundChannel();
+        retainTerminal('sess-1');
+        seedScrollback('sess-1', 'the frame');
+        const result = render(
+          <ThemeProvider>
+            <TerminalPane sessionId="sess-1" isActive />
+          </ThemeProvider>,
+        );
+        await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+        postFromWebView(JSON.stringify({ type: 'ready' }));
+        // The frame is on screen: this ends the episode and clears the ready
+        // init's deadline.
+        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+
+        // The desktop respawned the task: the successor's ring is retained
+        // (the screen's open does that) but its snapshot has not landed.
+        retainTerminal('sess-2');
+        webViewMock.__postMessageMock.mockClear();
+        result.rerender(
+          <ThemeProvider>
+            <TerminalPane sessionId="sess-2" isActive />
+          </ThemeProvider>,
+        );
+        // Held: the dead session's frame stays, nothing is posted over it.
+        expect(decodedPosts().some((message) => message?.type === 'init')).toBe(false);
+
+        act(() => {
+          jest.advanceTimersByTime(RECOVERY_DELAY_MS - 1);
+        });
+        expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
+        act(() => {
+          jest.advanceTimersByTime(1);
+        });
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
+        expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-2');
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

@@ -522,6 +522,107 @@ describe('SessionScreen session binding', () => {
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
   });
 
+  /**
+   * A notification tap carries NO mode param, so it must land on the lens the
+   * user last chose for that task. It used to carry a forced `mode: 'chat'`.
+   * Mutation that reddens this: make the initializer's remembered-lens line
+   * return 'terminal'.
+   */
+  it('lands on the remembered lens when no mode param is given', () => {
+    useSettingsStore.setState({ preferredSessionLensByTaskId: { 'task-1': 'chat' } });
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
+  });
+
+  /**
+   * The cold-launch tap: the screen mounts before settings hydrate (hydrate()
+   * starts in the root layout's mount effect, after the runner has queued the
+   * route), so the initializer read the store's EMPTY default map. Once
+   * hydration lands, the remembered lens is adopted. Red on the unfixed code
+   * with no mutation: it stayed on terminal.
+   */
+  it('adopts the remembered lens once settings hydrate after mount', () => {
+    useSettingsStore.setState({ hydrated: false, preferredSessionLensByTaskId: {} });
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('terminal');
+
+    act(() => {
+      useSettingsStore.setState({ hydrated: true, preferredSessionLensByTaskId: { 'task-1': 'chat' } });
+    });
+
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
+  });
+
+  it('never lets hydration override an explicit mode param or a lens the user already picked', () => {
+    useSettingsStore.setState({ hydrated: false, preferredSessionLensByTaskId: {} });
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', mode: 'changes' };
+    seedTaskWithSession('sess-a');
+    const withParam = renderSessionScreen();
+    act(() => {
+      useSettingsStore.setState({ hydrated: true, preferredSessionLensByTaskId: { 'task-1': 'chat' } });
+    });
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('changes');
+    withParam.unmount();
+
+    useSettingsStore.setState({ hydrated: false, preferredSessionLensByTaskId: {} });
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    renderSessionScreen();
+    fireEvent.press(screen.getByTestId('session-mode-changes'));
+    act(() => {
+      useSettingsStore.setState({ hydrated: true, preferredSessionLensByTaskId: { 'task-1': 'chat' } });
+    });
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('changes');
+  });
+
+  /**
+   * A mode REQUEST raised through the terminal UI store is as deliberate as a
+   * tap on the mode pill, so a request that lands before settings hydrate
+   * stands: hydration adopts the remembered lens only for a screen nobody has
+   * chosen a lens on yet. The requested and remembered lenses must differ, or
+   * a hydration that did replace the request could not be told from one that
+   * did not.
+   *
+   * Requests 'chat', not 'terminal', and that is deliberate rather than an
+   * omission. A screen that mounts before hydration starts on 'terminal', so a
+   * 'terminal' request is a same-value setMode. Observed with the mutation
+   * below: that row stayed green (the hydrated render adopted 'chat', then a
+   * further render landed back on 'terminal', which reads as React applying the
+   * eagerly bailed-out same-value update late; the mechanism is inferred, the
+   * outcome was logged), while a 'chat' request went red. Only a request that
+   * CHANGES the lens can see the cancel.
+   *
+   * Mutation that reddens this: remove `setLensAwaitingHydration(false);` from
+   * the requested-mode subscription in SessionScreen.
+   */
+  it('keeps a requested lens that arrived before settings hydrated, over the remembered one', () => {
+    useSettingsStore.setState({ hydrated: false, preferredSessionLensByTaskId: {} });
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    renderSessionScreen();
+    try {
+      act(() => {
+        useTerminalUiStore.getState().requestSessionMode('sess-a', 'chat');
+      });
+      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
+      // Consumed once, so the request cannot be replayed onto a later lens.
+      expect(useTerminalUiStore.getState().requestedModeBySessionId['sess-a']).toBeUndefined();
+
+      act(() => {
+        useSettingsStore.setState({ hydrated: true, preferredSessionLensByTaskId: { 'task-1': 'terminal' } });
+      });
+
+      expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
+    } finally {
+      // Nothing here resets the store between tests; an unconsumed request
+      // (a failing run) must not leak into the next screen's mount.
+      useTerminalUiStore.setState({ requestedModeBySessionId: {} });
+    }
+  });
+
   it('changes is an inline pane, not a header chip or pushed route', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a', projectId: 'project-1' };
     seedTaskWithSession('sess-a');

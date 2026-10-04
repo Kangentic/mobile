@@ -21,7 +21,11 @@ import { flushMicrotasks } from '../helpers/async';
 
 const platformMock = vi.hoisted(() => ({ OS: 'ios' as 'android' | 'ios' }));
 const routerMock = vi.hoisted(() => ({ push: vi.fn(), navigate: vi.fn(), canDismiss: vi.fn(), dismissAll: vi.fn() }));
-const notifeeMock = vi.hoisted(() => ({ onForegroundEvent: vi.fn(), onBackgroundEvent: vi.fn() }));
+const notifeeMock = vi.hoisted(() => ({
+  onForegroundEvent: vi.fn(),
+  onBackgroundEvent: vi.fn(),
+  getInitialNotification: vi.fn(async () => null as unknown),
+}));
 const expoNotificationsMock = vi.hoisted(() => ({
   addNotificationResponseReceivedListener: vi.fn(),
   getLastNotificationResponseAsync: vi.fn(async () => null as unknown),
@@ -126,7 +130,7 @@ describe('tapRouter - iOS push responses', () => {
     decryptPushBlobMock.mockResolvedValue(DECRYPTED);
   });
 
-  it('decrypts the tapped blob and publishes the task open in chat mode', async () => {
+  it('decrypts the tapped blob and publishes the task open, with no lens, so the screen opens the remembered one', async () => {
     const { tapRouter, pendingNavigation } = await loadModules();
     const published = recordPublished(pendingNavigation);
 
@@ -361,7 +365,71 @@ describe('tapRouter - Android notifee presses', () => {
     routerMock.navigate.mockClear();
     notifeeMock.onForegroundEvent.mockClear();
     notifeeMock.onBackgroundEvent.mockClear();
+    notifeeMock.getInitialNotification.mockReset();
+    notifeeMock.getInitialNotification.mockResolvedValue(null);
     decryptPushBlobMock.mockReset();
+  });
+
+  /**
+   * A tap on an alert for an app the OS had KILLED launches the process, and
+   * notifee reports that press only through getInitialNotification - neither
+   * listener fires. The router never read it on Android, so the tap opened
+   * the Agents feed and dropped the task (measured on a release build: no
+   * session-open at all after the tap).
+   *
+   * Mutation that reddens this: drop the getInitialNotification read.
+   */
+  it('routes the press that launched a killed process', async () => {
+    notifeeMock.getInitialNotification.mockResolvedValue({
+      notification: { id: 'alert-1', data: { taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' } },
+      pressAction: { id: 'default' },
+    });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    tapRouter.registerNotificationTapHandlers();
+    await flushMicrotasks();
+
+    expect(published).toEqual([
+      { kind: 'open-task', taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' },
+    ]);
+  });
+
+  /**
+   * When FCM had started the process headlessly, the same press can arrive
+   * through the background listener AND as the launching notification. It
+   * routes once.
+   *
+   * Mutation that reddens this: drop the notification-id latch.
+   */
+  it('routes a press reported by both the listener and the launch read once', async () => {
+    const launchingNotification = {
+      id: 'alert-2',
+      data: { taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' },
+    };
+    notifeeMock.getInitialNotification.mockResolvedValue({ notification: launchingNotification, pressAction: { id: 'default' } });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onBackgroundEvent = notifeeMock.onBackgroundEvent.mock.calls[0][0] as (event: unknown) => Promise<void>;
+    await onBackgroundEvent({ type: 1, detail: { notification: launchingNotification } });
+    await flushMicrotasks();
+
+    expect(published).toHaveLength(1);
+  });
+
+  it('still routes a second, different notification for the same task', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    const data = { taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' };
+    onForegroundEvent({ type: 1, detail: { notification: { id: 'alert-3', data } } });
+    onForegroundEvent({ type: 1, detail: { notification: { id: 'alert-4', data } } });
+
+    expect(published).toHaveLength(2);
   });
 
   /**

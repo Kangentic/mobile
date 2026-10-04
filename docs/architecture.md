@@ -339,16 +339,38 @@ inline-only), fed the scrollback snapshot plus live PTY chunks over a small post
 (`src/terminal/terminalBridge.ts`). The desktop reports its PTY grid (`ptyDimensions` on the
 snapshot, `terminal-resize` events on change), so the phone renders at the exact grid the bytes
 were laid out for instead of inferring a width. It is a **faithful read-only mirror**: it renders
-that grid 1:1 with horizontal pan, follow-the-cursor and pinch-zoom, and sizes the font ONCE, on
-the very first open, so the grid's ROWS fill the phone's height (a wider-than-screen grid then
-overflows and pans). That fitted size is remembered per desktop (`terminalFitFontPx` in the
-settings store, written by the page's own fit reports and never by a pinch) and every later open
-starts from it; every re-init over a painted frame - a session swap, a lens switch back, a
-re-seed - keeps the cell size too (`keepFont` on the bridge's `init`). So a successor whose PTY is
-shorter, or a task opened while the desktop shows it in a short panel, renders at the same
-resolution, centred, instead of zooming to fill the height and jumping back when the desktop rests
-it at its detail grid. The fit button and a desktop grid change fit again, and the page still steps
-the font down when a taller grid would overflow. It
+that grid 1:1 with horizontal pan, follow-the-cursor and pinch-zoom, in ONE REFERENCE CELL: the
+cell at which the desktop's resting grid (210x48, `REFERENCE_GRID_COLS`/`ROWS` in
+`scripts/xterm-page/state.js`) fills the Terminal lens's height. Every grid of 48 rows or fewer
+renders in that cell, PINNED TO THE TOP-LEFT, so row 0 and column 0 sit at the same spot on every
+task and every open: a 210x48 grid fills the pane, and a shorter one (a 120x30 spawn default)
+occupies the same frame from the top with the terminal's own background below its last row. Only
+two things render smaller: a grid taller than 48 rows (it fits its own rows, so no row is
+clipped) and a grid too wide for the GPU texture limit (a hardware ceiling; the cap is taken for
+the reference width too, so a narrow grid never lands a step bigger than a capped resting grid).
+The fit is a pure function of the grid and the pane, computed identically by every init and every
+refit, so no event history can produce a second answer and NOTHING is remembered across opens
+(the old per-desktop `terminalFitFontPx` is gone; its stored key is left as dead data). The height
+it fits against is the WebView's own layout height, the LATEST one `TerminalPane` measures while
+the footer shows its input row and the soft keyboard is down, sent on the init (`fitHeightPx`) and
+again on any change, so the first frame is already final and neither the Changes pane nor the
+keyboard can change it. A layout taken while another lens shows is provisional: Chat's footer is
+Terminal's height, so a switch from Chat fires no layout event, and a pane mounted under Chat
+(a push tap onto a remembered Chat lens) would otherwise never learn a height. A Terminal-lens
+value overrides it and is not moved by another lens at the same width. (Not a running maximum:
+that locked in a transiently taller layout and clipped the last row, measured on a release build
+2026-10-03.) Because that height ignores the keyboard, a viewport change that leaves the fit
+inputs where they were (the keyboard opening or closing) runs no fit at all: the page's window
+`resize` listener and ResizeObserver both go through `onViewportChange`
+(`scripts/xterm-page/refit.js`), which only re-pins column 0 and keeps the cursor in view unless
+the fit key moved (a new fit height, which is how a rotation arrives, or a grid not yet
+converged). One keyboard open used to run three complete fit
+chains (measured on a release build), and the shipped build reset the line height to 1 at the
+start of each, collapsing and re-stretching the grid three times per keyboard open. The page memoises the converged
+cell per fit key, so a repeat fit applies it directly instead of snapping short and re-stretching.
+A pinch is a page-local override: it survives a lens switch back, a foreground and a same-session
+re-seed (`preservePinch` on the bridge's `init`) and is cleared by the fit button, another session
+or another grid. The fit button always returns to the reference view. It
 **never resizes the desktop PTY** - a shared session must not be reshaped by the phone, so the
 only thing sent upstream is typed input. The protocol carries `resize` and `release-size` actions
 on the `interactive-terminal` verb, but they exist for the desktop: `src/channel/verbClient.ts`
@@ -356,8 +378,10 @@ exposes `write` alone, and nothing in `src/` sends the other two. (A phone-reque
 desktop-parked sessions was built, verified live end to end, and removed the same day: the
 phone-fitted narrow grid read WORSE than the desktop's own layout, whose rules and boxes are
 drawn for a wide frame - `docs/terminal-ownership-design.md` records the full arc. The durable
-fix is desktop-side: unwatched sessions rest at a detail-shaped 210x48 grid, so the mirror is
-identical whether a desktop surface shows the session or not.) A pre-0.4.0 desktop that reports
+fix is desktop-side: a session a phone streams with `terminal: true`, and no desktop surface
+holds, is parked at a detail-shaped 210x48 grid, so the mirror is identical whether a desktop
+surface shows the session or not. The park is a mobile feature, not a desktop one: a session no
+phone streams keeps whatever grid the last desktop surface left.) A pre-0.4.0 desktop that reports
 no grid falls back to inferring the column count from the scrollback. Arrow keys track the
 terminal's DECCKM mode (CSI vs SS3); the quick-key bar (Esc / Tab / arrows / Enter / Ctrl-C /
 slash) plus a text input row write through `interactive-terminal`.
@@ -577,9 +601,10 @@ for the first chunk with glyphs and an early chunk waits for the seed - the chun
 to paint, release the veil, and then be reset and replayed by the seed's own init, a black grid for
 about a second in the open, measured on the release build 2026-09-18), in chat mode when its
 transcript window lands, and never in changes mode, where the veil merely yields. The init that
-finally paints the successor keeps the predecessor's cell size (`keepFont`), so a shorter grid
-comes up at the same resolution, centred, rather than zoomed to fill the height; the fit button
-and a desktop grid change fit again. Past
+finally paints the successor holds the predecessor's frame across its reset (`holdFrame` on the
+bridge's `init`, sent whenever a frame is displayed), and comes up in the same reference cell as
+every other grid, pinned top-left, so a shorter successor is the same text in the same place rather
+than zoomed to fill the height. Past
 `SESSION_SWAP_QUIET_MS` with the dead session still bound, NOTHING is revealed: the window enters
 its waiting phase and stays there for as long as it takes, the way the desktop's own launch
 overlay (a muted spinner over a blank terminal area while a session spawns) does. The deadline is
@@ -716,7 +741,14 @@ rather than the raw response.
 `{ taskId, projectId, sessionId }` to the shared slot in
 `src/navigation/pendingNavigation.ts`, and `PendingNavigationRunner` - rendered in
 `app/_layout.tsx` as a sibling of the root `Stack`, immediately after it - consumes it and
-performs the `router.push` from inside React. The
+performs a `router.navigate` from inside React. `navigate`, not `push`: in expo-router 57's stack
+reducer a push always appends, so a tap for the task already on top stacked a duplicate screen,
+while a navigate to the same task on top keeps that route (and its key, so no remount) and only
+replaces its params; a different task still appends. The target carries no `mode`, so the screen
+opens the lens the user last chose for that task (Terminal when none), for every push category;
+it used to force Chat. A cold-launch tap can mount the screen before the settings store has
+hydrated that choice, so the screen adopts it when hydration lands unless the user has already
+switched lens. The
 desktop-revocation reset in `connectionManager.ts` publishes a `reset-to-root` intent through the
 same slot, for the same reason. That split is not stylistic. `router.push` does not navigate; it
 appends to expo-router's routing queue,
@@ -739,6 +771,17 @@ that `isReady()` tests in a *passive* effect on an ancestor of the root layout, 
 false at the consumer's own effect: a blocking guard there would defer with no retry signal and
 drop the tap. Correctness comes from tree position, since the drain runs after the navigator's
 effect in the same commit.
+
+**Android has a third delivery path, and it was missing until 2026-10-03.** notifee's press
+listeners (`onForegroundEvent`, `onBackgroundEvent`) fire only when the process is already alive,
+whether foregrounded or started headlessly by an FCM data message. A tap on an alert for an app the
+OS had KILLED launches a fresh process, and notifee reports that press only through
+`getInitialNotification()`, which the router never read on Android. So that tap opened the Agents
+feed and dropped the task, measured on a release build as no `session-open` at all after the tap,
+while the same tap worked whenever FCM had happened to start the process first. The router now
+reads it once at registration, beside the iOS cold-start read. A press reported by both a listener
+and the launch read routes once, latched on notifee's notification id (unique per displayed
+notification, since no task notification sets its own).
 
 The runtime notification permission - Android 13+'s `POST_NOTIFICATIONS` and iOS's
 `UNUserNotificationCenter` authorization, both via `notifee.requestPermission()` - is requested

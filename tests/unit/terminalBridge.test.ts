@@ -4,6 +4,7 @@ import {
   decodeTerminalMessage,
   encodeHostMessage,
   encodeTerminalMessage,
+  TERMINAL_FIT_TRIGGERS,
   type HostToTerminalMessage,
   type TerminalToHostMessage,
 } from '@/terminal/terminalBridge';
@@ -16,10 +17,11 @@ describe('host -> terminal round-trip', () => {
       scrollback: 'previous output\x1b[32m colored\x1b[0m\n',
       cols: 96,
       rows: 30,
-      fontSizePx: 13,
+      fitHeightPx: 635,
       theme: { background: '#101014', foreground: '#e6e6e6', cursor: '#e6e6e6', black: '#000000' },
       cleanFeed: false,
-      keepFont: false,
+      holdFrame: false,
+      preservePinch: false,
     };
     expect(decodeHostMessage(encodeHostMessage(knownDims))).toEqual(knownDims);
 
@@ -29,33 +31,62 @@ describe('host -> terminal round-trip', () => {
       scrollback: 'plain',
       cols: 80,
       rows: null,
-      fontSizePx: 12,
+      // The host has not measured the Terminal lens yet: the page falls back.
+      fitHeightPx: null,
       theme: {},
       cleanFeed: true,
-      keepFont: true,
+      holdFrame: true,
+      preservePinch: true,
     };
     expect(decodeHostMessage(encodeHostMessage(legacy))).toEqual(legacy);
   });
 
   /**
-   * keepFont is what keeps the cell size across a session swap; an init that
-   * lost the field (an older host against a newer page, or the reverse) must
-   * not decode into a fit-or-keep the sender never chose.
+   * holdFrame keeps the frame on screen across a swap, and preservePinch keeps
+   * a user's zoom across a lens switch back; an init that lost either (an
+   * older host against a newer page, or the reverse) must not decode into a
+   * choice the sender never made.
    */
-  it('rejects an init missing or with a non-boolean keepFont field', () => {
-    const withoutKeepFont = {
+  it('rejects an init missing or with a non-boolean holdFrame or preservePinch field', () => {
+    const complete = {
       type: 'init',
       seq: 3,
       scrollback: '',
       cols: 80,
       rows: 24,
-      fontSizePx: 12,
+      fitHeightPx: null,
       theme: {},
       cleanFeed: false,
+      holdFrame: true,
+      preservePinch: false,
     };
-    expect(decodeHostMessage(JSON.stringify(withoutKeepFont))).toBeNull();
-    expect(decodeHostMessage(JSON.stringify({ ...withoutKeepFont, keepFont: 'yes' }))).toBeNull();
-    expect(decodeHostMessage(JSON.stringify({ ...withoutKeepFont, keepFont: true }))).not.toBeNull();
+    expect(decodeHostMessage(JSON.stringify(complete))).not.toBeNull();
+    const { holdFrame: _holdFrame, ...withoutHoldFrame } = complete;
+    expect(decodeHostMessage(JSON.stringify(withoutHoldFrame))).toBeNull();
+    expect(decodeHostMessage(JSON.stringify({ ...complete, holdFrame: 'yes' }))).toBeNull();
+    const { preservePinch: _preservePinch, ...withoutPreservePinch } = complete;
+    expect(decodeHostMessage(JSON.stringify(withoutPreservePinch))).toBeNull();
+    expect(decodeHostMessage(JSON.stringify({ ...complete, fitHeightPx: '635' }))).toBeNull();
+  });
+
+  /**
+   * The fit button's message carries the ring's grid, so a page that inited
+   * before the desktop reported one fits the real grid. Unknown dims decode as
+   * nulls rather than rejecting the press.
+   */
+  it('round-trips the refit message with and without the ring grid', () => {
+    const withGrid: HostToTerminalMessage = { type: 'refit', cols: 210, rows: 48 };
+    expect(decodeHostMessage(encodeHostMessage(withGrid))).toEqual(withGrid);
+    const unknownGrid: HostToTerminalMessage = { type: 'refit', cols: null, rows: null };
+    expect(decodeHostMessage(encodeHostMessage(unknownGrid))).toEqual(unknownGrid);
+    expect(decodeHostMessage('{"type":"refit"}')).toEqual(unknownGrid);
+  });
+
+  it('round-trips the fit-height and repaint messages', () => {
+    const fitHeight: HostToTerminalMessage = { type: 'fit-height', fitHeightPx: 635 };
+    expect(decodeHostMessage(encodeHostMessage(fitHeight))).toEqual(fitHeight);
+    expect(decodeHostMessage('{"type":"fit-height","fitHeightPx":"635"}')).toBeNull();
+    expect(decodeHostMessage(encodeHostMessage({ type: 'repaint' }))).toEqual({ type: 'repaint' });
   });
 
   it('round-trips a write message including control bytes', () => {
@@ -104,8 +135,81 @@ describe('terminal -> host round-trip', () => {
       initial: false,
     };
     expect(decodeTerminalMessage(encodeTerminalMessage(modes))).toEqual(modes);
-    const fontSize: TerminalToHostMessage = { type: 'font-size', fontSizePx: 7 };
-    expect(decodeTerminalMessage(encodeTerminalMessage(fontSize))).toEqual(fontSize);
+    const fitReport: TerminalToHostMessage = {
+      type: 'font-size',
+      fontSizePx: 11,
+      source: 'settled',
+      trigger: 'init',
+      cols: 120,
+      rows: 30,
+      lineHeight: 1.194,
+      fitHeightPx: 635,
+      innerHeightPx: 635,
+      innerWidthPx: 411,
+      gridHeightPx: 396,
+      devicePixelRatio: 2.625,
+      maxTextureSize: 4096,
+    };
+    expect(decodeTerminalMessage(encodeTerminalMessage(fitReport))).toEqual(fitReport);
+  });
+
+  /**
+   * Only the size is required on a fit report: the rest is diagnostic for the
+   * release-build trace, and an older page's bare report must still keep the
+   * host's pinch baseline in sync.
+   */
+  it('defaults every diagnostic fit-report field when an older page sends only the size', () => {
+    expect(decodeTerminalMessage(JSON.stringify({ type: 'font-size', fontSizePx: 7 }))).toEqual({
+      type: 'font-size',
+      fontSizePx: 7,
+      source: 'unknown',
+      trigger: 'unknown',
+      cols: null,
+      rows: null,
+      lineHeight: null,
+      fitHeightPx: null,
+      innerHeightPx: null,
+      innerWidthPx: null,
+      gridHeightPx: null,
+      devicePixelRatio: null,
+      maxTextureSize: null,
+    });
+  });
+
+  /**
+   * The trigger lands in the release-build connection trace, which must never
+   * carry free text from the page, so it decodes through a CLOSED set: every
+   * member round-trips unchanged and anything else becomes 'unknown', whatever
+   * its type.
+   *
+   * Mutation that reddens this: let decodeFitTrigger pass any string through.
+   */
+  describe('the fit report trigger is a closed set', () => {
+    const decodeTrigger = (trigger: unknown): string | undefined => {
+      const decoded = decodeTerminalMessage(JSON.stringify({ type: 'font-size', fontSizePx: 11, trigger }));
+      return decoded?.type === 'font-size' ? decoded.trigger : undefined;
+    };
+
+    it('round-trips every known trigger unchanged', () => {
+      expect(TERMINAL_FIT_TRIGGERS.length).toBeGreaterThan(0);
+      for (const trigger of TERMINAL_FIT_TRIGGERS) {
+        expect(decodeTrigger(trigger), `trigger ${trigger}`).toBe(trigger);
+      }
+    });
+
+    it('decodes free text from the page to unknown instead of passing it to the trace', () => {
+      expect(decodeTrigger('user typed this')).toBe('unknown');
+      expect(decodeTrigger('')).toBe('unknown');
+      // Close to a member is still not a member.
+      expect(decodeTrigger('Init')).toBe('unknown');
+      expect(decodeTrigger('fit-height-x')).toBe('unknown');
+    });
+
+    it('decodes a trigger that is not a string to unknown', () => {
+      expect(decodeTrigger(42)).toBe('unknown');
+      expect(decodeTrigger(null)).toBe('unknown');
+      expect(decodeTrigger({ nested: 'init' })).toBe('unknown');
+    });
   });
 
   it('round-trips the scroll-latest host message', () => {
@@ -147,10 +251,6 @@ describe('terminal -> host round-trip', () => {
   it('round-trips the tapped message (keyboard toggle)', () => {
     const tapped: TerminalToHostMessage = { type: 'tapped' };
     expect(decodeTerminalMessage(encodeTerminalMessage(tapped))).toEqual(tapped);
-  });
-
-  it('round-trips the refit host message (snap back to the fitted view)', () => {
-    expect(decodeHostMessage(encodeHostMessage({ type: 'refit' }))).toEqual({ type: 'refit' });
   });
 
   it('round-trips a painted report, with and without an init seq to attribute it to', () => {

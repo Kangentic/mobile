@@ -67,9 +67,18 @@ const DECRYPTED = {
   data: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
 };
 
-const EXPECTED_PUSH = {
+/**
+ * A tap NAVIGATES (never pushes, which stacked a second session screen for the
+ * task already on top) and carries NO `mode`: the session screen resolves the
+ * lens itself, so a tap lands on the lens the user last chose for that task. A
+ * forced `mode: 'chat'` here used to override that for every push category.
+ * Mutations that redden this: restoring `mode: 'chat'`, or `router.push`.
+ * Whether NAVIGATE actually de-duplicates is the reducer's behaviour, pinned
+ * against the real router in PendingNavigationDedupe.test.tsx.
+ */
+const EXPECTED_NAVIGATION = {
   pathname: '/task/[taskId]',
-  params: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', mode: 'chat' },
+  params: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
 };
 
 /**
@@ -129,8 +138,9 @@ describe('PendingNavigationRunner', () => {
 
     render(<PendingNavigationRunner />);
 
-    expect(mockRouterPush).toHaveBeenCalledTimes(1);
-    expect(mockRouterPush).toHaveBeenCalledWith(EXPECTED_PUSH);
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledWith(EXPECTED_NAVIGATION);
+    expect(mockRouterPush).not.toHaveBeenCalled();
   });
 
   /**
@@ -138,8 +148,7 @@ describe('PendingNavigationRunner', () => {
    * re-render cannot show this - the effect is keyed on the pending value and
    * its reference is stable, so it never re-fires - but a remount runs the
    * effect again against module state that outlives the component. Leaving the
-   * value in place pushes the same task screen a second time, costing the user
-   * an extra back press.
+   * value in place navigates to the same task screen a second time.
    */
   it('does not perform the same navigation again when it remounts', async () => {
     await publishTap('remount-notification');
@@ -147,7 +156,7 @@ describe('PendingNavigationRunner', () => {
     render(<PendingNavigationRunner />).unmount();
     render(<PendingNavigationRunner />);
 
-    expect(mockRouterPush).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -159,14 +168,15 @@ describe('PendingNavigationRunner', () => {
   it('performs a navigation published while it is already mounted', async () => {
     render(<PendingNavigationRunner />);
 
-    expect(mockRouterPush).not.toHaveBeenCalled();
+    expect(mockRouterNavigate).not.toHaveBeenCalled();
 
     await act(async () => {
       await publishTap('warm-notification');
     });
 
-    expect(mockRouterPush).toHaveBeenCalledTimes(1);
-    expect(mockRouterPush).toHaveBeenCalledWith(EXPECTED_PUSH);
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledWith(EXPECTED_NAVIGATION);
+    expect(mockRouterPush).not.toHaveBeenCalled();
   });
 
   /**
