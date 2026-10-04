@@ -1,13 +1,16 @@
 import { Platform } from 'react-native';
-import notifee, { EventType, type EventDetail } from '@notifee/react-native';
+import notifee, { EventType, type Notification } from '@notifee/react-native';
 import * as Notifications from 'expo-notifications';
 import { publishPendingNavigation } from '@/navigation/pendingNavigation';
 import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
 
 /**
- * Notification tap routing: a tap opens the task screen in chat mode.
- * Registered once at boot, outside React - the background handler in
- * particular must exist before notifee replays a cold-start press event.
+ * Notification tap routing: a tap opens the task screen on the lens the user
+ * last chose for that task (terminal when there is none), for every category.
+ * Registered once at boot, outside React, so a press is caught on every path:
+ * the listeners for an app already running (foreground, or a process FCM
+ * started headlessly), and a one-time read for the press that launched a
+ * killed process, which on both platforms arrives only that way.
  *
  * The two platforms get there differently, because they carry the task
  * identity differently:
@@ -39,11 +42,32 @@ function openTask(taskId: string, projectId: string, sessionId: string): void {
   publishPendingNavigation({ kind: 'open-task', taskId, projectId, sessionId });
 }
 
-function openTaskFromNotification(detail: EventDetail): void {
-  const data = detail.notification?.data;
+/**
+ * The Android twin of the iOS identifier latch below: one press routes once.
+ * A press that launches the app can be reported twice - by the background
+ * listener when FCM had already started the process headlessly, and by
+ * getInitialNotification, which reports whatever press opened the activity -
+ * and routing both would be a wasted second navigation. Keyed on notifee's
+ * notification id, which is unique per displayed notification: no task
+ * notification sets an id of its own (only the connection notification does,
+ * and it carries no task), so a reposted alert is a new id and still routes.
+ * Latched only once a press resolves to a task, so a press that routes
+ * nothing (the connection notification, the decrypt placeholder) never
+ * occupies the slot. Per process: the state dies with it, as the reports do.
+ */
+let lastRoutedPressNotificationId: string | null = null;
+
+function openTaskFromNotification(notification: Notification | undefined): void {
+  if (!notification) return;
+  const data = notification.data;
   if (!data) return;
   const taskId = typeof data.taskId === 'string' ? data.taskId : null;
   if (!taskId) return;
+  const notificationId = notification.id;
+  if (typeof notificationId === 'string' && notificationId.length > 0) {
+    if (notificationId === lastRoutedPressNotificationId) return;
+    lastRoutedPressNotificationId = notificationId;
+  }
   const projectId = typeof data.projectId === 'string' ? data.projectId : '';
   const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
   openTask(taskId, projectId, sessionId);
@@ -56,8 +80,10 @@ function openTaskFromNotification(detail: EventDetail): void {
  * cached response AND subscribes to the listener, then de-duplicates the two by
  * comparing `notification.request.identifier` (`determineNextResponse`), and its
  * CHANGELOG records a fixed iOS bug where the response listener emitted
- * duplicate events. Routing both would open the same task screen twice,
- * costing the user two back presses to leave it.
+ * duplicate events. Routing both used to open the same task screen twice,
+ * costing the user two back presses to leave it. The runner now NAVIGATES, so a
+ * second route for the task already on top replaces it rather than stacking,
+ * but the latch still keeps one tap to one routing (and one decrypt on iOS).
  *
  * Guarded on a string identifier rather than blind equality so that a payload
  * without one still routes: dropping a real tap is worse than a rare double.
@@ -109,11 +135,25 @@ export function registerNotificationTapHandlers(): void {
 
   if (Platform.OS === 'android') {
     notifee.onForegroundEvent((event) => {
-      if (event.type === EventType.PRESS) openTaskFromNotification(event.detail);
+      if (event.type === EventType.PRESS) openTaskFromNotification(event.detail.notification);
     });
     notifee.onBackgroundEvent(async (event) => {
-      if (event.type === EventType.PRESS) openTaskFromNotification(event.detail);
+      if (event.type === EventType.PRESS) openTaskFromNotification(event.detail.notification);
     });
+    // A press that LAUNCHED A KILLED PROCESS reaches neither listener: notifee
+    // reports it only through getInitialNotification (the iOS deprecation of
+    // that API does not apply here). Without this read, a tap on an alert for
+    // an app the OS had killed opened the Agents feed and dropped the task,
+    // measured on a release build 2026-10-03. It worked only when FCM had
+    // happened to start the process headlessly first.
+    void notifee
+      .getInitialNotification()
+      .then((initial) => {
+        if (initial) openTaskFromNotification(initial.notification);
+      })
+      .catch(() => {
+        // No launching press, or the module is unavailable; nothing to route.
+      });
     return;
   }
 

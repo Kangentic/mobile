@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { TERMINAL_FIT_TRIGGERS } from '@/terminal/terminalBridge';
 
 /**
  * Every <script> block in the generated xterm.html must PARSE: the page's
@@ -81,13 +82,53 @@ describe('generated xterm.html', () => {
   });
 
   /**
-   * A grid narrower than the pane used to pin left and pile the whole
-   * leftover on the right, which reads as a terminal cut short rather than one
-   * with a margin (the font is fitted to the pane's HEIGHT, so a grid taller
-   * in aspect than the pane cannot fill the width at any font size, and that
-   * leftover is inherent - only WHERE it goes was the bug). `margin: 0 auto`
-   * centres a narrow grid and computes to zero for a wide one, so the
-   * overflow-and-pan path stays untouched either way.
+   * A fit report's `trigger` crosses the WebView bridge as a string, and the
+   * host decodes it through the CLOSED TERMINAL_FIT_TRIGGERS set: anything not
+   * in it becomes 'unknown', and the release-build trace silently loses what
+   * started the fit. The page names its triggers as string literals (the
+   * refit() and onViewportChange() call sites, the refit default, the initial
+   * value) with no import tying them to that list, so a rename on either side
+   * stays green everywhere else. This scans the page fragments for every
+   * literal and checks each against the host's set.
+   *
+   * Mutation that reddens this: rename one trigger literal in a page script
+   * (e.g. 'fit-height' to 'fit-height-x' in dispatch.js).
+   */
+  it('names only fit triggers the host decodes (page literals against TERMINAL_FIT_TRIGGERS)', () => {
+    const hostTriggers: readonly string[] = TERMINAL_FIT_TRIGGERS;
+    const namedTriggers: { where: string; trigger: string }[] = [];
+
+    const callSitePattern = /\b(refit|onViewportChange)\(\s*(['"])([^'"]*)\2/g;
+    let callSiteCount = 0;
+    for (const fileName of readdirSync(pageModulesDir)) {
+      for (const match of pageModule(fileName).matchAll(callSitePattern)) {
+        callSiteCount += 1;
+        namedTriggers.push({ where: `${fileName}: ${match[1]}('${match[3]}')`, trigger: match[3] });
+      }
+    }
+    // refit.js's own fallback, for a refit() handed an Event (the window
+    // 'resize' listener) instead of a name, and state.js's initial value.
+    const fallbackMatch = /activeFitTrigger = typeof trigger === 'string' \? trigger : '([^']+)';/.exec(pageModule('refit.js'));
+    expect(fallbackMatch, "refit.js: the activeFitTrigger fallback line was not found (reworded? update this scan)").not.toBeNull();
+    namedTriggers.push({ where: `refit.js: activeFitTrigger fallback '${fallbackMatch?.[1]}'`, trigger: fallbackMatch?.[1] ?? '' });
+    const initialMatch = /var activeFitTrigger = '([^']+)';/.exec(pageModule('state.js'));
+    expect(initialMatch, 'state.js: the initial activeFitTrigger line was not found (reworded? update this scan)').not.toBeNull();
+    namedTriggers.push({ where: `state.js: initial activeFitTrigger '${initialMatch?.[1]}'`, trigger: initialMatch?.[1] ?? '' });
+
+    // So a broken pattern cannot pass by finding nothing: seven call sites
+    // exist today (four refit, three onViewportChange).
+    expect(callSiteCount, 'the call-site scan found fewer literals than the page has').toBeGreaterThanOrEqual(7);
+
+    const notDecodedByHost = namedTriggers.filter(({ trigger }) => !hostTriggers.includes(trigger)).map(({ where }) => where);
+    expect(notDecodedByHost).toEqual([]);
+  });
+
+  /**
+   * A grid narrower than the pane is PINNED LEFT, as a shorter one is pinned
+   * to the top: column 0 and row 0 sit at the identical spot on every open of
+   * every task, the maintainer's rule (2026-10). Both used to be centred
+   * (`margin: 0 auto`), which read as a margin but moved the grid with the
+   * shape of whichever desktop surface a session was parked at.
    *
    * Checked against BOTH the committed HTML and its generator
    * (scripts/buildXtermHtml.mjs, where the CSS is actually authored - the CSS
@@ -95,10 +136,10 @@ describe('generated xterm.html', () => {
    * because nothing in CI regenerates xterm.html and diffs it, so an edit to
    * the generator alone would sit green until the next regeneration.
    *
-   * Matches loosely (width + margin/auto present, not the whole rule
-   * byte-for-byte) so a harmless reflow of the CSS does not redden this.
+   * Matches loosely (width + a margin without auto) so a harmless reflow of
+   * the CSS does not redden this.
    */
-  it('centres a grid narrower than the screen instead of pinning it left', () => {
+  it('pins a grid narrower than the screen to the left instead of centring it', () => {
     const builderSource = readFileSync(join(__dirname, '..', '..', 'scripts', 'buildXtermHtml.mjs'), 'utf8');
     for (const [label, source] of [
       ['the generated page', generatedHtml],
@@ -107,7 +148,8 @@ describe('generated xterm.html', () => {
       const rule = /#terminal\s*\{([^}]*)\}/.exec(source)?.[1] ?? '';
       expect(rule, `${label}: no #terminal rule found`).not.toBe('');
       expect(rule, `${label}: #terminal rule`).toContain('width: max-content');
-      expect(rule, `${label}: #terminal rule`).toMatch(/margin:\s*0\s+auto/);
+      expect(rule, `${label}: #terminal rule`).toMatch(/margin:\s*0\s*;/);
+      expect(rule, `${label}: #terminal rule`).not.toContain('auto');
     }
   });
 
@@ -126,7 +168,11 @@ describe('generated xterm.html', () => {
     // pinned clamp is what snaps the pan there. The VERTICAL follow must NOT
     // run here: the fit is still converging across frames, and following
     // mid-convergence locked in a stale translate (the settled fit owns it).
-    const refitBody = pageModule('refit.js');
+    // onViewportChange, in the same module, follows only on its re-orient
+    // path, where nothing is converging (the cell is settled or pinched).
+    const refitModule = pageModule('refit.js');
+    const refitBody = refitModule.slice(refitModule.indexOf('function refit('), refitModule.indexOf('function onViewportChange('));
+    expect(refitBody).toContain('function refit(');
     expect(refitBody).toContain('manualPanUntil = 0');
     expect(refitBody).toContain('pinnedToStart = true');
     expect(refitBody).toContain('clampHorizontalPan()');
@@ -154,19 +200,31 @@ describe('generated xterm.html', () => {
      * viewport, which is the keyboard-closed case every other test models.
      */
     fitHeight?: number;
+    /**
+     * The reference row count the fit is made in (fontGeometry.js's
+     * referenceRowsForFit). Defaults to the grid's own rows, which reproduces
+     * the fit-this-grid behaviour the older cases here were written against.
+     */
+    referenceRows?: number;
+    /** The line height the chain starts from; defaults to the clean slate, 1. */
+    lineHeight?: number;
   }): {
     fit: (passesLeft: number, stretchLocked: boolean, generation: number) => void;
+    /** The deferred half of a final-pass giveback: measures once and settles, for the generation it was scheduled in. */
+    settleAfterFinalGiveback: (generation: number) => void;
     screenHeight: () => number;
     fontSizePx: () => number;
+    lineHeight: () => number;
     followed: () => number;
     paddingTop: () => string;
-    fontSizePosts: () => number[];
+    settleReports: () => { source: string; fontSizePx: number; gridHeightPx: number }[];
+    settledFit: () => { key: string; fontSizePx: number; lineHeight: number } | null;
   } {
-    // The whole module: the fit, the centring, and the texture-cap cluster.
+    // The whole module: the fit, the settle, and the texture-cap cluster.
     // Its load-time GPU probe self-guards (its own try/catch keeps the
     // conservative default when the fake document has no createElement).
     const source = pageModule('heightFit.js');
-    const terminal = { rows: options.rows, options: { fontSize: options.fontSizePx, lineHeight: 1 } };
+    const terminal = { rows: options.rows, options: { fontSize: options.fontSizePx, lineHeight: options.lineHeight ?? 1 } };
     const screenHeight = (): number =>
       terminal.rows * Math.ceil(terminal.options.fontSize * options.cellHeightRatio * terminal.options.lineHeight);
     const gridHost = { style: { paddingTop: '0px' } };
@@ -175,7 +233,7 @@ describe('generated xterm.html', () => {
         selector === '.xterm-screen' ? { getBoundingClientRect: () => ({ height: screenHeight() }) } : null,
       getElementById: (id: string) => (id === 'terminal' ? gridHost : null),
     };
-    const fontSizePosts: number[] = [];
+    const settleReports: { source: string; fontSizePx: number; gridHeightPx: number }[] = [];
     assertInjectionsAreAlive('heightFit.js', source, [
       'currentFontSizePx',
       'followCursorVertically',
@@ -186,7 +244,10 @@ describe('generated xterm.html', () => {
       'HEIGHT_FIT_TOLERANCE_PX',
       'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
       'MIN_AUTO_FONT_PX',
-      'postToHost',
+      'referenceRowsForFit',
+      'currentFitKey',
+      'reportFit',
+      'settledFit',
       'requestAnimationFrame',
     ]);
     const build = new Function(
@@ -194,7 +255,6 @@ describe('generated xterm.html', () => {
       'window',
       'document',
       'requestAnimationFrame',
-      'postToHost',
       'fitViewportHeight',
       'heightFitGeneration',
       'MAX_LINE_HEIGHT',
@@ -202,17 +262,29 @@ describe('generated xterm.html', () => {
       'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
       'MIN_AUTO_FONT_PX',
       'initialFontSizePx',
+      'referenceRows',
+      'onSettleReport',
       `var currentFontSizePx = initialFontSizePx;
+       var settledFit = null;
        var followedAfterSettle = 0;
        function followCursorVertically(force) { followedAfterSettle += 1; }
        function traceHeightFit() {}
+       function referenceRowsForFit() { return referenceRows; }
+       function currentFitKey() { return 'fit-key'; }
+       function reportFit(source, gridHeightPx) {
+         onSettleReport({ source: source, fontSizePx: currentFontSizePx, gridHeightPx: gridHeightPx });
+       }
        ${source}
-       return { fit: fitGridHeightToViewport, fontSizePx: function () { return currentFontSizePx; },
-                followed: function () { return followedAfterSettle; } };`,
+       return { fit: fitGridHeightToViewport, settleAfterFinalGiveback: settleAfterFinalGiveback,
+                fontSizePx: function () { return currentFontSizePx; },
+                followed: function () { return followedAfterSettle; },
+                settledFit: function () { return settledFit; } };`,
     ) as (...dependencies: unknown[]) => {
       fit: (passesLeft: number, stretchLocked: boolean, generation: number) => void;
+      settleAfterFinalGiveback: (generation: number) => void;
       fontSizePx: () => number;
       followed: () => number;
+      settledFit: () => { key: string; fontSizePx: number; lineHeight: number } | null;
     };
     const built = build(
       terminal,
@@ -221,11 +293,6 @@ describe('generated xterm.html', () => {
       // Frames run inline: each pass still measures the fake renderer AFTER
       // the previous pass wrote to it, which is the ordering that matters.
       (callback: () => void) => callback(),
-      (message: { type: string; fontSizePx?: number }) => {
-        if (message.type === 'font-size' && typeof message.fontSizePx === 'number') {
-          fontSizePosts.push(message.fontSizePx);
-        }
-      },
       () => options.fitHeight ?? options.viewportHeight,
       1,
       pageVar('MAX_LINE_HEIGHT'),
@@ -233,14 +300,21 @@ describe('generated xterm.html', () => {
       pageVar('HEIGHT_FIT_BOTTOM_CLEARANCE_PX'),
       pageVar('MIN_AUTO_FONT_PX'),
       options.fontSizePx,
+      options.referenceRows ?? options.rows,
+      (report: { source: string; fontSizePx: number; gridHeightPx: number }) => {
+        settleReports.push(report);
+      },
     );
     return {
       fit: built.fit,
+      settleAfterFinalGiveback: built.settleAfterFinalGiveback,
       screenHeight,
       fontSizePx: built.fontSizePx,
+      lineHeight: () => terminal.options.lineHeight,
       followed: built.followed,
       paddingTop: () => gridHost.style.paddingTop,
-      fontSizePosts: () => fontSizePosts,
+      settleReports: () => settleReports,
+      settledFit: built.settledFit,
     };
   }
 
@@ -293,10 +367,11 @@ describe('generated xterm.html', () => {
 
     harness.fit(4, false, 1);
 
-    // Fits the FULL height, not the strip: no font collapse, no font posts.
+    // Fits the FULL height, not the strip: no font collapse, and the one
+    // settle report says so.
     expect(harness.screenHeight()).toBeLessThanOrEqual(fullHeight);
     expect(harness.fontSizePx()).toBe(17);
-    expect(harness.fontSizePosts()).toEqual([]);
+    expect(harness.settleReports().map((report) => report.fontSizePx)).toEqual([17]);
     // And deliberately still taller than the keyboard-shrunken window - the
     // keyboard covers rows rather than reshaping the grid.
     expect(harness.screenHeight()).toBeGreaterThan(380);
@@ -339,25 +414,99 @@ describe('generated xterm.html', () => {
 
     expect(harness.screenHeight()).toBeLessThanOrEqual(610);
     expect(harness.fontSizePx()).toBe(12);
-    expect(harness.fontSizePosts()).toEqual([]);
+    expect(harness.settleReports().map((report) => report.fontSizePx)).toEqual([12]);
   });
 
   /**
-   * The desktop parks a session at whatever surface last displayed it, and its
-   * bottom panel is a 14-row strip. A 14-row grid cannot fill a phone at any
-   * font the texture cap and the 1.3 line-height ceiling allow, so the
-   * leftover is inherent - but pinned to the top it all piles up underneath
-   * and reads as a terminal cut in half. Split it evenly, as the horizontal
-   * axis already does.
+   * THE REFERENCE CELL, through the real fit chain: the maintainer's rule is
+   * the same font size and the same position on every open of every task. A
+   * 120x30 session (the desktop's spawn default, task #529's grid) used to
+   * fill the height at ~17 px while a 210x48 one sat at ~11 px, and a short
+   * grid was centred, moving its first row. Now a 30-row grid takes exactly
+   * the decisions the 48-row resting grid takes and lands on the same font and
+   * line height, its grid 30/48 of the reference height, pinned to the top.
+   *
+   * Mutation that reddens this: drop the reference scaling in
+   * fitGridHeightToViewport (the 30-row grid then stretches to fill the pane).
    */
-  it('centres a grid shorter than the pane instead of pinning it to the top', () => {
-    const harness = buildHeightFit({ rows: 14, viewportHeight: 624, fontSizePx: 16, cellHeightRatio: 1.24 });
+  it('settles a 30-row grid on the exact cell of the 48-row reference grid, pinned to the top', () => {
+    const reference = buildHeightFit({ rows: 48, referenceRows: 48, viewportHeight: 635, fontSizePx: 11, cellHeightRatio: 1.21 });
+    const shorter = buildHeightFit({ rows: 30, referenceRows: 48, viewportHeight: 635, fontSizePx: 11, cellHeightRatio: 1.21 });
 
-    harness.fit(4, false, 1);
+    reference.fit(4, false, 1);
+    shorter.fit(4, false, 1);
 
-    const slack = 624 - harness.screenHeight();
-    expect(slack, 'precondition: a 14-row grid cannot fill the pane').toBeGreaterThan(100);
-    expect(harness.paddingTop()).toBe(`${Math.floor(slack / 2)}px`);
+    expect(shorter.fontSizePx()).toBe(reference.fontSizePx());
+    expect(shorter.lineHeight()).toBeCloseTo(reference.lineHeight(), 10);
+    // Same per-row height, so the shorter grid is exactly 30/48 of the
+    // reference grid's height - not stretched to fill the pane.
+    expect(shorter.screenHeight() / 30).toBe(reference.screenHeight() / 48);
+    expect(shorter.screenHeight()).toBeLessThan(635 * 0.7);
+    expect(shorter.paddingTop()).toBe('0px');
+  });
+
+  /**
+   * And the converged cell is recorded for reuse (settledFit), with the
+   * MEASURED grid height on the report rather than the reference-scaled one.
+   */
+  it('records the converged cell and reports the measured grid height', () => {
+    const shorter = buildHeightFit({ rows: 30, referenceRows: 48, viewportHeight: 635, fontSizePx: 11, cellHeightRatio: 1.21 });
+
+    shorter.fit(4, false, 1);
+
+    expect(shorter.settledFit()).toEqual({ key: 'fit-key', fontSizePx: shorter.fontSizePx(), lineHeight: shorter.lineHeight() });
+    expect(shorter.settleReports()).toEqual([{ source: 'settled', fontSizePx: shorter.fontSizePx(), gridHeightPx: shorter.screenHeight() }]);
+  });
+
+  /**
+   * The last pass hands an overshooting stretch back blind, and the settle
+   * used to report the measurement taken BEFORE that giveback: on a release
+   * build a 210x48 fit reported gridHeightPx=677 in a 670 pane while the grid
+   * on screen fit. The report (and the recorded cell) must describe the grid
+   * that is actually painted.
+   *
+   * Mutation that reddens this: settle on the pre-giveback measurement again.
+   */
+  it('settles on the corrected grid after a final-pass giveback, not the overflowing one', () => {
+    // 48 x ceil(10 x 1.21 x 1.1) = 672 overflows a 635 pane; the giveback
+    // takes the stretch to ~1.036 and the grid to 48 x 13 = 624.
+    const harness = buildHeightFit({ rows: 48, viewportHeight: 635, fontSizePx: 10, cellHeightRatio: 1.21, lineHeight: 1.1 });
+    expect(harness.screenHeight(), 'precondition: the stretch overflows').toBeGreaterThan(635);
+
+    harness.fit(1, false, 1);
+
+    expect(harness.screenHeight()).toBeLessThanOrEqual(635);
+    expect(harness.settleReports()).toEqual([{ source: 'settled', fontSizePx: 10, gridHeightPx: harness.screenHeight() }]);
+    expect(harness.settledFit()?.lineHeight).toBe(harness.lineHeight());
+    expect(harness.followed()).toBe(1);
+  });
+
+  /**
+   * The settle after a final-pass giveback waits one frame, and a refit can
+   * start a new chain (a new generation) inside it. The deferred settle then
+   * belongs to a dead chain: recording its measurement would overwrite the
+   * live chain's cell and report a grid nobody is waiting on.
+   *
+   * Mutation that reddens this: drop the generation check from
+   * settleAfterFinalGiveback.
+   */
+  it('ignores the deferred settle of a final giveback whose chain was superseded', () => {
+    const harness = buildHeightFit({ rows: 48, viewportHeight: 635, fontSizePx: 10, cellHeightRatio: 1.21 });
+
+    // The harness's live generation is 1. A settle scheduled by the chain
+    // before it (generation 0) arrives after a refit started a new chain.
+    harness.settleAfterFinalGiveback(0);
+
+    expect(harness.settleReports()).toEqual([]);
+    expect(harness.settledFit()).toBeNull();
+    expect(harness.followed()).toBe(0);
+
+    // Control: the live generation does settle on what it measures.
+    harness.settleAfterFinalGiveback(1);
+
+    expect(harness.settleReports()).toEqual([{ source: 'settled', fontSizePx: 10, gridHeightPx: harness.screenHeight() }]);
+    expect(harness.settledFit()).not.toBeNull();
+    expect(harness.followed()).toBe(1);
   });
 
   /**
@@ -372,23 +521,22 @@ describe('generated xterm.html', () => {
     harness.fit(4, false, 2);
 
     expect(harness.screenHeight()).toBe(before);
-    expect(harness.fontSizePosts()).toEqual([]);
+    expect(harness.settleReports()).toEqual([]);
   });
 
   /**
    * A pinch is the user taking the size. A fit still converging would keep
-   * stepping the font under their finger and post sizes that overwrite the
-   * host's pinch baseline mid-gesture, so zoom cancels it - while still
-   * re-centring, since a grid that grew past the pane must not keep the
-   * padding that a short one earned.
+   * stepping the font under their finger, so zoom cancels it, and records the
+   * pinch so every later refit (keyboard, rotation) keeps it until the fit
+   * button, another session or another grid.
    */
-  it('cancels an in-flight height fit when a pinch takes the size', () => {
+  it('cancels an in-flight height fit when a pinch takes the size, and records the pinch', () => {
     // applyFontSize is the last function in lifecycle.js; slice from its head.
     const lifecycleSource = pageModule('lifecycle.js');
     const applyFontSizeBody = lifecycleSource.slice(lifecycleSource.indexOf('function applyFontSize('));
     expect(applyFontSizeBody).toContain('function applyFontSize(');
     expect(applyFontSizeBody).toContain('heightFitGeneration += 1');
-    expect(applyFontSizeBody).toContain('centerGridFromMeasurement');
+    expect(applyFontSizeBody).toContain('pinchOverrideFontPx = capped');
   });
 
   it('runs the height fit from the refit pass, not the geometry pass', () => {
@@ -396,11 +544,11 @@ describe('generated xterm.html', () => {
     expect(refitBody).toContain('fitGridHeightToViewport(HEIGHT_FIT_PASSES');
     // Each refit owns a generation, or two live fits step the font together.
     expect(refitBody).toContain('heightFitGeneration += 1');
-    // And each chain starts from line height 1: an inherited stretch from the
-    // PREVIOUS chain overflows against the freshly-reset font, gets handed
-    // back as if it were this chain's own overshoot, and LOCKS stretching -
-    // the fit then settles short and centred ("~80% of the TUI" on a fresh
-    // open, caught live by the fit trace).
+    // And a chain that is not reusing a converged cell starts from line
+    // height 1: an inherited stretch from the PREVIOUS chain overflows against
+    // the freshly-reset font, gets handed back as if it were this chain's own
+    // overshoot, and LOCKS stretching - the fit then settles short ("~80% of
+    // the TUI" on a fresh open, caught live by the fit trace).
     expect(refitBody).toContain('terminal.options.lineHeight = 1');
   });
 
@@ -435,9 +583,9 @@ describe('generated xterm.html', () => {
     const handlerBody = pageModule('dispatch.js');
     const refitBranch = handlerBody.slice(
       handlerBody.indexOf("message.type === 'refit'"),
-      handlerBody.indexOf("message.type === 'resize'"),
+      handlerBody.indexOf("message.type === 'fit-height'"),
     );
-    expect(refitBranch).toContain('refit();');
+    expect(refitBranch).toContain("refit('refit-msg');");
     expect(refitBranch).not.toContain('autoFitFontToScreen()');
     expect(refitBranch).not.toContain('applyGeometry()');
   });
@@ -454,7 +602,7 @@ describe('generated xterm.html', () => {
   it('answers a resize message with the whole refit, not the font-and-geometry half', () => {
     const handlerBody = pageModule('dispatch.js');
     const resizeBranch = handlerBody.slice(handlerBody.indexOf("message.type === 'resize'"));
-    expect(resizeBranch).toContain('refit();');
+    expect(resizeBranch).toContain("refit('resize-msg');");
     expect(resizeBranch).not.toContain('autoFitFontToScreen()');
     expect(resizeBranch).not.toContain('applyGeometry()');
   });
@@ -470,6 +618,7 @@ describe('generated xterm.html', () => {
   describe('state.js fitViewportHeight', () => {
     function buildFitViewportHeight(): {
       setViewport: (innerWidth: number, innerHeight: number) => void;
+      setHostFitHeight: (fitHeightPx: number | null) => void;
       fit: () => number;
     } {
       const source = pageModule('state.js');
@@ -478,20 +627,45 @@ describe('generated xterm.html', () => {
         source.indexOf('var MIN_AUTO_FONT_PX'),
       );
       expect(fitSource).toContain('function fitViewportHeight(');
+      expect(fitSource).toContain('var hostFitHeightPx = null;');
       assertInjectionsAreAlive('state.js (fitViewportHeight slice)', fitSource, ['window']);
       const windowStub = { innerWidth: 0, innerHeight: 0 };
-      const build = new Function('window', `${fitSource} return fitViewportHeight;`) as (
-        windowReference: typeof windowStub,
-      ) => () => number;
-      const fitViewportHeight = build(windowStub);
+      const build = new Function(
+        'window',
+        `${fitSource}
+         return { fit: fitViewportHeight, setHost: function (value) { hostFitHeightPx = value; } };`,
+      ) as (windowReference: typeof windowStub) => { fit: () => number; setHost: (value: number | null) => void };
+      const built = build(windowStub);
       return {
         setViewport: (innerWidth: number, innerHeight: number) => {
           windowStub.innerWidth = innerWidth;
           windowStub.innerHeight = innerHeight;
         },
-        fit: fitViewportHeight,
+        setHostFitHeight: built.setHost,
+        fit: built.fit,
       };
     }
+
+    /**
+     * The host's measured Terminal-lens height outranks the page's own tracker:
+     * a fresh page's first innerHeight is provisional, and the tracker's
+     * maximum learns the taller pane another lens's footer leaves. With no host
+     * measurement yet, the tracker answers as before.
+     *
+     * Mutation that reddens this: drop the hostFitHeightPx branch.
+     */
+    it('answers with the host-measured fit height whenever there is one', () => {
+      const harness = buildFitViewportHeight();
+      // The Changes lens's taller pane, learned by the tracker.
+      harness.setViewport(411, 690);
+      expect(harness.fit()).toBe(690);
+
+      harness.setHostFitHeight(635);
+      expect(harness.fit()).toBe(635);
+
+      harness.setHostFitHeight(null);
+      expect(harness.fit()).toBe(690);
+    });
 
     it('raises the tracked maximum as the height grows at a fixed width', () => {
       const harness = buildFitViewportHeight();
@@ -544,45 +718,41 @@ describe('generated xterm.html', () => {
   });
 
   /**
-   * The soft-keyboard font collapse, one layer up from the tracker above.
-   * autoFitFontToScreen sizes the font from fitViewportHeight() - the tracked
-   * per-orientation maximum - and must NOT fall back to the live
-   * window.innerHeight, which the keyboard shrinks. There is no harness for
-   * fontGeometry.js elsewhere in this file; this extracts autoFitFontToScreen
-   * on its own (applyGeometry, the file's other function, is sliced away -
-   * it is never called here and pulls in unrelated collaborators).
+   * fontGeometry.js: the REFERENCE CELL's font, the fit key, and
+   * autoFitFontToScreen, sliced together (everything above applyGeometry,
+   * which is never called here and pulls in unrelated collaborators).
    */
-  describe('fontGeometry.js autoFitFontToScreen', () => {
+  describe('fontGeometry.js reference cell', () => {
     function buildAutoFitFontToScreen(options: {
-      knownRows: number;
+      knownRows: number | null;
       knownCols: number;
       innerHeightPx: number;
       fitHeightPx: number;
       initialFontSizePx: number;
+      /** Stands in for heightFit.js's GPU texture cap; defaults to no cap. */
+      textureCappedFontPx?: (fontPx: number, cols: number, rows: number | null) => number;
     }): {
       fit: () => void;
       fontSizePx: () => number;
-      fontSizePosts: () => number[];
+      fitKey: () => string;
     } {
       const fullSource = pageModule('fontGeometry.js');
-      const autoFitSource = fullSource.slice(
-        fullSource.indexOf('function autoFitFontToScreen('),
-        fullSource.indexOf('function applyGeometry('),
-      );
-      expect(autoFitSource).toContain('function autoFitFontToScreen(');
-      assertInjectionsAreAlive('fontGeometry.js (autoFitFontToScreen slice)', autoFitSource, [
+      const geometrySource = fullSource.slice(0, fullSource.indexOf('function applyGeometry('));
+      expect(geometrySource).toContain('function autoFitFontToScreen(');
+      assertInjectionsAreAlive('fontGeometry.js (reference cell slice)', geometrySource, [
         'knownRows',
         'knownCols',
         'CELL_HEIGHT_RATIO',
         'MIN_AUTO_FONT_PX',
         'MAX_AUTO_FIT_FONT_PX',
+        'REFERENCE_GRID_ROWS',
+        'REFERENCE_GRID_COLS',
         'textureCappedFontPx',
         'currentFontSizePx',
+        'settledFit',
         'terminal',
-        'postToHost',
         'fitViewportHeight',
       ]);
-      const fontSizePosts: number[] = [];
       const terminal = { options: { fontSize: options.initialFontSizePx } };
       const build = new Function(
         'terminal',
@@ -592,37 +762,116 @@ describe('generated xterm.html', () => {
         'CELL_HEIGHT_RATIO',
         'MIN_AUTO_FONT_PX',
         'MAX_AUTO_FIT_FONT_PX',
+        'REFERENCE_GRID_ROWS',
+        'REFERENCE_GRID_COLS',
         'textureCappedFontPx',
         'postToHost',
         'fitViewportHeight',
         'initialFontSizePx',
         `var currentFontSizePx = initialFontSizePx;
-         ${autoFitSource}
-         return { fit: autoFitFontToScreen, fontSizePx: function () { return currentFontSizePx; } };`,
-      ) as (...dependencies: unknown[]) => { fit: () => void; fontSizePx: () => number };
+         var settledFit = null;
+         var activeFitTrigger = 'init';
+         var maxGlTextureSize = 4096;
+         ${geometrySource}
+         return { fit: autoFitFontToScreen, fontSizePx: function () { return currentFontSizePx; },
+                  fitKey: currentFitKey };`,
+      ) as (...dependencies: unknown[]) => { fit: () => void; fontSizePx: () => number; fitKey: () => string };
       const built = build(
         terminal,
         // Present so a regression back to window.innerHeight would resolve
         // against THIS (shrunk) value rather than throwing ReferenceError -
         // the whole point is that the correct function never reads it.
-        { innerHeight: options.innerHeightPx },
+        { innerHeight: options.innerHeightPx, devicePixelRatio: 2.625 },
         options.knownRows,
         options.knownCols,
         pageVar('CELL_HEIGHT_RATIO'),
         pageVar('MIN_AUTO_FONT_PX'),
         pageVar('MAX_AUTO_FIT_FONT_PX'),
-        // No texture cap in play at these row/col counts; pass the value through.
-        (fontPx: number) => fontPx,
-        (message: { type: string; fontSizePx?: number }) => {
-          if (message.type === 'font-size' && typeof message.fontSizePx === 'number') {
-            fontSizePosts.push(message.fontSizePx);
-          }
-        },
+        pageVar('REFERENCE_GRID_ROWS'),
+        pageVar('REFERENCE_GRID_COLS'),
+        options.textureCappedFontPx ?? ((fontPx: number) => fontPx),
+        () => undefined,
         () => options.fitHeightPx,
         options.initialFontSizePx,
       );
-      return { fit: built.fit, fontSizePx: built.fontSizePx, fontSizePosts: () => fontSizePosts };
+      return { fit: built.fit, fontSizePx: built.fontSizePx, fitKey: built.fitKey };
     }
+
+    function fittedFont(knownRows: number | null, knownCols: number, fitHeightPx = 635): number {
+      const harness = buildAutoFitFontToScreen({
+        knownRows,
+        knownCols,
+        innerHeightPx: fitHeightPx,
+        fitHeightPx,
+        initialFontSizePx: 1,
+      });
+      harness.fit();
+      return harness.fontSizePx();
+    }
+
+    /**
+     * The maintainer's rule: the same font size on every open of every task.
+     * Every grid of 48 rows or fewer gets the resting grid's font; only a
+     * taller grid (which must still fit without clipping a row) goes smaller.
+     * The 120x30 spawn-default grid used to fit at about 17 px.
+     *
+     * Mutation that reddens this: fit referenceRowsForFit to the grid's own
+     * rows.
+     */
+    it('gives every grid of 48 rows or fewer the resting grid font, and a taller one less', () => {
+      const restingGridFont = fittedFont(48, 210);
+
+      expect(fittedFont(30, 120)).toBe(restingGridFont);
+      expect(fittedFont(14, 306)).toBe(restingGridFont);
+      expect(fittedFont(60, 210)).toBeLessThan(restingGridFont);
+    });
+
+    /**
+     * Rows unknown (the desktop has not reported its grid) fit the reference
+     * too. It used to return early, so the fit button could only stretch the
+     * line height of a grid nobody had measured.
+     */
+    it('fits an unknown row count to the reference instead of returning early', () => {
+      expect(fittedFont(null, 120)).toBe(fittedFont(48, 210));
+      expect(fittedFont(null, 120)).not.toBe(1);
+    });
+
+    /**
+     * The texture cap is taken for the reference grid's width AS WELL as this
+     * grid's, so a narrower grid lands on the same cell a capped resting grid
+     * gets (at a 4096 limit and dpr 3 the cap binds 210x48 by one step), while
+     * a wider grid still caps lower on its own.
+     */
+    it('caps a narrow grid at the reference width, so it never lands a step bigger than the resting grid', () => {
+      const capByColumns = (fontPx: number, cols: number): number => Math.min(fontPx, Math.floor(2100 / cols));
+      const build = (knownRows: number, knownCols: number): number => {
+        const harness = buildAutoFitFontToScreen({
+          knownRows,
+          knownCols,
+          innerHeightPx: 635,
+          fitHeightPx: 635,
+          initialFontSizePx: 1,
+          textureCappedFontPx: capByColumns,
+        });
+        harness.fit();
+        return harness.fontSizePx();
+      };
+
+      expect(build(48, 210), 'precondition: the cap binds the resting grid').toBe(10);
+      expect(build(30, 120)).toBe(10);
+      expect(build(48, 306)).toBeLessThan(10);
+    });
+
+    it('shares one fit key across grids up to the reference size, and splits it on height, width and taller grids', () => {
+      const keyFor = (knownRows: number | null, knownCols: number, fitHeightPx = 635): string =>
+        buildAutoFitFontToScreen({ knownRows, knownCols, innerHeightPx: fitHeightPx, fitHeightPx, initialFontSizePx: 1 }).fitKey();
+
+      expect(keyFor(30, 120)).toBe(keyFor(48, 210));
+      expect(keyFor(null, 80)).toBe(keyFor(48, 210));
+      expect(keyFor(48, 210, 700)).not.toBe(keyFor(48, 210));
+      expect(keyFor(48, 306)).not.toBe(keyFor(48, 210));
+      expect(keyFor(60, 210)).not.toBe(keyFor(48, 210));
+    });
 
     /**
      * The live bug: an open soft keyboard shrinks window.innerHeight, and a
@@ -632,15 +881,13 @@ describe('generated xterm.html', () => {
      * open must not change the computed font at all.
      */
     it('sizes the font from fitViewportHeight, not the keyboard-shrunk window.innerHeight', () => {
-      // rows=40 at the real CELL_HEIGHT_RATIO puts both candidate fonts
-      // strictly inside [MIN_AUTO_FONT_PX, MAX_AUTO_FIT_FONT_PX]: with
-      // rows=30 the full-height font landed ON the MAX_AUTO_FIT_FONT_PX
-      // ceiling, which made the "must derive from the fit height" assertion
-      // pass merely because both candidates hit the same clamp, not because
-      // either was actually computed from its height.
-      const rows = 40;
-      const fullHeight = 900;
-      const shrunkHeight = 380;
+      // At the reference 48 rows and the real CELL_HEIGHT_RATIO these two
+      // heights put both candidate fonts strictly inside [MIN_AUTO_FONT_PX,
+      // MAX_AUTO_FIT_FONT_PX], so neither assertion below can pass merely
+      // because both candidates hit the same clamp.
+      const rows = 48;
+      const fullHeight = 1000;
+      const shrunkHeight = 600;
 
       // The real scenario: the fit tracker still reports the full-orientation
       // height while the live window is shrunk by the keyboard.
@@ -693,10 +940,150 @@ describe('generated xterm.html', () => {
 
       expect(keyboardOpen.fontSizePx()).toBe(keyboardClosedReference.fontSizePx());
       expect(keyboardOpen.fontSizePx()).toBeGreaterThan(ifItUsedInnerHeightInstead.fontSizePx());
-      // The host's pinch baseline depends on this post firing whenever the
-      // font actually changes from its prior value (1, here).
-      expect(keyboardOpen.fontSizePosts()).toEqual([keyboardOpen.fontSizePx()]);
     });
+  });
+
+  /**
+   * fontGeometry.js's settled-fit memo: the converged cell (settledFit) is read
+   * back ONLY while the fit key it was recorded under is still the current
+   * one. The existing refit/heightFit/lifecycle harnesses all STUB these
+   * functions, so this slices fontGeometry.js itself (the same cut as the
+   * reference-cell harness) with the key's inputs and the memo left mutable.
+   * The fit height is a stand-in for state.js's fitViewportHeight, which
+   * answers with hostFitHeightPx once the host has measured one.
+   */
+  function buildSettledFitMemoHarness(initial: { knownRows: number | null; knownCols: number; fitHeightPx: number }): {
+    currentFitKey: () => string;
+    referenceFontPx: () => number;
+    settledFitForCurrentGrid: () => { key: string; fontSizePx: number; lineHeight: number } | null;
+    fittedFontPxForGrid: () => number;
+    fittedLineHeightForGrid: () => number;
+    setSettledFit: (settledFit: { key: string; fontSizePx: number; lineHeight: number } | null) => void;
+    setFitHeight: (fitHeightPx: number) => void;
+    setKnownRows: (knownRows: number | null) => void;
+    setKnownCols: (knownCols: number) => void;
+    setDevicePixelRatio: (devicePixelRatio: number) => void;
+  } {
+    const fullSource = pageModule('fontGeometry.js');
+    const geometrySource = fullSource.slice(0, fullSource.indexOf('function applyGeometry('));
+    expect(geometrySource).toContain('function settledFitForCurrentGrid(');
+    assertInjectionsAreAlive('fontGeometry.js (settled fit memo slice)', geometrySource, [
+      'knownRows',
+      'knownCols',
+      'CELL_HEIGHT_RATIO',
+      'MIN_AUTO_FONT_PX',
+      'MAX_AUTO_FIT_FONT_PX',
+      'REFERENCE_GRID_ROWS',
+      'REFERENCE_GRID_COLS',
+      'textureCappedFontPx',
+      'fitViewportHeight',
+      'settledFit',
+    ]);
+    const windowStub = { devicePixelRatio: 2.625 };
+    const build = new Function(
+      'window',
+      'CELL_HEIGHT_RATIO',
+      'MIN_AUTO_FONT_PX',
+      'MAX_AUTO_FIT_FONT_PX',
+      'REFERENCE_GRID_ROWS',
+      'REFERENCE_GRID_COLS',
+      'textureCappedFontPx',
+      'initialState',
+      `var knownRows = initialState.knownRows;
+       var knownCols = initialState.knownCols;
+       var fitHeightPx = initialState.fitHeightPx;
+       var settledFit = null;
+       function fitViewportHeight() { return fitHeightPx; }
+       ${geometrySource}
+       return {
+         currentFitKey: currentFitKey,
+         referenceFontPx: referenceFontPx,
+         settledFitForCurrentGrid: settledFitForCurrentGrid,
+         fittedFontPxForGrid: fittedFontPxForGrid,
+         fittedLineHeightForGrid: fittedLineHeightForGrid,
+         setSettledFit: function (next) { settledFit = next; },
+         setFitHeight: function (next) { fitHeightPx = next; },
+         setKnownRows: function (next) { knownRows = next; },
+         setKnownCols: function (next) { knownCols = next; },
+       };`,
+    ) as (...dependencies: unknown[]) => ReturnType<typeof buildSettledFitMemoHarness>;
+    const built = build(
+      windowStub,
+      pageVar('CELL_HEIGHT_RATIO'),
+      pageVar('MIN_AUTO_FONT_PX'),
+      pageVar('MAX_AUTO_FIT_FONT_PX'),
+      pageVar('REFERENCE_GRID_ROWS'),
+      pageVar('REFERENCE_GRID_COLS'),
+      (fontPx: number) => fontPx,
+      initial,
+    );
+    return {
+      ...built,
+      setDevicePixelRatio: (devicePixelRatio: number) => {
+        windowStub.devicePixelRatio = devicePixelRatio;
+      },
+    };
+  }
+
+  describe('fontGeometry.js settled fit memo', () => {
+    const memoFontPx = 17;
+    const memoLineHeight = 1.194;
+
+    /** The resting grid in a 635 px pane, with a cell recorded under that grid's own key. */
+    function memoizedHarness(): { harness: ReturnType<typeof buildSettledFitMemoHarness>; memoKey: string } {
+      const harness = buildSettledFitMemoHarness({ knownRows: 48, knownCols: 210, fitHeightPx: 635 });
+      const memoKey = harness.currentFitKey();
+      harness.setSettledFit({ key: memoKey, fontSizePx: memoFontPx, lineHeight: memoLineHeight });
+      return { harness, memoKey };
+    }
+
+    /**
+     * The positive control for the cases below: while the key matches, the
+     * memo comes back (font, line height, and the record itself), and a grid
+     * that shares the key (a shorter one, per the reference rows) keeps it.
+     */
+    it('hands the converged cell back while the fit key still matches', () => {
+      const { harness } = memoizedHarness();
+      expect(harness.referenceFontPx(), 'precondition: the memo is not simply the reference font').not.toBe(memoFontPx);
+
+      expect(harness.fittedFontPxForGrid()).toBe(memoFontPx);
+      expect(harness.fittedLineHeightForGrid()).toBe(memoLineHeight);
+      expect(harness.settledFitForCurrentGrid()).toMatchObject({ fontSizePx: memoFontPx, lineHeight: memoLineHeight });
+
+      harness.setKnownRows(30);
+      expect(harness.fittedFontPxForGrid(), 'a shorter grid shares the key').toBe(memoFontPx);
+
+      // And a key that moved away and came back finds it again.
+      harness.setFitHeight(700);
+      harness.setFitHeight(635);
+      expect(harness.fittedFontPxForGrid()).toBe(memoFontPx);
+    });
+
+    /**
+     * Mutation that reddens these: make settledFitForCurrentGrid return
+     * settledFit whenever it is non-null (the font would stay at the stale
+     * memo, and the line height at its stretch, for a pane or grid the memo
+     * was never converged for).
+     */
+    it.each([
+      ['the fit height changes (a rotation, a new measured Terminal lens)', (harness: ReturnType<typeof buildSettledFitMemoHarness>) => harness.setFitHeight(700)],
+      ['the grid is taller than the reference rows', (harness: ReturnType<typeof buildSettledFitMemoHarness>) => harness.setKnownRows(60)],
+      ['the grid is wider than the reference columns', (harness: ReturnType<typeof buildSettledFitMemoHarness>) => harness.setKnownCols(306)],
+      ['the device pixel ratio changes', (harness: ReturnType<typeof buildSettledFitMemoHarness>) => harness.setDevicePixelRatio(3)],
+    ])(
+      'falls back to the reference font and a clean line height once %s',
+      (_description, changeAKeyInput) => {
+        const { harness, memoKey } = memoizedHarness();
+
+        changeAKeyInput(harness);
+
+        expect(harness.currentFitKey(), 'precondition: the key really moved').not.toBe(memoKey);
+        expect(harness.referenceFontPx(), 'precondition: the fallback differs from the stale memo').not.toBe(memoFontPx);
+        expect(harness.fittedFontPxForGrid()).toBe(harness.referenceFontPx());
+        expect(harness.fittedLineHeightForGrid()).toBe(1);
+        expect(harness.settledFitForCurrentGrid()).toBeNull();
+      },
+    );
   });
 
   /**
@@ -1805,26 +2192,37 @@ describe('generated xterm.html', () => {
   });
 
   /**
-   * KEEPING THE CELL SIZE across a re-init. refit.js is one function; run it
-   * whole against spies for the font fit, the geometry pass and the measured
-   * height fit, with frames inline. The host asks for `keepFont` on every
-   * re-init over a painted frame (a session swap, a lens switch back, a
-   * re-seed), and the page then must neither re-fit the font nor reset the
-   * line-height stretch, and must run the height fit with stretching LOCKED -
-   * the successor's grid is laid out in the cells already on screen. The
-   * window 'resize' listener calls refit with an Event, which must read as an
-   * ordinary fit.
+   * refit.js is one function; run it whole against spies for the font fit, the
+   * geometry pass and the measured height fit, with frames inline. Three
+   * cases, whoever calls it: a pinch in force keeps the user's size; a grid
+   * that already converged applies its cell directly (re-running the chain
+   * from line height 1 is what made every re-init snap short and re-stretch);
+   * anything else fits the reference font from a clean line height of 1.
    */
-  function buildRefitHarness(initialLineHeight: number): {
-    refit: (keepFont?: unknown) => void;
+  function buildRefitHarness(options: {
+    initialLineHeight: number;
+    settledFit?: { fontSizePx: number; lineHeight: number } | null;
+    pinchOverrideFontPx?: number | null;
+  }): {
+    refit: (trigger?: unknown) => void;
+    onViewportChange: (trigger: string) => void;
     autoFitCalls: () => number;
     lineHeight: () => number;
+    fontSize: () => number;
+    trigger: () => string;
     heightFitCalls: () => { passes: number; stretchLocked: boolean; generation: number }[];
+    /** Calls made to the forced vertical follow and the pan clamp, in order. */
+    reorientCalls: () => string[];
+    pinnedToStart: () => boolean;
   } {
     const source = pageModule('refit.js');
     assertInjectionsAreAlive('refit.js', source, [
       'terminal',
       'pinnedToStart',
+      'pinchOverrideFontPx',
+      'settledFitForCurrentGrid',
+      'currentFontSizePx',
+      'activeFitTrigger',
       'autoFitFontToScreen',
       'applyGeometry',
       'heightFitGeneration',
@@ -1833,24 +2231,39 @@ describe('generated xterm.html', () => {
       'fitGridHeightToViewport',
       'manualPanUntil',
       'clampHorizontalPan',
+      'followCursorVertically',
     ]);
-    const terminal = { options: { lineHeight: initialLineHeight } };
+    const terminal = { options: { lineHeight: options.initialLineHeight, fontSize: 9 } };
     let autoFitCalls = 0;
     const heightFitCalls: { passes: number; stretchLocked: boolean; generation: number }[] = [];
+    const reorientCalls: string[] = [];
     const build = new Function(
       'terminal',
       'autoFitFontToScreen',
       'applyGeometry',
       'fitGridHeightToViewport',
       'clampHorizontalPan',
+      'followCursorVertically',
       'requestAnimationFrame',
+      'settledFitForCurrentGrid',
+      'initialPinchOverrideFontPx',
       `var pinnedToStart = false;
        var heightFitGeneration = 0;
        var HEIGHT_FIT_PASSES = 4;
        var manualPanUntil = 0;
+       var currentFontSizePx = 9;
+       var activeFitTrigger = 'none';
+       var pinchOverrideFontPx = initialPinchOverrideFontPx;
        ${source}
-       return { refit: refit };`,
-    ) as (...dependencies: unknown[]) => { refit: (keepFont?: unknown) => void };
+       return { refit: refit, onViewportChange: onViewportChange,
+                trigger: function () { return activeFitTrigger; },
+                pinnedToStart: function () { return pinnedToStart; } };`,
+    ) as (...dependencies: unknown[]) => {
+      refit: (trigger?: unknown) => void;
+      onViewportChange: (trigger: string) => void;
+      trigger: () => string;
+      pinnedToStart: () => boolean;
+    };
     const built = build(
       terminal,
       () => {
@@ -1860,58 +2273,276 @@ describe('generated xterm.html', () => {
       (passes: number, stretchLocked: boolean, generation: number) => {
         heightFitCalls.push({ passes, stretchLocked, generation });
       },
-      () => undefined,
+      () => {
+        reorientCalls.push('clamp');
+      },
+      (force: boolean) => {
+        reorientCalls.push(force ? 'follow-forced' : 'follow');
+      },
       (callback: () => void) => callback(),
+      () => options.settledFit ?? null,
+      options.pinchOverrideFontPx ?? null,
     );
     return {
       refit: built.refit,
+      onViewportChange: built.onViewportChange,
       autoFitCalls: () => autoFitCalls,
       lineHeight: () => terminal.options.lineHeight,
+      fontSize: () => terminal.options.fontSize,
+      trigger: built.trigger,
       heightFitCalls: () => heightFitCalls,
+      reorientCalls: () => reorientCalls,
+      pinnedToStart: built.pinnedToStart,
     };
   }
 
-  describe('refit.js keepFont', () => {
-    it('fits the font, resets the stretch and runs the height fit unlocked by default', () => {
-      const harness = buildRefitHarness(1.19);
+  describe('refit.js', () => {
+    it('fits the reference font from a clean line height when nothing has converged', () => {
+      const harness = buildRefitHarness({ initialLineHeight: 1.19 });
 
-      harness.refit();
+      harness.refit('init');
 
       expect(harness.autoFitCalls()).toBe(1);
       expect(harness.lineHeight()).toBe(1);
       expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: false, generation: 1 }]);
     });
 
-    it('keeps the font and the stretch, and locks stretching in the height fit, when asked to keep the cell size', () => {
-      const harness = buildRefitHarness(1.19);
+    /**
+     * The flicker fix: a grid this pane already converged on gets that cell
+     * back directly. The chain still runs (it measures once and settles), but
+     * the stretch is never reset to 1 first, and the chain runs
+     * STRETCH-LOCKED: a cell that settled through a giveback is not a fixed
+     * point of the stretch step, so an unlocked chain re-stretched it and
+     * handed it back on every reactivate (1.055 then 1.054 on a release
+     * build, a one-frame grow and shrink each time).
+     *
+     * Mutations that redden this: drop the settledFit branch; run the
+     * settled chain unlocked.
+     */
+    it('applies the converged cell directly and locks the stretch, when this grid already converged', () => {
+      const harness = buildRefitHarness({ initialLineHeight: 1, settledFit: { fontSizePx: 11, lineHeight: 1.194 } });
 
-      harness.refit(true);
+      harness.refit('ro-settle');
 
       expect(harness.autoFitCalls()).toBe(0);
-      expect(harness.lineHeight()).toBe(1.19);
+      expect(harness.fontSize()).toBe(11);
+      expect(harness.lineHeight()).toBe(1.194);
       expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: true, generation: 1 }]);
     });
 
-    it('treats the window resize listener\'s Event argument as an ordinary fit', () => {
-      const harness = buildRefitHarness(1.19);
+    /**
+     * A pinch is the user's size until the fit button, another session or
+     * another grid: a keyboard or a rotation refit must not take it away.
+     */
+    it('keeps a pinch in force: no font fit, no height fit, the stretch untouched', () => {
+      const harness = buildRefitHarness({ initialLineHeight: 1.1, pinchOverrideFontPx: 20 });
+
+      harness.refit('window-resize');
+
+      expect(harness.autoFitCalls()).toBe(0);
+      expect(harness.lineHeight()).toBe(1.1);
+      expect(harness.heightFitCalls()).toEqual([]);
+    });
+
+    /**
+     * THE KEYBOARD FLASH. One keyboard open fires three viewport triggers
+     * (the window 'resize' listener, the ResizeObserver's frame and its
+     * trailing settle), and each used to run a whole fit chain - measured on
+     * a release build as three chains settling on the identical cell, and in
+     * the shipped build each one reset the line height to 1 first, collapsing
+     * and re-stretching the grid. The keyboard cannot move the fit, so a
+     * converged grid only re-orients: column 0, the cursor kept in view.
+     *
+     * Mutation that reddens this: route onViewportChange straight to refit.
+     */
+    it('only re-orients on a viewport change that leaves the fit where it was', () => {
+      const harness = buildRefitHarness({ initialLineHeight: 1.055, settledFit: { fontSizePx: 11, lineHeight: 1.055 } });
+
+      harness.onViewportChange('window-resize');
+      harness.onViewportChange('ro-raf');
+      harness.onViewportChange('ro-settle');
+
+      expect(harness.heightFitCalls()).toEqual([]);
+      expect(harness.autoFitCalls()).toBe(0);
+      expect(harness.lineHeight()).toBe(1.055);
+      expect(harness.pinnedToStart()).toBe(true);
+      expect(harness.reorientCalls()).toEqual([
+        'clamp',
+        'follow-forced',
+        'clamp',
+        'follow-forced',
+        'clamp',
+        'follow-forced',
+      ]);
+    });
+
+    it('runs the fit chain for a viewport change that moved the fit inputs', () => {
+      const harness = buildRefitHarness({ initialLineHeight: 1.055, settledFit: null });
+
+      harness.onViewportChange('ro-settle');
+
+      expect(harness.trigger()).toBe('ro-settle');
+      expect(harness.heightFitCalls()).toHaveLength(1);
+    });
+
+    it('keeps a pinch through a viewport change, only re-orienting', () => {
+      const harness = buildRefitHarness({ initialLineHeight: 1.1, pinchOverrideFontPx: 20 });
+
+      harness.onViewportChange('window-resize');
+
+      expect(harness.heightFitCalls()).toEqual([]);
+      expect(harness.lineHeight()).toBe(1.1);
+      expect(harness.reorientCalls()).toEqual(['clamp', 'follow-forced']);
+    });
+
+    it('routes the window resize listener and the ResizeObserver through the viewport handler', () => {
+      expect(pageModule('dispatch.js')).toContain("onViewportChange('window-resize')");
+      expect(pageModule('dispatch.js')).not.toContain("addEventListener('resize', refit)");
+      expect(pageModule('bootstrap.js')).toContain("onViewportChange('ro-raf')");
+      expect(pageModule('bootstrap.js')).toContain("onViewportChange('ro-settle')");
+    });
+
+    it("reads the window resize listener's Event argument as the window-resize trigger", () => {
+      const harness = buildRefitHarness({ initialLineHeight: 1.19 });
 
       harness.refit({ type: 'resize' });
 
+      expect(harness.trigger()).toBe('window-resize');
       expect(harness.autoFitCalls()).toBe(1);
-      expect(harness.lineHeight()).toBe(1);
-      expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: false, generation: 1 }]);
+    });
+  });
+
+  /**
+   * resetSessionViewState, sliced from lifecycle.js: the half of every init
+   * that adopts the grid and decides the font. The pinch rule lives here: a
+   * pinch survives only a re-init the host marks preservePinch (the same
+   * session) at the same grid; anything else starts from the reference cell.
+   */
+  function buildResetSessionViewStateHarness(options: {
+    knownCols: number;
+    knownRows: number | null;
+    pinchOverrideFontPx: number | null;
+  }): {
+    reset: (initMessage: Record<string, unknown>) => void;
+    state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; hostFitHeightPx: number | null };
+  } {
+    const source = pageModule('lifecycle.js');
+    const resetSource = source.slice(source.indexOf('function resetSessionViewState('), source.indexOf('function seedAndSettle('));
+    expect(resetSource).toContain('function resetSessionViewState(');
+    assertInjectionsAreAlive('lifecycle.js (resetSessionViewState slice)', resetSource, [
+      'knownCols',
+      'knownRows',
+      'hostFitHeightPx',
+      'pinchOverrideFontPx',
+      'textureCappedFontPx',
+      'fittedFontPxForGrid',
+      'currentFontSizePx',
+      'setupCleanFeed',
+    ]);
+    const build = new Function(
+      'textureCappedFontPx',
+      'fittedFontPxForGrid',
+      'stopHistoryFling',
+      'applyVerticalOffset',
+      'setupCleanFeed',
+      'fallbackRowCount',
+      'document',
+      'initialState',
+      `var knownCols = initialState.knownCols;
+       var knownRows = initialState.knownRows;
+       var hostFitHeightPx = null;
+       var pinchOverrideFontPx = initialState.pinchOverrideFontPx;
+       var currentFontSizePx = 0;
+       var lastAppCursorMode = false;
+       var lastReportedModes = null;
+       var activeInitSeq = null;
+       var awaitingNonBlankPaint = false;
+       var lastInitHoldFrame = false;
+       var manualPanUntil = 0;
+       var dragSamples = [];
+       var netHistoryUnits = 0;
+       var pinnedToStart = false;
+       ${resetSource}
+       return {
+         reset: resetSessionViewState,
+         state: function () {
+           return { pinchOverrideFontPx: pinchOverrideFontPx, currentFontSizePx: currentFontSizePx,
+                    hostFitHeightPx: hostFitHeightPx };
+         },
+       };`,
+    ) as (...dependencies: unknown[]) => {
+      reset: (initMessage: Record<string, unknown>) => void;
+      state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; hostFitHeightPx: number | null };
+    };
+    const fakeElement = { style: {} as Record<string, string> };
+    return build(
+      (fontPx: number) => fontPx,
+      // The reference cell, whatever the grid.
+      () => 11,
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      () => 48,
+      { documentElement: fakeElement, body: fakeElement, getElementById: () => fakeElement },
+      options,
+    );
+  }
+
+  describe('lifecycle.js resetSessionViewState', () => {
+    const pinchedAtRestingGrid = { knownCols: 210, knownRows: 48, pinchOverrideFontPx: 20 };
+
+    /**
+     * Mutation that reddens these: drop the grid comparison, or the
+     * preservePinch check, from the clear condition.
+     */
+    it('keeps a pinch across a preservePinch re-init at the same grid', () => {
+      const harness = buildResetSessionViewStateHarness(pinchedAtRestingGrid);
+
+      harness.reset({ cols: 210, rows: 48, preservePinch: true });
+
+      expect(harness.state()).toMatchObject({ pinchOverrideFontPx: 20, currentFontSizePx: 20 });
+    });
+
+    it('drops the pinch for a different grid, even when the host asked to preserve it', () => {
+      const harness = buildResetSessionViewStateHarness(pinchedAtRestingGrid);
+
+      harness.reset({ cols: 120, rows: 30, preservePinch: true });
+
+      expect(harness.state()).toMatchObject({ pinchOverrideFontPx: null, currentFontSizePx: 11 });
+    });
+
+    it('drops the pinch for a re-init the host did not mark (another session)', () => {
+      const harness = buildResetSessionViewStateHarness(pinchedAtRestingGrid);
+
+      harness.reset({ cols: 210, rows: 48, preservePinch: false });
+
+      expect(harness.state()).toMatchObject({ pinchOverrideFontPx: null, currentFontSizePx: 11 });
+    });
+
+    it('adopts the host fit height an init carries, and keeps the last one when it carries none', () => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, fitHeightPx: 635 });
+      expect(harness.state().hostFitHeightPx).toBe(635);
+
+      harness.reset({ cols: 210, rows: 48, fitHeightPx: null });
+      expect(harness.state().hostFitHeightPx).toBe(635);
     });
   });
 
   /**
    * softReinit, sliced from lifecycle.js and run against spies: the in-place
-   * re-init is where a keepFont init must leave the font and line height
-   * exactly as the previous frame had them, and a plain init must start the
-   * fit from the clean slate a constructed terminal has.
+   * re-init lays the new grid out in the cell resetSessionViewState chose (the
+   * reference cell, or the one this grid already converged on) with the line
+   * height that goes with it, keeps a pinch's stretch, and holds the frame
+   * across the reset when the host asks.
    */
-  function buildSoftReinitHarness(initialLineHeight: number): {
+  function buildSoftReinitHarness(options: {
+    initialLineHeight: number;
+    fittedLineHeight: number;
+    pinchOverrideFontPx?: number | null;
+  }): {
     softReinit: (initMessage: Record<string, unknown>) => void;
-    autoFitCalls: () => number;
     options: () => { lineHeight: number; fontSize: number; theme: unknown };
     seedCalls: () => unknown[];
     /** The order of the calls that matter for the frame hold: 'hold', 'clear' and 'reset'. */
@@ -1925,7 +2556,8 @@ describe('generated xterm.html', () => {
       'resetSessionViewState',
       'terminal',
       'currentFontSizePx',
-      'autoFitFontToScreen',
+      'pinchOverrideFontPx',
+      'fittedLineHeightForGrid',
       'applyGeometry',
       'seedAndSettle',
       'holdFrameSnapshot',
@@ -1933,32 +2565,31 @@ describe('generated xterm.html', () => {
     ]);
     const holdLog: string[] = [];
     const terminal = {
-      options: { lineHeight: initialLineHeight, fontSize: 0, theme: null as unknown },
+      options: { lineHeight: options.initialLineHeight, fontSize: 0, theme: null as unknown },
       reset: () => {
         holdLog.push('reset');
       },
     };
-    let autoFitCalls = 0;
     const seedCalls: unknown[] = [];
     const build = new Function(
       'terminal',
       'resetSessionViewState',
-      'autoFitFontToScreen',
+      'fittedLineHeightForGrid',
       'applyGeometry',
       'seedAndSettle',
       'holdFrameSnapshot',
       'clearFrameHold',
+      'initialPinchOverrideFontPx',
       `var initCounts = { hard: 0, soft: 0 };
        var currentFontSizePx = 9;
+       var pinchOverrideFontPx = initialPinchOverrideFontPx;
        ${softReinitSource}
        return { softReinit: softReinit };`,
     ) as (...dependencies: unknown[]) => { softReinit: (initMessage: Record<string, unknown>) => void };
     const built = build(
       terminal,
       () => undefined,
-      () => {
-        autoFitCalls += 1;
-      },
+      () => options.fittedLineHeight,
       () => undefined,
       (initMessage: unknown) => {
         seedCalls.push(initMessage);
@@ -1969,53 +2600,202 @@ describe('generated xterm.html', () => {
       () => {
         holdLog.push('clear');
       },
+      options.pinchOverrideFontPx ?? null,
     );
     return {
       softReinit: built.softReinit,
-      autoFitCalls: () => autoFitCalls,
       options: () => terminal.options,
       seedCalls: () => seedCalls,
       holdLog: () => holdLog,
     };
   }
 
-  describe('lifecycle.js softReinit keepFont', () => {
-    it('starts a plain re-init from line height 1 and re-fits the font', () => {
-      const harness = buildSoftReinitHarness(1.19);
+  describe('lifecycle.js softReinit', () => {
+    /**
+     * Every re-init comes up in the reference cell - the swap's successor, a
+     * lens switch back, a re-seed - with the converged stretch when this grid
+     * already has one, so nothing visibly snaps short and re-stretches.
+     */
+    it('lays the re-init out in the chosen font and the line height fitted for this grid', () => {
+      const harness = buildSoftReinitHarness({ initialLineHeight: 1, fittedLineHeight: 1.194 });
 
-      harness.softReinit({ keepFont: false, theme: { background: '#000' }, scrollback: 'x' });
+      harness.softReinit({ holdFrame: true, theme: { background: '#000' }, scrollback: 'x' });
 
-      expect(harness.autoFitCalls()).toBe(1);
-      expect(harness.options().lineHeight).toBe(1);
       expect(harness.options().fontSize).toBe(9);
+      expect(harness.options().lineHeight).toBe(1.194);
       expect(harness.seedCalls()).toHaveLength(1);
     });
 
-    it('leaves the line height and skips the font fit on a keepFont re-init', () => {
-      const harness = buildSoftReinitHarness(1.19);
+    it("keeps a pinch's stretch on a re-init that kept the pinch", () => {
+      const harness = buildSoftReinitHarness({ initialLineHeight: 1.1, fittedLineHeight: 1.194, pinchOverrideFontPx: 20 });
 
-      harness.softReinit({ keepFont: true, theme: { background: '#000' }, scrollback: 'x' });
+      harness.softReinit({ holdFrame: true, theme: {}, scrollback: 'x' });
 
-      expect(harness.autoFitCalls()).toBe(0);
-      expect(harness.options().lineHeight).toBe(1.19);
-      // The host's copy of the current size, re-capped by resetSessionViewState.
-      expect(harness.options().fontSize).toBe(9);
-      expect(harness.seedCalls()).toHaveLength(1);
+      expect(harness.options().lineHeight).toBe(1.1);
     });
 
     /**
      * The hold has to be taken BEFORE terminal.reset(), while the frame worth
-     * keeping is still in the buffer; a plain re-init (a fresh fit) lifts any
-     * hold instead, since the frame it would keep is not the one being fitted.
+     * keeping is still in the buffer; a re-init with nothing to hold lifts any
+     * hold instead.
      */
-    it('holds the frame ahead of the reset on a keepFont re-init, and lifts it on a plain one', () => {
-      const harness = buildSoftReinitHarness(1);
+    it('holds the frame ahead of the reset on a holdFrame re-init, and lifts it on a plain one', () => {
+      const harness = buildSoftReinitHarness({ initialLineHeight: 1, fittedLineHeight: 1 });
 
-      harness.softReinit({ keepFont: true, theme: {}, scrollback: 'x' });
+      harness.softReinit({ holdFrame: true, theme: {}, scrollback: 'x' });
       expect(harness.holdLog()).toEqual(['hold', 'reset']);
 
-      harness.softReinit({ keepFont: false, theme: {}, scrollback: 'y' });
+      harness.softReinit({ holdFrame: false, theme: {}, scrollback: 'y' });
       expect(harness.holdLog()).toEqual(['hold', 'reset', 'clear', 'reset']);
+    });
+  });
+
+  /**
+   * createTerminal, the hard-init path, sliced from lifecycle.js and run
+   * against a fake `window.Terminal` that captures its constructor options.
+   * resetSessionViewState is a stand-in defined in the prelude (an injected
+   * function cannot write the page's own vars): it adopts the grid and sets
+   * the font and pinch the real one would have chosen, so what is checked here
+   * is only what createTerminal does with them.
+   */
+  function buildCreateTerminalHarness(chosen: {
+    pinchOverrideFontPx: number | null;
+    currentFontSizePx: number;
+    fittedLineHeight: number;
+  }): {
+    createTerminal: (initMessage: Record<string, unknown>) => void;
+    terminalOptions: () => Record<string, unknown>[];
+    seedCalls: () => unknown[];
+    autoFitCalls: () => number;
+  } {
+    const source = pageModule('lifecycle.js');
+    const createSource = source.slice(source.indexOf('function createTerminal('), source.indexOf('function softReinit('));
+    expect(createSource).toContain('function createTerminal(');
+    expect(createSource).toContain('new window.Terminal(');
+    assertInjectionsAreAlive('lifecycle.js (createTerminal slice)', createSource, [
+      'resetSessionViewState',
+      'currentFontSizePx',
+      'pinchOverrideFontPx',
+      'fittedLineHeightForGrid',
+      'seedAndSettle',
+      'knownCols',
+      'knownRows',
+    ]);
+    const terminalOptions: Record<string, unknown>[] = [];
+    class FakeTerminal {
+      textarea = null;
+      constructor(options: Record<string, unknown>) {
+        terminalOptions.push(options);
+      }
+      open = (): void => undefined;
+      onData = (): void => undefined;
+    }
+    const seedCalls: unknown[] = [];
+    let autoFitCalls = 0;
+    const build = new Function(
+      'window',
+      'document',
+      'fittedLineHeightForGrid',
+      'fallbackRowCount',
+      'resetWebglState',
+      'attachWebgl',
+      'reportRenderer',
+      'seedAndSettle',
+      'postToHost',
+      // Injected only to be counted: the hard path used to size the font with
+      // it, and resetSessionViewState owns that now. A call that comes back
+      // lands here instead of throwing a ReferenceError.
+      'autoFitFontToScreen',
+      'chosen',
+      `var terminal = null;
+       var cleanFeedEnabled = false;
+       var manualPanUntil = 0;
+       var knownCols = 0;
+       var knownRows = null;
+       var currentFontSizePx = 0;
+       var pinchOverrideFontPx = null;
+       function resetSessionViewState(initMessage) {
+         knownCols = initMessage.cols;
+         knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
+         pinchOverrideFontPx = chosen.pinchOverrideFontPx;
+         currentFontSizePx = chosen.currentFontSizePx;
+       }
+       ${createSource}
+       return { createTerminal: createTerminal };`,
+    ) as (...dependencies: unknown[]) => { createTerminal: (initMessage: Record<string, unknown>) => void };
+    const built = build(
+      { Terminal: FakeTerminal },
+      { getElementById: () => ({}) },
+      () => chosen.fittedLineHeight,
+      () => 24,
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      (initMessage: unknown) => {
+        seedCalls.push(initMessage);
+      },
+      () => undefined,
+      () => {
+        autoFitCalls += 1;
+      },
+      chosen,
+    );
+    return {
+      createTerminal: built.createTerminal,
+      terminalOptions: () => terminalOptions,
+      seedCalls: () => seedCalls,
+      autoFitCalls: () => autoFitCalls,
+    };
+  }
+
+  describe('lifecycle.js createTerminal', () => {
+    const initMessage = { cols: 210, rows: 48, theme: { background: '#0c0a07' }, scrollback: 'x', cleanFeed: false };
+
+    /**
+     * A fresh page (a remount after a killed renderer, a clean-feed rebuild)
+     * comes up at the final cell: the font resetSessionViewState chose and the
+     * stretch this grid already converged on, rather than line height 1 and a
+     * re-convergence from there. It no longer fits the font itself.
+     *
+     * Mutation that reddens this: hand the Terminal the constant line height 1.
+     */
+    it('constructs the terminal in the chosen font and the line height fitted for this grid', () => {
+      const harness = buildCreateTerminalHarness({ pinchOverrideFontPx: null, currentFontSizePx: 11, fittedLineHeight: 1.194 });
+
+      harness.createTerminal(initMessage);
+
+      expect(harness.terminalOptions()).toHaveLength(1);
+      expect(harness.terminalOptions()[0]).toMatchObject({ cols: 210, rows: 48, fontSize: 11, lineHeight: 1.194 });
+      expect(harness.seedCalls()).toEqual([initMessage]);
+    });
+
+    /**
+     * A pinch is the user's size, and the stretch the converged cell carries
+     * belongs to the font the pinch replaced: the pinched terminal starts from
+     * line height 1.
+     *
+     * Mutation that reddens this: drop the pinch condition and always use the
+     * fitted line height.
+     */
+    it('constructs a pinched terminal at line height 1, in the pinched font', () => {
+      const harness = buildCreateTerminalHarness({ pinchOverrideFontPx: 20, currentFontSizePx: 20, fittedLineHeight: 1.194 });
+
+      harness.createTerminal(initMessage);
+
+      expect(harness.terminalOptions()[0]).toMatchObject({ fontSize: 20, lineHeight: 1 });
+    });
+
+    /**
+     * Mutation that reddens this: call autoFitFontToScreen() between the
+     * reset and the construction.
+     */
+    it('leaves the font to resetSessionViewState instead of fitting it again', () => {
+      const harness = buildCreateTerminalHarness({ pinchOverrideFontPx: null, currentFontSizePx: 11, fittedLineHeight: 1 });
+
+      harness.createTerminal(initMessage);
+
+      expect(harness.autoFitCalls()).toBe(0);
+      expect(harness.terminalOptions()[0]).toMatchObject({ fontSize: 11 });
     });
   });
 
@@ -2145,7 +2925,7 @@ describe('generated xterm.html', () => {
   /**
    * seedAndSettle, sliced from lifecycle.js, with terminal.write capturing its
    * callbacks so the test can fire them in xterm's order. Two things live
-   * here: the settle refit inherits the init's keepFont, and a seed whose init
+   * here: every init settles with an init-triggered refit, and a seed whose init
    * was superseded before its bytes flushed does nothing - xterm flushes
    * asynchronously, so two inits inside one frame fire the FIRST seed's
    * callback after the second init has re-armed the paint report, and it used
@@ -2215,8 +2995,8 @@ describe('generated xterm.html', () => {
       () => undefined,
       () => undefined,
       (callback: () => void) => callback(),
-      (keepFont: unknown) => {
-        refitCalls.push(keepFont);
+      (trigger: unknown) => {
+        refitCalls.push(trigger);
       },
     );
     return {
@@ -2230,14 +3010,19 @@ describe('generated xterm.html', () => {
   }
 
   describe('lifecycle.js seedAndSettle', () => {
-    it("hands the init's keepFont to the settle refit", () => {
+    /**
+     * The settle refit is the same deterministic fit every caller gets: for a
+     * grid that already converged it measures once and changes nothing, so
+     * an init no longer has to tell it whether to keep or fit.
+     */
+    it('settles every init with an init-triggered refit', () => {
       const harness = buildSeedAndSettleHarness();
 
       harness.setActiveInitSeq(1);
-      harness.seedAndSettle({ scrollback: 'frame', keepFont: true });
+      harness.seedAndSettle({ scrollback: 'frame', holdFrame: true });
       harness.seedAndSettle({ scrollback: 'frame' });
 
-      expect(harness.refitCalls()).toEqual([true, false]);
+      expect(harness.refitCalls()).toEqual(['init', 'init']);
     });
 
     it('ignores the flush of a seed whose init was superseded, and settles the live one', () => {
@@ -2417,6 +3202,10 @@ describe('generated xterm.html', () => {
     options: {
       terminal?: Record<string, unknown> | null;
       cleanFeedEnabled?: boolean;
+      pinchOverrideFontPx?: number | null;
+      settledFit?: Record<string, unknown> | null;
+      hostFitHeightPx?: number | null;
+      webglAddon?: Record<string, unknown> | null;
     } = {},
   ): {
     onHostMessage: (rawData: string) => void;
@@ -2426,10 +3215,18 @@ describe('generated xterm.html', () => {
     createTerminalCalls: () => unknown[];
     terminalDisposeCallCount: () => number;
     stopHistoryFlingCallCount: () => number;
+    refitTriggers: () => unknown[];
     pinchActive: () => boolean;
     historyDragAnchorY: () => number | null;
     historyDragAxis: () => string | null;
     tapDirty: () => boolean;
+    fitState: () => {
+      pinchOverrideFontPx: number | null;
+      settledFit: unknown;
+      hostFitHeightPx: number | null;
+      knownCols: number;
+      knownRows: number | null;
+    };
   } {
     const source = pageModule('dispatch.js');
     const onHostMessageSource = source.slice(
@@ -2463,12 +3260,17 @@ describe('generated xterm.html', () => {
       'lastScrollRoundTripMs',
       'lastJumpAt',
       'lastJumpFirstWriteMs',
+      'pinchOverrideFontPx',
+      'settledFit',
+      'hostFitHeightPx',
+      'webglAddon',
     ]);
 
     const initCounts = { hard: 0, soft: 0 };
     const pinchMessageCounts = { activeTrue: 0, activeFalse: 0 };
     const softReinitCalls: unknown[] = [];
     const createTerminalCalls: unknown[] = [];
+    const refitTriggers: unknown[] = [];
     let terminalDisposeCallCount = 0;
     let stopHistoryFlingCallCount = 0;
 
@@ -2499,6 +3301,7 @@ describe('generated xterm.html', () => {
       'refit',
       'scrollToLatest',
       'pinchMessageCounts',
+      'fitStateArgument',
       `var terminal = terminalArgument;
        var cleanFeedEnabled = cleanFeedEnabledArgument;
        var pinchActive = false;
@@ -2513,6 +3316,10 @@ describe('generated xterm.html', () => {
        var lastScrollRoundTripMs = null;
        var lastJumpAt = null;
        var lastJumpFirstWriteMs = null;
+       var pinchOverrideFontPx = fitStateArgument.pinchOverrideFontPx;
+       var settledFit = fitStateArgument.settledFit;
+       var hostFitHeightPx = fitStateArgument.hostFitHeightPx;
+       var webglAddon = fitStateArgument.webglAddon;
        ${onHostMessageSource}
        return {
          onHostMessage: onHostMessage,
@@ -2520,6 +3327,10 @@ describe('generated xterm.html', () => {
          historyDragAnchorY: function () { return historyDragAnchorY; },
          historyDragAxis: function () { return historyDragAxis; },
          tapDirty: function () { return tapDirty; },
+         fitState: function () {
+           return { pinchOverrideFontPx: pinchOverrideFontPx, settledFit: settledFit, hostFitHeightPx: hostFitHeightPx,
+                    knownCols: knownCols, knownRows: knownRows };
+         },
        };`,
     ) as (...dependencies: unknown[]) => {
       onHostMessage: (rawData: string) => void;
@@ -2527,6 +3338,13 @@ describe('generated xterm.html', () => {
       historyDragAnchorY: () => number | null;
       historyDragAxis: () => string | null;
       tapDirty: () => boolean;
+      fitState: () => {
+        pinchOverrideFontPx: number | null;
+        settledFit: unknown;
+        hostFitHeightPx: number | null;
+        knownCols: number;
+        knownRows: number | null;
+      };
     };
 
     const built = build(
@@ -2543,9 +3361,17 @@ describe('generated xterm.html', () => {
         stopHistoryFlingCallCount += 1;
       },
       () => undefined,
-      () => undefined,
+      (trigger: unknown) => {
+        refitTriggers.push(trigger);
+      },
       () => undefined,
       pinchMessageCounts,
+      {
+        pinchOverrideFontPx: options.pinchOverrideFontPx ?? null,
+        settledFit: options.settledFit ?? null,
+        hostFitHeightPx: options.hostFitHeightPx ?? null,
+        webglAddon: options.webglAddon ?? null,
+      },
     );
 
     return {
@@ -2556,12 +3382,86 @@ describe('generated xterm.html', () => {
       createTerminalCalls: () => createTerminalCalls,
       terminalDisposeCallCount: () => terminalDisposeCallCount,
       stopHistoryFlingCallCount: () => stopHistoryFlingCallCount,
+      refitTriggers: () => refitTriggers,
       pinchActive: built.pinchActive,
       historyDragAnchorY: built.historyDragAnchorY,
       historyDragAxis: built.historyDragAxis,
       tapDirty: built.tapDirty,
+      fitState: built.fitState,
     };
   }
+
+  describe('dispatch.js onHostMessage - the fit messages', () => {
+    /**
+     * The fit button ALWAYS lands on the fitted view: the pinch goes, the
+     * converged cell is re-derived rather than trusted, and the ring's grid
+     * rides along so a page that inited with rows unknown fits the real grid.
+     *
+     * Mutation that reddens this: leave the pinch in place on 'refit'.
+     */
+    it('drops the pinch and the converged cell, adopts the ring grid and refits on the fit button', () => {
+      const harness = buildDispatchHarness({
+        terminal: {},
+        pinchOverrideFontPx: 6,
+        settledFit: { key: 'fit-key', fontSizePx: 11, lineHeight: 1.194 },
+      });
+
+      harness.onHostMessage(JSON.stringify({ type: 'refit', cols: 120, rows: 30 }));
+
+      expect(harness.fitState()).toMatchObject({ pinchOverrideFontPx: null, settledFit: null, knownCols: 120, knownRows: 30 });
+      expect(harness.refitTriggers()).toEqual(['refit-msg']);
+    });
+
+    it('keeps the current grid when the fit button arrives with an unknown one', () => {
+      const harness = buildDispatchHarness({ terminal: {} });
+
+      harness.onHostMessage(JSON.stringify({ type: 'refit', cols: null, rows: null }));
+
+      expect(harness.fitState()).toMatchObject({ knownCols: 80, knownRows: 24 });
+      expect(harness.refitTriggers()).toEqual(['refit-msg']);
+    });
+
+    it('adopts a new host fit height and refits, and ignores a repeat', () => {
+      const harness = buildDispatchHarness({ terminal: {}, hostFitHeightPx: 635 });
+
+      harness.onHostMessage(JSON.stringify({ type: 'fit-height', fitHeightPx: 635 }));
+      expect(harness.refitTriggers()).toEqual([]);
+
+      harness.onHostMessage(JSON.stringify({ type: 'fit-height', fitHeightPx: 380 }));
+      expect(harness.fitState().hostFitHeightPx).toBe(380);
+      expect(harness.refitTriggers()).toEqual(['fit-height']);
+    });
+
+    /**
+     * Back from the background: the glyph repair, WITHOUT a refit (a refit
+     * on every foreground is what used to undo a pinch).
+     */
+    it('repaints by dropping the glyph atlas and redrawing every row, without refitting', () => {
+      const atlasClears: number[] = [];
+      const refreshes: [number, number][] = [];
+      const harness = buildDispatchHarness({
+        terminal: { rows: 48, refresh: (start: number, end: number) => refreshes.push([start, end]) },
+        webglAddon: { clearTextureAtlas: () => atlasClears.push(1) },
+      });
+
+      harness.onHostMessage(JSON.stringify({ type: 'repaint' }));
+
+      expect(atlasClears).toEqual([1]);
+      expect(refreshes).toEqual([[0, 47]]);
+      expect(harness.refitTriggers()).toEqual([]);
+    });
+
+    it('drops a pinch when the desktop grid changes, and keeps it for the same grid', () => {
+      const harness = buildDispatchHarness({ terminal: {}, pinchOverrideFontPx: 20 });
+
+      harness.onHostMessage(JSON.stringify({ type: 'resize', cols: 80, rows: 24 }));
+      expect(harness.fitState().pinchOverrideFontPx).toBe(20);
+
+      harness.onHostMessage(JSON.stringify({ type: 'resize', cols: 210, rows: 48 }));
+      expect(harness.fitState().pinchOverrideFontPx).toBeNull();
+      expect(harness.refitTriggers()).toEqual(['resize-msg', 'resize-msg']);
+    });
+  });
 
   describe('dispatch.js onHostMessage - pinch branch', () => {
     it('tracks pinch start: counts, latches pinchActive, and stops any history fling', () => {

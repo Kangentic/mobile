@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
-import { SessionScreen } from '@/screens/task/SessionScreen';
+import { SESSION_SWAP_QUIET_MS, SessionScreen } from '@/screens/task/SessionScreen';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
 import {
   appendChunk,
@@ -143,7 +143,12 @@ jest.mock('@/components/terminal/DirectKeyInput', () => {
 
 interface WebViewMockModule {
   __postMessageMock: jest.Mock;
-  __capturedProps: { current: { onMessage?: (event: { nativeEvent: { data: string } }) => void } | null };
+  __capturedProps: {
+    current: {
+      onMessage?: (event: { nativeEvent: { data: string } }) => void;
+      onLayout?: (event: { nativeEvent: { layout: { x: number; y: number; width: number; height: number } } }) => void;
+    } | null;
+  };
 }
 const webViewMock = jest.requireMock<WebViewMockModule>('react-native-webview');
 
@@ -171,6 +176,13 @@ function seedTaskWithSession(sessionId: string | null): void {
 function postFromWebView(data: string): void {
   act(() => {
     webViewMock.__capturedProps.current?.onMessage?.({ nativeEvent: { data } });
+  });
+}
+
+/** Fires the WebView's onLayout, as the native layout pass would. */
+function layoutWebView(width: number, height: number): void {
+  act(() => {
+    webViewMock.__capturedProps.current?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width, height } } });
   });
 }
 
@@ -396,7 +408,10 @@ describe('SessionScreen terminal pane across a session swap', () => {
       expect(postsSinceSwap[0]?.type).toBe('init');
       if (postsSinceSwap[0]?.type === 'init') {
         expect(postsSinceSwap[0].scrollback).toContain('SUCCESSOR FRAME');
-        expect(postsSinceSwap[0].keepFont).toBe(true);
+        // The dead session's frame is held until the successor paints, and a
+        // pinch made on the dead session does not carry onto the successor.
+        expect(postsSinceSwap[0].holdFrame).toBe(true);
+        expect(postsSinceSwap[0].preservePinch).toBe(false);
       }
     } finally {
       jest.useRealTimers();
@@ -440,5 +455,117 @@ describe('SessionScreen terminal pane across a session swap', () => {
       .slice(postCountBeforeFlip)
       .filter((message) => message !== null && message.type === 'init' && message.cleanFeed === true);
     expect(cleanFeedInitsSinceFlip).toHaveLength(1);
+  });
+
+  /**
+   * Two session screens on ONE session: one buried under a sheet or a diff,
+   * then a notification tap for the same task. Dismissing either used to run
+   * closeSessionScreen's release against the SHARED ring - deleted, so every
+   * later seed and chunk for the session was dropped at the terminalFeed
+   * boundary, and the surviving screen's mirror had nothing to repaint from
+   * until it was remounted. Retention is reference counted now.
+   *
+   * Mutation that reddens this: make releaseTerminal delete the ring
+   * regardless of the count.
+   */
+  it('keeps the surviving screen fed when a second screen on the same session is dismissed', async () => {
+    seedTaskWithSession('sess-a');
+    function Screens({ showDuplicate }: { showDuplicate: boolean }): React.JSX.Element {
+      return (
+        <ThemeProvider>
+          <SessionScreen />
+          {showDuplicate ? <SessionScreen /> : null}
+        </ThemeProvider>
+      );
+    }
+    const result = render(<Screens showDuplicate={false} />);
+    await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+    postFromWebView(JSON.stringify({ type: 'ready' }));
+
+    result.rerender(<Screens showDuplicate />);
+    await waitFor(() => expect(screen.getAllByTestId('terminal-webview')).toHaveLength(2));
+    // The duplicate's page reports ready too (the WebView mock captures the
+    // latest-mounted view's props).
+    postFromWebView(JSON.stringify({ type: 'ready' }));
+    expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-a', retainCount: 2 })]);
+
+    result.rerender(<Screens showDuplicate={false} />);
+
+    expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-a', retainCount: 1, listeners: 1 })]);
+    // The consequence, not just the bookkeeping: a fresh frame for the
+    // session still reaches the survivor's WebView.
+    act(() => {
+      seedScrollback('sess-a', 'SURVIVOR FRAME');
+    });
+    expect(postsCarrying('SURVIVOR FRAME')).toHaveLength(1);
+  });
+
+  /**
+   * The swap veil's WAITING phase drops the footer to the switcher alone, so
+   * the pane is TALLER than the Terminal lens is ever read at; a layout
+   * measured then must not become the fit height, or the successor's grid is
+   * fitted to a pane that no longer exists once the keys come back and its
+   * last rows are clipped. SessionScreen derives that from the veil phase
+   * (`fitLayoutIsReference={!footerSwitcherOnly}`) and TerminalTab passes it
+   * through to TerminalPane, which owns the gate (TerminalPane.test.tsx pins
+   * the gate itself with the prop set directly). The wiring between them is
+   * only visible with all three real: with TerminalTab stubbed, as the
+   * session-swap suite has it, a screen that passed `true` always, or a tab
+   * that dropped the prop, would change nothing anyone could observe.
+   *
+   * Mutations that redden this, each on its own: pass
+   * `fitLayoutIsReference={true}` from SessionScreen, or drop the
+   * `fitLayoutIsReference` pass-through in TerminalTab.
+   */
+  it('ignores a layout measured in the veil waiting phase, and takes layouts again once a successor binds', async () => {
+    jest.useFakeTimers();
+    try {
+      seedTaskWithSession('sess-a');
+      render(
+        <ThemeProvider>
+          <SessionScreen />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      layoutWebView(411, 635);
+      postFromWebView(JSON.stringify({ type: 'ready' }));
+
+      // The session ends with no successor, and the quiet window runs out:
+      // the veil enters its waiting phase (the empty layer is its marker).
+      act(() => {
+        seedTaskWithSession(null);
+      });
+      act(() => {
+        jest.advanceTimersByTime(SESSION_SWAP_QUIET_MS + 1);
+      });
+      expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+
+      // The taller, keyless pane: not a reference layout, so nothing is told
+      // to the page.
+      webViewMock.__postMessageMock.mockClear();
+      layoutWebView(411, 690);
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
+
+      // A successor binds: the footer is whole again, so the layouts that
+      // follow are the real ones. 650 differs from the 635 the page has,
+      // which is what makes an adopted layout observable as a post.
+      act(() => {
+        seedTaskWithSession('sess-b');
+      });
+      layoutWebView(411, 650);
+      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
+        { type: 'fit-height', fitHeightPx: 650 },
+      ]);
+
+      // And the consumer of the height, the successor's next init, carries
+      // the settled 650, never the waiting phase's 690.
+      act(() => {
+        seedScrollback('sess-b', 'SUCCESSOR FRAME');
+      });
+      const successorInit = postsCarrying('SUCCESSOR FRAME').find((message) => message?.type === 'init');
+      expect(successorInit?.type === 'init' ? successorInit.fitHeightPx : 'no init').toBe(650);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

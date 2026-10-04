@@ -166,13 +166,33 @@ export function SessionScreen(): React.JSX.Element {
   });
 
   // Mode priority: an explicit route param (needs-you rows land on chat)
-  // beats the task's remembered lens beats the terminal default. The
+  // beats the task's remembered lens beats the terminal default. A
+  // notification tap carries no mode, so it lands on the remembered lens. The
   // remembered lens is read once at mount - later store writes must not
   // yank the surface the user is looking at.
+  const explicitModeParam = params.mode === 'chat' || params.mode === 'changes' ? params.mode : null;
   const [mode, setMode] = useState<SessionMode>(() => {
-    if (params.mode === 'chat' || params.mode === 'changes') return params.mode;
+    if (explicitModeParam !== null) return explicitModeParam;
     return useSettingsStore.getState().preferredSessionLensByTaskId[taskId] ?? 'terminal';
   });
+  // The one exception to "read once": a screen that mounted BEFORE settings
+  // hydrated read the store's empty default map, not the user's. That is the
+  // cold-launch notification tap - hydrate() starts in the root layout's mount
+  // effect, which runs after the pending-navigation runner below it has
+  // already queued the route. So adopt the remembered lens once, on hydration,
+  // unless a mode param or the user already chose (the splash is held until
+  // hydration, so in practice the user never sees the first guess).
+  // Render-time adjustment, the pattern this file uses.
+  const settingsHydrated = useSettingsStore((state) => state.hydrated);
+  const rememberedLens = useSettingsStore((state) => state.preferredSessionLensByTaskId[taskId] ?? null);
+  const [lensAwaitingHydration, setLensAwaitingHydration] = useState(
+    () => explicitModeParam === null && !useSettingsStore.getState().hydrated,
+  );
+  if (lensAwaitingHydration && settingsHydrated) {
+    setLensAwaitingHydration(false);
+    const adoptedLens = rememberedLens ?? 'terminal';
+    if (adoptedLens !== mode) setMode(adoptedLens);
+  }
 
   useEffect(() => {
     if (!sessionId) return;
@@ -687,7 +707,6 @@ export function SessionScreen(): React.JSX.Element {
   const agentLabel = useBoardStore((state) => findTaskById(state, taskId)?.task.agent ?? null);
 
   const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
-  const settingsHydrated = useSettingsStore((state) => state.hydrated);
   const showModeHint = settingsHydrated && !hasSeenSessionModeHint && !sessionEnded && sessionId !== null;
   const dismissModeHint = useCallback(() => {
     void useSettingsStore.getState().markSessionModeHintSeen();
@@ -706,12 +725,15 @@ export function SessionScreen(): React.JSX.Element {
       const requested = state.requestedModeBySessionId[boundSessionId];
       if (requested === undefined) return;
       useTerminalUiStore.getState().consumeRequestedMode(boundSessionId);
+      setLensAwaitingHydration(false);
       setMode(requested);
     });
   }, [sessionId]);
 
   const onModeChange = useCallback(
     (nextMode: SessionMode) => {
+      // A deliberate choice is final: hydration must not overwrite it.
+      setLensAwaitingHydration(false);
       setMode(nextMode);
       dismissModeHint();
       // Remember the task's lens (terminal/chat only: Changes is a
@@ -832,6 +854,9 @@ export function SessionScreen(): React.JSX.Element {
                 sessionId={displaySessionId}
                 active={mode === 'terminal'}
                 cleanFeedEnabled={chatFallbackActive}
+                // The waiting phase drops the quick-key row, so the pane is
+                // taller than the lens is ever read at: not a fit height.
+                fitLayoutIsReference={!footerSwitcherOnly}
               />
             </View>
             <View

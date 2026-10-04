@@ -7,16 +7,36 @@
  *
  * The pane is a FAITHFUL MIRROR: it renders the desktop's exact grid 1:1 and
  * NEVER resizes the desktop PTY (a shared session must not be reshaped by the
- * phone). It sizes the font so the whole frame fits the phone screen, and
- * pinch-zoom + pan read the detail. `rows: null` on init means the desktop
+ * phone). The PAGE owns the cell size: every grid renders in one reference
+ * cell, pinned top-left (see REFERENCE_GRID_ROWS in scripts/xterm-page/state.js),
+ * and pinch-zoom + pan read the detail. `rows: null` on init means the desktop
  * never reported its grid (pre-0.4.0) - the glue then infers cols from
- * content and fits rows to the viewport until the real dims arrive.
+ * content and lays rows out to the viewport until the real dims arrive.
  *
  * The theme record maps xterm ITheme keys (black, red, ..., brightWhite,
  * background, foreground, cursor) to hex color strings. It stays a plain
  * Record<string, string> so this module never depends on the app theme type
  * or on xterm's own typings.
  */
+
+/** Why the page reported a fit: a settled fit chain, or the texture cap clamping a pinch. */
+export type TerminalFitSource = 'settled' | 'texture-cap' | 'unknown';
+
+/**
+ * What started the fit chain a report describes (the page's activeFitTrigger).
+ * A closed set rather than any string because it lands in the release-build
+ * connection trace, which must never carry free text from the page.
+ */
+export const TERMINAL_FIT_TRIGGERS = [
+  'init',
+  'ro-settle',
+  'ro-raf',
+  'window-resize',
+  'refit-msg',
+  'resize-msg',
+  'fit-height',
+] as const;
+export type TerminalFitTrigger = (typeof TERMINAL_FIT_TRIGGERS)[number] | 'unknown';
 
 export type HostToTerminalMessage =
   | {
@@ -32,7 +52,13 @@ export type HostToTerminalMessage =
       cols: number;
       /** The PTY's rows, or null when the desktop never reported dims (legacy inference). */
       rows: number | null;
-      fontSizePx: number;
+      /**
+       * The Terminal lens's own height as the host measured it (the WebView's
+       * layout with the quick-key row showing and the keyboard down), or null
+       * before the host has one. The page fits to it, so a fresh page's first
+       * frame is already the final cell.
+       */
+      fitHeightPx: number | null;
       theme: Record<string, string>;
       /**
        * True enables the CLEAN FEED: a second, headless parser over the same
@@ -42,21 +68,33 @@ export type HostToTerminalMessage =
        */
       cleanFeed: boolean;
       /**
-       * True keeps the CELL SIZE the page is already showing instead of
-       * re-fitting the font to this init's grid: the host sends it on every
-       * re-init over a painted frame (a session swap, a lens switch back, a
-       * re-seed), so a successor with a shorter grid renders at the same
-       * resolution, centred, rather than zoomed to fill the height. A fresh
-       * page, the fit button and a desktop grid change still fit. The page
-       * still steps the font DOWN when the kept size would overflow the
-       * viewport (a taller grid), because the mirror never clips rows.
+       * True HOLDS the frame on screen (a text copy over the grid) until the
+       * new one paints: the host sends it on every re-init over a painted
+       * frame (a session swap, a lens switch back, a re-seed), so the reset
+       * and replay never shows a blank grid. Nothing to do with the size any
+       * more: the page fits every init to the same reference cell.
        */
-      keepFont: boolean;
+      holdFrame: boolean;
+      /**
+       * True keeps a pinch the user made: the host sends it for a re-init of
+       * the SAME session (a lens switch back, a re-seed). The page still drops
+       * the pinch when the grid changed.
+       */
+      preservePinch: boolean;
     }
   | { type: 'write'; data: string }
   | { type: 'set-font-size'; fontSizePx: number }
-  /** Snap back to the fitted view: recompute the fit-to-screen font and reset pan. */
-  | { type: 'refit' }
+  /**
+   * The fit button: snap back to the fitted view from ANY state. Drops a
+   * pinch and the converged cell and re-fits from scratch. Carries the ring's
+   * grid (null when unknown) so a page that inited before the desktop reported
+   * one fits the real grid rather than a guess.
+   */
+  | { type: 'refit'; cols: number | null; rows: number | null }
+  /** The host re-measured the Terminal lens's height (a first measurement, a rotation). */
+  | { type: 'fit-height'; fitHeightPx: number }
+  /** Back from the background: drop the glyph atlas and redraw every row, without touching the fit. */
+  | { type: 'repaint' }
   /**
    * Jump to the newest output. Mechanism-aware in the page: local
    * scrollToBottom when the buffer has real scrollback; otherwise Ctrl+End
@@ -105,8 +143,28 @@ export type TerminalToHostMessage =
        */
       initial: boolean;
     }
-  /** The glue changed the font size autonomously (fit-to-screen zoom); keeps the host's pinch base in sync. */
-  | { type: 'font-size'; fontSizePx: number }
+  /**
+   * A fit report: a fit chain SETTLED ('settled', every settle, changed or not)
+   * or the texture cap clamped a pinch ('texture-cap'). Keeps the host's pinch
+   * baseline in sync and feeds the release-build `terminal-fit` trace; the
+   * host persists nothing. Every field past `fontSizePx` is diagnostic and
+   * decodes to a default from an older page.
+   */
+  | {
+      type: 'font-size';
+      fontSizePx: number;
+      source: TerminalFitSource;
+      trigger: TerminalFitTrigger;
+      cols: number | null;
+      rows: number | null;
+      lineHeight: number | null;
+      fitHeightPx: number | null;
+      innerHeightPx: number | null;
+      innerWidthPx: number | null;
+      gridHeightPx: number | null;
+      devicePixelRatio: number | null;
+      maxTextureSize: number | null;
+    }
   /** Which renderer backs the terminal: WebGL (GPU) or the DOM fallback. Observability for a degraded terminal. */
   | { type: 'renderer'; renderer: 'webgl' | 'dom' }
   /**
@@ -165,6 +223,19 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function finiteNumberOrNull(value: unknown): number | null {
+  return isFiniteNumber(value) ? value : null;
+}
+
+function decodeFitSource(value: unknown): TerminalFitSource {
+  return value === 'settled' || value === 'texture-cap' ? value : 'unknown';
+}
+
+function decodeFitTrigger(value: unknown): TerminalFitTrigger {
+  const knownTrigger = TERMINAL_FIT_TRIGGERS.find((trigger) => trigger === value);
+  return knownTrigger ?? 'unknown';
+}
+
 /** Decode a message received FROM the WebView terminal; null on anything malformed. */
 export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null {
   const parsedObject = parseJsonObject(raw);
@@ -194,7 +265,24 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
     };
   }
   if (parsedObject.type === 'font-size' && isFiniteNumber(parsedObject.fontSizePx)) {
-    return { type: 'font-size', fontSizePx: parsedObject.fontSizePx };
+    // Only the size is required: every other field is diagnostic and
+    // defaults rather than rejects, so an older page's bare report still
+    // keeps the pinch baseline in sync.
+    return {
+      type: 'font-size',
+      fontSizePx: parsedObject.fontSizePx,
+      source: decodeFitSource(parsedObject.source),
+      trigger: decodeFitTrigger(parsedObject.trigger),
+      cols: finiteNumberOrNull(parsedObject.cols),
+      rows: finiteNumberOrNull(parsedObject.rows),
+      lineHeight: finiteNumberOrNull(parsedObject.lineHeight),
+      fitHeightPx: finiteNumberOrNull(parsedObject.fitHeightPx),
+      innerHeightPx: finiteNumberOrNull(parsedObject.innerHeightPx),
+      innerWidthPx: finiteNumberOrNull(parsedObject.innerWidthPx),
+      gridHeightPx: finiteNumberOrNull(parsedObject.gridHeightPx),
+      devicePixelRatio: finiteNumberOrNull(parsedObject.devicePixelRatio),
+      maxTextureSize: finiteNumberOrNull(parsedObject.maxTextureSize),
+    };
   }
   if (parsedObject.type === 'renderer' && (parsedObject.renderer === 'webgl' || parsedObject.renderer === 'dom')) {
     return { type: 'renderer', renderer: parsedObject.renderer };
@@ -236,7 +324,13 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
     return { type: 'set-font-size', fontSizePx: parsedObject.fontSizePx };
   }
   if (parsedObject.type === 'refit') {
-    return { type: 'refit' };
+    return { type: 'refit', cols: finiteNumberOrNull(parsedObject.cols), rows: finiteNumberOrNull(parsedObject.rows) };
+  }
+  if (parsedObject.type === 'fit-height' && isFiniteNumber(parsedObject.fitHeightPx)) {
+    return { type: 'fit-height', fitHeightPx: parsedObject.fitHeightPx };
+  }
+  if (parsedObject.type === 'repaint') {
+    return { type: 'repaint' };
   }
   if (parsedObject.type === 'scroll-latest') {
     return { type: 'scroll-latest' };
@@ -253,10 +347,11 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
     typeof parsedObject.scrollback === 'string' &&
     isFiniteNumber(parsedObject.cols) &&
     (parsedObject.rows === null || isFiniteNumber(parsedObject.rows)) &&
-    isFiniteNumber(parsedObject.fontSizePx) &&
+    (parsedObject.fitHeightPx === null || isFiniteNumber(parsedObject.fitHeightPx)) &&
     isStringRecord(parsedObject.theme) &&
     typeof parsedObject.cleanFeed === 'boolean' &&
-    typeof parsedObject.keepFont === 'boolean'
+    typeof parsedObject.holdFrame === 'boolean' &&
+    typeof parsedObject.preservePinch === 'boolean'
   ) {
     return {
       type: 'init',
@@ -264,10 +359,11 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
       scrollback: parsedObject.scrollback,
       cols: parsedObject.cols,
       rows: parsedObject.rows === null ? null : parsedObject.rows,
-      fontSizePx: parsedObject.fontSizePx,
+      fitHeightPx: parsedObject.fitHeightPx === null ? null : parsedObject.fitHeightPx,
       theme: parsedObject.theme,
       cleanFeed: parsedObject.cleanFeed,
-      keepFont: parsedObject.keepFont,
+      holdFrame: parsedObject.holdFrame,
+      preservePinch: parsedObject.preservePinch,
     };
   }
   return null;

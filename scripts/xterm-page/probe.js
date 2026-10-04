@@ -60,6 +60,15 @@
       paddingTopPx: gridHost ? gridHost.style.paddingTop : null,
       viewportWidthPx: window.innerWidth,
       viewportHeightPx: window.innerHeight,
+      // A native page zoom would look exactly like a fit gone small; this
+      // rules it in or out in one read.
+      visualViewportScale: window.visualViewport ? window.visualViewport.scale : null,
+      fitHeightPx: fitViewportHeight(),
+      hostFitHeightPx: hostFitHeightPx,
+      maxFitHeightByWidth: JSON.parse(JSON.stringify(maxFitHeightByWidth)),
+      referenceRows: referenceRowsForFit(),
+      settledFit: settledFit ? JSON.parse(JSON.stringify(settledFit)) : null,
+      pinchOverrideFontPx: pinchOverrideFontPx,
       devicePixelRatio: window.devicePixelRatio,
       scrollLeft: container ? container.scrollLeft : null,
       scrollWidth: container ? container.scrollWidth : null,
@@ -96,7 +105,7 @@
       activeInitSeq: activeInitSeq,
       awaitingNonBlankPaint: awaitingNonBlankPaint,
       paintReportCounts: JSON.parse(JSON.stringify(paintReportCounts)),
-      lastInitKeepFont: lastInitKeepFont,
+      lastInitHoldFrame: lastInitHoldFrame,
       frameHoldCount: frameHoldCount,
       frameHoldActive: document.getElementById('frame-hold') !== null,
       netHistoryUnits: netHistoryUnits,
@@ -120,9 +129,12 @@
     },
     refit: function () {
       // Through the MESSAGE branch, not refit() directly: the reset button
-      // posts {type:'refit'}, and that branch now also drops gesture state, so
-      // calling the inner function would test a path the button does not take.
-      onHostMessage(JSON.stringify({ type: 'refit' }));
+      // posts {type:'refit'} with the ring's grid, and that branch drops the
+      // pinch and the converged cell and adopts the grid, so calling the inner
+      // function would test a path the button does not take. The page's own
+      // grid stands in for the ring's (null rows when unknown, as the button
+      // sends).
+      onHostMessage(JSON.stringify({ type: 'refit', cols: knownCols, rows: knownRows }));
       return terminalProbeState();
     },
     scroll: function (units) {

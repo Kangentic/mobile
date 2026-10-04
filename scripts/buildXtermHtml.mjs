@@ -137,12 +137,13 @@ const html = `<!DOCTYPE html>
 <style>
 ${xtermCss}
 html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow: hidden; }
-/* The grid fills the phone HEIGHT (autoFitFontToScreen sizes the font to the row
-   count) and is pinned top/left: column 0, row 0 start at the top-left corner. A
-   wide grid overflows the width and pans right inside #scroll-container (follow-
-   the-cursor tracks the active column); a grid taller than the viewport pans down.
-   width:max-content keeps the terminal its natural grid width so the overflow is
-   real and scrollable rather than wrapped. */
+/* Every grid renders in ONE cell size, the reference cell at which the desktop's
+   resting grid fills the phone HEIGHT (see REFERENCE_GRID_ROWS in the page's
+   state.js), and is pinned top/left: column 0, row 0 start at the top-left corner
+   on every open of every task. A wide grid overflows the width and pans right
+   inside #scroll-container (follow-the-cursor tracks the active column); a grid
+   taller than the viewport pans down. width:max-content keeps the terminal its
+   natural grid width so the overflow is real and scrollable rather than wrapped. */
 /* Horizontal pans, vertical deliberately does NOT. A one-finger vertical drag
    is history scrolling (consumeHistoryDrag), so the container must not consume
    it as a pan first: with overflow-y auto the browser swallowed the gesture
@@ -150,20 +151,17 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    responding. The cost is that the bottom of a zoomed-in frame cannot be
    dragged to, which is the accepted trade for one finger and no modes. */
 #scroll-container { width: 100%; height: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
-/* Auto side margins CENTRE a grid narrower than the screen and do nothing to a
-   wider one, which is exactly the split we want. The font is fitted to the
-   pane's HEIGHT, so a grid whose aspect is taller than the pane's cannot fill
-   the width at any font size - the leftover is inherent, not a bug. Pinned
-   left it all piles up on the right and reads as a terminal cut short; split
-   evenly it reads as a margin. When the grid IS wider, auto margins compute to
-   zero, the overflow stays real, and the pan logic is untouched. The VERTICAL
-   half of that split is padding-top, set from the measured grid by
-   centerGridVertically (it needs the painted height, which no CSS rule has). */
-/* translateZ(0) keeps the grid on its own compositor layer - see
+/* No auto margins: a grid narrower than the screen is pinned LEFT, as a shorter
+   one is pinned to the top. Both used to be centred, which read as a margin but
+   moved column 0 and row 0 with the shape of whichever desktop grid a session
+   happened to be at; the maintainer's rule (2026-10) is the same font size and
+   the same position every time, so the leftover is the terminal's own
+   background on the right and below. A wider grid is unaffected either way.
+   translateZ(0) keeps the grid on its own compositor layer - see
    applyVerticalOffset, whose inline transform preserves it. Without the
    promotion, Android WebView sometimes skips recompositing a fully repainted
    canvas (a black terminal until a 1px scroll invalidates the layer). */
-#terminal { width: max-content; margin: 0 auto; transform: translateZ(0); }
+#terminal { width: max-content; margin: 0; transform: translateZ(0); }
 </style>
 </head>
 <body>

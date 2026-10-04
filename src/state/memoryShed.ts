@@ -14,10 +14,15 @@ import { shedUnwatchedTerminalRings } from './terminalFeed';
  * door at all (`.claude/rules/crash-reporting-scope.md`).
  *
  * Everything shed here is reconstructible from the desktop - a transcript
- * window refetches on mount, a terminal ring re-seeds on the next read-stream
- * subscribe - so the cost is a round trip, never content and never user input.
- * Both are idempotent, which matters because listeners fire on every warning
- * rather than only on the ones that get a breadcrumb.
+ * window refetches on mount - so the cost is a round trip, never content and
+ * never user input. Every shedder is idempotent, which matters because
+ * listeners fire on every warning rather than only on the ones that get a
+ * breadcrumb.
+ *
+ * The terminal arm is INERT, deliberately: a terminal ring exists only while a
+ * mounted session screen retains it, and a retained ring is never shed (a
+ * deleted ring is NOT re-seeded, and losing it blanked the terminal the user
+ * came back to). See shedUnwatchedTerminalRings.
  *
  * SHEDS ON `serious` OR `backgrounded`, and skips `moderate`. The threshold is
  * chosen so the user never watches content they are reading get refetched:

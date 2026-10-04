@@ -64,6 +64,20 @@ export interface SubscriptionManagerOptions {
   session: SessionManager;
   verbs: VerbClient;
   sinks: SubscriptionSnapshotSinks;
+  /**
+   * Whether a session's subscription must carry live PTY bytes: true while a
+   * session screen holds the session's terminal. READ AT SUBSCRIBE TIME, never
+   * stored here, because this manager is rebuilt on every connection and the
+   * fact must outlive it: when it lived on the manager as a Set, a session
+   * screen that stayed mounted across a reconnect (any iOS background, Android
+   * push-only mode, the keepalive ceiling) was re-subscribed list-only, and its
+   * terminal froze or went black until the screen remounted.
+   *
+   * Injected rather than imported so `src/channel/` stays free of screen
+   * state, and REQUIRED rather than defaulted, so a wiring regression is a
+   * type error instead of a silent repeat of that bug.
+   */
+  isTerminalWanted: (sessionId: string) => boolean;
 }
 
 /**
@@ -92,6 +106,7 @@ export class SubscriptionManager {
   private readonly session: SessionManager;
   private readonly verbs: VerbClient;
   private readonly sinks: SubscriptionSnapshotSinks;
+  private readonly isTerminalWanted: (sessionId: string) => boolean;
   private readonly unsubscribeEstablished: Unsubscribe;
   private readonly unsubscribeRekey: Unsubscribe;
 
@@ -100,12 +115,6 @@ export class SubscriptionManager {
   private readonly desiredDiffsByTaskId = new Map<string, DesiredDiff>();
 
   private readonly activeStreamIds = new Set<string>();
-  /**
-   * Sessions whose subscription must carry live PTY bytes - the ones with a
-   * terminal on screen. Everything else subscribes list-only: the feed needs
-   * activity, not output it discards on arrival.
-   */
-  private readonly terminalStreamIds = new Set<string>();
   private readonly activeBoardIds = new Set<string>();
   /**
    * Which projection each board is subscribed with. Boards start at
@@ -166,21 +175,29 @@ export class SubscriptionManager {
   private readonly queuedStreamIds = new Set<string>();
   private readonly queuedBoardIds = new Set<string>();
   /**
-   * Stream subscribes that have been SENT and not yet answered. A reconcile
-   * that lands inside that window (a board snapshot re-listing the session
-   * the screen just opened) must not issue a second copy of a request the
-   * desktop is already answering. Measured on a release build: every column
-   * move seeded the successor's terminal twice, 30 to 45 ms apart, one from
-   * the reconcile's queue and one from the screen's terminal flip, and the
-   * page replayed a full ring for each.
+   * The NEWEST stream subscribe sent per session and not yet answered, by its
+   * request sequence. Two jobs:
+   *
+   * - A reconcile that lands inside that window (a board snapshot re-listing
+   *   the session the screen just opened) must not issue a second copy of a
+   *   request the desktop is already answering. Measured on a release build:
+   *   every column move seeded the successor's terminal twice, 30 to 45 ms
+   *   apart, one from the reconcile's queue and one from the screen's open,
+   *   and the page replayed a full ring for each.
+   * - When two subscribes for one session overlap (a screen opening or
+   *   closing while a reconcile's request is on the wire), only the newest
+   *   answer counts. A Set could not tell them apart: the FIRST answer to land
+   *   cleared it while the second was still on the wire.
    */
-  private readonly inFlightStreamIds = new Set<string>();
+  private readonly inFlightStreamRequestBySessionId = new Map<string, number>();
+  private nextStreamRequestSequence = 0;
   private disposed = false;
 
   constructor(options: SubscriptionManagerOptions) {
     this.session = options.session;
     this.verbs = options.verbs;
     this.sinks = options.sinks;
+    this.isTerminalWanted = options.isTerminalWanted;
     this.unsubscribeEstablished = this.session.onEstablished(() => this.onEstablished());
     this.unsubscribeRekey = this.session.onRekey(() => this.onRekey());
   }
@@ -196,7 +213,7 @@ export class SubscriptionManager {
     for (const sessionId of this.desiredStreamIds) {
       if (
         !this.activeStreamIds.has(sessionId) &&
-        !this.inFlightStreamIds.has(sessionId) &&
+        !this.inFlightStreamRequestBySessionId.has(sessionId) &&
         !this.streamRetryTimers.has(sessionId)
       ) {
         this.enqueueStreamSubscribe(sessionId);
@@ -268,44 +285,25 @@ export class SubscriptionManager {
   }
 
   /**
-   * Declare whether this session's subscription needs live PTY bytes. A
-   * session screen turns it on when it opens and off when it closes; the feed
-   * never turns it on. Flipping it re-subscribes, which is also what fetches
-   * the fresh scrollback a newly-opened terminal needs to seed itself.
+   * Immediate re-subscribe for one stream, carrying whatever `isTerminalWanted`
+   * says NOW. Two callers: a session screen opening (the fresh scrollback its
+   * terminal seeds from, and the switch to live PTY bytes) and the last screen
+   * on a session closing (the switch back to list-only).
    *
-   * Returns whether it issued that re-subscribe, so a caller that also wants
-   * a fresh frame knows whether it still needs to ask for one.
-   */
-  setStreamWantsTerminal(sessionId: string, wantsTerminal: boolean): boolean {
-    const previous = this.terminalStreamIds.has(sessionId);
-    if (previous === wantsTerminal) return false;
-    if (wantsTerminal) this.terminalStreamIds.add(sessionId);
-    else this.terminalStreamIds.delete(sessionId);
-    if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return false;
-    // A reconcile's copy still waiting in the queue is superseded by this
-    // direct one: it would read the same flag when it started and answer the
-    // same question a second time (the successor seeded twice per swap).
-    this.queuedStreamIds.delete(sessionId);
-    void this.subscribeStream(sessionId);
-    return true;
-  }
-
-  /**
-   * Immediate re-subscribe for one stream - the fresh-scrollback path when a
-   * session screen opens.
-   *
-   * Deliberately NOT queued, and the same goes for `setStreamWantsTerminal`,
-   * `setBoardWantsFull` and `refreshBoard`. Those four are one request each,
-   * caused by a user action, and the screen is waiting on the answer; putting
-   * them behind the fan-out cap would make opening a session screen wait on up
-   * to four background subscribes. The cap exists for the storms, which are
-   * the reconciles that issue one request PER project or PER session. A direct
-   * re-issue can overlap a queued task for the same id, which is the
-   * refresh-by-re-issue the desktop's replace-and-tear-down already makes safe.
+   * Deliberately NOT queued, and the same goes for `setBoardWantsFull` and
+   * `refreshBoard`. Those are one request each, caused by a user action, and
+   * the screen is waiting on the answer; putting them behind the fan-out cap
+   * would make opening a session screen wait on up to four background
+   * subscribes. The cap exists for the storms, which are the reconciles that
+   * issue one request PER project or PER session. A direct re-issue can
+   * overlap a queued task for the same id, which is the refresh-by-re-issue
+   * the desktop's replace-and-tear-down already makes safe.
    */
   refreshStream(sessionId: string): void {
     if (!this.desiredStreamIds.has(sessionId) || !this.session.isEstablished) return;
-    // Same supersession as setStreamWantsTerminal: one answer is enough.
+    // A reconcile's copy still waiting in the queue is superseded by this
+    // direct one: it would read the same want when it started and answer the
+    // same question a second time (the successor seeded twice per swap).
     this.queuedStreamIds.delete(sessionId);
     void this.subscribeStream(sessionId);
   }
@@ -328,6 +326,8 @@ export class SubscriptionManager {
   debugSnapshot(): {
     desiredStreams: string[];
     activeStreams: string[];
+    /** The desired streams this manager asks LIVE PTY bytes for - a lost terminal want shows here. */
+    terminalStreams: string[];
     desiredBoards: string[];
     activeBoards: string[];
     fullBoards: string[];
@@ -337,6 +337,7 @@ export class SubscriptionManager {
     return {
       desiredStreams: [...this.desiredStreamIds].sort(),
       activeStreams: [...this.activeStreamIds].sort(),
+      terminalStreams: [...this.desiredStreamIds].filter((sessionId) => this.isTerminalWanted(sessionId)).sort(),
       desiredBoards: [...this.desiredBoardIds].sort(),
       activeBoards: [...this.activeBoardIds].sort(),
       fullBoards: [...this.boardViewByProjectId.entries()].filter(([, view]) => view === 'full').map(([projectId]) => projectId).sort(),
@@ -382,8 +383,8 @@ export class SubscriptionManager {
     if (this.disposed || this.queuedStreamIds.has(sessionId)) return;
     this.queuedStreamIds.add(sessionId);
     this.subscribeQueue.enqueue(async () => {
-      // Superseded while waiting: a direct subscribe for this id (the screen's
-      // terminal flip or refresh) already went out carrying the current flag,
+      // Superseded while waiting: a direct subscribe for this id (a session
+      // screen opening or closing) already went out carrying the current want,
       // so this copy has nothing left to ask. `delete` doubles as the check.
       if (!this.queuedStreamIds.delete(sessionId)) return;
       // The isEstablished half is belt-and-braces: `SessionManager.send`
@@ -456,25 +457,52 @@ export class SubscriptionManager {
     }
   }
 
-  private async subscribeStream(sessionId: string, isRetry = false): Promise<void> {
-    const wantsTerminal = this.terminalStreamIds.has(sessionId);
-    this.inFlightStreamIds.add(sessionId);
+  private async subscribeStream(sessionId: string, isRetry = false, isReask = false): Promise<void> {
+    const wantsTerminal = this.isTerminalWanted(sessionId);
+    this.nextStreamRequestSequence += 1;
+    const requestSequence = this.nextStreamRequestSequence;
+    this.inFlightStreamRequestBySessionId.set(sessionId, requestSequence);
+    // Clears the in-flight entry only if it is still THIS request's: a newer
+    // overlapping subscribe for the same session owns it now. Answers once
+    // per request: when the snapshot sink throws after the success path
+    // settled, the catch must see the same verdict (and arm the retry), not
+    // re-read an entry that settling already removed.
+    let settledAsNewest: boolean | null = null;
+    const settle = (): boolean => {
+      if (settledAsNewest === null) {
+        settledAsNewest = this.inFlightStreamRequestBySessionId.get(sessionId) === requestSequence;
+        if (settledAsNewest) this.inFlightStreamRequestBySessionId.delete(sessionId);
+      }
+      return settledAsNewest;
+    };
     try {
-      const snapshot = await this.verbs.readStreamSubscribe(sessionId, { terminal: wantsTerminal }).finally(() => {
-        this.inFlightStreamIds.delete(sessionId);
-      });
+      const snapshot = await this.verbs.readStreamSubscribe(sessionId, { terminal: wantsTerminal });
+      const isNewest = settle();
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
-      // Same staleness guard as subscribeBoard. Opening and immediately
-      // closing a session screen flips the flag twice, so two subscribes are
-      // in flight with opposite terminal values; whichever landed last would
-      // otherwise decide the bookkeeping regardless of which is current.
-      // Dropping the stale one loses nothing: the flag only ever changes on a
-      // path that issues its own subscribe, so a fresher one is always coming.
-      if (this.terminalStreamIds.has(sessionId) !== wantsTerminal) return;
+      // Same staleness rule as subscribeBoard, by request rather than by flag.
+      // Two subscribes for one session overlap whenever a screen opens or
+      // closes while another request is on the wire, and the answers can land
+      // in either order; only the newest one describes what was last asked.
+      if (!isNewest) return;
+      if (this.isTerminalWanted(sessionId) !== wantsTerminal) {
+        // The want changed while this was in flight and nothing newer was
+        // issued for it (the change landed when no direct subscribe could go
+        // out). Dropping this answer silently used to strand the session
+        // desired, inactive and on the wrong projection until the next board
+        // snapshot happened to re-list it. Ask again with the current want -
+        // ONCE per chain: a want that flips on every round trip must not turn
+        // this into a request loop, and the next screen open, close or
+        // reconcile asks again anyway.
+        if (!isReask && this.session.isEstablished) void this.subscribeStream(sessionId, false, true);
+        return;
+      }
       this.activeStreamIds.add(sessionId);
       this.sinks.onStreamSnapshot(sessionId, snapshot);
     } catch (error) {
+      const isNewest = settle();
       if (this.disposed || !this.desiredStreamIds.has(sessionId)) return;
+      // A newer request is on the wire and decides; this failure is moot.
+      if (!isNewest) return;
       if (error instanceof CapabilityError) {
         // The desktop said no (session gone) - prune; the next board
         // snapshot reconcile re-adds it if it comes back.
@@ -585,15 +613,11 @@ export class SubscriptionManager {
       clearTimeout(retryTimer);
       this.streamRetryTimers.delete(sessionId);
     }
-    // terminalStreamIds is NOT cleared here: it is screen-owned state, set by
-    // openSessionScreen and cleared by closeSessionScreen. A stream can drop
-    // out of the desired set while its screen stays mounted (the task gets
-    // archived desktop-side, say), and clearing the flag would bring the
-    // session back list-only, leaving a mounted terminal permanently frozen.
-    //
-    // Nothing leaks: closeSessionScreen is the CLEANUP of SessionScreen's
-    // mount effect, so it runs on every unmount path, not just the back
-    // button - and a process death takes this manager with it.
+    // The terminal want is not this manager's to clear: it is the screen's
+    // terminal retention (isTerminalWanted), which lives outside every
+    // connection. A stream can drop out of the desired set while its screen
+    // stays mounted (the task gets archived desktop-side, say), and the re-add
+    // must come back with live PTY bytes, not list-only.
     if (!this.activeStreamIds.has(sessionId)) return;
     this.activeStreamIds.delete(sessionId);
     if (this.session.isEstablished) void this.verbs.readStreamUnsubscribe(sessionId).catch(() => undefined);

@@ -46,13 +46,23 @@ function performPendingNavigation(navigation: PendingNavigation): void {
     router.navigate('/');
     return;
   }
-  router.push({
+  // NAVIGATE, not push. In expo-router 57 a PUSH with no getId always appends a
+  // route, so a tap for the task already on top stacked a second session screen
+  // on the same session. NAVIGATE to the same [taskId] on top replaces that
+  // route's params and keeps its key, so nothing remounts; a different taskId
+  // still appends (build/layouts/StackClient.js, the PUSH/NAVIGATE branch of the
+  // stack router override). Not dismissTo: it pops to the newest route of that
+  // NAME, which can be another task's screen, and replaces Home when none
+  // matches.
+  //
+  // No `mode` param: the screen resolves the lens itself (the task's remembered
+  // lens, else terminal), so a push tap lands where the user last worked.
+  router.navigate({
     pathname: '/task/[taskId]',
     params: {
       taskId: navigation.taskId,
       projectId: navigation.projectId,
       sessionId: navigation.sessionId,
-      mode: 'chat',
     },
   });
 }

@@ -1685,13 +1685,33 @@ move-opened window, the end arriving, with `sinceMoveMs`), `phase=bind` (the suc
 `sinceEndedMs` and `sinceMoveMs`), `phase=settled` (the veil let go, with the `mode` it settled
 in, `sinceEndedMs`, `sinceMoveMs` and `sinceBindMs`) or `phase=deadline` (the quiet threshold
 passed first, with `bound` and `ended`; `ended=false` is a move whose end never came, which drops
-the veil without spending the window), plus three from the terminal pane: `terminal-init` on every init it
+the veil without spending the window), plus six from the terminal pane: `terminal-fit-height`
+when the pane's measured fit height changes (`fitHeightPx`, `previousPx`, `ready`, whether the
+page was up to be told, and `active`, false for a provisional value taken while another lens
+showed; a fit must end on the pane's settled height, so with the keyboard
+down the last of these should match the next `terminal-fit`'s `innerHeightPx`), `terminal-init` on every init it
 posts (`reason`, one of `ready`, `seed`, `chunk-release`, `swap`, `clean-feed` or `reactivate`;
-the grid's `cols` and `rows`, `n/a` before the desktop reports one; `fontSizePx`; and `keepFont`,
-whether that init kept the cell size or fit the font), `terminal-painted` on every paint
-report the WebView sends (`blank` and `sinceInitMs`), and `terminal-renderer` on the page's
-renderer report (`webgl` or `dom`; until 2026-09-18 this was a bare console.log carrying the
-session id into release logcat); and one from the subscription manager, `board-subscribe`, on a
+the grid's `cols` and `rows`, `n/a` before the desktop reports one; `fitHeightPx`, the
+host-measured Terminal-lens height the page fits against, `n/a` before the pane has measured one;
+`holdFrame`, whether the page holds the displayed frame across the reset; and `preservePinch`,
+whether a pinch survives it), `terminal-fit` on every fit report the page sends (`source`,
+`settled` when a fit chain converged or `texture-cap` when the GPU limit clamped a pinch;
+`trigger`, what started the fit, one of `init`, `ro-settle`, `ro-raf`, `window-resize`,
+`refit-msg`, `resize-msg` or `fit-height`; the settled `fontSizePx` and `lineHeight`; the grid's
+`cols` and `rows`; the page's `fitHeightPx` beside the host's `hostFitHeightPx`; the page's
+`innerHeightPx` and `innerWidthPx`; the measured `gridHeightPx`; `devicePixelRatio`;
+`maxTextureSize`; and `active`, whether the pane was the visible one). Every open of a grid of 48
+rows or fewer should settle on the SAME `fontSizePx` and `lineHeight`, which is the reference-cell
+rule's whole claim, so this line is how it is checked on a release build. Then
+`terminal-recovery` when the blank-recovery deadline fires (`action`, `refresh` when no seed ever
+arrived, so the stream is re-subscribed, or `remount` when the page sent no paint report at all for
+its init, so the WebView is rebuilt; and `attempt`, at most two per episode), `terminal-painted`
+on every paint report the WebView sends (`blank` and `sinceInitMs`), and `terminal-renderer` on
+the page's renderer report (`webgl` or `dom`; until 2026-09-18 this was a bare console.log
+carrying the session id into release logcat). `session-open` comes from `openSessionScreen` on
+every session screen mount (`hasConnection` and `established`; `hasConnection=false` is a
+cold-launch notification tap that beat the connection, which the screen's retention now survives
+because every later subscription manager reads it). And one from the subscription manager, `board-subscribe`, on a
 board read that did not land (`outcome`, `rejected` when the desktop answered no or `failed` for
 a timeout or transport failure; `view`; `ms` since it was issued; and `retry`, whether the one
 queued retry was armed). A Board tab stranded on its skeleton is diagnosed from that line: a
@@ -3620,10 +3640,14 @@ they live on the Hermes heap anyway, which is not the heap that died.
 
 One targeted candidate worth knowing about before reading the dump: a session screen left open
 while the app backgrounds keeps `terminal: true` on its stream subscription
-(`subscriptionManager.ts`), so live PTY bytes keep arriving with no one watching. Dropping that on
-background is a one-line change through the existing `setStreamWantsTerminal`, and it was
-deliberately NOT made pre-emptively - a speculative fix landed before the dump would muddy exactly
-the reading the dump exists to give.
+(`subscriptionManager.ts`), so live PTY bytes keep arriving with no one watching. That want is now
+the screen's RETENTION of the session's ring (`retainTerminal` in `src/state/terminalFeed.ts`,
+reference counted and read by every subscription manager at subscribe time), because a flag kept
+on the manager was lost when a connection rebuilt it and froze or blanked the mirror. So dropping
+the bytes on background is no longer a one-line change: it needs a background-only want that does
+not release the retention, or the ring the screen returns to is gone. It was deliberately NOT made
+pre-emptively - a speculative fix landed before the dump would muddy exactly the reading the dump
+exists to give.
 
 ## Credential inventory
 

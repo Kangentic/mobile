@@ -32,11 +32,36 @@
   var awaitingNonBlankPaint = false;
   // Probe counters: how many paint reports went out blank vs painted.
   var paintReportCounts = { blank: 0, painted: 0 };
-  // Whether the last init asked to KEEP the cell size (a re-init over a
-  // painted frame: a session swap, a lens switch back, a re-seed) rather than
-  // fit the font to its grid. For the probe; the decision itself is the
-  // host's (TerminalPane's keepFont).
-  var lastInitKeepFont = false;
+  // Whether the last init asked to HOLD the frame on screen (a re-init over a
+  // painted frame: a session swap, a lens switch back, a re-seed) until the
+  // new one paints. For the probe; the decision itself is the host's
+  // (TerminalPane's holdFrame).
+  var lastInitHoldFrame = false;
+  // THE REFERENCE CELL. Every grid renders in ONE cell size: the one at which
+  // the desktop's resting grid (RESTING_GRID_COLS x RESTING_GRID_ROWS in the
+  // kangentic repo, 210x48) fills the pane's height. The maintainer's rule,
+  // 2026-10: the same font size and the same position on every open of every
+  // task. A grid with 48 rows or fewer gets exactly this cell, pinned to the
+  // top-left; a taller one fits its own rows; a wider one is capped by the
+  // GPU texture limit like any other. It replaced a fit per grid (rows fill
+  // the height, so text size followed the desktop's grid) plus a remembered
+  // size, which together gave the same session two different looks
+  // depending on which code path fitted it last. If the desktop changes its
+  // resting grid, these move with it.
+  var REFERENCE_GRID_COLS = 210;
+  var REFERENCE_GRID_ROWS = 48;
+  // A pinch the user made, in font px: the user owns the size until the fit
+  // button, a different session or a different grid. Null when fitted.
+  var pinchOverrideFontPx = null;
+  // The converged cell for one fit key (see currentFitKey): the font and the
+  // line-height stretch the measured height fit settled on. A re-init or a
+  // refit with the same key applies it directly instead of re-running the fit
+  // from line height 1, which is what made every re-init visibly snap short
+  // and re-stretch. Page memory only: the host owns nothing about the size.
+  var settledFit = null;
+  // What started the current fit chain, carried on the fit report so a
+  // release-build trace can tell an init's fit from a keyboard's.
+  var activeFitTrigger = 'init';
   // How many frame holds have been raised (see holdFrameSnapshot). Probe only.
   var frameHoldCount = 0;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
@@ -62,7 +87,19 @@
   // the keyboard covers its lower rows, and follow-the-cursor (which reads
   // the CURRENT innerHeight on purpose) pans the typing back into view.
   var maxFitHeightByWidth = {};
+  // The fit height the HOST measured: the WebView's own layout height while
+  // the Terminal lens is showing with its quick-key row and the keyboard
+  // down (TerminalPane's onLayout). It outranks everything below when
+  // present, for two reasons. A fresh page's first innerHeight is not final
+  // (refit.js), so a page-measured fit computed one cell on the first frame
+  // and corrected it a quarter second later, on every open. And all three
+  // lenses share one box whose height follows the footer (Changes has no
+  // input row), so the maximum below learned a pane taller than the
+  // Terminal lens ever is. Null until the host has measured one (a pane
+  // mounted while another lens is showing).
+  var hostFitHeightPx = null;
   function fitViewportHeight() {
+    if (typeof hostFitHeightPx === 'number' && hostFitHeightPx > 0) return hostFitHeightPx;
     var width = window.innerWidth;
     var height = window.innerHeight;
     var best = maxFitHeightByWidth[width] || 0;

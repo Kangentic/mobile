@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, StyleSheet, View } from 'react-native';
+import { AppState, Keyboard, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Asset } from 'expo-asset';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -21,8 +21,8 @@ import {
   hasSeed,
   subscribeChunks,
 } from '@/state/terminalFeed';
+import { useChannelStore } from '@/state/channelStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
-import { useSettingsStore } from '@/state/settingsStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { refreshTerminalStream, writeTerminal } from '@/connection/actions';
 import { DirectKeyInput, type DirectKeyInputHandle } from './DirectKeyInput';
@@ -44,6 +44,13 @@ export interface TerminalPaneProps {
    * flip re-inits the terminal with the flag.
    */
   cleanFeedEnabled?: boolean;
+  /**
+   * False while the screen's footer is in a state the Terminal lens is never
+   * read in (the swap veil's switcher-only phase drops the quick-key row, so
+   * the pane is TALLER than it will be once the session is back). A layout
+   * measured then must not become the fit height. Defaults to true.
+   */
+  fitLayoutIsReference?: boolean;
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
@@ -69,10 +76,18 @@ const CHUNK_BATCH_INTERVAL_MS = 32;
 // batching resumes the moment the user stops interacting.
 const INPUT_ECHO_WINDOW_MS = 250;
 const FONT_SIZE_POST_THROTTLE_MS = 50;
-// How long the reset button waits for its stream refresh to produce a re-seed
-// before falling back to a local refit (the offline path). A live channel
-// round-trips a seed well inside this.
-const REFIT_FALLBACK_DELAY_MS = 700;
+/**
+ * How long an init may go without its bytes or its paint report before the
+ * pane repairs itself (see runBlankRecovery). CHOSEN, not measured
+ * (performance-claims-are-measured.md): the nearest measured neighbour is a
+ * session swap's ended-to-settled gap, 730-2466 ms with a median of 0.99 s over
+ * ten release-build column moves (docs/developer-guide.md), so 5 s is twice
+ * the slowest observed and sits inside SESSION_SWAP_QUIET_MS (8 s). A check
+ * that finds everything healthy costs nothing.
+ */
+const BLANK_RECOVERY_DELAY_MS = 5000;
+/** Repairs per episode before the pane stops trying and leaves it to a remount, a lens switch or the fit button. */
+const BLANK_RECOVERY_MAX_ATTEMPTS = 2;
 
 // Metro asset reference; ESM import syntax cannot load an html asset.
 const xtermHtmlModule = require('../../terminal/xterm.html') as number;
@@ -160,17 +175,16 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
 /**
  * The raw interactive terminal: a FAITHFUL MIRROR of the desktop terminal.
  * An xterm.js WebView fed by the terminalFeed ring renders the desktop's
- * EXACT grid 1:1, with the font sized ONCE, on first open, so the grid's ROWS
- * fill the phone's height. A grid wider than the screen then overflows and
- * pans horizontally (the cursor stays in view); pinch-zoom reads the detail.
- *
- * Every later re-init over a painted frame (a session swap, a lens switch
- * back, a re-seed) keeps that cell size (`keepFont` on the init): a successor
- * whose PTY is shorter renders at the same resolution, centred, instead of
- * zooming to fill the height and then jumping back when the desktop rests it
- * at its detail grid. The fit button, a fresh page and a desktop grid change
- * fit again; the page still steps the font down when a taller grid would
- * overflow, because the mirror never clips rows.
+ * EXACT grid 1:1 in ONE cell size: the reference cell at which the desktop's
+ * resting grid (210x48) fills the Terminal lens's height, pinned to the
+ * top-left. The same font and the same position on every open of every task
+ * (the maintainer's rule, 2026-10): a shorter grid sits at the top with the
+ * terminal's background below it, a grid wider than the screen overflows and
+ * pans horizontally (the cursor stays in view), and pinch-zoom reads the
+ * detail. The PAGE owns that size (scripts/xterm-page/state.js); this host
+ * only measures the lens's height for it and keeps its pinch baseline in step
+ * with the page's fit reports. Nothing is remembered across opens - the fit
+ * is a pure function of the grid and the pane, so there is nothing to.
  *
  * It NEVER resizes the desktop PTY - a shared desktop session must not be
  * reshaped by the phone. Keyboard input typed inside the WebView flows back
@@ -178,18 +192,29 @@ export function buildXtermTheme(palette: TerminalPalette, colors: Theme['colors'
  * pinch zoom adjusts the local font between MIN_TERMINAL_FONT_SIZE_PX and
  * MAX_TERMINAL_FONT_SIZE_PX (6 to 56).
  */
-export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: TerminalPaneProps): React.JSX.Element {
+export function TerminalPane({
+  sessionId,
+  isActive,
+  cleanFeedEnabled = false,
+  fitLayoutIsReference = true,
+}: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
   const webViewRef = useRef<WebView>(null);
   const directKeyRef = useRef<DirectKeyInputHandle>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
+  // The same fact for handlers, written beside every setTerminalReady rather
+  // than only synced by an effect: a layout landing between the 'ready' init
+  // and that commit's effect would otherwise read false and never tell the
+  // live page its new fit height (onWebViewLayout).
+  const terminalReadyRef = useRef(false);
   // Bumped to remount the WebView after the OS kills its renderer (the
   // Android render process under memory pressure, the iOS content process).
   // Without a handler that surfaces as a native crash or a permanently blank
   // terminal; a remount reloads the page, whose 'ready' re-seeds from the ring.
   const [webViewGeneration, setWebViewGeneration] = useState(0);
   const recoverWebView = useCallback(() => {
+    terminalReadyRef.current = false;
     setTerminalReady(false);
     setWebViewGeneration((generation) => generation + 1);
   }, []);
@@ -321,15 +346,109 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     };
   }, [sessionId, runTerminalEval]);
 
-  // When the last init was posted; the reset button reads it to decide whether
-  // its stream refresh actually produced a re-seed.
+  // When the last init was posted, for the paint report's sinceInitMs.
   const lastInitPostAtRef = useRef(0);
-  const refitFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * THE FIT HEIGHT, measured here rather than in the page. The page used to
+   * fit against its own window height, and two things made that a different
+   * number on different opens of the same task: a fresh page's first
+   * innerHeight is not final (so the first frame was fitted to a guess and
+   * corrected a quarter second later, every open), and all three lenses share
+   * one box whose height follows the footer (Changes has no input row), so
+   * the page's running maximum learned a pane taller than the Terminal lens.
+   *
+   * So: the WebView's own layout height, recorded while the footer is in its
+   * reference state with the soft keyboard DOWN (a KeyboardAvoidingView pads
+   * the screen while it is up), from the Terminal lens or provisionally from
+   * another one (see onWebViewLayout). The LATEST such layout wins, so a
+   * rotation is simply a new value. onLayout fires before the page reports
+   * ready, so the very first init carries it. Null only until the first
+   * layout, when the page falls back to its own tracker.
+   *
+   * Not a running maximum, which is what this was first written as: a
+   * maximum locks in any layout that is ever taller than the settled pane.
+   * Measured on a release build (emulator, 2026-10-03): the first open of a
+   * 210x48 session fitted to a host height of 693 while the page's own
+   * innerHeight read 670, so the 695 px grid overflowed the pane and its last
+   * row, the status line, was cut off. The keyboard is the only shrink a fit
+   * must ignore, and it is gated directly.
+   */
+  const hostFitHeightRef = useRef<number | null>(null);
+  // Whether that height was measured with THIS lens showing, and at which
+  // width. See the provisional rule in onWebViewLayout.
+  const hostFitHeightFromActiveRef = useRef(false);
+  const hostFitWidthRef = useRef<number | null>(null);
   useEffect(() => {
+    terminalReadyRef.current = terminalReady;
+  }, [terminalReady]);
+  // Whether the soft keyboard is up, by the same events the screen's
+  // KeyboardAvoidingView pads on: keyboardWillShow/WillHide on iOS and
+  // keyboardDidShow/DidHide on Android (the other pair never fires there).
+  // Keyboard.isVisible() alone follows only the Did events, which on iOS
+  // land AFTER the padded layout this gate exists to ignore.
+  const keyboardVisibleRef = useRef(Keyboard.isVisible());
+  useEffect(() => {
+    const markShown = (): void => {
+      keyboardVisibleRef.current = true;
+    };
+    const markHidden = (): void => {
+      keyboardVisibleRef.current = false;
+    };
+    const subscriptions = [
+      Keyboard.addListener('keyboardWillShow', markShown),
+      Keyboard.addListener('keyboardDidShow', markShown),
+      Keyboard.addListener('keyboardWillHide', markHidden),
+      Keyboard.addListener('keyboardDidHide', markHidden),
+    ];
     return () => {
-      if (refitFallbackTimerRef.current !== null) clearTimeout(refitFallbackTimerRef.current);
+      for (const subscription of subscriptions) subscription.remove();
     };
   }, []);
+
+  // Records the fit height by the rules above and tells a live page when it
+  // changes - a first measurement after the page came up on another lens, a
+  // settled pane after a transient one, or a rotation.
+  //
+  // A layout taken while ANOTHER lens shows is PROVISIONAL. All three panes
+  // share one box, and Chat's footer is the same height as Terminal's, so a
+  // switch from Chat to Terminal fires no layout event at all: a pane that
+  // mounted under Chat (a push tap onto a remembered Chat lens) used to never
+  // learn a height, and its page fell back to its own running maximum, which
+  // a visit to the taller Changes pane pollutes. Measured on a release build
+  // 2026-10-03 as fitHeightPx=n/a on the Terminal lens. So an inactive layout
+  // is taken until a Terminal-lens layout exists; any box that really differs
+  // for Terminal (Changes, a grown composer) fires a layout on the switch,
+  // which then overrides it. A Terminal-lens value stays authoritative against
+  // inactive layouts at the same width; a new width is a rotation, so it wins.
+  //
+  // The gate reads isActive and fitLayoutIsReference from the CLOSURE, not
+  // from refs synced in passive effects: the handler attached to the WebView
+  // is the one from the commit that produced the layout, while a passive
+  // effect can run after that commit's layout event is dispatched. A ref one
+  // commit stale would record the taller switcher-only pane as the reference.
+  const onWebViewLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      if (!fitLayoutIsReference || keyboardVisibleRef.current) return;
+      const { width, height } = event.nativeEvent.layout;
+      if (!(width > 0) || !(height > 0)) return;
+      const widthKey = Math.round(width);
+      if (!isActive && hostFitHeightFromActiveRef.current && widthKey === hostFitWidthRef.current) return;
+      hostFitHeightFromActiveRef.current = isActive;
+      hostFitWidthRef.current = widthKey;
+      const fitHeight = Math.round(height);
+      if (fitHeight === hostFitHeightRef.current) return;
+      traceConnection('terminal-fit-height', {
+        fitHeightPx: fitHeight,
+        previousPx: hostFitHeightRef.current ?? 'n/a',
+        ready: terminalReadyRef.current,
+        active: isActive,
+      });
+      hostFitHeightRef.current = fitHeight;
+      if (terminalReadyRef.current) postToTerminal({ type: 'fit-height', fitHeightPx: fitHeight });
+    },
+    [isActive, fitLayoutIsReference, postToTerminal],
+  );
 
   /**
    * THE HOLD RULE: never post an init that would replace a painted frame with
@@ -344,8 +463,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
    * `heldInitSessionIdRef` is a session whose init is deferred until its ring
    * is SEEDED and carries visible glyphs - the seed, swap and re-activation
    * paths all route through postInitOrHold, and the chunk listener releases
-   * the hold. `fitOnNextInitRef` is the fit button's one-shot: its re-seed
-   * init fits the font where every other re-init keeps the cell size.
+   * the hold.
    *
    * Why a hold and not a byte-count gate: a fresh PTY's first seed is often
    * escape-only (the alternate-screen switch, a clear), which has bytes and
@@ -364,28 +482,87 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   const lastInitSessionIdRef = useRef<string | null>(null);
   const displayedFrameSessionIdRef = useRef<string | null>(null);
   const heldInitSessionIdRef = useRef<string | null>(null);
-  const fitOnNextInitRef = useRef(false);
+
+  /**
+   * A PATH BACK FROM BLACK. Every init (and every hold) arms a deadline; when it
+   * fires, the pane checks the two ways a mirror can be left with nothing on it
+   * and repairs whichever applies, so a black terminal no longer needs the
+   * screen remounted to recover:
+   *
+   * - The PAGE is dead: no paint report of ANY kind has arrived for the current
+   *   init. Every init produces exactly one once its seed flushes, blank or not
+   *   (scripts/xterm-page/lifecycle.js seedAndSettle, modes.js
+   *   reportPaintedIfAwaiting), so silence is the precise signal - a renderer
+   *   gone without onRenderProcessGone, a page that never ran the init. Remount
+   *   the WebView; its 'ready' re-inits from the ring. Never keyed on a BLANK
+   *   report: the page judges blankness from the viewport rows alone, and a
+   *   healthy page reports blank over a paintable ring after a clear or before a
+   *   TUI redraws.
+   * - The BYTES never came: the ring has never been seeded since it was
+   *   retained. Ask the desktop for a fresh frame. Not "the ring is empty": a
+   *   seeded empty ring under a live subscription is a legitimate state.
+   *
+   * Only while this pane is the visible page, the app is in the foreground
+   * (requestAnimationFrame, which the paint report rides, does not run in the
+   * background) and the channel is established (a channel still coming up
+   * cannot deliver a seed, and would burn the attempts). The reactivate init,
+   * the foreground listener and the established edge re-arm it.
+   */
+  const lastPaintReportSeqRef = useRef<number | null>(null);
+  const blankRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const blankRecoveryAttemptsRef = useRef(0);
+  const runBlankRecoveryRef = useRef<() => void>(() => undefined);
+  const clearBlankRecovery = useCallback(() => {
+    if (blankRecoveryTimerRef.current !== null) {
+      clearTimeout(blankRecoveryTimerRef.current);
+      blankRecoveryTimerRef.current = null;
+    }
+  }, []);
+  const armBlankRecovery = useCallback(() => {
+    clearBlankRecovery();
+    blankRecoveryTimerRef.current = setTimeout(() => {
+      blankRecoveryTimerRef.current = null;
+      runBlankRecoveryRef.current();
+    }, BLANK_RECOVERY_DELAY_MS);
+  }, [clearBlankRecovery]);
+  const runBlankRecovery = useCallback(() => {
+    if (!isActiveRef.current || AppState.currentState !== 'active' || !useChannelStore.getState().established) return;
+    const pageSilent = initSeqRef.current > 0 && lastPaintReportSeqRef.current !== initSeqRef.current;
+    const neverSeeded = !hasSeed(sessionId);
+    if (!pageSilent && !neverSeeded) {
+      blankRecoveryAttemptsRef.current = 0;
+      return;
+    }
+    if (blankRecoveryAttemptsRef.current >= BLANK_RECOVERY_MAX_ATTEMPTS) return;
+    blankRecoveryAttemptsRef.current += 1;
+    traceConnection('terminal-recovery', {
+      action: pageSilent ? 'remount' : 'refresh',
+      attempt: blankRecoveryAttemptsRef.current,
+    });
+    if (pageSilent) {
+      // The remounted page's 'ready' init arms the next check.
+      recoverWebView();
+      return;
+    }
+    refreshTerminalStream(sessionId);
+    armBlankRecovery();
+  }, [sessionId, recoverWebView, armBlankRecovery]);
+  useEffect(() => {
+    runBlankRecoveryRef.current = runBlankRecovery;
+  }, [runBlankRecovery]);
+  useEffect(() => clearBlankRecovery, [clearBlankRecovery]);
 
   const postInit = useCallback(
     (reason: TerminalInitReason) => {
       lastInitPostAtRef.current = Date.now();
       initSeqRef.current += 1;
+      // Hold the frame on screen across the reset whenever there is one to
+      // hold; keep a pinch only across a re-init of the SAME session (a lens
+      // switch back, a re-seed), never across a swap or onto a fresh page.
+      const holdFrame = displayedFrameSessionIdRef.current !== null;
+      const preservePinch = holdFrame && lastInitSessionIdRef.current === sessionId;
       lastInitSessionIdRef.current = sessionId;
       heldInitSessionIdRef.current = null;
-      // Keep the cell size whenever a frame is already on screen, and on a
-      // fresh page whenever the mirror has fitted once before (the remembered
-      // size, per desktop): every open comes up at the same resolution, not
-      // at whatever grid the desktop reports this second. Only the very first
-      // open and the fit button's own re-seed fit anew.
-      const rememberedFontSizePx = useSettingsStore.getState().terminalFitFontPx;
-      if (reason === 'ready' && rememberedFontSizePx !== null && !fitOnNextInitRef.current) {
-        fontSizePxRef.current = rememberedFontSizePx;
-        pinchBaseFontSizeRef.current = rememberedFontSizePx;
-      }
-      const keepFont =
-        !fitOnNextInitRef.current &&
-        (displayedFrameSessionIdRef.current !== null || (reason === 'ready' && rememberedFontSizePx !== null));
-      fitOnNextInitRef.current = false;
       const scrollback = getBufferedData(sessionId);
       // The RAW ring decides, not the mode-restore-prefixed string below: the
       // prefix is escape sequences by construction and would count as content.
@@ -395,8 +572,9 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         reason,
         cols: ptyDimensions ? ptyDimensions.cols : 'n/a',
         rows: ptyDimensions ? ptyDimensions.rows : 'n/a',
-        fontSizePx: fontSizePxRef.current,
-        keepFont,
+        fitHeightPx: hostFitHeightRef.current ?? 'n/a',
+        holdFrame,
+        preservePinch,
       });
     // Put the terminal back into the modes the desktop's TUI set once at
     // startup BEFORE replaying the tail. The feed is a ring, so those DECSETs
@@ -416,13 +594,15 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         // leave rows null; the real grid arrives shortly as a 'resize'.
         cols: ptyDimensions ? ptyDimensions.cols : parseColsFromScrollback(scrollback),
         rows: ptyDimensions ? ptyDimensions.rows : null,
-        fontSizePx: fontSizePxRef.current,
+        fitHeightPx: hostFitHeightRef.current,
         theme: buildXtermTheme(theme.terminalPalette, theme.colors),
         cleanFeed: cleanFeedEnabled,
-        keepFont,
+        holdFrame,
+        preservePinch,
       });
+      armBlankRecovery();
     },
-    [postToTerminal, sessionId, theme, cleanFeedEnabled],
+    [postToTerminal, sessionId, theme, cleanFeedEnabled, armBlankRecovery],
   );
 
   /**
@@ -439,11 +619,14 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     (reason: TerminalInitReason) => {
       if (displayedFrameSessionIdRef.current !== null && (!hasSeed(sessionId) || !hasPaintableFrame(sessionId))) {
         heldInitSessionIdRef.current = sessionId;
+        // A hold waiting on a seed that never comes is the frozen half of the
+        // same failure: check on it.
+        armBlankRecovery();
         return;
       }
       postInit(reason);
     },
-    [postInit, sessionId],
+    [postInit, sessionId, armBlankRecovery],
   );
 
   const flushPendingChunks = useCallback(() => {
@@ -542,18 +725,31 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   // WebView survives (no 'ready', so nothing re-inits) but its renderer has
   // dropped glyphs, and single characters go missing mid-line and STAY
   // missing. Observed on a Pixel - "110 +" rendered as "10", "progress" as
-  // "p ogress" - and repaired completely by the refit button, which is
-  // exactly this message. So send it automatically: a refit re-fits the font
-  // and re-applies the geometry, which forces a full repaint of the frame
-  // already in the buffer. Purely local, no wire traffic.
+  // "p ogress" - and repaired completely by a refit, which relaid the whole
+  // frame out. The fit is deterministic now, so a refit no longer changes
+  // anything and would no longer repaint; the repaint is asked for directly
+  // instead (the glyph atlas dropped, every row redrawn). Purely local, no
+  // wire traffic. That it still repairs the dropped glyphs is a HARDWARE
+  // check: the emulator may never drop them.
   useEffect(() => {
     if (!terminalReady) return;
     const subscription = AppState.addEventListener('change', (status) => {
       if (status !== 'active' || !isActiveRef.current) return;
-      postToTerminal({ type: 'refit' });
+      postToTerminal({ type: 'repaint' });
+      // The page may have died while backgrounded; check once it has had
+      // the chance to answer.
+      armBlankRecovery();
     });
     return () => subscription.remove();
-  }, [terminalReady, postToTerminal]);
+  }, [terminalReady, postToTerminal, armBlankRecovery]);
+
+  // A channel coming up (a reconnect, or the first connection after a
+  // cold-launch notification tap) is when a missing seed can finally arrive;
+  // check on it once it has had the chance.
+  const channelEstablished = useChannelStore((state) => state.established);
+  useEffect(() => {
+    if (channelEstablished && terminalReady) armBlankRecovery();
+  }, [channelEstablished, terminalReady, armBlankRecovery]);
 
   // Session swap under a mounted pane (the desktop respawned the task's
   // session): the WebView survives but its grid belongs to the dead session.
@@ -569,9 +765,10 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
   // postInitOrHold keeps the dead session's last frame until the successor's
   // ring is seeded and can paint (the seed and chunk listeners release the
   // hold); SessionScreen's swap veil covers that frame and lets go once the
-  // page reports the successor painted. The init it finally posts keeps the
-  // predecessor's cell size (keepFont), so the successor's grid comes up at
-  // the same resolution whatever its row count.
+  // page reports the successor painted. The init it finally posts holds the
+  // predecessor's frame (holdFrame) until the successor paints, and the
+  // successor's grid comes up in the same reference cell whatever its row
+  // count, so nothing jumps.
   //
   // A clean-feed flip goes through the same hold. The flag only takes effect
   // at init, and on a fresh page (nothing displayed) it posts at once; with a
@@ -585,6 +782,8 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
     if (!sessionChanged && !cleanFeedChanged) return;
     previousSessionIdRef.current = sessionId;
     previousCleanFeedRef.current = cleanFeedEnabled;
+    // A new session is a new episode: it gets its own repair attempts.
+    if (sessionChanged) blankRecoveryAttemptsRef.current = 0;
     if (!terminalReady) return;
     pendingChunksRef.current = [];
     clearFlushTimer();
@@ -629,6 +828,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         displayedFrameSessionIdRef.current = null;
         heldInitSessionIdRef.current = null;
         postInit('ready');
+        terminalReadyRef.current = true;
         setTerminalReady(true);
         return;
       }
@@ -638,6 +838,13 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         // successor. Only a NON-BLANK paint counts as the frame being on
         // screen; a blank one just says the page is up and waiting for bytes.
         if (message.seq !== null && message.seq !== initSeqRef.current) return;
+        // Any report for the current init, blank or not, proves the page is
+        // alive (see runBlankRecovery); a non-blank one ends the episode.
+        lastPaintReportSeqRef.current = initSeqRef.current;
+        if (!message.blank) {
+          clearBlankRecovery();
+          blankRecoveryAttemptsRef.current = 0;
+        }
         traceConnection('terminal-painted', {
           blank: message.blank,
           sinceInitMs: Date.now() - lastInitPostAtRef.current,
@@ -672,20 +879,30 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
         return;
       }
       if (message.type === 'font-size') {
-        // The glue fit the font to the screen; keep the pinch baseline in sync
-        // so the first pinch does not jump, and remember the size so the next
-        // open starts there. Only a FIT reports this message (the auto fit,
-        // the height fit's step, a texture cap); a pinch is driven from here
-        // and never reported back, so a temporary zoom is never remembered.
+        // The page's fit report: a fit chain settled, or the texture cap
+        // clamped a pinch. Keep the pinch baseline on the size the page
+        // actually shows, so the next pinch starts from it rather than
+        // jumping. Nothing is persisted: the fit is a pure function of the
+        // grid and the pane, so there is nothing worth remembering.
         const syncedFontSize = clampTerminalFontSize(Math.round(message.fontSizePx));
         fontSizePxRef.current = syncedFontSize;
         pinchBaseFontSizeRef.current = syncedFontSize;
-        void useSettingsStore
-          .getState()
-          .setTerminalFitFontPx(syncedFontSize)
-          .catch(() => {
-            // A failed Keychain write costs the next open one fit; nothing to surface.
-          });
+        traceConnection('terminal-fit', {
+          source: message.source,
+          trigger: message.trigger,
+          fontSizePx: message.fontSizePx,
+          lineHeight: message.lineHeight === null ? 'n/a' : Math.round(message.lineHeight * 1000) / 1000,
+          cols: message.cols ?? 'n/a',
+          rows: message.rows ?? 'n/a',
+          fitHeightPx: message.fitHeightPx ?? 'n/a',
+          hostFitHeightPx: hostFitHeightRef.current ?? 'n/a',
+          innerHeightPx: message.innerHeightPx ?? 'n/a',
+          innerWidthPx: message.innerWidthPx ?? 'n/a',
+          gridHeightPx: message.gridHeightPx ?? 'n/a',
+          devicePixelRatio: message.devicePixelRatio ?? 'n/a',
+          maxTextureSize: message.maxTextureSize ?? 'n/a',
+          active: isActiveRef.current,
+        });
         return;
       }
       if (message.type === 'renderer') {
@@ -722,7 +939,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
           writeError instanceof Error ? writeError.message : String(writeError);
       });
     },
-    [postInit, sessionId],
+    [postInit, sessionId, clearBlankRecovery],
   );
 
   /* eslint-disable react-hooks/refs, react-hooks/purity -- the pinch callbacks run on touch
@@ -809,6 +1026,7 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
           scrollEnabled={false}
           setSupportMultipleWindows={false}
           onMessage={onWebViewMessage}
+          onLayout={onWebViewLayout}
           onRenderProcessGone={recoverWebView}
           onContentProcessDidTerminate={recoverWebView}
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
@@ -830,25 +1048,24 @@ export function TerminalPane({ sessionId, isActive, cleanFeedEnabled = false }: 
             testID="terminal-refit"
             accessibilityLabel="Fit the terminal to the screen"
             onPress={() => {
-              // A fresh frame from the desktop, then a local refit ONLY if the
-              // re-seed never arrived. Posting both eagerly painted twice per
-              // press (the refit's fit passes, then the seed's own re-init),
-              // which read as screen flashes; the re-seed re-fits everything
-              // itself, so the explicit refit is purely the offline fallback.
-              // The re-seed's init is the ONE re-init over a painted frame
-              // that fits the font instead of keeping the cell size - this
-              // button is how the user asks for the fitted view back.
-              const pressedAt = Date.now();
-              fitOnNextInitRef.current = true;
+              // The fitted view back, from ANY state, at once: the page drops
+              // the pinch and re-fits to the reference cell. The ring's grid
+              // rides along, so a page that inited before the desktop reported
+              // one fits the real grid. It used to wait on a re-seed's init
+              // (a one-shot any unrelated init could consume) and fall back to
+              // a local refit 700 ms later - which with the grid unknown could
+              // only stretch the line height, leaving a pinched-tiny view tiny.
+              const ptyDimensions = getTerminalDimensions(sessionId);
+              postToTerminal({
+                type: 'refit',
+                cols: ptyDimensions ? ptyDimensions.cols : null,
+                rows: ptyDimensions ? ptyDimensions.rows : null,
+              });
+              // And a fresh frame from the desktop: the button is also the
+              // user's way to unstick a mirror a missed byte has wedged. Its
+              // init lands on the same deterministic fit, so it does not
+              // resize anything a second time.
               refreshTerminalStream(sessionId);
-              if (refitFallbackTimerRef.current !== null) clearTimeout(refitFallbackTimerRef.current);
-              refitFallbackTimerRef.current = setTimeout(() => {
-                refitFallbackTimerRef.current = null;
-                if (lastInitPostAtRef.current < pressedAt) {
-                  fitOnNextInitRef.current = false;
-                  postToTerminal({ type: 'refit' });
-                }
-              }, REFIT_FALLBACK_DELAY_MS);
             }}
           />
         </View>

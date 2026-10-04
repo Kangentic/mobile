@@ -43,6 +43,13 @@ const LIVE_TAIL_FLUSH_INTERVAL_MS = 250;
 const JUMP_TO_LATEST_THRESHOLD_PX = 600;
 /** How close to the top of the loaded window a scroll gets before the next older page is fetched. */
 const PAGE_OLDER_THRESHOLD_PX = 1200;
+/**
+ * Waits before each retry of a failed newest-window fetch; the length is the
+ * retry budget. Chosen, not measured: past the capability timeout (10 s) a
+ * stuck desktop has three more chances over ~17 s, which covers a bootstrap
+ * or a rekey without polling a desktop that is genuinely refusing.
+ */
+const TAIL_FETCH_RETRY_DELAYS_MS = [2000, 5000, 10000];
 
 // A stable identity (an inline object literal re-triggers FlashList layout
 // every render). `startRenderingFromBottom` is deliberately omitted: on a
@@ -87,12 +94,36 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   // unpatchable (reset signal, delta gap, delta before any window) and the
   // channel is up, re-fetch the newest window. openSessionScreen does the
   // first fetch; this covers reconnects and mid-stream resets.
+  //
+  // A failed fetch RETRIES, a bounded number of times. It used to wait for
+  // the next change of the flag, the channel or the session, and a fetch that
+  // fails on an already-established channel changes none of them. Observed
+  // on a release build (2026-10-03): a cold-launch notification tap opened
+  // Chat before the connection existed, and Chat sat on "Loading
+  // conversation..." for over a minute until the desktop happened to bind a
+  // new session; a failed fetch with no retry is the likely mechanism (read
+  // from this effect, not reproduced on demand). The retries live in this
+  // effect's closure, so a landed window (the flag clears), a dropped channel
+  // or a session swap cancels them through the cleanup.
   useEffect(() => {
     if (!needsTailFetch || !established) return;
-    void loadTranscriptTail(sessionId).catch(() => {
-      // Still disconnected or a transient failure: the flag stays set and
-      // the next established/flag change retries.
-    });
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const fetchTail = (retryIndex: number): void => {
+      void loadTranscriptTail(sessionId).catch(() => {
+        if (cancelled) return;
+        const retryDelayMs = TAIL_FETCH_RETRY_DELAYS_MS[retryIndex];
+        // Out of retries: the flag stays set, and the next established,
+        // flag or session change starts a fresh budget.
+        if (retryDelayMs === undefined) return;
+        retryTimer = setTimeout(() => fetchTail(retryIndex + 1), retryDelayMs);
+      });
+    };
+    fetchTail(0);
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
   }, [needsTailFetch, established, sessionId]);
 
   /**

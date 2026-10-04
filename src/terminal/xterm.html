@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 2b1ec8887a46) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 2f535d66f227) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -293,12 +293,13 @@
 }
 
 html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow: hidden; }
-/* The grid fills the phone HEIGHT (autoFitFontToScreen sizes the font to the row
-   count) and is pinned top/left: column 0, row 0 start at the top-left corner. A
-   wide grid overflows the width and pans right inside #scroll-container (follow-
-   the-cursor tracks the active column); a grid taller than the viewport pans down.
-   width:max-content keeps the terminal its natural grid width so the overflow is
-   real and scrollable rather than wrapped. */
+/* Every grid renders in ONE cell size, the reference cell at which the desktop's
+   resting grid fills the phone HEIGHT (see REFERENCE_GRID_ROWS in the page's
+   state.js), and is pinned top/left: column 0, row 0 start at the top-left corner
+   on every open of every task. A wide grid overflows the width and pans right
+   inside #scroll-container (follow-the-cursor tracks the active column); a grid
+   taller than the viewport pans down. width:max-content keeps the terminal its
+   natural grid width so the overflow is real and scrollable rather than wrapped. */
 /* Horizontal pans, vertical deliberately does NOT. A one-finger vertical drag
    is history scrolling (consumeHistoryDrag), so the container must not consume
    it as a pan first: with overflow-y auto the browser swallowed the gesture
@@ -306,20 +307,17 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    responding. The cost is that the bottom of a zoomed-in frame cannot be
    dragged to, which is the accepted trade for one finger and no modes. */
 #scroll-container { width: 100%; height: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
-/* Auto side margins CENTRE a grid narrower than the screen and do nothing to a
-   wider one, which is exactly the split we want. The font is fitted to the
-   pane's HEIGHT, so a grid whose aspect is taller than the pane's cannot fill
-   the width at any font size - the leftover is inherent, not a bug. Pinned
-   left it all piles up on the right and reads as a terminal cut short; split
-   evenly it reads as a margin. When the grid IS wider, auto margins compute to
-   zero, the overflow stays real, and the pan logic is untouched. The VERTICAL
-   half of that split is padding-top, set from the measured grid by
-   centerGridVertically (it needs the painted height, which no CSS rule has). */
-/* translateZ(0) keeps the grid on its own compositor layer - see
+/* No auto margins: a grid narrower than the screen is pinned LEFT, as a shorter
+   one is pinned to the top. Both used to be centred, which read as a margin but
+   moved column 0 and row 0 with the shape of whichever desktop grid a session
+   happened to be at; the maintainer's rule (2026-10) is the same font size and
+   the same position every time, so the leftover is the terminal's own
+   background on the right and below. A wider grid is unaffected either way.
+   translateZ(0) keeps the grid on its own compositor layer - see
    applyVerticalOffset, whose inline transform preserves it. Without the
    promotion, Android WebView sometimes skips recompositing a fully repainted
    canvas (a black terminal until a 1px scroll invalidates the layer). */
-#terminal { width: max-content; margin: 0 auto; transform: translateZ(0); }
+#terminal { width: max-content; margin: 0; transform: translateZ(0); }
 </style>
 </head>
 <body>
@@ -375,11 +373,36 @@ return exports; })();
   var awaitingNonBlankPaint = false;
   // Probe counters: how many paint reports went out blank vs painted.
   var paintReportCounts = { blank: 0, painted: 0 };
-  // Whether the last init asked to KEEP the cell size (a re-init over a
-  // painted frame: a session swap, a lens switch back, a re-seed) rather than
-  // fit the font to its grid. For the probe; the decision itself is the
-  // host's (TerminalPane's keepFont).
-  var lastInitKeepFont = false;
+  // Whether the last init asked to HOLD the frame on screen (a re-init over a
+  // painted frame: a session swap, a lens switch back, a re-seed) until the
+  // new one paints. For the probe; the decision itself is the host's
+  // (TerminalPane's holdFrame).
+  var lastInitHoldFrame = false;
+  // THE REFERENCE CELL. Every grid renders in ONE cell size: the one at which
+  // the desktop's resting grid (RESTING_GRID_COLS x RESTING_GRID_ROWS in the
+  // kangentic repo, 210x48) fills the pane's height. The maintainer's rule,
+  // 2026-10: the same font size and the same position on every open of every
+  // task. A grid with 48 rows or fewer gets exactly this cell, pinned to the
+  // top-left; a taller one fits its own rows; a wider one is capped by the
+  // GPU texture limit like any other. It replaced a fit per grid (rows fill
+  // the height, so text size followed the desktop's grid) plus a remembered
+  // size, which together gave the same session two different looks
+  // depending on which code path fitted it last. If the desktop changes its
+  // resting grid, these move with it.
+  var REFERENCE_GRID_COLS = 210;
+  var REFERENCE_GRID_ROWS = 48;
+  // A pinch the user made, in font px: the user owns the size until the fit
+  // button, a different session or a different grid. Null when fitted.
+  var pinchOverrideFontPx = null;
+  // The converged cell for one fit key (see currentFitKey): the font and the
+  // line-height stretch the measured height fit settled on. A re-init or a
+  // refit with the same key applies it directly instead of re-running the fit
+  // from line height 1, which is what made every re-init visibly snap short
+  // and re-stretch. Page memory only: the host owns nothing about the size.
+  var settledFit = null;
+  // What started the current fit chain, carried on the fit report so a
+  // release-build trace can tell an init's fit from a keyboard's.
+  var activeFitTrigger = 'init';
   // How many frame holds have been raised (see holdFrameSnapshot). Probe only.
   var frameHoldCount = 0;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
@@ -405,7 +428,19 @@ return exports; })();
   // the keyboard covers its lower rows, and follow-the-cursor (which reads
   // the CURRENT innerHeight on purpose) pans the typing back into view.
   var maxFitHeightByWidth = {};
+  // The fit height the HOST measured: the WebView's own layout height while
+  // the Terminal lens is showing with its quick-key row and the keyboard
+  // down (TerminalPane's onLayout). It outranks everything below when
+  // present, for two reasons. A fresh page's first innerHeight is not final
+  // (refit.js), so a page-measured fit computed one cell on the first frame
+  // and corrected it a quarter second later, on every open. And all three
+  // lenses share one box whose height follows the footer (Changes has no
+  // input row), so the maximum below learned a pane taller than the
+  // Terminal lens ever is. Null until the host has measured one (a pane
+  // mounted while another lens is showing).
+  var hostFitHeightPx = null;
   function fitViewportHeight() {
+    if (typeof hostFitHeightPx === 'number' && hostFitHeightPx > 0) return hostFitHeightPx;
     var width = window.innerWidth;
     var height = window.innerHeight;
     var best = maxFitHeightByWidth[width] || 0;
@@ -629,32 +664,99 @@ return exports; })();
     if (wasAtBottom) terminal.scrollToBottom();
   }
 
-  // Pick the font so the desktop grid's ROWS fill the FULL phone height,
-  // maximizing vertical use of the screen. A wide grid then overflows the width
-  // and pans horizontally (follow-the-cursor keeps the active column in view);
-  // pinch zoom adjusts from there. Recomputed on rotation so it fills the height
-  // in portrait AND landscape. Reported to the host so its pinch baseline
-  // matches (no jump on the first pinch).
-  function autoFitFontToScreen() {
-    if (knownRows === null || knownRows < 1 || knownCols < 1) return;
+  // The row count the REFERENCE CELL is fitted to (see REFERENCE_GRID_ROWS in
+  // state.js): the resting grid's 48 rows for any grid that short or shorter,
+  // so every such grid lands on the identical cell; the grid's own rows for a
+  // taller one, which must still fit the pane without clipping a row. Unknown
+  // rows (the desktop has not reported its grid yet) fit the reference: the
+  // cell is the same either way, and a later 'resize' only re-lays the grid.
+  function referenceRowsForFit() {
+    var rows = knownRows !== null && knownRows >= 1 ? knownRows : REFERENCE_GRID_ROWS;
+    return Math.max(rows, REFERENCE_GRID_ROWS);
+  }
+
+  // The reference cell's font: the reference rows fill the FULL fit height
+  // (the measured height fit then corrects the guess). Capped by the GPU
+  // texture limit for the reference grid's width as well as this grid's,
+  // so a narrower grid lands on the same cell a capped resting grid gets
+  // rather than one step bigger; a wider grid caps lower on its own, which is
+  // the honest hardware ceiling (a 4096 limit binds the resting grid by a
+  // step at dpr 3). AUTO-fit keeps its ceiling below pinch's, as before.
+  function referenceFontPx() {
+    var rowsForFit = referenceRowsForFit();
     // fitViewportHeight, NOT window.innerHeight: the soft keyboard must not
     // shrink the fit (see the tracker in state.js).
-    var forHeight = fitViewportHeight() / (knownRows * CELL_HEIGHT_RATIO);
-    var fitted = Math.floor(forHeight);
-    // AUTO-fit gets a far lower ceiling than pinch: a SHORT desktop grid
-    // (a fresh session with ten rows) would otherwise blow up to poster
-    // print - a giant prompt glyph filling the phone. Pinch can still go
-    // higher for detail work.
+    var fitted = Math.floor(fitViewportHeight() / (rowsForFit * CELL_HEIGHT_RATIO));
     var next = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
-    // The texture cap outranks the fill floor: a very wide desktop grid (the
-    // desktop's bottom terminal panel parks sessions around 300 cols) must
-    // render small and CORRECT rather than large and clamped-blurry.
-    next = textureCappedFontPx(next, knownCols, knownRows);
+    return textureCappedFontPx(next, Math.max(knownCols, REFERENCE_GRID_COLS), rowsForFit);
+  }
+
+  // Everything the converged cell depends on. Two fits with the same key
+  // settle on the same font and line height, so the second applies the
+  // first's result (settledFit) instead of re-running the chain from line
+  // height 1. Cols enter only through the texture cap, so every grid at or
+  // under the reference width shares one key.
+  function currentFitKey() {
+    return [
+      referenceRowsForFit(),
+      Math.max(knownCols, REFERENCE_GRID_COLS),
+      Math.round(fitViewportHeight()),
+      window.devicePixelRatio,
+    ].join(':');
+  }
+
+  function settledFitForCurrentGrid() {
+    return settledFit !== null && settledFit.key === currentFitKey() ? settledFit : null;
+  }
+
+  // The font an init starts from: the converged cell when this grid and pane
+  // already have one, the reference font otherwise.
+  function fittedFontPxForGrid() {
+    var settled = settledFitForCurrentGrid();
+    return settled !== null ? settled.fontSizePx : referenceFontPx();
+  }
+
+  // The line height an init starts from, by the same rule: the converged
+  // stretch, or the clean slate (1) the height fit starts a fresh chain from.
+  function fittedLineHeightForGrid() {
+    var settled = settledFitForCurrentGrid();
+    return settled !== null ? settled.lineHeight : 1;
+  }
+
+  // Set the font to the reference cell's. Pick the font so the REFERENCE
+  // rows fill the full phone height; a wide grid then overflows the width and
+  // pans horizontally (follow-the-cursor keeps the active column in view);
+  // pinch zoom adjusts from there.
+  function autoFitFontToScreen() {
+    if (knownCols < 1) return;
+    var next = referenceFontPx();
     if (next !== currentFontSizePx) {
       currentFontSizePx = next;
       if (terminal) terminal.options.fontSize = next;
-      postToHost({ type: 'font-size', fontSizePx: next });
     }
+  }
+
+  // The fit report the host traces and keeps its pinch baseline on. Posted
+  // when a fit chain SETTLES (source 'settled') - every settle, changed or
+  // not, so a release-build trace shows every open's cell, not only the ones
+  // that moved - and when the texture cap clamps a pinch ('texture-cap').
+  // Primitives only: the host's connection trace never carries content.
+  function reportFit(source, gridHeightPx) {
+    postToHost({
+      type: 'font-size',
+      fontSizePx: currentFontSizePx,
+      source: source,
+      trigger: activeFitTrigger,
+      cols: knownCols,
+      rows: knownRows,
+      lineHeight: terminal && terminal.options ? terminal.options.lineHeight || 1 : 1,
+      fitHeightPx: Math.round(fitViewportHeight()),
+      innerHeightPx: window.innerHeight,
+      innerWidthPx: window.innerWidth,
+      gridHeightPx: Math.round(gridHeightPx),
+      devicePixelRatio: window.devicePixelRatio,
+      maxTextureSize: maxGlTextureSize,
+    });
   }
 
   // Render the desktop's EXACT grid 1:1. Legacy (no dims reported yet) falls
@@ -1369,7 +1471,7 @@ return exports; })();
 
   /**
    * THE FRAME HOLD: a text copy of the viewport, raised over the terminal
-   * for the span between a keepFont re-init and the successor's first
+   * for the span between a holdFrame re-init and the successor's first
    * non-blank paint.
    *
    * A re-init over a painted frame resets the grid (terminal.reset() is RIS)
@@ -1431,24 +1533,43 @@ return exports; })();
    * The reset both init paths share, before their halves diverge into
    * construction vs reset(): adopt the new grid and font, clear the
    * per-session view state (modes, pan, zoom-follow translate, glide,
-   * scrollback ledger), repaint the page background, zero the vertical
-   * centring, and rebuild the clean-feed parser. The grid host SURVIVES a
+   * scrollback ledger), repaint the page background, zero the top padding,
+   * and rebuild the clean-feed parser. The grid host SURVIVES a
    * re-init (only its children are replaced), which is why the translate,
    * the padding, and the pan must be reset by hand here.
    */
   function resetSessionViewState(initMessage) {
+    var previousCols = knownCols;
+    var previousRows = knownRows;
     knownCols = initMessage.cols;
     knownRows = typeof initMessage.rows === 'number' ? initMessage.rows : null;
-    // Capped even on the legacy no-dims path (autoFitFontToScreen early-returns
-    // there, so this is the only guard between a wide grid and the GPU limit).
-    currentFontSizePx = textureCappedFontPx(initMessage.fontSizePx, knownCols, knownRows);
+    // The host's measured fit height, when it has one (see hostFitHeightPx):
+    // a fresh page's first init carries it, so the very first frame is
+    // already the final cell rather than a guess corrected a beat later.
+    if (typeof initMessage.fitHeightPx === 'number' && initMessage.fitHeightPx > 0) {
+      hostFitHeightPx = initMessage.fitHeightPx;
+    }
+    // A pinch survives a re-init of the SAME session at the SAME grid (a lens
+    // switch back, a re-seed - the host says which with preservePinch); a
+    // different session or a different grid starts from the fit.
+    if (initMessage.preservePinch !== true || previousCols !== knownCols || previousRows !== knownRows) {
+      pinchOverrideFontPx = null;
+    }
+    // The page owns the font: the reference cell for this grid (or the cell
+    // it already converged on), or the pinch. Capped either way, which on the
+    // legacy no-dims path is the only guard between a wide grid and the GPU
+    // limit.
+    currentFontSizePx =
+      pinchOverrideFontPx !== null
+        ? textureCappedFontPx(pinchOverrideFontPx, knownCols, knownRows)
+        : fittedFontPxForGrid();
     lastAppCursorMode = false;
     lastReportedModes = null;
     // Every init re-arms the paint report (see reportPaintedIfAwaiting) and
     // records which init it answers for.
     activeInitSeq = typeof initMessage.seq === 'number' ? initMessage.seq : null;
     awaitingNonBlankPaint = true;
-    lastInitKeepFont = initMessage.keepFont === true;
+    lastInitHoldFrame = initMessage.holdFrame === true;
     manualPanUntil = 0;
     stopHistoryFling();
     dragSamples = [];
@@ -1465,9 +1586,9 @@ return exports; })();
       document.documentElement.style.background = initMessage.theme.background;
       document.body.style.background = initMessage.theme.background;
     }
-    // Start every init from zero vertical padding: the centring is measured
-    // per grid, and a short session's leftover must not survive into the
-    // grid that replaced it.
+    // Every grid is pinned to the top: zero vertical padding, on every init
+    // (see settleFit in heightFit.js for why a short grid is no longer
+    // centred).
     var gridHost = document.getElementById('terminal');
     if (gridHost) gridHost.style.paddingTop = '0px';
     setupCleanFeed(knownCols, knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx));
@@ -1475,7 +1596,6 @@ return exports; })();
 
   /** The seed both init paths share, after their halves prepared the grid. */
   function seedAndSettle(initMessage) {
-    var keepFont = initMessage.keepFont === true;
     if (initMessage.scrollback) {
       // The seq this seed belongs to. xterm flushes writes asynchronously, so
       // when two inits land inside one frame the FIRST seed's callback fires
@@ -1505,10 +1625,10 @@ return exports; })();
       reportPaintedIfAwaiting(true);
     }
     // Cell metrics AND the viewport height can settle a frame after open();
-    // re-fit once they have - the font too on a fresh fit, the measured
-    // height only when this init keeps the cell size.
+    // re-fit once they have. Deterministic (refit.js), so for a grid that
+    // already converged this measures once and changes nothing.
     requestAnimationFrame(function () {
-      refit(keepFont);
+      refit('init');
     });
   }
 
@@ -1516,11 +1636,14 @@ return exports; })();
     // Set before resetSessionViewState so its setupCleanFeed sees the flag.
     cleanFeedEnabled = initMessage.cleanFeed === true;
     resetSessionViewState(initMessage);
-    autoFitFontToScreen();
     terminal = new window.Terminal({
       cols: knownCols,
       rows: knownRows !== null ? knownRows : fallbackRowCount(currentFontSizePx),
       fontSize: currentFontSizePx,
+      // The converged stretch when this grid and pane already have one, so a
+      // fresh page (a remount after a killed renderer, a clean-feed rebuild)
+      // comes up at the final cell instead of re-converging from 1.
+      lineHeight: pinchOverrideFontPx !== null ? 1 : fittedLineHeightForGrid(),
       fontFamily: 'Menlo, Consolas, monospace',
       theme: initMessage.theme,
       scrollback: 2000,
@@ -1563,27 +1686,16 @@ return exports; })();
   function softReinit(initMessage) {
     initCounts.soft += 1;
     // Before the reset, while the frame worth keeping is still in the buffer.
-    if (initMessage.keepFont === true) holdFrameSnapshot();
+    if (initMessage.holdFrame === true) holdFrameSnapshot();
     else clearFrameHold();
     resetSessionViewState(initMessage);
     terminal.reset();
     terminal.options.theme = initMessage.theme;
-    if (initMessage.keepFont !== true) {
-      // A previous height fit may have stretched the line height; the fresh
-      // fit below assumes the same clean slate a constructed terminal starts
-      // with.
-      terminal.options.lineHeight = 1;
-      terminal.options.fontSize = currentFontSizePx;
-      autoFitFontToScreen();
-    } else {
-      // KEEP the cell size the previous frame was read at: font AND line
-      // height stay, and the grid that follows is laid out in those cells,
-      // centred when it is shorter than the viewport. currentFontSizePx is
-      // the host's copy of that size (it mirrors every fit and pinch back),
-      // re-capped for this grid's width in resetSessionViewState, so a wider
-      // grid can still be forced smaller by the GPU texture limit.
-      terminal.options.fontSize = currentFontSizePx;
-    }
+    // The font resetSessionViewState chose (the reference cell, the cell
+    // already converged for this grid, or the pinch), and the line height
+    // that goes with it. A pinch keeps the stretch it was made over.
+    terminal.options.fontSize = currentFontSizePx;
+    if (pinchOverrideFontPx === null) terminal.options.lineHeight = fittedLineHeightForGrid();
     applyGeometry();
     seedAndSettle(initMessage);
   }
@@ -1596,21 +1708,24 @@ return exports; })();
     // is far above any font size a pinch can reach; a 4096 limit is an
     // emulator trait.)
     var capped = textureCappedFontPx(fontSizePx, knownCols, knownRows !== null ? knownRows : terminal.rows);
+    // The user owns the size now, until the fit button, another session or
+    // another grid (see refit.js and resetSessionViewState).
+    pinchOverrideFontPx = capped;
     currentFontSizePx = capped;
     terminal.options.fontSize = capped;
     // Keep the host's pinch baseline honest when the cap engaged.
-    if (capped !== fontSizePx) postToHost({ type: 'font-size', fontSizePx: capped });
+    if (capped !== fontSizePx) {
+      var screen = document.querySelector('.xterm-screen');
+      reportFit('texture-cap', screen ? screen.getBoundingClientRect().height : 0);
+    }
     // Pinch changed the cell size; the grid (cols/rows) is unchanged.
     applyGeometry();
     // Zoom deliberately does NOT re-fit (the user owns the size now), so it
     // also CANCELS a fit still converging - otherwise that fit keeps stepping
-    // the font under the pinching finger and posts sizes that overwrite the
-    // host's pinch baseline mid-gesture. The centring is measured, though, so
-    // it has to follow the new cell height: without it, zooming into a short
-    // grid pushes the frame down by a stale padding.
+    // the font under the pinching finger. The grid stays pinned to the top,
+    // so there is no padding to follow the new cell height.
     heightFitGeneration += 1;
     requestAnimationFrame(function () {
-      centerGridFromMeasurement();
       // Forced: the pinch just changed the geometry deliberately, and the
       // manual-pan pause would otherwise leave the zoomed frame top-anchored
       // with the TUI's live rows (input line, status bar) off screen for
@@ -1636,8 +1751,21 @@ return exports; })();
   // shift while fonts load), and letting them consume the budget starved the
   // stretch, settling fresh opens at line height 1 with a short centred grid
   // ("~80% of the TUI"). Steps are monotonic and floored at MIN_AUTO_FONT_PX,
-  // so the exemption cannot spin. The final pass only measures, so the
-  // centring below always runs against the settled grid.
+  // so the exemption cannot spin. The final pass only measures, and when it
+  // has to hand back an overshooting stretch blind, the settle waits one
+  // frame to measure the corrected grid, so it always records the grid that
+  // is actually on screen.
+  //
+  // THE FIT IS THE REFERENCE CELL'S, not this grid's: every decision below is
+  // made in REFERENCE-GRID terms. The measured grid height is scaled up to
+  // what the reference row count would measure at the same cell (xterm ceils
+  // every row the same way, so that is exact), and compared against the full
+  // fit height. So a 30-row grid takes precisely the decisions a 48-row grid
+  // takes - same font steps, same stretch, same giveback, the same tolerance -
+  // converges on the same cell, and sits pinned to the top with the
+  // terminal's own background below it. Scaling the TARGET down instead would
+  // apply the absolute pixel tolerance at a different scale per grid, and the
+  // two could settle a stretch step apart.
   function fitGridHeightToViewport(passesLeft, stretchLocked, generation) {
     if (!terminal || generation !== heightFitGeneration) return;
     var screen = document.querySelector('.xterm-screen');
@@ -1645,17 +1773,19 @@ return exports; })();
       traceHeightFit('bail-no-screen', generation, passesLeft, 0);
       return;
     }
-    var screenHeight = screen.getBoundingClientRect().height;
-    if (!(screenHeight > 0) || terminal.rows < 1) {
-      traceHeightFit('bail-zero-measure', generation, passesLeft, screenHeight);
+    var measuredHeight = screen.getBoundingClientRect().height;
+    if (!(measuredHeight > 0) || terminal.rows < 1) {
+      traceHeightFit('bail-zero-measure', generation, passesLeft, measuredHeight);
       return;
     }
+    var referenceRows = Math.max(terminal.rows, referenceRowsForFit());
+    var screenHeight = measuredHeight * (referenceRows / terminal.rows);
     // fitViewportHeight, NOT window.innerHeight, for the same reason as
     // autoFitFontToScreen: measuring against the keyboard-shrunken window
     // would walk the font down a step per pass until the whole grid fit the
-    // strip above the keyboard. (centerGridVertically and the vertical follow
-    // keep reading the CURRENT innerHeight deliberately - centring and
-    // keeping the cursor visible are questions about what is on screen NOW.)
+    // strip above the keyboard. (The vertical follow keeps reading the
+    // CURRENT innerHeight deliberately - keeping the cursor visible is a
+    // question about what is on screen NOW.)
     var viewportHeight = fitViewportHeight() - HEIGHT_FIT_BOTTOM_CLEARANCE_PX;
     var currentLineHeight = terminal.options.lineHeight || 1;
     if (passesLeft <= 1) {
@@ -1667,13 +1797,21 @@ return exports; })();
       // sliced off by exactly that extra pixel per row.
       if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX && currentLineHeight > 1.005) {
         terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+        traceHeightFit('final-giveback', generation, passesLeft, screenHeight);
+        // Settle on the NEXT frame's measurement: the one above is the
+        // overflowing grid this pass just corrected, and settling on it used
+        // to report a grid taller than the pane when none was on screen.
+        requestAnimationFrame(function () {
+          settleAfterFinalGiveback(generation);
+        });
+        return;
       }
       traceHeightFit('final', generation, passesLeft, screenHeight);
-      centerGridVertically(screenHeight);
+      settleFit(measuredHeight);
       followCursorVertically(true);
       return;
     }
-    var baseCellHeight = screenHeight / terminal.rows / currentLineHeight;
+    var baseCellHeight = screenHeight / referenceRows / currentLineHeight;
     if (!(baseCellHeight > 0)) return;
     var adjusted = false;
     var fontStepped = false;
@@ -1691,12 +1829,11 @@ return exports; })();
         // after this step, and is how the leftover row gets reclaimed.
         currentFontSizePx -= 1;
         terminal.options.fontSize = currentFontSizePx;
-        postToHost({ type: 'font-size', fontSizePx: currentFontSizePx });
         adjusted = true;
         fontStepped = true;
       }
     } else if (!stretchLocked) {
-      var desiredLineHeight = viewportHeight / (terminal.rows * baseCellHeight);
+      var desiredLineHeight = viewportHeight / (referenceRows * baseCellHeight);
       var next = Math.max(1, Math.min(MAX_LINE_HEIGHT, desiredLineHeight));
       if (Math.abs(next - currentLineHeight) > 0.005) {
         terminal.options.lineHeight = next;
@@ -1705,13 +1842,13 @@ return exports; })();
     }
     if (!adjusted) {
       traceHeightFit('settled', generation, passesLeft, screenHeight);
-      centerGridVertically(screenHeight);
+      settleFit(measuredHeight);
       // The fit has SETTLED: only now is the vertical follow computed against
       // real geometry. Forcing it from refit's first frame sampled the grid
       // MID-CONVERGENCE - on a 48-row grid the stretch transiently overflows
       // before the give-back, so the follow locked in a negative translate
       // that nothing cleared once the grid settled smaller, shifting the
-      // whole frame up past the centring pad ("pushed up more"). A 30-row
+      // whole frame up past the centring pad of the time ("pushed up more"). A 30-row
       // grid never overflows mid-fit, which is why the first verification
       // pass missed it.
       followCursorVertically(true);
@@ -1723,24 +1860,32 @@ return exports; })();
     });
   }
 
-  // Height the fit cannot reach: a SHORT desktop grid (the desktop parks a
-  // session at whatever surface last showed it, and its bottom panel is a
-  // 14-row strip) cannot fill a phone at any font size the texture cap and the
-  // line-height ceiling allow. Pinned to the top, the whole leftover piles up
-  // underneath and reads as a terminal cut in half; split evenly it reads as a
-  // margin. Same argument as the horizontal auto margins, one axis over.
-  function centerGridVertically(screenHeight) {
-    var gridHost = document.getElementById('terminal');
-    if (!gridHost) return;
-    var slack = window.innerHeight - screenHeight;
-    var paddingTop = slack > 1 ? Math.floor(slack / 2) + 'px' : '0px';
-    if (gridHost.style.paddingTop !== paddingTop) gridHost.style.paddingTop = paddingTop;
+  // The last pass's blind giveback has painted: measure the corrected grid
+  // and settle on it. Measure only, never adjust - the budget is spent.
+  function settleAfterFinalGiveback(generation) {
+    if (!terminal || generation !== heightFitGeneration) return;
+    var screen = document.querySelector('.xterm-screen');
+    var measuredHeight = screen ? screen.getBoundingClientRect().height : 0;
+    traceHeightFit('final', generation, 0, measuredHeight);
+    settleFit(measuredHeight);
+    followCursorVertically(true);
   }
 
-  function centerGridFromMeasurement() {
-    var screen = document.querySelector('.xterm-screen');
-    if (!screen) return;
-    centerGridVertically(screen.getBoundingClientRect().height);
+  // A fit chain SETTLED: record the converged cell for this fit key, so the
+  // next init or refit of the same grid in the same pane applies it directly,
+  // and report it to the host. The grid stays PINNED TO THE TOP-LEFT: a grid
+  // shorter than the pane used to be centred, which moved its first row on
+  // every open of a differently shaped session - the maintainer's rule is the
+  // same position every time, so row 0 always sits at the top and the slack
+  // below a short grid is the terminal's own background (resetSessionViewState
+  // zeroes the padding on every init, and nothing sets it since).
+  function settleFit(measuredGridHeight) {
+    settledFit = {
+      key: currentFitKey(),
+      fontSizePx: currentFontSizePx,
+      lineHeight: terminal.options.lineHeight || 1,
+    };
+    reportFit('settled', measuredGridHeight);
   }
 
   // The GPU's max texture edge, probed once. A canvas wider (or taller) than
@@ -1808,21 +1953,32 @@ return exports; })();
     if (container.scrollLeft > maxScrollLeft) container.scrollLeft = maxScrollLeft;
   }
 
-  // Re-fit the font to the CURRENT viewport height, then re-apply the grid.
+  // Re-fit the grid to the CURRENT fit height, then re-apply the geometry.
   // Called whenever the viewport settles or changes - the first-open layout
   // settle (window.innerHeight is not always final the instant the terminal is
   // created, which left the initial fit stale until a manual reload), the soft
-  // keyboard, and rotation - so the fit is never left stale.
+  // keyboard, rotation, the host's fit-height report, an init - so the fit is
+  // never left stale.
   //
-  // `keepFont === true` (only from an init that keeps the cell size, see
-  // softReinit) skips the font fit and the line-height reset and runs the
-  // measured height fit with stretching LOCKED: the grid is laid out in the
-  // cells already on screen, centred when shorter, and only stepped down
-  // when it would overflow. Strictly `=== true` because the window 'resize'
-  // listener hands this function an Event.
-  function refit(keepFont) {
+  // DETERMINISTIC, whoever calls it: every refit lands on the reference cell
+  // for this grid and pane (state.js), so it no longer matters which path ran
+  // last. Three cases:
+  // - A pinch is in force: the user owns the size. Keep it, re-lay the grid,
+  //   re-pin the pan. Only the fit button, another session or another grid
+  //   clears it.
+  // - This grid and pane already converged (settledFit): apply that font and
+  //   line height directly, and run the chain stretch-locked, so it measures
+  //   once and finds nothing to do. Re-running it from line height 1 instead
+  //   is what made every re-init and every foreground visibly snap short and
+  //   re-stretch.
+  // - Otherwise: the reference font, a clean line height of 1, and the
+  //   measured height fit converges from there.
+  //
+  // `trigger` names what started it, for the fit report. The window 'resize'
+  // listener hands this function an Event, which reads as 'window-resize'.
+  function refit(trigger) {
     if (!terminal) return;
-    var keep = keepFont === true;
+    activeFitTrigger = typeof trigger === 'string' ? trigger : 'window-resize';
     // Every refit is a RE-ORIENTATION - a keyboard opening or closing, a
     // rotation, the reset button - and the reader re-orients at the LEFT
     // edge, where every line, prompt, and tree begins. Re-pinning reuses the
@@ -1832,25 +1988,48 @@ return exports; })();
     // dropping the reader into the middle of text after every keyboard
     // open/close ("disorienting in resize events").
     pinnedToStart = true;
-    if (!keep) {
+    if (pinchOverrideFontPx !== null) {
+      applyGeometry();
+      // Cancels a fit still converging: it would step the font under the
+      // user's chosen size.
+      heightFitGeneration += 1;
+      requestAnimationFrame(function () {
+        manualPanUntil = 0;
+        clampHorizontalPan();
+      });
+      return;
+    }
+    var settled = settledFitForCurrentGrid();
+    if (settled !== null) {
+      currentFontSizePx = settled.fontSizePx;
+      terminal.options.fontSize = settled.fontSizePx;
+      terminal.options.lineHeight = settled.lineHeight;
+    } else {
       autoFitFontToScreen();
+      terminal.options.fontSize = currentFontSizePx;
       // The fit chain below must start from the same clean slate a constructed
-      // terminal does (the rule softReinit already follows): autoFitFontToScreen
-      // just reset the FONT, and a line-height stretch left over from the
-      // PREVIOUS chain makes the new font x old stretch overflow. The chain then
-      // misreads that as its own stretch overshooting, hands it back, and LOCKS
-      // stretching - so once its font correction lands, nothing can reclaim the
-      // slack. Caught live by the fit trace on a fresh open of a parked 210x48
-      // session: settled at line height 1 with a 530px grid in a 635px viewport,
-      // stretchLocked by a giveback of the prior chain's 1.194.
+      // terminal does: a line-height stretch left over from the PREVIOUS
+      // chain makes the new font x old stretch overflow. The chain then
+      // misreads that as its own stretch overshooting, hands it back, and
+      // LOCKS stretching - so once its font correction lands, nothing can
+      // reclaim the slack. Caught live by the fit trace on a fresh open of a
+      // parked 210x48 session: settled at line height 1 with a 530px grid in a
+      // 635px viewport, stretchLocked by a giveback of the prior chain's 1.194.
       terminal.options.lineHeight = 1;
     }
     applyGeometry();
     heightFitGeneration += 1;
     var generation = heightFitGeneration;
+    // A converged cell runs its chain STRETCH-LOCKED: it is already known to
+    // fit this key, and a cell that settled through a giveback is not a fixed
+    // point of the stretch step (xterm ceils every row to device pixels), so
+    // an unlocked chain re-stretched it, overflowed for a frame and handed it
+    // back on every reactivate - seen on a release build as a lens switch
+    // back settling at 1.054 after a first settle at 1.055.
+    var stretchLocked = settled !== null;
     // Measure AFTER the font/geometry pass paints, then true up the height.
     requestAnimationFrame(function () {
-      fitGridHeightToViewport(HEIGHT_FIT_PASSES, keep, generation);
+      fitGridHeightToViewport(HEIGHT_FIT_PASSES, stretchLocked, generation);
       manualPanUntil = 0;
       // pinnedToStart makes this snap the pan to column 0. The VERTICAL
       // follow deliberately does NOT run here: the fit above is still
@@ -1858,6 +2037,37 @@ return exports; })();
       // geometry locked in a stale translate (see fitGridHeightToViewport's
       // settled paths, which own it now).
       clampHorizontalPan();
+    });
+  }
+
+  // A VIEWPORT change: the soft keyboard opening or closing, the WebView
+  // settling, a rotation. The window 'resize' listener and the
+  // ResizeObserver both land here, and one keyboard open fires all three of
+  // their triggers. Each used to run a whole refit: measured on a release
+  // build (2026-10-03), one keyboard open ran three complete fit chains that
+  // all settled on the identical cell, and the shipped refit reset the line
+  // height to 1 on each, collapsing and re-stretching the grid three times.
+  //
+  // The keyboard cannot change the fit (the fit height is the host-measured
+  // Terminal lens, which ignores it), so only a change that moves the fit
+  // key (currentFitKey) runs the chain: a new fit height, or a grid not yet
+  // converged. Width is NOT in the key; a rotation reaches it as a new fit
+  // height, from the host's 'fit-height' message (which refits on its own)
+  // or, before the host has measured, from the per-width tracker in
+  // state.js. Anything else only re-orients: column 0, and the cursor kept
+  // in view above the keyboard. A pinch is the user's size, so it only
+  // re-orients too.
+  function onViewportChange(trigger) {
+    if (!terminal) return;
+    if (pinchOverrideFontPx === null && settledFitForCurrentGrid() === null) {
+      refit(trigger);
+      return;
+    }
+    pinnedToStart = true;
+    requestAnimationFrame(function () {
+      manualPanUntil = 0;
+      clampHorizontalPan();
+      followCursorVertically(true);
     });
   }
 
@@ -1919,7 +2129,39 @@ return exports; })();
       tapDirty = true;
       stopHistoryFling();
       applyVerticalOffset(0);
-      refit();
+      // And it ALWAYS lands on the fitted view: the pinch goes, and so does
+      // the converged cell, so the chain re-derives it from scratch rather
+      // than trusting a record the user is pressing the button to escape.
+      pinchOverrideFontPx = null;
+      settledFit = null;
+      // The host sends the ring's grid with the press. A page that inited
+      // before the desktop reported one (rows unknown) adopts it here, so the
+      // fit is for the real grid rather than a guess.
+      if (terminal && typeof message.cols === 'number' && typeof message.rows === 'number') {
+        knownCols = message.cols;
+        knownRows = message.rows;
+        if (cleanTerminal) cleanTerminal.resize(knownCols, knownRows);
+      }
+      refit('refit-msg');
+    } else if (message.type === 'fit-height') {
+      // The host measured the Terminal lens's own height (see hostFitHeightPx
+      // in state.js): a first measurement, or a rotation.
+      if (typeof message.fitHeightPx === 'number' && message.fitHeightPx > 0 && message.fitHeightPx !== hostFitHeightPx) {
+        hostFitHeightPx = message.fitHeightPx;
+        refit('fit-height');
+      }
+    } else if (message.type === 'repaint') {
+      // Back from the background: the renderer can come back with glyphs
+      // missing ("110 +" drawn as "10", "progress" as "p ogress", observed on
+      // a Pixel) and the frame STAYS that way. A refit used to repair it by
+      // relaying the whole frame out; with the fit deterministic a refit
+      // changes nothing, so the repaint is asked for directly: drop the WebGL
+      // glyph atlas, which is where a corrupted glyph lives, and redraw every
+      // row from the buffer.
+      if (terminal) {
+        if (webglAddon && typeof webglAddon.clearTextureAtlas === 'function') webglAddon.clearTextureAtlas();
+        terminal.refresh(0, terminal.rows - 1);
+      }
     } else if (message.type === 'scroll-latest') {
       scrollToLatest();
     } else if (message.type === 'pinch') {
@@ -1950,11 +2192,14 @@ return exports; })();
       // here: the host only posts 'resize' when the dims actually changed
       // (terminalFeed's setTerminalDimensions has a same-dims guard).
       if (terminal && typeof message.cols === 'number' && typeof message.rows === 'number') {
+        // A different grid is a different picture: a pinch made over the old
+        // one does not carry over.
+        if (message.cols !== knownCols || message.rows !== knownRows) pinchOverrideFontPx = null;
         knownCols = message.cols;
         knownRows = message.rows;
         manualPanUntil = 0;
         if (cleanTerminal) cleanTerminal.resize(knownCols, knownRows);
-        refit();
+        refit('resize-msg');
       }
     }
   }
@@ -1968,9 +2213,11 @@ return exports; })();
   document.addEventListener('message', handleMessageEvent);
 
   // The WebView viewport changes when the soft keyboard shows/hides or on
-  // rotation: re-fit the whole frame to the new viewport so it stays fully
-  // visible.
-  window.addEventListener('resize', refit);
+  // rotation. onViewportChange re-fits only when that moved the fit (a
+  // rotation); a keyboard only re-orients the frame (see refit.js).
+  window.addEventListener('resize', function () {
+    onViewportChange('window-resize');
+  });
 
   /**
    * DEV HARNESS. Everything the terminal knows about its own geometry, modes,
@@ -2015,7 +2262,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: '2b1ec8887a46',
+      buildId: '2f535d66f227',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
@@ -2034,6 +2281,15 @@ return exports; })();
       paddingTopPx: gridHost ? gridHost.style.paddingTop : null,
       viewportWidthPx: window.innerWidth,
       viewportHeightPx: window.innerHeight,
+      // A native page zoom would look exactly like a fit gone small; this
+      // rules it in or out in one read.
+      visualViewportScale: window.visualViewport ? window.visualViewport.scale : null,
+      fitHeightPx: fitViewportHeight(),
+      hostFitHeightPx: hostFitHeightPx,
+      maxFitHeightByWidth: JSON.parse(JSON.stringify(maxFitHeightByWidth)),
+      referenceRows: referenceRowsForFit(),
+      settledFit: settledFit ? JSON.parse(JSON.stringify(settledFit)) : null,
+      pinchOverrideFontPx: pinchOverrideFontPx,
       devicePixelRatio: window.devicePixelRatio,
       scrollLeft: container ? container.scrollLeft : null,
       scrollWidth: container ? container.scrollWidth : null,
@@ -2070,7 +2326,7 @@ return exports; })();
       activeInitSeq: activeInitSeq,
       awaitingNonBlankPaint: awaitingNonBlankPaint,
       paintReportCounts: JSON.parse(JSON.stringify(paintReportCounts)),
-      lastInitKeepFont: lastInitKeepFont,
+      lastInitHoldFrame: lastInitHoldFrame,
       frameHoldCount: frameHoldCount,
       frameHoldActive: document.getElementById('frame-hold') !== null,
       netHistoryUnits: netHistoryUnits,
@@ -2094,9 +2350,12 @@ return exports; })();
     },
     refit: function () {
       // Through the MESSAGE branch, not refit() directly: the reset button
-      // posts {type:'refit'}, and that branch now also drops gesture state, so
-      // calling the inner function would test a path the button does not take.
-      onHostMessage(JSON.stringify({ type: 'refit' }));
+      // posts {type:'refit'} with the ring's grid, and that branch drops the
+      // pinch and the converged cell and adopts the grid, so calling the inner
+      // function would test a path the button does not take. The page's own
+      // grid stands in for the ring's (null rows when unknown, as the button
+      // sends).
+      onHostMessage(JSON.stringify({ type: 'refit', cols: knownCols, rows: knownRows }));
       return terminalProbeState();
     },
     scroll: function (units) {
@@ -2215,18 +2474,20 @@ return exports; })();
           // with the 105px of slack split into a 52px top pad, reported as
           // "the bottom of the terminal is pushed up ~50px" after dismissing
           // the keyboard. One refit against the SETTLED viewport always
-          // completes, so this guarantees exactly that.
+          // completes, so this guarantees exactly that. Both go through
+          // onViewportChange, which runs the chain only when the fit inputs
+          // moved: a keyboard open or close only re-orients.
           if (settleRefitTimer !== null) clearTimeout(settleRefitTimer);
           settleRefitTimer = setTimeout(function () {
             settleRefitTimer = null;
             viewportSettleRefits += 1;
-            refit();
+            onViewportChange('ro-settle');
           }, VIEWPORT_SETTLE_REFIT_MS);
           if (refitScheduled) return;
           refitScheduled = true;
           requestAnimationFrame(function () {
             refitScheduled = false;
-            refit();
+            onViewportChange('ro-raf');
           });
         });
         viewportObserver.observe(container);

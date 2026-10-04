@@ -9,6 +9,8 @@ export interface TerminalTabProps {
   active: boolean;
   /** Enables the WebView's clean feed for the chat reading view (sessions without a structured transcript). */
   cleanFeedEnabled?: boolean;
+  /** False while the footer is in a state the lens is never read in; see TerminalPane's prop of the same name. */
+  fitLayoutIsReference?: boolean;
 }
 
 /**
@@ -17,7 +19,12 @@ export interface TerminalTabProps {
  * is the default lens). It renders the desktop's grid 1:1 and never resizes
  * the shared session; pinch-zoom + pan read the detail.
  */
-export function TerminalTab({ sessionId, active, cleanFeedEnabled = false }: TerminalTabProps): React.JSX.Element {
+export function TerminalTab({
+  sessionId,
+  active,
+  cleanFeedEnabled = false,
+  fitLayoutIsReference = true,
+}: TerminalTabProps): React.JSX.Element {
   if (sessionId === null) {
     return (
       <Stack gap="sm" style={styles.placeholder}>
@@ -27,7 +34,14 @@ export function TerminalTab({ sessionId, active, cleanFeedEnabled = false }: Ter
       </Stack>
     );
   }
-  return <TerminalPane sessionId={sessionId} isActive={active} cleanFeedEnabled={cleanFeedEnabled} />;
+  return (
+    <TerminalPane
+      sessionId={sessionId}
+      isActive={active}
+      cleanFeedEnabled={cleanFeedEnabled}
+      fitLayoutIsReference={fitLayoutIsReference}
+    />
+  );
 }
 
 const styles = StyleSheet.create({

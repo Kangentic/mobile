@@ -6,7 +6,8 @@ import { ConversationTab } from '@/screens/task/ConversationTab';
 import { useActivityStore } from '@/state/activityStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { appendChunk, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
-import { loadOlderTranscript } from '@/connection/actions';
+import { loadOlderTranscript, loadTranscriptTail } from '@/connection/actions';
+import { useChannelStore } from '@/state/channelStore';
 
 jest.mock('@/connection/actions', () => ({
   sendUserMessage: jest.fn().mockResolvedValue(undefined),
@@ -298,5 +299,99 @@ describe('ConversationTab', () => {
     fireEvent(list, 'scrollBeginDrag');
     fireEvent(list, 'contentSizeChange', 400, 2800);
     expect(mockFlashListScrollToEnd.mock.calls.length).toBe(callsBeforeDrag);
+  });
+});
+
+/**
+ * The self-heal's RETRY. A newest-window fetch that failed on an established
+ * channel used to wait for the next change of the flag, the channel or the
+ * session, none of which a failure causes: on a release build a cold-launch
+ * notification tap left Chat on "Loading conversation..." for over a minute.
+ * It now retries on a bounded budget (2 s, 5 s, 10 s), and stops the moment
+ * the window lands.
+ *
+ * Mutation that reddens these: drop the retry from the effect's catch.
+ */
+describe('ConversationTab - newest-window fetch retry', () => {
+  const tailFetch = loadTranscriptTail as jest.MockedFunction<typeof loadTranscriptTail>;
+
+  async function flushFetches(): Promise<void> {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  async function advance(milliseconds: number): Promise<void> {
+    await act(async () => {
+      jest.advanceTimersByTime(milliseconds);
+    });
+    await flushFetches();
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    seedStores();
+    // A window the store has flagged as unpatchable: the fetch is owed.
+    useTranscriptStore.setState((state) => ({
+      bySessionId: { 'sess-1': { ...state.bySessionId['sess-1'], needsTailFetch: true } },
+    }));
+    act(() => {
+      useChannelStore.setState({ established: true });
+    });
+    tailFetch.mockReset();
+  });
+
+  afterEach(() => {
+    act(() => {
+      useChannelStore.getState().reset();
+    });
+    tailFetch.mockReset();
+    tailFetch.mockResolvedValue(undefined);
+    jest.useRealTimers();
+  });
+
+  it('retries a failed fetch until one lands, then stops', async () => {
+    tailFetch.mockRejectedValueOnce(new Error('capability timeout')).mockRejectedValueOnce(new Error('capability timeout'));
+    tailFetch.mockResolvedValue(undefined);
+    renderTab();
+    await flushFetches();
+    expect(tailFetch).toHaveBeenCalledTimes(1);
+
+    await advance(2000);
+    expect(tailFetch).toHaveBeenCalledTimes(2);
+    await advance(5000);
+    expect(tailFetch).toHaveBeenCalledTimes(3);
+
+    // The third landed: no more attempts, however long the screen stays up.
+    await advance(30000);
+    expect(tailFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up after three retries against a desktop that keeps failing', async () => {
+    tailFetch.mockRejectedValue(new Error('refused'));
+    renderTab();
+    await flushFetches();
+    await advance(2000);
+    await advance(5000);
+    await advance(10000);
+    expect(tailFetch).toHaveBeenCalledTimes(4);
+
+    await advance(60000);
+    expect(tailFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('drops a pending retry once the window lands some other way', async () => {
+    tailFetch.mockRejectedValue(new Error('capability timeout'));
+    renderTab();
+    await flushFetches();
+    expect(tailFetch).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useTranscriptStore.setState((state) => ({
+        bySessionId: { 'sess-1': { ...state.bySessionId['sess-1'], needsTailFetch: false } },
+      }));
+    });
+    await advance(20000);
+    expect(tailFetch).toHaveBeenCalledTimes(1);
   });
 });

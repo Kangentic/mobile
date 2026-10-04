@@ -81,6 +81,28 @@ describe('terminalFeed', () => {
   });
 
   /**
+   * Retention is reference counted: two session screens can be mounted on one
+   * session, and the first to close must not drop the ring the other is still
+   * rendering. Only the LAST release drops it and says so (the caller's cue to
+   * switch the desktop back to list-only). A release with no ring (wiped by
+   * resetTerminalFeed under a mounted screen) is a harmless no-op.
+   */
+  it('keeps the ring until the last of several holders releases it', () => {
+    retainTerminal('sess-1');
+    retainTerminal('sess-1');
+    appendChunk('sess-1', 'shared frame');
+
+    expect(releaseTerminal('sess-1')).toBe(false);
+    expect(isTerminalRetained('sess-1')).toBe(true);
+    expect(getBufferedData('sess-1')).toBe('shared frame');
+
+    expect(releaseTerminal('sess-1')).toBe(true);
+    expect(isTerminalRetained('sess-1')).toBe(false);
+
+    expect(releaseTerminal('sess-1')).toBe(false);
+  });
+
+  /**
    * THE ORDERING BUG THIS MODULE EXISTS TO NOT HAVE.
    *
    * React runs child effects before parent effects in the same commit, so on a

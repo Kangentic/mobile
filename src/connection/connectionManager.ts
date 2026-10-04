@@ -14,6 +14,7 @@ import { notificationPermissionGranted, notificationPermissionStatus } from '@/n
 import { reportHandledError } from '@/observability/crashReporting';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
+import { isTerminalRetained } from '@/state/terminalFeed';
 import { bindFeedToStores, createSnapshotSinks } from './storeFeed';
 import { runBootstrap } from './bootstrap';
 
@@ -415,6 +416,11 @@ async function performOpenConnection(): Promise<void> {
       if (!subscriptionsHolder) throw new Error('SubscriptionManager sink resolved before construction completed');
       return subscriptionsHolder;
     }),
+    // A mounted session screen's terminal retention, which outlives this
+    // connection: a screen that stayed mounted across a rebuild (or opened
+    // before any connection existed, as on a cold-launch notification tap)
+    // is subscribed with live PTY bytes from this manager's first request.
+    isTerminalWanted: isTerminalRetained,
   });
   subscriptionsHolder = subscriptions;
 

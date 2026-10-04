@@ -117,34 +117,40 @@ describe('registerMemoryShedders', () => {
     expect(Object.keys(useBoardStore.getState().archivedByProjectId)).toHaveLength(ARCHIVED_PROJECT_CAP);
   });
 
-  it('sheds on serious pressure', async () => {
+  /**
+   * The black-terminal regression, through the real wiring. A mounted session
+   * screen's pane has NO chunk listener for routine windows: before its WebView
+   * reports ready, and across recoverWebView after the OS killed the renderer.
+   * These two cases used to assert the ring WAS shed there - and a deleted ring
+   * is never re-seeded and stops reading as retained, so the screen's want for
+   * terminal bytes went with it and the mirror stayed black until a remount.
+   * Android 14+ sends 'backgrounded' on every app switch, so that was routine.
+   *
+   * Mutation that reddens both: drop the retained-ring skip from
+   * shedUnwatchedTerminalRings.
+   */
+  it('never sheds a retained terminal ring on serious pressure, listener or not', async () => {
     const { registerMemoryShedders } = await import('@/state/memoryShed');
     registerMemoryShedders();
-    retainTerminal('background');
-    appendChunk('background', 'offscreen bytes');
+    retainTerminal('mid-remount');
+    appendChunk('mid-remount', 'the frame on screen');
 
     firePressure('serious');
 
-    expect(isTerminalRetained('background')).toBe(false);
+    expect(isTerminalRetained('mid-remount')).toBe(true);
+    expect(getBufferedData('mid-remount')).toBe('the frame on screen');
   });
 
-  /**
-   * The arm that keeps this feature alive on modern Android. From Android 14
-   * the system delivers ONLY TRIM_MEMORY_UI_HIDDEN and TRIM_MEMORY_BACKGROUND,
-   * both of which map to 'backgrounded'; the legacy RUNNING_* levels are gone
-   * and were deprecated in Android 15. If the shedders ignored this severity
-   * they would never run on any current device, while every test built around
-   * the legacy levels kept passing.
-   */
-  it('sheds when the app is backgrounded, the only signal Android 14+ still sends', async () => {
+  it('never sheds a retained terminal ring when backgrounded, the signal Android 14+ sends on every app switch', async () => {
     const { registerMemoryShedders } = await import('@/state/memoryShed');
     registerMemoryShedders();
-    retainTerminal('background');
-    appendChunk('background', 'offscreen bytes');
+    retainTerminal('mid-remount');
+    appendChunk('mid-remount', 'the frame on screen');
 
     firePressure('backgrounded');
 
-    expect(isTerminalRetained('background')).toBe(false);
+    expect(isTerminalRetained('mid-remount')).toBe(true);
+    expect(getBufferedData('mid-remount')).toBe('the frame on screen');
   });
 
   /**
@@ -203,48 +209,40 @@ describe('shedUnwatchedTerminalRings', () => {
     resetTerminalFeed();
   });
 
-  it('drops rings nobody is subscribed to', () => {
-    retainTerminal('session-a');
-    retainTerminal('session-b');
-    appendChunk('session-a', 'scrollback a');
-    appendChunk('session-b', 'scrollback b');
-
-    expect(shedUnwatchedTerminalRings()).toBe(2);
-    expect(isTerminalRetained('session-a')).toBe(false);
-    expect(isTerminalRetained('session-b')).toBe(false);
-  });
-
-  it('keeps the ring a mounted pane is watching', () => {
+  /**
+   * Every ring that exists is held by a mounted session screen (retainTerminal
+   * creates it, the last releaseTerminal deletes it), so the terminal arm is
+   * inert by construction. This pins that, rather than pretending it sheds.
+   */
+  it('keeps every retained ring, watched or not', () => {
     retainTerminal('watched');
-    retainTerminal('background');
+    retainTerminal('pane-not-ready');
     appendChunk('watched', 'visible bytes');
-    appendChunk('background', 'offscreen bytes');
+    appendChunk('pane-not-ready', 'bytes waiting for the remounted page');
     const unsubscribe = subscribeChunks('watched', () => undefined);
 
-    expect(shedUnwatchedTerminalRings()).toBe(1);
-    // The whole point: a terminal on screen must not go blank.
-    expect(isTerminalRetained('watched')).toBe(true);
+    expect(shedUnwatchedTerminalRings()).toBe(0);
     expect(getBufferedData('watched')).toBe('visible bytes');
-    expect(isTerminalRetained('background')).toBe(false);
+    expect(getBufferedData('pane-not-ready')).toBe('bytes waiting for the remounted page');
 
     unsubscribe();
   });
 
-  it('sheds a session once its last listener has gone', () => {
+  it('keeps a ring once its last listener has gone, while a screen still holds it', () => {
     retainTerminal('was-watched');
     appendChunk('was-watched', 'bytes');
     const unsubscribe = subscribeChunks('was-watched', () => undefined);
-    expect(shedUnwatchedTerminalRings()).toBe(0);
-
     unsubscribe();
-    expect(shedUnwatchedTerminalRings()).toBe(1);
+
+    expect(shedUnwatchedTerminalRings()).toBe(0);
+    expect(isTerminalRetained('was-watched')).toBe(true);
   });
 
   it('is idempotent, because listeners fire on every warning', () => {
     retainTerminal('session-a');
-    expect(shedUnwatchedTerminalRings()).toBe(1);
     expect(shedUnwatchedTerminalRings()).toBe(0);
     expect(shedUnwatchedTerminalRings()).toBe(0);
+    expect(isTerminalRetained('session-a')).toBe(true);
   });
 });
 
