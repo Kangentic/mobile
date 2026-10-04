@@ -212,6 +212,71 @@ describe('terminal -> host round-trip', () => {
     });
   });
 
+  /**
+   * The source is the same kind of seam as the trigger: it lands in the same
+   * release-build trace, so it decodes through a closed set too. Both members
+   * the page sends round-trip, and anything else is 'unknown'.
+   *
+   * Mutation that reddens this: let decodeFitSource pass any string through.
+   */
+  it('decodes the fit report source through a closed set', () => {
+    const decodeSource = (fitSource: unknown): string | undefined => {
+      const decoded = decodeTerminalMessage(JSON.stringify({ type: 'font-size', fontSizePx: 11, source: fitSource }));
+      return decoded?.type === 'font-size' ? decoded.source : undefined;
+    };
+
+    expect(decodeSource('settled')).toBe('settled');
+    expect(decodeSource('texture-cap')).toBe('texture-cap');
+    expect(decodeSource('user typed this')).toBe('unknown');
+    expect(decodeSource('Settled')).toBe('unknown');
+    expect(decodeSource('')).toBe('unknown');
+    expect(decodeSource(7)).toBe('unknown');
+    expect(decodeSource(null)).toBe('unknown');
+  });
+
+  /**
+   * Every numeric diagnostic is primitives only, because the same trace must
+   * never carry content from the page: a field that is not a finite number
+   * (a string, a boolean, an object; JSON turns Infinity into null) decodes to
+   * null rather than reaching the trace as whatever it was.
+   *
+   * Mutation that reddens this: let finiteNumberOrNull return its argument
+   * unchecked.
+   */
+  it('decodes a diagnostic fit-report field that is not a finite number to null', () => {
+    const decoded = decodeTerminalMessage(
+      JSON.stringify({
+        type: 'font-size',
+        fontSizePx: 11,
+        cols: '120',
+        rows: true,
+        lineHeight: { nested: 1.2 },
+        fitHeightPx: null,
+        innerHeightPx: [640],
+        innerWidthPx: 411,
+        gridHeightPx: Infinity,
+        devicePixelRatio: 'high',
+        maxTextureSize: 4096,
+      }),
+    );
+
+    expect(decoded).toEqual({
+      type: 'font-size',
+      fontSizePx: 11,
+      source: 'unknown',
+      trigger: 'unknown',
+      cols: null,
+      rows: null,
+      lineHeight: null,
+      fitHeightPx: null,
+      innerHeightPx: null,
+      innerWidthPx: 411,
+      gridHeightPx: null,
+      devicePixelRatio: null,
+      maxTextureSize: 4096,
+    });
+  });
+
   it('round-trips the scroll-latest host message', () => {
     expect(decodeHostMessage(encodeHostMessage({ type: 'scroll-latest' }))).toEqual({ type: 'scroll-latest' });
   });

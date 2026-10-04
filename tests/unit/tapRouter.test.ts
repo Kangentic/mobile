@@ -433,6 +433,57 @@ describe('tapRouter - Android notifee presses', () => {
   });
 
   /**
+   * The id latch only engages on a non-empty string id: a press whose
+   * notification carries none still routes every time, because dropping a real
+   * tap is worse than a rare double. Two presses, since a single one routes
+   * with or without the guard.
+   *
+   * Mutation that reddens this: latch on the id unconditionally (drop the
+   * `typeof notificationId === 'string' && notificationId.length > 0` guard).
+   */
+  it('routes every press of a notification that has no id, rather than latching on its absence', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    const data = { taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' };
+    onForegroundEvent({ type: 1, detail: { notification: { data } } });
+    onForegroundEvent({ type: 1, detail: { notification: { data } } });
+    onForegroundEvent({ type: 1, detail: { notification: { id: '', data } } });
+    onForegroundEvent({ type: 1, detail: { notification: { id: '', data } } });
+
+    expect(published).toHaveLength(4);
+  });
+
+  /**
+   * getInitialNotification rejects when there is no launching press to report
+   * or the native module is unavailable. That is "nothing to route", never an
+   * unhandled rejection out of the boot path, and the live listeners still work.
+   *
+   * Mutation that reddens this: drop the `.catch` on the launch read (vitest
+   * reports the unhandled rejection and fails the run).
+   */
+  it('treats a failed launch read as no launching press, and still routes later presses', async () => {
+    notifeeMock.getInitialNotification.mockRejectedValue(new Error('native module unavailable'));
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    tapRouter.registerNotificationTapHandlers();
+    await flushMicrotasks();
+
+    expect(notifeeMock.getInitialNotification).toHaveBeenCalledTimes(1);
+    expect(published).toEqual([]);
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { id: 'alert-5', data: { taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' } } },
+    });
+    expect(published).toHaveLength(1);
+  });
+
+  /**
    * Android notifications are posted by notifee AFTER decryption, so the ids
    * are already on the notification and nothing is decrypted a second time.
    */
