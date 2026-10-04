@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.8.0',
+  version: '0.8.1',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -163,7 +163,18 @@ const config: ExpoConfig = {
     // dial carries role=mobile for the relay's waiting-peer gauge. Native
     // dependencies moved with the SDK 57 drift (seven expo packages), so this
     // is a new native build on both platforms, not a JS-only change.
-    buildNumber: '15',
+    //
+    // 16 is the v0.8.1 release cut 2026-10-04. 15 is spent, tagged ios-b15.
+    // Nothing in this release is iOS-only; it is the terminal mirror fix, all
+    // cross-platform: every grid renders in one reference cell (the cell at
+    // which 210x48 fills the pane) pinned top-left, so every task opens at the
+    // same text size and the fit button returns there; the mirror no longer
+    // goes black after a background return or a push tap; a push tap opens
+    // the remembered lens instead of forcing Chat, and reuses the task's
+    // screen instead of stacking a second one; opening the keyboard no longer
+    // flashes the terminal black. Native dependencies moved again with the SDK
+    // 57 drift (eight expo packages), so this is a new native build.
+    buildNumber: '16',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -371,13 +382,24 @@ const config: ExpoConfig = {
     // measured on a release build on an x86_64 emulator against a same-process
     // control (the developer guide's measurement table carries the numbers).
     //
+    // 14 is the v0.8.1 release cut 2026-10-04, going to the INTERNAL track. 13
+    // is spent, tagged android-vc13. The one Android-specific item is the
+    // expo-task-manager patch re-pinned at 57.0.21 with the next SDK 57 drift,
+    // so the headless push task's null-loader guard still ships. The rest is
+    // the cross-platform terminal mirror fix: one reference cell pinned
+    // top-left for every grid, no black mirror after a background return or a
+    // push tap, a push tap keeping the remembered lens and reusing the task's
+    // screen, and no black flash on opening the keyboard (a ~0.8 s blank on
+    // the v0.8.0 Play build, gone on a release build of this code, both
+    // screen-recorded on a Pixel 11 Pro).
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 13,
+    versionCode: 14,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
