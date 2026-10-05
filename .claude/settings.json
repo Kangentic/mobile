@@ -94,6 +94,14 @@
     ],
     "deny": []
   },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Sentry reads for the /sentry skill: any GET against the sentry.io API under the kangentic org or its mobile project, by numeric project id 4511808149651456 or by the mobile slug (issue summaries, latest and all events, tag breakdowns, issue and event search, releases, org members, the caller's own whoami). Any transport the skill documents: Sentry's CLI as npx -y sentry@0.46.0 (issue list, issue view, issue events, auth status, auth whoami, and api with no -X or -X GET), PowerShell Invoke-RestMethod or Invoke-WebRequest with a bearer token taken from the KANGENTIC_SENTRY_TOKEN environment variable or its Windows User-level registry value, and curl on macOS and Linux. Reading an event payload is not a write and needs no further judgement.",
+      "Sentry triage assignment: a PUT to https://sentry.io/api/0/organizations/kangentic/issues/<a single issue id or shortId>/ whose body sets only assignedTo. This is the triage marker the /sentry skill requires after filing a follow-up board task; it leaves the issue in the unresolved stream so a recurrence stays visible. Scoped to one issue in the path, never a bulk query. npx -y sentry@0.46.0 api organizations/kangentic/issues/<id>/ -X PUT -f assignedTo=user:<id>, run once per issue, is exactly this PUT.",
+      "The two Sentry rules above cover reads plus the single-issue assign PUT. They do not extend to resolving or archiving an issue, to any DELETE, to a bulk mutation that targets a search query instead of a single issue, to writes against org, team, member, project, client-key, alert or integration settings, to a Seer or autofix run, to reading a token out of ~/.sentryclirc or any other credential file, or to any Sentry org other than kangentic. Judge those normally."
+    ]
+  },
   "enableAllProjectMcpServers": true,
   "enabledPlugins": {
     "expo@claude-plugins-official": true

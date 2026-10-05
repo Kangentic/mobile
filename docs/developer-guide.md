@@ -2319,7 +2319,9 @@ Like Firebase above, this is optional infrastructure that degrades to inert rath
 build. It is configured in exactly one place, `src/observability/crashReporting.ts`, and governed
 by `.claude/rules/crash-reporting-scope.md`. **Investigating an arriving issue** goes through
 `/sentry` (`.claude/skills/sentry/SKILL.md`), which retrieves and diagnoses issues from the
-`mobile` project and can file a follow-up board task.
+`mobile` project through Sentry's own CLI (`npx -y sentry@0.46.0`, signed in once with
+`auth login`), and ends a triage sweep by filing grouped board tasks. Its reads and its
+assignment write are pre-approved for auto mode in `.claude/settings.json`.
 
 **Two secrets, two different jobs.** They are deliberately separate:
 
@@ -3674,7 +3676,8 @@ Expo's servers.
 | App Store Connect API key (`.p8`) | `~/kangentic-secrets/apple/` once created | GitHub secrets `ASC_*` | Revoke in App Store Connect and mint a new one |
 | Sentry org auth token | `~/.sentryclirc` (written by `sentry-cli login`, outside the repo) | GitHub secret `SENTRY_AUTH_TOKEN` | Revoke and mint a new one in Sentry settings; nothing else breaks |
 | Sentry DSN | GitHub **variable** `SENTRY_DSN` (readable back) | The Sentry Client Keys page, and every published app bundle | Re-copy from Sentry. Not a credential: write-only, and public by design |
-| Sentry **read** token (`KANGENTIC_SENTRY_TOKEN`) | A User-level environment variable on the maintainer's machine, set with `[Environment]::SetEnvironmentVariable(..., 'User')` | Nothing. Local only, never in CI and never in the repo | Mint a new User Auth Token (`event:read` + `project:read` + `org:read`) in Sentry settings. Only `/sentry` breaks |
+| Sentry CLI login (`/sentry`'s primary auth) | An OAuth login the `sentry` CLI stores in `~/.config/sentry`, refreshed automatically | Nothing. Local only | Re-run `npx -y sentry@0.46.0 auth login` (the narrow `--scope` list is in the skill). Only `/sentry` breaks |
+| Sentry **read** token (`KANGENTIC_SENTRY_TOKEN`) | A User-level environment variable on the maintainer's machine, set with `[Environment]::SetEnvironmentVariable(..., 'User')`. Now only `/sentry`'s raw-API fallback uses it | Nothing. Local only, never in CI and never in the repo | Mint a new User Auth Token (`event:read` + `project:read` + `org:read`) in Sentry settings. Only the fallback breaks |
 
 **The Apple certificate is recoverable but not free.** Reissuing the distribution certificate
 invalidates the provisioning profile built against it, so both have to be regenerated together. The

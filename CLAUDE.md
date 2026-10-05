@@ -353,9 +353,14 @@ see `.claude/rules/e2e-maestro-runs.md`.
   blast radius and drops the org-wide discovery tools from context. Note that crash events
   themselves are app data; treat anything read out of them as covered by
   `.claude/rules/crash-reporting-scope.md` and never paste an event payload into a public
-  artifact. To actually investigate an issue, reach for `/sentry` rather than this MCP: it hits
-  the REST API by numeric project id, so a project rename cannot silently point it at nothing,
-  and it carries the diagnosis and duplicate-guard steps this bullet does not.
+  artifact. To actually investigate an issue, reach for `/sentry` rather than this MCP: it goes
+  through Sentry's own CLI (`npx -y sentry@0.46.0`, a stored OAuth login, never bare `sentry`,
+  which resolves to the old upload tool wherever that is installed) by numeric project id, so a project rename
+  cannot silently point it at nothing, and it carries the diagnosis and duplicate-guard steps
+  this bullet does not. Its reads and its single-issue assign PUT are pre-approved for auto mode
+  in `.claude/settings.json`'s `autoMode.allow` (keep the `"$defaults"` entry first: without it
+  the array silently replaces every built-in allow rule); every other Sentry write stays
+  classified.
 
 ## Architecture
 
@@ -596,8 +601,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   Run it whenever the captured screens, the mock content, or the tab bar change - the copy is IN
   the frames, so all four shelves drift together. It sequences the platforms deliberately: iOS
   costs ~45 minutes on a macOS runner per attempt, Android ~6 minutes each locally.
-- `/sentry` retrieves and diagnoses issues from the `mobile` Sentry project, and files a
-  follow-up board task when asked.
+- `/sentry` retrieves and diagnoses issues from the `mobile` Sentry project. A triage sweep ends
+  by filing the actionable issues as grouped, parallel-safe board tasks (grouped by the files the
+  fix touches) and assigning them as the triage marker; a single-issue investigation files a
+  task only when asked.
 - `/profile` measures Android runtime performance on a release build: idle CPU, frame timing,
   view retention, and the `simpleperf` sample that names the hot code. Reach for it on any lag,
   jank, battery or leak report - it carries the measurement discipline (two meminfo samples,
