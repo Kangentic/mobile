@@ -2299,11 +2299,25 @@ function mockColumns() {
   ];
 }
 
+/**
+ * The checkout-api board is the desktop's DEFAULT board, the one every new
+ * project is seeded with (the desktop's DEFAULT_SWIMLANES: names, colors and
+ * icons verbatim), so the mock shows both a customised board (storefront-web)
+ * and a fresh one. It used to be a three-column stand-in with an icon-less
+ * "In Progress" as its only working column, which put a lone color dot in
+ * every checkout-api row's step track - correct for that data, and nothing
+ * like a real project. The To Do and Done ids keep their old `lane2-backlog`
+ * / `lane2-shipped` spelling because tests address them by id.
+ */
 function mockColumns2() {
   return [
-    boardColumnFixture({ id: 'lane2-backlog', name: 'Backlog', role: 'todo', position: 0, color: '#58a6ff' }),
-    boardColumnFixture({ id: 'lane2-progress', name: 'In Progress', role: null, position: 1, color: '#d29922' }),
-    boardColumnFixture({ id: 'lane2-shipped', name: 'Shipped', role: 'done', position: 2, color: '#3fb950' }),
+    boardColumnFixture({ id: 'lane2-backlog', name: 'To Do', role: 'todo', position: 0, color: '#6b7280', icon: 'layers' }),
+    boardColumnFixture({ id: 'lane2-planning', name: 'Planning', role: null, position: 1, color: '#8b5cf6', icon: 'map' }),
+    boardColumnFixture({ id: 'lane2-executing', name: 'Executing', role: null, position: 2, color: '#3b82f6', icon: 'square-terminal' }),
+    boardColumnFixture({ id: 'lane2-code-review', name: 'Code Review', role: null, position: 3, color: '#f59e0b', icon: 'code' }),
+    boardColumnFixture({ id: 'lane2-testing', name: 'Testing', role: null, position: 4, color: '#06b6d4', icon: 'flask-conical' }),
+    boardColumnFixture({ id: 'lane2-merge', name: 'Merge', role: null, position: 5, color: '#f97316', icon: 'merge' }),
+    boardColumnFixture({ id: 'lane2-shipped', name: 'Done', role: 'done', position: 6, color: '#10b981', icon: 'circle-check-big', is_archived: true }),
   ];
 }
 
@@ -2316,7 +2330,9 @@ export function initialTasks2(): BoardTaskWire[] {
       // An idle agent session: exercises the Home feed's Idle section.
       title: 'Checkout load-test follow-ups',
       description: 'Latency held under a millisecond across fifty concurrent carts. Write up the headroom numbers and open issues for the two slowest cases.',
-      swimlane_id: 'lane2-progress',
+      // One task per working column, so the three checkout-api rows show
+      // three different places in the step track.
+      swimlane_id: 'lane2-testing',
       session_id: MOCK_IDLE_SESSION_ID,
       branch_name: 'perf/load-test',
       created_at: nowIso,
@@ -2328,8 +2344,7 @@ export function initialTasks2(): BoardTaskWire[] {
       // The deep OpenCode session - see MOCK_OPENCODE_STATIC_SESSION.
       title: 'Make the charge endpoint idempotent',
       description: 'Clients that retry a timed-out charge double bill. Reserve an idempotency key before the insert and replay the stored result.',
-      swimlane_id: 'lane2-progress',
-      position: 1,
+      swimlane_id: 'lane2-executing',
       agent: 'opencode',
       session_id: MOCK_OPENCODE_STATIC_SESSION.sessionId,
       branch_name: 'feature/idempotency-keys',
@@ -2346,8 +2361,7 @@ export function initialTasks2(): BoardTaskWire[] {
       // the idle row two cards up using sessionStatus alone.
       title: 'Show a low-stock badge on the product grid',
       description: 'Shoppers add sold-out sizes to the cart and only find out at checkout. Surface the warehouse count on the grid card itself.',
-      swimlane_id: 'lane2-progress',
-      position: 2,
+      swimlane_id: 'lane2-planning',
       agent: 'claude',
       session_id: MOCK_QUEUED_SESSION_ID,
       branch_name: 'feature/low-stock-badge',
