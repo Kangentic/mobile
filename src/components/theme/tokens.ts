@@ -178,6 +178,27 @@ export interface MotionTokens {
     opacityMin: number;
     opacityMax: number;
   };
+  /**
+   * The Agents feed's section-landing pulse: a row that just changed section
+   * tints with the accent and fades, so the eye can track the move. A one-shot
+   * fade, mounted only for its own window and unmounted on a JS timer
+   * (`durationMs + unmountMarginMs`) rather than trusted to its last frame:
+   * see src/screens/home/SectionLandingPulse.tsx for the stuck-tint report
+   * that requires it.
+   */
+  sectionPulse: {
+    /** A row that mounts this long after its section change no longer pulses. */
+    windowMs: number;
+    opacityMax: number;
+    /** The fade from `opacityMax` to 0, on the `accelerate` curve: the tint is leaving while the user watches. */
+    durationMs: number;
+    /**
+     * Added to the fade for the unmount timer. Covers the gap between the JS
+     * mount and the UI runtime starting the fade, so a healthy fade has reached
+     * 0 before the cut. A JS timer only ever fires late, never early.
+     */
+    unmountMarginMs: number;
+  };
 }
 
 export interface TypographyToken {
@@ -264,6 +285,16 @@ export const motionTokens: MotionTokens = {
     durationMs: 1600,
     opacityMin: 0.8,
     opacityMax: 0.92,
+  },
+  // Window, strength and fade duration carried over unchanged from the values
+  // the pulse shipped with (a subtle tint). The fade's accelerate curve (it
+  // used Reanimated's default before) and the margin are new with the
+  // JS-timer unmount.
+  sectionPulse: {
+    windowMs: 3000,
+    opacityMax: 0.16,
+    durationMs: 700,
+    unmountMarginMs: 300,
   },
 };
 

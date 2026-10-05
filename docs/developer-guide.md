@@ -3406,10 +3406,17 @@ spin) above its early returns, so every idle-envelope row registered two dead ma
 now live in `SpinningMark`/`MarchingMark`, children mounted only while animating: an idle row
 registers zero, a working row registers one. The mechanism is locked by the "registered mappers"
 block in `tests/components/AgentStatusIcon.test.tsx` (red-green verified: restoring the
-unconditional hooks fails all four). The remaining per-row mappers on the feed are `PressScale`
-(one per card; measured unresolvable in the earlier swap A/B, consistent with ~0.5 points) and
-the section-pulse overlay (one per row; gating it to mount only while pulsing fights the strict
-react-hooks purity/set-state-in-effect lints and is left as a documented follow-up).
+unconditional hooks fails all four). The remaining per-row mapper on a resting feed is `PressScale`
+(one per card; measured unresolvable in the earlier swap A/B, consistent with ~0.5 points). The
+section-pulse overlay used to be a second one per row, and this section once called gating it a
+deferred follow-up because "a time-window mount needs a clock" seemed to fight the strict
+react-hooks purity/set-state-in-effect lints. It did not need to fight them. The pulse is now
+`src/screens/home/SectionLandingPulse.tsx`, a gate KEYED by session and change instant that
+reads the clock in a lazy `useState` initializer and unmounts itself from a `setTimeout`
+callback, with its animated half mounted only for the ~1 s window. What forced it was not CPU:
+on 2026-10-05 an always-mounted overlay kept its first write on an iOS card until force-kill (see
+`motion-conventions.md`). No CPU delta is claimed for the change; the mapper reduction is locked by
+the "registered mappers" block in `tests/components/SectionLandingPulse.test.tsx`.
 
 **What the fix is worth is NOT settled by a before/after of the shipped screen, and this section
 does not claim one.** The post-fix build measured 46-47% (36-53) against the pre-fix 41% (34-50) -

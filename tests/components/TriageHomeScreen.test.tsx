@@ -211,9 +211,15 @@ describe('TriageHomeScreen', () => {
    * (the peek is mocked to null and nothing waits on it), but the noise runs to
    * ~190KB a run and buries the output of a test that genuinely fails.
    *
-   * Flushing the microtask queue inside act() here lets that update land where
-   * React expects it. It is an afterEach rather than part of renderHome so the
-   * ~50 sync call sites do not all have to become async.
+   * Flushing the microtask queue inside act() here lets the LATER updates land
+   * where React expects them, but not all of them. Measured over four tests:
+   * 11 warnings without this flush, 4 with it. The one left per test is the
+   * first peek to settle, which needs only a few microtask turns and lands in
+   * the gap between the test body returning and this hook starting, so no
+   * afterEach can reach it. Removing it would take renderHome awaiting the
+   * flush itself, which makes the ~50 sync call sites async AND resolves every
+   * snippet before the first assertion, changing what the pre-resolution tests
+   * observe. Left as is deliberately.
    */
   afterEach(async () => {
     await act(async () => {
@@ -1004,6 +1010,172 @@ describe('TriageHomeScreen', () => {
       );
       expect(nowTickIntervalCalls.length).toBeGreaterThan(0);
       setIntervalSpy.mockRestore();
+    });
+  });
+
+  /**
+   * The section-landing pulse, asserted on whether the overlay is MOUNTED rather
+   * than on its opacity.
+   *
+   * The overlay used to be mounted on every row for good, cleared only by
+   * Reanimated writes, and on 2026-10-05 an iOS card kept its first write (alpha
+   * 0.16, measured from the screenshot) until the app was force-killed. Jest's
+   * Reanimated mock never advances a tween either, so these tests run in exactly
+   * that state: only the JS-timer unmount can take the tint down. The mechanism
+   * (no mapper outside the window, the timer's own cleanup) is asserted on the
+   * isolated component in SectionLandingPulse.test.tsx, since every card's
+   * PressScale also calls useAnimatedStyle and a spy here could not tell them
+   * apart.
+   */
+  describe('section-landing pulse', () => {
+    const pulseTestId = 'activity-row-sess-1-pulse';
+    const { windowMs: SECTION_PULSE_WINDOW_MS, durationMs, unmountMarginMs } = darkTerminalTheme.motion.sectionPulse;
+    const SECTION_PULSE_MOUNT_MS = durationMs + unmountMarginMs;
+
+    const pushThinking = (): void => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'activity', state: 'thinking', reason: { kind: 'tool', pendingCount: 1, currentTool: 'Bash' } },
+      });
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-05T10:29:00Z'));
+      // Re-seeded under the fake clock: the outer beforeEach ran on the real
+      // one, and the seed's permission event IS a section change, so it is
+      // what stamps sectionChangedAt.
+      seedStores();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('mounts no overlay on a row whose section change is older than the window', () => {
+      expect(useActivityStore.getState().bySessionId['sess-1'].sectionChangedAt).toBe(Date.now());
+      jest.advanceTimersByTime(SECTION_PULSE_WINDOW_MS);
+      renderHome();
+
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+      expect(screen.queryByTestId(pulseTestId)).toBeNull();
+    });
+
+    it('mounts no overlay on a row that has never changed section', () => {
+      useActivityStore.getState().reset();
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      expect(useActivityStore.getState().bySessionId['sess-1'].sectionChangedAt).toBeNull();
+      renderHome();
+
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+      expect(screen.queryByTestId(pulseTestId)).toBeNull();
+    });
+
+    it('unmounts the pulse on a JS timer, with no fade frame ever arriving', () => {
+      renderHome();
+      expect(screen.getByTestId(pulseTestId)).toBeTruthy();
+
+      act(() => {
+        jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS - 1);
+      });
+      expect(screen.getByTestId(pulseTestId)).toBeTruthy();
+
+      act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(screen.queryByTestId(pulseTestId)).toBeNull();
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+    });
+
+    it('pulses again when the row changes section after the last pulse ended', () => {
+      renderHome();
+      act(() => {
+        jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS);
+      });
+      expect(screen.queryByTestId(pulseTestId)).toBeNull();
+
+      act(() => {
+        pushThinking();
+      });
+      expect(screen.getByTestId(pulseTestId)).toBeTruthy();
+    });
+
+    /**
+     * A second change mid-pulse must restart the bound, not inherit the first
+     * one's deadline: the overlay is keyed by the change instant, so the new
+     * change mounts a fresh gate with its own timer.
+     */
+    it('restarts the bound when a second change lands mid-pulse', () => {
+      renderHome();
+      const firstChangeDelayMs = Math.floor(SECTION_PULSE_MOUNT_MS / 2);
+      act(() => {
+        jest.advanceTimersByTime(firstChangeDelayMs);
+      });
+      act(() => {
+        pushThinking();
+      });
+
+      // Past the FIRST pulse's deadline, inside the second one's.
+      act(() => {
+        jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS - 1);
+      });
+      expect(screen.getByTestId(pulseTestId)).toBeTruthy();
+
+      act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(screen.queryByTestId(pulseTestId)).toBeNull();
+    });
+
+    /**
+     * The SESSION half of the overlay key. FlashList hands a cell whose item
+     * changed (same index, same item type) to the next item, so the row's
+     * ActivityRow instance survives the rebind and only its props change. A key
+     * of the stamp alone would then be unchanged when two sessions share a
+     * stamp (one event burst stamps several in the same millisecond), the gate
+     * would keep its state, and sess-2 would inherit sess-1's live tint.
+     *
+     * The swap is ONE store write so the list never empties (an empty list
+     * unmounts the FlashList and remounts every row, which would pass against
+     * the stamp-only key too), and it lands after the stamp is stale: the
+     * rebind's fresh gate reads the clock past the window, while the survivor
+     * is still inside its own mount.
+     */
+    it('remounts the pulse when a recycled cell rebinds to another session with the same stamp', () => {
+      const sharedStampMs = Date.now();
+      const firstSessionEntry = useActivityStore.getState().bySessionId['sess-1'];
+      expect(firstSessionEntry.sectionChangedAt).toBe(sharedStampMs);
+
+      // First render 100 ms inside the window, rebind 100 ms past it. The
+      // survivor's timer (armed at the first render) must still be running at
+      // the rebind, or "no overlay" below would prove the timer, not the key.
+      const firstRenderAgeMs = SECTION_PULSE_WINDOW_MS - 100;
+      const rebindAgeMs = SECTION_PULSE_WINDOW_MS + 100;
+      expect(rebindAgeMs).toBeLessThan(firstRenderAgeMs + SECTION_PULSE_MOUNT_MS);
+
+      act(() => {
+        jest.advanceTimersByTime(firstRenderAgeMs);
+      });
+      renderHome();
+      expect(screen.getByTestId(pulseTestId)).toBeTruthy();
+
+      act(() => {
+        jest.advanceTimersByTime(rebindAgeMs - firstRenderAgeMs);
+      });
+      expect(screen.getByTestId(pulseTestId)).toBeTruthy();
+
+      act(() => {
+        useActivityStore.setState({
+          bySessionId: { 'sess-2': { ...firstSessionEntry, sessionId: 'sess-2', taskId: 'task-2' } },
+        });
+      });
+
+      // The swap landed: the same slot now shows sess-2, and sess-1 is gone.
+      expect(screen.getByTestId('activity-row-sess-2')).toBeTruthy();
+      expect(screen.queryByTestId('activity-row-sess-1')).toBeNull();
+      expect(screen.queryByTestId('activity-row-sess-2-pulse')).toBeNull();
     });
   });
 

@@ -55,14 +55,32 @@ Tab switches never slide: peers are not a hierarchy.
   the native node, so React's prop diff never clears a transform on a node that survives the
   rebind: the row keeps whatever angle was last written. That is the tilted-envelope bug
   (e4e5524), and it is a property of the mount, not of the transform's shape.
+- **A one-shot tween's resting value needs a JS-timer unmount, not a final frame.** The same
+  last-write-wins property holds without any rebind: if the frames never arrive, the native view
+  keeps its first write. On 2026-10-05 an iOS card on the Agents feed held the section pulse's
+  first write (alpha 0.16, measured from the screenshot) until the app was force-killed. Why the
+  frames were lost is inferred, not measured. So a transient overlay mounts for its window only,
+  and a JS `setTimeout` unmounts it (`SectionLandingPulse`), because a React unmount needs no
+  Reanimated frame. Never drive that unmount from the tween's completion callback through
+  `runOnJS`: the callback runs on the frame that went missing. Three sites still carry this class
+  and a JS timer cannot fix them, all READ from source and never observed stuck. `PressScale`'s
+  press-out tween back to 1 (the view stays mounted, so a lost frame leaves a card at
+  `pressedScale`). `SegmentedSwitcher`'s indicator (it self-heals on the next switch). And every
+  `exiting=` preset (`ConnectionBanner`, `SessionSwapVeil`): Reanimated removes an exiting view
+  only in the animation's finished callback on the UI runtime
+  (`react-native-reanimated/src/layoutReanimation/animationsManager.ts`, the `EXITING` branch),
+  so a lost frame leaves the banner or veil on screen. If one of those is ever reported stuck
+  after a resume, start here, and ask whether the spinners still turned: a dead frame loop
+  freezes all of them at once.
 - Never `setState` from a gesture or scroll handler. Use a shared value plus `useAnimatedStyle`.
 - Never read or write a shared value during render. It fires mid-reconciliation, and a re-render
   you did not cause replays the write. Touch shared values only in worklets, handlers and effects.
 - Prefer `.get()` and `.set()` over direct `.value` access. On Reanimated 4 (this project pins
   4.5.1) they are the documented compiler-safe form; direct `.value` is the shape the React
-  Compiler cannot see through. Existing code predates this and still uses `.value` in
-  `PressScale.tsx` and `TriageHomeScreen.tsx`. Convert those when you touch the
-  file rather than in a sweep, the same way `typescript-style.md` handles existing `any` casts.
+  Compiler cannot see through. The two places that predated this (`PressScale.tsx` and the Agents
+  feed's section pulse, now `src/screens/home/SectionLandingPulse.tsx`) have both been converted.
+  Convert any other `.value` you find when you touch the file rather than in a sweep, the same way
+  `typescript-style.md` handles existing `any` casts.
 - Reach for a shared value only when the value is continuous or interruptible. A two-state toggle
   is a preset or a transition, not a worklet.
 
@@ -144,6 +162,11 @@ Do not re-derive any of this by argument; see `performance-claims-are-measured.m
 - **Review (live now):** `expo-rn-reviewer` covers the FlashList and list-performance conventions
   during `/code-review`, and treats `useAnimatedProps` into a third-party component as a HIGH
   finding; `/design-pass` cites this rule as the motion bar for a screen pass.
+- **Test (live now):** `tests/components/SectionLandingPulse.test.tsx` pins the one-shot-tween
+  bullet for the section pulse: no overlay and no mapper outside the window, and an unmount on the
+  JS timer while the overlay still holds its first write (Jest's Reanimated mock never advances a
+  tween, which is exactly the stuck state). A NEW one-shot overlay elsewhere has no mechanical
+  check; review is the backstop.
 - **Lint (live now):** `eslint.config.mjs` bans a `useAnimatedProps(` call outside an explicit
   allowlist (`no-restricted-syntax`; the sole entry is `src/components/AgentStatusIcon.tsx`,
   whose inert march genuinely moves a dash). Widening the allowlist is the mechanical prompt to
