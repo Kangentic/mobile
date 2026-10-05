@@ -1130,6 +1130,47 @@ describe('TriageHomeScreen', () => {
     });
 
     /**
+     * An event that leaves the section alone must not bring a finished pulse
+     * back. The mount is shorter than the window, so for the stretch between the
+     * two the row can still be "recent" by the clock, and a working row gets an
+     * engine event every few hundred ms (each one replaces the entry object and
+     * bumps lastEventAt and unreadCount). A key that tracked any of that would
+     * remount the overlay at full strength on every event, the fresh gate would
+     * read the clock inside the window, and the card would flash for the whole
+     * window. The key is the session and the change instant and nothing else.
+     */
+    it('stays down when a same-section event lands after the pulse ended but inside the window', () => {
+      // The premise: a gap between the end of the mount and the end of the window.
+      expect(SECTION_PULSE_MOUNT_MS).toBeLessThan(SECTION_PULSE_WINDOW_MS);
+      renderHome();
+      act(() => {
+        jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS);
+      });
+      expect(screen.queryByTestId(pulseTestId)).toBeNull();
+      const entryBeforeEvent = useActivityStore.getState().bySessionId['sess-1'];
+
+      act(() => {
+        useActivityStore.getState().applyActivityEvent({
+          kind: 'activity',
+          sessionId: 'sess-1',
+          taskId: 'task-1',
+          payload: { type: 'event', event: { ts: 1, type: 'tool_start', tool: 'Bash' } },
+        });
+      });
+
+      // Preconditions: it was a real, same-section event, still inside the window.
+      const entryAfterEvent = useActivityStore.getState().bySessionId['sess-1'];
+      expect(entryAfterEvent).not.toBe(entryBeforeEvent);
+      expect(entryAfterEvent.unreadCount).toBe(entryBeforeEvent.unreadCount + 1);
+      expect(entryAfterEvent.lastEventAt).toBeGreaterThan(entryBeforeEvent.lastEventAt);
+      expect(entryAfterEvent.sectionChangedAt).toBe(entryBeforeEvent.sectionChangedAt);
+      expect(Date.now() - (entryAfterEvent.sectionChangedAt ?? 0)).toBeLessThan(SECTION_PULSE_WINDOW_MS);
+
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+      expect(screen.queryByTestId(pulseTestId)).toBeNull();
+    });
+
+    /**
      * The SESSION half of the overlay key. FlashList hands a cell whose item
      * changed (same index, same item type) to the next item, so the row's
      * ActivityRow instance survives the rebind and only its props change. A key
