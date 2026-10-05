@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { GitPullRequest } from 'lucide-react-native';
-import type { BoardTaskWire, SessionUsageWire } from '@kangentic/protocol';
+import type { BoardColumnWire, BoardTaskWire, SessionUsageWire } from '@kangentic/protocol';
 import {
   AgentStatusIcon,
   Badge,
@@ -16,6 +16,8 @@ import {
   isContextWindowKnown,
   type AgentStatusKind,
 } from '@/components';
+import { ColumnStrip } from './ColumnStrip';
+import type { ColumnTrackStep } from './columnTrack';
 import { computeVisibleLabelCount } from './labelFit';
 import { prChipAccessibilityLabel, prChipPresentation } from './prChipPresentation';
 import { WaitLabel } from './WaitLabel';
@@ -24,7 +26,7 @@ import { WaitLabel } from './WaitLabel';
 const FALLBACK_LABEL_LIMIT = 3;
 
 export interface TaskCardProps {
-  /** Base testID; sub-parts key off it as `${testID}-status`, `-project`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`. */
+  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-column` (whose own parts include `-column-project`). */
   testID: string;
   task: BoardTaskWire;
   statusKind: AgentStatusKind | null;
@@ -47,15 +49,22 @@ export interface TaskCardProps {
    */
   bodyMinHeight?: number;
   /**
-   * The Agents feed's addition to the title row - the project this task
-   * belongs to, as quiet muted text (never a pill: it would compete with
-   * the title for width and visual weight). Omitted (or null) on the
-   * board, where the project is already established by which board you're
-   * viewing. The Agents feed also passes `showTicketNumbers={false}` - a
-   * triage feed cares about status/title/last-message/recency, not the
-   * ticket ID; the board is the ticket-reference view.
+   * The Agents feed's top band: the project the task lives in, and the step
+   * track with its current column marked by the column's icon - the desktop's
+   * workflow card strip and project row (kangentic #732) folded into one row.
+   * The desktop's rule for it applies here as well: new information goes in
+   * the band, never into one of the rows below it. That is why the project
+   * lives here rather than as a pill in the title row, where it used to take
+   * width from the title.
+   *
+   * Omitted on the board, where both the project and the column are the page
+   * being viewed. Present with `column: null` when the task cannot be located
+   * yet: the band still draws, so the row never changes height (see
+   * ColumnStrip). The Agents feed also passes `showTicketNumbers={false}` - a
+   * triage feed cares about status/title/last-message/recency, not the ticket
+   * ID; the board is the ticket-reference view.
    */
-  projectName?: string | null;
+  columnStrip?: { column: BoardColumnWire | null; track: readonly ColumnTrackStep[]; projectName: string | null };
   /**
    * Whether to render board/backlog reference chrome: the labels row and
    * the title row's PR chip (same category as the ticket number).
@@ -91,8 +100,8 @@ export interface TaskCardProps {
  * The task card shared by the board and the Agents feed: status icon,
  * title (with a PR chip and ticket number sharing its row), a body
  * line, the labels row, and the context-usage bar - the two screens render
- * nearly identical cards; the Agents feed's only addition is the project
- * name sharing the title row.
+ * nearly identical cards. The Agents feed adds one thing: the band across the
+ * top naming the project and drawing the column's step track.
  */
 export function TaskCard({
   testID,
@@ -103,7 +112,7 @@ export function TaskCard({
   bodyText,
   bodyNumberOfLines = 2,
   bodyMinHeight,
-  projectName,
+  columnStrip,
   showMetaRow = true,
   waitingSinceMs = null,
   onPress,
@@ -134,6 +143,20 @@ export function TaskCard({
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>
+      {/* Outside the Stack on purpose: the band sets its own 8 below it
+          (the desktop's gap), and the Stack's xs would add to that. */}
+      {columnStrip ? (
+        <ColumnStrip
+          column={columnStrip.column}
+          track={columnStrip.track}
+          projectName={columnStrip.projectName}
+          testID={`${testID}-column`}
+        />
+      ) : null}
+      {/* AFTER the strip: later siblings paint on top, and the strip's fill is
+          opaque, so an overlay ahead of it would tint every part of the card
+          except the band. Still ahead of the Stack, so the text reads over the
+          tint as it always has. */}
       {overlay}
       <Stack gap="xs">
         <Row gap="sm" style={styles.spaceBetween}>
@@ -143,13 +166,6 @@ export function TaskCard({
           <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
             {task.title}
           </Text>
-          {/* A muted pill, not plain text: the project is non-standard
-              metadata (unlike the title, snippet, or model/time rows), so
-              it keeps a contained shape to read as its own kind of thing -
-              just with quiet, non-competing color. */}
-          {projectName ? (
-            <Badge label={projectName} color="muted" shape="pill" outlined={false} testID={`${testID}-project`} />
-          ) : null}
           {showTicketNumbers ? (
             <MonoText size="caption" color="muted" testID={`${testID}-display-id`}>
               #{task.display_id}

@@ -13,6 +13,7 @@ import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, NowTickProvider, SectionHeader, useTheme } from '@/components';
 import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
+import { buildPositionalTrack } from '@/components/board/columnTrack';
 import {
   isStartingSession,
   selectTaskRespawn,
@@ -23,7 +24,7 @@ import {
   type TriageSection,
   useActivityStore,
 } from '@/state/activityStore';
-import { useBoardStore } from '@/state/boardStore';
+import { selectTaskColumn, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import {
@@ -576,8 +577,8 @@ const ActivityRow = React.memo(function ActivityRow({
   const router = useRouter();
   // The full task (not just title): the Agents feed renders the EXACT SAME
   // card as the board - labels, PR, usage bar - via the same shared
-  // TaskCard, plus the project name sharing the title row (the
-  // board's only structural addition). The ticket number is the one
+  // TaskCard, plus one Agents-only addition: the band across the top naming
+  // the project and drawing the column's step track. The ticket number is the one
   // deliberate exception: a triage feed cares about status/title/last
   // message, not the ticket ID, so it is always off here regardless of the
   // board's own showTicketNumbers setting (the board is the ticket-reference
@@ -589,6 +590,26 @@ const ActivityRow = React.memo(function ActivityRow({
   const task = locatedTask ?? fallbackTask(entry);
   const projectName = useBoardStore(
     (state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null,
+  );
+  /**
+   * The column strip's data. Both selectors return references the store
+   * already holds - a column ELEMENT of the board's own array, and that array
+   * itself - so neither re-renders the row unless the board actually changed.
+   * Never `selectColumnsOrdered` here: it builds a fresh sorted array per call,
+   * which would re-render every row on every store write.
+   *
+   * The column is null whenever no cached board locates the task (the fallback
+   * stand-in), which is what makes the strip draw empty rather than guess. It
+   * keys on that alone, never on swap state: through a column move's swap the
+   * strip shows the task's NEW column while a board still holds the task, and
+   * the empty band if the sessions projection drops it for the sessionless
+   * gap - either way never the old column, and never a height change.
+   */
+  const column = useBoardStore((state) => selectTaskColumn(state, entry.taskId));
+  const boardColumns = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.columns ?? null);
+  const columnStrip = useMemo(
+    () => ({ column, track: buildPositionalTrack(boardColumns ?? [], column?.id ?? null), projectName }),
+    [column, boardColumns, projectName],
   );
 
   const section = sectionForEntry(entry);
@@ -810,7 +831,7 @@ const ActivityRow = React.memo(function ActivityRow({
         statusKind={statusKind}
         showTicketNumbers={false}
         usage={entry.usage}
-        projectName={projectName}
+        columnStrip={columnStrip}
         bodyText={bodyText}
         bodyNumberOfLines={SNIPPET_LINES}
         bodyMinHeight={snippetSlotHeight}

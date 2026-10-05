@@ -27,11 +27,26 @@ describe('text readability', () => {
     expect(ratioBetween(colors.textPrimary, colors.background)).toBeGreaterThanOrEqual(7);
     expect(ratioBetween(colors.textPrimary, colors.surfaceRaised)).toBeGreaterThanOrEqual(7);
     expect(ratioBetween(colors.textPrimary, colors.surfaceOverlay)).toBeGreaterThanOrEqual(7);
+    expect(ratioBetween(colors.textPrimary, colors.surfaceInset)).toBeGreaterThanOrEqual(7);
   });
 
-  it('textSecondary reads at >= 4.5 on surface (and the sheet overlay)', () => {
+  it('textSecondary reads at >= 4.5 on surface (and the sheet overlay, and the inset band)', () => {
     expect(ratioBetween(colors.textSecondary, colors.surface)).toBeGreaterThanOrEqual(4.5);
     expect(ratioBetween(colors.textSecondary, colors.surfaceOverlay)).toBeGreaterThanOrEqual(4.5);
+    // The Agents row's column strip draws its 12px name in textSecondary on this fill.
+    expect(ratioBetween(colors.textSecondary, colors.surfaceInset)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  /**
+   * The inset band only reads as SET INTO the card if it is darker than the
+   * card and lighter than the canvas the card sits on - the desktop strip's own
+   * relationship. Measured as contrast against the brightest text, which rises
+   * as a surface darkens.
+   */
+  it('surfaceInset sits between surface and background', () => {
+    const againstInset = ratioBetween(colors.textPrimary, colors.surfaceInset);
+    expect(againstInset).toBeGreaterThan(ratioBetween(colors.textPrimary, colors.surface));
+    expect(againstInset).toBeLessThan(ratioBetween(colors.textPrimary, colors.background));
   });
 });
 

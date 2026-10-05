@@ -21,6 +21,13 @@ export interface ColorTokens {
   background: string;
   surface: string;
   surfaceRaised: string;
+  /**
+   * One shade BELOW `surface`: a band set into a card rather than raised off
+   * it. The Agents row's column strip is the consumer, and the value mirrors
+   * the desktop's own strip (kangentic #732: the layer below the card at 30%
+   * over the card), so the two read as the same object.
+   */
+  surfaceInset: string;
   /** Sheets and modal surfaces: the highest elevation step, above surfaceRaised. */
   surfaceOverlay: string;
   border: string;
@@ -270,6 +277,9 @@ export const motionTokens: MotionTokens = {
 /** Warm near-black canvas; every neutral below tints toward the brand ink, not gray. */
 const BACKGROUND = '#0f0d0a';
 
+/** The card surface; named because `surfaceInset` is derived from it. */
+const SURFACE = '#16120d';
+
 /**
  * Body text floors at 14, dense/caption text floors at 12, and nothing goes
  * below 11 without an explicit UI-conventions exception (.claude/rules/ui-conventions.md).
@@ -282,8 +292,9 @@ const BACKGROUND = '#0f0d0a';
 export const darkTerminalTheme: Theme = {
   colors: {
     background: BACKGROUND,
-    surface: '#16120d',
+    surface: SURFACE,
     surfaceRaised: '#1d1812',
+    surfaceInset: mixHex(SURFACE, BACKGROUND, 0.3),
     surfaceOverlay: '#262019',
     border: '#332b21',
     backdrop: 'rgba(0, 0, 0, 0.6)',
