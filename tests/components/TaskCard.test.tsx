@@ -1,11 +1,11 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { StyleSheet, type StyleProp, type TextStyle } from 'react-native';
+import { StyleSheet, View, type StyleProp, type TextStyle } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { ThemeProvider } from '@/components';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
 import { PR_READINESS_FRESHNESS_CAVEAT } from '@/components/board/prChipPresentation';
-import { boardTaskFixture, usageFixture } from '@/devsupport/desktopFixtures';
+import { boardColumnFixture, boardTaskFixture, usageFixture } from '@/devsupport/desktopFixtures';
 
 const BASE_TEST_ID = 'task-card';
 
@@ -49,13 +49,18 @@ describe('TaskCard', () => {
       statusKind: 'working',
       showTicketNumbers: true,
       usage: usageFixture(),
-      projectName: 'Kangentic Mobile',
+      columnStrip: {
+        column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, icon: 'code' }),
+        track: [{ columnId: 'lane-doing', name: 'Doing', color: '#3fb950', state: 'current' }],
+        projectName: 'Kangentic Mobile',
+      },
       bodyText: 'A live inbox-style snippet.',
     });
 
     expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
     expect(screen.getByTestId(`${BASE_TEST_ID}-usage`)).toBeTruthy();
-    expect(screen.getByTestId(`${BASE_TEST_ID}-project`)).toBeTruthy();
+    expect(screen.getByTestId(`${BASE_TEST_ID}-column-project`)).toBeTruthy();
+    expect(screen.getByTestId(`${BASE_TEST_ID}-column-icon`)).toBeTruthy();
     expect(screen.getByTestId(`${BASE_TEST_ID}-display-id`)).toBeTruthy();
     expect(screen.getByTestId(`${BASE_TEST_ID}-status`)).toBeTruthy();
     expect(screen.getByTestId(`${BASE_TEST_ID}-snippet`)).toBeTruthy();
@@ -91,6 +96,76 @@ describe('TaskCard', () => {
     expect(screen.queryByTestId(`${BASE_TEST_ID}-pr`)).toBeNull();
     expect(screen.queryByText('backend')).toBeNull();
     expect(screen.queryByText('p0')).toBeNull();
+  });
+
+  describe('the column strip (Agents only)', () => {
+    it('draws no strip when the caller passes none - the Board, where the column is the page being viewed', () => {
+      renderTaskCard();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-column`)).toBeNull();
+    });
+
+    it('draws the strip, keyed off the card testID, when the Agents feed passes one', () => {
+      renderTaskCard({
+        columnStrip: {
+          column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }),
+          track: [{ columnId: 'lane-doing', name: 'Doing', color: '#3fb950', state: 'current' }],
+          projectName: 'Alpha',
+        },
+      });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column`)).toBeTruthy();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column-project`)).toHaveTextContent('Alpha');
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column-marker`)).toBeTruthy();
+    });
+
+    /**
+     * The project moved from a pill in the title row into the band: the title
+     * row is the board's, and the pill was taking characters from the title.
+     * The project must appear exactly once, in the band.
+     */
+    it('names the project once, in the band, never as a title-row pill', () => {
+      renderTaskCard({
+        columnStrip: { column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }), track: [], projectName: 'Alpha' },
+      });
+      expect(screen.getAllByText('Alpha')).toHaveLength(1);
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-project`)).toBeNull();
+    });
+
+    /**
+     * The section-change pulse is an absolutely positioned overlay, and the
+     * strip's fill is opaque: whichever renders later paints on top. Rendered
+     * before the strip, the pulse would tint the whole card except its top
+     * band - invisible in any static render, so this pins the sibling order.
+     */
+    it('paints the overlay after the strip, so the pulse tints the band too', () => {
+      render(
+        <ThemeProvider>
+          <TaskCard
+            testID={BASE_TEST_ID}
+            task={boardTaskFixture()}
+            statusKind={null}
+            showTicketNumbers={false}
+            usage={null}
+            bodyText="A task worth doing."
+            onPress={jest.fn()}
+            columnStrip={{ column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }), track: [], projectName: 'Alpha' }}
+            overlay={<View testID="task-card-overlay" />}
+          />
+        </ThemeProvider>,
+      );
+      // Pre-order over the whole tree is render order, and neither node
+      // contains the other, so a later index is a later-painted sibling branch.
+      const renderOrder = screen.UNSAFE_root.findAll(() => true);
+      const stripIndex = renderOrder.indexOf(screen.getByTestId(`${BASE_TEST_ID}-column`));
+      const overlayIndex = renderOrder.indexOf(screen.getByTestId('task-card-overlay'));
+      expect(stripIndex).toBeGreaterThanOrEqual(0);
+      expect(overlayIndex).toBeGreaterThan(stripIndex);
+    });
+
+    it('still draws the band for an unlocated task, with no marker', () => {
+      renderTaskCard({ columnStrip: { column: null, track: [], projectName: 'Alpha' } });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column`)).toBeTruthy();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-column-marker`)).toBeNull();
+    });
   });
 
   describe('PR merge readiness', () => {

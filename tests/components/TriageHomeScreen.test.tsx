@@ -258,9 +258,9 @@ describe('TriageHomeScreen', () => {
 
   it('renders board-card parity (project name, no ticket number) and the context-usage bar', () => {
     renderHome();
-    // The project name shares the title row as quiet muted text.
-    expect(screen.getByTestId('activity-row-sess-1-project')).toBeTruthy();
-    expect(screen.getByText('Alpha')).toBeTruthy();
+    // The project names the band across the top of the card, not the title row.
+    expect(screen.getByTestId('activity-row-sess-1-column-project')).toHaveTextContent('Alpha');
+    expect(screen.queryByTestId('activity-row-sess-1-project')).toBeNull();
     // No ticket number here: a triage feed cares about status/title/last
     // message/recency, not the ticket ID - the board is that view.
     expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
@@ -294,6 +294,71 @@ describe('TriageHomeScreen', () => {
     renderHome();
     expect(screen.getByText('Untitled task')).toBeTruthy();
     expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
+  });
+
+  describe('the column strip', () => {
+    function moveTask2To(swimlaneId: string): void {
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-2'];
+        const task = board?.tasksById['task-2'];
+        if (board === undefined || task === undefined) throw new Error('seedTwoProjectBoards did not seed task-2');
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-2': { ...board, tasksById: { ...board.tasksById, 'task-2': { ...task, swimlane_id: swimlaneId } } },
+          },
+        };
+      });
+    }
+
+    /** The band never draws the column name; a screen reader hears it from the band's label. */
+    function stripLabel(sessionId: string): unknown {
+      return screen.getByTestId(`activity-row-${sessionId}-column`).props.accessibilityLabel;
+    }
+
+    it('names the project and marks a To Do column on its own, with no track (the desktop track never draws To Do)', async () => {
+      seedTwoProjectBoards();
+      renderHome();
+      await act(async () => {});
+      expect(screen.getByTestId('activity-row-sess-2-column-project')).toHaveTextContent('Beta');
+      expect(stripLabel('sess-2')).toBe('Beta, Backlog');
+      expect(screen.getByTestId('activity-row-sess-2-column-marker')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-2-column-track').children).toHaveLength(1);
+    });
+
+    it('marks a working column inside its track', async () => {
+      seedTwoProjectBoards();
+      moveTask2To('p2-doing');
+      renderHome();
+      await act(async () => {});
+      expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 1 of 1');
+      expect(screen.getByTestId('activity-row-sess-2-column-marker')).toBeTruthy();
+    });
+
+    /**
+     * A column move is a session swap, and the swap is exactly when the new
+     * column should show - the strip keys on where the task IS, never on the
+     * swap's transitional state.
+     */
+    it('relabels in place when the task moves column', async () => {
+      seedTwoProjectBoards();
+      renderHome();
+      await act(async () => {});
+      expect(stripLabel('sess-2')).toBe('Beta, Backlog');
+      await act(async () => moveTask2To('p2-doing'));
+      expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 1 of 1');
+    });
+
+    it('keeps the band and the project on the fallback card, with no marker rather than a guessed column', async () => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...state.boardsByProjectId['project-1'], tasksById: {} } },
+      }));
+      renderHome();
+      await act(async () => {});
+      expect(screen.getByText('Untitled task')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1-column-project')).toHaveTextContent('Alpha');
+      expect(screen.queryByTestId('activity-row-sess-1-column-marker')).toBeNull();
+    });
   });
 
   it('reacts to store changes (a session moving sections re-renders)', () => {
