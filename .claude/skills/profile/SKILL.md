@@ -33,6 +33,32 @@ EXPO_PUBLIC_KANGENTIC_PROFILEABLE=1 npx expo run:android --variant release --no-
 Verify rather than assume: `grep profileable android/app/src/main/AndroidManifest.xml`. A clean
 prebuild triggers a full native rebuild across all ABIs (~10 min), so budget for it.
 
+`expo run:android --device` takes the AVD NAME, not the adb serial (`emulator-5554` fails with
+"Could not find device"). With one device attached, leave the flag off.
+
+## Which device
+
+Absolute numbers come from a real phone. On the emulator, profile on a **dedicated AVD paired with
+the demo code** (`kangentic-pair://demo`), never on one paired to a live desktop. Live sessions
+make a reading unrepeatable: one run on 2026-10-05 measured whatever the desktop's agents happened
+to be doing. And the demo cannot be layered onto a paired device: `beginDemoPairing`
+(`src/demo/demoPairing.ts`) refuses with `AlreadyPairedError` over any existing trust anchor, so
+the daily AVD would have to be unpaired first, costing its desktop pairing.
+
+Use the `default` system image, not `google_apis`: Play Services starves the app (see the E2E
+emulator notes in docs/developer-guide.md), which is noise in exactly what you are measuring.
+One-time setup, then set `hw.keyboard=yes`, `hw.gpu.enabled=yes` and `hw.gpu.mode=host` in the
+new AVD's `config.ini`:
+
+```sh
+avdmanager create avd -n kangentic_profile -k "system-images;android-36;default;x86_64" -d pixel_7
+```
+
+Boot it, install the release build, and open the demo link
+(`adb shell am start -a android.intent.action.VIEW -d kangentic-pair://demo`). The demo is also a
+free, repeatable section change: its active session raises a permission prompt about 20 s after
+the channel comes up (feed tick 20 in `src/connection/mockDesktop.ts`).
+
 ## The four questions, and the tool for each
 
 Do not mix them up. Each answers something the others cannot.

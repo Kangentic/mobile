@@ -1,12 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   RefreshControl,
-  StyleSheet,
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import Animated, { ReduceMotion, cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import type { BoardTaskWire } from '@kangentic/protocol';
@@ -39,6 +37,7 @@ import { MapperLoad } from '@/devsupport/MapperLoad';
 import { useConcurrencyProbeDepth } from '@/devsupport/concurrencyProbe';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
+import { SectionLandingPulse } from './home/SectionLandingPulse';
 
 /**
  * A session can briefly outlive its task's board entry (e.g. a snapshot
@@ -555,16 +554,6 @@ async function peekSnippet(
   return snippetText;
 }
 
-/**
- * The landing pulse: a row that just changed sections tints briefly at
- * its new position so the eye can track the move. Marked event-side only
- * (see activityStore.sectionChangedAt), so a reconnect snapshot that
- * reshuffles everything stays silent.
- */
-const SECTION_PULSE_WINDOW_MS = 3000;
-const SECTION_PULSE_MAX_OPACITY = 0.16;
-const SECTION_PULSE_FADE_MS = 700;
-
 const ActivityRow = React.memo(function ActivityRow({
   entry,
   onLongPressTask,
@@ -634,33 +623,6 @@ const ActivityRow = React.memo(function ActivityRow({
   // 'starting' outranks both: neither of its two states is doing work, and
   // neither is waiting on the user.
   const statusKind: AgentStatusKind = starting ? 'starting' : working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
-
-  // One subtle tint fade when the row lands in a new section. The cleanup
-  // zeroes the shared value: FlashList recycles row instances, and a
-  // reused card must never inherit a mid-flight pulse.
-  //
-  // NOTE (idle-CPU lever, deferred): this registers one always-on
-  // `useAnimatedStyle` mapper per row even when no pulse is playing, and the
-  // per-vsync Reanimated flush walks every registered mapper (measured: ~0.47
-  // CPU points each on a release build - see AgentStatusIcon). Gating it to
-  // mount only while pulsing is a real saving but fights the strict
-  // react-hooks purity / set-state-in-effect rules (a time-window mount needs a
-  // clock, which is impure in render and cascades as setState in an effect), so
-  // it is left as a documented follow-up rather than forced. The higher-leverage
-  // reduction - AgentStatusIcon's two dead mappers per idle row - already landed.
-  const sectionChangedAt = entry.sectionChangedAt;
-  const pulseOpacity = useSharedValue(0);
-  useEffect(() => {
-    if (sectionChangedAt !== null && Date.now() - sectionChangedAt < SECTION_PULSE_WINDOW_MS) {
-      pulseOpacity.value = SECTION_PULSE_MAX_OPACITY;
-      pulseOpacity.value = withTiming(0, { duration: SECTION_PULSE_FADE_MS, reduceMotion: ReduceMotion.System });
-    }
-    return () => {
-      cancelAnimation(pulseOpacity);
-      pulseOpacity.value = 0;
-    };
-  }, [sectionChangedAt, pulseOpacity]);
-  const pulseStyle = useAnimatedStyle(() => ({ opacity: pulseOpacity.value }));
 
   // Inbox-style snippet, the row's body for EVERY state: the pending
   // decision when a prompt waits, otherwise the agent's last message
@@ -817,12 +779,19 @@ const ActivityRow = React.memo(function ActivityRow({
         waitingSinceMs={selectWaitingSince(entry)}
         onPress={openTask}
         onLongPress={onLongPress}
+        // One subtle tint fade when the row lands in a new section, mounted
+        // only for its own window and taken down by a JS timer (see
+        // SectionLandingPulse for why a Reanimated frame cannot be trusted to
+        // clear it). The key does the recycling work: a new change, or a
+        // FlashList rebind to another session, remounts it from scratch.
         overlay={
-          <Animated.View
-            pointerEvents="none"
-            testID={`${testID}-pulse`}
-            style={[styles.pulseOverlay, { backgroundColor: theme.colors.accent, borderRadius: theme.radii.md }, pulseStyle]}
-          />
+          entry.sectionChangedAt !== null ? (
+            <SectionLandingPulse
+              key={`${entry.sessionId}:${entry.sectionChangedAt}`}
+              changedAtMs={entry.sectionChangedAt}
+              testID={`${testID}-pulse`}
+            />
+          ) : null
         }
       />
       {/* Inert in every shipped build (the probe flag is off): the idle-CPU
@@ -830,14 +799,4 @@ const ActivityRow = React.memo(function ActivityRow({
       <MapperLoad />
     </>
   );
-});
-
-const styles = StyleSheet.create({
-  pulseOverlay: {
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-  },
 });
