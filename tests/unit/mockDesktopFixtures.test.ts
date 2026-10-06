@@ -405,10 +405,10 @@ describe('the terminal frame and the changes frame describe one piece of work', 
       'src/routes/checkout.tsx',
     ]);
     expect(diffFileList().files.map((file) => [file.insertions, file.deletions])).toEqual([
-      [2, 2],
-      [10, 2],
-      [3, 3],
-      [3, 1],
+      [8, 2],
+      [21, 2],
+      [1, 1],
+      [8, 1],
     ]);
   });
 
@@ -572,22 +572,18 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
     // is a capture whose screenshot depends on when the shutter happens to fall.
     //
     // The fixture answers that by holding still: the seed frame IS the settled
-    // dialog and there is nothing after it that repaints. Assert exactly that,
-    // because it is the property the store flow depends on. An earlier version
-    // of this test compared "the frame by 6s" against "the final frame" without
-    // noticing they are the same frame here, so it asserted one thing twice and
-    // could not fail.
-    expect(CLAUDE_CAPTURE_SHOTS.chunks.length).toBe(1);
-    expect(CLAUDE_CAPTURE_SHOTS.chunks[0].offsetMs).toBe(0);
-
-    // Every distinct row seen across the whole replay is a row of the seed
-    // frame: nothing new is ever painted. Both directions, so a chunk that
-    // added rows AND one that blanked them would both fail.
-    const settledRows = shotsRows.filter((row) => row.trim().length > 0);
-    expect([...shotsEveryRow].sort()).toEqual([...new Set(settledRows)].sort());
+    // dialog and NOTHING streams after it. It is seed-only by construction now,
+    // not just by choice: the seed is widened to the announced grid, and any
+    // chunk after it was recorded for the narrower one, so
+    // scripts/buildTerminalFixture.mjs refuses one that paints. Assert the
+    // property the store flow depends on directly. (An earlier version compared
+    // "the frame by 6s" against "the final frame" without noticing they were the
+    // same frame, so it asserted one thing twice and could not fail.)
+    expect(CLAUDE_CAPTURE_SHOTS.chunks).toEqual([]);
 
     // And the state it rests in is the dialog, which is what the chat lens
     // shows as a permission card at the same moment.
+    const settledRows = shotsRows.filter((row) => row.trim().length > 0);
     expect(settledRows.join('\n')).toMatch(/Do you want to/);
   });
 });

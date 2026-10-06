@@ -6,13 +6,21 @@
  * committed fixture module the mock desktop replays.
  *
  *   node scripts/buildTerminalFixture.mjs \
- *     --capture capture-44x38.jsonl --cols 44 --rows 38 \
- *     --seed-end 2500 --end 2677 --export CLAUDE_CAPTURE_SHOTS
+ *     --capture capture-66x48.jsonl --cols 66 --rows 48 \
+ *     --grid-cols 210 --grid-rows 48 \
+ *     --seed-end <N> --end <N - 1> --export CLAUDE_CAPTURE_SHOTS
  *
- * The grid in that example is the one actually committed. Copy-pasting an
- * older one regenerates the fixture at a grid the app does not report, which
- * renders as borders sliced mid-glyph and is caught only by a human looking at
- * a store image.
+ * where N is the capture's chunk count: a SEED-ONLY fixture whose seed is the
+ * settled final frame, which is what the committed one is.
+ *
+ * `--cols/--rows` are the grid the capture was RECORDED at, and the only grid
+ * its bytes replay correctly into. `--grid-cols/--grid-rows` are the grid the
+ * mock ANNOUNCES (default: the recorded one), and the seed frame is widened to
+ * it. The committed fixture is recorded narrow enough for its text to sit
+ * inside the narrowest store shelf, and announced at the desktop's resting
+ * grid, 210x48, so it fills the mirror's reference cell edge to edge on every
+ * shelf (src/connection/mockDesktop.ts, above activeCapture(), has the
+ * numbers; tests/unit/storeScreenshots.test.ts enforces them).
  *
  * WHY A SEED FRAME AND NOT JUST THE CHUNKS
  *
@@ -21,10 +29,41 @@
  * a capture sliced anywhere but chunk 0 renders into a fresh terminal as
  * fragments. So the slice before `--seed-end` is replayed into a headless
  * xterm and SERIALIZED into one self-contained frame, and only chunks after it
- * stream. That is precisely how the desktop seeds a real phone
- * (`HeadlessFrameBuffer.serialize()` in the desktop's pty/buffer module), so
- * the fixture's seed is built the same way the real one is, including the
- * alt-screen and mode preamble the serializer emits.
+ * stream. That is how the desktop seeds a real phone too.
+ *
+ * The frame is written as PHYSICAL ROWS (scripts/terminalFrame.mjs), one per
+ * buffer row, rather than by @xterm/addon-serialize, which the desktop's phone
+ * seed uses. At the recorded grid the two render identically; only physical
+ * rows survive being widened, because the addon joins a soft-wrapped row onto
+ * the one above and relies on the terminal wrapping at exactly the recorded
+ * width. The terminal MODES the addon would carry (bracketed paste, focus, mouse
+ * reporting) are appended the way the addon writes them, because the phone
+ * acts on them, and the cursor is hidden if the recording last hid it. Like the
+ * addon's, the seed puts the cursor back with RELATIVE moves rather than one
+ * absolute position, because the phone's live-tail cleaner reads an absolute
+ * position as a full repaint and would show the chat lens an empty tail.
+ *
+ * WHY WIDENING DOES NOT BREAK "NEVER REWRITE THE CAPTURE"
+ *
+ * Widening re-serializes a recorded buffer: it adds cells past the recorded
+ * width (a rule run on, a diff band grown, a right border moved out) and never
+ * authors or moves a displayed character inside it. That is checked on every
+ * build rather than argued, in two steps:
+ *
+ * - the seed at the RECORDED grid must reproduce the raw capture's screen
+ *   text exactly (the round trip below);
+ * - the widened seed must then match that recorded-grid seed cell for cell,
+ *   glyph and style, inside the recorded width, except for a right border
+ *   that moved out and the blank cells after a row's last glyph (the CLI's
+ *   right padding, which a band or rule crosses on its way to the new edge).
+ *   Past the recorded width only fill may appear.
+ *
+ * "Identical" is to the serialized screen, not to every byte of the capture:
+ * the serializer writes a space that draws nothing (a foreground colour and no
+ * background) as a plain space, see looksBlank() in terminalFrame.mjs, and it
+ * drops trailing padding. Neither changes a pixel. A frame with a right-aligned
+ * label (which widening moves out to the new edge, off every phone screen)
+ * fails the check by design: pick another frame.
  *
  * WHY THIS VERIFIES INSTEAD OF SANITIZING
  *
@@ -50,29 +89,30 @@ import { createRequire } from 'node:module';
 import { isAbsolute, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { serializeModes, serializePhysicalRows, widenFrame, withRelativeCursor } from './terminalFrame.mjs';
+
 const require = createRequire(import.meta.url);
 const { Terminal } = require('@xterm/headless');
-const { SerializeAddon } = require('@xterm/addon-serialize');
 
 /**
  * Scrollback the PARSER retains. Matches the desktop's own
  * SERIALIZED_SCROLLBACK_LINES so the fixture cannot be shaped by a limit the
  * real path does not have.
+ *
+ * Nothing above the SCREEN is ever written into the seed (serializePhysicalRows
+ * keeps the visible rows only). Claude Code runs full-screen in the alt
+ * buffer, which has no scrollback of its own, so everything the session shows
+ * is on screen; what sits above it is the NORMAL buffer's shell output from
+ * before the TUI took over, which on the recording machine is the startup
+ * banner carrying the operator's name, org email and home directory. Seeding
+ * it would ship identity that is one scroll-up away on the phone.
  */
 const SERIALIZED_SCROLLBACK_LINES = 500;
 
-/**
- * Scrollback written into the SEED, which is deliberately zero.
- *
- * Claude Code runs full-screen in the alt buffer, which has no scrollback of
- * its own, so everything the session ever shows is in the visible grid. What
- * `serialize()` would add above it is the NORMAL buffer: the shell output from
- * before the TUI took over, which on this machine is the startup banner
- * carrying the operator's name, org email and home directory. That is not part
- * of the agent session, and seeding it would ship identity that never appears
- * on screen but is one scroll-up away on the phone.
- */
-const SEED_SCROLLBACK_LINES = 0;
+/** What widening may put past the recorded width: blanks, rules run on, and borders moved out. */
+const WIDENING_FILL_GLYPHS = ' ─━┄┅┈┉╌╍═╴╶╸╺╼╾▀▁▂▃▄▅▆▇█▔│┃┆┇┊┋╎╏║▐▕┐┓┘┛┤┫╗╝╢╣╮╯';
+/** The right-edge glyphs widening MOVES out to the new edge, so they may vanish from inside the recorded width. */
+const MOVABLE_EDGE_GLYPHS = '│┃┆┇┊┋╎╏║▐▕┐┓┘┛┤┫╗╝╢╣╮╯';
 
 /**
  * Terms that must never reach a committed fixture. Kept in step with
@@ -200,6 +240,8 @@ const { values } = parseArgs({
     capture: { type: 'string' },
     cols: { type: 'string' },
     rows: { type: 'string' },
+    'grid-cols': { type: 'string' },
+    'grid-rows': { type: 'string' },
     'seed-end': { type: 'string' },
     end: { type: 'string' },
     export: { type: 'string' },
@@ -212,6 +254,12 @@ const cols = Number.parseInt(values.cols ?? '', 10);
 const rows = Number.parseInt(values.rows ?? '', 10);
 if (!Number.isInteger(cols) || !Number.isInteger(rows)) fail('--cols and --rows are required');
 if (!values.export) fail('--export is required (the exported constant name)');
+const gridCols = Number.parseInt(values['grid-cols'] ?? String(cols), 10);
+const gridRows = Number.parseInt(values['grid-rows'] ?? String(rows), 10);
+if (!Number.isInteger(gridCols) || !Number.isInteger(gridRows)) fail('--grid-cols and --grid-rows must be integers');
+if (gridRows !== rows) fail(`--grid-rows ${gridRows} must equal --rows ${rows}: a frame is widened, never made taller`);
+if (gridCols < cols) fail(`--grid-cols ${gridCols} is narrower than --cols ${cols}: a frame is widened, never cut`);
+const widening = gridCols !== cols;
 
 const capturePath = isAbsolute(values.capture) ? values.capture : resolve(process.cwd(), values.capture);
 // Hyperlink targets are rewritten at LOAD, so the seed, the streamed chunks and
@@ -223,50 +271,112 @@ const allChunks = readFileSync(capturePath, 'utf8')
   .map((line) => JSON.parse(line))
   .map((chunk) => ({ offsetMs: chunk.offsetMs, data: rewriteHyperlinkTargets(chunk.data) }));
 
+// `--seed-end` is EXCLUSIVE: the seed is chunks [0, seed-end) and the stream is
+// [seed-end, end]. So `--seed-end <end + 1>` is a SEED-ONLY fixture, which is
+// what a widened capture usually wants: everything after the settled frame was
+// recorded for the narrow grid.
 const seedEnd = Number.parseInt(values['seed-end'] ?? String(Math.floor(allChunks.length * 0.9)), 10);
 const end = Number.parseInt(values.end ?? String(allChunks.length - 1), 10);
-if (!(seedEnd > 0 && seedEnd <= end && end < allChunks.length)) {
+if (!(seedEnd > 0 && seedEnd <= end + 1 && end < allChunks.length)) {
   fail(`--seed-end/--end out of range for ${allChunks.length} chunks`);
 }
 
-/** Serialize the grid as it stands after replaying `[0, candidateEnd)`. */
-async function buildSeedFrame(candidateEnd) {
-  const terminal = new Terminal({ cols, rows, scrollback: SERIALIZED_SCROLLBACK_LINES, allowProposedApi: true });
-  const serializer = new SerializeAddon();
-  terminal.loadAddon(serializer);
-  for (let index = 0; index < candidateEnd; index += 1) terminal.write(allChunks[index].data);
-  // xterm parses writes on a macrotask, so serializing without this barrier
-  // snapshots a stale grid. A zero-length write's callback fires only once
-  // every queued chunk ahead of it has been parsed.
-  await new Promise((resolveFlush) => terminal.write('', resolveFlush));
-  // Otherwise emitted exactly as the serializer produces it, so the fixture's
-  // seed is the same kind of artifact a real desktop sends. (It already
-  // restores the cursor via trailing relative moves, which matters because
-  // Claude Code's next repaint resumes with RELATIVE cursor moves.)
-  const frame = serializer.serialize({ scrollback: SEED_SCROLLBACK_LINES });
-
-  // Keep only the alt-screen half. The serializer emits the NORMAL buffer
-  // first, then `ESC[?1049h`, then the alt frame - and for a full-screen TUI
-  // the normal buffer holds the shell output from before the TUI started,
-  // which here is the startup banner with the operator's home directory. It is
-  // not part of the session and must not ship. Slicing at the switch is safe
-  // because entering the alt screen clears it, so everything after that marker
-  // reconstructs the grid on its own.
-  const altScreenStart = frame.indexOf('\x1b[?1049h');
-  return altScreenStart === -1 ? frame : frame.slice(altScreenStart);
+function createTerminal(terminalCols, terminalRows) {
+  return new Terminal({
+    cols: terminalCols,
+    rows: terminalRows,
+    scrollback: SERIALIZED_SCROLLBACK_LINES,
+    allowProposedApi: true,
+  });
 }
 
-/** Render a byte stream at the capture grid and read the visible cells back as text. */
-async function renderToText(writes) {
-  const target = new Terminal({ cols, rows, scrollback: SERIALIZED_SCROLLBACK_LINES, allowProposedApi: true });
+/**
+ * xterm parses writes on a macrotask, so reading a buffer without this barrier
+ * snapshots a stale grid. A zero-length write's callback fires only once every
+ * queued chunk ahead of it has been parsed.
+ */
+function settle(terminal) {
+  return new Promise((resolveFlush) => terminal.write('', resolveFlush));
+}
+
+/**
+ * Whether the recording left the cursor HIDDEN by the end of `[0, candidateEnd)`:
+ * the last DECTCEM toggle wins. The serializers carry no cursor visibility, and
+ * Claude Code hides the cursor while it draws, so a seed without this shows a
+ * stray cursor block wherever the TUI last stopped writing.
+ */
+function cursorHiddenAt(candidateEnd) {
+  let hidden = false;
+  for (let index = 0; index < candidateEnd; index += 1) {
+    for (const match of allChunks[index].data.matchAll(/\x1b\[\?((?:\d+;)*25(?:;\d+)*)([hl])/g)) {
+      hidden = match[2] === 'l';
+    }
+  }
+  return hidden;
+}
+
+/**
+ * The settled screen must be cells this pipeline counts exactly: one code
+ * point, one cell. Widening counts cells by code point (scripts/terminalFrame.mjs),
+ * and the phone's xterm runs Unicode 6 widths, so a wide or combining glyph is
+ * where the two could disagree. Failing here is cheaper than finding out in a
+ * store image.
+ */
+function assertNarrowCells(terminal) {
+  const buffer = terminal.buffer.active;
+  const scratchCell = buffer.getNullCell();
+  for (let row = 0; row < terminal.rows; row += 1) {
+    const line = buffer.getLine(buffer.baseY + row);
+    if (!line) continue;
+    for (let column = 0; column < terminal.cols; column += 1) {
+      const cell = line.getCell(column, scratchCell);
+      if (!cell) continue;
+      const characters = cell.getChars();
+      if (cell.getWidth() !== 1 || [...characters].length > 1) {
+        fail(
+          `row ${row}, column ${column} holds "${characters}" (width ${cell.getWidth()}). ` +
+            'Only one-cell, one-code-point glyphs survive widening exactly; pick a frame without it.',
+        );
+      }
+    }
+  }
+}
+
+/**
+ * The seed at the RECORDED grid, as it stands after replaying `[0, candidateEnd)`:
+ * physical rows, then the modes the recording left on, then the cursor's
+ * visibility. Also returns the bare physical-row frame, which is what widening
+ * takes.
+ */
+async function buildSeedFrame(candidateEnd) {
+  const terminal = createTerminal(cols, rows);
+  for (let index = 0; index < candidateEnd; index += 1) terminal.write(allChunks[index].data);
+  await settle(terminal);
+  const physicalRows = serializePhysicalRows(terminal);
+  const tail = serializeModes(terminal) + (cursorHiddenAt(candidateEnd) ? '\x1b[?25l' : '');
+  return { terminal, physicalRows, tail, seedFrame: withRelativeCursor(physicalRows) + tail };
+}
+
+/**
+ * Render a byte stream at a grid and read the visible cells back as text.
+ *
+ * Trailing whitespace is trimmed, not just trailing EMPTY cells (which is all
+ * `translateToString(true)` drops): the raw capture pads rows with written
+ * spaces, and the physical-row seed leaves those cells empty instead. The two
+ * look identical, and a row's background is not text either way, so the
+ * widening check below compares cells, styles included.
+ */
+async function renderToText(writes, terminalCols = cols, terminalRows = rows) {
+  const target = createTerminal(terminalCols, terminalRows);
   for (const write of writes) target.write(write);
-  await new Promise((resolveFlush) => target.write('', resolveFlush));
+  await settle(target);
   const buffer = target.buffer.active;
   const lines = [];
-  for (let y = buffer.baseY; y < buffer.baseY + rows; y += 1) {
+  for (let y = buffer.baseY; y < buffer.baseY + terminalRows; y += 1) {
     const line = buffer.getLine(y);
-    lines.push(line ? line.translateToString(true) : '');
+    lines.push(line ? line.translateToString(true).trimEnd() : '');
   }
+  target.dispose();
   return lines.join('\n');
 }
 
@@ -279,18 +389,22 @@ async function renderToText(writes) {
 const expectedGrid = await renderToText(allChunks.slice(0, end + 1).map((chunk) => chunk.data));
 
 const SEED_SEARCH_RADIUS = 60;
-let seedFrame = null;
+let seed = null;
 let resolvedSeedEnd = null;
 for (let offset = 0; offset <= SEED_SEARCH_RADIUS && resolvedSeedEnd === null; offset += 1) {
   for (const candidate of offset === 0 ? [seedEnd] : [seedEnd - offset, seedEnd + offset]) {
-    if (candidate < 1 || candidate > end) continue;
+    if (candidate < 1 || candidate > end + 1) continue;
     const candidateSeed = await buildSeedFrame(candidate);
-    const replayed = await renderToText([candidateSeed, ...allChunks.slice(candidate, end + 1).map((c) => c.data)]);
+    const replayed = await renderToText([
+      candidateSeed.seedFrame,
+      ...allChunks.slice(candidate, end + 1).map((chunk) => chunk.data),
+    ]);
     if (replayed === expectedGrid) {
-      seedFrame = candidateSeed;
+      seed = candidateSeed;
       resolvedSeedEnd = candidate;
       break;
     }
+    candidateSeed.terminal.dispose();
   }
 }
 
@@ -310,19 +424,116 @@ const chunks = streamed.map((chunk) => ({ offsetMs: chunk.offsetMs - baseOffset,
 
 console.log(`buildTerminalFixture: seed + chunks reproduces the captured screen (seed-end ${resolvedSeedEnd})`);
 
+if (widening) {
+  assertNarrowCells(seed.terminal);
+  // A live chunk was recorded for the RECORDED grid: its cursor addressing and
+  // its wrapping are wrong inside a wider one. Only cell-free chunks (a mode
+  // toggle such as synchronized output) may follow a widened seed.
+  for (const [index, chunk] of chunks.entries()) {
+    if (chunk.data.replace(/\x1b\[\?[0-9;]*[hl]/g, '').length > 0) {
+      fail(
+        `chunk ${index} after the seed paints or moves the cursor, and was recorded at ${cols} columns. ` +
+          'A widened fixture must be seed-only: set --seed-end to the settled frame.',
+      );
+    }
+  }
+}
+const seedFrame = widening
+  ? withRelativeCursor(widenFrame(seed.physicalRows, { cols: gridCols, rows: gridRows }, { cols, rows })) + seed.tail
+  : seed.seedFrame;
+seed.terminal.dispose();
+
+/** Every cell of a rendered screen: glyph, colours and attributes, comparable as one string. */
+async function renderCells(writes, terminalCols, terminalRows) {
+  const target = createTerminal(terminalCols, terminalRows);
+  for (const write of writes) target.write(write);
+  await settle(target);
+  const buffer = target.buffer.active;
+  const scratchCell = buffer.getNullCell();
+  const screen = [];
+  for (let row = 0; row < terminalRows; row += 1) {
+    const line = buffer.getLine(buffer.baseY + row);
+    const cells = [];
+    for (let column = 0; column < terminalCols; column += 1) {
+      const cell = line?.getCell(column, scratchCell);
+      const glyph = cell?.getChars() || ' ';
+      const style = cell
+        ? [
+            cell.getFgColorMode(),
+            cell.getFgColor(),
+            cell.getBgColorMode(),
+            cell.getBgColor(),
+            cell.isBold(),
+            cell.isDim(),
+            cell.isItalic(),
+            cell.isUnderline(),
+            cell.isInverse(),
+            cell.isStrikethrough(),
+          ].join(',')
+        : '';
+      cells.push({ glyph, style });
+    }
+    screen.push(cells);
+  }
+  target.dispose();
+  return screen;
+}
+
+// Widening adds cells and moves nothing - checked, not argued. The baseline is
+// the seed at the RECORDED grid, which the round trip above has already proved
+// against the raw capture. Inside the recorded width every cell must match it,
+// glyph and style, with two exceptions that are the widening itself: a
+// right-hand border may leave (it moves out to the new edge), and the blank
+// cells AFTER a row's last glyph - the CLI's own right padding - may take the
+// fill a band or rule brings through them on its way to the new edge. Past the
+// recorded width, only fill may appear.
+if (widening) {
+  const streamedData = chunks.map((chunk) => chunk.data);
+  const recordedScreen = await renderCells([seed.seedFrame, ...streamedData], cols, rows);
+  const widenedScreen = await renderCells([seedFrame, ...streamedData], gridCols, gridRows);
+  for (let row = 0; row < rows; row += 1) {
+    let lastRecordedGlyph = -1;
+    for (let column = 0; column < cols; column += 1) {
+      const glyph = recordedScreen[row][column].glyph;
+      if (glyph !== ' ' && !MOVABLE_EDGE_GLYPHS.includes(glyph)) lastRecordedGlyph = column;
+    }
+    for (let column = 0; column < gridCols; column += 1) {
+      const widenedCell = widenedScreen[row][column];
+      if (column < cols) {
+        const recordedCell = recordedScreen[row][column];
+        if (MOVABLE_EDGE_GLYPHS.includes(recordedCell.glyph)) continue;
+        // Trailing padding only: a blank between two words that changed would
+        // be a background leaking into the text, which is exactly what this
+        // check exists to catch, along with text that moved.
+        const inTrailingPadding = column > lastRecordedGlyph && recordedCell.glyph === ' ';
+        if (inTrailingPadding && WIDENING_FILL_GLYPHS.includes(widenedCell.glyph)) continue;
+        if (widenedCell.glyph !== recordedCell.glyph || widenedCell.style !== recordedCell.style) {
+          fail(
+            `widening changed row ${row}, column ${column} ("${recordedCell.glyph}" -> "${widenedCell.glyph}"). ` +
+              'Usually a right-aligned label moved out to the new edge, off every phone screen: pick another frame.',
+          );
+        }
+      } else if (!WIDENING_FILL_GLYPHS.includes(widenedCell.glyph)) {
+        fail(`widening put "${widenedCell.glyph}" at row ${row}, column ${column}, past the recorded ${cols} columns`);
+      }
+    }
+  }
+  console.log(`buildTerminalFixture: widened ${cols}x${rows} -> ${gridCols}x${gridRows}, recorded cells unchanged`);
+}
+
 // Check what the viewer SEES, frame by frame, not just the endpoints. A banner
 // carrying the operator's name can be on screen for the opening seconds of the
 // window and gone by the last chunk, and a store capture takes its shot
 // somewhere in the middle.
 assertClean('the raw fixture bytes', seedFrame + chunks.map((chunk) => chunk.data).join(''));
-const progressive = new Terminal({ cols, rows, scrollback: SERIALIZED_SCROLLBACK_LINES, allowProposedApi: true });
+const progressive = createTerminal(gridCols, gridRows);
 progressive.write(seedFrame);
 for (const [index, chunk] of chunks.entries()) {
   progressive.write(chunk.data);
-  await new Promise((resolveFlush) => progressive.write('', resolveFlush));
+  await settle(progressive);
   const buffer = progressive.buffer.active;
   const visible = [];
-  for (let y = buffer.baseY; y < buffer.baseY + rows; y += 1) {
+  for (let y = buffer.baseY; y < buffer.baseY + gridRows; y += 1) {
     const line = buffer.getLine(y);
     visible.push(line ? line.translateToString(true) : '');
   }
@@ -331,26 +542,38 @@ for (const [index, chunk] of chunks.entries()) {
 console.log(`buildTerminalFixture: all ${chunks.length + 1} rendered frames are clean`);
 
 const spanMs = chunks.length > 0 ? chunks[chunks.length - 1].offsetMs : 0;
+const gridArguments = widening ? ` --grid-cols ${gridCols} --grid-rows ${gridRows}` : '';
+const windowArguments = chunks.length === 0 ? '--seed-end <N> --end <N - 1>' : '--seed-end <n> --end <n>';
+const provenance = widening
+  ? `Recorded at ${cols}x${rows} from a real session against a throwaway
+ * storefront fixture repo, then widened to the ${gridCols}x${gridRows} grid the mock
+ * announces (scripts/terminalFrame.mjs): rules and diff bands run to the new
+ * edge, every recorded cell stays where it was.`
+  : `Captured at ${cols}x${rows} from a real session against a throwaway
+ * storefront fixture repo.`;
 const body = `import type { RecordedTerminalCapture } from './recordedTerminal';
 
 /**
  * RECORDED Claude Code output. Do not hand-edit - regenerate with:
  *   node scripts/buildTerminalFixture.mjs --capture <file> --cols ${cols} --rows ${rows} \\
- *     --seed-end <n> --end <n> --export ${values.export}
+ *     ${gridArguments.trim() ? `${gridArguments.trim()} ` : ''}${windowArguments} --export ${values.export}
  *
- * Captured at ${cols}x${rows} from a real session against a throwaway
- * storefront fixture repo, so the prose is a customer's work rather than this
- * product's. See scripts/captureClaudeFrames.mjs for how, and why the
- * recording environment matters.
+ * ${provenance}
+ *
+ * The prose is a customer's work rather than this product's. See
+ * scripts/captureClaudeFrames.mjs for how, and why the recording environment
+ * matters.
  */
 export const ${values.export}: RecordedTerminalCapture = {
-  cols: ${cols},
-  rows: ${rows},
+  cols: ${gridCols},
+  rows: ${gridRows},
   seedFrame:
     ${toTypeScriptLiteral(seedFrame)},
-  chunks: [
-${chunks.map((chunk) => `    { offsetMs: ${chunk.offsetMs}, data: ${toTypeScriptLiteral(chunk.data)} },`).join('\n')}
-  ],
+  chunks: ${
+    chunks.length === 0
+      ? '[]'
+      : `[\n${chunks.map((chunk) => `    { offsetMs: ${chunk.offsetMs}, data: ${toTypeScriptLiteral(chunk.data)} },`).join('\n')}\n  ]`
+  },
 };
 `;
 

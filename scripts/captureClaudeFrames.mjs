@@ -11,18 +11,66 @@
  *
  * Usage (node-pty is deliberately NOT a dependency of this repo - its prebuilds
  * cover win32 and darwin only, so declaring it would make CI's Linux install
- * compile it from source):
+ * compile it from source). Install it anywhere outside the repo and point at
+ * it; `npm exec --package=node-pty` does NOT work, because it only puts the
+ * package on PATH and this script `require`s it from its own directory:
  *
- *   npm exec --package=node-pty -- node scripts/captureClaudeFrames.mjs \
- *     --cwd <fixture-repo> --cols 44 --rows 38 --out capture-44x38.jsonl \
- *     --prompt "Sign-in always lands on the dashboard. Fix the redirect."
+ *   npm install --prefix <scratch-dir> node-pty
+ *   KANGENTIC_NODE_PTY=<scratch-dir>/node_modules/node-pty \
+ *     node scripts/captureClaudeFrames.mjs \
+ *     --cwd <fixture-repo> --cols 66 --rows 48 --out capture-66x48.jsonl \
+ *     --approve-count all --max-ms 1200000 --per-prompt-ms 420000 \
+ *     --prompt "Signing in always lands on the dashboard instead of the page \
+ * I asked for. Fix the redirect. Match the repo's formatting, and there is no \
+ * need to run anything." \
+ *     --prompt "Review feedback on checkout.tsx: window is undefined during \
+ * server rendering, and the hash is dropped from the return path. Fix both in \
+ * checkout.tsx."
  *
- * 44x38 is the grid the committed fixture uses, and the one the mock reports.
- * The --cols/--rows DEFAULTS below are a plain wide terminal, not that grid, so
- * pass them explicitly when re-recording the shipped capture.
+ * Those are the committed fixture's two prompts, each one line. Then build it
+ * SEED-ONLY at the last chunk (N = the chunk count the run prints):
  *
- * Or point at an existing install:
- *   KANGENTIC_NODE_PTY=<path-to-node-pty> node scripts/captureClaudeFrames.mjs ...
+ *   node scripts/buildTerminalFixture.mjs --capture capture-66x48.jsonl \
+ *     --cols 66 --rows 48 --grid-cols 210 --grid-rows 48 \
+ *     --seed-end <N> --end <N - 1> --export CLAUDE_CAPTURE_SHOTS
+ *
+ * The run closes on checkout.tsx's edit still awaiting approval, so apply the
+ * edit its dialog shows to the fixture repo before regenerating diffFileList
+ * and diffFileContent (src/connection/mockDesktop.ts) from its `git diff`.
+ *
+ * 66x48 is the grid the committed fixture was RECORDED at: 48 is the rows the
+ * mirror fits its reference cell to, and 66 columns sit inside the narrowest
+ * store shelf (69 on the 6.9-inch iPhone), so Claude Code wraps every line
+ * where every phone can show it. buildTerminalFixture.mjs then widens the seed
+ * to the 210x48 grid the mock announces; the table above activeCapture() in
+ * src/connection/mockDesktop.ts has the numbers. The --cols/--rows DEFAULTS
+ * below are a plain wide terminal, not that grid, so pass them explicitly when
+ * re-recording the shipped capture.
+ *
+ * THE FIXTURE REPO decides whether a take is usable. Every code line a diff on
+ * screen shows must fit at 66 columns, or it wraps onto a continuation row
+ * mid-identifier and tests/unit/storeScreenshots.test.ts fails. The binding
+ * box is the tool RESULT's diff (`⎿ Added 1 line`), whose gutter is about ten
+ * columns and which stops a few short of the edge, not the edit dialog's. So
+ * write the repo with every line at most 48 columns and give it a
+ * `.prettierrc.json` with `printWidth: 48`: Claude Code MOSTLY wraps its own
+ * edits to the repo's prettier width without being told (the committed take
+ * wrote one 51-column line, which still fits).
+ *
+ * The repo is throwaway and not committed anywhere. Rebuild it from
+ * `diffFileContent(...).original` in src/connection/mockDesktop.ts (the four
+ * edited files, already at 48 columns), plus the call sites the chat transcript
+ * quotes - src/routes/account.tsx, src/auth/guard.ts - and the small modules
+ * they import (router, useUser, api, ui), all at the same width, with a
+ * package.json named storefront-web and no CLAUDE.md. Commit it, so the take's
+ * `git diff` is exactly the session's work.
+ *
+ * Telling it IS worse: a prompt that mentions the width sends it off running
+ * prettier and tsc through npx, which fills the frame with shell noise. And a
+ * prompt that leaves a shell command running never settles - the running tool's
+ * bullet blinks every 600ms, so the idle wait below cannot fire and the take
+ * ends on --per-prompt-ms. Ask for no commands ("there is no need to run
+ * anything") and expect a few takes regardless.
  *
  * Output is JSONL, one `{ offsetMs, data }` per PTY chunk, where `offsetMs` is
  * milliseconds since the first chunk. The timing matters: Claude Code's cadence
@@ -319,6 +367,13 @@ async function main() {
   // capture of an accepted dialog and nothing else.
   if (!exited && /trust\s*this\s*folder/i.test(stripSequences(recentOutput))) {
     console.log('captureClaudeFrames: answering the workspace trust prompt');
+    // Claude Code 2.1.29x opens this dialog with "No, exit" SELECTED, so Enter
+    // alone quits the session and the capture is eight seconds of the dialog.
+    // Step down to the trust option first whenever the marker sits on exit.
+    if (/❯\s*No,?\s*exit/i.test(stripSequences(recentOutput))) {
+      session.write('\x1b[B');
+      await sleep(400);
+    }
     session.write('\r');
     await sleep(1500);
     await waitForIdle('the session to open');
