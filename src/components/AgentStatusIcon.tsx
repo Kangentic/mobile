@@ -32,6 +32,13 @@ export interface AgentStatusIconProps {
   kind: AgentStatusKind;
   size?: number;
   testID?: string;
+  /**
+   * Draws the mark without its motion, through the hookless static path: for a
+   * LEGEND (the Show sections sheet's rows), where the glyph names a section
+   * rather than reporting a live session, so a spin would only hold a
+   * Reanimated mapper and keep the app drawing frames while the sheet is open.
+   */
+  still?: boolean;
 }
 
 /**
@@ -280,7 +287,7 @@ function MarchingMark({
  * CPU on this screen almost linearly (see renderMarkSvg's note and the
  * REACT-NATIVE-5 section of docs/developer-guide.md).
  */
-export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProps): React.JSX.Element {
+export function AgentStatusIcon({ kind, size = 16, testID, still = false }: AgentStatusIconProps): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
   const screenMotionActive = useScreenMotionActive();
@@ -303,8 +310,8 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
    * renders through the hookless static path, so it holds no registered mapper
    * for a view nobody can see.
    */
-  const marching = !reducedMotion && screenMotionActive && !belowFloor && march !== undefined;
-  const spinning = !reducedMotion && screenMotionActive && !belowFloor && spin !== undefined;
+  const marching = !still && !reducedMotion && screenMotionActive && !belowFloor && march !== undefined;
+  const spinning = !still && !reducedMotion && screenMotionActive && !belowFloor && spin !== undefined;
 
   const color = kind === 'working' ? theme.colors.statusWorking : theme.colors.warning;
   const resolvedTestID = testID ?? FALLBACK_TESTID_BY_KIND[kind];
@@ -346,6 +353,6 @@ export function AgentStatusIcon({ kind, size = 16, testID }: AgentStatusIconProp
     );
   }
 
-  // Idle envelope, reduced motion, a blurred screen: static, no animated hooks.
+  // Idle envelope, reduced motion, a blurred screen, a legend: static, no animated hooks.
   return renderMarkSvg({ mark, markName, size, color, testID: resolvedTestID, spinning: false, marching: false });
 }
