@@ -15,7 +15,14 @@
       "exclude": [
         "react-native-gesture-handler",
         "react-native-reanimated",
-        "react-native-worklets"
+        "react-native-worklets",
+        "react-native-screens",
+        "react-native-safe-area-context",
+        "react-native-svg",
+        "@shopify/flash-list",
+        "react-native-webview",
+        "react-native-get-random-values",
+        "react-native-pager-view"
       ]
     },
     "autolinking": {
@@ -67,7 +74,7 @@
     "@kangentic/protocol": "^0.15.0",
     "@notifee/react-native": "9.1.8",
     "@sentry/react-native": "~7.11.0",
-    "@shopify/flash-list": "2.0.2",
+    "@shopify/flash-list": "2.3.3",
     "@xterm/addon-webgl": "0.19.0",
     "diff": "^9.0.0",
     "expo": "~57.0.27",
@@ -93,13 +100,13 @@
     "react-native": "0.86.3",
     "react-native-enriched-markdown": "^1.1.1",
     "react-native-gesture-handler": "~3.3.0",
-    "react-native-get-random-values": "~1.11.0",
-    "react-native-pager-view": "8.0.2",
+    "react-native-get-random-values": "~2.0.0",
+    "react-native-pager-view": "9.0.6",
     "react-native-reanimated": "4.7.1",
-    "react-native-safe-area-context": "~5.7.0",
-    "react-native-screens": "~4.26.0",
-    "react-native-svg": "15.15.4",
-    "react-native-webview": "13.16.1",
+    "react-native-safe-area-context": "~5.10.1",
+    "react-native-screens": "~4.28.0",
+    "react-native-svg": "15.15.5",
+    "react-native-webview": "14.0.1",
     "react-native-worklets": "0.13.0",
     "zustand": "^5.0.15"
   },
