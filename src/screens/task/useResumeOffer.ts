@@ -16,7 +16,11 @@ export interface ResumeOffer {
  *
  * Offered only for a session the card reads as Paused (cardSessionDisplay,
  * so a respawn's label in flight is never offered Resume) AND that the
- * desktop marks `resumable`.
+ * desktop marks `resumable`. Today that is the stream's copy alone, which no
+ * desktop sends yet; protocol 0.16.0 (desktop #762) makes the board row's
+ * `BoardTaskWire.resumable` the authoritative source, because a desktop pause
+ * clears the task's `session_id` and with it the phone's stream, so mobile
+ * #101 adds that task-keyed source here when it adopts 0.16.0.
  *
  * A resume is over as soon as the session is no longer paused: the desktop
  * resumes into a NEW session, so the paused one ends (with the desktop's

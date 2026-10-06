@@ -711,9 +711,12 @@ that is not running.
 terminal lens shows the desktop's "Resume session" button in place of the terminal (`ResumePanel`,
 quick keys hidden), the header shows a play circle, and the long-press hub gains "Resume session".
 All three read one gate, `useResumeOffer`: a session the card reads as Paused that the desktop
-marks `resumable`. That flag (`SessionActivityEntry.resumable`) arrives with protocol 0.16.0
-(desktop task #762), sent only by a desktop whose `start-session` resumes a paused task exactly as
-its own Resume button does, with no on-enter automations and no column message. Every earlier
+marks `resumable`. That flag arrives with protocol 0.16.0 (desktop task #762), sent only by a
+desktop whose `start-session` resumes a paused task exactly as its own Resume button does, with
+no on-enter automations and no column message. Its authoritative home is the board row
+(`BoardTaskWire.resumable`), since a desktop pause clears the task's `session_id` and with it the
+phone's stream; the stream's copy (`SessionActivityEntry.resumable` today) only keeps an open
+session screen current through the suspend. Every earlier
 desktop answers `start-session` the way a move into the column does, re-running the column's
 automations, so until the phone adopts 0.16.0 (mobile task #101) the flag is always false and
 Resume stays hidden rather than meaning something different from the desktop's. A tap sends
