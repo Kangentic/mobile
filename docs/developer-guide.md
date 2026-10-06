@@ -873,7 +873,7 @@ maps current versions of each; remove the entry in the same change that vets the
 | Package | SDK 57 maps | Held at | Why | Verified by |
 |---|---|---|---|---|
 | `react-native-gesture-handler` | `~2.32.0` | `~3.3.0` | The terminal pane's pinch lifecycle sits on the 3.x line; taking the mapping would DOWNGRADE a major (held since 2026-08-04). 3.2/3.3 fix an orchestrator leak (#4402) and a crash after detector unmount (#4268). `PinchGestureHandler.kt` is byte-identical 3.1.0 to 3.3.0 | TerminalPane suites; device pinch, pan and fit |
-| `react-native-reanimated` | `4.5.1` | `4.7.1` | 4.7.1 removes the native per-frame mapper loop the idle-CPU work measured at ~0.47 points per registered mapper on 4.5.1 (read from `mappers.ts`, NOT measured: the `extra-mappers` A/B did not take, see "Dependency refresh"), and fixes exiting layout animations leaking their views on Android (#10682) | motion suites; release builds on the emulator and the Pixel |
+| `react-native-reanimated` | `4.5.1` | `4.7.1` | 4.7.1 removes the native per-frame mapper loop that cost ~0.47 CPU points per registered mapper on 4.5.1, and fixes exiting layout animations leaking their views on Android (#10682) | motion suites; the in-process `extra-mappers` A/B (64 registered clean mappers: no measurable cost on 4.7.1, see "Dependency refresh"); release builds on the emulator and the Pixel |
 | `react-native-worklets` | `0.10.1` | `0.13.0` | Required by Reanimated 4.7.1 (`0.13.x`); faster startup. expo-modules-core 57's optional peer caps at `^0.10.0`; its C++ integration was read against 0.13's StableApi and compiles | a release build and cold launch |
 | `react-native-screens` | `~4.26.0` | `~4.28.0` | #4413 use-after-free of the removal listener | navigation on device |
 | `react-native-safe-area-context` | `~5.7.0` | `~5.10.1` | #735 skips Fabric state updates while detached | navigation on device |
@@ -3490,8 +3490,10 @@ Two conclusions, each carried by one row:
    the GPU histogram empty - compositing cannot be the cost when nothing composites. This is the
    measurement the "hwui share rose" percentage table appeared to contradict (see the
    denominator note above).
-2. **Idle CPU scales almost linearly with the number of REGISTERED Reanimated mappers, dirty or
-   not: ~0.47 points each.** 64 permanently-clean mappers (a shared value nothing ever changes)
+2. **On Reanimated 4.5.1, idle CPU scaled almost linearly with the number of REGISTERED mappers,
+   dirty or not: ~0.47 points each.** (4.7.1 removed the frame loop behind this, and the same
+   probe measured 64 registered clean mappers as free there: see "Dependency refresh, 2026-10
+   (task #102)".) 64 permanently-clean mappers (a shared value nothing ever changes)
    added ~30 points and removing them took it straight back. The per-vsync flush walks the
    registered set; "mapperRun skips clean mappers" is true of the callback body and false of the
    walk's cost. The jump landed mid-sample exactly as the FlashList rows re-rendered and mounted
@@ -3824,20 +3826,31 @@ per open, far below the 15 to 20 MB swing in native heap between identical runs,
 heap is not readable on a release build. The fix is in the build because the release notes say
 so; there is no measurement either way.
 
-**Registered mappers on Reanimated 4.7.1: NOT settled.** The plan was the `extra-mappers` probe
-in one process per build: idle CPU with it off, on, then off again. It did not produce a usable
-arm. On the `base` build (Reanimated 4.5.1, where the same probe measured +29 points on
-2026-08-30), the on phase read 48.5% against 42% and 52.5% for the two off phases, inside a
-22-60% sample spread. `dumpsys meminfo` Views rose by 8 or 9 with the probe on, where 64 were
-expected, and 8 is exactly one row's `EXTRA_MAPPERS_PER_ROW`. The likely reason (inferred): feed
-rows are memoized and `MapperLoad` reads the variant at render time without subscribing to it,
-so after the Settings switch only a row that happened to re-render mounted its mappers. Scrolling
-the list to its end and back did not change the count. **For the next attempt, remount the rows
-after switching** (collapse and re-expand a section) and check that Views jumps by about 64
-BEFORE reading any CPU number; if it does not, the arm has not taken. With no evidence that the
-arm took effect on the build where its effect is known, a null on 4.7.1 would mean nothing, so it
-was not run there. `.claude/rules/motion-conventions.md` keeps treating registered mappers as
-costly until a probe that demonstrably mounts settles it.
+**Registered mappers on Reanimated 4.7.1 (measured): free.** The `extra-mappers` probe, in ONE
+process on a release build of the branch (Reanimated 4.7.1, the probe and the connection trace
+compiled in), five phases off / extra / off / extra / off, two 40-second windows each:
+
+| Phase | Mapper units mounted | Idle CPU, median of each window | Frames |
+|---|---|---|---|
+| off | 0 | 26%, 30% | ~57/s |
+| extra | 64 | 23.5%, 24% | ~57/s |
+| off | 0 | 23%, 25% | ~57/s |
+| extra | 64 | 21%, 22% | ~57/s |
+| off | 0 | 25%, 24.5% | ~57/s |
+
+The same 64 mappers cost ~29 points on 4.5.1 (2026-08-30). On 4.7.1 they cost nothing this rig
+can resolve, which is what removing the self-re-arming frame loop predicted. The 4.5.1 figure is
+the historical one; it was not re-run against the fixed probe, because the 4.5.1 cost is already
+measured and the open question was 4.7.1.
+
+**The first attempt was void, and why is the reusable part.** Run against the three arms, the probe
+raised `dumpsys meminfo` Views by only 8 or 9 (one row's `EXTRA_MAPPERS_PER_ROW`) where 64 were
+expected, and its CPU readings sat inside a 22-60% spread. `MapperLoad` read the variant at render
+time without subscribing, and the feed's rows are memoized, so after the Settings switch only a row
+that happened to re-render mounted anything; scrolling the list did not help, and Views cannot
+prove the arm anyway, since a card's own view count moves with the scroll position. The probe now
+subscribes to the variant and logs `mapper-load mounted=N` on the connection trace. Read that count
+before any CPU number from this arm.
 
 **Idle CPU on the Agents list (measured): no resolvable change.** Two interleaved rounds of
 two 40-second windows per build (20 `top` samples each, frames counted over the same window):

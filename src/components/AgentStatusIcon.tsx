@@ -99,13 +99,13 @@ interface MarkSvgParams {
 /**
  * Pure renderer for a mark's <Svg>. No Reanimated hooks live here, so the
  * common branch (idle envelope, reduced motion, a blurred screen) renders the
- * mark with ZERO animated mappers registered - which matters because the
- * per-vsync mapper flush walks every registered mapper whether or not it is
- * dirty. Measured on a release build, Pixel 11 Pro: adding 64 clean, never-
- * animating mappers to the Agents list took idle CPU from ~41% to ~70% (~0.47
- * points per registered mapper), so an idle row that used to register a dead
- * `useAnimatedProps` and a dead `useAnimatedStyle` was paying for both. The
- * animated variants below mount their hooks ONLY on the branch that animates.
+ * mark with ZERO animated mappers registered. On Reanimated 4.5.1 that was a
+ * CPU matter: its per-vsync flush walked every registered mapper, and 64 clean
+ * ones took the Agents list from ~41% to ~70% (~0.47 points each, release
+ * build). 4.7.1 removed that loop and the same 64 measure free (task #102).
+ * The animated variants below still mount their hooks ONLY on the branch that
+ * animates, because a mapper's writes outlive a FlashList recycle and a dirty
+ * one runs every frame (motion-conventions.md).
  */
 function renderMarkSvg({ mark, markName, size, color, testID, spinning, marching, marchAnimatedProps }: MarkSvgParams): React.JSX.Element {
   return (

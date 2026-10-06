@@ -147,24 +147,33 @@ per registered mapper, dirty or not**. An earlier revision of this paragraph cla
 were skipped for free; that was read out of `mapperRun()`'s early-continue and did not survive the
 experiment.
 
-**4.7.1 removed that loop (read from source, task #102).** A diff of `mappers.ts` 4.5.1 -> 4.7.1
-deletes the self-re-arming `schedulingFunction(scheduledMapperRun)` and its "We always run mappers
-on native" comment; native now schedules a run only from `maybeRequestUpdates()`, when a mapper's
-input shared value changes, the same on-demand path web always used. **Whether registered-but-clean
-mappers are therefore free on 4.7.1 is NOT yet measured** - that is exactly the kind of claim the
-previous paragraph records being wrong once. The `extra-mappers` arm is the A/B that settles it on
-a 4.7.1 release build; until it is re-run, keep treating mappers as costly. Practical
-consequences, all load-bearing either way:
+**4.7.1 removed that loop, and a registered CLEAN mapper is now free: measured (task #102,
+2026-10-06).** A diff of `mappers.ts` 4.5.1 -> 4.7.1 deletes the self-re-arming
+`schedulingFunction(scheduledMapperRun)` and its "We always run mappers on native" comment; native
+now schedules a run only from `maybeRequestUpdates()`, when a mapper's input shared value changes,
+the same on-demand path web always used. Read from source, that was a hypothesis, so it was then
+measured the same way the 4.5.1 cost was: the `extra-mappers` arm, in ONE process on a 4.7.1
+release build (the demo-paired `kangentic_profile` AVD, cold-booted), five phases off / extra /
+off / extra / off with two 40-second windows each. The probe logged **64 mounted mapper units in
+both extra phases and 0 in every off phase**, and idle CPU read 21-24% with them against 23-30%
+without, frames flat at ~57 a second throughout. On 4.5.1 the same 64 cost ~29 points. (The
+first attempt that day was void: the probe read the variant without subscribing, so only one
+memoized row ever mounted its mappers. It now subscribes and logs `mapper-load mounted=N` on the
+connection trace; check that count before reading any CPU number from it.) Practical consequences:
 
-- **Register an animated hook only on the branch that animates.** A `useAnimatedStyle` /
-  `useAnimatedProps` above an early return runs (and registers) on EVERY branch - an idle row
-  paying for a spin it never shows. Put the hooks in a child component mounted only while
+- **Register an animated hook only on the branch that animates - still.** The reason has
+  narrowed, not gone. On 4.7.1 a registered mapper whose inputs never change costs nothing
+  measurable, so an idle row's dead mapper is no longer a CPU cost. But a mapper whose input DOES
+  change runs every frame it changes, and a transform written by a mapper outlives a recycle
+  (the tilted-envelope bug above), so the hook still belongs in a child mounted only while
   animating (`AgentStatusIcon`'s `SpinningMark`/`MarchingMark` are the pattern, and its
   "registered mappers" test block is the mechanism assertion to copy).
-- The two component-swap attempts stand as cautions against ARGUED swaps, with the corrected read:
-  the activity-ring focus gate is worth ~9 points (measured); `Card`'s `PressScale`-to-`Pressable`
-  swap moved nothing resolvable and was reverted - one mapper per row was under that experiment's
-  noise floor, which is consistent with ~0.47 points each, not proof mappers are free.
+- **What costs CPU on 4.7.1 is frames, not registrations.** An animation that is running is the
+  cost (the paragraph above on "an animation that never stops"), so count what is MOVING on an
+  idle screen, not how many animated hooks are mounted.
+- The two component-swap attempts stand as cautions against ARGUED swaps: the activity-ring focus
+  gate is worth ~9 points (measured, on 4.5.1, and a focus gate stops frames, so it still
+  applies); `Card`'s `PressScale`-to-`Pressable` swap moved nothing resolvable and was reverted.
 
 Do not re-derive any of this by argument; see `performance-claims-are-measured.md` and `/profile`.
 
