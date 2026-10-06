@@ -28,6 +28,12 @@ export interface SessionInputBarProps {
    * from them.
    */
   switcherOnly?: boolean;
+  /**
+   * True while the terminal lens shows the Resume panel (a paused session):
+   * the quick keys go, since there is no live session to type into. Chat's
+   * composer and the switcher are unaffected.
+   */
+  quickKeysHidden?: boolean;
 }
 
 /**
@@ -46,6 +52,7 @@ export function SessionInputBar({
   chatAttention,
   suspended = false,
   switcherOnly = false,
+  quickKeysHidden = false,
 }: SessionInputBarProps): React.JSX.Element | null {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -70,7 +77,7 @@ export function SessionInputBar({
       {/* Rendered only when a mode row exists: an empty wrapper would add a
           `gap` slot above the pill in changes mode, and past the end of the
           session the pill is the whole footer. */}
-      {mode !== 'changes' && !switcherOnly ? (
+      {mode !== 'changes' && !switcherOnly && !(mode === 'terminal' && quickKeysHidden) ? (
         <View
           testID="session-input-row"
           pointerEvents={suspended ? 'none' : 'auto'}

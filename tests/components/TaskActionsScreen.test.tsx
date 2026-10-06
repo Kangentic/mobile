@@ -3,8 +3,10 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
 import { TaskActionsScreen } from '@/screens/TaskActionsScreen';
+import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
-import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { useResumeStore } from '@/state/resumeStore';
+import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -26,9 +28,11 @@ jest.mock('expo-linking', () => ({
 
 const mockArchiveTask = jest.fn().mockResolvedValue(undefined);
 const mockDeleteTaskFromBoard = jest.fn().mockResolvedValue(undefined);
+const mockResumeTaskSession = jest.fn();
 jest.mock('@/connection/actions', () => ({
   archiveTask: (input: unknown) => mockArchiveTask(input),
   deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
+  resumeTaskSession: (taskId: string, projectId: string) => mockResumeTaskSession(taskId, projectId),
 }));
 
 /** `withDoneColumn` decides whether Archive is even possible - it is a move into a done-role column. */
@@ -83,6 +87,71 @@ describe('TaskActionsScreen', () => {
     mockParams = { taskId: 'task-1', projectId: 'project-1' };
     useBoardStore.getState().reset();
     seedBoard({ withDoneColumn: true });
+  });
+
+  /**
+   * Design review round 2, decision B: Resume in the hub for a paused card,
+   * gated exactly as the session view's Resume is. No wire on protocol 0.15.0
+   * carries `resumable` (desktop #762 adds it in 0.16.0), so a desktop that
+   * offers Resume is seeded by flipping the entry; the snapshot leaves it false.
+   */
+  describe('Resume session', () => {
+    function seedPausedSession({ resumable }: { resumable: boolean }): void {
+      seedBoard({ withDoneColumn: true, task: { session_id: 'sess-1' } });
+      useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
+      if (resumable) {
+        useActivityStore.setState((state) => ({
+          bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: true } },
+        }));
+      }
+    }
+
+    beforeEach(() => {
+      useActivityStore.getState().reset();
+      useResumeStore.setState({ byTaskId: {} });
+    });
+
+    it('closes once the desktop accepts the resume', async () => {
+      seedPausedSession({ resumable: true });
+      mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0 });
+      renderTaskActions();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-resume'));
+      });
+
+      expect(mockResumeTaskSession).toHaveBeenCalledWith('task-1', 'project-1');
+      expect(mockBack).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays open with the desktop\'s refusal when the resume is refused', async () => {
+      seedPausedSession({ resumable: true });
+      mockResumeTaskSession.mockResolvedValue({ phase: 'failed', message: null });
+      renderTaskActions();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-resume'));
+      });
+
+      expect(mockBack).not.toHaveBeenCalled();
+      expect(screen.getByTestId('task-action-error').props.children).toBe('Session could not be resumed.');
+    });
+
+    it('is not offered for a paused session the desktop does not mark resumable', () => {
+      seedPausedSession({ resumable: false });
+      renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-resume')).toBeNull();
+    });
+
+    it('is not offered for a task with no paused session', () => {
+      renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-resume')).toBeNull();
+    });
   });
 
   describe('View pull request', () => {

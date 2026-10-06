@@ -6,9 +6,13 @@ import * as Linking from 'expo-linking';
 import { Icon, Row, Stack, Text, useTheme, type TextColorRole } from '@/components';
 import { prStateSummary } from '@/components/board/prChipPresentation';
 import { CapabilityError } from '@/channel';
-import { archiveTask, deleteTaskFromBoard } from '@/connection/actions';
+import { archiveTask, deleteTaskFromBoard, resumeTaskSession } from '@/connection/actions';
 import { findTaskById, isDoneColumn, selectColumnsOrdered, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
+import { useResumeOffer } from './task/useResumeOffer';
+
+/** The desktop's failure line (TaskDetailBody.tsx), for a refusal that carried no text of its own. */
+const RESUME_FAILED_MESSAGE = 'Session could not be resumed.';
 
 /**
  * Every row here needs both route params. Missing one is a routing defect the
@@ -76,6 +80,10 @@ export function TaskActionsScreen(): React.JSX.Element {
   const [actionInFlight, setActionInFlight] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
+  // Design review round 2, decision B: the desktop card's right-click menu
+  // has no Resume, so this row is the phone's one addition to the hub, shown
+  // only where the session view would offer Resume.
+  const resumeOffer = useResumeOffer(taskId ?? null, task?.session_id ?? null);
 
   // The one non-mutating row in the sheet, and the only place the phone can
   // act on the PR the card's readiness chip is talking about.
@@ -102,6 +110,29 @@ export function TaskActionsScreen(): React.JSX.Element {
       setErrorMessage(messageForActionError(error, 'Could not open the pull request')),
     );
   }, [prUrl]);
+
+  /**
+   * As the desktop's menu item does, closes and resumes, but only once the
+   * desktop has ACCEPTED the start: a refusal (a column that blocks Resume, a
+   * lost connection) stays in the sheet, where the user tapped. The resume
+   * itself then runs on the desktop and reaches the card as its usual events.
+   */
+  const onResume = useCallback(() => {
+    if (!taskId || !projectId) {
+      setErrorMessage(MISSING_TASK_CONTEXT);
+      return;
+    }
+    setActionInFlight(true);
+    setErrorMessage(null);
+    void resumeTaskSession(taskId, projectId).then((attempt) => {
+      setActionInFlight(false);
+      if (attempt.phase === 'failed') {
+        setErrorMessage(attempt.message ?? RESUME_FAILED_MESSAGE);
+        return;
+      }
+      router.back();
+    });
+  }, [taskId, projectId, router]);
 
   const onMove = useCallback(() => {
     if (!taskId || !projectId) {
@@ -183,6 +214,15 @@ export function TaskActionsScreen(): React.JSX.Element {
         <Text variant="title" numberOfLines={2}>
           {task ? task.title : 'Task'}
         </Text>
+        {resumeOffer.offered ? (
+          <ActionRow
+            label="Resume session"
+            iconName="resume"
+            onPress={onResume}
+            disabled={actionInFlight || resumeOffer.attempt?.phase === 'resuming'}
+            testID="task-action-resume"
+          />
+        ) : null}
         {prUrl !== null ? (
           <ActionRow
             label="View pull request"

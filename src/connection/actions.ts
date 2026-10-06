@@ -1,4 +1,5 @@
 import type { JsonValue, ReadDiffScope } from '@kangentic/protocol';
+import { CapabilityError } from '@/channel';
 import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { useActivityStore } from '@/state/activityStore';
@@ -6,6 +7,7 @@ import { useChannelStore } from '@/state/channelStore';
 import { isDoneColumn, useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
+import { useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
@@ -35,6 +37,60 @@ export async function answerPermissionPrompt(sessionId: string, promptId: string
 
 export async function writeTerminal(sessionId: string, data: string): Promise<void> {
   await requireVerbClient().writeInteractiveTerminal(sessionId, data);
+}
+
+/**
+ * How long Resume waits for the resumed session once the desktop has accepted
+ * the start. The desktop answers on accept, and a failure after that sends the
+ * phone nothing, so without a bound a failed resume would say "Resuming
+ * agent..." forever. The same 20 s the feed already gives a labelled respawn
+ * to produce its successor (RESPAWN_ROW_GRACE_MS).
+ */
+export const RESUME_WAIT_MS = 20_000;
+
+/** The desktop's refusal text is shown as the desktop shows it, capped: it is peer-supplied display text. */
+const RESUME_FAILURE_MESSAGE_MAX_LENGTH = 160;
+
+/**
+ * The desktop task view's Resume, from the phone: resumes a PAUSED task's
+ * session in the column it sits in, by sending `start-session`.
+ *
+ * Only ever called from a surface `useResumeOffer` gates on the desktop's
+ * `resumable` flag, which a desktop sends only when `start-session` takes its
+ * own Resume path for a paused task (desktop task #762, protocol 0.16.0): the
+ * conversation resumes with no on-enter automations and no column message.
+ * An older desktop answers `start-session` the way a move into the column
+ * does, re-running the column's automations, which is why the gate exists.
+ *
+ * Every surface reads the attempt from `useResumeStore`. It stays "resuming"
+ * until the paused session ends into its successor (the surfaces clear it) or
+ * RESUME_WAIT_MS passes; a refusal or a lost connection fails it at once.
+ * Resolves with the attempt as the request left it, so a caller that closes
+ * on success (the long-press sheet) can stay open to show a refusal.
+ */
+export async function resumeTaskSession(taskId: string, projectId: string): Promise<ResumeAttempt> {
+  const inFlight = useResumeStore.getState().byTaskId[taskId];
+  if (inFlight?.phase === 'resuming') return inFlight;
+  const startedAt = Date.now();
+  useResumeStore.getState().markResuming(taskId, startedAt);
+  try {
+    const response = await requireVerbClient().startSession({ taskId, projectId });
+    // `live`: a session is already live (queued counts), so no successor event
+    // is coming. Refresh rather than wait, so a stale paused view catches up.
+    if (response.outcome === 'live') void refreshSnapshots().catch(() => undefined);
+  } catch (error) {
+    const failed: ResumeAttempt = {
+      phase: 'failed',
+      message: error instanceof CapabilityError ? error.message.slice(0, RESUME_FAILURE_MESSAGE_MAX_LENGTH) : null,
+    };
+    useResumeStore.getState().markFailed(taskId, failed.message);
+    return failed;
+  }
+  setTimeout(() => {
+    const attempt = useResumeStore.getState().byTaskId[taskId];
+    if (attempt?.phase === 'resuming' && attempt.startedAt === startedAt) useResumeStore.getState().markFailed(taskId, null);
+  }, RESUME_WAIT_MS);
+  return { phase: 'resuming', startedAt };
 }
 
 export async function moveTaskOptimistic(input: {

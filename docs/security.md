@@ -183,7 +183,9 @@ desktop's Mobile Devices settings exists to NARROW a device after the fact rathe
 default-deny gate. The load-bearing guarantee is the previous paragraph's - the verbs a grant
 can contain are the eleven above, with no shell, file, or arbitrary-command verb to grant.
 `start-session` starts or resumes the agent the desktop would have started for that task anyway
-(the desktop's own Resume button, reachable from the phone), never a shell.
+(the desktop's own Resume button, reachable from the phone), never a shell. The phone sends it only
+for a paused session the desktop marks `resumable` (protocol 0.16.0), so it only ever reaches a
+desktop that answers it with that same Resume path.
 `interactive-terminal` is deliberately
 raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
 already running, never a new shell. Its resize/release actions (the phone sizing that PTY to the
