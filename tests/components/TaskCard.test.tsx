@@ -1,8 +1,10 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import { StyleSheet, View, type StyleProp, type TextStyle } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
+import { GitMerge, GitMergeConflict, GitPullRequest } from 'lucide-react-native';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
 import { PR_READINESS_FRESHNESS_CAVEAT } from '@/components/board/prChipPresentation';
 import { boardColumnFixture, boardTaskFixture, usageFixture } from '@/devsupport/desktopFixtures';
@@ -168,30 +170,40 @@ describe('TaskCard', () => {
     });
   });
 
-  describe('PR merge readiness', () => {
-    it('labels the chip while the PR is open and the verdict says something', () => {
+  describe('PR chip (icon only: shape is the state, color the verdict)', () => {
+    /** The glyph drawn inside the chip's wrapper, by its lucide component type. */
+    function prChipGlyph(glyphType: React.ComponentType): ReactTestInstance {
+      return within(screen.getByTestId(`${BASE_TEST_ID}-pr`)).UNSAFE_getByType(glyphType);
+    }
+
+    it('draws the merge-conflict icon in the conflict color, and no word, for a conflicting open PR', () => {
       renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: 'conflicting' }),
       });
 
-      // Text, not color: a color assertion passes by accident the moment the
-      // token it reads happens to match. The wire says `conflicting`; the card
-      // must say `conflicts`.
-      expect(screen.getByText('conflicts')).toBeTruthy();
-      expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
+      expect(prChipGlyph(GitMergeConflict).props.color).toBe(darkTerminalTheme.colors.conflict);
+      expect(screen.queryByText('conflicts')).toBeNull();
     });
 
-    it('spends no title width on an open PR with no verdict', () => {
+    it('draws the ready verdict as the PR icon in green, and no word', () => {
+      renderTaskCard({
+        task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: 'ready' }),
+      });
+
+      expect(prChipGlyph(GitPullRequest).props.color).toBe(darkTerminalTheme.colors.success);
+      expect(screen.queryByText('ready')).toBeNull();
+    });
+
+    it('draws an open PR with no verdict in the quiet secondary color, so green can only mean ready', () => {
       renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: null }),
       });
 
-      expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
+      expect(prChipGlyph(GitPullRequest).props.color).toBe(darkTerminalTheme.colors.textSecondary);
       expect(screen.queryByText('open')).toBeNull();
-      expect(screen.queryByText('ready')).toBeNull();
     });
 
-    it('spends no title width on an open PR whose wire omits the readiness field entirely', () => {
+    it('reads an open PR whose wire omits the readiness field entirely as plain open', () => {
       // `pr_merge_readiness` became OPTIONAL in protocol 0.13.1, so a desktop
       // may leave the key off rather than send null. Every other undefined
       // case in this change is a literal handed straight to the presentation
@@ -205,46 +217,35 @@ describe('TaskCard', () => {
       // so this line fails to build against 0.13.0.
       //
       // Unlike the undefined cases in tests/unit/prChipPresentation.test.ts,
-      // this one IS falsifiable. Verified failing: resolving the undefined arm
-      // of `presentationForReadiness` to the `ready` entry rendered a `ready`
-      // label and turned this red on both platform projects at the
-      // `queryByText('ready')` line, which is what proves the absent key
+      // this one IS falsifiable: resolving the undefined arm of
+      // `presentationForReadiness` to the `ready` entry paints this chip green,
+      // which the color assertion catches. That is what proves the absent key
       // actually travels to the reader rather than being normalised somewhere
       // on the way in.
       //
       // The accessibilityLabel assertion covers the card's OTHER production
-      // call site (`prChipAccessibilityLabel` at TaskCard.tsx:152), which the
-      // rest of this block exercises but never asserts on. The shared-helper
-      // mutation above cannot isolate this line: Jest stops at the first
-      // failing assertion, and that mutation reddens `queryByText('ready')`
-      // first. Verified failing with a mutation scoped to this call site
-      // instead: making `prChipAccessibilityLabel`'s absent-verdict branch
-      // return `'Pull request'` (rather than `'Pull request open'`) only when
-      // `prMergeReadiness === undefined` left both `queryByText` assertions
-      // green and reddened only this line - `Expected: "Pull request open" /
-      // Received: "Pull request"` - which is what proves this assertion
-      // carries coverage the two above it do not.
+      // call site (`prChipAccessibilityLabel`), which the rest of this block
+      // exercises but never asserts on. Making that function's absent-verdict
+      // branch return `'Pull request'` only when `prMergeReadiness ===
+      // undefined` leaves the color green-free and reddens only this line.
       const task = boardTaskFixture({ pr_number: 42, pr_state: 'open' });
       delete task.pr_merge_readiness;
       expect('pr_merge_readiness' in task).toBe(false);
 
       renderTaskCard({ task });
 
-      expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
-      expect(screen.queryByText('open')).toBeNull();
-      expect(screen.queryByText('ready')).toBeNull();
+      expect(prChipGlyph(GitPullRequest).props.color).toBe(darkTerminalTheme.colors.textSecondary);
       expect(screen.getByTestId(`${BASE_TEST_ID}-pr`).props.accessibilityLabel).toBe('Pull request open');
     });
 
-    it('never shows a stale verdict on a merged PR', () => {
+    it('never shows a stale verdict on a merged PR: the merge icon, never the ready green', () => {
       // The desktop stops refreshing readiness once a PR lands, so this is
-      // what the wire really looks like afterwards. Seen failing against a
-      // mutation that consulted readiness outside the open branch.
+      // what the wire really looks like afterwards.
       renderTaskCard({
         task: boardTaskFixture({ pr_number: 103, pr_state: 'merged', pr_merge_readiness: 'ready' }),
       });
 
-      expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
+      expect(prChipGlyph(GitMerge).props.color).toBe(darkTerminalTheme.colors.info);
       expect(screen.queryByText('ready')).toBeNull();
     });
 

@@ -578,16 +578,20 @@ const ActivityRow = React.memo(function ActivityRow({
   // The full task (not just title): the Agents feed renders the EXACT SAME
   // card as the board - labels, PR, usage bar - via the same shared
   // TaskCard, plus one Agents-only addition: the band across the top naming
-  // the project and drawing the column's step track. The ticket number is the one
-  // deliberate exception: a triage feed cares about status/title/last
-  // message, not the ticket ID, so it is always off here regardless of the
-  // board's own showTicketNumbers setting (the board is the ticket-reference
-  // view). That also keeps the fallback stand-in's placeholder display_id
-  // off screen. A session can outlive its task's board entry briefly (e.g. a
-  // snapshot race), so a located-but-absent task falls back to that minimal
-  // stand-in rather than crashing.
+  // the project and drawing the column's step track. A session can outlive its
+  // task's board entry briefly (e.g. a snapshot race), so a located-but-absent
+  // task falls back to a minimal stand-in rather than crashing.
   const locatedTask = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.tasksById[entry.taskId] ?? null);
   const task = locatedTask ?? fallbackTask(entry);
+  // The ticket number, exactly as the desktop card and the Board tab show it:
+  // after the title, whenever the task's OWN board has Ticket Numbers on (the
+  // feed spans every project, and each keeps its own setting). It came back
+  // once the project left the title row and freed the width it needed. Never
+  // on the fallback stand-in, whose display_id is a placeholder 0.
+  const boardShowsTicketNumbers = useBoardStore(
+    (state) => state.boardsByProjectId[entry.projectId]?.showTicketNumbers ?? false,
+  );
+  const showTicketNumbers = locatedTask !== null && boardShowsTicketNumbers;
   const projectName = useBoardStore(
     (state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null,
   );
@@ -829,7 +833,7 @@ const ActivityRow = React.memo(function ActivityRow({
         testID={testID}
         task={task}
         statusKind={statusKind}
-        showTicketNumbers={false}
+        showTicketNumbers={showTicketNumbers}
         usage={entry.usage}
         columnStrip={columnStrip}
         bodyText={bodyText}
