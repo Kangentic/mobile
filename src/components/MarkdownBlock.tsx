@@ -23,9 +23,13 @@ export interface MarkdownBlockProps {
  *   native features are configured by the `"enriched-markdown"` block in
  *   package.json, which both the Gradle build and the podspec read.
  * - That block turns OFF math, code highlighting and video, all of which 1.x
- *   enables by default. Rendering stays what it was on 0.7.x, the APK skips
- *   Media3 ExoPlayer, and the postinstall exits without downloading the
- *   tree-sitter grammars or the RaTeX framework.
+ *   enables by default. Highlighting and video are new in 1.x, so code blocks
+ *   render as they did on 0.7.x. Math is NOT: 0.7.4 rendered LaTeX through
+ *   RaTeX (libratex_ffi.so plus the KaTeX fonts, about 3 MB of APK), and it is
+ *   off now by decision (task #102), so `$...$` in a transcript shows as the
+ *   literal source text. With all three off the APK skips Media3 ExoPlayer,
+ *   and the postinstall exits without downloading the tree-sitter grammars or
+ *   the RaTeX framework.
  * - 1.1.0 removes its accessibility layout listener on detach (upstream #731).
  *   That listener retained a whole session screen per open on 0.7.x, which is
  *   what the deleted patch-package patch used to fix (REACT-NATIVE-5 in

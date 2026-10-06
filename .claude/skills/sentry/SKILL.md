@@ -261,7 +261,9 @@ its own board.
 ## Diagnosis (mobile specifics)
 
 - **Native vs JS, one-field discriminator.** A native-captured event carries `platform: java`
-  and `mechanism: UncaughtExceptionHandler`, native auto-breadcrumbs (`app.lifecycle`,
+  and an unhandled mechanism (`UncaughtExceptionHandler` up to @sentry/react-native 7.11;
+  `expoReactHost` on 8.29, observed 2026-10-06 on a crash-test `Sentry.nativeCrash()`; why it
+  changed was not traced), native auto-breadcrumbs (`app.lifecycle`,
   `device.event`, `network.event`), and a `user.id`. A JS-caught event has no `user`,
   `request`, `extra`, or `server_name` at all - `scrubEvent` strips them, and `beforeSend`
   never runs for a native-captured event in the first place. So: an event carrying `user` was
@@ -306,7 +308,8 @@ its own board.
   all. Task #98 (a stuck pulse tint, 2026-10-05) is the precedent: an empty Sentry window was
   informative only once that was established.
 - **Read the breadcrumbs before reasoning about the code.** On a native-captured event
-  (`mechanism: UncaughtExceptionHandler`) sentry-android's own auto-breadcrumbs ride along
+  (`mechanism: UncaughtExceptionHandler`, or `expoReactHost` from 8.29) sentry-android's own
+  auto-breadcrumbs ride along
   unfiltered, so every such event carries a free **lifecycle timeline**: `app.lifecycle`
   foreground/background transitions, `ui.lifecycle` activity states, `device.event`
   (`SCREEN_ON`/`SCREEN_OFF`, `LOW_MEMORY`, battery), `device.orientation`, and `network.event`.
