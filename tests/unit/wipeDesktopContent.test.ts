@@ -78,14 +78,14 @@ describe('wipeDesktopContent', () => {
   it('clears preferredSessionLensByTaskId (keyed by the old desktop\'s task IDs) but leaves other settings alone', () => {
     useSettingsStore.setState({
       preferredSessionLensByTaskId: { 'task-1': 'chat' },
-      collapsedTriageSection: 'Idle',
+      collapsedTriageSections: ['Idle'],
       hapticsEnabled: false,
     });
 
     wipeDesktopContent();
 
     expect(useSettingsStore.getState().preferredSessionLensByTaskId).toEqual({});
-    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Idle');
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Idle']);
     expect(useSettingsStore.getState().hapticsEnabled).toBe(false);
   });
 });

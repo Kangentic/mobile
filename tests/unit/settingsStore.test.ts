@@ -192,73 +192,123 @@ describe('settingsStore - per-category push preferences', () => {
   });
 });
 
-describe('settingsStore - collapsed triage section', () => {
+describe('settingsStore - collapsed triage sections', () => {
+  const COLLAPSED_KEY = 'settings.collapsedTriageSections';
+  const LEGACY_COLLAPSED_KEY = 'settings.collapsedTriageSection';
+
   beforeEach(() => {
     storedValues.clear();
-    useSettingsStore.setState({ collapsedTriageSection: null });
+    useSettingsStore.setState({ collapsedTriageSections: [] });
   });
 
-  it('collapses a section by title and persists it', async () => {
+  it('collapses a section by title and persists the list', async () => {
     await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
 
-    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Idle');
-    expect(storedValues.get('settings.collapsedTriageSection')).toBe(JSON.stringify('Idle'));
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Idle']);
+    expect(storedValues.get(COLLAPSED_KEY)).toBe(JSON.stringify(['Idle']));
   });
 
-  it('toggles the same title back to expanded (null)', async () => {
+  it('toggles the same title back to expanded', async () => {
     await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
     await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
 
-    expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
-    expect(storedValues.get('settings.collapsedTriageSection')).toBe(JSON.stringify(null));
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual([]);
+    expect(storedValues.get(COLLAPSED_KEY)).toBe(JSON.stringify([]));
   });
 
-  it('collapsing a different title replaces the collapsed section rather than accumulating', async () => {
+  /**
+   * The reported bug: with four sections, collapsing Active while Idle was
+   * collapsed re-expanded Idle above it, pushing Active down the screen, so
+   * the tap read as doing nothing. Each section now keeps its own state.
+   */
+  it('collapsing a second section keeps the first one collapsed', async () => {
     await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
-    await useSettingsStore.getState().toggleTriageSectionCollapsed('Needs you');
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Active');
 
-    // A two-state accordion: collapsing a different section leaves ONLY that
-    // section collapsed, not a set of both.
-    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Needs you');
-    expect(storedValues.get('settings.collapsedTriageSection')).toBe(JSON.stringify('Needs you'));
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Idle', 'Active']);
+    expect(storedValues.get(COLLAPSED_KEY)).toBe(JSON.stringify(['Idle', 'Active']));
   });
 
-  it('hydrate restores a stored string value', async () => {
-    storedValues.set('settings.collapsedTriageSection', JSON.stringify('Idle'));
+  it('expanding one section leaves the others collapsed', async () => {
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Active');
+    await useSettingsStore.getState().toggleTriageSectionCollapsed('Idle');
+
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Active']);
+  });
+
+  it('hydrate restores a stored list', async () => {
+    storedValues.set(COLLAPSED_KEY, JSON.stringify(['Idle', 'Paused']));
     await useSettingsStore.getState().hydrate();
 
-    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Idle');
-  });
-
-  it('hydrate falls back to null on malformed JSON', async () => {
-    storedValues.set('settings.collapsedTriageSection', 'not json');
-    await useSettingsStore.getState().hydrate();
-
-    expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Idle', 'Paused']);
   });
 
   it.each([
+    ['malformed JSON', 'not json'],
+    ['a bare string', JSON.stringify('Idle')],
+    ['null', 'null'],
+  ])('hydrate reads %s under the list key as nothing collapsed', async (_description, raw) => {
+    storedValues.set(COLLAPSED_KEY, raw);
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual([]);
+  });
+
+  it('hydrate keeps only the string entries of a mixed list', async () => {
+    storedValues.set(COLLAPSED_KEY, JSON.stringify(['Idle', 5, null, 'Queued']));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Idle', 'Queued']);
+  });
+
+  // An install from before the per-section rule holds at most one title under
+  // the old key. It must come back collapsed rather than silently re-open.
+  it('hydrate carries the legacy single title over as a one-entry list', async () => {
+    storedValues.set(LEGACY_COLLAPSED_KEY, JSON.stringify('Idle'));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Idle']);
+  });
+
+  it('hydrate prefers the list key over the legacy key once the list has been written', async () => {
+    storedValues.set(LEGACY_COLLAPSED_KEY, JSON.stringify('Idle'));
+    storedValues.set(COLLAPSED_KEY, JSON.stringify([]));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual([]);
+  });
+
+  it.each([
+    ['malformed JSON', 'not json'],
     ['a bare number', '5'],
     ['null', 'null'],
     ['an array', '[1,2]'],
-  ])('hydrate falls back to null when the stored JSON parses to %s, not a string', async (_description, raw) => {
-    storedValues.set('settings.collapsedTriageSection', raw);
+  ])('hydrate reads %s under the legacy key as nothing collapsed', async (_description, raw) => {
+    storedValues.set(LEGACY_COLLAPSED_KEY, raw);
     await useSettingsStore.getState().hydrate();
 
-    expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual([]);
   });
 
   /**
    * The running sessions' section was titled "Thinking" until it became
    * "Active". The collapse is stored by TITLE, so an install that had it
    * collapsed would otherwise read back a title no section carries and silently
-   * show the section expanded.
+   * show the section expanded. Applies to both keys.
    */
-  it('hydrate migrates the legacy "Thinking" title to "Active"', async () => {
-    storedValues.set('settings.collapsedTriageSection', JSON.stringify('Thinking'));
+  it('hydrate migrates the legacy "Thinking" title to "Active" under the legacy key', async () => {
+    storedValues.set(LEGACY_COLLAPSED_KEY, JSON.stringify('Thinking'));
     await useSettingsStore.getState().hydrate();
 
-    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Active');
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Active']);
+  });
+
+  it('hydrate migrates "Thinking" inside the list and drops the duplicate it makes', async () => {
+    storedValues.set(COLLAPSED_KEY, JSON.stringify(['Thinking', 'Active', 'Idle']));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Active', 'Idle']);
   });
 
   // The migration is an exact-title lookup, not a rewrite of anything that looks
@@ -267,10 +317,10 @@ describe('settingsStore - collapsed triage section', () => {
   it.each(['Idle', 'Active', 'Queued', 'Paused', 'thinking', 'Thinking section'])(
     'hydrate passes the stored title "%s" through unchanged',
     async (title) => {
-      storedValues.set('settings.collapsedTriageSection', JSON.stringify(title));
+      storedValues.set(COLLAPSED_KEY, JSON.stringify([title]));
       await useSettingsStore.getState().hydrate();
 
-      expect(useSettingsStore.getState().collapsedTriageSection).toBe(title);
+      expect(useSettingsStore.getState().collapsedTriageSections).toEqual([title]);
     },
   );
 });
