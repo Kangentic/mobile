@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import { GitPullRequest } from 'lucide-react-native';
+import { GitMerge, GitMergeConflict, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft } from 'lucide-react-native';
 import type { BoardColumnWire, BoardTaskWire, SessionUsageWire } from '@kangentic/protocol';
 import {
   AgentStatusIcon,
@@ -19,11 +19,33 @@ import {
 import { ColumnStrip } from './ColumnStrip';
 import type { ColumnTrackStep } from './columnTrack';
 import { computeVisibleLabelCount } from './labelFit';
-import { prChipAccessibilityLabel, prChipPresentation } from './prChipPresentation';
+import { prChipAccessibilityLabel, prChipPresentation, type PrChipGlyph } from './prChipPresentation';
 import { WaitLabel } from './WaitLabel';
 
 /** Before the labels row's real width is measured (its first layout pass). */
 const FALLBACK_LABEL_LIMIT = 3;
+
+/** The PR icon's size: the card's other title-row glyphs are 14 to 16. */
+const PR_GLYPH_SIZE = 14;
+
+/**
+ * The PR chip's icon for each state. A switch over static imports rather than
+ * a lookup table of components, so no component is chosen at render time.
+ */
+function prGlyph(glyph: PrChipGlyph, color: string): React.JSX.Element {
+  switch (glyph) {
+    case 'merge':
+      return <GitMerge size={PR_GLYPH_SIZE} color={color} />;
+    case 'merge-conflict':
+      return <GitMergeConflict size={PR_GLYPH_SIZE} color={color} />;
+    case 'closed':
+      return <GitPullRequestClosed size={PR_GLYPH_SIZE} color={color} />;
+    case 'draft':
+      return <GitPullRequestDraft size={PR_GLYPH_SIZE} color={color} />;
+    case 'pull-request':
+      return <GitPullRequest size={PR_GLYPH_SIZE} color={color} />;
+  }
+}
 
 export interface TaskCardProps {
   /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-column` (whose own parts include `-column-project`). */
@@ -60,9 +82,7 @@ export interface TaskCardProps {
    * Omitted on the board, where both the project and the column are the page
    * being viewed. Present with `column: null` when the task cannot be located
    * yet: the band still draws, so the row never changes height (see
-   * ColumnStrip). The Agents feed also passes `showTicketNumbers={false}` - a
-   * triage feed cares about status/title/last-message/recency, not the ticket
-   * ID; the board is the ticket-reference view.
+   * ColumnStrip).
    */
   columnStrip?: { column: BoardColumnWire | null; track: readonly ColumnTrackStep[]; projectName: string | null };
   /**
@@ -132,10 +152,10 @@ export function TaskCard({
   const visibleLabels = task.labels.slice(0, visibleLabelCount);
   const hiddenLabelCount = task.labels.length - visibleLabels.length;
   // Existence + state is what matters here (it decides whether the task is
-  // ready to move to Done), not the PR number - a chip on the title row says
-  // that without adding another stacked row of chrome: a bare glyph at rest,
-  // growing a word only when merge readiness has something to say. The number
-  // itself is one tap away in the detail view.
+  // ready to move to Done), not the PR number - an icon on the title row says
+  // that without adding another stacked row of chrome, and without spending
+  // title width on a word: its shape is the state, its color the merge verdict
+  // (see prChipPresentation). The number itself is one tap away in the detail view.
   const hasPr = showMetaRow && task.pr_number !== null;
   const prChip = prChipPresentation(task.pr_state, task.pr_merge_readiness);
   const hasMetaRow = showMetaRow && task.labels.length > 0;
@@ -188,20 +208,7 @@ export function TaskCard({
               accessibilityRole="text"
               accessibilityLabel={prChipAccessibilityLabel(task.pr_state, task.pr_merge_readiness)}
             >
-              {prChip.label === null ? (
-                <GitPullRequest size={14} color={colorForTextRole(prChip.color, theme.colors)} />
-              ) : (
-                // A labeled pill only when readiness has something to say, so
-                // the common card spends no title width. `align="center"`
-                // because this sits in a Row - see BadgeProps.align.
-                <Badge
-                  label={prChip.label}
-                  color={prChip.color}
-                  shape="pill"
-                  align="center"
-                  icon={<GitPullRequest size={11} color={colorForTextRole(prChip.color, theme.colors)} />}
-                />
-              )}
+              {prGlyph(prChip.glyph, colorForTextRole(prChip.color, theme.colors))}
             </View>
           ) : null}
         </Row>

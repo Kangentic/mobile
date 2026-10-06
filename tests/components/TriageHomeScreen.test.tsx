@@ -256,14 +256,14 @@ describe('TriageHomeScreen', () => {
     });
   });
 
-  it('renders board-card parity (project name, no ticket number) and the context-usage bar', () => {
+  it('renders board-card parity (project in the band, ticket number in the title row) and the context-usage bar', () => {
     renderHome();
     // The project names the band across the top of the card, not the title row.
     expect(screen.getByTestId('activity-row-sess-1-column-project')).toHaveTextContent('Alpha');
     expect(screen.queryByTestId('activity-row-sess-1-project')).toBeNull();
-    // No ticket number here: a triage feed cares about status/title/last
-    // message/recency, not the ticket ID - the board is that view.
-    expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
+    // The ticket number shows as the desktop card and the Board tab show it,
+    // because this task's board has Ticket Numbers on.
+    expect(screen.getByTestId('activity-row-sess-1-display-id')).toHaveTextContent('#1');
     // No usage yet: the bar stays hidden rather than showing an untrusted 0%.
     expect(screen.queryByTestId('activity-row-sess-1-usage')).toBeNull();
 
@@ -293,6 +293,19 @@ describe('TriageHomeScreen', () => {
     }));
     renderHome();
     expect(screen.getByText('Untitled task')).toBeTruthy();
+    // Its board has Ticket Numbers on, but the stand-in's display_id is a placeholder 0.
+    expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
+  });
+
+  /** The feed spans every project, so each row follows its OWN board's setting, as the Board tab does. */
+  it('hides the ticket number on a row whose board has Ticket Numbers off', () => {
+    useBoardStore.setState((state) => {
+      const board = state.boardsByProjectId['project-1'];
+      if (board === undefined) throw new Error('seedStores did not seed project-1');
+      return { boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...board, showTicketNumbers: false } } };
+    });
+    renderHome();
+    expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
     expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
   });
 
