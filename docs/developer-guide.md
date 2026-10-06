@@ -3045,8 +3045,9 @@ reference therefore accounts for a whole ~225-view screen.
 ### The cause: an accessibility listener left on the window's ViewTreeObserver
 
 **Fixed, and the fix is verified to the plan's bar: `Views` returns exactly to baseline and
-`WebViews` to zero after six cycles.** It is one line of Kotlin, carried as a `patch-package`
-patch (`patches/react-native-enriched-markdown+0.7.4.patch`, applied by the `postinstall` script).
+`WebViews` to zero after six cycles.** It is one line of Kotlin, carried until task #102 as a
+`patch-package` patch (`patches/react-native-enriched-markdown+0.7.4.patch`, applied by the
+`postinstall` script) and now upstream in 1.1.0 - see the end of this section.
 
 `MarkdownAccessibilityHelper.invalidateAccessibilityItems()` rebuilds its TalkBack items
 immediately when the view already has a `Layout`, and otherwise defers via
@@ -3163,16 +3164,23 @@ Clean on everything else checked: one `CADisplayLink` that self-cancels and hold
 no `NSTimer`, no KVO, no strongly-captured blocks on any manager or singleton, no custom `delegate`
 properties to mis-qualify, and an `NSMapTable` with weak values.
 
-**Upgrading does not fix it.** The library is at 0.7.4 here and 1.0.2 is current;
-`MarkdownAccessibilityHelper.kt` is **byte-identical** between the two, and the same code is on
-their `main`. Filed upstream with the measurements and the minimal reproduction as
+**Upgrading did not fix it at the time, and now it does.** When this was found the library was at
+0.7.4 and 1.0.2 was current, with `MarkdownAccessibilityHelper.kt` **byte-identical** between the
+two. Filed upstream with the measurements and the minimal reproduction as
 [issue #730](https://github.com/software-mansion/enriched-markdown/issues/730) and
-[PR #731](https://github.com/software-mansion/enriched-markdown/pull/731); drop
-`patches/react-native-enriched-markdown+0.7.4.patch` once that ships in a version we depend on.
+[PR #731](https://github.com/software-mansion/enriched-markdown/pull/731). #731 merged on
+2026-08-31 and shipped in v1.1.0 ("remove the accessibility layout listener on detach"). At the
+v1.1.1 tag `AccessibleMarkdownTextView.onDetachedFromWindow()` calls
+`accessibilityHelper.cleanup()`, which removes the pending layout listener - the patch's change,
+nearly line for line. **Read from source**, not measured by that alone.
 
-Until then the patch filename pins 0.7.4, so **re-run the probe after any bump of
-`react-native-enriched-markdown`** - a version bump silently drops the patch. `patch-package` will
-warn, but only the probe proves the leak is still fixed.
+The app moved to 1.1.1 in task #102 and `patches/react-native-enriched-markdown+0.7.4.patch` was
+deleted in the same commit as the lockfile. The 1.x defaults turn on math, code highlighting and
+video, so the `"enriched-markdown"` block in `package.json` turns all three off: rendering is what
+0.7.x drew, and the APK skips Media3 ExoPlayer.
+
+**Re-run the probe after any bump of `react-native-enriched-markdown`.** The 1.1.1 re-measure
+against this section's protocol is recorded below under "Dependency refresh, 2026-10 (task #102)".
 
 ### Two dead ends worth not repeating
 

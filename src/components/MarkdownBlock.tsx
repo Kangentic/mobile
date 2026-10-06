@@ -15,13 +15,21 @@ export interface MarkdownBlockProps {
  * the markdown library is a one-file change: keep the `MarkdownBlockProps`
  * contract and rewrite the body.
  *
- * Library notes (react-native-enriched-markdown 0.7.x):
+ * Library notes (react-native-enriched-markdown 1.1.x):
  * - Renders via `EnrichedMarkdownText`, a native Fabric component (New
  *   Architecture required). It needs a native rebuild (`npx expo prebuild` /
  *   a new dev client) and does not run in Expo Go.
- * - Autolinking is sufficient; its optional Expo config plugin
- *   (`react-native-enriched-markdown/app.plugin.js`) only toggles the LaTeX
- *   math native dependency (`{ enableMath: boolean }`), which we do not need.
+ * - Autolinking is sufficient. 1.0.2 removed the bundled Expo config plugin;
+ *   native features are configured by the `"enriched-markdown"` block in
+ *   package.json, which both the Gradle build and the podspec read.
+ * - That block turns OFF math, code highlighting and video, all of which 1.x
+ *   enables by default. Rendering stays what it was on 0.7.x, the APK skips
+ *   Media3 ExoPlayer, and the postinstall exits without downloading the
+ *   tree-sitter grammars or the RaTeX framework.
+ * - 1.1.0 removes its accessibility layout listener on detach (upstream #731).
+ *   That listener retained a whole session screen per open on 0.7.x, which is
+ *   what the deleted patch-package patch used to fix (REACT-NATIVE-5 in
+ *   docs/developer-guide.md).
  * - Styling flows through the `markdownStyle` prop, mapped below from the
  *   theme's semantic tokens and typography scale.
  */
