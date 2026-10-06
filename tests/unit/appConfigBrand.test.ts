@@ -293,6 +293,16 @@ describe('app.config.ts R8 release optimization', () => {
   // expect. Guarding on `shrinkResources === true` would make this test pass
   // having asserted NOTHING the moment that property went missing - which is
   // precisely the regression the test exists to catch.
+  // Minify and shrinkResources alone leave R8 never OPTIMIZING: the SDK 57
+  // template's proguard-android.txt preset carries -dontoptimize, which is what
+  // Play Console's 0.8.1 "Optimization isn't enabled" row reported. The plugin
+  // is the only thing that swaps the preset, and dropping its entry from the
+  // plugins list would leave every other check here green.
+  it('registers the R8 optimization plugin, which swaps the -dontoptimize preset', () => {
+    const entryNames = (appConfig.plugins ?? []).map((plugin) => (Array.isArray(plugin) ? plugin[0] : plugin));
+    expect(entryNames).toContain('./plugins/withAndroidR8Optimization.ts');
+  });
+
   it('never sets shrinkResources without minify, which prebuild rejects', () => {
     const androidProperties = androidBuildProperties(appConfig);
     const shrinkImpliesMinify =
