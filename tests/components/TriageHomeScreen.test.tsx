@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import { NOW_TICK_MS, ThemeProvider, darkTerminalTheme } from '@/components';
+import { NOW_TICK_MS, ThemeProvider } from '@/components';
 import { SNIPPET_WARM_CONCURRENCY, TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
@@ -1086,14 +1086,19 @@ describe('TriageHomeScreen', () => {
   });
 
   /**
-   * The two transitional states, on the surface that used to hide both.
+   * The in-between states, drawn as the desktop card draws them (kangentic
+   * TaskCard.tsx's bottom-bar switch): no status icon, the task's description
+   * as the body, and the state named in the footer. Only a running session
+   * reads as an agent.
    *
-   * A respawn made the row DISAPPEAR for several seconds; a queued session
-   * rendered as an ordinary finished-work idle row. Both are task-keyed facts,
-   * and neither is expressible through `sectionForEntry`, which reads only
-   * `entry.state`.
+   * Both are task-keyed facts that `sectionForEntry`, which reads only
+   * `entry.state`, cannot express: a respawn's step rides the session-ended
+   * push, and a queued session sits at `state: 'idle'`.
    */
-  describe('transitional states (respawning and queued)', () => {
+  describe('in-between states (the desktop card\'s footer)', () => {
+    const MINUTE = 60_000;
+    const DESCRIPTION = 'Repro the auth redirect loop.';
+
     /**
      * The desktop's end push for the seeded task-1/sess-1 pair: labelled (a
      * model switch), or not (the column-move swap, or a park).
@@ -1110,33 +1115,46 @@ describe('TriageHomeScreen', () => {
       });
     };
 
+    function setTaskOneDescription(description: string): void {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': {
+            ...state.boardsByProjectId['project-1'],
+            tasksById: {
+              ...state.boardsByProjectId['project-1'].tasksById,
+              'task-1': { ...state.boardsByProjectId['project-1'].tasksById['task-1'], description },
+            },
+          },
+        },
+      }));
+    }
+
     /**
-     * NOTHING NEW TO READ during a swap: the row keeps the body it had and only
-     * the glyph changes, whatever the desktop sent. The label once replaced
-     * the body here ("Switching model...", or "Starting a new session" for a
-     * rejected one), which was text appearing and vanishing inside a
-     * two-second gap. The body is seeded as a pushed preview so "unchanged" is
-     * an exact string, and the row is idle so that preview is what it shows.
+     * Seeded idle-and-waiting with a pushed preview, so the "before" row has a
+     * status icon, the agent's message as its body, and a wait time: all three
+     * must go when the session ends. The wait assertion is only non-vacuous
+     * because the row showed one first.
      *
      * Whether the row SURVIVES the gap is decided by
-     * reconcileSessionsFromBoards, which no board snapshot drives here - the
-     * surviving row is not evidence of retention. That half lives in
-     * tests/unit/storeFeedRespawnRetention.test.ts. For the unlabelled arm the
-     * glyph assertion is the load-bearing one: the text assertions pass
-     * against the old label-only store too, since it recorded nothing.
+     * reconcileSessionsFromBoards, which no board snapshot drives here; that
+     * half lives in tests/unit/storeFeedRespawnRetention.test.ts.
      */
     it.each([
-      ['a labelled end', 'Switching model...'],
-      ['an over-cap labelled end', 'x'.repeat(200)],
-      ['an unlabelled end', null],
-    ])('keeps the body it had and adds nothing to read on %s', async (_kind, label) => {
+      ['a labelled end', 'Switching model...', 'Switching model...'],
+      ['an over-cap labelled end', 'x'.repeat(200), 'x'.repeat(80)],
+      ['an unlabelled end', null, null],
+    ])('turns a row whose session ended into the desktop\'s card on %s', async (_kind, label, footerText) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      setTaskOneDescription(DESCRIPTION);
       useActivityStore
         .getState()
         .applySnapshot(
           'sess-1',
           'task-1',
           'project-1',
-          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
+          streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 12 * MINUTE } }, sessionStatus: 'running' }),
         );
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
@@ -1147,16 +1165,24 @@ describe('TriageHomeScreen', () => {
       renderHome();
       await act(async () => {});
       expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1-status')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1-wait')).toBeTruthy();
 
       act(() => {
         pushRespawnEnded(label);
       });
 
-      expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
-      if (label !== null) expect(screen.queryByText(label)).toBeNull();
-      expect(screen.queryByText('Starting a new session')).toBeNull();
-      expect(screen.queryByText('Waiting for a free slot')).toBeNull();
-      expect(screen.getByTestId('activity-row-sess-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+      expect(screen.queryByText('Summary written to the task notes.')).toBeNull();
+      expect(screen.getByTestId('activity-row-sess-1-snippet')).toHaveTextContent(DESCRIPTION);
+      expect(screen.queryByTestId('activity-row-sess-1-status')).toBeNull();
+      expect(screen.queryByTestId('activity-row-sess-1-wait')).toBeNull();
+      expect(screen.queryByTestId('activity-row-sess-1-usage')).toBeNull();
+      if (footerText === null) {
+        expect(screen.queryByTestId('activity-row-sess-1-status-bar')).toBeNull();
+      } else {
+        expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent(footerText);
+      }
+      jest.useRealTimers();
     });
 
     /**
@@ -1164,7 +1190,7 @@ describe('TriageHomeScreen', () => {
      * subscription was torn down before the `session-ended` push - so a peek
      * for it can only fail, and on failure the row arms a retry. Left
      * unskipped, every respawn would spend the gap retry-looping against a
-     * dead session id for a snippet the caption has already replaced.
+     * dead session id for a snippet the description has already replaced.
      *
      * Asserted as "no call at all" rather than through rendered output,
      * because a failed peek renders exactly like a skipped one: the body shows
@@ -1199,60 +1225,89 @@ describe('TriageHomeScreen', () => {
     });
 
     /**
-     * The queued row. Its entry is idle and live - nothing about its STATE
-     * distinguishes it from an agent that finished its work, which is exactly
-     * why it was invisible. The caption is the only thing that separates them,
-     * and it is driven by `sessionStatus` alone.
+     * The queued row. Its entry is idle and live, with a wait reason - nothing
+     * about its STATE distinguishes it from an agent that finished its work,
+     * so `sessionStatus` alone must turn off the envelope, the agent's message
+     * and the wait time, and put "Queued..." in the footer.
      */
-    it('captions a queued session instead of letting it read as finished work', async () => {
+    it('draws a queued session as the desktop card does: no icon, "Queued...", the description, no wait time', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      setTaskOneDescription(DESCRIPTION);
       useActivityStore
         .getState()
         .applySnapshot(
           'sess-1',
           'task-1',
           'project-1',
-          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
+          streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 12 * MINUTE } }, sessionStatus: 'queued' }),
         );
 
       renderHome();
       await act(async () => {});
 
-      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
-      expect(screen.getByText('Waiting for a free slot')).toBeTruthy();
-    });
-
-    /**
-     * The control that keeps the test above honest: the SAME idle entry
-     * without the queued status must show its ordinary snippet, so the caption
-     * cannot be coming from the idle state itself.
-     */
-    it('leaves an ordinary idle row captioned by its snippet, not by the queue line', async () => {
-      jest.mocked(peekLastAssistantMessage).mockResolvedValue('Summary written to the task notes.');
-      useActivityStore
-        .getState()
-        .applySnapshot(
-          'sess-1',
-          'task-1',
-          'project-1',
-          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
-        );
-
-      renderHome();
-      await act(async () => {});
-
-      expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Queued...');
+      expect(screen.getByTestId('activity-row-sess-1-snippet')).toHaveTextContent(DESCRIPTION);
+      expect(screen.queryByTestId('activity-row-sess-1-status')).toBeNull();
+      expect(screen.queryByTestId('activity-row-sess-1-wait')).toBeNull();
       expect(screen.queryByText('Waiting for a free slot')).toBeNull();
+      jest.useRealTimers();
     });
 
     /**
-     * The queued caption is derived as "starting for a reason that is not a
-     * swap", not by re-reading `sessionStatus` at the call site. A queued
-     * session cancelled out of the queue keeps its stale 'queued' status (the
-     * store's retirement excludes session-ended on purpose), so a call site
-     * reading the status directly would keep captioning a session that is
-     * over. What makes this non-vacuous: the glyph still says starting.
+     * The control that keeps the test above honest: the SAME idle entry as
+     * RUNNING keeps the envelope, the wait time and its usage, so none of what
+     * the queued test removed can be coming from the idle state itself.
      */
-    it('drops the queue caption once a queued session ends, while the glyph still says starting', async () => {
+    it('leaves the same idle entry, running, with its envelope, wait time and no status bar', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 12 * MINUTE } }, sessionStatus: 'running' }),
+        );
+
+      renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-1-status')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1-wait')).toHaveTextContent('12m');
+      expect(screen.queryByTestId('activity-row-sess-1-status-bar')).toBeNull();
+      jest.useRealTimers();
+    });
+
+    it('draws a paused session with "Paused" in the footer and no envelope or wait time', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 12 * MINUTE } }, sessionStatus: 'suspended' }),
+        );
+
+      renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Paused');
+      expect(screen.queryByTestId('activity-row-sess-1-status')).toBeNull();
+      expect(screen.queryByTestId('activity-row-sess-1-wait')).toBeNull();
+      jest.useRealTimers();
+    });
+
+    /**
+     * A queued session cancelled out of the queue keeps its stale 'queued'
+     * status (the store's retirement excludes session-ended on purpose), so
+     * reading `sessionStatus` before the end would keep saying "Queued..." for
+     * a session that is over. The end wins, as the desktop's label does.
+     */
+    it('stops saying "Queued..." once a queued session ends', async () => {
       useActivityStore
         .getState()
         .applySnapshot(
@@ -1263,14 +1318,14 @@ describe('TriageHomeScreen', () => {
         );
       renderHome();
       await act(async () => {});
-      expect(screen.getByText('Waiting for a free slot')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Queued...');
 
       act(() => {
         pushRespawnEnded(null);
       });
 
-      expect(screen.queryByText('Waiting for a free slot')).toBeNull();
-      expect(screen.getByTestId('activity-row-sess-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+      expect(screen.queryByTestId('activity-row-sess-1-status-bar')).toBeNull();
+      expect(screen.queryByTestId('activity-row-sess-1-status')).toBeNull();
     });
   });
 });

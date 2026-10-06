@@ -219,16 +219,17 @@ describe('BoardScreen', () => {
   });
 
   /**
-   * The board card reads its status from `bySessionId[task.session_id]`, so
+   * The board card reads its session from `bySessionId[task.session_id]`, so
    * during a respawn - when the desktop has nulled session_id and not yet
-   * assigned the successor - it resolved to null and the card showed NO status
-   * glyph at all, for the several seconds the work was being handed over.
+   * assigned the successor - it resolved to null and the card showed nothing,
+   * for the several seconds the work was being handed over.
    *
    * The respawn fact is therefore looked up by TASK, which is the only id the
-   * card still has. Seeded with `session_id: null` because that is exactly the
-   * state the gap leaves the board in.
+   * card still has, and drawn as the desktop card draws it: the desktop's own
+   * step in the footer, and no status icon. Seeded with `session_id: null`
+   * because that is exactly the state the gap leaves the board in.
    */
-  it('shows a starting glyph for a sessionless task the desktop is respawning', () => {
+  it('shows the desktop\'s step in the footer for a sessionless task the desktop is respawning', () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: {
         ...state.boardsByProjectId,
@@ -251,21 +252,16 @@ describe('BoardScreen', () => {
       </ThemeProvider>,
     );
 
-    // Read off the TINT, not mere presence. `TaskCard` renders the same
-    // `${testID}-status` for EVERY non-null kind, so `toBeTruthy()` alone would
-    // pass for `starting ? 'working' : ...` just as happily - it would only
-    // catch respawn-awareness being removed outright. The colour is the one
-    // thing that separates the kinds, and it is how `TaskHeader.test.tsx`
-    // discriminates them.
-    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+    expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Switching model...');
+    expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
   });
 
   /**
-   * The control: the same sessionless card with NO respawn in flight keeps its
-   * glyph-less rendering. Without this, a change that simply always drew a
-   * glyph would satisfy the test above.
+   * The control: the same sessionless card with NO respawn in flight has no
+   * footer at all. Without this, a change that always drew a step would
+   * satisfy the test above.
    */
-  it('still shows no glyph for a sessionless task with no respawn in flight', () => {
+  it('still shows no glyph and no footer for a sessionless task with no respawn in flight', () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: {
         ...state.boardsByProjectId,
@@ -283,16 +279,14 @@ describe('BoardScreen', () => {
     );
 
     expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
+    expect(screen.queryByTestId('board-card-task-1-status-bar')).toBeNull();
   });
 
   /**
-   * The desktop's column-move swap arrives with NO label and cannot be told
-   * from a park when the push lands, so the card wears the starting glyph for
-   * it exactly as for a labelled respawn - for the short window the store
-   * grants an unlabelled end. The label-only store write fails the first
-   * test; a store with no window at all fails the second.
+   * An end with NO step to show is an ended session, which the desktop card
+   * draws with no icon and no footer: the phone never guesses a step.
    */
-  it('shows a starting glyph for a sessionless task whose session ended without a label', () => {
+  it('draws an ended card, no icon and no footer, for a sessionless task whose session ended without a label', () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: {
         ...state.boardsByProjectId,
@@ -315,7 +309,8 @@ describe('BoardScreen', () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+    expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
+    expect(screen.queryByTestId('board-card-task-1-status-bar')).toBeNull();
   });
 
   it('shows no glyph once an unlabelled end has outlived its short grace', () => {
@@ -361,15 +356,14 @@ describe('BoardScreen', () => {
    * card both have to tell it apart from the idle row two cards up using
    * sessionStatus alone."
    *
-   * Distinct regression risk from the respawn test above: `statusKind`'s
-   * ternary checks `starting` before `activityEntry`, and with a null
-   * `activityEntry` (the respawn case) that ordering is unobservable - either
-   * branch order reaches the same `starting ? 'starting' : null` result. Only
-   * a case where `activityEntry` is truthy, like this one, can tell the
-   * ternary's ordering apart from a version that checks `activityEntry` first
-   * and falls back to the idle envelope for a queued session.
+   * Distinct regression risk from the respawn test above: with a null
+   * `activityEntry` (the respawn case) no icon can be drawn either way. Only a
+   * case where `activityEntry` is truthy, like this one, can tell a card that
+   * reads `sessionStatus` apart from one that falls back to the idle envelope
+   * for a queued session. The desktop card draws no icon and "Queued..." in
+   * its footer.
    */
-  it('shows a starting glyph for a queued task that still has a live session entry', () => {
+  it('draws a queued task that still has a live session entry with "Queued..." and no icon', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
@@ -386,7 +380,8 @@ describe('BoardScreen', () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusIdle);
+    expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Queued...');
+    expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
   });
 
   /**

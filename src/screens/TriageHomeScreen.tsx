@@ -13,9 +13,9 @@ import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, NowTickProvider, SectionHeader, useTheme } from '@/components';
 import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
+import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
 import { buildPositionalTrack } from '@/components/board/columnTrack';
 import {
-  isStartingSession,
   selectTaskRespawn,
   selectTriageRows,
   selectWaitingSince,
@@ -611,9 +611,27 @@ const ActivityRow = React.memo(function ActivityRow({
    */
   const column = useBoardStore((state) => selectTaskColumn(state, entry.taskId));
   const boardColumns = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.columns ?? null);
+
+  /**
+   * Which of the desktop card's states this row is in (cardSessionDisplay):
+   * running, queued, suspended, a respawn's step, or ended. TASK-keyed for the
+   * respawn, because a column move leaves the task sessionless for several
+   * seconds and this row only still exists because reconcileSessionsFromBoards
+   * retains it for exactly that window.
+   *
+   * Only a RUNNING row reads as an agent: the status icon, the agent's last
+   * message as the body, and the wait time all belong to it, as on the desktop
+   * card. Every other state draws no icon, shows the task's description, and
+   * says what it is in the footer ("Queued...", "Paused", the desktop's step).
+   */
+  const respawn = useActivityStore((state) => selectTaskRespawn(state, entry.taskId));
+  const sessionDisplay = cardSessionDisplay({ hasSession: true, sessionStatus: entry.sessionStatus, respawn });
+  const isRunning = sessionDisplay.kind === 'running';
   // The band also carries the wait time (it moved up from the end of the body
-  // line), so a waiting row's band changes when `waitingSinceMs` does.
-  const waitingSinceMs = selectWaitingSince(entry);
+  // line), so a waiting row's band changes when `waitingSinceMs` does. It is
+  // the touch stand-in for the desktop card's "Idle for 4m" tooltip, so it
+  // shows exactly where that tooltip exists: a running session waiting on you.
+  const waitingSinceMs = isRunning ? selectWaitingSince(entry) : null;
   const columnStrip = useMemo(
     () => ({ column, track: buildPositionalTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs }),
     [column, boardColumns, projectName, waitingSinceMs],
@@ -638,30 +656,14 @@ const ActivityRow = React.memo(function ActivityRow({
     onLongPressTask(task, entry.projectId);
   }, [onLongPressTask, task, entry.projectId]);
 
-  /**
-   * The two transitional states, both TASK-keyed rather than section-derived.
-   *
-   * A swap (labelled or not) leaves the task sessionless for several seconds,
-   * and this row only still exists because reconcileSessionsFromBoards retains
-   * it for exactly that window - without this the row vanished and came back.
-   * The swap changes the GLYPH and nothing else on this row: the body keeps
-   * whatever it showed, because a caption that appeared and disappeared inside
-   * a two-second gap was itself the flash this exists to remove.
-   *
-   * A queued session is the quieter of the two: the desktop holds a
-   * placeholder with no PTY, so it never reports thinking and its entry sits
-   * at `state: 'idle'`, indistinguishable from an agent that finished its
-   * work. `sessionStatus` is the only thing that separates them.
-   */
-  const respawn = useActivityStore((state) => selectTaskRespawn(state, entry.taskId));
-  const starting = isStartingSession(respawn, entry.sessionStatus);
-
   // Desktop-parity status treatment: green spinner while the agent works,
   // the yellow mail envelope for EVERY idle session (a pending prompt is
   // idle too - all idle rows are equal priority, first come first served).
-  // 'starting' outranks both: neither of its two states is doing work, and
-  // neither is waiting on the user.
-  const statusKind: AgentStatusKind = starting ? 'starting' : working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
+  // None at all for a session that is not running, as the desktop card draws
+  // it: a queued session in particular sits at `state: 'idle'` (the desktop
+  // holds a placeholder with no PTY, so it never reports thinking), and only
+  // `sessionStatus` keeps it from wearing the envelope.
+  const statusKind: AgentStatusKind | null = !isRunning ? null : working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
 
   // One subtle tint fade when the row lands in a new section. The cleanup
   // zeroes the shared value: FlashList recycles row instances, and a
@@ -720,12 +722,11 @@ const ActivityRow = React.memo(function ActivityRow({
    */
   const previewPushedByDesktop = !isPermission && entry.messagePreview !== null;
   useEffect(() => {
-    // Nothing to fetch, and for a swap nothing that COULD be fetched: a
+    // Only a running row shows the agent's message, so nothing else fetches
+    // one. For a swap there is nothing that COULD be fetched either: a
     // retained ghost's session is gone desktop-side, so a peek would
-    // retry-loop against a dead id. The body it already resolved stays (it is
-    // per-mount state this early return leaves untouched), which is exactly
-    // what the row should show through the gap.
-    if (starting) return undefined;
+    // retry-loop against a dead id.
+    if (!isRunning) return undefined;
     if (previewPushedByDesktop) return undefined;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -780,7 +781,7 @@ const ActivityRow = React.memo(function ActivityRow({
     peekRetryNonce,
     snippetFreshnessMs,
     previewPushedByDesktop,
-    starting,
+    isRunning,
   ]);
 
   // No status filler ("Thinking", "Waiting for..."): the section header
@@ -800,24 +801,17 @@ const ActivityRow = React.memo(function ActivityRow({
   // above) so no row changes height. A working row passes null and renders
   // nothing at all: the label appears exactly when the agent's last message has
   // stopped moving (see `snippetFreshnessMs` above - an idle row's snippet is
-  // refetched at freshness 0 precisely because it is the last word).
+  // refetched at freshness 0 precisely because it is the last word). A row that
+  // is not running passes null too (see `waitingSinceMs`).
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
   /**
-   * ONLY the queued state takes the body outright: a queued session has
-   * produced no output at all, can sit for minutes, and the muted glyph alone
-   * says "not running" without saying why. Derived as "starting for a reason
-   * that is not a swap" rather than by re-reading `sessionStatus`, so this row
-   * and `isStartingSession` cannot drift.
+   * A row that is not running shows the task's description, as the desktop
+   * card does: its message trail only shows while a session runs. Queued,
+   * paused, a respawn's step and an ended session all say what they are in the
+   * footer instead (cardSessionDisplay).
    *
-   * A swap deliberately does NOT: it lasts a second or two, and a caption that
-   * appeared and disappeared inside it (the desktop's phase label, once shown
-   * here) was itself text flashing mid-swap. The row keeps the body it had;
-   * the glyph carries the state.
-   */
-  const queuedBodyText = starting && respawn === null ? 'Waiting for a free slot' : null;
-  /**
-   * Body preference, cheapest first:
+   * For a running row, body preference, cheapest first:
    *   1. the desktop's pushed preview (protocol 0.8.0+) - already on a feed
    *      the app receives, so it costs no request at all;
    *   2. this row's own transcript peek - the fallback for an older desktop,
@@ -829,7 +823,8 @@ const ActivityRow = React.memo(function ActivityRow({
    *      the feed revealed with every body empty and filled them a beat later,
    *      which read as a second load.
    */
-  const bodyText = queuedBodyText ?? (isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? collapseToSnippetText(task.description);
+  const descriptionText = collapseToSnippetText(task.description);
+  const bodyText = isRunning ? ((isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? descriptionText) : descriptionText;
 
   return (
     <>
@@ -838,6 +833,7 @@ const ActivityRow = React.memo(function ActivityRow({
         task={task}
         statusKind={statusKind}
         showTicketNumbers={showTicketNumbers}
+        sessionDisplay={sessionDisplay}
         usage={entry.usage}
         columnStrip={columnStrip}
         bodyText={bodyText}
