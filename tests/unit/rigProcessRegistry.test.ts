@@ -268,6 +268,16 @@ describe('adbServerClientPids', () => {
     expect(adbServerClientPids(movedServer, { port: 5038 })).toEqual([4412]);
     expect(adbServerClientPids(movedServer)).toEqual([]);
   });
+
+  it('lists each pid once, in numeric order rather than text order', () => {
+    // The default Array sort is lexicographic and would put 10000 before 999.
+    const unordered = [
+      '  TCP    127.0.0.1:61001        127.0.0.1:5037         ESTABLISHED     10000',
+      '  TCP    127.0.0.1:61002        127.0.0.1:5037         ESTABLISHED     999',
+      '  TCP    127.0.0.1:61003        127.0.0.1:5037         ESTABLISHED     999',
+    ].join('\r\n');
+    expect(adbServerClientPids(unordered)).toEqual([999, 10000]);
+  });
 });
 
 describe('adbServerPort', () => {
@@ -275,6 +285,15 @@ describe('adbServerPort', () => {
     expect(adbServerPort({ ANDROID_ADB_SERVER_PORT: '5038' })).toBe(5038);
     expect(adbServerPort({})).toBe(5037);
     expect(adbServerPort({ ANDROID_ADB_SERVER_PORT: 'not-a-port' })).toBe(5037);
+  });
+
+  it('falls back to 5037 for a value that cannot be a port, never to a port nothing listens on', () => {
+    // An EMPTY variable is the realistic one: Number('') is 0, and a guard
+    // watching port 0 sees no clients and waves a kill through.
+    for (const unusable of ['', '0', '-5', '5038.5']) {
+      expect(adbServerPort({ ANDROID_ADB_SERVER_PORT: unusable }), JSON.stringify(unusable)).toBe(5037);
+    }
+    expect(adbServerPort()).toBe(5037);
   });
 });
 
@@ -291,6 +310,10 @@ describe('decideAdbServerRestart', () => {
 
   it('refuses when the clients cannot be listed', () => {
     expect(decideAdbServerRestart(null).allowed).toBe(false);
+    // No list at all is the same unknown as a null one, not a crash.
+    const decision = decideAdbServerRestart(undefined);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('could not list');
   });
 
   it('restarts anyway under --force, whatever is connected', () => {
@@ -381,5 +404,91 @@ describe('the adb server and the emulator never start inside a task worktree', (
     expect(killServerIndex).toBeGreaterThan(guardIndex);
     // An exact process name, never a command-line pattern.
     expect(inspect).not.toMatch(/\['-f',\s*'adb'\]/);
+  });
+});
+
+/**
+ * The scans above prove the guard's markers sit BEFORE the kill. They cannot
+ * tell a guard that stops from one that only logs: a refusal that falls
+ * through, or a dry run that does not exit, still has every marker in the
+ * right place and then force-kills every adb process on the machine. So these
+ * read what each guarded branch DOES. Static, like the rest, because
+ * dev.mjs runs main() on import and the only runtime check would be a real
+ * `taskkill /IM adb.exe` on a machine other tasks share.
+ */
+describe('the adb restart guard acts on a refusal rather than only noting it', () => {
+  const devRig = readFileSync(join(scriptsDir, 'dev.mjs'), 'utf8');
+  const inspect = readFileSync(join(scriptsDir, 'mobileInspect.mjs'), 'utf8');
+
+  /**
+   * The text between the braces of the block that opens with `openingMarker`
+   * (which must end in its `{`), searching from `fromIndex`. Counts braces, so
+   * a `${...}` in a template literal is fine; a lone brace inside a string
+   * would throw it off, and neither guarded block has one.
+   */
+  function blockBody(source: string, openingMarker: string, fromIndex: number): string {
+    const markerIndex = source.indexOf(openingMarker, fromIndex);
+    expect(markerIndex, openingMarker).toBeGreaterThanOrEqual(0);
+    const openBraceIndex = markerIndex + openingMarker.length - 1;
+    expect(source[openBraceIndex], openingMarker).toBe('{');
+    let depth = 0;
+    for (let index = openBraceIndex; index < source.length; index += 1) {
+      if (source[index] === '{') depth += 1;
+      if (source[index] === '}') depth -= 1;
+      if (depth === 0) return source.slice(openBraceIndex + 1, index);
+    }
+    throw new Error(`unterminated block after ${openingMarker}`);
+  }
+
+  const adbModeStart = devRig.indexOf("if (mode === 'adb') {");
+  const inspectRecoveryStart = inspect.indexOf('function recoverAdbServer()');
+
+  it('dev:adb --dry-run exits before it can reach the force-kill', () => {
+    expect(adbModeStart).toBeGreaterThanOrEqual(0);
+    expect(blockBody(devRig, "if (flags['dry-run']) {", adbModeStart)).toContain('process.exit(0)');
+  });
+
+  it('dev:adb stops on a refusal instead of falling through to the force-kill', () => {
+    const refusal = blockBody(devRig, 'if (!decision.allowed) {', adbModeStart);
+    // fail() exits the process; a warn() or log() here would carry on to taskkill.
+    expect(refusal).toContain('fail(');
+    expect(refusal).not.toContain('taskkill');
+  });
+
+  it('dev:adb only overrides the guard when --force was typed', () => {
+    const callIndex = devRig.indexOf('decideAdbServerRestart(', adbModeStart);
+    expect(callIndex).toBeGreaterThan(adbModeStart);
+    const decisionCall = devRig.slice(callIndex, devRig.indexOf(';', callIndex));
+    expect(decisionCall).toContain('{ force: flags.force }');
+    // Opt-in: a flag that defaulted to true would override the guard unasked.
+    expect(devRig.match(/\n\s*force: \{[^}]*\},/)?.[0].trim()).toBe("force: { type: 'boolean', default: false },");
+  });
+
+  it("mobileInspect's refusal returns false rather than going on to kill-server", () => {
+    expect(inspectRecoveryStart).toBeGreaterThanOrEqual(0);
+    expect(blockBody(inspect, 'if (!decision.allowed) {', inspectRecoveryStart)).toMatch(/return false;/);
+  });
+
+  it('mobileInspect never forces its own automatic restart', () => {
+    const guardIndex = inspect.indexOf('if (!decision.allowed) {', inspectRecoveryStart);
+    const recoveryHead = inspect.slice(inspectRecoveryStart, guardIndex);
+    expect(recoveryHead).toMatch(/decideAdbServerRestart\(clientPids,\s*\{ force: false \}\)/);
+    expect(recoveryHead).not.toContain('force: true');
+  });
+
+  it("mobileInspect's runAdb gives up on a refusal rather than retrying a server that was not restarted", () => {
+    const callIndex = inspect.indexOf('recoverAdbServer()', inspect.indexOf('function runAdb('));
+    expect(callIndex).toBeGreaterThan(0);
+    expect(inspect.slice(callIndex - 'if (!'.length, callIndex + 'recoverAdbServer()) fail('.length)).toBe('if (!recoverAdbServer()) fail(');
+  });
+
+  it('mobileInspect resolves --out, since adb pull now runs from the home folder', () => {
+    // mkdirSync would use the caller's directory while a relative adb-pull
+    // destination lands under the home folder, and the printed path would lie.
+    const declarationIndex = inspect.indexOf('const outPath =', inspect.indexOf('function commandScreenshot('));
+    expect(declarationIndex).toBeGreaterThan(0);
+    expect(inspect.slice(declarationIndex, declarationIndex + "const outPath = resolve(flagValue(args, '--out')".length)).toBe(
+      "const outPath = resolve(flagValue(args, '--out')",
+    );
   });
 });
