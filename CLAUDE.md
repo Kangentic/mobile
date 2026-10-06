@@ -78,14 +78,15 @@ modules/                      # LOCAL Expo modules, autolinked by CNG (no ios/ o
                               #   switch would say nothing about memory. Legacy levels still map
                               #   to 'moderate'/'serious' on pre-14 devices and do breadcrumb
 patches/                      # patch-package patches, applied by the `postinstall` script.
-                              #   react-native-enriched-markdown+0.7.4.patch removes an
-                              #   accessibility OnGlobalLayoutListener the library leaves on the
-                              #   WINDOW's ViewTreeObserver, which retained a whole session screen
-                              #   per open. Filed upstream as software-mansion/enriched-markdown
-                              #   issue #730 and PR #731; drop the patch once that ships in a
-                              #   release we depend on. The filename pins the version, so a bump
-                              #   drops the patch silently: re-measure with the retention probe
-                              #   (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1) before accepting one.
+                              #   (react-native-enriched-markdown+0.7.4.patch is GONE: it removed
+                              #   an accessibility OnGlobalLayoutListener left on the WINDOW's
+                              #   ViewTreeObserver, which retained a whole session screen per
+                              #   open. Upstream shipped the same fix as #731 in 1.1.0, and the
+                              #   app moved to 1.1.1 with the patch deleted in the same commit.
+                              #   A patch filename pins its version, so any future bump of a
+                              #   patched package drops the patch silently: re-measure with the
+                              #   retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1)
+                              #   before accepting one.)
                               #   CI's node_modules cache used to be keyed on package-lock.json
                               #   ALONE, and `npm ci` (so `postinstall`, so patch-package) runs
                               #   only on a MISS - so editing a .patch without touching the
