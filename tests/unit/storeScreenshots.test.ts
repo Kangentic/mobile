@@ -26,7 +26,7 @@ import {
   readPngSize,
 } from '../../scripts/storeScreenshots.mjs';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
-import { renderCaptureRows } from '../helpers/renderCapture';
+import { renderCaptureCells, renderCaptureRows, type RenderedCell } from '../helpers/renderCapture';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -246,101 +246,230 @@ describe('the shot list matches the capture flow', () => {
 });
 
 /**
- * The terminal mirror renders the desktop's real grid and pans the overflow, so
- * how much is VISIBLE depends on the auto-fitted font - and that font is fitted
- * to the terminal pane's HEIGHT, never its width. A taller pane picks a bigger
- * font and therefore shows FEWER columns, which makes the 6.9-inch iPhone the
- * binding case rather than the widest device.
+ * The terminal mirror draws every grid of 48 rows or fewer in ONE reference
+ * cell: the cell at which the desktop's resting grid (210x48) fills the pane's
+ * HEIGHT (scripts/xterm-page/state.js, fontGeometry.js). So how many columns a
+ * shelf shows is a property of the SHELF, not of the grid, and a grid fills a
+ * shelf only if it has the reference rows and at least the shelf's visible
+ * columns. Anything less leaves terminal background below and to the right.
  *
- * The first iOS store capture clipped its header mid-word. Nothing failed: the
- * PNG was the right size and the flow was green, so this is the repo's
- * green-but-worthless-artifact shape again, and it is worth a mechanical check
- * rather than an eye on every future capture.
+ * This used to model the OLD fit, where the font came from the grid's own rows.
+ * Under that model a 44x38 capture "fit" every target; under the real one it
+ * filled about 57% of the pane's width and 79% of its height on every shelf,
+ * with every diff line wrapped mid-identifier, and the test stayed green until a
+ * human looked at a re-capture (task #100). The PNG was the right size and the
+ * flow passed, which is this repo's green-but-worthless-artifact shape, so the
+ * check is mechanical rather than an eye on every capture.
  *
- * This used to scrape string literals out of mockDesktop.ts and measure their
- * `.length`. That only ever worked because the fixture was an array of plain
- * strings; it is now a RECORDED capture, where bytes and columns are unrelated
- * (escape sequences have no width, and words are split by cursor moves). So the
- * budget is re-derived from the fit math and checked against the real grid.
+ * The fixture meets it by being recorded NARROW and widened to the resting grid
+ * (scripts/buildTerminalFixture.mjs): prose keeps the breaks it was recorded
+ * with, inside the narrowest shelf, while rules and diff bands run out to 210.
  */
-describe('the recorded terminal fits the narrowest capture device', () => {
-  // From scripts/xterm-page/state.js. Duplicated deliberately: the page
-  // fragments are browser scripts with no importable export, so the
+describe('the recorded terminal fills every shelf at the reference cell', () => {
+  // From scripts/xterm-page/state.js and heightFit.js. Duplicated deliberately:
+  // the page fragments are browser scripts with no importable export, so the
   // alternative is no check at all.
-  const MAX_AUTO_FIT_FONT_PX = 20;
+  const REFERENCE_GRID_COLS = 210;
+  const REFERENCE_GRID_ROWS = 48;
   const MIN_AUTO_FONT_PX = 6;
+  const MAX_AUTO_FIT_FONT_PX = 20;
   const CELL_WIDTH_RATIO = 0.6;
   const CELL_HEIGHT_RATIO = 1.2;
+  const TEXTURE_BUDGET_RATIO = 0.97;
 
-  /**
-   * Terminal-pane sizes MEASURED off the committed store captures, not guessed.
-   *
-   * On store/screenshots/ios/iphone-6.9/02-session-terminal.png the cell is
-   * 11.8pt wide and 23.9pt tall at the 30-row grid that shipped it. A 11.8pt
-   * cell means font 20 (11.8 / 0.6), which needs a pane at least 720pt tall;
-   * a 23.9pt row means the line-height stretch is 1.0, which caps the pane at
-   * 720pt. The two bracket it exactly. The Android phone shelf works out the
-   * same way from its own capture.
-   */
-  const CAPTURE_TARGETS = [
-    { name: 'iPhone 6.9-inch', paneWidth: 440, paneHeight: 720 },
-    { name: 'Android phone shelf', paneWidth: 360, paneHeight: 440 },
-  ];
-
-  function visibleColumns(target: { paneWidth: number; paneHeight: number }, rows: number): number {
-    const fitted = Math.floor(target.paneHeight / (rows * CELL_HEIGHT_RATIO));
-    const fontPx = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
-    return Math.floor(target.paneWidth / (fontPx * CELL_WIDTH_RATIO));
+  interface ShelfPane {
+    readonly name: string;
+    /** The terminal pane's height in CSS px: what the reference rows are fitted to. */
+    readonly fitHeightPx: number;
+    /** The pane's width in DEVICE px. The cell is floored to device pixels, so this is the honest unit. */
+    readonly paneWidthDevicePx: number;
+    readonly devicePixelRatio: number;
+    /** The WebGL texture limit, or null where it is too high to bind the reference grid. */
+    readonly maxTextureSize: number | null;
+    /** The cell width MEASURED off a real capture, in device px. */
+    readonly measuredCellWidthDevicePx: number;
   }
 
-  it('reproduces the 36 columns the shipped iOS capture actually shows', () => {
-    // Anchors the model to an artifact in the repo. If this drifts, the pane
-    // measurements above are wrong and every budget below is wrong with them.
-    expect(visibleColumns(CAPTURE_TARGETS[0], 30)).toBe(36);
-  });
+  /**
+   * MEASURED, not estimated. The pane bounds and the cell are read pixel by
+   * pixel off task #99's re-captures of 02-session-terminal (2026-10-06, the
+   * first captures taken after the reference cell landed): the pane is the
+   * terminal-background run between the header and the quick-key bar, and the
+   * cell is the 44-column grid's diff band divided by 44.
+   *
+   * The 10-inch shelf's 18px cell is what pins its texture limit: the height fit
+   * alone gives font 17 (a 20px cell), and only a 4096 limit caps the 210-column
+   * reference grid to font 15. iOS's font 11 is above what a 4096 limit allows
+   * (10), so its limit is higher and does not bind.
+   */
+  const SHELF_PANES: readonly ShelfPane[] = [
+    {
+      name: 'iPhone 6.9-inch',
+      fitHeightPx: 681,
+      paneWidthDevicePx: 1320,
+      devicePixelRatio: 3,
+      maxTextureSize: null,
+      measuredCellWidthDevicePx: 19,
+    },
+    {
+      name: 'Android phone',
+      fitHeightPx: 410,
+      paneWidthDevicePx: 1080,
+      devicePixelRatio: 3,
+      maxTextureSize: 4096,
+      measuredCellWidthDevicePx: 12,
+    },
+    {
+      name: 'Android 7-inch',
+      fitHeightPx: 825,
+      paneWidthDevicePx: 1080,
+      devicePixelRatio: 1.75,
+      maxTextureSize: 4096,
+      measuredCellWidthDevicePx: 14,
+    },
+    {
+      name: 'Android 10-inch',
+      fitHeightPx: 998,
+      paneWidthDevicePx: 1440,
+      devicePixelRatio: 2,
+      maxTextureSize: 4096,
+      measuredCellWidthDevicePx: 18,
+    },
+  ];
 
-  it('keeps the store-capture grid inside every target device', () => {
-    for (const target of CAPTURE_TARGETS) {
-      const budget = visibleColumns(target, CLAUDE_CAPTURE_SHOTS.rows);
-      expect({
-        target: target.name,
-        gridCols: CLAUDE_CAPTURE_SHOTS.cols,
-        fitsWithin: CLAUDE_CAPTURE_SHOTS.cols <= budget,
-      }).toEqual({ target: target.name, gridCols: CLAUDE_CAPTURE_SHOTS.cols, fitsWithin: true });
-    }
-  });
-
-  it('keeps the terminal font legible on the shelf that renders it smallest', () => {
-    // Column count is bound by iOS (tallest pane, biggest font, fewest columns);
-    // LEGIBILITY is bound by the Android phone shelf (shortest pane, smallest
-    // font). Optimising only for width silently halves the Android text: at 48
-    // rows it drops to 7px against the 12px that ships today. This is the other
-    // half of the constraint, and it has no other guard.
-    const androidShelf = CAPTURE_TARGETS[1];
-    const fitted = Math.floor(androidShelf.paneHeight / (CLAUDE_CAPTURE_SHOTS.rows * CELL_HEIGHT_RATIO));
+  /** The reference cell's font on a shelf: referenceFontPx() and textureCappedFontPx() in the page. */
+  function referenceFontPx(shelf: ShelfPane): number {
+    const fitted = Math.floor(shelf.fitHeightPx / (REFERENCE_GRID_ROWS * CELL_HEIGHT_RATIO));
     const fontPx = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
-    expect(fontPx).toBeGreaterThanOrEqual(9);
+    if (shelf.maxTextureSize === null) return fontPx;
+    const budget = shelf.maxTextureSize * TEXTURE_BUDGET_RATIO;
+    const widthCap = budget / (REFERENCE_GRID_COLS * CELL_WIDTH_RATIO * shelf.devicePixelRatio);
+    const heightCap = budget / (REFERENCE_GRID_ROWS * CELL_HEIGHT_RATIO * shelf.devicePixelRatio);
+    return Math.min(fontPx, Math.max(1, Math.floor(Math.min(widthCap, heightCap))));
+  }
+
+  /** xterm floors the cell to whole device pixels; the epsilon keeps 18.0000001 from reading as 18. */
+  function cellWidthDevicePx(shelf: ShelfPane): number {
+    return Math.floor(referenceFontPx(shelf) * CELL_WIDTH_RATIO * shelf.devicePixelRatio + 1e-9);
+  }
+
+  function visibleColumns(shelf: ShelfPane): number {
+    return Math.floor(shelf.paneWidthDevicePx / cellWidthDevicePx(shelf));
+  }
+
+  const narrowestVisibleColumns = Math.min(...SHELF_PANES.map(visibleColumns));
+  const widestVisibleColumns = Math.max(...SHELF_PANES.map(visibleColumns));
+
+  const HORIZONTAL_RULE_GLYPHS = '─━┄┅┈┉╌╍═';
+
+  /**
+   * A diff line's colour band: Claude Code paints it from a column or so in,
+   * under the line-number gutter, so a background anywhere in the first few
+   * cells marks the row. Returns the band's colour, or null.
+   */
+  function bandBackground(row: readonly RenderedCell[]): string | null {
+    const painted = row.slice(0, 4).find((cell) => cell.background !== 'default');
+    return painted ? painted.background : null;
+  }
+
+  function rowText(row: readonly RenderedCell[]): string {
+    return row.map((cell) => cell.glyph).join('');
+  }
+
+  it('reproduces the cell measured on every shelf', () => {
+    // Anchors the model to the captures. If this drifts, a pane measurement is
+    // wrong and every column count below is wrong with it.
+    expect(
+      SHELF_PANES.map((shelf) => ({ shelf: shelf.name, cell: cellWidthDevicePx(shelf) })),
+    ).toEqual(SHELF_PANES.map((shelf) => ({ shelf: shelf.name, cell: shelf.measuredCellWidthDevicePx })));
   });
 
-  it('fits every row of the grid vertically, not just its columns', () => {
-    // A grid whose rows do not fit is cropped from the bottom, which hides the
-    // status line and the input box - the two things that make it read as a
-    // live terminal rather than a code listing.
-    for (const target of CAPTURE_TARGETS) {
-      const fitted = Math.floor(target.paneHeight / (CLAUDE_CAPTURE_SHOTS.rows * CELL_HEIGHT_RATIO));
-      const fontPx = Math.max(MIN_AUTO_FONT_PX, Math.min(MAX_AUTO_FIT_FONT_PX, fitted));
-      const usedHeight = CLAUDE_CAPTURE_SHOTS.rows * fontPx * CELL_HEIGHT_RATIO;
-      expect({ target: target.name, fits: usedHeight <= target.paneHeight }).toEqual({
-        target: target.name,
-        fits: true,
+  it('has the reference rows, so the frame fills the pane height exactly', () => {
+    // Fewer rows leave a band of terminal background below the frame; more
+    // would refit the cell to the grid's own rows and shrink it.
+    expect(CLAUDE_CAPTURE_SHOTS.rows).toBe(REFERENCE_GRID_ROWS);
+  });
+
+  it('reaches the right edge of every shelf without moving the cell', () => {
+    for (const shelf of SHELF_PANES) {
+      expect({ shelf: shelf.name, reachesEdge: CLAUDE_CAPTURE_SHOTS.cols >= visibleColumns(shelf) }).toEqual({
+        shelf: shelf.name,
+        reachesEdge: true,
       });
     }
+    // Wider than the reference grid moves the texture cap, and so the cell.
+    expect(CLAUDE_CAPTURE_SHOTS.cols).toBeLessThanOrEqual(REFERENCE_GRID_COLS);
   });
 
+  it('keeps every word inside the narrowest shelf, and the same fill at every shelf edge', async () => {
+    // Across the band of columns where some shelf's right edge falls - from the
+    // narrowest shelf's last visible column to the widest's - every cell of a
+    // row must look the same. Text there would be cut mid-word on iOS, and a
+    // band or rule that stopped there would end mid-pane on a wider shelf.
+    // Columns past the widest shelf are on no screen until panned to, which is
+    // where a real 210-column session puts its padding and borders too.
+    const cells = await renderCaptureCells(CLAUDE_CAPTURE_SHOTS);
+    const offenders: string[] = [];
+    cells.forEach((row, rowIndex) => {
+      const edges = row.slice(narrowestVisibleColumns - 1, widestVisibleColumns);
+      const distinct = new Set(edges.map((cell) => `${cell.glyph}|${cell.background}`));
+      if (distinct.size > 1) offenders.push(`row ${rowIndex}: ${[...distinct].join(' / ')}`);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it('runs every diff band and every rule past the widest shelf edge', async () => {
+    const cells = await renderCaptureCells(CLAUDE_CAPTURE_SHOTS);
+    const widestEdge = widestVisibleColumns - 1;
+    const bandRows = cells.filter((row) => bandBackground(row) !== null);
+    const ruleRows = cells.filter((row) => new RegExp(`[${HORIZONTAL_RULE_GLYPHS}]{8}`).test(rowText(row)));
+    // Non-vacuity: the capture is a diff under a permission dialog, so both
+    // kinds of row must exist for the assertions below to mean anything.
+    expect(bandRows.length).toBeGreaterThan(0);
+    expect(ruleRows.length).toBeGreaterThanOrEqual(2);
+
+    // Optional reads: a grid narrower than the widest shelf has no cell there,
+    // which is a short band or rule, not a crash.
+    const shortBands = bandRows
+      .filter((row) => row[widestEdge]?.background !== bandBackground(row))
+      .map((row) => rowText(row).trimEnd());
+    expect(shortBands).toEqual([]);
+    const shortRules = ruleRows
+      .filter((row) => !HORIZONTAL_RULE_GLYPHS.includes(row[widestEdge]?.glyph ?? ''))
+      .map((row) => rowText(row).trimEnd());
+    expect(shortRules).toEqual([]);
+  });
+
+  it('wraps no diff line', async () => {
+    // Claude Code wraps a code line that is wider than its diff box onto a
+    // continuation row with no line number - "-n.pathname" under
+    // "window.locatio" - painted in the same added/removed colour. So the diff
+    // colours are the ones on rows that DO open on a line number, and every row
+    // in one of those colours must open on its own. (The submitted prompt is a
+    // band too, in its own colour, and wraps like any prose.)
+    const cells = await renderCaptureCells(CLAUDE_CAPTURE_SHOTS);
+    const lineNumbered = /^\s*\d+\s*[-+]/;
+    const diffColours = new Set(
+      cells.filter((row) => lineNumbered.test(rowText(row))).map((row) => bandBackground(row)),
+    );
+    diffColours.delete(null);
+    expect(diffColours.size).toBeGreaterThan(0);
+    const continuationRows = cells
+      .filter((row) => diffColours.has(bandBackground(row)))
+      .map((row) => rowText(row).trimEnd())
+      .filter((text) => !lineNumbered.test(text));
+    expect(continuationRows).toEqual([]);
+  });
+
+  // No font-size floor. At the reference cell the Android phone shelf renders
+  // at about 7px, and no fixture can change that: one cell for every open is a
+  // product rule (maintainer decision, 2026-10). If 7px reads too small in the
+  // listing, that is a product question, not something to work around here.
+
   it('renders no row wider than the grid it reports', async () => {
-    // The grid fitting the screen is only half of it: a capture replayed at a
-    // grid it was not recorded at overflows its own columns, and the phone
-    // shows borders sliced mid-glyph rather than a wide frame.
+    // A capture replayed at a grid it was not recorded at overflows its own
+    // columns, and the phone shows borders sliced mid-glyph rather than a wide
+    // frame.
     const rows = await renderCaptureRows(CLAUDE_CAPTURE_SHOTS);
     const tooWide = rows
       .filter((row) => [...row].length > CLAUDE_CAPTURE_SHOTS.cols)

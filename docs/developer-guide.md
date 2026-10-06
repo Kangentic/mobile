@@ -494,7 +494,7 @@ src/
                   #   dev-only mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
   devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures -
-                  #   shared by tests/unit and the mock desktop - plus claudeCapture*.ts
+                  #   shared by tests/unit and the mock desktop - plus claudeCapture.ts
                   #   (RECORDED Claude Code PTY output, generated) and recordedTerminal.ts
                   #   (its replay player)
   terminal/       # Pure liveTail cleaner, key sequences, WebView bridge, generated xterm.html
@@ -518,8 +518,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   xterm-page/ (the WebView glue as plain browser .js modules,
                   #   concatenated into one IIFE - shared top-level state, no imports),
                   #   captureClaudeFrames.mjs + buildTerminalFixture.mjs (record real Claude
-                  #   Code PTY output and pack it into src/devsupport/claudeCapture*.ts; dev
-                  #   utilities, not run in CI),
+                  #   Code PTY output narrow, widen its settled frame to the mock's 210x48
+                  #   grid with terminalFrame.mjs - the desktop demo's physical-row
+                  #   serializer and fill-never-letterbox rules, ported - and pack it into
+                  #   src/devsupport/claudeCapture.ts; dev utilities, not run in CI),
                   #   storeScreenshots.mjs, syncBranding.mjs (npm run sync:branding pulls the
                   #   brand rasters, the Board tab glyph and the activity marks out of
                   #   @kangentic/branding; --check gates drift in CI),

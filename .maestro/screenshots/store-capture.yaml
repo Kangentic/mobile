@@ -162,8 +162,9 @@ env:
 # into a canvas inside a WebView, so NOTHING it renders reaches the native view
 # hierarchy - a wait on the PTY text can only ever time out, however plainly the
 # line is on screen. That is why the settle below is a duration rather than a
-# selector: there is no native signal for "the PTY has painted some rows", and
-# the mock emits one line per second.
+# selector: there is no native signal for "the PTY has painted its rows". (The
+# mock seeds one settled 210x48 frame, so there is nothing further to wait for
+# once it has painted.)
 - tapOn:
     id: "session-mode-terminal"
 # Retried for the same reason the Changes tap below is: same switcher, same

@@ -290,9 +290,11 @@ export interface MockStaticSessionSpec {
    */
   replyText: string;
   /**
-   * Seed terminal content. Lines stay under the active capture's 44-column
-   * grid (activeGrid()), because the mirror renders at the desktop's reported
-   * grid and a longer line wraps mid-word on the one screen that ships.
+   * Seed terminal content, drawn at activeGrid() (210x48). Keep authored TEXT
+   * inside the narrowest store shelf's visible columns (69, the 6.9-inch
+   * iPhone; see the table above activeCapture()): the mirror pins the grid
+   * top-left and pans the rest, so a longer line is cut at the pane edge rather
+   * than wrapped. Rules and box edges may run to the grid edge.
    */
   scrollback: string;
   model: SessionUsageWire['model'];
@@ -1856,55 +1858,56 @@ export function staticSessionSeedTranscriptForTest(spec: MockStaticSessionSpec):
 }
 
 /**
- * The grid `dev:shots` reports, and where those numbers come from.
+ * The grid every mock session reports (210x48), and why the capture behind it
+ * was recorded at 66x48.
  *
- * The mirror renders the desktop's real grid and pans the overflow, so what is
- * VISIBLE is set by the auto-fitted font - and that font is fitted to the
- * terminal pane's HEIGHT, never its width (scripts/xterm-page/fontGeometry.js):
+ * The mirror draws every grid of 48 rows or fewer in ONE reference cell: the
+ * cell at which the desktop's resting grid, 210x48, fills the terminal pane's
+ * HEIGHT (scripts/xterm-page/state.js, fontGeometry.js). So the font, and with
+ * it how many columns are visible, is a property of the SCREEN, not of the
+ * grid, and a grid fills the pane only with 48 rows and at least the screen's
+ * visible columns. Anything less leaves terminal background below and to the
+ * right: the 44x38 capture this replaced filled about 57% of the width and 79%
+ * of the height of every store shelf once the reference cell landed, while the
+ * guard test still modelled the old per-grid fit and stayed green (task #100).
  *
- *   fontPx      = clamp(6, 20, floor(paneHeight / (rows * 1.2)))
- *   visibleCols = paneWidth / (fontPx * 0.6)
+ * Visible columns at the reference cell, MEASURED off the store captures
+ * (xterm floors the cell to whole device pixels, which is why the iPhone shows
+ * 69 rather than the 66 a font-times-0.6 estimate gives):
  *
- * So `rows` is a lever on column count, which is not obvious and is the whole
- * reason a wider grid is affordable at all: more rows means a smaller font
- * means more columns fit.
+ *   shelf            | font | cell         | visible columns
+ *   iPhone 6.9-inch  | 11px | 19px at 3x   | 69
+ *   Android phone    |  7px | 12px at 3x   | 90
+ *   Android 7-inch   | 14px | 14px at 1.75x| 77
+ *   Android 10-inch  | 15px | 18px at 2x   | 80 (a 4096 texture limit caps the font)
  *
- * MEASURED off the committed store captures rather than derived. On the
- * 6.9-inch iPhone (store/screenshots/ios/iphone-6.9) the cell is 11.8pt wide
- * and 23.9pt tall at rows:30, which pins font 20 and therefore a pane of
- * 440x720pt; on the Android phone shelf the same arithmetic gives 360x440dp.
- * iOS binds at every candidate because its pane is the tallest, so it takes the
- * biggest font and shows the FEWEST columns:
+ * So the capture is RECORDED at 66 columns, inside the narrowest shelf with
+ * three to spare: that is where Claude Code wraps its prose and sizes its diff
+ * box, so no word can reach a pane edge. It is ANNOUNCED at 210x48, the grid a
+ * real session rests at while a phone streams it (the desktop's
+ * RESTING_GRID_COLS/ROWS), and scripts/buildTerminalFixture.mjs widens the
+ * seed to it: rules and diff bands run out to the new edge, every recorded cell
+ * stays where it was. The store shot is then exactly what a phone shows for a
+ * session at rest, edge to edge on every shelf.
+ * tests/unit/storeScreenshots.test.ts holds this table and fails if the grid
+ * stops filling a shelf or any text crosses the narrowest one.
  *
- *   rows | iOS font / cols | Android phone font / cols
- *     30 |   20px  /  36   |      12px  /  50
- *     38 |   15px  /  48   |       9px  /  66
- *     44 |   13px  /  56   |       8px  /  75
- *     48 |   12px  /  61   |       7px  /  85
- *
- * The grid is 44x38: iOS shows 48 columns, so it fits with four spare, and BOTH
- * shelves keep about three quarters of the text size they ship at today. Going
- * wider is tempting and costs exactly that - at 48 rows the Android phone shelf
- * drops to a 7px font, roughly half of what it renders now, because that shelf
- * has the SHORTEST pane and therefore always takes the smallest font. Column
- * count is bound by iOS; legibility is bound by Android; a grid has to answer
- * to both.
- *
- * Overflowing is silent and single-platform: the first iOS capture cut a branch
- * name mid-word to "fix/sign-in-return-" and nothing caught it until a human
- * looked at the image. tests/unit/storeScreenshots.test.ts re-derives this
- * table and fails if the grid stops fitting.
+ * What it costs: the Android phone shelf has the shortest pane, so it renders
+ * at 7px. One cell for every open is a product rule, not a fixture choice; if
+ * 7px reads too small in the listing, that is a question for the mirror.
  */
 /**
  * ONE recording, replayed by every mode.
  *
  * An earlier revision carried two - a 120x30 capture for `dev:mock` and a
  * narrow one for `dev:shots` - on the argument that the debugging rig should
- * behave like a real wide desktop, pan and all. On a device that reads as a
- * frame clipped down its right edge, which is not what anybody wants to look at
- * while working, and it doubled the ways the reported grid could disagree with
- * the bytes. One grid that renders whole everywhere is worth more than
- * reproducing the awkwardness of a wide desktop.
+ * behave like a real wide desktop, pan and all. On a device that read as a
+ * frame clipped down its right edge, because Claude Code had laid its prose out
+ * across all 120 columns, and it doubled the ways the reported grid could
+ * disagree with the bytes. The widened capture is not that: its text stays
+ * inside 66 columns and only rules, bands and borders run past them, so it
+ * renders whole on every phone while reporting the same grid a real resting
+ * session does.
  */
 export function activeCapture(): RecordedTerminalCapture {
   return CLAUDE_CAPTURE_SHOTS;
@@ -1917,6 +1920,12 @@ export function activeCapture(): RecordedTerminalCapture {
  * static sessions too: they carry plain-text scrollback with no grid of their
  * own, and letting them announce a different one would mean a single mock
  * desktop claiming two pane sizes.
+ *
+ * The authored frames draw at it as well (claudeTuiFrame, the Codex, Gemini
+ * and opencode boxes), so their rules run to the grid edge and whatever they
+ * right-align - claudeTuiFrame's branch tag, a box's right border - sits past
+ * every phone screen until panned to. That is deliberate: it is where a real
+ * 210-column session puts them.
  */
 export function activeGrid(): { cols: number; rows: number } {
   const capture = activeCapture();
@@ -2489,7 +2498,7 @@ function baseTranscript(): TranscriptEntryWire[] {
       // diffFileList. A call site shown here as broken but absent from the
       // Changes lens reads as work the agent claimed and never did.
       content:
-        'src/routes/checkout.tsx:8:    return loginRedirect();\nsrc/routes/account.tsx:12:  return loginRedirect(route.path);\nsrc/auth/guard.ts:21:  return loginRedirect(to.path);',
+        'src/routes/checkout.tsx:8:    return loginRedirect();\nsrc/routes/account.tsx:12:  return loginRedirect(route.path);\nsrc/auth/guard.ts:19:  return loginRedirect(to.path);',
     },
     {
       kind: 'assistant',
@@ -2547,7 +2556,7 @@ function baseTranscript(): TranscriptEntryWire[] {
             // "before" states of the same function, one swipe apart.
             old_string: 'export function loginRedirect(path) {\n  redirect("/login");',
             new_string:
-              'export function loginRedirect(path: string) {\n  redirect(path ? `/login?next=${encodeURIComponent(path)}` : "/login");',
+              '// Remember where the user was headed so sign-in\n// can send them back there.\nexport function loginRedirect(\n  path = window.location.pathname +\n    window.location.search,\n) {\n  const next = encodeURIComponent(path);\n  redirect(`/login?next=${next}`);',
           },
         },
       ],
@@ -2667,7 +2676,7 @@ function baseTranscript(): TranscriptEntryWire[] {
       uuid: 'mock-result-task',
       ts: now - 224000,
       toolUseId: 'mock-tool-task',
-      content: 'Four call sites. checkout.tsx and account.tsx now pass the current path; guard.ts already did; the test helper is unaffected.',
+      content: 'Three call sites. account.tsx and guard.ts already pass the route path; checkout.tsx calls it bare, so it now gets the current path from the new default.',
     },
     {
       kind: 'assistant',
@@ -2716,12 +2725,15 @@ function baseTranscript(): TranscriptEntryWire[] {
  *
  * Not authored: these are the four files, and the exact line counts, that the
  * Claude Code session in src/devsupport/claudeCapture.ts changed while fixing
- * the sign-in redirect, taken from `git diff --stat` of the storefront fixture
- * repo it ran against. That is what keeps the Terminal, Chat and Changes lenses
- * describing ONE piece of work: a reviewer comparing 02-session-terminal
- * against 04-session-changes is exactly what a store listing invites, and the
- * previous authored list disagreed with the terminal about which files were
- * touched and by how much.
+ * the sign-in redirect, taken from `git diff --numstat` of the storefront
+ * fixture repo it ran against. That is what keeps the Terminal, Chat and
+ * Changes lenses describing ONE piece of work: a reviewer comparing
+ * 02-session-terminal against 04-session-changes is exactly what a store
+ * listing invites, and an earlier authored list disagreed with the terminal
+ * about which files were touched and by how much.
+ *
+ * The capture closes on checkout.tsx's edit still awaiting approval, so that
+ * file's change is the one the terminal's dialog shows, applied as shown.
  *
  * Regenerate both this and diffFileContent from the patch whenever the capture
  * is re-recorded.
@@ -2729,13 +2741,13 @@ function baseTranscript(): TranscriptEntryWire[] {
 export function diffFileList(): DiffFileListWire {
   return {
     files: [
-      { path: 'src/auth/login.ts', status: 'M', insertions: 2, deletions: 2, binary: false },
-      { path: 'src/auth/session.ts', status: 'M', insertions: 10, deletions: 2, binary: false },
-      { path: 'src/components/SignInForm.tsx', status: 'M', insertions: 3, deletions: 3, binary: false },
-      { path: 'src/routes/checkout.tsx', status: 'M', insertions: 3, deletions: 1, binary: false },
+      { path: 'src/auth/login.ts', status: 'M', insertions: 8, deletions: 2, binary: false },
+      { path: 'src/auth/session.ts', status: 'M', insertions: 21, deletions: 2, binary: false },
+      { path: 'src/components/SignInForm.tsx', status: 'M', insertions: 1, deletions: 1, binary: false },
+      { path: 'src/routes/checkout.tsx', status: 'M', insertions: 8, deletions: 1, binary: false },
     ],
-    totalInsertions: 18,
-    totalDeletions: 8,
+    totalInsertions: 38,
+    totalDeletions: 6,
   };
 }
 
@@ -2744,11 +2756,11 @@ export function diffFileList(): DiffFileListWire {
  * from the same `git diff` that produced diffFileList. The app derives the
  * unified diff itself (src/diff), so these are file contents, not patches.
  *
- * These are REAL edits, which means some lines are longer than a phone is wide
- * and the diff rows scroll horizontally. That was previously avoided by keeping
- * authored lines under ~46 columns; it is kept now because the alternative is
- * re-authoring the agent's work, and a review surface that only ever shows
- * short lines misrepresents what reviewing a real diff on a phone is like.
+ * These are REAL edits. They are short because the storefront repo is
+ * formatted at 48 columns and Claude Code follows a repo's prettier width: that
+ * is what lets the recorded terminal's diff fit a 66-column grid without
+ * wrapping (scripts/captureClaudeFrames.mjs), and it keeps most rows of this
+ * diff inside a phone's width too. Nothing here was shortened by hand.
  */
 export function diffFileContent(filePath: string): DiffFileContentWire {
   if (filePath === 'src/auth/login.ts') {
@@ -2769,8 +2781,14 @@ export function diffFileContent(filePath: string): DiffFileContentWire {
       modified: [
         'import { redirect } from "../router";',
         '',
-        'export function loginRedirect(path: string) {',
-        '  redirect(path ? `/login?next=${encodeURIComponent(path)}` : "/login");',
+        '// Remember where the user was headed so sign-in',
+        '// can send them back there.',
+        'export function loginRedirect(',
+        '  path = window.location.pathname +',
+        '    window.location.search,',
+        ') {',
+        '  const next = encodeURIComponent(path);',
+        '  redirect(`/login?next=${next}`);',
         '  return null;',
         '}',
         '',
@@ -2786,16 +2804,27 @@ export function diffFileContent(filePath: string): DiffFileContentWire {
     return {
       original: ['export function afterSignIn() {', '  return "/dashboard";', '}', ''].join('\n'),
       modified: [
-        'const DEFAULT_AFTER_SIGN_IN = "/dashboard";',
+        'const home = "/dashboard";',
         '',
-        '// Only path-absolute, same-origin targets are safe to navigate to. Rejects',
-        '// "//evil.com" and "/\\evil.com", which browsers resolve as protocol-relative URLs.',
-        'function isInternalPath(path: string | null | undefined): path is string {',
-        '  return !!path && path.startsWith("/") && path[1] !== "/" && path[1] !== "\\\\";',
-        '}',
-        '',
-        'export function afterSignIn(next?: string | null) {',
-        '  return isInternalPath(next) ? next : DEFAULT_AFTER_SIGN_IN;',
+        '// `next` comes from the query string, so anyone',
+        '// can set it: only follow it within this site.',
+        'export function afterSignIn(',
+        '  next: string | null,',
+        ') {',
+        '  if (!next) {',
+        '    return home;',
+        '  }',
+        '  const { origin } = window.location;',
+        '  let url: URL;',
+        '  try {',
+        '    url = new URL(next, origin);',
+        '  } catch {',
+        '    return home;',
+        '  }',
+        '  if (url.origin !== origin) {',
+        '    return home;',
+        '  }',
+        '  return url.pathname + url.search + url.hash;',
         '}',
         '',
       ].join('\n'),
@@ -2803,44 +2832,79 @@ export function diffFileContent(filePath: string): DiffFileContentWire {
     };
   }
   if (filePath === 'src/components/SignInForm.tsx') {
+    const before = [
+      'import { signIn } from "../auth/api";',
+      'import { afterSignIn } from "../auth/session";',
+      'import {',
+      '  useNavigate,',
+      '  useSearchParams,',
+      '} from "../router";',
+      '',
+      'export function SignInForm() {',
+      '  const navigate = useNavigate();',
+      '  const params = useSearchParams();',
+      '',
+      '  const onSubmit = async (form: FormData) => {',
+      '    const email = String(form.get("email"));',
+      '    const secret = String(form.get("password"));',
+      '    await signIn(email, secret);',
+      '    navigate(afterSignIn());',
+      '  };',
+      '',
+      '  return (',
+      '    <form action={onSubmit}>',
+      '      <input name="email" type="email" />',
+      '      <input name="password" type="password" />',
+      '      <button type="submit">Sign in</button>',
+      '    </form>',
+      '  );',
+      '}',
+      '',
+    ];
     return {
-      original: [
-        'import { useNavigate, useSearchParams } from "../router";',
-        '',
-        'export function SignInForm() {',
-        '  const navigate = useNavigate();',
-        '  const params = useSearchParams();',
-        '',
-        '  const onSubmit = async () => {',
-        '    await signIn(email, password);',
-        '    navigate(afterSignIn());',
-        '  };',
-        '',
-      ].join('\n'),
-      modified: [
-        'import { useNavigate } from "../router";',
-        '',
-        'export function SignInForm() {',
-        '  const navigate = useNavigate();',
-        '',
-        '  const onSubmit = async () => {',
-        '    await signIn(email, password);',
-        '    const next = new URLSearchParams(window.location.search).get("next");',
-        '    navigate(afterSignIn(next));',
-        '  };',
-        '',
-      ].join('\n'),
+      original: before.join('\n'),
+      modified: before
+        .map((line) => (line === '    navigate(afterSignIn());' ? '    navigate(afterSignIn(params.get("next")));' : line))
+        .join('\n'),
       language: 'typescript',
     };
   }
   if (filePath === 'src/routes/checkout.tsx') {
     return {
-      original: 'if (!user) {\n  return loginRedirect();\n}\n',
+      original: [
+        'import { loginRedirect } from "../auth/login";',
+        'import { useUser } from "../auth/useUser";',
+        'import { CheckoutSummary } from "../ui";',
+        '',
+        'export function CheckoutRoute() {',
+        '  const user = useUser();',
+        '  if (!user) {',
+        '    return loginRedirect();',
+        '  }',
+        '',
+        '  return <CheckoutSummary user={user} />;',
+        '}',
+        '',
+      ].join('\n'),
       modified: [
-        'if (!user) {',
-        '  // Empty on the server; loginRedirect falls back to a plain /login in that case.',
-        '  const { pathname, search, hash } = typeof window === "undefined" ? EMPTY_LOCATION : window.location;',
-        '  return loginRedirect(pathname + search + hash);',
+        'import { loginRedirect } from "../auth/login";',
+        'import { useUser } from "../auth/useUser";',
+        'import { CheckoutSummary } from "../ui";',
+        '',
+        'export function CheckoutRoute() {',
+        '  const user = useUser();',
+        '  if (!user) {',
+        '    // Only the browser has window and the',
+        '    // URL hash, so redirect from there.',
+        '    if (typeof window === "undefined") {',
+        '      return null;',
+        '    }',
+        '    const { pathname, search, hash } =',
+        '      window.location;',
+        '    return loginRedirect(pathname + search + hash);',
+        '  }',
+        '',
+        '  return <CheckoutSummary user={user} />;',
         '}',
         '',
       ].join('\n'),

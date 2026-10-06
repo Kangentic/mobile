@@ -181,11 +181,15 @@ Do not open a PR unless asked; the board's Tests column owns that.
 
 ## Traps worth knowing before they cost you a run
 
-- **Mock terminal copy has a 34-column budget**, including indentation. The
-  terminal mirror fits its font to screen HEIGHT, so a TALLER phone shows FEWER
-  columns: the 6.9-inch iPhone hits the font ceiling at 36-37 columns while a
-  1080x1920 Android shows ~53. Android will not reveal an overflow.
-  `tests/unit/storeScreenshots.test.ts` enforces the budget.
+- **The terminal's visible columns belong to the SHELF, not the grid.** The
+  mirror draws every grid of 48 rows or fewer in one reference cell, the cell
+  at which 210x48 fills the pane HEIGHT, so the iPhone shows 69 columns, the
+  7-inch 77, the 10-inch 80 and the Android phone 90, whatever the mock
+  reports. A grid with fewer rows or columns leaves background below and to the
+  right (the 44x38 capture filled 57% x 79% and nothing failed). The fixture is
+  therefore recorded at 66x48 and widened to 210x48, and any text past column
+  69 is cut on iOS only. `tests/unit/storeScreenshots.test.ts` enforces both;
+  the numbers are in `src/connection/mockDesktop.ts` above `activeCapture()`.
 - **`- back` is not one gesture.** Android has a button, iOS gets an edge swipe
   that is ambiguous over the session screen's three-page pager. The flow taps
   the native bar button (`resource-id: BackButton`) where it exists.

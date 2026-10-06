@@ -127,12 +127,13 @@ reproduced there.
 
 Three things bit here, and all three were invisible on Android:
 
-- **The terminal shows FEWER columns on a bigger phone.** The mirror renders the desktop's real
-  120-column grid and pans the overflow, and the font is auto-fitted to the screen HEIGHT, so a
-  taller viewport picks a bigger font and fits less across. The 6.9-inch iPhone hits the 20px
-  ceiling at 36-37 columns; a 1080x1920 Android phone lands near 11px and shows about 53. Mock
-  terminal copy is therefore budgeted to 34 columns including indentation, enforced by
-  `tests/unit/storeScreenshots.test.ts`.
+- **The terminal shows the FEWEST columns on the iPhone.** The mirror draws every grid in one
+  reference cell, fitted so the desktop's 210x48 resting grid fills the pane HEIGHT, and pans
+  the rest. The 6.9-inch iPhone's tall pane gets the biggest cell and shows 69 columns; the
+  Android shelves show 77 (7-inch), 80 (10-inch) and 90 (phone). The mock terminal is recorded
+  at 66 columns so every word sits inside the iPhone's, then widened to 210x48 so its rules and
+  diff bands reach the edge of every shelf. `tests/unit/storeScreenshots.test.ts` enforces
+  both.
 - **`- back` is not one gesture.** Android has a real back button; iOS gets a left-edge swipe,
   which is ambiguous over the session screen's three-page pager. The flow taps the native bar
   button (`resource-id: BackButton`) where it exists instead.
