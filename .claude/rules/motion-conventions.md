@@ -68,15 +68,17 @@ Tab switches never slide: peers are not a hierarchy.
   `pressedScale`). `SegmentedSwitcher`'s indicator (it self-heals on the next switch). And every
   `exiting=` preset (`ConnectionBanner`, `SessionSwapVeil`): Reanimated removes an exiting view
   only in the animation's finished callback on the UI runtime
-  (`react-native-reanimated/src/layoutReanimation/animationsManager.ts`, the `EXITING` branch),
-  so a lost frame leaves the banner or veil on screen. If one of those is ever reported stuck
+  (`react-native-reanimated/src/layoutReanimation/animationsManager.native.ts`, the
+  `shouldRemoveView` / `EXITING` branch, unchanged in 4.7.1 even though 4.7.0 made the new
+  layout-animations engine the default), so a lost frame leaves the banner or veil on screen. If one of those is ever reported stuck
   after a resume, start here, and ask whether the spinners still turned: a dead frame loop
   freezes all of them at once.
 - Never `setState` from a gesture or scroll handler. Use a shared value plus `useAnimatedStyle`.
 - Never read or write a shared value during render. It fires mid-reconciliation, and a re-render
   you did not cause replays the write. Touch shared values only in worklets, handlers and effects.
 - Prefer `.get()` and `.set()` over direct `.value` access. On Reanimated 4 (this project pins
-  4.5.1) they are the documented compiler-safe form; direct `.value` is the shape the React
+  4.7.1, held past the SDK 57 mapping via `expo.install.exclude`) they are the documented
+  compiler-safe form; direct `.value` is the shape the React
   Compiler cannot see through. The two places that predated this (`PressScale.tsx` and the Agents
   feed's section pulse, now `src/screens/home/SectionLandingPulse.tsx`) have both been converted.
   Convert any other `.value` you find when you touch the file rather than in a sweep, the same way
@@ -128,22 +130,31 @@ by `skeletonPulse.holdAfterMs` (10 s, then the static branch) because a board st
 skeleton by a lost subscribe was measured drawing 60 frames a second for the ninety seconds the
 stall lasted, and nothing about a stall stops a tween.
 
-**But do not read that as "Reanimated is idle when nothing animates".** It is not, and the
-difference matters when you go looking for a cost. `scheduledMapperRun` in
-`react-native-reanimated/src/mappers.ts` re-arms itself EVERY FRAME for the life of the process on
-native - the comment says so outright ("We always run mappers on native") - starting at init, not
-when an animation begins. `useAnimatedStyle` registers one mapper per mounted component
+**But do not read that as "Reanimated is idle when nothing animates" - at least, not on the
+version this was measured on.** On **4.5.1**, `scheduledMapperRun` in
+`react-native-reanimated/src/mappers.ts` re-armed itself EVERY FRAME for the life of the process on
+native - the comment said so outright ("We always run mappers on native") - starting at init, not
+when an animation began. `useAnimatedStyle` registers one mapper per mounted component
 (`useAnimatedStyle.ts` -> `startMapper`); `mapperRun()` skips clean mappers, but calls
 `updateMappersOrder()`, a recursive topological sort over ALL of them, whenever the mapper count
 changes - which FlashList recycling does constantly.
 
-So the frame loop cannot be "stopped" - and, corrected by measurement (2026-08-30): the useful
-question is **how many mappers are REGISTERED**, not only which are dirty. An in-process A/B on a
-release build (the `extra-mappers` probe variant) added 64 clean, never-animating mappers to the
-Agents list and idle CPU went from ~41% to ~70%, back to ~39% when removed - **~0.47 CPU points
+So on 4.5.1 the frame loop could not be "stopped" - and, corrected by measurement (2026-08-30): the
+useful question was **how many mappers are REGISTERED**, not only which are dirty. An in-process A/B
+on a release build (the `extra-mappers` probe variant) added 64 clean, never-animating mappers to
+the Agents list and idle CPU went from ~41% to ~70%, back to ~39% when removed - **~0.47 CPU points
 per registered mapper, dirty or not**. An earlier revision of this paragraph claimed clean mappers
 were skipped for free; that was read out of `mapperRun()`'s early-continue and did not survive the
-experiment. Practical consequences, all load-bearing:
+experiment.
+
+**4.7.1 removed that loop (read from source, task #102).** A diff of `mappers.ts` 4.5.1 -> 4.7.1
+deletes the self-re-arming `schedulingFunction(scheduledMapperRun)` and its "We always run mappers
+on native" comment; native now schedules a run only from `maybeRequestUpdates()`, when a mapper's
+input shared value changes, the same on-demand path web always used. **Whether registered-but-clean
+mappers are therefore free on 4.7.1 is NOT yet measured** - that is exactly the kind of claim the
+previous paragraph records being wrong once. The `extra-mappers` arm is the A/B that settles it on
+a 4.7.1 release build; until it is re-run, keep treating mappers as costly. Practical
+consequences, all load-bearing either way:
 
 - **Register an animated hook only on the branch that animates.** A `useAnimatedStyle` /
   `useAnimatedProps` above an early return runs (and registers) on EVERY branch - an idle row
