@@ -124,6 +124,16 @@ describe('ColumnStrip', () => {
       expect(within(screen.getByTestId(`${STRIP_TEST_ID}-icon`)).UNSAFE_queryByType(CircleCheckBig)).not.toBeNull();
     });
 
+    /** Column colors are desktop-authored data: a blank one draws the faint text color rather than an invisible, unfilled marker. */
+    it('falls back to the faint text color for a column with no color of its own', () => {
+      renderStrip({
+        column: boardColumnFixture({ id: 'lane-bare', name: 'Bare', role: null, icon: 'square-code', color: '' }),
+        track: [{ columnId: 'lane-bare', name: 'Bare', color: '', state: 'current' }],
+      });
+      expect(markerTintStyle().backgroundColor).toBe(darkTerminalTheme.colors.textMuted);
+      expect(within(screen.getByTestId(`${STRIP_TEST_ID}-icon`)).UNSAFE_getByType(SquareCode).props.color).toBe(darkTerminalTheme.colors.textMuted);
+    });
+
     /** The same fallback as the Board's chip bar and the session header: a dot in the column's color, never the desktop's former `square`. */
     it('falls back to a dot in the column\'s color when there is no icon and no role', () => {
       renderStrip({
