@@ -9,7 +9,6 @@ import { isRecord, type JsonValue, type TranscriptEntryWire } from '@kangentic/p
 import { splitPathForDisplay } from '@/diff/pathDisplay';
 
 const SUMMARY_MAX_LENGTH = 80;
-const GENERIC_SUMMARY = 'Waiting for your approval';
 
 /** Tools whose one-line summary shows the basename of `input.file_path`. */
 const FILE_PATH_TOOL_NAMES = new Set(['Edit', 'Write', 'Read', 'NotebookEdit']);
@@ -238,21 +237,26 @@ function firstLineOf(text: string): string {
 }
 
 /**
- * One-line triage-card summary of the awaited prompt. Falls back to a
- * generic string whenever the tool_use could not be located or its input is
+ * One-line triage-card summary of the awaited prompt, or null when there is
+ * nothing specific to say: the tool_use could not be located, or its input is
  * not the shape the summarizer expects.
+ *
+ * Null, never a generic line. This used to return "Waiting for your approval",
+ * which restated what the card's Idle section and its icon already say (the
+ * filler the UI copy rule bans) and displaced the agent's own words. The card
+ * falls back to the agent's last message, then the task description, instead.
  */
 export function buildPendingPromptSummary(
   toolUse: { name: string; input: JsonValue } | null,
-): string {
+): string | null {
   if (toolUse === null) {
-    return GENERIC_SUMMARY;
+    return null;
   }
   const { name, input } = toolUse;
   if (name === 'AskUserQuestion') {
     const parsedInput = parseAskUserQuestionInput(input);
     if (parsedInput === null) {
-      return GENERIC_SUMMARY;
+      return null;
     }
     return capSummary(parsedInput.questions[0].question);
   }
