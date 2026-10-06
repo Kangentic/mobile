@@ -2,13 +2,15 @@ import React, { useCallback } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Clock, GitCompareArrows } from 'lucide-react-native';
+import { CirclePlay, Clock, GitCompareArrows } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, StatusSpinner, Text, useTheme } from '@/components';
 import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
 import { getColumnIcon } from '@/components/board/columnIcons';
 import { sectionForEntry, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { findTaskById, selectTaskColumn, useBoardStore } from '@/state/boardStore';
+import { resumeTaskSession } from '@/connection/actions';
+import { useResumeOffer } from './useResumeOffer';
 
 export interface TaskHeaderProps {
   taskTitle: string;
@@ -32,6 +34,8 @@ const STATUS_GLYPH_SIZE = 16;
 const COLUMN_CHIP_MAX_WIDTH = 120;
 const COLUMN_CHIP_ICON_SIZE = 14;
 const COLUMN_CHIP_DOT_SIZE = 8;
+/** The approved card's ring: 2 dp of padding inside a hairline circle. */
+const RESUME_RING_PADDING = 2;
 
 export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = null, onOpenChanges }: TaskHeaderProps): React.JSX.Element {
   const theme = useTheme();
@@ -56,6 +60,7 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
   // where the chip is hidden anyway.
   const locatedProjectId = useBoardStore((state) => (taskId ? (findTaskById(state, taskId)?.projectId ?? null) : null));
   const showColumnChip = column !== null && locatedProjectId !== null;
+  const resumeOffer = useResumeOffer(taskId, sessionId);
 
   const openMoveSheet = useCallback(() => {
     if (!taskId || !locatedProjectId) return;
@@ -85,15 +90,23 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
         {/* The desktop task view header's glyph for each state
             (TaskDetailHeader.tsx): the agent's own icon while it runs (green
             spinner working, yellow mail otherwise), a still clock while
-            queued, the spinner while a respawn is in flight, and nothing once
-            the session has ended. */}
-        {sessionDisplay.kind === 'queued' ? (
+            queued, the spinner while a respawn is in flight, the Resume
+            control for a paused session the desktop offers Resume for, and
+            nothing once the session has ended. A paused session WITHOUT the
+            offer shows nothing, as the desktop shows no toggle when its own
+            Resume is blocked. */}
+        {resumeOffer.offered && taskId !== null && locatedProjectId !== null ? (
+          <HeaderResumeButton
+            resuming={resumeOffer.attempt?.phase === 'resuming'}
+            onPress={() => void resumeTaskSession(taskId, locatedProjectId)}
+          />
+        ) : sessionDisplay.kind === 'queued' ? (
           <View testID="task-header-status-queued">
             <Clock size={STATUS_GLYPH_SIZE} color={theme.colors.textMuted} />
           </View>
         ) : sessionDisplay.kind === 'preparing' ? (
           <StatusSpinner size={STATUS_GLYPH_SIZE} color={theme.colors.textMuted} testID="task-header-status-preparing" />
-        ) : activityEntry !== null && (sessionDisplay.kind === 'running' || sessionDisplay.kind === 'suspended') ? (
+        ) : activityEntry !== null && sessionDisplay.kind === 'running' ? (
           <AgentStatusIcon kind={sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'} testID="task-header-status" />
         ) : null}
         <Text variant="bodyStrong" numberOfLines={1} style={styles.title}>
@@ -140,6 +153,47 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
       </Row>
       <ConnectionBanner />
     </>
+  );
+}
+
+/**
+ * The desktop task header's Resume control for a paused session
+ * (TaskDetailHeader.tsx 309-333): a muted play circle, and the muted spinner
+ * while the resume runs, when it cannot be pressed again. Drawn in a hairline
+ * ring so the tap target is visible, inside the 44pt touch box.
+ */
+function HeaderResumeButton({ resuming, onPress }: { resuming: boolean; onPress: () => void }): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={resuming ? 'Resuming session' : 'Resume session'}
+      accessibilityState={{ disabled: resuming, busy: resuming }}
+      disabled={resuming}
+      onPress={onPress}
+      testID="task-header-resume"
+      style={[styles.resumeTarget, { minWidth: theme.minTouchSize, minHeight: theme.minTouchSize }]}
+    >
+      {({ pressed }) => (
+        <View
+          style={[
+            styles.resumeRing,
+            {
+              borderRadius: theme.radii.full,
+              borderColor: theme.colors.border,
+              padding: RESUME_RING_PADDING,
+              opacity: pressed ? 0.7 : 1,
+            },
+          ]}
+        >
+          {resuming ? (
+            <StatusSpinner size={STATUS_GLYPH_SIZE} color={theme.colors.textMuted} testID="task-header-resume-spinner" />
+          ) : (
+            <CirclePlay size={STATUS_GLYPH_SIZE} color={theme.colors.textMuted} />
+          )}
+        </View>
+      )}
+    </Pressable>
   );
 }
 
@@ -215,6 +269,13 @@ const styles = StyleSheet.create({
   changesButton: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  resumeTarget: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resumeRing: {
+    borderWidth: StyleSheet.hairlineWidth,
   },
   columnChipTarget: {
     justifyContent: 'center',

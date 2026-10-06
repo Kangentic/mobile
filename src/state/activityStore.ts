@@ -168,6 +168,22 @@ export interface SessionActivityEntry {
    * because it carries `intentional`, which a snapshot cannot.
    */
   sessionStatus: ReadStreamSessionStatusWire | null;
+  /**
+   * Whether the desktop offers Resume for this paused session, which gates
+   * every Resume surface on the phone (the session screen's button, the
+   * header's play button, the long-press item). Its source is the read-stream
+   * snapshot's and the `status` payload's `resumable`, added for this purpose
+   * by desktop task #762 in protocol 0.16.0: true only when `start-session`
+   * will resume the session exactly as the desktop's own Resume button does,
+   * with no on-enter automations and no column message.
+   *
+   * Always false until the phone adopts 0.16.0 (mobile task #101). That is
+   * the point, not a gap: every desktop before it answers `start-session`
+   * on a paused task the way a move into the column does, re-running the
+   * column's automations, so on those desktops Resume stays hidden rather
+   * than meaning something different from the desktop's.
+   */
+  resumable: boolean;
 }
 
 interface ActivityStoreState {
@@ -275,6 +291,7 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     // Null, never 'running': no snapshot has landed for a freshly registered
     // session, and the two must stay distinguishable - see the field's docs.
     sessionStatus: null,
+    resumable: false,
   };
 }
 

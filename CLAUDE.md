@@ -183,7 +183,9 @@ src/
                   #   tap routing, Settings status and RICH display are all cross-platform; iOS
                   #   decrypts in the targets/nse/ extension, Android in the Notifee handler)
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
-                  #   channel-fed, in-memory) + the non-Zustand terminalFeed PTY ring buffers +
+                  #   channel-fed, in-memory; resume, the one Resume attempt per task that the
+                  #   session screen, header and long-press hub share) + the non-Zustand
+                  #   terminalFeed PTY ring buffers +
                   #   memoryShed (registers the OS-memory-pressure reactions; lives here rather
                   #   than in observability/ because it touches the stores, and here rather than
                   #   in connection/ because that directory is banned from the observability door)
@@ -383,7 +385,8 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   allowlist decides what it may do. Eleven verbs (`read-stream`, `read-board`, `read-diff`,
   `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
   `board-tool-read`, `board-tool-write`, `register-push`, and since protocol 0.15.0
-  `start-session`, which the phone does not send yet); **the default pairing grant is all
+  `start-session`, which the phone sends only for Resume, gated on a desktop flag that arrives
+  with protocol 0.16.0); **the default pairing grant is all
   eleven** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts` - pairing proves
   possession of both devices, so pairing is the approval). The per-verb allowlist exists to
   NARROW a device from the desktop's devices panel, not as a default-deny gate.

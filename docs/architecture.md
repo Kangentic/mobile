@@ -117,7 +117,7 @@ decides *what* it may do:
 | `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...) |
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
-| `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone does not send it yet: the session screen's "Start again" is a follow-up (a button on the swap veil during the waiting phase) |
+| `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it only for Resume on a paused session, gated on the desktop's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it. The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
@@ -703,8 +703,24 @@ the screen focused), and its one Reanimated mapper is mounted only on a spinning
 
 **`TaskHeader`** reads the same `cardSessionDisplay` and draws the desktop task view header's glyph
 for each state (`TaskDetailHeader.tsx`): the agent icon while running, a still clock while queued,
-the spinner while a respawn is in flight, nothing once the session has ended. No surface draws an
-agent icon for a session that is not running.
+the spinner while a respawn is in flight, the Resume control for a paused session the desktop
+offers Resume for, nothing once the session has ended. No surface draws an agent icon for a session
+that is not running.
+
+**Resume** is the desktop task view's, from the phone, on three surfaces: the session screen's
+terminal lens shows the desktop's "Resume session" button in place of the terminal (`ResumePanel`,
+quick keys hidden), the header shows a play circle, and the long-press hub gains "Resume session".
+All three read one gate, `useResumeOffer`: a session the card reads as Paused that the desktop
+marks `resumable`. That flag (`SessionActivityEntry.resumable`) arrives with protocol 0.16.0
+(desktop task #762), sent only by a desktop whose `start-session` resumes a paused task exactly as
+its own Resume button does, with no on-enter automations and no column message. Every earlier
+desktop answers `start-session` the way a move into the column does, re-running the column's
+automations, so until the phone adopts 0.16.0 (mobile task #101) the flag is always false and
+Resume stays hidden rather than meaning something different from the desktop's. A tap sends
+`start-session` (`resumeTaskSession`); the attempt lives in `resumeStore`, shared by the three
+surfaces, and reads "Resuming agent..." until the paused session ends into its successor, or fails
+with the desktop's refusal text, or with "Session could not be resumed." after `RESUME_WAIT_MS`
+(20 s), since a resume that fails after the desktop accepted it sends the phone nothing.
 
 **The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
 you), Active, then the two statuses that are not running: Queued, its own section, and Paused,

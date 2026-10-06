@@ -23,6 +23,8 @@ import {
 } from './SessionSwapVeil';
 import { SessionInputBar } from './SessionInputBar';
 import { ModeToggleHint } from './ModeToggleHint';
+import { ResumePanel } from './ResumePanel';
+import { useResumeOffer } from './useResumeOffer';
 import { resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
 
@@ -771,8 +773,18 @@ export function SessionScreen(): React.JSX.Element {
   // veil over it, so what the WebView does after the PTY dies can be measured
   // on its own. Inert (dead code) outside a probe build.
   const probeBaresSwap = getRetentionProbeVariant() === 'no-swap-veil';
+  // A paused session the desktop offers Resume for: the terminal lens shows
+  // the desktop task view's Resume button in place of the terminal, and the
+  // quick keys go. A pause is not a swap (a respawn in flight carries a label,
+  // which reads as preparing, never as paused), so the veil yields to it.
+  const resumeOffer = useResumeOffer(taskId, displaySessionId);
+  const resumePanelShown = resumeOffer.offered && projectId !== null;
   const showQuietVeil =
-    quietWindowOpen && !leaveScreen && !probeBaresSwap && (quietWindowCleared ? mode === 'terminal' : !overlaysYieldToChanges);
+    quietWindowOpen &&
+    !leaveScreen &&
+    !probeBaresSwap &&
+    !resumePanelShown &&
+    (quietWindowCleared ? mode === 'terminal' : !overlaysYieldToChanges);
   // The veil occludes the panes, visually and for assistive technology.
   const overlayCoversPanes = showQuietVeil;
   // The footer never leaves. A footer that blinked out the instant the
@@ -854,10 +866,14 @@ export function SessionScreen(): React.JSX.Element {
                 sessionId={displaySessionId}
                 active={mode === 'terminal'}
                 cleanFeedEnabled={chatFallbackActive}
-                // The waiting phase drops the quick-key row, so the pane is
-                // taller than the lens is ever read at: not a fit height.
-                fitLayoutIsReference={!footerSwitcherOnly}
+                // The waiting phase and the Resume panel drop the quick-key
+                // row, so the pane is taller than the lens is ever read at:
+                // not a fit height.
+                fitLayoutIsReference={!footerSwitcherOnly && !resumePanelShown}
               />
+              {resumePanelShown && projectId !== null ? (
+                <ResumePanel taskId={taskId} projectId={projectId} attempt={resumeOffer.attempt} />
+              ) : null}
             </View>
             <View
               style={[styles.pane, mode === 'chat' ? styles.paneVisible : styles.paneHidden]}
@@ -895,6 +911,7 @@ export function SessionScreen(): React.JSX.Element {
           chatAttention={chatAttention}
           suspended={footerSuspended}
           switcherOnly={footerSwitcherOnly}
+          quickKeysHidden={resumePanelShown}
         />
       </KeyboardAvoidingView>
     </Screen>

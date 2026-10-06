@@ -130,4 +130,32 @@ describe('SessionInputBar', () => {
       expect(onModeChange).toHaveBeenCalledWith('changes');
     });
   });
+
+  /**
+   * A paused session (the terminal lens shows Resume): the quick keys go,
+   * since there is no live session to type into, but only in terminal mode.
+   * Chat keeps its composer, unlike switcherOnly.
+   */
+  describe('quickKeysHidden (a paused session)', () => {
+    it('drops the quick keys in terminal mode', () => {
+      render(
+        <ThemeProvider>
+          <SessionInputBar sessionId="sess-1" mode="terminal" onModeChange={jest.fn()} chatAttention={false} quickKeysHidden />
+        </ThemeProvider>,
+      );
+
+      expect(screen.queryByTestId('quick-key-esc', { includeHiddenElements: true })).toBeNull();
+      expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
+    });
+
+    it('keeps the composer in chat mode', () => {
+      render(
+        <ThemeProvider>
+          <SessionInputBar sessionId="sess-1" mode="chat" onModeChange={jest.fn()} chatAttention={false} quickKeysHidden />
+        </ThemeProvider>,
+      );
+
+      expect(screen.getByTestId('composer-input')).toBeTruthy();
+    });
+  });
 });

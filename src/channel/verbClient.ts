@@ -2,6 +2,7 @@ import {
   parseReadBoardResponsePayload,
   parseReadDiffResponsePayload,
   parseReadStreamResponsePayload,
+  parseStartSessionResponsePayload,
   parseTranscriptWindowResponsePayload,
   type AnswerPermissionPromptRequestPayload,
   type AnswerPermissionPromptResponsePayload,
@@ -26,6 +27,8 @@ import {
   type RegisterPushResponsePayload,
   type SendUserMessageRequestPayload,
   type SendUserMessageResponsePayload,
+  type StartSessionRequestPayload,
+  type StartSessionResponsePayload,
   type TranscriptWindowResponsePayload,
   isRecord,
 } from '@kangentic/protocol';
@@ -236,6 +239,19 @@ export class VerbClient {
       if (!isRecord(value) || typeof value.ok !== 'boolean') throw new Error('move-task response is missing "ok"');
       return { ok: value.ok };
     });
+  }
+
+  /**
+   * Starts or resumes a task's session in the column it already sits in. The
+   * desktop answers when it ACCEPTS the start, not when the agent is up:
+   * `starting` means the successor will arrive as the usual board and stream
+   * events; `live` means a session is already live (queued counts), so no event
+   * is coming. A failure after acceptance sends nothing back, so a caller owns
+   * its own wait bound.
+   */
+  async startSession(input: StartSessionRequestPayload): Promise<StartSessionResponsePayload> {
+    const response = await this.requireOk('start-session', asRequestJson(input));
+    return this.parsePayload('start-session', response, parseStartSessionResponsePayload);
   }
 
   async answerPermissionPrompt(input: AnswerPermissionPromptRequestPayload): Promise<AnswerPermissionPromptResponsePayload> {

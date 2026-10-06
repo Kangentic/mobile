@@ -1,10 +1,11 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import { Clock, LoaderCircle } from 'lucide-react-native';
+import { CirclePlay, Clock, LoaderCircle } from 'lucide-react-native';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { TaskHeader } from '@/screens/task/TaskHeader';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
+import { useResumeStore } from '@/state/resumeStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 jest.mock('react-native-safe-area-context', () =>
@@ -15,6 +16,11 @@ jest.mock('react-native-safe-area-context', () =>
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
+}));
+
+const mockResumeTaskSession = jest.fn().mockResolvedValue({ phase: 'resuming', startedAt: 0 });
+jest.mock('@/connection/actions', () => ({
+  resumeTaskSession: (taskId: string, projectId: string) => mockResumeTaskSession(taskId, projectId),
 }));
 
 /**
@@ -253,5 +259,64 @@ describe('TaskHeader status glyph', () => {
 
     expect(renderedStatusTone()).toBeNull();
     expect(screen.queryByTestId('task-header-status-preparing')).toBeNull();
+  });
+
+  /**
+   * A paused session the desktop marks resumable. No wire on protocol 0.15.0
+   * carries the flag (desktop #762 adds it in 0.16.0), so it is set on the
+   * entry directly; the snapshot alone leaves it false.
+   */
+  function seedPausedSession({ resumable }: { resumable: boolean }): void {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
+    if (resumable) {
+      useActivityStore.setState((state) => ({
+        bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: true } },
+      }));
+    }
+  }
+
+  it('offers the desktop\'s play circle for a paused session the desktop marks resumable, and resumes on tap', async () => {
+    useResumeStore.setState({ byTaskId: {} });
+    seedPausedSession({ resumable: true });
+
+    renderTaskHeader({ sessionId: 'sess-1' });
+
+    const resumeButton = screen.getByTestId('task-header-resume');
+    expect(within(resumeButton).UNSAFE_getByType(CirclePlay)).toBeTruthy();
+    expect(resumeButton.props.accessibilityLabel).toBe('Resume session');
+    expect(renderedStatusTone()).toBeNull();
+    await act(async () => {
+      fireEvent.press(resumeButton);
+    });
+    expect(mockResumeTaskSession).toHaveBeenCalledWith('task-1', 'project-1');
+  });
+
+  /**
+   * The desktop draws no toggle when its own Resume is blocked; a desktop
+   * that does not mark the session resumable is the phone's blocked case. The
+   * seeded entry is idle, so a header that fell through would draw the
+   * envelope, which is what it drew for a paused session before Resume.
+   */
+  it('draws nothing for a paused session the desktop does not mark resumable', () => {
+    seedPausedSession({ resumable: false });
+
+    renderTaskHeader({ sessionId: 'sess-1' });
+
+    expect(screen.queryByTestId('task-header-resume')).toBeNull();
+    expect(renderedStatusTone()).toBeNull();
+  });
+
+  it('spins the muted spinner, and takes no second tap, while the resume runs', () => {
+    useResumeStore.setState({ byTaskId: {} });
+    useResumeStore.getState().markResuming('task-1', Date.now());
+    seedPausedSession({ resumable: true });
+
+    renderTaskHeader({ sessionId: 'sess-1' });
+
+    expect(screen.getByTestId('task-header-resume-spinner')).toBeTruthy();
+    expect(screen.getByTestId('task-header-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
   });
 });
