@@ -166,7 +166,8 @@ passes whether the pane is full or empty, and Metro logged
 came out blank. The next run of the identical commit rendered perfectly.
 
 File size is the cheap tell, and worth checking before you even open the
-frames. A full 6.9-inch terminal frame is ~317KB; the blank one was 104KB,
+frames. A full 6.9-inch terminal frame is ~380KB (the 210x48 fixture,
+2026-10; it was ~317KB with the old 44x38 one); the blank one was 104KB,
 while every other frame in the same run was within noise. If
 `02-session-terminal` comes back dramatically smaller than its neighbours,
 look at it before doing anything else, and just re-run - it is a WebGL context
@@ -186,7 +187,8 @@ Do not open a PR unless asked; the board's Tests column owns that.
   at which 210x48 fills the pane HEIGHT, so the iPhone shows 69 columns, the
   7-inch 77, the 10-inch 80 and the Android phone 90, whatever the mock
   reports. A grid with fewer rows or columns leaves background below and to the
-  right (the 44x38 capture filled 57% x 79% and nothing failed). The fixture is
+  right (the 44x38 capture filled 49-64% of the width by shelf and 79% of the
+  height, and nothing failed). The fixture is
   therefore recorded at 66x48 and widened to 210x48, and any text past column
   69 is cut on iOS only. `tests/unit/storeScreenshots.test.ts` enforces both;
   the numbers are in `src/connection/mockDesktop.ts` above `activeCapture()`.

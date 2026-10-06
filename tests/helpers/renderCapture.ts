@@ -2,6 +2,26 @@ import { Terminal } from '@xterm/headless';
 
 import type { RecordedTerminalCapture } from '@/devsupport/recordedTerminal';
 
+/** A headless terminal at the capture's own grid, which is the only grid its bytes replay correctly into. */
+function createCaptureTerminal(capture: RecordedTerminalCapture): Terminal {
+  return new Terminal({
+    cols: capture.cols,
+    rows: capture.rows,
+    scrollback: 500,
+    allowProposedApi: true,
+  });
+}
+
+/**
+ * xterm parses writes on a macrotask, so reading the buffer straight after
+ * the last write() snapshots a STALE grid. A zero-length write's callback
+ * fires only once every queued chunk ahead of it has been parsed, which is
+ * exactly the barrier needed - and is why these helpers are async.
+ */
+function settle(terminal: Terminal): Promise<void> {
+  return new Promise<void>((resolveFlush) => terminal.write('', resolveFlush));
+}
+
 /**
  * Replay a recorded capture through a headless xterm and read back the visible
  * grid as plain text, one string per row.
@@ -20,29 +40,19 @@ export async function renderCaptureRows(
   capture: RecordedTerminalCapture,
   throughChunk?: number,
 ): Promise<string[]> {
-  const terminal = new Terminal({
-    cols: capture.cols,
-    rows: capture.rows,
-    scrollback: 500,
-    allowProposedApi: true,
-  });
+  const terminal = createCaptureTerminal(capture);
 
   terminal.write(capture.seedFrame);
   const lastChunk = throughChunk ?? capture.chunks.length - 1;
   for (let index = 0; index <= lastChunk && index < capture.chunks.length; index += 1) {
     terminal.write(capture.chunks[index].data);
   }
-
-  // xterm parses writes on a macrotask, so reading the buffer straight after
-  // the last write() snapshots a STALE grid. A zero-length write's callback
-  // fires only once every queued chunk ahead of it has been parsed, which is
-  // exactly the barrier needed - and is why this helper is async.
-  await new Promise<void>((resolveFlush) => terminal.write('', resolveFlush));
+  await settle(terminal);
 
   const buffer = terminal.buffer.active;
   const rows: string[] = [];
-  for (let y = buffer.baseY; y < buffer.baseY + capture.rows; y += 1) {
-    const line = buffer.getLine(y);
+  for (let lineIndex = buffer.baseY; lineIndex < buffer.baseY + capture.rows; lineIndex += 1) {
+    const line = buffer.getLine(lineIndex);
     rows.push(line ? line.translateToString(true) : '');
   }
   terminal.dispose();
@@ -64,25 +74,20 @@ export interface RenderedCell {
  * `translateToString`.
  */
 export async function renderCaptureCells(capture: RecordedTerminalCapture): Promise<RenderedCell[][]> {
-  const terminal = new Terminal({
-    cols: capture.cols,
-    rows: capture.rows,
-    scrollback: 500,
-    allowProposedApi: true,
-  });
+  const terminal = createCaptureTerminal(capture);
 
   terminal.write(capture.seedFrame);
   for (const chunk of capture.chunks) terminal.write(chunk.data);
-  await new Promise<void>((resolveFlush) => terminal.write('', resolveFlush));
+  await settle(terminal);
 
   const buffer = terminal.buffer.active;
   const scratchCell = buffer.getNullCell();
   const rows: RenderedCell[][] = [];
-  for (let y = buffer.baseY; y < buffer.baseY + capture.rows; y += 1) {
-    const line = buffer.getLine(y);
+  for (let lineIndex = buffer.baseY; lineIndex < buffer.baseY + capture.rows; lineIndex += 1) {
+    const line = buffer.getLine(lineIndex);
     const cells: RenderedCell[] = [];
-    for (let x = 0; x < capture.cols; x += 1) {
-      const cell = line?.getCell(x, scratchCell);
+    for (let column = 0; column < capture.cols; column += 1) {
+      const cell = line?.getCell(column, scratchCell);
       if (!cell) {
         cells.push({ glyph: ' ', background: 'default' });
         continue;
@@ -109,19 +114,14 @@ export async function renderCaptureCells(capture: RecordedTerminalCapture): Prom
  * that use it correct if a re-record streams again.
  */
 export async function renderCaptureAllRows(capture: RecordedTerminalCapture): Promise<string[]> {
-  const terminal = new Terminal({
-    cols: capture.cols,
-    rows: capture.rows,
-    scrollback: 500,
-    allowProposedApi: true,
-  });
+  const terminal = createCaptureTerminal(capture);
   const seen = new Set<string>();
 
   const collectVisibleRows = async (): Promise<void> => {
-    await new Promise<void>((resolveFlush) => terminal.write('', resolveFlush));
+    await settle(terminal);
     const buffer = terminal.buffer.active;
-    for (let y = buffer.baseY; y < buffer.baseY + capture.rows; y += 1) {
-      const line = buffer.getLine(y);
+    for (let lineIndex = buffer.baseY; lineIndex < buffer.baseY + capture.rows; lineIndex += 1) {
+      const line = buffer.getLine(lineIndex);
       const text = line ? line.translateToString(true) : '';
       if (text.trim().length > 0) seen.add(text);
     }

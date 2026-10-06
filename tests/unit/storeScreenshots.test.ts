@@ -16,7 +16,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   SHELVES,
@@ -255,9 +255,9 @@ describe('the shot list matches the capture flow', () => {
  *
  * This used to model the OLD fit, where the font came from the grid's own rows.
  * Under that model a 44x38 capture "fit" every target; under the real one it
- * filled about 57% of the pane's width and 79% of its height on every shelf,
- * with every diff line wrapped mid-identifier, and the test stayed green until a
- * human looked at a re-capture (task #100). The PNG was the right size and the
+ * filled 49-64% of the pane's width (44 of 69 to 90 visible columns) and 79%
+ * of its height on every shelf, with every diff line wrapped mid-identifier,
+ * and the test stayed green until a human looked at a re-capture (task #100). The PNG was the right size and the
  * flow passed, which is this repo's green-but-worthless-artifact shape, so the
  * check is mechanical rather than an eye on every capture.
  *
@@ -266,9 +266,11 @@ describe('the shot list matches the capture flow', () => {
  * with, inside the narrowest shelf, while rules and diff bands run out to 210.
  */
 describe('the recorded terminal fills every shelf at the reference cell', () => {
-  // From scripts/xterm-page/state.js and heightFit.js. Duplicated deliberately:
-  // the page fragments are browser scripts with no importable export, so the
-  // alternative is no check at all.
+  // The grid, the font clamps and the cell ratios are scripts/xterm-page/state.js's;
+  // the 0.97 texture budget is an inline literal in heightFit.js's
+  // textureCappedFontPx(). Duplicated deliberately: the page fragments are
+  // browser scripts with no importable export, so the alternative is no check
+  // at all.
   const REFERENCE_GRID_COLS = 210;
   const REFERENCE_GRID_ROWS = 48;
   const MIN_AUTO_FONT_PX = 6;
@@ -295,7 +297,8 @@ describe('the recorded terminal fills every shelf at the reference cell', () => 
    * pixel off task #99's re-captures of 02-session-terminal (2026-10-06, the
    * first captures taken after the reference cell landed): the pane is the
    * terminal-background run between the header and the quick-key bar, and the
-   * cell is the 44-column grid's diff band divided by 44.
+   * cell is the then-committed 44x38 fixture's diff band divided by its 44
+   * columns.
    *
    * The 10-inch shelf's 18px cell is what pins its texture limit: the height fit
    * alone gives font 17 (a 20px cell), and only a 4096 limit caps the 210-column
@@ -376,6 +379,46 @@ describe('the recorded terminal fills every shelf at the reference cell', () => 
     return row.map((cell) => cell.glyph).join('');
   }
 
+  /** The settled capture cell by cell, rendered once for every test below that reads cells. */
+  let settledCells: RenderedCell[][] = [];
+  beforeAll(async () => {
+    settledCells = await renderCaptureCells(CLAUDE_CAPTURE_SHOTS);
+  });
+
+  it("still uses the page's own grid, font clamps, cell ratios and texture budget", () => {
+    // The constants above are copies, so this model would go stale without a sound the day one of
+    // them is retuned in the page: every column count below would then describe a terminal the
+    // phone no longer draws. Read the page scripts as text (they are browser fragments with no
+    // export to import) and compare each declaration with the copy.
+    const pageDirectory = '../../scripts/xterm-page/';
+    const stateSource = readFileSync(fileURLToPath(new URL(`${pageDirectory}state.js`, import.meta.url)), 'utf8');
+    const heightFitSource = readFileSync(fileURLToPath(new URL(`${pageDirectory}heightFit.js`, import.meta.url)), 'utf8');
+
+    /** The number a `var NAME = <number>;` declaration gives, or null when there is no such declaration. */
+    function declaredNumber(source: string, name: string): number | null {
+      const match = new RegExp(`\\bvar ${name} = ([0-9.]+);`).exec(source);
+      return match === null ? null : Number(match[1]);
+    }
+
+    const modelled = {
+      REFERENCE_GRID_COLS,
+      REFERENCE_GRID_ROWS,
+      MIN_AUTO_FONT_PX,
+      MAX_AUTO_FIT_FONT_PX,
+      CELL_WIDTH_RATIO,
+      CELL_HEIGHT_RATIO,
+    };
+    const declared = Object.fromEntries(
+      Object.keys(modelled).map((name) => [name, declaredNumber(stateSource, name)]),
+    );
+    expect(declared).toEqual(modelled);
+
+    // textureCappedFontPx's budget is an inline literal, not a named constant.
+    const budgetMatch = /var budget = maxGlTextureSize \* ([0-9.]+);/.exec(heightFitSource);
+    expect(budgetMatch, 'heightFit.js still computes `var budget = maxGlTextureSize * <ratio>;`').not.toBeNull();
+    expect(Number(budgetMatch?.[1])).toBe(TEXTURE_BUDGET_RATIO);
+  });
+
   it('reproduces the cell measured on every shelf', () => {
     // Anchors the model to the captures. If this drifts, a pane measurement is
     // wrong and every column count below is wrong with it.
@@ -401,14 +444,14 @@ describe('the recorded terminal fills every shelf at the reference cell', () => 
     expect(CLAUDE_CAPTURE_SHOTS.cols).toBeLessThanOrEqual(REFERENCE_GRID_COLS);
   });
 
-  it('keeps every word inside the narrowest shelf, and the same fill at every shelf edge', async () => {
+  it('keeps every word inside the narrowest shelf, and the same fill at every shelf edge', () => {
     // Across the band of columns where some shelf's right edge falls - from the
     // narrowest shelf's last visible column to the widest's - every cell of a
     // row must look the same. Text there would be cut mid-word on iOS, and a
     // band or rule that stopped there would end mid-pane on a wider shelf.
     // Columns past the widest shelf are on no screen until panned to, which is
     // where a real 210-column session puts its padding and borders too.
-    const cells = await renderCaptureCells(CLAUDE_CAPTURE_SHOTS);
+    const cells = settledCells;
     const offenders: string[] = [];
     cells.forEach((row, rowIndex) => {
       const edges = row.slice(narrowestVisibleColumns - 1, widestVisibleColumns);
@@ -418,8 +461,8 @@ describe('the recorded terminal fills every shelf at the reference cell', () => 
     expect(offenders).toEqual([]);
   });
 
-  it('runs every diff band and every rule past the widest shelf edge', async () => {
-    const cells = await renderCaptureCells(CLAUDE_CAPTURE_SHOTS);
+  it('runs every diff band and every rule past the widest shelf edge', () => {
+    const cells = settledCells;
     const widestEdge = widestVisibleColumns - 1;
     const bandRows = cells.filter((row) => bandBackground(row) !== null);
     const ruleRows = cells.filter((row) => new RegExp(`[${HORIZONTAL_RULE_GLYPHS}]{8}`).test(rowText(row)));
@@ -440,14 +483,14 @@ describe('the recorded terminal fills every shelf at the reference cell', () => 
     expect(shortRules).toEqual([]);
   });
 
-  it('wraps no diff line', async () => {
+  it('wraps no diff line', () => {
     // Claude Code wraps a code line that is wider than its diff box onto a
     // continuation row with no line number - "-n.pathname" under
     // "window.locatio" - painted in the same added/removed colour. So the diff
     // colours are the ones on rows that DO open on a line number, and every row
     // in one of those colours must open on its own. (The submitted prompt is a
     // band too, in its own colour, and wraps like any prose.)
-    const cells = await renderCaptureCells(CLAUDE_CAPTURE_SHOTS);
+    const cells = settledCells;
     const lineNumbered = /^\s*\d+\s*[-+]/;
     const diffColours = new Set(
       cells.filter((row) => lineNumbered.test(rowText(row))).map((row) => bandBackground(row)),

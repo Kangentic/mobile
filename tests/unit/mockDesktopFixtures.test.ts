@@ -23,6 +23,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Terminal } from '@xterm/headless';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { BoardTaskWire } from '@kangentic/protocol';
 
@@ -50,7 +51,8 @@ import {
   streamingUsedTokens,
 } from '@/connection/mockDesktop';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
-import { stripAnsiPreservingLayout } from '@/terminal/liveTail';
+import { buildUnifiedDiffLines } from '@/diff/diffLines';
+import { createLiveTailBuffer, stripAnsiPreservingLayout } from '@/terminal/liveTail';
 import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCapture';
 
 /**
@@ -419,6 +421,31 @@ describe('the terminal frame and the changes frame describe one piece of work', 
     expect(insertions).toBe(diffFileList().totalInsertions);
     expect(deletions).toBe(diffFileList().totalDeletions);
   });
+
+  it("lists the line counts the app itself derives from each file's before and after text", () => {
+    // The list's numbers are a transcription of `git diff --numstat`, and diffFileContent is a
+    // transcription of the same diff as whole files, which the app turns back into a unified diff
+    // with buildUnifiedDiffLines (the Changes lens and the file-diff screen both do). A reviewer
+    // reads the counts off one and the added and removed rows off the other, so they have to agree.
+    const listed = diffFileList().files.map((file) => ({
+      path: file.path,
+      insertions: file.insertions,
+      deletions: file.deletions,
+    }));
+    const derived = listed.map(({ path }) => {
+      const { original, modified } = diffFileContent(path);
+      const lines = buildUnifiedDiffLines(original, modified);
+      return {
+        path,
+        insertions: lines.filter((line) => line.kind === 'add').length,
+        deletions: lines.filter((line) => line.kind === 'remove').length,
+      };
+    });
+    // Non-vacuity: a path diffFileContent does not know answers with two empty texts, which diffs
+    // to nothing and would only agree with a list that claimed no change.
+    expect(derived.every((file) => file.insertions + file.deletions > 0)).toBe(true);
+    expect(derived).toEqual(listed);
+  });
 });
 
 /**
@@ -530,6 +557,80 @@ describe('the chat frame and the changes frame describe one edit', () => {
     });
     expect(mismatched).toEqual([]);
   });
+
+  /**
+   * The first call to `toolName` in the transcript with its result: the input it was made with and
+   * the text it printed. Looked up by tool name and the id that pairs a result to its call, so a
+   * renamed uuid does not blind the checks below.
+   */
+  function firstToolExchange(toolName: string): { input: Record<string, unknown>; content: string } | null {
+    const transcript = baseTranscriptForTest();
+    for (const entry of transcript) {
+      if (entry.kind !== 'assistant') continue;
+      for (const block of entry.blocks) {
+        if (block.type !== 'tool_use' || block.name !== toolName || !isRecord(block.input)) continue;
+        for (const candidate of transcript) {
+          if (candidate.kind === 'tool_result' && candidate.toolUseId === block.id) {
+            return { input: block.input, content: candidate.content };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  it('quotes call sites in the Grep result that the diff frame shows verbatim', () => {
+    // The Grep result claims "checkout.tsx line 8 is `return loginRedirect();`", and the chat lens
+    // renders it as tool output one swipe from the Changes lens. Where the file is one the diff
+    // lists, line N of its ORIGINAL text has to be that line: a quote that disagrees reads as
+    // output the agent made up. Hits in files the diff does not list are call sites the agent
+    // left alone, so there is nothing to compare them with.
+    const exchange = firstToolExchange('Grep');
+    expect(exchange, 'the transcript has a Grep call with a result').not.toBeNull();
+    const hits = (exchange?.content ?? '')
+      .split('\n')
+      .flatMap((line) => {
+        const match = /^(.+?):(\d+):(.*)$/.exec(line);
+        return match ? [{ path: match[1], lineNumber: Number(match[2]), text: match[3] }] : [];
+      });
+    const listedPaths = diffFileList().files.map((file) => file.path);
+    const checkedHits = hits.filter((hit) => listedPaths.includes(hit.path));
+    // Non-vacuity: the result carries hits, and at least one is in a listed file.
+    expect(hits.length).toBeGreaterThan(0);
+    expect(checkedHits.length).toBeGreaterThan(0);
+    const mismatched = checkedHits.flatMap((hit) => {
+      const originalLine = diffFileContent(hit.path).original.split('\n')[hit.lineNumber - 1];
+      return originalLine === hit.text
+        ? []
+        : [`${hit.path}:${hit.lineNumber} quotes ${JSON.stringify(hit.text)} but the diff's original has ${JSON.stringify(originalLine)}`];
+    });
+    expect(mismatched).toEqual([]);
+  });
+
+  it("quotes the Read result's numbered lines exactly as the diff frame's original text has them", () => {
+    // The same hazard through the other tool that prints file text: `cat -n` output, a right-aligned
+    // line number, a tab, then the line. The Read here is of a file the diff lists.
+    const exchange = firstToolExchange('Read');
+    expect(exchange, 'the transcript has a Read call with a result').not.toBeNull();
+    const filePath = exchange?.input.file_path;
+    expect(typeof filePath).toBe('string');
+    const wirePath = String(filePath).replace(WORKSPACE_ROOT, '').replace(/\\/g, '/');
+    expect(diffFileList().files.map((file) => file.path)).toContain(wirePath);
+    const originalLines = diffFileContent(wirePath).original.split('\n');
+    const quotedLines = (exchange?.content ?? '').split('\n').map((line) => /^\s*(\d+)\t(.*)$/.exec(line));
+    // Non-vacuity: every line of the result parsed as numbered text.
+    expect(quotedLines.length).toBeGreaterThan(0);
+    expect(quotedLines.every((match) => match !== null)).toBe(true);
+    const mismatched = quotedLines.flatMap((match) => {
+      if (match === null) return [];
+      const lineNumber = Number(match[1]);
+      const originalLine = originalLines[lineNumber - 1];
+      return originalLine === match[2]
+        ? []
+        : [`${wirePath}:${lineNumber} quotes ${JSON.stringify(match[2])} but the diff's original has ${JSON.stringify(originalLine)}`];
+    });
+    expect(mismatched).toEqual([]);
+  });
 });
 
 describe('the recorded terminal is real Claude Code, not an authored script', () => {
@@ -585,6 +686,79 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
     // shows as a permission card at the same moment.
     const settledRows = shotsRows.filter((row) => row.trim().length > 0);
     expect(settledRows.join('\n')).toMatch(/Do you want to/);
+  });
+
+  /**
+   * The shape of the seed itself, the bytes a phone receives on subscribing. The settled-frame
+   * checks above read it back through a terminal, which cannot see these: each is a property of
+   * how the bytes are written, and each one wrong leaves a screen that still looks right.
+   */
+  describe('the seed frame carries what a real desktop seed carries', () => {
+    /** Enter the alternate screen and home the cursor: what every alt-screen seed opens with. */
+    const ALT_SCREEN_PREFIX = '\x1b[?1049h\x1b[H';
+    const seedFrame = CLAUDE_CAPTURE_SHOTS.seedFrame;
+
+    /** The modes a headless terminal reports after the seed is replayed at the grid the capture announces. */
+    async function modesAfterReplaying(seed: string): Promise<Terminal['modes']> {
+      const terminal = new Terminal({
+        cols: CLAUDE_CAPTURE_SHOTS.cols,
+        rows: CLAUDE_CAPTURE_SHOTS.rows,
+        scrollback: 0,
+        allowProposedApi: true,
+      });
+      await new Promise<void>((resolveFlush) => terminal.write(seed, resolveFlush));
+      const modes = { ...terminal.modes };
+      terminal.dispose();
+      return modes;
+    }
+
+    it('opens on the alternate screen, as a session that is running a full-screen TUI does', () => {
+      expect(seedFrame.startsWith(ALT_SCREEN_PREFIX)).toBe(true);
+    });
+
+    it('positions nothing absolutely after that, because the live-tail cleaner reads one as a repaint', () => {
+      // src/terminal/liveTail.ts resets on ANY cursor position (CUP or HVP, with or without
+      // parameters): it cannot represent a repaint as a tail. A seed that ends in one leaves the chat
+      // lens with an empty live tail until the next byte arrives. The prefix's own home is before
+      // any content, so it resets nothing worth keeping.
+      const afterPrefix = seedFrame.slice(ALT_SCREEN_PREFIX.length);
+      // Compared as the list of offending sequences, so a failure names them and does not print the frame.
+      expect(afterPrefix.match(/\x1b\[[\d;]*[Hf]/g) ?? []).toEqual([]);
+      // And the consumer itself: the seed's text is still there after the cleaner has read it.
+      const liveTail = createLiveTailBuffer();
+      liveTail.append(seedFrame);
+      expect(liveTail.snapshotLines().join('\n')).toContain('Do you want to');
+    });
+
+    it("carries the recording's modes, because the phone scrolls by whichever mouse mode is on", async () => {
+      // scripts/xterm-page/historyScroll.js takes mouse reporting as the authority on how a touch
+      // drag scrolls (a wheel report when the app wants the mouse, page keys when it does not), so a
+      // seed without ?1003h scrolls a Claude session differently from a real one.
+      const recordedModes = ['\x1b[?2004h', '\x1b[?1004h', '\x1b[?1003h'];
+      expect(recordedModes.filter((sequence) => !seedFrame.includes(sequence))).toEqual([]);
+      const modes = await modesAfterReplaying(seedFrame);
+      expect(modes.bracketedPasteMode).toBe(true);
+      expect(modes.sendFocusMode).toBe(true);
+      expect(modes.mouseTrackingMode).toBe('any');
+    });
+
+    it('leaves the cursor hidden, as Claude Code does while it is drawing', () => {
+      const hides = seedFrame.lastIndexOf('\x1b[?25l');
+      expect(hides).toBeGreaterThanOrEqual(0);
+      // Nothing shows it again after the last hide.
+      expect(seedFrame.slice(hides)).not.toContain('\x1b[?25h');
+    });
+
+    it('turns autowrap back on after the rows were written with it off', async () => {
+      // The rows are written with autowrap off so a width the two sides disagree on overwrites the
+      // last column instead of wrapping. Left off, every line the agent streams AFTER the seed would
+      // overwrite the last column too, on a terminal that was never told to.
+      const turnedOff = seedFrame.indexOf('\x1b[?7l');
+      const turnedOn = seedFrame.indexOf('\x1b[?7h');
+      expect(turnedOff).toBeGreaterThanOrEqual(0);
+      expect(turnedOn).toBeGreaterThan(turnedOff);
+      expect((await modesAfterReplaying(seedFrame)).wraparoundMode).toBe(true);
+    });
   });
 });
 

@@ -1867,9 +1867,10 @@ export function staticSessionSeedTranscriptForTest(spec: MockStaticSessionSpec):
  * it how many columns are visible, is a property of the SCREEN, not of the
  * grid, and a grid fills the pane only with 48 rows and at least the screen's
  * visible columns. Anything less leaves terminal background below and to the
- * right: the 44x38 capture this replaced filled about 57% of the width and 79%
- * of the height of every store shelf once the reference cell landed, while the
- * guard test still modelled the old per-grid fit and stayed green (task #100).
+ * right: the 44x38 capture this replaced filled 49-64% of the width (44 of 69
+ * to 90 visible columns) and 79% of the height of every store shelf once the
+ * reference cell landed, while the guard test still modelled the old per-grid
+ * fit and stayed green (task #100).
  *
  * Visible columns at the reference cell, MEASURED off the store captures
  * (xterm floors the cell to whole device pixels, which is why the iPhone shows
@@ -1895,8 +1896,7 @@ export function staticSessionSeedTranscriptForTest(spec: MockStaticSessionSpec):
  * What it costs: the Android phone shelf has the shortest pane, so it renders
  * at 7px. One cell for every open is a product rule, not a fixture choice; if
  * 7px reads too small in the listing, that is a question for the mirror.
- */
-/**
+ *
  * ONE recording, replayed by every mode.
  *
  * An earlier revision carried two - a 120x30 capture for `dev:mock` and a
