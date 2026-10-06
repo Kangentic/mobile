@@ -814,6 +814,44 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByText('Heading Repro the auth redirect loop.')).toBeTruthy();
   });
 
+  /**
+   * The wait for a prompt-pending row's peek is when the pushed preview earns its
+   * place. The row's own peek comes first once it lands, but until then the body
+   * is the agent's own last words (the preview), not the task description: the
+   * description is the last resort for a row with nothing at all to say. Held
+   * unresolved, like the test above, because the resolved case is covered below
+   * and RNTL 14's awaited render() would otherwise flush past this state.
+   */
+  it('shows the pushed preview, not the task description, while a prompt-pending row\'s peek is unresolved', async () => {
+    useBoardStore.setState((state) => ({
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        'project-1': {
+          ...state.boardsByProjectId['project-1'],
+          tasksById: {
+            ...state.boardsByProjectId['project-1'].tasksById,
+            'task-1': {
+              ...state.boardsByProjectId['project-1'].tasksById['task-1'],
+              description: 'Repro the auth redirect loop.',
+            },
+          },
+        },
+      },
+    }));
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'message-preview', text: 'About to run the auth tests.' },
+    });
+    mockPeekAwaitedPrompt.mockReturnValue(new Promise(() => {}));
+
+    await renderHome();
+
+    expect(screen.getByText('About to run the auth tests.')).toBeTruthy();
+    expect(screen.queryByText('Repro the auth redirect loop.')).toBeNull();
+  });
+
   it('replaces the description with the agent snippet once it lands', async () => {
     // Not `Once`: the screen pre-warms every known session's snippet before
     // the rows mount, so a single-use mock is consumed before render.

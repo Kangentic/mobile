@@ -201,8 +201,12 @@ describe("ci.yml's R8 optimization assertions", () => {
     'utf8',
   );
 
-  it('greps build.gradle for the optimize preset the plugin writes', () => {
-    expect(ciWorkflow).toContain('proguard-android-optimize.txt');
+  it('greps build.gradle for the optimize preset call the plugin writes', () => {
+    expect(ciWorkflow).toContain(OPTIMIZED_PRESET_CALL);
+  });
+
+  it('greps build.gradle for the unoptimized preset call the plugin removes', () => {
+    expect(ciWorkflow).toContain(UNOPTIMIZED_PRESET_CALL);
   });
 
   it('greps gradle.properties for the property the plugin sets', () => {

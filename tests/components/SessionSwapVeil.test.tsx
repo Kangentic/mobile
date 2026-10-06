@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, render, screen } from '@testing-library/react-native';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import type { TestInstance } from 'test-renderer';
 import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
@@ -47,6 +47,17 @@ describe('SessionSwapVeil', () => {
 
     expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
     expect(renderedTextHosts()).toHaveLength(0);
+  });
+
+  /**
+   * The control for the two no-text assertions: if the host type name ever
+   * stopped being 'Text' in this environment, `toHaveLength(0)` would pass on
+   * a veil that grew a caption. This is what proves the query can see one.
+   */
+  it('finds a rendered Text host, so the no-text assertions can fail', async () => {
+    await render(<Text>caption</Text>);
+
+    expect(renderedTextHosts()).toHaveLength(1);
   });
 
   it('is one modal, busy progress stop for a screen reader, with a descriptive label', async () => {
@@ -252,10 +263,11 @@ describe('SessionSwapVeil', () => {
    * The mechanism assertion, copied from Skeleton's motion-gate block: a veil
    * that never animates still renders a correct-looking static scrim, so the
    * rendered output cannot tell a gated pulse from a mapper silently
-   * registered behind it. The per-vsync Reanimated flush walks every
-   * REGISTERED mapper, dirty or not (~0.47 CPU points each, measured on a
-   * release build), so the hooks must live in the child that is mounted
-   * only on the animating branch.
+   * registered behind it. On Reanimated 4.5.1 the per-vsync flush walked
+   * every REGISTERED mapper, dirty or not (~0.47 CPU points each, measured on
+   * a release build; 4.7.1 measures them free), and a mapper's writes outlive
+   * its view's rebind, so the hooks live in the child that is mounted only on
+   * the animating branch.
    */
   describe('the motion gate', () => {
     it('rests at the mid opacity and registers no animated mapper under OS reduced motion', async () => {

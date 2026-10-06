@@ -63,9 +63,10 @@ describe('Skeleton', () => {
 
   /**
    * A loop nobody can see costs the same as one they can (see
-   * .claude/rules/motion-conventions.md): the per-vsync Reanimated flush walks
-   * every REGISTERED mapper, dirty or not, at ~0.47 CPU points each measured
-   * on a release build. The pulse's useSharedValue/effect/useAnimatedStyle now
+   * .claude/rules/motion-conventions.md): on Reanimated 4.5.1 the per-vsync
+   * flush walked every REGISTERED mapper, dirty or not, at ~0.47 CPU points
+   * each measured on a release build (4.7.1 measures clean mappers free; the
+   * conditional mount stands for the recycle hazard). The pulse's useSharedValue/effect/useAnimatedStyle now
    * live in a PulsingBlock child mounted ONLY on the branch that animates
    * (!reducedMotion && screenMotionActive), so a blurred or reduced-motion
    * skeleton registers NO mapper rather than a cancelled one.

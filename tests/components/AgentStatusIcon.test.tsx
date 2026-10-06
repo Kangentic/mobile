@@ -443,8 +443,8 @@ describe('the screen motion gate', () => {
 
   /**
    * The gate drops the MOUNT, not just the driver, so that a blurred screen
-   * leaves no Reanimated node registered for a view nobody can see - the
-   * per-frame flush walks the registered nodes.
+   * leaves no Reanimated node registered for a view nobody can see (on
+   * Reanimated 4.5.1 the per-frame flush walked every registered node).
    *
    * Stated precisely, because this file's own history is a lesson in claiming
    * more than was measured: forcing the gate closed on a FOCUSED screen is
@@ -472,11 +472,13 @@ describe('the screen motion gate', () => {
 });
 
 /**
- * The idle-CPU lever, asserted at the source. The per-vsync Reanimated flush
- * walks every REGISTERED mapper, dirty or not, so an idle-envelope row that
- * registered a dead `useAnimatedProps` and a dead `useAnimatedStyle` was paying
+ * The idle-CPU lever, asserted at the source. On Reanimated 4.5.1 the per-vsync
+ * flush walked every REGISTERED mapper, dirty or not, so an idle-envelope row
+ * that registered a dead `useAnimatedProps` and a dead `useAnimatedStyle` paid
  * for both on every frame - measured at ~0.47 CPU points per registered mapper
  * on a release build (see the REACT-NATIVE-5 section of docs/developer-guide.md).
+ * 4.7.1 removed that loop and measures clean mappers free, but a mapper's writes
+ * still outlive a FlashList recycle (motion-conventions.md), so the split stands.
  * The split moved those hooks into children mounted only on the animating
  * branch, so these assert the hooks are NOT called at all on a non-animating
  * row. A row rendered identically but with the hooks back at the top (the old

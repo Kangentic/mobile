@@ -93,6 +93,33 @@ function requireCapturedInitOptions(): ReactNativeInitOptions {
   return firstCall[0] as ReactNativeInitOptions;
 }
 
+/**
+ * The `name` an installed Sentry integration registers under, read out of the
+ * installed package's own source rather than restated here. Every integration
+ * the app drops is dropped by NAME (DROPPED_DEFAULT_INTEGRATIONS), so a test
+ * that feeds the factory a hand-typed `{ name: 'ExpoConstants' }` only proves
+ * the filter matches what this repo believes the name is. If an SDK upgrade
+ * renamed the integration, that test would stay green while the drop matched
+ * nothing and the integration shipped. The regex accepts either quote style
+ * because the React Native package and @sentry/browser are compiled differently,
+ * and it throws on a miss so a moved constant fails loudly instead of feeding
+ * `undefined` into the factory.
+ */
+function installedIntegrationName(sdkRelativePath: string): string {
+  const source = readFileSync(join(__dirname, '..', '..', 'node_modules', ...sdkRelativePath.split('/')), 'utf8');
+  const nameConstantMatch = /const INTEGRATION_NAME\s*=\s*['"]([^'"]+)['"]/.exec(source);
+  if (nameConstantMatch === null) {
+    throw new Error(`no INTEGRATION_NAME constant found in ${sdkRelativePath}`);
+  }
+  // The constant is only meaningful if it is what the integration registers
+  // under; a file that declared it and then used a different name would make
+  // this read the wrong string.
+  if (!/\bname:\s*INTEGRATION_NAME\b/.test(source)) {
+    throw new Error(`${sdkRelativePath} does not register its integration under INTEGRATION_NAME`);
+  }
+  return nameConstantMatch[1];
+}
+
 describe('initializeCrashReporting', () => {
   const originalDsn = process.env.EXPO_PUBLIC_SENTRY_DSN;
   const originalE2eFlag = process.env.EXPO_PUBLIC_KANGENTIC_E2E;
@@ -194,6 +221,42 @@ describe('initializeCrashReporting', () => {
       sentry: true,
     });
   });
+
+  // The test above feeds the factory names this repo typed by hand. This one feeds
+  // the names the INSTALLED SDK registers, so a rename in an upgrade fails here
+  // instead of leaving DROPPED_DEFAULT_INTEGRATIONS matching nothing.
+  it.each([
+    ['Breadcrumbs', '@sentry/browser/build/npm/esm/prod/integrations/breadcrumbs.js'],
+    ['ExpoConstants', '@sentry/react-native/dist/js/integrations/expoconstants.js'],
+    ['TurboModuleContext', '@sentry/react-native/dist/js/integrations/turboModuleContext.js'],
+    ['ExpoUpdatesListener', '@sentry/react-native/dist/js/integrations/expoupdateslistener.js'],
+  ])(
+    'drops the default %s integration under the name the installed SDK registers it with',
+    async (_integrationLabel, sdkRelativePath) => {
+      setSentryDsn(testDsn);
+      setE2eFlag(undefined);
+      vi.stubGlobal('__DEV__', false);
+
+      const crashReporting = await loadFreshCrashReporting();
+      crashReporting.initializeCrashReporting();
+
+      const integrationsFactory = requireCapturedInitOptions().integrations;
+      if (typeof integrationsFactory !== 'function') {
+        throw new Error('expected the integrations option to be a factory function');
+      }
+
+      const installedDefaultEntry = { name: installedIntegrationName(sdkRelativePath) };
+      // A control that must survive, so a filter that drops everything cannot pass.
+      const unrelatedDefaultEntry = { name: 'Dedupe' };
+
+      const resultIntegrations = integrationsFactory([installedDefaultEntry, unrelatedDefaultEntry]);
+
+      // By identity, not by name: the hardened Breadcrumbs replacement is appended
+      // under the same name, so "nothing named Breadcrumbs" would fail on correct code.
+      expect(resultIntegrations).not.toContain(installedDefaultEntry);
+      expect(resultIntegrations).toContain(unrelatedDefaultEntry);
+    },
+  );
 
   it('ignores exactly the three known transport-noise patterns, and caps breadcrumbs at 20', async () => {
     setSentryDsn(testDsn);

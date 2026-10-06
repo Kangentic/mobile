@@ -106,6 +106,9 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
         </Text>
       ) : null}
       <Row gap="sm" style={styles.inputRow}>
+        {/* Read at render, not subscribed: one composer mounts per session
+            open, so a probe switch takes effect on the NEXT open, which is
+            exactly the open/close cycle this arm measures. */}
         {getRetentionProbeVariant() === 'composer-no-dictation' ? null : (
           <DictationMicButton
             dictationEnabled={dictationMode !== 'off'}

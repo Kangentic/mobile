@@ -35,7 +35,7 @@
 # Usage: verify-r8-optimization.sh <path-to-configuration.txt>
 set -euo pipefail
 
-configuration_path="$1"
+configuration_path="${1:?usage: verify-r8-optimization.sh <path-to-configuration.txt>}"
 
 if [ ! -f "$configuration_path" ]; then
   echo "::error::No R8 configuration at $configuration_path. A minified release build always writes one next to mapping.txt; its absence means R8 never ran, or the path moved."
