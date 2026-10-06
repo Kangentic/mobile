@@ -1,7 +1,9 @@
 import React from 'react';
 import { Platform } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider } from '@/components';
+import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { SectionFilterScreen } from '@/screens/SectionFilterScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -94,6 +96,27 @@ describe('SectionFilterScreen', () => {
       fireEvent.press(screen.getByTestId('section-filter-show-all'));
     });
     expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
+  });
+
+  /**
+   * The rows' glyphs are a legend, so the Active row's working mark is drawn
+   * still. A spinning one cannot be told from a still arc in the render tree,
+   * so this asserts the timing call, with screen motion explicitly ON so a
+   * gate closed by default could not pass it vacuously.
+   */
+  it('draws the Active glyph still, starting no spin, even where motion is allowed', () => {
+    const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+    render(
+      <ThemeProvider>
+        <ScreenMotionOverride active>
+          <SectionFilterScreen />
+        </ScreenMotionOverride>
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('agent-status-working')).toBeTruthy();
+    expect(withTimingSpy).not.toHaveBeenCalled();
+    withTimingSpy.mockRestore();
   });
 
   /**

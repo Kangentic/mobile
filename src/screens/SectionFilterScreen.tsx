@@ -166,14 +166,19 @@ function Checkbox({ checked, testID }: { checked: boolean; testID: string }): Re
   );
 }
 
-/** The glyph each section's cards or session header wear, so the row says what it would hide. */
+/**
+ * The glyph each section's cards or session header wear, so the row says what
+ * it would hide. Drawn still: this is a legend, not a live session, and a
+ * spinning working mark here held a mapper and drew frames for as long as the
+ * sheet stayed open (seen turning across emulator captures).
+ */
 function SectionGlyph({ title }: { title: string }): React.JSX.Element | null {
   const theme = useTheme();
   switch (title) {
     case 'Idle':
-      return <AgentStatusIcon kind="idle" size={GLYPH_SIZE} />;
+      return <AgentStatusIcon kind="idle" size={GLYPH_SIZE} still />;
     case 'Active':
-      return <AgentStatusIcon kind="working" size={GLYPH_SIZE} />;
+      return <AgentStatusIcon kind="working" size={GLYPH_SIZE} still />;
     case 'Queued':
       return <Clock size={GLYPH_SIZE} color={theme.colors.textMuted} />;
     case 'Paused':
