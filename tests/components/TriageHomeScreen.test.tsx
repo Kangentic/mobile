@@ -246,19 +246,19 @@ describe('TriageHomeScreen', () => {
   });
 
   it('prompt-pending rows carry no inline controls or status filler and route to chat on tap', async () => {
-    // Hold the prompt peek unresolved. The old sync render() observed the row
-    // before its peek landed, and that is the state this test is about: once
-    // the peek resolves null the snippet legitimately reads "Waiting for your
-    // approval" (the generic pending-prompt summary), and RNTL 14's awaited
-    // render() flushes that microtask before the first assertion. A separate
-    // status-filler line would show in the unresolved state too.
-    mockPeekAwaitedPrompt.mockReturnValue(new Promise(() => {}));
+    // The prompt peek RESOLVES here (to null: nothing specific to summarize).
+    // That used to render the generic "Waiting for your approval" as the
+    // card's body, a filler line restating the Idle section and its icon. It
+    // now falls through to the agent's last message.
+    jest.mocked(peekLastAssistantMessage).mockResolvedValue('Running the auth tests before I touch the redirect.');
     await renderHome();
+    await act(async () => {});
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
     // No filler status lines and no inline answering: the section + icon
     // say the state, the snippet teases the decision, and answering lives
     // in the session's own prompt card.
     expect(screen.queryByText('Waiting for your approval')).toBeNull();
+    expect(screen.getByText('Running the auth tests before I touch the redirect.')).toBeTruthy();
     expect(screen.queryByTestId('permission-approve')).toBeNull();
     expect(screen.queryByText('Review and approve')).toBeNull();
 
@@ -806,8 +806,7 @@ describe('TriageHomeScreen', () => {
 
     // The row is prompt-pending, so its snippet comes from the prompt peek.
     // Hold that peek unresolved: this test is about the state BEFORE it lands,
-    // and RNTL 14's awaited render() otherwise flushes the resolved null (whose
-    // summary is the generic "Waiting for your approval") before the assertion.
+    // which RNTL 14's awaited render() would otherwise flush past.
     mockPeekAwaitedPrompt.mockReturnValue(new Promise(() => {}));
     await renderHome();
 
@@ -881,10 +880,12 @@ describe('TriageHomeScreen', () => {
 
   /**
    * A prompt-pending row's body is the pending DECISION, which the preview
-   * does not describe, so that row keeps peeking even when a preview exists.
+   * does not describe, so that row keeps peeking even when a preview exists,
+   * and a decision it can summarize wins over the preview.
    */
-  it('still peeks for a prompt-pending row despite a pushed preview', async () => {
+  it('still peeks for a prompt-pending row despite a pushed preview, and shows the decision', async () => {
     jest.mocked(peekLastAssistantMessage).mockClear();
+    mockPeekAwaitedPrompt.mockResolvedValue({ name: 'Bash', input: { command: 'npm run test:auth' } });
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
       sessionId: 'sess-1',
@@ -896,7 +897,29 @@ describe('TriageHomeScreen', () => {
     await act(async () => {});
 
     expect(mockPeekAwaitedPrompt).toHaveBeenCalled();
+    expect(screen.getByText('Approve: npm run test:auth')).toBeTruthy();
     expect(screen.queryByText('Not what this row should show.')).toBeNull();
+  });
+
+  /**
+   * When the pending prompt has nothing specific to say (its tool_use cannot be
+   * found), the row shows the agent's own last words rather than a line that
+   * restates the Idle section: the pushed preview, here.
+   */
+  it('falls back to the pushed preview when the pending prompt cannot be summarized', async () => {
+    mockPeekAwaitedPrompt.mockResolvedValue(null);
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'message-preview', text: 'About to run the auth tests.' },
+    });
+
+    await renderHome();
+    await act(async () => {});
+
+    expect(screen.getByText('About to run the auth tests.')).toBeTruthy();
+    expect(screen.queryByText('Waiting for your approval')).toBeNull();
   });
 
   /**

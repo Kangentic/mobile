@@ -144,8 +144,10 @@ describe('parseAskUserQuestionInput', () => {
 });
 
 describe('buildPendingPromptSummary', () => {
-  it('falls back to the generic string when no tool_use was located', () => {
-    expect(buildPendingPromptSummary(null)).toBe('Waiting for your approval');
+  // Null, never a generic line: the card falls back to the agent's own words
+  // rather than restating what its section and icon already say.
+  it('returns null when no tool_use was located', () => {
+    expect(buildPendingPromptSummary(null)).toBeNull();
   });
 
   it('uses the first question text for AskUserQuestion', () => {
@@ -156,10 +158,8 @@ describe('buildPendingPromptSummary', () => {
     expect(summary).toBe('Which database should we use?');
   });
 
-  it('falls back to the generic string for an unparseable AskUserQuestion input', () => {
-    expect(buildPendingPromptSummary({ name: 'AskUserQuestion', input: { nope: true } })).toBe(
-      'Waiting for your approval',
-    );
+  it('returns null for an unparseable AskUserQuestion input', () => {
+    expect(buildPendingPromptSummary({ name: 'AskUserQuestion', input: { nope: true } })).toBeNull();
   });
 
   it('summarizes Bash with the first line of the command', () => {
@@ -209,9 +209,10 @@ describe('buildPendingPromptSummary', () => {
       name: 'Bash',
       input: { command: 'x'.repeat(200) },
     });
-    expect(summary.length).toBe(80);
-    expect(summary.endsWith('...')).toBe(true);
-    expect(summary.startsWith('Approve: xxx')).toBe(true);
+    expect(summary).not.toBeNull();
+    expect(summary?.length).toBe(80);
+    expect(summary?.endsWith('...')).toBe(true);
+    expect(summary?.startsWith('Approve: xxx')).toBe(true);
   });
 });
 
