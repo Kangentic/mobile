@@ -6,6 +6,7 @@ import { Text, useTheme } from '@/components';
 import { isDoneRole, isTodoRole } from '@/state/boardStore';
 import { getColumnIcon } from './columnIcons';
 import type { ColumnTrackStep } from './columnTrack';
+import { WaitLabel } from './WaitLabel';
 
 /*
  * The band's frame and track are the desktop's own measurements, copied 1:1
@@ -14,9 +15,13 @@ import type { ColumnTrackStep } from './columnTrack';
  * deliberately literal rather than spacing tokens: the token scale has no 5 or
  * 10, and rounding to it is exactly the drift this component exists to avoid.
  *
- * The current step's marker is this app's design (2026-10-05 design review,
- * "D5"), and #732 was asked to adopt it: the column's icon in an 18 dp rounded
- * square tinted with the column's color, in place of the desktop's wider bar.
+ * Two departures are this app's design (2026-10-05 design review), and #732 was
+ * asked to adopt both: the current step's marker is the column's icon in an
+ * 18 dp rounded square tinted with the column's color, in place of the
+ * desktop's wider bar ("D5"); and done steps are NEUTRAL rather than each in
+ * its column's color ("R5"), so the marker is the only color in the track. The
+ * card's right edge was carrying up to six colored marks, and the review cut it
+ * to the ones that say something.
  */
 export const COLUMN_STRIP_HEIGHT = 29;
 const STRIP_INSET = 10;
@@ -44,16 +49,35 @@ export interface ColumnStripProps {
   track: readonly ColumnTrackStep[];
   /** Where the task lives. Known from the session even before its task reaches a board, so the band is rarely empty. */
   projectName: string | null;
+  /**
+   * Epoch ms this session first needed the user (`selectWaitingSince`), or null
+   * when it is working. Drawn just before the track; see the band's doc for why
+   * it lives here rather than at the end of the body line.
+   */
+  waitingSinceMs: number | null;
+  /**
+   * The wait label's testID, passed in rather than derived from `testID`: it
+   * predates the band (it used to end the card's body line) and a Maestro flow
+   * selects it as `<card>-wait`, so moving the label must not rename it.
+   */
+  waitTestID: string;
   /** Root testID; parts key off it as `-project`, `-track`, `-marker` (holding `-icon` or `-dot`), and `-step-<columnId>-<done|ahead>`. */
   testID: string;
 }
 
 /**
- * The Agents row's top band: where the task lives on the left (the project),
- * where it is in the flow on the right (the step track, its current step
- * marked by the column's own icon). The desktop's rule for its strip carries
- * over: new information goes in this band, never into the card rows under it,
- * which is why the project left the title row for it.
+ * The Agents row's top band, the card's status line: where the task lives on
+ * the left (the project); how long it has waited on you, then where it is in
+ * the flow, on the right (the wait time, then the step track with its current
+ * step marked by the column's own icon). The desktop's rule for its strip
+ * carries over: new information goes in this band, never into the card rows
+ * under it, which is why the project left the title row for it.
+ *
+ * The wait time moved here from the end of the body line in the same review
+ * that quieted the track: below the band, the card's right edge now holds a
+ * single colored mark (the PR icon), and the body line gets its full width. It
+ * still reads as the age of the agent's last message - a waiting session's
+ * last message is the moment it started waiting - just from one line higher.
  *
  * The column is never named in words here. The review compared a name beside
  * the track and chose the quieter band: the icon, its color and its place in
@@ -77,6 +101,8 @@ export const ColumnStrip = React.memo(function ColumnStrip({
   column,
   track,
   projectName,
+  waitingSinceMs,
+  waitTestID,
   testID,
 }: ColumnStripProps): React.JSX.Element {
   const theme = useTheme();
@@ -108,28 +134,37 @@ export const ColumnStrip = React.memo(function ColumnStrip({
           </Text>
         </View>
       ) : null}
-      {column !== null ? (
-        <View testID={`${testID}-track`} style={styles.track}>
-          {visibleSteps.length === 0
-            ? columnMarker(column, theme.colors.textMuted, testID)
-            : visibleSteps.map((step) =>
-                step.state === 'current' ? (
-                  <React.Fragment key={step.columnId}>{columnMarker(column, theme.colors.textMuted, testID)}</React.Fragment>
-                ) : (
-                  <View
-                    key={step.columnId}
-                    testID={`${testID}-step-${step.columnId}-${step.state}`}
-                    style={[
-                      styles.segment,
-                      step.state === 'done'
-                        ? { backgroundColor: colorOrFaint(step.color, theme.colors.textMuted), opacity: DONE_SEGMENT_OPACITY }
-                        : { backgroundColor: theme.colors.border },
-                    ]}
-                  />
-                ),
-              )}
-        </View>
-      ) : null}
+      <View style={styles.trailing}>
+        {/* WaitLabel subscribes to the shared clock on its own, so a tick
+            re-renders this leaf and not the band (see WaitLabel). It renders
+            nothing for its first minute. */}
+        {waitingSinceMs !== null ? <WaitLabel sinceMs={waitingSinceMs} testID={waitTestID} /> : null}
+        {column !== null ? (
+          <View testID={`${testID}-track`} style={styles.track}>
+            {visibleSteps.length === 0
+              ? columnMarker(column, theme.colors.textMuted, testID)
+              : visibleSteps.map((step) =>
+                  step.state === 'current' ? (
+                    <React.Fragment key={step.columnId}>{columnMarker(column, theme.colors.textMuted, testID)}</React.Fragment>
+                  ) : (
+                    <View
+                      key={step.columnId}
+                      testID={`${testID}-step-${step.columnId}-${step.state}`}
+                      style={[
+                        styles.segment,
+                        // Done steps are neutral, the faint text color at the
+                        // desktop's done-step strength: the marker carries the
+                        // column's color, and nothing else in the track does.
+                        step.state === 'done'
+                          ? { backgroundColor: theme.colors.textMuted, opacity: DONE_SEGMENT_OPACITY }
+                          : { backgroundColor: theme.colors.border },
+                      ]}
+                    />
+                  ),
+                )}
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 });
@@ -217,13 +252,19 @@ const styles = StyleSheet.create({
   projectName: {
     flexShrink: 1,
   },
+  trailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: STRIP_GROUP_GAP,
+    flexShrink: 0,
+    // Pinned right even when there is no project to push it there.
+    marginLeft: 'auto',
+  },
   track: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: TRACK_GAP,
     flexShrink: 0,
-    // Pinned right even when there is no project to push it there.
-    marginLeft: 'auto',
   },
   segment: {
     width: SEGMENT_WIDTH,

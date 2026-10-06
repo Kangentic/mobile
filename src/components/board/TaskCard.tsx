@@ -20,7 +20,6 @@ import { ColumnStrip } from './ColumnStrip';
 import type { ColumnTrackStep } from './columnTrack';
 import { computeVisibleLabelCount } from './labelFit';
 import { prChipAccessibilityLabel, prChipPresentation, type PrChipGlyph } from './prChipPresentation';
-import { WaitLabel } from './WaitLabel';
 
 /** Before the labels row's real width is measured (its first layout pass). */
 const FALLBACK_LABEL_LIMIT = 3;
@@ -71,45 +70,36 @@ export interface TaskCardProps {
    */
   bodyMinHeight?: number;
   /**
-   * The Agents feed's top band: the project the task lives in, and the step
-   * track with its current column marked by the column's icon - the desktop's
-   * workflow card strip and project row (kangentic #732) folded into one row.
-   * The desktop's rule for it applies here as well: new information goes in
-   * the band, never into one of the rows below it. That is why the project
-   * lives here rather than as a pill in the title row, where it used to take
-   * width from the title.
+   * The Agents feed's top band, the card's status line: the project the task
+   * lives in, how long it has waited on you, and the step track with its
+   * current column marked by the column's icon - the desktop's workflow card
+   * strip and project row (kangentic #732) folded into one row. The desktop's
+   * rule for it applies here as well: new information goes in the band, never
+   * into one of the rows below it. That is why the project lives here rather
+   * than as a pill in the title row, where it used to take width from the title.
    *
    * Omitted on the board, where both the project and the column are the page
-   * being viewed. Present with `column: null` when the task cannot be located
-   * yet: the band still draws, so the row never changes height (see
-   * ColumnStrip).
+   * being viewed, and whose body is the task DESCRIPTION - static because the
+   * user wrote it, not because a session stalled, so a wait time beside it
+   * would date the wrong thing. Present with `column: null` when the task
+   * cannot be located yet: the band still draws, so the row never changes
+   * height (see ColumnStrip).
+   *
+   * `waitingSinceMs` is `selectWaitingSince`: epoch ms the session first needed
+   * the user, or null while it works. Shown at its `-wait` testID.
    */
-  columnStrip?: { column: BoardColumnWire | null; track: readonly ColumnTrackStep[]; projectName: string | null };
+  columnStrip?: {
+    column: BoardColumnWire | null;
+    track: readonly ColumnTrackStep[];
+    projectName: string | null;
+    waitingSinceMs: number | null;
+  };
   /**
    * Whether to render board/backlog reference chrome: the labels row and
    * the title row's PR chip (same category as the ticket number).
    * Defaults true (the board).
    */
   showMetaRow?: boolean;
-  /**
-   * Epoch ms this session first needed the user (`selectWaitingSince`), or
-   * null when it is working or not a session at all.
-   *
-   * Renders at the END OF THE BODY LINE rather than in the title row, and the
-   * placement is the design, not a convenience. The title row's only flexible
-   * element is the title itself, so every chip added there is paid for in
-   * characters of the thing the user is scanning for; the body line already
-   * truncates and already owns a fixed height, so a label there costs width
-   * where width is cheap and costs no height at all.
-   *
-   * It also lands next to the text it describes. The Agents feed's body is the
-   * agent's LAST message, refetched at `freshness: 0` once a session goes idle
-   * - so on a waiting row that text is final, and this dates it. That is why
-   * the board passes nothing here even though it shares this component: its
-   * body is the task DESCRIPTION, static because the user wrote it rather than
-   * because a session stalled, and a time beside it would date the wrong thing.
-   */
-  waitingSinceMs?: number | null;
   onPress: () => void;
   onLongPress?: () => void;
   /** Absolutely-positioned content painted over the whole card - the Agents feed's section-change pulse. The board has none. */
@@ -121,7 +111,7 @@ export interface TaskCardProps {
  * title (with a PR chip and ticket number sharing its row), a body
  * line, the labels row, and the context-usage bar - the two screens render
  * nearly identical cards. The Agents feed adds one thing: the band across the
- * top naming the project and drawing the column's step track.
+ * top naming the project, the wait time and the column's step track.
  */
 export function TaskCard({
   testID,
@@ -134,7 +124,6 @@ export function TaskCard({
   bodyMinHeight,
   columnStrip,
   showMetaRow = true,
-  waitingSinceMs = null,
   onPress,
   onLongPress,
   overlay,
@@ -170,6 +159,8 @@ export function TaskCard({
           column={columnStrip.column}
           track={columnStrip.track}
           projectName={columnStrip.projectName}
+          waitingSinceMs={columnStrip.waitingSinceMs}
+          waitTestID={`${testID}-wait`}
           testID={`${testID}-column`}
         />
       ) : null}
@@ -216,22 +207,13 @@ export function TaskCard({
           bodyMinHeight !== undefined ? (
             // Fixed slot: the box owns the height and the text is centered
             // inside it, so one-line and two-line snippets occupy exactly
-            // the same space and neighbouring cards never shift. The wait
-            // label rides INSIDE that box for the same reason - it takes
-            // width from a line that already truncates, never height.
+            // the same space and neighbouring cards never shift. It has the
+            // full width: the wait time that used to end this line moved up
+            // into the band.
             <View style={{ height: bodyMinHeight, justifyContent: 'center' }}>
-              <Row gap="sm">
-                <Text
-                  variant="caption"
-                  color="muted"
-                  numberOfLines={bodyNumberOfLines}
-                  style={styles.snippetText}
-                  testID={`${testID}-snippet`}
-                >
-                  {bodyText}
-                </Text>
-                {waitingSinceMs !== null ? <WaitLabel sinceMs={waitingSinceMs} testID={`${testID}-wait`} /> : null}
-              </Row>
+              <Text variant="caption" color="muted" numberOfLines={bodyNumberOfLines} testID={`${testID}-snippet`}>
+                {bodyText}
+              </Text>
             </View>
           ) : (
             <Text variant="caption" color="muted" numberOfLines={bodyNumberOfLines} testID={`${testID}-snippet`}>
@@ -266,19 +248,6 @@ export function TaskCard({
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
-  },
-  // `flex: 1` is the load-bearing half: RN expands it to
-  // `flexGrow 1 / flexShrink 1 / flexBasis 0`, so the snippet is sized from a
-  // zero basis and truncates instead of pushing the wait label off the card.
-  // Without it the label is the thing that appears to fail to render.
-  //
-  // `minWidth: 0` is inert on Yoga, which applies no content-based minimum to a
-  // flex item the way web's `min-width: auto` does - it is kept for the planned
-  // react-native-web tier, where the web rule DOES apply and the snippet would
-  // otherwise refuse to shrink below its intrinsic width.
-  snippetText: {
-    flex: 1,
-    minWidth: 0,
   },
   spaceBetween: {
     justifyContent: 'space-between',
