@@ -1,24 +1,12 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import Animated, {
-  Easing,
-  ReduceMotion,
-  cancelAnimation,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
-import { CirclePause, LoaderCircle } from 'lucide-react-native';
+import { CirclePause } from 'lucide-react-native';
 import type { SessionUsageWire } from '@kangentic/protocol';
-import { ContextUsageBar, Row, Text, useTheme } from '@/components';
-import { useScreenMotionActive } from '@/components/motion/ScreenMotion';
+import { ContextUsageBar, Row, StatusSpinner, Text, useTheme } from '@/components';
 import type { CardSessionDisplay } from './cardSessionDisplay';
 
 /** The desktop footer's glyph size (lucide Loader2 / CirclePause at 12). */
 const STATUS_GLYPH_SIZE = 12;
-const FULL_TURN_DEGREES = 360;
 /** The desktop's wording, verbatim (TaskCard.tsx's bottom-bar switch). */
 const STARTING_AGENT_LABEL = 'Starting agent...';
 const QUEUED_LABEL = 'Queued...';
@@ -82,7 +70,7 @@ function StatusBar({ glyph, label, testID }: { glyph: 'spinner' | 'pause'; label
     <View testID={testID}>
       <Row gap="xs" style={styles.labelRow}>
         {glyph === 'spinner' ? (
-          <FooterSpinner color={glyphColor} testID={`${testID}-spinner`} />
+          <StatusSpinner size={STATUS_GLYPH_SIZE} color={glyphColor} testID={`${testID}-spinner`} />
         ) : (
           // The testID rides a wrapping View: lucide forwards `testID` as the
           // web-only `data-testid`, which neither RNTL nor Maestro can select.
@@ -99,47 +87,6 @@ function StatusBar({ glyph, label, testID }: { glyph: 'spinner' | 'pause'; label
   );
 }
 
-/**
- * The footer's spinner. It spins only where motion is allowed (OS reduced
- * motion off, the screen focused), which the desktop's does not check; it
- * holds still otherwise. The spinning wrapper is its own component, mounted
- * only on that branch, so a still spinner registers no Reanimated mapper and a
- * recycled row never keeps a stale angle (motion-conventions.md).
- */
-function FooterSpinner({ color, testID }: { color: string; testID: string }): React.JSX.Element {
-  const reducedMotion = useReducedMotion();
-  const screenMotionActive = useScreenMotionActive();
-  const glyph = <LoaderCircle size={STATUS_GLYPH_SIZE} color={color} />;
-  if (reducedMotion || !screenMotionActive) {
-    return <View testID={testID}>{glyph}</View>;
-  }
-  return <SpinningGlyph testID={testID}>{glyph}</SpinningGlyph>;
-}
-
-/** One linear turn per `statusSpinner.turnMs`, as a transform on a native view (never an SVG prop). */
-function SpinningGlyph({ testID, children }: { testID: string; children: React.ReactNode }): React.JSX.Element {
-  const theme = useTheme();
-  const turnMs = theme.motion.statusSpinner.turnMs;
-  const spinTurns = useSharedValue(0);
-  useEffect(() => {
-    spinTurns.set(0);
-    spinTurns.set(
-      withRepeat(withTiming(1, { duration: turnMs, easing: Easing.linear, reduceMotion: ReduceMotion.System }), -1, false),
-    );
-    return () => {
-      cancelAnimation(spinTurns);
-    };
-  }, [spinTurns, turnMs]);
-  const spinStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${spinTurns.get() * FULL_TURN_DEGREES}deg` }],
-  }));
-  return (
-    <Animated.View testID={testID} style={[styles.glyphBox, spinStyle]}>
-      {children}
-    </Animated.View>
-  );
-}
-
 const styles = StyleSheet.create({
   labelRow: {
     alignItems: 'center',
@@ -150,9 +97,5 @@ const styles = StyleSheet.create({
   track: {
     height: 4,
     borderRadius: 2,
-  },
-  glyphBox: {
-    width: STATUS_GLYPH_SIZE,
-    height: STATUS_GLYPH_SIZE,
   },
 });

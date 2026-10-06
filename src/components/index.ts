@@ -8,6 +8,7 @@ export { Card, type CardProps } from './Card';
 export { Badge, type BadgeProps } from './Badge';
 export { StatusDot, type StatusDotProps, type StatusDotVariant } from './StatusDot';
 export { AgentStatusIcon, type AgentStatusIconProps, type AgentStatusKind } from './AgentStatusIcon';
+export { StatusSpinner, type StatusSpinnerProps } from './StatusSpinner';
 export { Row, type RowProps } from './Row';
 export { Stack, type StackProps } from './Stack';
 export { SectionHeader, type SectionHeaderProps } from './SectionHeader';

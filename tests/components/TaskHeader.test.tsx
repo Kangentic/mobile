@@ -1,5 +1,6 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { Clock, LoaderCircle } from 'lucide-react-native';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { TaskHeader } from '@/screens/task/TaskHeader';
 import { useActivityStore } from '@/state/activityStore';
@@ -134,11 +135,11 @@ describe('TaskHeader column chip', () => {
 });
 
 /**
- * One task must not report two different states on two screens at once. The
- * feed row and the board card badge a queued or mid-respawn session with the
- * muted starting ring; this header drew the yellow idle envelope for the very
- * same session, because a queued placeholder has no PTY and so sits at
- * `state: 'idle'` - which is all `sectionForEntry` can see.
+ * The desktop task view header's glyph for each state (TaskDetailHeader.tsx):
+ * the agent icon while running, a clock while queued, the spinner while a
+ * respawn is in flight, nothing once the session ended. A queued placeholder
+ * has no PTY and so sits at `state: 'idle'` - which is all `sectionForEntry`
+ * can see - so this header once drew the yellow idle envelope for it.
  */
 describe('TaskHeader status glyph', () => {
   beforeEach(() => {
@@ -164,13 +165,12 @@ describe('TaskHeader status glyph', () => {
     const icon = screen.queryByTestId('task-header-status');
     if (icon === null) return null;
     const { color } = icon.props;
-    if (color === darkTerminalTheme.colors.statusIdle) return 'starting';
     if (color === darkTerminalTheme.colors.statusWorking) return 'working';
     if (color === darkTerminalTheme.colors.warning) return 'idle';
     return `unknown:${String(color)}`;
   };
 
-  it('shows the starting ring for a queued session, matching the feed and the board card', () => {
+  it('shows the desktop\'s still clock for a queued session, and no agent icon', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applySnapshot(
       'sess-1',
@@ -181,7 +181,8 @@ describe('TaskHeader status glyph', () => {
 
     renderTaskHeader({ sessionId: 'sess-1' });
 
-    expect(renderedStatusTone()).toBe('starting');
+    expect(within(screen.getByTestId('task-header-status-queued')).UNSAFE_getByType(Clock)).toBeTruthy();
+    expect(renderedStatusTone()).toBeNull();
   });
 
   /**
@@ -204,12 +205,14 @@ describe('TaskHeader status glyph', () => {
   });
 
   /**
-   * A swap is task-keyed, so the header finds it without a session id of its
-   * own - but only where a glyph already existed. The guard stays on
-   * `activityEntry` deliberately: a swap may change the glyph but never
-   * conjure one where the header had nothing bound.
+   * A swap is task-keyed, so the header finds it whether or not its outgoing
+   * session is still bound: the desktop's header spins while a task is being
+   * prepared, session or not.
    */
-  it('shows the starting ring for a respawning task that still has its outgoing entry', () => {
+  it.each([
+    ['still has its outgoing entry', 'sess-1'],
+    ['has no session bound', null],
+  ])('shows the desktop\'s spinner for a respawning task that %s, and no agent icon', (_case, sessionId) => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
@@ -218,19 +221,18 @@ describe('TaskHeader status glyph', () => {
       payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
     });
 
-    renderTaskHeader({ sessionId: 'sess-1' });
+    renderTaskHeader({ sessionId });
 
-    expect(renderedStatusTone()).toBe('starting');
+    expect(within(screen.getByTestId('task-header-status-preparing')).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+    expect(renderedStatusTone()).toBeNull();
   });
 
   /**
-   * The desktop's column-move swap arrives with NO label. The header must
-   * read it exactly like the labelled one, or a Code Review move would draw
-   * the idle envelope while the feed drew the starting ring for the same
-   * task. The label-only store write fails this with 'idle', which is the
-   * right reason.
+   * An end with no step is an ended session, which the desktop header draws
+   * nothing for. The seeded entry is idle, so a header that ignored the end
+   * would draw the envelope.
    */
-  it('shows the starting ring for a task whose session ended without a label', () => {
+  it('draws nothing for a task whose session ended without a label', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
@@ -241,19 +243,15 @@ describe('TaskHeader status glyph', () => {
 
     renderTaskHeader({ sessionId: 'sess-1' });
 
-    expect(renderedStatusTone()).toBe('starting');
+    expect(renderedStatusTone()).toBeNull();
+    expect(screen.queryByTestId('task-header-status-queued')).toBeNull();
+    expect(screen.queryByTestId('task-header-status-preparing')).toBeNull();
   });
 
-  it('draws no glyph at all when no session is bound, respawn or not', () => {
-    useActivityStore.getState().applyActivityEvent({
-      kind: 'activity',
-      sessionId: 'sess-1',
-      taskId: 'task-1',
-      payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
-    });
-
+  it('draws no glyph at all when no session is bound and nothing is in flight', () => {
     renderTaskHeader({ sessionId: null });
 
     expect(renderedStatusTone()).toBeNull();
+    expect(screen.queryByTestId('task-header-status-preparing')).toBeNull();
   });
 });

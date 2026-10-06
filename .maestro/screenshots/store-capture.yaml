@@ -55,7 +55,7 @@ env:
 # id, not position, and the prompt is left UNANSWERED, so by the time we come
 # back the Needs You row exists and a single scroll to the top reaches it.
 # Start from the top, because the row moves. Before the prompt is raised the
-# session sits in Thinking, below the fold; once raised it jumps to Needs You at
+# session sits in Active, below the fold; once raised it jumps to Needs You at
 # the very top. Searching DOWN from wherever the launch happened to leave the
 # viewport therefore scrolls AWAY from it half the time - which is exactly what
 # happened, running to the end of the feed while the row sat above.
@@ -67,7 +67,7 @@ env:
 # sitting above the whole time.
 #
 # The two positions are what makes a DOWN search unsafe. Before the prompt the
-# session is in Thinking, below the fold; the moment it is raised the row moves
+# session is in Active, below the fold; the moment it is raised the row moves
 # to the top of Idle and STAYS there, because this flow deliberately leaves the
 # prompt unanswered. So the row's position is only stable in one direction, and
 # it is up.
@@ -123,7 +123,7 @@ env:
 # answer it. That is only true when the route carries `mode=chat`, which the
 # feed attaches to a NEEDS-YOU row. We tap the row much earlier than that: the
 # mock raises the prompt at tick 20, so at tap time the session is still
-# Thinking and the route carries no mode. SessionScreen's priority is then
+# Active and the route carries no mode. SessionScreen's priority is then
 # route param -> the task's remembered lens -> the `terminal` default
 # (src/screens/task/SessionScreen.tsx), so we land on Terminal with the prompt
 # pending and the Chat segment wearing its attention dot.

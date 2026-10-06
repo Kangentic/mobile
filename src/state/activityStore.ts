@@ -686,32 +686,6 @@ export function selectTaskRespawn(
   return respawn;
 }
 
-/**
- * Whether a task is in one of the two transitional states the `'starting'`
- * glyph stands for: between two sessions (its last one ended, labelled or
- * not, and the window `selectTaskRespawn` applies has not passed) or queued
- * behind the desktop's concurrency limit.
- *
- * Shared rather than recomputed at each surface BECAUSE the surfaces claim to
- * agree. The Home feed row, the board card and `TaskHeader` all promise that
- * one task cannot report two different states on two screens at once (see
- * `docs/architecture.md`'s "Transitional states" section), and three hand-copied
- * predicates have nothing holding them to that promise - a fifth transitional
- * state would have to be remembered in three files with no compiler check.
- * Small, in the same spirit as `sectionForEntry`: the classification rule lives
- * once, and each caller supplies only the two facts it happens to hold.
- *
- * Takes the values rather than the store because the three callers reach them
- * differently: two read `sessionStatus` off a possibly-absent entry, one off an
- * entry it always has, and `TaskHeader` may have no `taskId` to look an end up
- * with at all.
- */
-export function isStartingSession(
-  taskRespawn: RespawnInFlight | null,
-  sessionStatus: ReadStreamSessionStatusWire | null | undefined,
-): boolean {
-  return taskRespawn !== null || sessionStatus === 'queued';
-}
 
 /**
  * The triage bucketing: 'permission' needs the user (covers permission
