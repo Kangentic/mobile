@@ -437,6 +437,20 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
     expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
     expect(screen.getByTestId('filtered-empty-show-all')).toBeTruthy();
+    expect(screen.getByText('Nothing in the shown sections')).toBeTruthy();
+    expect(screen.getByText('1 section is hidden.')).toBeTruthy();
+    useSettingsStore.setState({ hiddenTriageSections: [] });
+  });
+
+  /** With every section hidden the count would only repeat the title, so it is left off. */
+  it('names every section hidden without repeating it as a count', async () => {
+    useSettingsStore.setState({ hiddenTriageSections: ['Idle', 'Active', 'Queued', 'Paused'] });
+
+    renderHome();
+    await act(async () => {});
+
+    expect(screen.getByText('All sections hidden')).toBeTruthy();
+    expect(screen.queryByText(/sections? (are|is) hidden\./)).toBeNull();
     useSettingsStore.setState({ hiddenTriageSections: [] });
   });
 
