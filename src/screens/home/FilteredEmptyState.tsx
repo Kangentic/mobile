@@ -16,7 +16,9 @@ export function FilteredEmptyState(): React.JSX.Element {
     <EmptyState
       testID="filtered-empty-state"
       title={everySectionHidden ? 'All sections hidden' : 'Nothing in the shown sections'}
-      caption={hiddenCount === 1 ? '1 section is hidden.' : `${hiddenCount} sections are hidden.`}
+      // The count only adds anything when some sections are still shown: with
+      // all of them hidden it repeats the title (ui-copy-brevity).
+      caption={everySectionHidden ? undefined : hiddenCount === 1 ? '1 section is hidden.' : `${hiddenCount} sections are hidden.`}
       overseerSize={90}
     >
       <Button
