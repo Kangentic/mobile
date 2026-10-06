@@ -477,7 +477,7 @@ function claudeTuiFrame(contentRows: string[], options: ClaudeTuiFrameOptions): 
 
 /**
  * Extra static "thinking" sessions (no ticker, nothing ever streams from
- * them) - purely to give the Agents feed's Thinking section enough volume
+ * them) - purely to give the Agents feed's Active section enough volume
  * to feel real scrolling and justify a collapsible-section UI, for
  * display/testing purposes.
  */
@@ -2129,7 +2129,7 @@ export function initialTasks(): BoardTaskWire[] {
       created_at: nowIso,
       updated_at: nowIso,
     }),
-    // Volume for the Thinking section - see MOCK_EXTRA_THINKING_SESSIONS.
+    // Volume for the Active section - see MOCK_EXTRA_THINKING_SESSIONS.
     ...MOCK_EXTRA_THINKING_SESSIONS.map((spec) =>
       boardTaskFixture({
         id: spec.taskId,

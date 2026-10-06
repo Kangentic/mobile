@@ -70,7 +70,10 @@ function StatusBar({ glyph, label, testID }: { glyph: 'spinner' | 'pause'; label
     <View testID={testID}>
       <Row gap="xs" style={styles.labelRow}>
         {glyph === 'spinner' ? (
-          <StatusSpinner size={STATUS_GLYPH_SIZE} color={glyphColor} testID={`${testID}-spinner`} />
+          // Keyed on the label so each new step ("Queued..." then "Starting
+          // agent...", or a respawn's next step) gets its own spin window rather
+          // than inheriting one a long queue already used up.
+          <StatusSpinner key={label} size={STATUS_GLYPH_SIZE} color={glyphColor} testID={`${testID}-spinner`} />
         ) : (
           // The testID rides a wrapping View: lucide forwards `testID` as the
           // web-only `data-testid`, which neither RNTL nor Maestro can select.

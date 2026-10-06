@@ -455,7 +455,7 @@ describe('activityStore', () => {
      * 'session-ended' proof the queue promoted it, whatever it says. The
      * narrower
      * 'thinking'-only rule would leave a promoted session that happens to
-     * report idle first badged "Waiting for a free slot" forever, because the
+     * report idle first drawn as "Queued..." forever, because the
      * promotion REUSES the same session id and setDesiredStreams never
      * re-subscribes a session that already has a stream, so no snapshot would
      * ever correct it.
@@ -483,11 +483,11 @@ describe('activityStore', () => {
      * The NON-activity payloads, which is where scoping the retirement to
      * `case 'activity'` actually bit. A queued placeholder emits nothing at
      * all, so any of these arriving is equally proof of promotion - and
-     * 'permission' is the one with teeth: `starting` outranks every other body
-     * source on the feed row, so a promoted session whose first push was a
-     * prompt would have rendered as a muted "Waiting for a free slot" with the
-     * decision it wants from the user hidden behind that caption, and the row's
-     * peek effect skipped so nothing would fetch it either.
+     * 'permission' is the one with teeth: a card that is not running shows only
+     * the task's description, so a promoted session whose first push was a
+     * prompt would have stayed "Queued..." with the decision it wants from the
+     * user hidden, and the row's peek effect skipped so nothing would fetch it
+     * either.
      *
      * These fail against a retirement that lives inside the switch's
      * `case 'activity'`, which is the whole point of listing them separately

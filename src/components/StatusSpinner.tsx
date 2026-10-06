@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
@@ -33,12 +33,32 @@ export interface StatusSpinnerProps {
  * spinning wrapper is its own component, mounted only on that branch, so a still
  * spinner registers no Reanimated mapper and a recycled row never keeps a stale
  * angle (motion-conventions.md).
+ *
+ * The spin is also BOUNDED (`statusSpinner.holdAfterMs`), which the desktop's is
+ * not: a queued session can wait for minutes, and a turn that never ends keeps
+ * the app drawing frames for as long as it is mounted. Past the bound this takes
+ * the same still branch as reduced motion. The expiry is keyed on `testID`
+ * (which carries the session or task) rather than held as a plain flag, because
+ * FlashList recycles this instance into another row, which must start its own
+ * window rather than inherit a stopped one.
  */
 export function StatusSpinner({ size, color, testID }: StatusSpinnerProps): React.JSX.Element {
+  const theme = useTheme();
   const reducedMotion = useReducedMotion();
   const screenMotionActive = useScreenMotionActive();
+  const holdAfterMs = theme.motion.statusSpinner.holdAfterMs;
+  const [expiredTestID, setExpiredTestID] = useState<string | null>(null);
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setExpiredTestID(testID);
+    }, holdAfterMs);
+    return () => {
+      clearTimeout(handle);
+    };
+  }, [testID, holdAfterMs]);
+  const spinExpired = expiredTestID === testID;
   const glyph = <LoaderCircle size={size} color={color} />;
-  if (reducedMotion || !screenMotionActive) {
+  if (reducedMotion || !screenMotionActive || spinExpired) {
     return <View testID={testID}>{glyph}</View>;
   }
   return (

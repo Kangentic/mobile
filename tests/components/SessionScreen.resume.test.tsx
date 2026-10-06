@@ -45,7 +45,14 @@ jest.mock('@/screens/task/ChangesTab', () => {
 jest.mock('@/screens/task/TerminalTab', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const { View } = require('react-native');
-  return { __esModule: true, TerminalTab: () => <View testID="stub-terminal-tab" /> };
+  return {
+    __esModule: true,
+    // Records `fitLayoutIsReference` (always passed as a boolean by the screen) so the
+    // terminal lens's half of the paused layout is visible here.
+    TerminalTab: (props: { fitLayoutIsReference?: boolean }) => (
+      <View testID="stub-terminal-tab" accessibilityValue={{ text: `fit-layout-is-reference-${String(props.fitLayoutIsReference)}` }} />
+    ),
+  };
 });
 // Records `quickKeysHidden` so the footer's half of the paused layout is visible here.
 jest.mock('@/screens/task/SessionInputBar', () => {
@@ -61,13 +68,14 @@ jest.mock('@/screens/task/SessionInputBar', () => {
 
 const resumeTaskSessionMock = resumeTaskSession as jest.Mock;
 
-function seedBoard(): void {
+/** `sessionId: null` is the board's report once the desktop has paused the task: it clears the task's `session_id`. */
+function seedBoard({ sessionId = 'sess-1' }: { sessionId?: string | null } = {}): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
     boardsByProjectId: {
       'project-1': {
         columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-review', name: 'Code Review', role: null, position: 1 })],
-        tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', session_id: 'sess-1', swimlane_id: 'lane-review' }) },
+        tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', session_id: sessionId, swimlane_id: 'lane-review' }) },
         snapshotAt: 0,
         showTicketNumbers: true,
         view: 'full',
@@ -186,6 +194,116 @@ describe('SessionScreen Resume (a paused session)', () => {
 
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
     expect(useResumeStore.getState().byTaskId['task-1']).toBeUndefined();
+  });
+
+  /**
+   * A FAILED attempt clears the same way as a resuming one, so its error line
+   * cannot resurface under a fresh Resume button the next time the task
+   * pauses (resumed from the desktop meanwhile, say). The attempt is read back
+   * from the store: the panel is gone either way, so only the store shows
+   * whether it was cleared or merely hidden.
+   */
+  it.each([
+    [
+      'the paused session ends into its resume',
+      (): void => {
+        useActivityStore.getState().applyActivityEvent({
+          kind: 'activity',
+          sessionId: 'sess-1',
+          taskId: 'task-1',
+          payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Resuming session...' },
+        });
+      },
+    ],
+    [
+      'the session reports running again',
+      (): void => {
+        useActivityStore
+          .getState()
+          .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }));
+      },
+    ],
+  ])('clears a FAILED attempt once %s, so its error cannot resurface under a later pause', (_case, leavePaused) => {
+    seedPausedSession({ resumable: true });
+    useResumeStore.getState().markFailed('task-1', 'Cannot resume a task in To Do');
+    renderSessionScreen();
+    // Held, and drawn, for as long as the session stays paused.
+    expect(screen.getByTestId('session-resume-error')).toBeTruthy();
+    expect(useResumeStore.getState().byTaskId['task-1']).toEqual({ phase: 'failed', message: 'Cannot resume a task in To Do' });
+
+    act(() => {
+      leavePaused();
+    });
+
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+    expect(useResumeStore.getState().byTaskId['task-1']).toBeUndefined();
+  });
+
+  /**
+   * The Resume panel takes the terminal lens's place for a paused session, so
+   * the swap veil yields to it: a veil over the panel would swallow the Resume
+   * tap. The desktop's pause clears the task's session_id, which this screen
+   * reads as the session going away and opens its quiet window; the session
+   * it keeps bound is still paused, so the panel stays. The window opens on
+   * the board's word alone here (not a `session-ended`, which would end the
+   * session's paused display and take the panel with it).
+   */
+  it('yields the swap veil to the Resume panel while the quiet window is open on a paused session', () => {
+    seedPausedSession({ resumable: true });
+    renderSessionScreen();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+
+    act(() => {
+      seedBoard({ sessionId: null });
+    });
+
+    // The veil first: a veil that covers the panel also hides it from the
+    // accessibility tree, so asserting the panel first would fail with "not
+    // found" rather than naming the veil.
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+
+    // Control: the quiet window really is open. Once the desktop no longer
+    // offers Resume, the same open window shows its veil.
+    act(() => {
+      useActivityStore.setState((state) => ({
+        bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: false } },
+      }));
+    });
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+    expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+  });
+
+  /**
+   * The terminal mirror's fit-to-height button and its reference cell read the
+   * pane's height as "the height the lens is read at". The Resume panel drops
+   * the quick-key row, so the pane is TALLER than that: a fit taken there would
+   * pin a cell no ordinary session ever uses. The pane says so by not being a
+   * fit reference while the panel shows, and is one again as soon as it goes.
+   */
+  it('tells the terminal its pane is not a fit reference while the Resume panel shows, and again once it is gone', () => {
+    seedPausedSession({ resumable: true });
+    renderSessionScreen();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+
+    expect(screen.getByTestId('stub-terminal-tab').props.accessibilityValue).toEqual({ text: 'fit-layout-is-reference-false' });
+
+    act(() => {
+      useActivityStore
+        .getState()
+        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }));
+    });
+
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+    expect(screen.getByTestId('stub-terminal-tab').props.accessibilityValue).toEqual({ text: 'fit-layout-is-reference-true' });
+  });
+
+  it('keeps the terminal pane a fit reference when no Resume panel shows (a paused session the desktop does not mark resumable)', () => {
+    seedPausedSession({ resumable: false });
+    renderSessionScreen();
+
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+    expect(screen.getByTestId('stub-terminal-tab').props.accessibilityValue).toEqual({ text: 'fit-layout-is-reference-true' });
   });
 
   it('shows no Resume for a running session', () => {

@@ -9,17 +9,23 @@ import { CapabilityError } from '@/channel/verbClient';
 import { RESUME_WAIT_MS, resumeTaskSession } from '@/connection/actions';
 import { useResumeStore } from '@/state/resumeStore';
 
-const { startSession } = vi.hoisted(() => ({
+const { startSession, getActiveConnection, requireSubscriptions, runBootstrap } = vi.hoisted(() => ({
   startSession: vi.fn(),
+  getActiveConnection: vi.fn(),
+  requireSubscriptions: vi.fn(),
+  runBootstrap: vi.fn(),
 }));
 
+// `refreshSnapshots` is the real one: it lives in the module under test, so a
+// spy on the export would not intercept the call resumeTaskSession makes. Its
+// one outward effect is `runBootstrap`, which is what the refresh tests observe.
 vi.mock('@/connection/connectionManager', () => ({
-  getActiveConnection: vi.fn(() => null),
+  getActiveConnection,
   reconnectNow: vi.fn(),
-  requireSubscriptions: vi.fn(),
+  requireSubscriptions,
   requireVerbClient: () => ({ startSession }),
 }));
-vi.mock('@/connection/bootstrap', () => ({ runBootstrap: vi.fn() }));
+vi.mock('@/connection/bootstrap', () => ({ runBootstrap }));
 // @/connection/actions also imports settingsStore, which persists via
 // expo-secure-store - fake it so the vitest (node) run has no native module.
 vi.mock('expo-secure-store', () => ({
@@ -35,6 +41,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   startSession.mockReset();
+  getActiveConnection.mockReset();
+  requireSubscriptions.mockReset();
+  runBootstrap.mockReset();
 });
 
 describe('resumeTaskSession', () => {
@@ -93,11 +102,110 @@ describe('resumeTaskSession', () => {
     expect(attempt).toEqual({ phase: 'failed', message: null });
   });
 
+  /**
+   * A refusal with no text must read as NO text. An empty message would be
+   * shown by every surface as a blank failure line, where null makes each fall
+   * back to its generic one. `''` is the plain empty case; the whitespace-only
+   * one is what a `.trim()` is for, and passes a bare length check untouched.
+   */
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '  \n\t '],
+  ])('fails with no text of its own when the desktop\'s refusal is %s', async (_description, refusalText) => {
+    startSession.mockRejectedValue(new CapabilityError('start-session', refusalText));
+
+    const attempt = await resumeTaskSession('task-1', 'project-1');
+
+    expect(attempt).toEqual({ phase: 'failed', message: null });
+    expect(useResumeStore.getState().byTaskId['task-1']).toEqual({ phase: 'failed', message: null });
+  });
+
+  it('trims the whitespace around the desktop\'s refusal text', async () => {
+    startSession.mockRejectedValue(new CapabilityError('start-session', '  Cannot resume a task in To Do \n'));
+
+    const attempt = await resumeTaskSession('task-1', 'project-1');
+
+    expect(attempt).toEqual({ phase: 'failed', message: 'Cannot resume a task in To Do' });
+    expect(useResumeStore.getState().byTaskId['task-1']).toEqual({ phase: 'failed', message: 'Cannot resume a task in To Do' });
+  });
+
   it('sends nothing while an attempt is already running', async () => {
     startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
     await resumeTaskSession('task-1', 'project-1');
     await resumeTaskSession('task-1', 'project-1');
 
     expect(startSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * `live` means the desktop already had a running session for the task, so the
+ * successor-arrival event the phone would otherwise wait on is never coming.
+ * The phone refreshes its own snapshots instead, so a stale paused view catches
+ * up. `starting` is the opposite: the successor's arrival is the signal, and a
+ * refresh would only race it.
+ */
+describe('resumeTaskSession - refreshing on a live outcome', () => {
+  const establishedConnection = { controller: { session: { isEstablished: true } }, verbs: { label: 'verb client' } };
+  const subscriptions = { label: 'subscription manager' };
+
+  /**
+   * The refresh is a no-op without an established connection, so every test here
+   * connects one: otherwise "no refresh happened" would be true for the wrong
+   * reason and the negative assertion below could never fail.
+   */
+  beforeEach(() => {
+    getActiveConnection.mockReturnValue(establishedConnection);
+    requireSubscriptions.mockReturnValue(subscriptions);
+    runBootstrap.mockResolvedValue(undefined);
+  });
+
+  it('refreshes the snapshots when the desktop reports a session already live', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'live' });
+
+    const attempt = await resumeTaskSession('task-1', 'project-1');
+
+    expect(runBootstrap).toHaveBeenCalledTimes(1);
+    expect(runBootstrap).toHaveBeenCalledWith(establishedConnection.verbs, subscriptions);
+    expect(attempt.phase).toBe('resuming');
+  });
+
+  it('does not refresh when the desktop reports the session is starting', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+
+    const attempt = await resumeTaskSession('task-1', 'project-1');
+
+    expect(runBootstrap).not.toHaveBeenCalled();
+    expect(attempt.phase).toBe('resuming');
+  });
+
+  /**
+   * The refresh is best-effort and fire-and-forget. If it were awaited inside
+   * the request's try, its failure would land in the catch and mark a resume the
+   * desktop ACCEPTED as failed; if its rejection were left unhandled, it would
+   * surface as an unhandled promise rejection.
+   */
+  it('keeps the attempt resuming, with no unhandled rejection, when the refresh itself rejects', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'live' });
+    runBootstrap.mockRejectedValue(new Error('bootstrap failed'));
+    const unhandledReasons: unknown[] = [];
+    const recordUnhandled = (reason: unknown): void => {
+      unhandledReasons.push(reason);
+    };
+    process.on('unhandledRejection', recordUnhandled);
+
+    try {
+      const attempt = await resumeTaskSession('task-1', 'project-1');
+      // Lets the rejected refresh settle, and Node's end-of-turn unhandled
+      // rejection check run, before anything is asserted.
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(runBootstrap).toHaveBeenCalledTimes(1);
+      expect(attempt.phase).toBe('resuming');
+      expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+      expect(unhandledReasons).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
   });
 });

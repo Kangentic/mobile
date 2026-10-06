@@ -770,17 +770,18 @@ export interface TriageRows {
  * The order `selectTriageRows` RETURNS its sections in - which is not the order
  * the Home feed displays them in, and the difference is a trap worth naming.
  *
- * `TriageHomeScreen` has its own `SECTION_ORDER` (`['needs-you', 'idle',
- * 'working']`, Idle above Thinking) and re-finds each section by name, so this
- * array's order reaches no screen. That makes it look like drift somebody
- * should "tidy" by matching the two. It is not inert: `activityStore.test.ts`
- * indexes the result POSITIONALLY (`selectTriageRows(...)[1]` means the working
- * section), so reordering this silently changes what those assertions are about
- * rather than failing.
+ * The feed's order lives in `FEED_SECTION_ORDER` (`src/screens/home/feedSections.ts`:
+ * `['needs-you', 'idle', 'working', 'queued', 'paused']`, Idle above Active),
+ * and every consumer re-finds each section by name, so this array's order
+ * reaches no screen. That makes it look like drift somebody should "tidy" by
+ * matching the two. It is not inert: `activityStore.test.ts` indexes the
+ * result POSITIONALLY (`selectTriageRows(...)[1]` means the working section),
+ * so reordering this silently changes what those assertions are about rather
+ * than failing.
  *
- * Adding a member to `TriageSection` means adding it to BOTH arrays - the
- * screen's copy carries the same warning, since a section missing from its
- * SECTION_ORDER renders no rows and warms no snippets.
+ * Adding a member to `TriageSection` means adding it to BOTH arrays - the feed
+ * carries the same warning, since a section missing from FEED_SECTION_ORDER
+ * renders no rows and warms no snippets.
  */
 const TRIAGE_SECTION_ORDER: readonly TriageSection[] = ['needs-you', 'working', 'idle'];
 

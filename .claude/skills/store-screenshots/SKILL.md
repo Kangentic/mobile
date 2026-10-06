@@ -198,7 +198,7 @@ Do not open a PR unless asked; the board's Tests column owns that.
   `terminal` default. The app is right to stay put, so do not "fix" this by
   making a pending prompt switch lenses.
 - **Search the feed UP, not down.** That same tick-20 prompt moves the target row
-  from Thinking to the top of Idle, where it stays. A DOWN search that runs after
+  from Active to the top of Idle, where it stays. A DOWN search that runs after
   it lands scrolls away from the row and fails at full timeout, which reads as a
   broken feed rather than a race.
 - **The Changes page is attempted, not asserted.** One bad navigation used to

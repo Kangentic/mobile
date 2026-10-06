@@ -247,6 +247,127 @@ describe('settingsStore - collapsed triage section', () => {
 
     expect(useSettingsStore.getState().collapsedTriageSection).toBeNull();
   });
+
+  /**
+   * The running sessions' section was titled "Thinking" until it became
+   * "Active". The collapse is stored by TITLE, so an install that had it
+   * collapsed would otherwise read back a title no section carries and silently
+   * show the section expanded.
+   */
+  it('hydrate migrates the legacy "Thinking" title to "Active"', async () => {
+    storedValues.set('settings.collapsedTriageSection', JSON.stringify('Thinking'));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSection).toBe('Active');
+  });
+
+  // The migration is an exact-title lookup, not a rewrite of anything that looks
+  // similar: every current title, a near miss on the legacy one, and a title no
+  // section has ever carried all read back as stored.
+  it.each(['Idle', 'Active', 'Queued', 'Paused', 'thinking', 'Thinking section'])(
+    'hydrate passes the stored title "%s" through unchanged',
+    async (title) => {
+      storedValues.set('settings.collapsedTriageSection', JSON.stringify(title));
+      await useSettingsStore.getState().hydrate();
+
+      expect(useSettingsStore.getState().collapsedTriageSection).toBe(title);
+    },
+  );
+});
+
+describe('settingsStore - hidden triage sections', () => {
+  const HIDDEN_KEY = 'settings.hiddenTriageSections';
+
+  beforeEach(() => {
+    storedValues.clear();
+    readFailure.active = false;
+    readFailure.onlyKeys = null;
+    useSettingsStore.setState({ hiddenTriageSections: [] });
+  });
+
+  it('hydrate restores a stored array of titles', async () => {
+    storedValues.set(HIDDEN_KEY, JSON.stringify(['Idle', 'Paused']));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual(['Idle', 'Paused']);
+  });
+
+  it('hydrate reads nothing hidden when no value was ever stored', async () => {
+    // Seeded non-empty so that an untouched field cannot pass for a correct read.
+    useSettingsStore.setState({ hiddenTriageSections: ['Queued'] });
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
+  });
+
+  // Seeded non-empty in each case below for the same reason: a corrupt value must
+  // RESET the field to nothing hidden, and an empty starting point would let a
+  // hydrate that never wrote the field pass.
+  it('hydrate reads nothing hidden from malformed JSON', async () => {
+    useSettingsStore.setState({ hiddenTriageSections: ['Queued'] });
+    storedValues.set(HIDDEN_KEY, 'not json');
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
+  });
+
+  it.each([
+    ['a bare string', JSON.stringify('Idle')],
+    ['an object', '{}'],
+    ['null', 'null'],
+    ['a bare number', '5'],
+  ])('hydrate reads nothing hidden when the stored JSON parses to %s, not an array', async (_description, raw) => {
+    useSettingsStore.setState({ hiddenTriageSections: ['Queued'] });
+    storedValues.set(HIDDEN_KEY, raw);
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
+  });
+
+  it('hydrate keeps the string members of a mixed array and drops the rest', async () => {
+    storedValues.set(HIDDEN_KEY, JSON.stringify(['Idle', 5, null, { title: 'Active' }, ['Queued'], 'Paused']));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual(['Idle', 'Paused']);
+  });
+
+  it('toggle hides a title, accumulates a second, and persists the whole list each time', async () => {
+    await useSettingsStore.getState().toggleTriageSectionHidden('Idle');
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual(['Idle']);
+    expect(storedValues.get(HIDDEN_KEY)).toBe(JSON.stringify(['Idle']));
+
+    // Unlike the collapse, hiding a second section does not replace the first.
+    await useSettingsStore.getState().toggleTriageSectionHidden('Paused');
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual(['Idle', 'Paused']);
+    expect(storedValues.get(HIDDEN_KEY)).toBe(JSON.stringify(['Idle', 'Paused']));
+  });
+
+  it('toggling a hidden title shows it again without disturbing the others, and persists', async () => {
+    await useSettingsStore.getState().toggleTriageSectionHidden('Idle');
+    await useSettingsStore.getState().toggleTriageSectionHidden('Paused');
+    await useSettingsStore.getState().toggleTriageSectionHidden('Idle');
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual(['Paused']);
+    expect(storedValues.get(HIDDEN_KEY)).toBe(JSON.stringify(['Paused']));
+
+    await useSettingsStore.getState().toggleTriageSectionHidden('Paused');
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
+    expect(storedValues.get(HIDDEN_KEY)).toBe(JSON.stringify([]));
+  });
+
+  it('showAllTriageSections clears every hidden title and persists an empty list', async () => {
+    await useSettingsStore.getState().toggleTriageSectionHidden('Idle');
+    await useSettingsStore.getState().toggleTriageSectionHidden('Queued');
+    expect(storedValues.get(HIDDEN_KEY)).toBe(JSON.stringify(['Idle', 'Queued']));
+
+    await useSettingsStore.getState().showAllTriageSections();
+
+    expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
+    expect(storedValues.get(HIDDEN_KEY)).toBe('[]');
+  });
 });
 
 describe('settingsStore - clearDesktopScopedPreferences', () => {

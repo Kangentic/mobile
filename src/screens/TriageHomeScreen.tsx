@@ -76,9 +76,6 @@ type TriageListRow =
   | { kind: 'section-header'; section: FeedSection; title: string; count: number }
   | { kind: 'activity'; entry: SessionActivityEntry };
 
-const SECTION_ORDER = FEED_SECTION_ORDER;
-const SECTION_TITLES = FEED_SECTION_TITLES;
-
 export function TriageHomeScreen(): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
@@ -97,21 +94,21 @@ export function TriageHomeScreen(): React.JSX.Element {
     // the header shows the right count even when only one of the two
     // sections underneath it has entries.
     const countByTitle = new Map<string, number>();
-    for (const sectionKind of SECTION_ORDER) {
+    for (const sectionKind of FEED_SECTION_ORDER) {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       if (!section) continue;
-      const title = SECTION_TITLES[sectionKind];
+      const title = FEED_SECTION_TITLES[sectionKind];
       countByTitle.set(title, (countByTitle.get(title) ?? 0) + section.entries.length);
     }
     const listRows: TriageListRow[] = [];
     const emittedTitles = new Set<string>();
-    for (const sectionKind of SECTION_ORDER) {
+    for (const sectionKind of FEED_SECTION_ORDER) {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       // Empty sections render nothing: the feed leads with what matters
       // instead of headers over blank space. needs-you + idle share the
       // Idle header (one title, prompt cards first).
       if (!section || section.entries.length === 0) continue;
-      const title = SECTION_TITLES[section.section];
+      const title = FEED_SECTION_TITLES[section.section];
       if (hiddenTriageSections.includes(title)) continue;
       if (!emittedTitles.has(title)) {
         emittedTitles.add(title);
@@ -254,19 +251,19 @@ export function TriageHomeScreen(): React.JSX.Element {
     //
     // This changes the ORDER and nothing else. `selectFeedSections` partitions
     // every entry into exactly one of the closed `FeedSection` union's members,
-    // and SECTION_ORDER lists them all - so every session the previous
+    // and FEED_SECTION_ORDER lists them all - so every session the previous
     // `Object.values(bySessionId)` loop reached is still reached exactly once.
-    // A future section added to the union without being added to SECTION_ORDER
-    // would silently stop warming its sessions.
+    // A future section added to the union without being added to
+    // FEED_SECTION_ORDER would silently stop warming its sessions.
     const sections = selectFeedSections(useActivityStore.getState().bySessionId);
     // A section the filter hides mounts no rows, so its snippets would be
     // fetched for nothing; unhiding it mounts the rows, which peek for
     // themselves.
     const hiddenTitles = useSettingsStore.getState().hiddenTriageSections;
-    for (const sectionKind of SECTION_ORDER) {
+    for (const sectionKind of FEED_SECTION_ORDER) {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       if (!section) continue;
-      if (hiddenTitles.includes(SECTION_TITLES[sectionKind])) continue;
+      if (hiddenTitles.includes(FEED_SECTION_TITLES[sectionKind])) continue;
       for (const entry of section.entries) {
         if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
         // A queued or paused card shows the task's description, never the

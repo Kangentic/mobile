@@ -79,10 +79,10 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
     // is coming. Refresh rather than wait, so a stale paused view catches up.
     if (response.outcome === 'live') void refreshSnapshots().catch(() => undefined);
   } catch (error) {
-    const failed: ResumeAttempt = {
-      phase: 'failed',
-      message: error instanceof CapabilityError ? error.message.slice(0, RESUME_FAILURE_MESSAGE_MAX_LENGTH) : null,
-    };
+    // A blank refusal reads as no refusal text: null makes every surface show
+    // its generic line rather than an empty one.
+    const refusalText = error instanceof CapabilityError ? error.message.trim().slice(0, RESUME_FAILURE_MESSAGE_MAX_LENGTH) : '';
+    const failed: ResumeAttempt = { phase: 'failed', message: refusalText.length > 0 ? refusalText : null };
     useResumeStore.getState().markFailed(taskId, failed.message);
     return failed;
   }
