@@ -206,6 +206,15 @@ export interface MotionTokens {
      */
     unmountMarginMs: number;
   };
+  /**
+   * The task card footer's spinner (queued, preparing, starting): one full
+   * turn, linear. The desktop card's own value - its footer spins lucide's
+   * Loader2 with Tailwind's `animate-spin`, a 1s linear turn. Unlike the
+   * desktop's, ours respects reduced motion (CardStatusFooter).
+   */
+  statusSpinner: {
+    turnMs: number;
+  };
 }
 
 export interface TypographyToken {
@@ -302,6 +311,9 @@ export const motionTokens: MotionTokens = {
     opacityMax: 0.16,
     durationMs: 700,
     unmountMarginMs: 300,
+  },
+  statusSpinner: {
+    turnMs: 1000,
   },
 };
 

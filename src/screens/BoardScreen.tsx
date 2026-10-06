@@ -8,6 +8,7 @@ import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCa
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { TaskCard } from '@/components/board/TaskCard';
+import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
 import {
   isDoneColumn,
   selectArchived,
@@ -16,7 +17,7 @@ import {
   useBoardStore,
   type ProjectBoard,
 } from '@/state/boardStore';
-import { useActivityStore, isStartingSession, sectionForEntry, selectTaskRespawn } from '@/state/activityStore';
+import { useActivityStore, sectionForEntry, selectTaskRespawn } from '@/state/activityStore';
 import { ARCHIVED_PAGE_SIZE, loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
 import { reportHandledError } from '@/observability/crashReporting';
 
@@ -428,19 +429,24 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
 
   // Task-keyed, not session-keyed, and that is the entire point: during a
   // swap the task's session_id is null, so `activityEntry` above is null and
-  // this card used to show no status at all for the several seconds the
-  // desktop was handing the work to a new agent. Labelled or not: the glyph
-  // is the one thing on this card a swap may change.
+  // this card used to show nothing at all for the several seconds the desktop
+  // was handing the work to a new agent. Now it shows the desktop's step in
+  // the footer, as the desktop card does (cardSessionDisplay).
   const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
-  const starting = isStartingSession(respawn, activityEntry?.sessionStatus);
+  const sessionDisplay = cardSessionDisplay({
+    hasSession: activityEntry !== null,
+    sessionStatus: activityEntry?.sessionStatus,
+    respawn,
+  });
 
   // Desktop TaskCard parity: spinner while thinking, mail while the
-  // session waits on the user (permission or idle). 'starting' outranks both -
-  // a queued session reports idle (no PTY, so it never thinks) and would
-  // otherwise be indistinguishable from an agent that finished its work.
-  const statusKind: AgentStatusKind | null = starting
-    ? 'starting'
-    : activityEntry
+  // session waits on the user (permission or idle), and no icon for a
+  // session that is not running (queued, paused, mid-respawn, ended): its
+  // footer says which. A queued session reports idle (no PTY, so it never
+  // thinks), so `sessionStatus`, not the activity state, is what keeps it
+  // from wearing the envelope.
+  const statusKind: AgentStatusKind | null =
+    activityEntry !== null && sessionDisplay.kind === 'running'
       ? sectionForEntry(activityEntry) === 'working'
         ? 'working'
         : sectionForEntry(activityEntry) === 'needs-you' || activityEntry.unreadCount > 0
@@ -455,6 +461,7 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
       task={task}
       statusKind={statusKind}
       showTicketNumbers={showTicketNumbers}
+      sessionDisplay={sessionDisplay}
       usage={activityEntry?.usage ?? null}
       bodyText={descriptionPreview}
       bodyNumberOfLines={CARD_DESCRIPTION_LINES}

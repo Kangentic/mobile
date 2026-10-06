@@ -2,8 +2,10 @@ import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import { View } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
-import { GitMerge, GitMergeConflict, GitPullRequest } from 'lucide-react-native';
+import * as Reanimated from 'react-native-reanimated';
+import { CirclePause, GitMerge, GitMergeConflict, GitPullRequest, LoaderCircle } from 'lucide-react-native';
 import { ThemeProvider } from '@/components';
+import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
 import { PR_READINESS_FRESHNESS_CAVEAT } from '@/components/board/prChipPresentation';
@@ -17,6 +19,7 @@ function renderTaskCard(overrides: Partial<TaskCardProps> = {}): void {
     task: boardTaskFixture(),
     statusKind: null,
     showTicketNumbers: false,
+    sessionDisplay: { kind: 'none' },
     usage: null,
     bodyText: 'A task worth doing.',
     onPress: jest.fn(),
@@ -50,6 +53,7 @@ describe('TaskCard', () => {
       task: boardTaskFixture({ pr_number: 42 }),
       statusKind: 'working',
       showTicketNumbers: true,
+      sessionDisplay: { kind: 'running' },
       usage: usageFixture(),
       columnStrip: {
         column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, icon: 'code' }),
@@ -75,6 +79,7 @@ describe('TaskCard', () => {
     // that mutation stays green against every other fixture in this file,
     // which all report usedTokens comfortably under contextWindowSize.
     renderTaskCard({
+      sessionDisplay: { kind: 'running' },
       usage: usageFixture({
         contextWindow: {
           usedPercentage: 92,
@@ -99,6 +104,124 @@ describe('TaskCard', () => {
     expect(screen.queryByTestId(`${BASE_TEST_ID}-pr`)).toBeNull();
     expect(screen.queryByText('backend')).toBeNull();
     expect(screen.queryByText('p0')).toBeNull();
+  });
+
+  /**
+   * The footer is a port of the desktop card's bottom-bar switch
+   * (kangentic TaskCard.tsx): every in-between state shows here, as faint text
+   * beside a 12 dp glyph, and nowhere else on the card. Strings are the
+   * desktop's, verbatim.
+   */
+  describe('the footer (the desktop card\'s bottom bar)', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    const STATUS_BAR = `${BASE_TEST_ID}-status-bar`;
+    const unknownWindowUsage = usageFixture({
+      contextWindow: { usedPercentage: 0, usedTokens: 0, cacheTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, contextWindowSize: 0 },
+    });
+
+    it('shows "Starting agent..." with a spinner while a running session has not reported its model', () => {
+      renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: null });
+      expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
+      expect(within(screen.getByTestId(`${STATUS_BAR}-spinner`)).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
+    });
+
+    /**
+     * The desktop draws the full usage footer as soon as the model is known,
+     * at 0% until the window size lands, so the card never grows when it
+     * does. The phone used to draw nothing until then.
+     */
+    it('shows the model at 0% over an empty bar once the model is known but the window size is not', () => {
+      renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unknownWindowUsage });
+      const usageBar = screen.getByTestId(`${BASE_TEST_ID}-usage`);
+      expect(usageBar).toHaveTextContent(new RegExp(unknownWindowUsage.model.displayName));
+      expect(usageBar).toHaveTextContent(/0%/);
+      expect(screen.getByTestId(`${BASE_TEST_ID}-usage-fill`)).toHaveStyle({ width: '0%' });
+      expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
+    });
+
+    it('shows "Queued..." with a spinner for a queued session, and no usage bar even when usage is known', () => {
+      renderTaskCard({ sessionDisplay: { kind: 'queued' }, usage: usageFixture() });
+      expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Queued...');
+      expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
+    });
+
+    it('shows "Paused" with a still pause circle for a suspended session', () => {
+      renderTaskCard({ sessionDisplay: { kind: 'suspended' }, usage: usageFixture() });
+      expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Paused');
+      expect(within(screen.getByTestId(`${STATUS_BAR}-paused`)).UNSAFE_getByType(CirclePause)).toBeTruthy();
+      expect(screen.queryByTestId(`${STATUS_BAR}-spinner`)).toBeNull();
+    });
+
+    it('shows the desktop\'s own step, verbatim, for a respawn in flight', () => {
+      renderTaskCard({ sessionDisplay: { kind: 'preparing', label: 'Switching model...' }, usage: usageFixture() });
+      expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Switching model...');
+      expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
+    });
+
+    it.each([['none' as const], ['exited' as const]])('draws no footer at all for %s', (kind) => {
+      renderTaskCard({ sessionDisplay: { kind }, usage: usageFixture() });
+      expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
+    });
+
+    it('spins with the desktop\'s 1s linear turn, looping forever', () => {
+      const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+      const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
+      renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: darkTerminalTheme.motion.statusSpinner.turnMs }));
+      expect(withRepeatSpy).toHaveBeenCalledWith(expect.anything(), -1, false);
+    });
+
+    /**
+     * Idle CPU scales with REGISTERED Reanimated mappers (~0.47 points each on
+     * a release build), so the spin's hook must exist only on a spinning row.
+     * Counted against a paused card's own baseline, since the card's press
+     * feedback (PressScale) registers one of its own.
+     */
+    it('registers exactly one more animated mapper for a spinning footer than for a paused one', () => {
+      const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+      renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
+      const pausedCardCalls = animatedStyleSpy.mock.calls.length;
+      renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      expect(animatedStyleSpy.mock.calls.length - pausedCardCalls).toBe(pausedCardCalls + 1);
+    });
+
+    it('holds the spinner still under reduced motion, which the desktop does not, registering no extra mapper', () => {
+      jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
+      const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+      renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
+      const pausedCardCalls = animatedStyleSpy.mock.calls.length;
+      renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      expect(within(screen.getByTestId(`${STATUS_BAR}-spinner`)).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+      expect(animatedStyleSpy.mock.calls.length - pausedCardCalls).toBe(pausedCardCalls);
+    });
+
+    it('holds the spinner still while the screen is blurred', () => {
+      const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+      render(
+        <ThemeProvider>
+          <ScreenMotionOverride active={false}>
+            <TaskCard
+              testID={BASE_TEST_ID}
+              task={boardTaskFixture()}
+              statusKind={null}
+              showTicketNumbers={false}
+              sessionDisplay={{ kind: 'queued' }}
+              usage={null}
+              bodyText="A task worth doing."
+              onPress={jest.fn()}
+            />
+          </ScreenMotionOverride>
+        </ThemeProvider>,
+      );
+      expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
+      expect(withTimingSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('the column strip (Agents only)', () => {
@@ -148,6 +271,7 @@ describe('TaskCard', () => {
             task={boardTaskFixture()}
             statusKind={null}
             showTicketNumbers={false}
+            sessionDisplay={{ kind: 'none' }}
             usage={null}
             bodyText="A task worth doing."
             onPress={jest.fn()}

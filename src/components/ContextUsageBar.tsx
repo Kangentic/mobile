@@ -7,7 +7,7 @@ import { useTheme } from './theme/ThemeProvider';
 import type { Theme } from './theme/tokens';
 
 export interface ContextUsageBarProps {
-  /** Null (or an unknown window - see below) renders nothing. */
+  /** Null renders nothing; an unknown window renders at 0% (see below). */
   usage: SessionUsageWire | null;
   testID?: string;
 }
@@ -30,11 +30,9 @@ export function contextUsageColor(theme: Theme, usedPercentage: number): string 
 }
 
 /**
- * Whether a usage report has a known context window - the render gate. A
- * size of 0 is the desktop's "unknown size" sentinel, sent before any
- * window has been learned for a session's model. Exported so a parent
- * (TaskCard) can decide layout - whether to render its bordered utility
- * strip at all - without duplicating the check.
+ * Whether a usage report has a known context window. A size of 0 is the
+ * desktop's "unknown size" sentinel, sent before any window has been learned
+ * for a session's model; the bar then sits at 0% rather than vanishing.
  *
  * This and the two functions below port the desktop `Kangentic` repo's
  * `src/renderer/utils/format-tokens.ts` trio (same names, same semantics),
@@ -62,8 +60,7 @@ function isContextWindowOverBudget(usage: SessionUsageWire): boolean {
 
 /**
  * The clamped context-window percentage to display: 0 for an unknown
- * window (no denominator - callers still gate the render on
- * isContextWindowKnown), 100 for an over-budget one (the near-full /
+ * window (no denominator, so the bar sits empty), 100 for an over-budget one (the near-full /
  * auto-compaction critical state), otherwise the reported percentage
  * rounded and capped at 100. The cap is load-bearing, not decorative: the
  * authoritative used_percentage can exceed 100 against an
@@ -82,20 +79,28 @@ export function contextWindowDisplayPercent(usage: SessionUsageWire): number {
  * secondary to the card's own content, never competing with it), the bar
  * full-width beneath. No divider or top padding of its own - the parent
  * (a task card's utility strip) owns the divider above it. Renders nothing
- * when the session reports no usage yet, or the window size is unknown -
- * a full critical bar still renders when usage is over budget, desktop
- * parity for "a near-full session shows a full critical bar, not nothing".
+ * when the session reports no usage yet. An UNKNOWN window renders the full
+ * layout at 0%, as the desktop card's footer does: it keeps the card's height
+ * fixed, so the bar does not mount in later and push the card taller when the
+ * size arrives. A full critical bar still renders when usage is over budget,
+ * desktop parity for "a near-full session shows a full critical bar, not
+ * nothing".
  */
 export function ContextUsageBar({ usage, testID }: ContextUsageBarProps): React.JSX.Element | null {
   const theme = useTheme();
-  if (!isContextWindowKnown(usage)) return null;
+  if (usage === null) return null;
   const usedPercentage = contextWindowDisplayPercent(usage);
+  const modelName = usage.model.displayName;
 
   return (
     <View
       testID={testID}
       accessibilityRole="progressbar"
-      accessibilityLabel={`${usage.model.displayName}, context window ${usedPercentage}% used`}
+      accessibilityLabel={
+        isContextWindowKnown(usage)
+          ? `${modelName}, context window ${usedPercentage}% used`
+          : `${modelName}, context window size not reported yet`
+      }
       accessibilityValue={{ min: 0, max: 100, now: usedPercentage }}
     >
       <Row gap="sm" style={styles.spaceBetween}>
