@@ -59,6 +59,16 @@ Boot it, install the release build, and open the demo link
 free, repeatable section change: its active session raises a permission prompt about 20 s after
 the channel comes up (feed tick 20 in `src/connection/mockDesktop.ts`).
 
+**Cold-boot it before a measurement session, and smoke-test it before trusting a number.** A
+long-lived emulator degrades. On 2026-10-06 (task #102), `kangentic_profile` after about 2.5 hours
+of uptime and a few dozen installs launched the app in 11 to 13 s, with 13 s of app CPU before
+the first frame. After `adb -s <serial> emu kill` and a boot with `-no-snapshot-load`, the SAME
+APK launched in 1.1 s, about 0.6 s to JS entry. A whole earlier round at 2.3 to 5 s, which looked
+plausible, was degraded too and was thrown away. Nothing in the numbers themselves says the
+emulator is sick, so two cold launches right after the boot are the reference to compare against.
+A second emulator streaming in the foreground (a live-paired AVD) adds host contention on top.
+Background its app for the measurement window, but do not mistake it for the main cause.
+
 ## The four questions, and the tool for each
 
 Do not mix them up. Each answers something the others cannot.

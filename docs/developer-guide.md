@@ -633,6 +633,39 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
      turning `enableShrinkResourcesInReleaseBuilds` back off - minification, which is what Play's
      optimization rating mostly reads and what the `mapping.txt` work exists for, is independent
      of it.
+  3. **R8 also OPTIMIZES, since task #102 (Play's 0.8.1 advisory).** Minify and shrink were on,
+     but the SDK 57 template's release block reads
+     `getDefaultProguardFile("proguard-android.txt")`, and that preset carries `-dontoptimize`.
+     ProGuard options are global, so R8 shrank and obfuscated but never inlined, merged classes or
+     removed dead branches, and Play flagged release 14 with "Optimization isn't enabled" and
+     "Optimized resource shrinking isn't enabled". `plugins/withAndroidR8Optimization.ts` swaps the
+     preset for `proguard-android-optimize.txt` (and throws if the template names neither, rather
+     than skipping) and sets `android.r8.optimizedResourceShrinking=true`, AGP 8.12/8.13's opt-in.
+     Unlike the two properties above, the preset IS literal text in `build.gradle`, so `ci.yml`
+     checks both files. **The prebuild check cannot see a library's consumer rules**, and any one
+     of them can switch optimization off for the whole app with its own `-dontoptimize`, so
+     `.github/scripts/verify-r8-optimization.sh` reads the merged `configuration.txt` R8 actually
+     ran with. It fails on a live `-dontoptimize` from ANY rule file and names that file. It runs
+     in `e2e.yml` and on release variants in `build-android.yml`. Measured on the production AAB
+     (run 37517370295 against vc14's run 37180001044):
+
+     | | vc14 (Play) | R8 optimized |
+     |---|---|---|
+     | dex | 20.20 MB, 3 files | 13.00 MB, 2 files |
+     | resource files / `resources.pb` | 979 / 2.36 MB | 765 / 1.70 MB |
+     | AAB | 92.18 MB | 86.81 MB |
+
+     The AAB row also carries the dependency refresh's native-library changes (5.5 MB of `lib/`
+     across four ABIs, mostly the dropped LaTeX renderer). The dex and resource rows are R8's: on
+     local x86_64 builds whose JS bundles hash identically, the plugin alone took dex from 21.32
+     to 13.63 MB and removed 214 resource files. Optimized resource shrinking puts resources into
+     the code reference graph, which is the risk the table above names, and `xterm.html` survives
+     it (`verify-android-assets.sh` passes on both artifacts), as do `notification_icon`, the
+     splash and launcher art, and every Firebase string. **R8 sits off the production build's
+     critical path**: its task logs at 19:25 in that run, and the last native compile
+     (`buildCMakeRelWithDebInfo[x86_64]`) starts at 19:42, so whatever optimization adds to the
+     R8 task does not lengthen a four-ABI build. **Delete the plugin at the Expo SDK 58 upgrade**,
+     whose template already reads the optimize preset, on AGP 9, which needs no property.
 
   `build-android.yml` uploads `mapping.txt` as its own run artifact (`mapping-<artifact-name>`)
   alongside the APK/AAB. That is the file Play Console accepts for manual deobfuscation, and the
@@ -818,6 +851,41 @@ purpose.
 version**. That last one matters as much as the pin itself. Pinning CI alone just moves the problem:
 a developer on a newer CLI writes a flow that passes locally and fails the gate, with nothing in
 either place explaining why.
+
+#### Dependencies held past the Expo SDK mapping (`expo.install.exclude`)
+
+`npx expo install --check` is a required gate (`Native config (prebuild)`), and it validates every
+package in `node_modules/expo/bundledNativeModules.json` plus the SDK's `relatedPackages` (from
+`api.expo.dev/v2/versions/latest`). Listing a package in `package.json`'s `expo.install.exclude`
+SILENCES that gate for it (`.claude/rules/expo-cng.md`), so each entry is a deliberate, vetted hold
+and is recorded here with its reason. **`tests/unit/expoInstallExclude.test.ts` fails if an entry
+has no row below or a row has no entry**, so an exclude cannot outlive its reason unnoticed.
+
+Every row except gesture-handler was added in task #102 (2026-10-06) to take a performance or
+memory fix that SDK 57's mapping trails. **All of them come out at the Expo SDK 58 upgrade**, which
+maps current versions of each; remove the entry in the same change that vets the SDK 58 version.
+"Measured" in the last column refers to the release-build A/B under "Dependency refresh, 2026-10
+(task #102)" below; everything else is read from the release notes and source.
+
+| Package | SDK 57 maps | Held at | Why | Verified by |
+|---|---|---|---|---|
+| `react-native-gesture-handler` | `~2.32.0` | `~3.3.0` | The terminal pane's pinch lifecycle sits on the 3.x line; taking the mapping would DOWNGRADE a major (held since 2026-08-04). 3.2/3.3 fix an orchestrator leak (#4402) and a crash after detector unmount (#4268). `PinchGestureHandler.kt` is byte-identical 3.1.0 to 3.3.0 | TerminalPane suites; device pinch, pan and fit |
+| `react-native-reanimated` | `4.5.1` | `4.7.1` | 4.7.1 removes the native per-frame mapper loop the idle-CPU work measured at ~0.47 points per registered mapper on 4.5.1 (read from `mappers.ts`, NOT measured: the `extra-mappers` A/B did not take, see "Dependency refresh"), and fixes exiting layout animations leaking their views on Android (#10682) | motion suites; release builds on the emulator and the Pixel |
+| `react-native-worklets` | `0.10.1` | `0.13.0` | Required by Reanimated 4.7.1 (`0.13.x`); faster startup. expo-modules-core 57's optional peer caps at `^0.10.0`; its C++ integration was read against 0.13's StableApi and compiles | a release build and cold launch |
+| `react-native-screens` | `~4.26.0` | `~4.28.0` | #4413 use-after-free of the removal listener | navigation on device |
+| `react-native-safe-area-context` | `~5.7.0` | `~5.10.1` | #735 skips Fabric state updates while detached | navigation on device |
+| `react-native-svg` | `15.15.4` | `15.15.5` | patch release, taken with the set | icons render |
+| `@shopify/flash-list` | `2.0.2` | `2.3.3` | #2138 scroll position on prepend (`maintainVisibleContentPosition` feeds), #2095 no jitter; 2.3.2 disables `removeClippedSubviews` to stop an Android crash | feeds on device; retention |
+| `react-native-webview` | `13.16.1` | `14.0.1` | the `latest` tag; only breaking change is Android API 24, already met. 14 broke its own default props typing, worked around with `WebView<object>` in `TerminalPane.tsx` | the Terminal lens paints |
+| `react-native-get-random-values` | `~1.11.0` | `~2.0.0` | one shared `SecureRandom` instead of one per call; module lookup now fails closed (`getEnforcing`). The CSPRNG under `@noble/*` | pairing and reconnect on device; `crypto-pairing-auditor` |
+| `react-native-pager-view` | `8.0.2` | `9.0.6` | Android moved to a Compose pager (#1092) with the manager API kept; post-release fixes through 9.0.6 (#1103 blank page after navigation, safe-area and keyboard shrink). `@expo/ui` already ships Compose | Board swiping on device |
+| `@sentry/react-native` | `~7.11.0` | `~8.29.0` | 8.24 Android fragment leak fix, cheaper frame collection. Privacy posture kept: three new data-adding default integrations dropped, and the installed default list is pinned by `crashReporting.test.ts` | crash-test events read back on both platforms |
+
+**Held at the mapping, deliberately:** `react-native` and `react` (the SDK's backbone; RN 0.87+ is
+the SDK 58 upgrade), `@types/react` (must match runtime React 19.2), `jest` and `@types/jest` 30
+(jest-expo 57 is built on Jest 29 internals), `typescript` 7 (typescript-eslint supports `<6.1`),
+and ESLint 10 (not Expo-mapped, but `eslint-config-expo`'s `eslint-plugin-react` calls
+`context.getFilename()`, which ESLint 10 removed).
 
 **GitHub Actions are kept off Node 20**, which GitHub is already force-running on Node 24 and will
 eventually remove. `actions/setup-java@v5`, `android-actions/setup-android@v4` and
@@ -1475,6 +1543,18 @@ until `plugins/withAndroidCmakeBuildStaging.ts` landed, and every recipe in this
 route around it via a separate short-path checkout at the drive root. That workaround is gone.
 **Do not recreate it:** if a build hits MAX_PATH, the plugin is not applying, and the fix is the
 plugin.
+
+**"Any path" has a ceiling, measured 2026-10-06 (task #102).** A release build from a checkout
+rooted at 165 characters (a Claude session scratchpad under `%TEMP%`) failed in
+`configureCMakeRelWithDebInfo` for `react-native-screens` and `react-native-worklets` with
+`[CXX1428] ... A problem occurred starting process 'command '...\node_modules\react-native-screens\android\build\intermediates\cxx\RelWithDebInfo\<hash>\logs\x86_64\prefab_command.bat''`:
+at about 270 characters, the generated `prefab_command.bat` cannot be STARTED (Windows applies
+MAX_PATH to the executable path). That file lives under each module's own `build/` directory,
+which the plugin does not relocate - it moves `.cxx` staging only - so this is a third mechanism,
+not a regression of the two the plugin fixes. The same build succeeded unchanged from a
+47-character root, and `.kangentic/worktrees/<n>` (about 73 characters) is well inside the
+limit. Keep throwaway checkouts at a normal depth; if a real checkout ever needs to be this deep,
+the fix is relocating module `buildDir`s in the plugin, not a drive-root checkout.
 
 ```
 npm install
@@ -3176,8 +3256,12 @@ nearly line for line. **Read from source**, not measured by that alone.
 
 The app moved to 1.1.1 in task #102 and `patches/react-native-enriched-markdown+0.7.4.patch` was
 deleted in the same commit as the lockfile. The 1.x defaults turn on math, code highlighting and
-video, so the `"enriched-markdown"` block in `package.json` turns all three off: rendering is what
-0.7.x drew, and the APK skips Media3 ExoPlayer.
+video, and the `"enriched-markdown"` block in `package.json` turns all three off, so the APK skips
+Media3 ExoPlayer. **That is not a no-op for math.** Highlighting and video are new in 1.x, but 0.7.4
+already rendered LaTeX (it shipped `libratex_ffi.so` and the KaTeX fonts), so turning math off is a
+deliberate change, taken in task #102: `$...$` in a transcript now shows as its literal source.
+An earlier draft of this paragraph said rendering was unchanged; it read 0.7.4 as math-free without
+checking the installed package.
 
 **Re-run the probe after any bump of `react-native-enriched-markdown`.** The 1.1.1 re-measure
 against this section's protocol is recorded below under "Dependency refresh, 2026-10 (task #102)".
@@ -3667,6 +3751,91 @@ the bytes on background is no longer a one-line change: it needs a background-on
 not release the retention, or the ring the screen returns to is gone. It was deliberately NOT made
 pre-emptively - a speculative fix landed before the dump would muddy exactly the reading the dump
 exists to give.
+
+### Dependency refresh, 2026-10 (task #102)
+
+Task #102 moved every package it could to its latest version (the holds and their reasons are
+in the table under "Dependencies held past the Expo SDK mapping") and turned R8 optimization on.
+This records what was MEASURED about the result, separately from what the release notes claim.
+Every number below is a release build on the `kangentic_profile` AVD (API 36, `default` image,
+demo-paired), **cold-booted first**: before the boot, the same APK launched in 11 to 13 s; after
+it, in about 1 s (see `/profile`'s "Which device").
+
+**Three arms, three APKs, all x86_64 release builds with the connection trace and the retention
+probe compiled in:** `base` is `main` before the task (18d7bdd, plus the probe variant below
+cherry-picked locally), `deps` is every dependency move without the R8 plugin, and `r8` is
+`deps` plus the plugin. `deps` and `r8` bundle byte-identical JavaScript (the bundle's sha256
+matches), so those two differ only in dex and resources. Every comparison across arms is a
+cross-build A/B by necessity; the in-process probe arms are the exception, and say so.
+
+**Size (measured).**
+
+| APK (x86_64) | Size | What moved |
+|---|---|---|
+| `base` | 54.77 MB | |
+| `deps` | 52.74 MB | native libs -2.62 MB (enriched-markdown 1.x with math off drops `libratex_ffi.so`), KaTeX fonts -0.5 MB, JS bundle +0.81 MB, dex +0.14 MB |
+| `r8` | 49.75 MB | dex 21.32 -> 13.63 MB uncompressed (3 files -> 2), resources 4.65 -> 4.08 MB (214 files) |
+
+The four-ABI production AAB is in the R8 entry of "Build System".
+
+**Cold start (measured): no resolvable change.** 24 launches per arm, in four rounds whose arm
+order alternated, each launch a force-stopped `am start -W -S` after a compile from the APK's own
+baseline profile:
+
+| Arm | TotalTime | Process start to JS entry | App CPU at first frame |
+|---|---|---|---|
+| `base` | 948 ms (IQR 910-976) | 426 ms (388-466) | 1050 ms (1000-1110) |
+| `deps` | 936 ms (872-1013) | 418 ms (395-458) | 1035 ms (970-1140) |
+| `r8` | 924 ms (884-949) | 414 ms (380-436) | 1010 ms (950-1055) |
+
+The medians fall in the order the changes would predict, but every gap is smaller than one
+arm's interquartile range, and the per-round medians cross over, so none of it is a result. R8
+optimizing the Java and Kotlin startup path is expected to be worth tens of milliseconds at
+most, which this rig cannot resolve.
+
+**Session-screen retention (measured): the leak stays fixed without the patch.** This section's
+protocol on `deps` (enriched-markdown 1.1.1, no patch) and `base` (0.7.4, patched), on the same
+demo session and the same tap target. Six open/close cycles each, then a forced GC (background
+and wait), with the second of two `dumpsys meminfo` samples trusted:
+
+| Arm | Views before / after | WebViews before / after | Every cycle opened |
+|---|---|---|---|
+| `base` | 350 / 351 | 0 / 0 | 6 of 6 (539 views, 1 WebView while open) |
+| `deps` | 351 / 351 | 0 / 0 | 6 of 6 (539 views, 1 WebView while open) |
+
+The old leak was +225 views and +1 WebView per cycle. A cycle counts as opened only when the
+view count rose 100+ over the list's GC'd baseline with a WebView present, so a tap that opened
+nothing cannot pass as "no leak". The first scripted run checked for a WebView rising across
+each tap instead and undercounted: five seconds after a pop, the popped screen is still partly
+alive (487 views, 1 WebView), which is the normal state the Memory bullet in CLAUDE.md warns
+about. Native heap rose 30 to 40 MB over the first opens in BOTH arms and then held, which is
+first-open warm-up (the WebView and its caches), not retention.
+
+**Not measurable with these tools: expo-modules-core #50603.** The `composer-no-dictation` probe
+variant was added to isolate it (one composer, four speech listeners per session open, a
+listener kept alive by `remove()` on 57.0.20). What it would retain is a handful of JS objects
+per open, far below the 15 to 20 MB swing in native heap between identical runs, and Hermes
+heap is not readable on a release build. The fix is in the build because the release notes say
+so; there is no measurement either way.
+
+**Registered mappers on Reanimated 4.7.1: NOT settled.** The plan was the `extra-mappers` probe
+in one process per build: idle CPU with it off, on, then off again. It did not produce a usable
+arm. On the `base` build (Reanimated 4.5.1, where the same probe measured +29 points on
+2026-08-30), the on phase read 48.5% against 42% and 52.5% for the two off phases, inside a
+22-60% sample spread. `dumpsys meminfo` Views rose by only 8 to 9 with the probe on, where 64 were
+expected. That count cannot prove registration either way, because React Native may cull a
+zero-size native view while its JS-side mapper still registers. With no evidence that the arm
+took effect on the build where its effect is known, a null on 4.7.1 would mean nothing, so it
+was not run there. `.claude/rules/motion-conventions.md` keeps treating registered mappers as
+costly until a probe that demonstrably mounts settles it.
+
+**Idle CPU on the Agents list (measured): no resolvable change.** Two interleaved rounds of
+two 40-second windows per build (20 `top` samples each, frames counted over the same window):
+round 1 read `base` 21% and 21%, `deps` 18.5% and 16.5%, `r8` 19% and 34%; round 2, in reverse
+order with the host busier, read `r8` 19.5% and 28%, `deps` 34.5% and 43.5%, `base` 19% and
+17.5%. The two rounds disagree about the ordering, and each window's own range ran from about
+12% to 56%. Frame counts were flat at about 55 a second in every arm (the Thinking rows'
+spinners), so this screen still draws continuously whatever the Reanimated version.
 
 ## Credential inventory
 

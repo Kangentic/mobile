@@ -228,7 +228,10 @@ rather than claim it does not exist.
 **What was NOT tested: a real native (NDK/signal-handler) crash.** Every native-path observation
 above came from `Sentry.nativeCrash()`, which is `RNSentryModuleImpl.crash()` throwing a
 `RuntimeException` caught by Android's `UncaughtExceptionHandler` - `platform: java`,
-`mechanism: UncaughtExceptionHandler`. That is the Java-uncaught path, not a SIGSEGV or other
+`mechanism: UncaughtExceptionHandler` (on @sentry/react-native 8.29 the same crash reports
+`mechanism: expoReactHost`, observed 2026-10-06, with `contexts.expo_constants` and
+`contexts.turbo_module` absent and the same `app.lifecycle`/`device.event` breadcrumbs as
+before). That is the Java-uncaught path, not a SIGSEGV or other
 signal caught by sentry-android's NDK handler. The two paths share the same auto-breadcrumb and
 `user.id` machinery in sentry-android, so there is no specific reason to expect them to differ,
 but that is an inference, not an observation, and this file says so rather than implying full
