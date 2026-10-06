@@ -600,9 +600,12 @@ const ActivityRow = React.memo(function ActivityRow({
    */
   const column = useBoardStore((state) => selectTaskColumn(state, entry.taskId));
   const boardColumns = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.columns ?? null);
+  // The band also carries the wait time (it moved up from the end of the body
+  // line), so a waiting row's band changes when `waitingSinceMs` does.
+  const waitingSinceMs = selectWaitingSince(entry);
   const columnStrip = useMemo(
-    () => ({ column, track: buildPositionalTrack(boardColumns ?? [], column?.id ?? null), projectName }),
-    [column, boardColumns, projectName],
+    () => ({ column, track: buildPositionalTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs }),
+    [column, boardColumns, projectName, waitingSinceMs],
   );
 
   const section = sectionForEntry(entry);
@@ -754,11 +757,12 @@ const ActivityRow = React.memo(function ActivityRow({
   // to the rule above: "Thinking" restates what the icon already says, while
   // "4h 7m" is information nothing else on this screen carries. It earns the
   // space by answering the question this feed exists for - who is waiting on
-  // me, and for how long - and it obeys the geometry rule strictly, riding
-  // INSIDE the fixed slot so no row changes height. A working row passes null
-  // and renders nothing at all: the label appears exactly when the text beside
-  // it has stopped moving (see `snippetFreshnessMs` above - an idle row's
-  // snippet is refetched at freshness 0 precisely because it is the last word).
+  // me, and for how long - and it obeys the geometry rule strictly, riding in
+  // the fixed-height band at the top of the card (`columnStrip.waitingSinceMs`
+  // above) so no row changes height. A working row passes null and renders
+  // nothing at all: the label appears exactly when the agent's last message has
+  // stopped moving (see `snippetFreshnessMs` above - an idle row's snippet is
+  // refetched at freshness 0 precisely because it is the last word).
   const snippetSlotHeight = theme.typography.caption.lineHeight * SNIPPET_LINES;
   const testID = `activity-row-${entry.sessionId}`;
   /**
@@ -801,7 +805,6 @@ const ActivityRow = React.memo(function ActivityRow({
         bodyText={bodyText}
         bodyNumberOfLines={SNIPPET_LINES}
         bodyMinHeight={snippetSlotHeight}
-        waitingSinceMs={selectWaitingSince(entry)}
         onPress={openTask}
         onLongPress={onLongPress}
         // One subtle tint fade when the row lands in a new section, mounted

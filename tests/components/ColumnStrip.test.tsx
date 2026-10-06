@@ -10,6 +10,8 @@ import type { ColumnTrackStep } from '@/components/board/columnTrack';
 import { boardColumnFixture } from '@/devsupport/desktopFixtures';
 
 const STRIP_TEST_ID = 'strip';
+/** Deliberately NOT derived from the strip's testID: the label keeps the `<card>-wait` id a Maestro flow selects. */
+const WAIT_TEST_ID = 'card-wait';
 
 const EXECUTING = boardColumnFixture({
   id: 'lane-executing',
@@ -31,6 +33,8 @@ function renderStrip(overrides: Partial<ColumnStripProps> = {}): void {
     column: EXECUTING,
     track: EXECUTING_TRACK,
     projectName: 'storefront-web',
+    waitingSinceMs: null,
+    waitTestID: WAIT_TEST_ID,
     testID: STRIP_TEST_ID,
     ...overrides,
   };
@@ -147,12 +151,64 @@ describe('ColumnStrip', () => {
       expect(order).toEqual([`${STRIP_TEST_ID}-step-lane-planning-done`, `${STRIP_TEST_ID}-marker`, `${STRIP_TEST_ID}-step-lane-code-review-ahead`]);
     });
 
-    it('matches the desktop segment sizes, colors and opacities', () => {
+    it('matches the desktop segment sizes and opacities', () => {
       renderStrip();
       const done = flattenedStyle(`${STRIP_TEST_ID}-step-lane-planning-done`);
-      expect([done.width, done.height, done.backgroundColor, done.opacity]).toEqual([11, 4, '#8957e5', 0.55]);
+      expect([done.width, done.height, done.opacity]).toEqual([11, 4, 0.55]);
       const ahead = flattenedStyle(`${STRIP_TEST_ID}-step-lane-code-review-ahead`);
       expect([ahead.width, ahead.height, ahead.backgroundColor]).toEqual([11, 4, darkTerminalTheme.colors.border]);
+    });
+
+    /**
+     * The card-composition review (2026-10-05, "R5"): the card's right edge
+     * carried up to six colored marks, so done steps went neutral and the
+     * marker is the only color left in the track. A done step back in its
+     * column's color is the regression this pins.
+     */
+    it('draws done steps neutral, never in their column\'s color', () => {
+      renderStrip();
+      expect(flattenedStyle(`${STRIP_TEST_ID}-step-lane-planning-done`).backgroundColor).toBe(darkTerminalTheme.colors.textMuted);
+    });
+  });
+
+  describe('the wait time, just before the track', () => {
+    const MINUTE = 60_000;
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    function renderWaiting(waitedMs: number): void {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-05T12:00:00Z'));
+      renderStrip({ waitingSinceMs: Date.now() - waitedMs });
+    }
+
+    it('shows how long the session has waited, at the testID it had before it moved', () => {
+      renderWaiting(26 * MINUTE);
+      expect(screen.getByTestId(WAIT_TEST_ID)).toHaveTextContent('26m');
+    });
+
+    it('sits inside the band, ahead of the track', () => {
+      renderWaiting(26 * MINUTE);
+      const renderOrder = screen.UNSAFE_root.findAll(() => true);
+      const band = screen.getByTestId(STRIP_TEST_ID);
+      const wait = screen.getByTestId(WAIT_TEST_ID);
+      expect(band.findAll(() => true)).toContain(wait);
+      expect(renderOrder.indexOf(wait)).toBeLessThan(renderOrder.indexOf(screen.getByTestId(`${STRIP_TEST_ID}-track`)));
+    });
+
+    it('shows nothing for a working session, which passes null', () => {
+      renderStrip({ waitingSinceMs: null });
+      expect(screen.queryByTestId(WAIT_TEST_ID)).toBeNull();
+    });
+
+    it('still shows the wait time on a row whose column cannot be found', () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-05T12:00:00Z'));
+      renderStrip({ column: null, waitingSinceMs: Date.now() - 4 * 60 * MINUTE });
+      expect(screen.getByTestId(WAIT_TEST_ID)).toHaveTextContent('4h');
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-marker`)).toBeNull();
     });
   });
 

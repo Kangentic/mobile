@@ -1,6 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
-import { StyleSheet, View, type StyleProp, type TextStyle } from 'react-native';
+import { View } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { GitMerge, GitMergeConflict, GitPullRequest } from 'lucide-react-native';
 import { ThemeProvider } from '@/components';
@@ -55,6 +55,7 @@ describe('TaskCard', () => {
         column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, icon: 'code' }),
         track: [{ columnId: 'lane-doing', name: 'Doing', color: '#3fb950', state: 'current' }],
         projectName: 'Kangentic Mobile',
+        waitingSinceMs: null,
       },
       bodyText: 'A live inbox-style snippet.',
     });
@@ -112,6 +113,7 @@ describe('TaskCard', () => {
           column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }),
           track: [{ columnId: 'lane-doing', name: 'Doing', color: '#3fb950', state: 'current' }],
           projectName: 'Alpha',
+          waitingSinceMs: null,
         },
       });
       expect(screen.getByTestId(`${BASE_TEST_ID}-column`)).toBeTruthy();
@@ -126,7 +128,7 @@ describe('TaskCard', () => {
      */
     it('names the project once, in the band, never as a title-row pill', () => {
       renderTaskCard({
-        columnStrip: { column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }), track: [], projectName: 'Alpha' },
+        columnStrip: { column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }), track: [], projectName: 'Alpha', waitingSinceMs: null },
       });
       expect(screen.getAllByText('Alpha')).toHaveLength(1);
       expect(screen.queryByTestId(`${BASE_TEST_ID}-project`)).toBeNull();
@@ -149,7 +151,7 @@ describe('TaskCard', () => {
             usage={null}
             bodyText="A task worth doing."
             onPress={jest.fn()}
-            columnStrip={{ column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }), track: [], projectName: 'Alpha' }}
+            columnStrip={{ column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }), track: [], projectName: 'Alpha', waitingSinceMs: null }}
             overlay={<View testID="task-card-overlay" />}
           />
         </ThemeProvider>,
@@ -164,7 +166,7 @@ describe('TaskCard', () => {
     });
 
     it('still draws the band for an unlocated task, with no marker', () => {
-      renderTaskCard({ columnStrip: { column: null, track: [], projectName: 'Alpha' } });
+      renderTaskCard({ columnStrip: { column: null, track: [], projectName: 'Alpha', waitingSinceMs: null } });
       expect(screen.getByTestId(`${BASE_TEST_ID}-column`)).toBeTruthy();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-column-marker`)).toBeNull();
     });
@@ -289,7 +291,7 @@ describe('TaskCard', () => {
     });
   });
 
-  describe('the elapsed-wait label', () => {
+  describe('the elapsed-wait label (in the band, since the card-composition review)', () => {
     const MINUTE = 60_000;
     const BODY_HEIGHT = 32;
 
@@ -304,7 +306,12 @@ describe('TaskCard', () => {
       renderTaskCard({
         bodyMinHeight: BODY_HEIGHT,
         bodyNumberOfLines: 2,
-        waitingSinceMs: waitedMs === null ? null : Date.now() - waitedMs,
+        columnStrip: {
+          column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }),
+          track: [],
+          projectName: 'Alpha',
+          waitingSinceMs: waitedMs === null ? null : Date.now() - waitedMs,
+        },
       });
     }
 
@@ -312,9 +319,21 @@ describe('TaskCard', () => {
       jest.useRealTimers();
     });
 
-    it('renders how long the message beside it has been waiting', () => {
+    it('renders how long the session has been waiting, at its unchanged <card>-wait testID', () => {
       renderWithWait(4 * 60 * MINUTE + 7 * MINUTE);
       expect(screen.getByTestId(`${BASE_TEST_ID}-wait`)).toHaveTextContent('4h 7m');
+    });
+
+    /**
+     * It moved from the end of the body line into the band. A label back on
+     * the body line would put amber at the card's right edge again, under the
+     * PR icon, which is the stacking the review removed.
+     */
+    it('renders inside the band, not on the body line', () => {
+      renderWithWait(26 * MINUTE);
+      const wait = screen.getByTestId(`${BASE_TEST_ID}-wait`);
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column`).findAll(() => true)).toContain(wait);
+      expect(findAncestorWithHeight(wait, BODY_HEIGHT)).toBeNull();
     });
 
     it('spells the span out for a screen reader, since "4h 7m" read alone says nothing', () => {
@@ -340,33 +359,14 @@ describe('TaskCard', () => {
 
     /**
      * The card's fixed body slot exists so a feed never moves under a reading
-     * thumb. The wait label rides INSIDE that slot for the same reason, so
-     * adding one must not change the reserved height - a label that pushed the
-     * row taller would shift every card below it the moment a session crossed
-     * a minute.
+     * thumb; the wait label rides in the fixed-height band for the same reason.
+     * A session crossing its first minute must not change the slot.
      */
     it('keeps the fixed body slot at exactly its reserved height', () => {
       renderWithWait(12 * MINUTE);
       const snippet = screen.getByTestId(`${BASE_TEST_ID}-snippet`);
       const slot = findAncestorWithHeight(snippet, BODY_HEIGHT);
       expect(slot).toBeTruthy();
-    });
-
-    /**
-     * `styles.snippetText`'s `flex: 1` is the load-bearing half that makes the
-     * snippet TRUNCATE instead of pushing the wait label off the card (RN
-     * expands `flex: 1` to `flexGrow 1 / flexShrink 1 / flexBasis 0`, see the
-     * comment on `styles.snippetText` in TaskCard.tsx). RNTL computes no flex
-     * layout, so no rendering assertion can see the effect of removing this
-     * style - a bug here is invisible in rendered output, so this pins the
-     * mechanism directly instead: the style prop actually attached to the
-     * snippet Text.
-     */
-    it('keeps the snippet flexible so it truncates instead of pushing the wait label off the card', () => {
-      renderWithWait(12 * MINUTE);
-      const snippet = screen.getByTestId(`${BASE_TEST_ID}-snippet`);
-      const flattenedSnippetStyle = StyleSheet.flatten(snippet.props.style as StyleProp<TextStyle>);
-      expect(flattenedSnippetStyle?.flex).toBe(1);
     });
   });
 });
