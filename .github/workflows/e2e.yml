@@ -440,6 +440,11 @@ jobs:
           # between a shrunk-away Terminal pane and a fully green run. See the
           # script's header for why it matches on size rather than on path.
           bash .github/scripts/verify-android-assets.sh "$apk"
+          # R8 optimization actually ON in what was built, not merely requested
+          # in build.gradle: one -dontoptimize in any library's consumer rules
+          # turns it off app-wide. Read from the merged configuration R8 wrote,
+          # which a build-cache hit restores too. See the script's header.
+          bash .github/scripts/verify-r8-optimization.sh android/app/build/outputs/mapping/release/configuration.txt
 
       - name: Stage the APK
         id: name

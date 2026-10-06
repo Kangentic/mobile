@@ -53,6 +53,12 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   Windows-gated inside the generated Gradle;
                               #   withAndroidGradleHeap: raises the Gradle daemon heap past the
                               #   template's 2048m so R8 survives a four-ABI production build;
+                              #   withAndroidR8Optimization: swaps the template's -dontoptimize
+                              #   ProGuard preset for proguard-android-optimize.txt and sets
+                              #   android.r8.optimizedResourceShrinking (the Play 0.8.1 R8
+                              #   advisory). Throws if the template names neither preset.
+                              #   DELETE at the Expo SDK 58 upgrade, whose template and AGP 9
+                              #   do both by default;
                               #   withIosPodsUuidCollisionGuard: injects a collision-safe UUID
                               #   generator into the generated Podfile's post_install hook so an
                               #   SPM object cannot take the Pods root object's UUID, droppable

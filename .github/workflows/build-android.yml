@@ -484,6 +484,17 @@ jobs:
           OUTPUT_PATH: ${{ steps.plan.outputs.output-path }}
         run: bash .github/scripts/verify-android-assets.sh "$OUTPUT_PATH"
 
+      # The shipping half of the check e2e.yml runs: R8 optimization actually ON
+      # in the build that goes to Play, which is what Play Console's "Optimization
+      # isn't enabled" row reads. ci.yml proves the optimize preset reached
+      # build.gradle; only the merged configuration R8 wrote can prove no
+      # library's consumer rule carries a global -dontoptimize. RELEASE ONLY,
+      # for the same reason as the asset guard above: the keystore-less
+      # fallback builds debug, where R8 never runs and no configuration exists.
+      - name: Verify R8 optimization is on in the built artifact
+        if: steps.plan.outputs.variant == 'release'
+        run: bash .github/scripts/verify-r8-optimization.sh android/app/build/outputs/mapping/release/configuration.txt
+
       - name: Name the artifact
         id: name
         env:
