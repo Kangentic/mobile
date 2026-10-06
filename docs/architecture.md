@@ -701,12 +701,19 @@ the usage bar itself draws at 0% while the window size is unknown rather than mo
 footer spinner turns, as the desktop's does, but only where motion is allowed (reduced motion off,
 the screen focused), and its one Reanimated mapper is mounted only on a spinning row.
 
-`TaskHeader` still draws the fourth `AgentStatusKind`, `'starting'` (the agent ring STILL, in the
-muted `statusIdle` tone), for both states; the desktop's detail header has its own glyphs there, a
-parity gap not yet closed. Deliberately **not** a fourth `TriageSection` - `sectionForEntry` stays a
-pure function of `entry.state`, which keeps both states structurally unable to reach
-`endedSessionIds` or `SessionScreen`'s `sessionEnded`, and keeps a swapping row in its existing
-section rather than bouncing it through a new one twice in five seconds.
+**`TaskHeader`** reads the same `cardSessionDisplay` and draws the desktop task view header's glyph
+for each state (`TaskDetailHeader.tsx`): the agent icon while running, a still clock while queued,
+the spinner while a respawn is in flight, nothing once the session has ended. No surface draws an
+agent icon for a session that is not running.
+
+**The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
+you), Active, then the two statuses that are not running: Queued, its own section, and Paused,
+which holds only suspended sessions (the Monitor files the two together under Paused). The split is
+feed-level (`selectFeedSections` in `TriageHomeScreen`), deliberately **not** a new `TriageSection`:
+`sectionForEntry` stays a pure function of `entry.state`, which the wait time, the notifier and
+section re-stamping read, which keeps both states structurally unable to reach `endedSessionIds`
+or `SessionScreen`'s `sessionEnded`, and which keeps a swapping row in its existing section rather
+than bouncing it through a new one twice in five seconds.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`

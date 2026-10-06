@@ -72,22 +72,69 @@ function fallbackTask(entry: SessionActivityEntry): BoardTaskWire {
   };
 }
 
+/**
+ * The feed's sections: the activity buckets (`TriageSection`) for running
+ * sessions, plus one section each for the two session STATUSES that are not
+ * running. Feed-level on purpose: `sectionForEntry` stays a pure function of
+ * `entry.state`, which the wait time, the notifier and section re-stamping all
+ * read, and none of them should change because a session is queued or paused.
+ */
+type FeedSection = TriageSection | 'queued' | 'paused';
+
 type TriageListRow =
-  | { kind: 'section-header'; section: TriageSection; title: string; count: number }
+  | { kind: 'section-header'; section: FeedSection; title: string; count: number }
   | { kind: 'activity'; entry: SessionActivityEntry };
 
-// Kangentic's Thinking/Idle is TURN-based, not presence-based (desktop
-// vocabulary: the project tooltip counts "N thinking, N idle"). A session
-// is Thinking while a turn is in flight; Idle once the turn ends OR a
-// prompt waits on the user (desktop counts permission in the idle bucket:
-// both mean it is the user's move). Idle therefore ranks ABOVE Thinking,
-// and prompt cards render at the top of Idle under the shared header.
-const SECTION_ORDER: TriageSection[] = ['needs-you', 'idle', 'working'];
-const SECTION_TITLES: Record<TriageSection, string> = {
+// The desktop Agent Monitor's groups (monitor-view-model.ts BUCKET_LABELS), in
+// its order: Idle (waiting on you), Active, then the sessions that are not
+// running. Running sessions are bucketed by TURN, not presence: Active while a
+// turn is in flight, Idle once it ends OR a prompt waits on the user (both are
+// the user's move), so prompt cards lead Idle under the shared header. The one
+// departure is Queued: the Monitor files queued and paused together under
+// Paused; here Queued is its own section and Paused holds only suspended
+// sessions, the ones Resume applies to.
+const SECTION_ORDER: FeedSection[] = ['needs-you', 'idle', 'working', 'queued', 'paused'];
+const SECTION_TITLES: Record<FeedSection, string> = {
   'needs-you': 'Idle',
   idle: 'Idle',
-  working: 'Thinking',
+  working: 'Active',
+  queued: 'Queued',
+  paused: 'Paused',
 };
+
+/**
+ * `selectTriageRows` re-partitioned into the feed's sections: queued and
+ * suspended sessions leave their activity bucket for Queued and Paused. Order
+ * within those two follows the store's own rule, newest arrival first with a
+ * stable value-based tiebreak, so neither reshuffles on a re-render.
+ */
+function selectFeedSections(bySessionId: Record<string, SessionActivityEntry>): { section: FeedSection; entries: SessionActivityEntry[] }[] {
+  const queued: SessionActivityEntry[] = [];
+  const paused: SessionActivityEntry[] = [];
+  const running = selectTriageRows({ bySessionId }).map(({ section, entries }) => ({
+    section: section as FeedSection,
+    entries: entries.filter((entry) => {
+      if (entry.sessionStatus === 'queued') {
+        queued.push(entry);
+        return false;
+      }
+      if (entry.sessionStatus === 'suspended') {
+        paused.push(entry);
+        return false;
+      }
+      return true;
+    }),
+  }));
+  const newestFirst = (first: SessionActivityEntry, second: SessionActivityEntry): number =>
+    second.enteredSectionAt !== first.enteredSectionAt
+      ? second.enteredSectionAt - first.enteredSectionAt
+      : first.sessionId < second.sessionId
+        ? -1
+        : first.sessionId > second.sessionId
+          ? 1
+          : 0;
+  return [...running, { section: 'queued', entries: queued.sort(newestFirst) }, { section: 'paused', entries: paused.sort(newestFirst) }];
+}
 
 export function TriageHomeScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -99,7 +146,7 @@ export function TriageHomeScreen(): React.JSX.Element {
   const collapsedTriageSection = useSettingsStore((state) => state.collapsedTriageSection);
 
   const rows = useMemo<TriageListRow[]>(() => {
-    const sections = selectTriageRows({ bySessionId });
+    const sections = selectFeedSections(bySessionId);
     // Total per TITLE first (needs-you + idle share the "Idle" title), so
     // the header shows the right count even when only one of the two
     // sections underneath it has entries.
@@ -258,18 +305,22 @@ export function TriageHomeScreen(): React.JSX.Element {
     // effect on every activity event, which is exactly what the set-valued
     // `knownSessionIds` selector above exists to avoid.
     //
-    // This changes the ORDER and nothing else. `selectTriageRows` partitions
-    // by `sectionForEntry`, which is total over the three states of the closed
-    // `TriageSection` union, and SECTION_ORDER lists all three - so every
-    // session the previous `Object.values(bySessionId)` loop reached is still
-    // reached exactly once. A future section added to the union without being
-    // added to SECTION_ORDER would silently stop warming its sessions.
-    const sections = selectTriageRows({ bySessionId: useActivityStore.getState().bySessionId });
+    // This changes the ORDER and nothing else. `selectFeedSections` partitions
+    // every entry into exactly one of the closed `FeedSection` union's members,
+    // and SECTION_ORDER lists them all - so every session the previous
+    // `Object.values(bySessionId)` loop reached is still reached exactly once.
+    // A future section added to the union without being added to SECTION_ORDER
+    // would silently stop warming its sessions.
+    const sections = selectFeedSections(useActivityStore.getState().bySessionId);
     for (const sectionKind of SECTION_ORDER) {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       if (!section) continue;
       for (const entry of section.entries) {
         if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
+        // A queued or paused card shows the task's description, never the
+        // agent's message (ActivityRow), so a warm would fetch a line nothing
+        // draws.
+        if (entry.sessionStatus === 'queued' || entry.sessionStatus === 'suspended') continue;
         // An ended session has nothing left to peek: the desktop tore its
         // read-stream subscription down, so this would be a request that can
         // only fail. Such an entry used to be pruned within a few hundred ms

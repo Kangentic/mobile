@@ -7,7 +7,6 @@ import type { ActivityEvent, ActivityEventPayload } from '@kangentic/protocol';
 import {
   ENDED_ROW_GRACE_MS,
   RESPAWN_ROW_GRACE_MS,
-  isStartingSession,
   sectionForEntry,
   selectSessionEnded,
   selectSessionSpawnProgressLabel,
@@ -597,13 +596,6 @@ describe('activityStore', () => {
       const respawn = selectTaskRespawn(useActivityStore.getState(), 'task-7');
       expect(respawn).not.toBeNull();
       expect(respawn?.label).toBeNull();
-    });
-
-    it('is a starting session for an unlabelled end, exactly as for a labelled one', () => {
-      useActivityStore.getState().applyActivityEvent(activityEvent('sess-old', { type: 'session-ended', intentional: true }, 'task-7'));
-
-      expect(isStartingSession(selectTaskRespawn(useActivityStore.getState(), 'task-7'), 'running')).toBe(true);
-      expect(isStartingSession(null, 'running')).toBe(false);
     });
 
     /**

@@ -225,11 +225,11 @@ describe('TriageHomeScreen', () => {
     renderHome();
     // The lone session is prompt-pending: desktop semantics count it in the
     // idle bucket, so its row sits under one Idle header - styled exactly
-    // like every other idle row - and the empty Thinking section renders
+    // like every other idle row - and the empty Active section renders
     // nothing.
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
     expect(screen.getAllByText('Idle')).toHaveLength(1);
-    expect(screen.queryByText('Thinking')).toBeNull();
+    expect(screen.queryByText('Active')).toBeNull();
     expect(screen.queryByText('Needs you')).toBeNull();
   });
 
@@ -368,6 +368,35 @@ describe('TriageHomeScreen', () => {
     });
   });
 
+  /**
+   * The desktop Agent Monitor's groups, with Queued as its own section: Idle
+   * (waiting on you), Active, Queued, then Paused for suspended sessions only.
+   * The queued and paused entries are seeded idle-and-live, so nothing about
+   * their activity STATE keeps them out of Idle: only `sessionStatus` does.
+   */
+  it('files queued and paused sessions in their own sections, after Idle and Active', async () => {
+    useActivityStore.getState().registerSession('sess-working', 'task-working', 'project-1');
+    useActivityStore.getState().applySnapshot('sess-working', 'task-working', 'project-1', streamSnapshotFixture({ activity: { state: 'thinking', reason: { kind: 'turn-active' } } }));
+    useActivityStore.getState().registerSession('sess-queued', 'task-queued', 'project-1');
+    useActivityStore.getState().applySnapshot('sess-queued', 'task-queued', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }));
+    useActivityStore.getState().registerSession('sess-paused', 'task-paused', 'project-1');
+    useActivityStore.getState().applySnapshot('sess-paused', 'task-paused', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
+
+    renderHome();
+    await act(async () => {});
+
+    const renderOrder = screen.UNSAFE_root.findAll(() => true);
+    const position = (testID: string): number => renderOrder.indexOf(screen.getByTestId(testID));
+    expect(position('section-header-idle')).toBeLessThan(position('section-header-active'));
+    expect(position('section-header-active')).toBeLessThan(position('section-header-queued'));
+    expect(position('section-header-queued')).toBeLessThan(position('activity-row-sess-queued'));
+    expect(position('activity-row-sess-queued')).toBeLessThan(position('section-header-paused'));
+    expect(position('section-header-paused')).toBeLessThan(position('activity-row-sess-paused'));
+    // Idle counts only the card waiting on you, not the idle-state queued and paused ones.
+    expect(within(screen.getByTestId('section-header-idle')).getByText('1')).toBeTruthy();
+    expect(screen.queryByText('Thinking')).toBeNull();
+  });
+
   it('reacts to store changes (a session moving sections re-renders)', () => {
     renderHome();
     expect(screen.getAllByText('Idle')).toHaveLength(1);
@@ -380,7 +409,7 @@ describe('TriageHomeScreen', () => {
         payload: { type: 'activity', state: 'thinking', reason: { kind: 'tool', pendingCount: 1, currentTool: 'Bash' } },
       });
     });
-    expect(screen.getAllByText('Thinking')).toHaveLength(1);
+    expect(screen.getAllByText('Active')).toHaveLength(1);
     expect(screen.queryByText('Idle')).toBeNull();
   });
 
@@ -823,7 +852,7 @@ describe('TriageHomeScreen', () => {
    * peak simultaneous TRANSIENT allocation scaling with fleet size, which is
    * what a foreground out-of-memory kill actually looks like.
    *
-   * Isolation matters here: the Thinking section is collapsed so no rows
+   * Isolation matters here: the Active section is collapsed so no rows
    * render, which removes the per-row peek and leaves the pre-warm as the only
    * caller. Without that, a row's own fetch would be indistinguishable from a
    * pre-warm in the call count.
@@ -832,7 +861,7 @@ describe('TriageHomeScreen', () => {
     const workingSessionIds = Array.from({ length: 12 }, (_, index) => `warm-sess-${index}`);
 
     function seedManyWorkingSessions(): void {
-      useSettingsStore.setState({ collapsedTriageSection: 'Thinking' });
+      useSettingsStore.setState({ collapsedTriageSection: 'Active' });
       useActivityStore.getState().reset();
       for (const sessionId of workingSessionIds) {
         useActivityStore.getState().registerSession(sessionId, `task-${sessionId}`, 'project-1');
