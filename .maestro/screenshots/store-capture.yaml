@@ -240,6 +240,13 @@ env:
           visible:
             id: "file-diff-lines"
           timeout: 30000
+      # The diff lines exist as soon as the screen mounts, which on iOS 26 is
+      # before the push transition ends: one capture caught the page still
+      # sliding in, rounded corners and the window background showing at its
+      # edge, with the back button mid-animation. Settle first, as the terminal
+      # shot does.
+      - waitForAnimationToEnd:
+          timeout: 15000
       - takeScreenshot:
           path: ${OUTPUT_DIR}/06-file-diff
           label: Unified diff for a changed file
