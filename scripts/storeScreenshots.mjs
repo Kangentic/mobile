@@ -305,6 +305,13 @@ function enterDemoMode() {
   // step is a readback (screenshot the bar and count the icons) rather than a
   // longer sleep, because there is no evidence sleeping longer helps.
   //
+  // 2026-10-05 adds a pattern worth testing first. The defect struck twice that
+  // day, both times on the phone shelf of an `all` run started minutes after a
+  // cold boot, so on the FIRST demo-mode entry since boot, and a phone-only
+  // re-run on the same boot came out clean. The 2026-08-04 case above was a
+  // cold-booted emulator too. A fresh boot is not among the four
+  // reconstructions above.
+  //
   // Sleeping on the device rather than in Node keeps this a single synchronous
   // adb call.
   demo(['-e', 'command', 'exit']);
