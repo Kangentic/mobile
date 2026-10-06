@@ -450,8 +450,11 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   (`enableAppLifecycleBreadcrumbs`, `enableSystemEventBreadcrumbs`,
   `enableNetworkEventBreadcrumbs` and two more on Android; `enableAutoBreadcrumbTracking` and
   `enableNetworkBreadcrumbs` on iOS), so this is no longer a gap that needs a config plugin. They
-  are left on deliberately for now - the lifecycle context is diagnostic signal - and switching
-  them off is a privacy-policy decision that would update this section in the same change. The same native breadcrumbs also rode a JS-captured event on iOS
+  are left on BY DECISION (the maintainer, 2026-10-06): a crash report must carry the context
+  needed to fix the failure, and this trail is that context. The same decision keeps the
+  approximate city-level location Sentry derives server-side from a report's IP address; the app
+  has no location permission and reads none. Both are disclosed in the privacy policy, and
+  reversing either is a privacy-policy change that updates this section in the same change. The same native breadcrumbs also rode a JS-captured event on iOS
   (`started` and `ui.lifecycle`, observed on the first iOS event the project received, 2026-09-12),
   because the SDK merges the native scope's breadcrumbs into every JS event before `beforeSend`;
   that half IS reachable from JS, so `scrubEvent` now applies the same default-deny allowlist to

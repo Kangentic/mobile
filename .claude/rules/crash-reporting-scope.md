@@ -142,17 +142,21 @@ more detailed than "coarse app-lifecycle timing" suggests - it carries `action`,
 None of it is session content, but "the allowlist is default-deny" is true of the JS path and
 not of the native one. Say "JS breadcrumbs are allowlisted", not "breadcrumbs are allowlisted".
 
-**It is now closable from `Sentry.init()`, and is deliberately still open.** An earlier revision
-said closing it needed a config plugin and that iOS had no switch at all. Since
-@sentry/react-native 8.28 (in this app from 8.29, task #102) every family has an init option that
-reaches native: Android `enableAppLifecycleBreadcrumbs` (`app.lifecycle`),
+**It is now closable from `Sentry.init()`, and is deliberately kept open: a maintainer decision.**
+An earlier revision said closing it needed a config plugin and that iOS had no switch at all.
+Since @sentry/react-native 8.28 (in this app from 8.29, task #102) every family has an init option
+that reaches native: Android `enableAppLifecycleBreadcrumbs` (`app.lifecycle`),
 `enableSystemEventBreadcrumbs` (`device.event`), `enableNetworkEventBreadcrumbs`
 (`network.event`), `enableActivityLifecycleBreadcrumbs` and `enableAppComponentBreadcrumbs`; iOS
 `enableAutoBreadcrumbTracking` and `enableNetworkBreadcrumbs` (the latter a native breadcrumb per
-network request). They are left at their defaults (on) because the upgrade was not the place to
-change what leaves a device: the lifecycle context is diagnostic signal this project has used, and
-switching it off is a privacy-policy decision that edits `docs/privacy-policy.md` and
-`docs/security.md` in the same change.
+network request). **Decided 2026-10-06: they stay on.** The maintainer's standard is that a crash
+report always carries the data relevant to the failure, with enough information to fix it, and
+the lifecycle and network trail is exactly that context. The same decision keeps the
+approximate city-level location Sentry derives from the report's IP address (a server-side
+lookup; the app has no location permission). Both are disclosed in `docs/privacy-policy.md`.
+The line this does NOT move is session content: the scrubber, the breadcrumb allowlist and the
+handled-error door stay exactly as they are. Reversing either native decision is still a
+privacy-policy change that edits `docs/privacy-policy.md` and `docs/security.md` together.
 
 **The native breadcrumbs also ride a JS-CAPTURED event, and there the allowlist does reach
 them.** Observed on the first iOS event the project ever received (the handled canary from
