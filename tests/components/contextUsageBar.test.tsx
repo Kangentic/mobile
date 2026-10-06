@@ -181,7 +181,12 @@ describe('ContextUsageBar', () => {
     expect(screen.queryByTestId('usage-bar')).toBeNull();
   });
 
-  it('renders nothing for a zero-size (unknown) context window - the render guard, not just the pure predicate', () => {
+  /**
+   * Desktop parity (kangentic TaskCard.tsx): once the model is known, the card
+   * draws the full footer and holds it at 0% until a window size lands, so the
+   * card does not grow when it does. This used to render nothing.
+   */
+  it('renders the bar at 0% with an empty fill for a zero-size (unknown) context window', () => {
     const usage = buildUsage({ contextWindowSize: 0, usedTokens: 0 });
     render(
       <ThemeProvider>
@@ -189,7 +194,9 @@ describe('ContextUsageBar', () => {
       </ThemeProvider>,
     );
 
-    expect(screen.queryByTestId('usage-bar')).toBeNull();
+    expect(screen.getByTestId('usage-bar')).toHaveTextContent(/0%/);
+    expect(screen.getByTestId('usage-bar-fill')).toHaveStyle({ width: '0%' });
+    expect(screen.getByTestId('usage-bar').props.accessibilityLabel).toMatch(/context window size not reported yet/);
   });
 
   it('sets the fill width and color to danger for an over-budget usage report', () => {

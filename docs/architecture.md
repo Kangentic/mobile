@@ -561,8 +561,8 @@ re-subscribes a session that already has a stream, nothing would ever correct th
 all, so any payload arriving is itself the proof of promotion. The retirement sits ABOVE the switch
 for exactly that reason - its justification is the payload ARRIVING, not what the payload says.
 Scoping it to the `'activity'` case would have left a session whose first push after promotion
-happened to be a `'permission'` badged "Waiting for a free slot" with its prompt hidden behind that
-caption, because `starting` outranks every other body source on the feed row. `'session-ended'` is
+happened to be a `'permission'` still drawn as "Queued..." with its prompt hidden, because a card
+that is not running shows only its description. `'session-ended'` is
 the one exclusion: a session cancelled OUT of the queue never ran, so calling it `'running'` would
 be a lie. All of that is wider than the `'suspended'` clause above on purpose - a parked session's
 entry can legitimately carry a stale `'idle'`, so only positive proof of work retires that one.
@@ -575,8 +575,9 @@ Tests), or the same session restarted in place. On the wire every one is a **ses
 `session-ended` push for the old session (carrying a spawn-progress label for a same-column
 respawn, and NO label for the desktop's own column-move suspend-then-resume), the task
 sessionless for one to four seconds, then a board snapshot with the successor's id, and a round
-trip later its first frame. The phone presents every swap kind the same way, and shows nothing new
-to read on any surface while it is in flight.
+trip later its first frame. The phone presents every swap kind the same way. The session screen
+shows nothing new to read while it is in flight; the task cards show the desktop's own step in their
+footer, as the desktop's card does (below).
 
 **The session screen** shows one silent surface, `SessionSwapVeil`: the last terminal frame under a
 scrim that breathes slowly, with no title, caption or button. It opens on the column move itself,
@@ -660,11 +661,9 @@ Reanimated mapper only while mounted (`PulsingBlock`, shared with the loading Sk
 branch under reduced motion registers none). Past the deadline the scrim is static and the wait
 cursor's blink registers no mapper at all (`BlinkingBlock`, a JS interval).
 
-**The Home feed row, the board card and `TaskHeader`** keep their place and their last content, and
-only the glyph changes. `reconcileSessionsFromBoards` used to prune the activity entry for any
-session no board claims, so the row vanished for the gap and reappeared under the successor's id,
-and the card lost its glyph; a labelled end was retained but re-captioned with the label, which
-was text appearing and disappearing inside a two-second gap. Now `respawnByTaskId` is written on
+**The Home feed row, the board card and `TaskHeader`** keep their place through the gap.
+`reconcileSessionsFromBoards` used to prune the activity entry for any session no board claims, so
+the row vanished for the gap and reappeared under the successor's id. Now `respawnByTaskId` is written on
 EVERY `session-ended` (label nullable, plus the ended session's id), `selectTaskRespawn` applies a
 per-record window (`RESPAWN_ROW_GRACE_MS`, 20 s, when the desktop said a successor is coming;
 `ENDED_ROW_GRACE_MS`, equal to the session screen's quiet window, when it said nothing, since an
@@ -679,28 +678,35 @@ isolated column's session ending, the main one resuming), so its first snapshot 
 (`inheritedPreview`) and the row peeks the successor's own transcript, while a preview the successor
 pushes itself is its own. The one consequence worth knowing: a successor inherited as thinking whose snapshot
 reports idle is a thinking-to-idle edge, which arms the notifier's 45 s idle settle where a fresh
-entry armed nothing. The desktop's phase label is rendered nowhere on the phone; it only lengthens
-the row's retention window and marks the connection trace. The elapsed-wait label on a needs-you
-row goes with `feedStatus: 'live'` at the end, since a
-dead prompt's wait is not held. `tests/unit/sessionRespawnGapTiming.test.ts` pins the two list
+entry armed nothing. The desktop's phase label lengthens the row's retention window, marks the
+connection trace, and is the step a task card's footer shows through the gap (below). The
+elapsed-wait label goes at the end, since only a running session carries one. `tests/unit/sessionRespawnGapTiming.test.ts` pins the two list
 windows to the two session-screen windows and both rigs' respawn gap inside the quiet one.
 
 A **queued** session is the durable transitional state. The desktop's placeholder has no PTY, so
 it never reports thinking and its entry sits at `state: 'idle'` - indistinguishable from an agent
 that finished its work, which is exactly why it was invisible.
 
-Both render as a fourth `AgentStatusKind`, `'starting'`: the agent ring drawn STILL and in the muted
-`statusIdle` tone. The queued row alone also carries a caption ("Waiting for a free slot"), derived
-as "starting for a reason that is not a swap" so the row and the shared `isStartingSession`
-predicate cannot drift. All three surfaces read the same two signals, so one task cannot report
-two different states on two screens at once. The header keeps its existing `activityEntry` guard,
-so a transitional state adds no glyph where there was none. Deliberately **not** a fourth
-`TriageSection` - `sectionForEntry` stays a pure function of `entry.state`, which keeps both states
-structurally unable to reach `endedSessionIds` or `SessionScreen`'s `sessionEnded`, and keeps a
-swapping row in its existing section rather than bouncing it through a new one twice in five
-seconds. The ring is static because a queued session can sit for minutes and a never-ending
-animation holds the app drawing at full frame rate; rendering it through the hookless path also
-registers no Reanimated mapper.
+**The task cards** (the Home feed row and the board card, one shared `TaskCard`) draw every
+in-between state exactly as the desktop's card does. `cardSessionDisplay` ports the desktop's
+`getTaskProgress` precedence: a respawn's step wins while the session is gone, then the session's
+status decides (`queued`, `suspended`, `exited`, else running). Only a RUNNING card draws a status
+icon, the agent's message as its body, and a wait time. Every other state draws no icon, shows the
+task's description, and names itself in the footer (`CardStatusFooter`, a port of the desktop
+card's bottom-bar switch, strings verbatim): a spinner and "Queued...", a spinner and the desktop's
+own step ("Switching model..."), a still pause circle and "Paused", or, for a running session that
+has not reported its model yet, a spinner and "Starting agent...". An ended session has no footer.
+Every footer keeps the usage bar's box, so a card holds one height from queued through running, and
+the usage bar itself draws at 0% while the window size is unknown rather than mounting late. The
+footer spinner turns, as the desktop's does, but only where motion is allowed (reduced motion off,
+the screen focused), and its one Reanimated mapper is mounted only on a spinning row.
+
+`TaskHeader` still draws the fourth `AgentStatusKind`, `'starting'` (the agent ring STILL, in the
+muted `statusIdle` tone), for both states; the desktop's detail header has its own glyphs there, a
+parity gap not yet closed. Deliberately **not** a fourth `TriageSection` - `sectionForEntry` stays a
+pure function of `entry.state`, which keeps both states structurally unable to reach
+`endedSessionIds` or `SessionScreen`'s `sessionEnded`, and keeps a swapping row in its existing
+section rather than bouncing it through a new one twice in five seconds.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`

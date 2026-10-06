@@ -6,16 +6,16 @@ import {
   AgentStatusIcon,
   Badge,
   Card,
-  ContextUsageBar,
   MonoText,
   Row,
   Stack,
   Text,
   useTheme,
   colorForTextRole,
-  isContextWindowKnown,
   type AgentStatusKind,
 } from '@/components';
+import { cardStatusFooter } from './CardStatusFooter';
+import type { CardSessionDisplay } from './cardSessionDisplay';
 import { ColumnStrip } from './ColumnStrip';
 import type { ColumnTrackStep } from './columnTrack';
 import { computeVisibleLabelCount } from './labelFit';
@@ -47,11 +47,18 @@ function prGlyph(glyph: PrChipGlyph, color: string): React.JSX.Element {
 }
 
 export interface TaskCardProps {
-  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-column` (whose own parts include `-column-project`). */
+  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-status-bar`, `-column` (whose own parts include `-column-project`). */
   testID: string;
   task: BoardTaskWire;
+  /** The title row's status icon. The desktop draws one only for a running session, so callers pass null for every other `sessionDisplay`. */
   statusKind: AgentStatusKind | null;
   showTicketNumbers: boolean;
+  /**
+   * Which of the desktop card's session states this card is in
+   * (`cardSessionDisplay`). It picks the footer: the usage bar, a status bar
+   * ("Starting agent...", "Queued...", "Paused", a respawn's step), or none.
+   */
+  sessionDisplay: CardSessionDisplay;
   usage: SessionUsageWire | null;
   /**
    * The card's one body line: the board shows the task's own description
@@ -109,7 +116,8 @@ export interface TaskCardProps {
 /**
  * The task card shared by the board and the Agents feed: status icon,
  * title (with a PR chip and ticket number sharing its row), a body
- * line, the labels row, and the context-usage bar - the two screens render
+ * line, the labels row, and the footer (the usage bar, or the session's state
+ * as the desktop card's footer shows it: Queued, Paused, a step) - the two screens render
  * nearly identical cards. The Agents feed adds one thing: the band across the
  * top naming the project, the wait time and the column's step track.
  */
@@ -118,6 +126,7 @@ export function TaskCard({
   task,
   statusKind,
   showTicketNumbers,
+  sessionDisplay,
   usage,
   bodyText,
   bodyNumberOfLines = 2,
@@ -148,7 +157,7 @@ export function TaskCard({
   const hasPr = showMetaRow && task.pr_number !== null;
   const prChip = prChipPresentation(task.pr_state, task.pr_merge_readiness);
   const hasMetaRow = showMetaRow && task.labels.length > 0;
-  const hasUtilityStrip = isContextWindowKnown(usage);
+  const footer = cardStatusFooter({ display: sessionDisplay, usage, testID });
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>
@@ -233,11 +242,11 @@ export function TaskCard({
             {hiddenLabelCount > 0 ? <Badge label={`+${hiddenLabelCount}`} color="secondary" /> : null}
           </Row>
         ) : null}
-        {hasUtilityStrip ? (
+        {footer !== null ? (
           <View
             style={[styles.utilityStrip, { borderTopColor: theme.colors.border, marginTop: theme.spacing.xs, paddingTop: theme.spacing.sm }]}
           >
-            <ContextUsageBar usage={usage} testID={`${testID}-usage`} />
+            {footer}
           </View>
         ) : null}
       </Stack>
