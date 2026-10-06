@@ -403,6 +403,43 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByText('Thinking')).toBeNull();
   });
 
+  /**
+   * The section filter: a hidden section draws neither its header nor its
+   * rows (unlike a collapsed one, which keeps its header), and the header's
+   * filter button carries a dot while anything is hidden.
+   */
+  it('drops a section the filter hides, header and rows, and marks the filter button', async () => {
+    useActivityStore.getState().registerSession('sess-paused', 'task-paused', 'project-1');
+    useActivityStore.getState().applySnapshot('sess-paused', 'task-paused', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
+    useSettingsStore.setState({ hiddenTriageSections: ['Paused'] });
+
+    renderHome();
+    await act(async () => {});
+
+    expect(screen.getByTestId('section-header-idle')).toBeTruthy();
+    expect(screen.queryByTestId('section-header-paused')).toBeNull();
+    expect(screen.queryByTestId('activity-row-sess-paused')).toBeNull();
+    expect(screen.getByTestId('header-section-filter-dot')).toBeTruthy();
+    expect(screen.getByTestId('header-section-filter-button').props.accessibilityLabel).toBe('Show sections, 1 hidden');
+    useSettingsStore.setState({ hiddenTriageSections: [] });
+  });
+
+  /**
+   * Sessions exist but the filter hides them all: that must not read as
+   * "All quiet", which would be false.
+   */
+  it('says the filter is hiding everything, with Show all, rather than "All quiet"', async () => {
+    useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
+
+    renderHome();
+    await act(async () => {});
+
+    expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
+    expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
+    expect(screen.getByTestId('filtered-empty-show-all')).toBeTruthy();
+    useSettingsStore.setState({ hiddenTriageSections: [] });
+  });
+
   it('reacts to store changes (a session moving sections re-renders)', () => {
     renderHome();
     expect(screen.getAllByText('Idle')).toHaveLength(1);

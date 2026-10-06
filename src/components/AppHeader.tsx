@@ -21,6 +21,8 @@ export interface AppHeaderProps {
    * ONE anchored navigation surface.
    */
   divider?: boolean;
+  /** Extra header buttons, drawn just before Settings (e.g. the Agents tab's section filter). */
+  actions?: React.ReactNode;
   testID?: string;
 }
 
@@ -31,7 +33,7 @@ const BRANDMARK_SIZE = 28;
  * settings affordance. Owns the status-bar inset so screens keep their
  * no-top-edge SafeArea discipline.
  */
-export function AppHeader({ title, subtitle, onTitlePress, divider = true, testID = 'app-header' }: AppHeaderProps): React.JSX.Element {
+export function AppHeader({ title, subtitle, onTitlePress, divider = true, actions, testID = 'app-header' }: AppHeaderProps): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -84,6 +86,7 @@ export function AppHeader({ title, subtitle, onTitlePress, divider = true, testI
           {titleBlock}
         </View>
       )}
+      {actions}
       <Pressable
         testID="header-settings-button"
         accessibilityRole="button"

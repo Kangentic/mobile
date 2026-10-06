@@ -10,6 +10,7 @@ import {
   Circle,
   CircleDot,
   GitPullRequest,
+  ListFilter,
   Mic,
   Plus,
   Send,
@@ -45,7 +46,8 @@ export type IconName =
   | 'to-latest'
   | 'user'
   | 'agent'
-  | 'git-pull-request';
+  | 'git-pull-request'
+  | 'filter';
 
 const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   'chevron-forward': ChevronRight,
@@ -67,6 +69,7 @@ const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   user: User,
   agent: Bot,
   'git-pull-request': GitPullRequest,
+  filter: ListFilter,
 };
 
 export interface IconProps {

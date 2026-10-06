@@ -33,6 +33,7 @@ const PUSH_CATEGORIES_ENABLED_STORAGE_KEY = 'settings.pushCategoriesEnabled.v2';
 /** Read-only now; the v2 key is the only one written. Left in place as dead data. */
 const PUSH_CATEGORIES_ENABLED_LEGACY_STORAGE_KEY = 'settings.pushCategoriesEnabled';
 const COLLAPSED_TRIAGE_SECTION_STORAGE_KEY = 'settings.collapsedTriageSection';
+const HIDDEN_TRIAGE_SECTIONS_STORAGE_KEY = 'settings.hiddenTriageSections';
 const NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY = 'settings.hasRequestedNotificationPermission';
 
 /** The remembered per-task lens is capped so the map cannot grow unboundedly. */
@@ -94,6 +95,22 @@ function parseCollapsedTriageSection(raw: string | null): string | null {
     return typeof parsed === 'string' ? parsed : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The Agents-feed sections (by display TITLE) the user has hidden with the
+ * section filter. A list rather than one value: unlike the collapse, any number
+ * can be hidden at once. Anything that is not an array of strings reads as
+ * nothing hidden, so a corrupt value can never blank the feed.
+ */
+function parseHiddenTriageSections(raw: string | null): string[] {
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((title): title is string => typeof title === 'string') : [];
+  } catch {
+    return [];
   }
 }
 
@@ -173,6 +190,8 @@ interface SettingsStoreState {
   pushCategoriesEnabled: Record<PushCategory, boolean>;
   /** The one Agents-feed section (by title) the user has collapsed, or null if both are expanded. */
   collapsedTriageSection: string | null;
+  /** The Agents-feed sections (by title) the section filter hides; empty shows them all. Never applies to the Board. */
+  hiddenTriageSections: string[];
   /**
    * Whether the POST_NOTIFICATIONS runtime prompt has ever been shown. The
    * prompt fires on session establishment, which repeats on every reconnect,
@@ -193,6 +212,8 @@ interface SettingsStoreState {
   setPreferredSessionLens: (taskId: string, lens: PreferredSessionLens) => Promise<void>;
   setPushCategoryEnabled: (category: PushCategory, enabled: boolean) => Promise<void>;
   toggleTriageSectionCollapsed: (title: string) => Promise<void>;
+  toggleTriageSectionHidden: (title: string) => Promise<void>;
+  showAllTriageSections: () => Promise<void>;
   markNotificationPermissionRequested: () => Promise<void>;
   /** Clears preferences that belong to the paired desktop (the lens map, keyed
    * by its task IDs), which go stale on unpair or a new pairing. */
@@ -213,6 +234,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   preferredSessionLensByTaskId: {},
   pushCategoriesEnabled: defaultPushCategoriesEnabled(),
   collapsedTriageSection: null,
+  hiddenTriageSections: [],
   hasRequestedNotificationPermission: false,
   hydrated: false,
 
@@ -242,6 +264,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedPushCategoriesEnabled,
       storedLegacyPushCategoriesEnabled,
       storedCollapsedTriageSection,
+      storedHiddenTriageSections,
       storedNotificationPermissionRequested,
     ] = await Promise.all([
       readSetting(DICTATION_MODE_STORAGE_KEY),
@@ -252,6 +275,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       readSetting(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
       readSetting(PUSH_CATEGORIES_ENABLED_LEGACY_STORAGE_KEY),
       readSetting(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
+      readSetting(HIDDEN_TRIAGE_SECTIONS_STORAGE_KEY),
       readSetting(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
     ]);
     set({
@@ -272,6 +296,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
           ? parsePushCategoriesEnabled(storedPushCategoriesEnabled)
           : parsePushCategoriesEnabled(storedLegacyPushCategoriesEnabled, true),
       collapsedTriageSection: parseCollapsedTriageSection(storedCollapsedTriageSection),
+      hiddenTriageSections: parseHiddenTriageSections(storedHiddenTriageSections),
       hasRequestedNotificationPermission: storedNotificationPermissionRequested === 'true',
       hydrated: true,
     });
@@ -330,6 +355,18 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     const next = get().collapsedTriageSection === title ? null : title;
     set({ collapsedTriageSection: next });
     await SecureStore.setItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY, JSON.stringify(next));
+  },
+
+  toggleTriageSectionHidden: async (title) => {
+    const current = get().hiddenTriageSections;
+    const next = current.includes(title) ? current.filter((hiddenTitle) => hiddenTitle !== title) : [...current, title];
+    set({ hiddenTriageSections: next });
+    await SecureStore.setItemAsync(HIDDEN_TRIAGE_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+  },
+
+  showAllTriageSections: async () => {
+    set({ hiddenTriageSections: [] });
+    await SecureStore.setItemAsync(HIDDEN_TRIAGE_SECTIONS_STORAGE_KEY, JSON.stringify([]));
   },
 
   clearDesktopScopedPreferences: async () => {
