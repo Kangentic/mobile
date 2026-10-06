@@ -36,15 +36,15 @@ function GateReadout(): React.JSX.Element {
 }
 
 describe('useScreenMotionActive default (no provider)', () => {
-  it('is active outside any provider, so a bare render (every other component test) never turns motion off by accident', () => {
-    render(<GateReadout />);
+  it('is active outside any provider, so a bare render (every other component test) never turns motion off by accident', async () => {
+    await render(<GateReadout />);
     expect(screen.getByTestId('gate-readout').props.children).toBe('active');
   });
 });
 
 describe('ScreenMotionOverride', () => {
-  it('drives the gate directly, without a navigator', () => {
-    render(
+  it('drives the gate directly, without a navigator', async () => {
+    await render(
       <ScreenMotionOverride active={false}>
         <GateReadout />
       </ScreenMotionOverride>,
@@ -58,8 +58,8 @@ describe('ScreenMotionProvider', () => {
     mockLatestFocusEffect.current = null;
   });
 
-  it('starts active and registers a focus effect with the host navigator', () => {
-    render(
+  it('starts active and registers a focus effect with the host navigator', async () => {
+    await render(
       <ScreenMotionProvider>
         <GateReadout />
       </ScreenMotionProvider>,
@@ -75,27 +75,27 @@ describe('ScreenMotionProvider', () => {
    * against the captured callback, the same technique
    * PairingScanScreen.test.tsx uses to replay a focus-regain.
    */
-  it('closes the gate when the host navigator blurs the screen, and reopens it on refocus', () => {
-    render(
+  it('closes the gate when the host navigator blurs the screen, and reopens it on refocus', async () => {
+    await render(
       <ScreenMotionProvider>
         <GateReadout />
       </ScreenMotionProvider>,
     );
 
     let blurCleanup: (() => void) | undefined;
-    act(() => {
+    await act(() => {
       blurCleanup = mockLatestFocusEffect.current?.() ?? undefined;
     });
     expect(blurCleanup).toBeDefined();
 
     // Blur: the host navigator runs the cleanup the focus callback returned.
-    act(() => {
+    await act(() => {
       blurCleanup?.();
     });
     expect(screen.getByTestId('gate-readout').props.children).toBe('inactive');
 
     // Refocus: the host navigator invokes the focus callback again.
-    act(() => {
+    await act(() => {
       mockLatestFocusEffect.current?.();
     });
     expect(screen.getByTestId('gate-readout').props.children).toBe('active');

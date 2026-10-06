@@ -21,8 +21,8 @@ function makeCell(overrides: Partial<ToolCallCellModel>): ToolCallCellModel {
   };
 }
 
-function renderCard(cell: ToolCallCellModel): void {
-  render(
+async function renderCard(cell: ToolCallCellModel): Promise<void> {
+  await render(
     <ThemeProvider>
       <ToolCallCard cell={cell} />
     </ThemeProvider>,
@@ -30,14 +30,14 @@ function renderCard(cell: ToolCallCellModel): void {
 }
 
 describe('ToolCallCard', () => {
-  it('summarizes Bash with the first line of the command', () => {
-    renderCard(makeCell({}));
+  it('summarizes Bash with the first line of the command', async () => {
+    await renderCard(makeCell({}));
     expect(screen.getByText('Bash')).toBeTruthy();
     expect(screen.getByText('npm run lint')).toBeTruthy();
   });
 
-  it('summarizes file tools with the basename and directory', () => {
-    renderCard(
+  it('summarizes file tools with the basename and directory', async () => {
+    await renderCard(
       makeCell({
         toolUseId: 'tool-2',
         toolName: 'Read',
@@ -48,13 +48,13 @@ describe('ToolCallCard', () => {
     expect(screen.getByText('src/screens/task/')).toBeTruthy();
   });
 
-  it('summarizes Grep with the pattern and Task with the description', () => {
-    renderCard(makeCell({ toolUseId: 'tool-3', toolName: 'Grep', input: { pattern: 'FlashList' } }));
+  it('summarizes Grep with the pattern and Task with the description', async () => {
+    await renderCard(makeCell({ toolUseId: 'tool-3', toolName: 'Grep', input: { pattern: 'FlashList' } }));
     expect(screen.getByText('FlashList')).toBeTruthy();
   });
 
-  it('expands an Edit call to the inline old/new diff', () => {
-    renderCard(
+  it('expands an Edit call to the inline old/new diff', async () => {
+    await renderCard(
       makeCell({
         toolUseId: 'tool-4',
         toolName: 'Edit',
@@ -65,44 +65,44 @@ describe('ToolCallCard', () => {
         },
       }),
     );
-    fireEvent.press(screen.getByTestId('tool-call-tool-4'));
+    await fireEvent.press(screen.getByTestId('tool-call-tool-4'));
     expect(screen.getByText('-const value = 1;')).toBeTruthy();
     expect(screen.getByText('+const value = 2;')).toBeTruthy();
   });
 
-  it('expands other tools to pretty-printed input JSON', () => {
-    renderCard(makeCell({ toolUseId: 'tool-5', toolName: 'WebFetch', input: { url: 'https://example.com' } }));
-    fireEvent.press(screen.getByTestId('tool-call-tool-5'));
+  it('expands other tools to pretty-printed input JSON', async () => {
+    await renderCard(makeCell({ toolUseId: 'tool-5', toolName: 'WebFetch', input: { url: 'https://example.com' } }));
+    await fireEvent.press(screen.getByTestId('tool-call-tool-5'));
     expect(screen.getByText(JSON.stringify({ url: 'https://example.com' }, null, 2))).toBeTruthy();
   });
 
-  it('shows a success glyph and a collapsed result preview', () => {
+  it('shows a success glyph and a collapsed result preview', async () => {
     const result: ToolCallResult = { content: 'lint passed', isError: false };
-    renderCard(makeCell({ result }));
+    await renderCard(makeCell({ result }));
     expect(screen.getByText('✓')).toBeTruthy();
     expect(screen.getByText('lint passed')).toBeTruthy();
   });
 
-  it('tints an error result with the danger border and glyph', () => {
+  it('tints an error result with the danger border and glyph', async () => {
     const result: ToolCallResult = { content: 'command failed\nstack line', isError: true };
-    renderCard(makeCell({ result }));
+    await renderCard(makeCell({ result }));
     expect(screen.getByText('✗')).toBeTruthy();
     const resultBlock = screen.getByTestId('tool-result-tool-1');
     expect(StyleSheet.flatten(resultBlock.props.style).borderLeftColor).toBe(darkTerminalTheme.colors.danger);
   });
 
-  it('expands the result to its full content on tap', () => {
+  it('expands the result to its full content on tap', async () => {
     const result: ToolCallResult = { content: 'line one\nline two\nline three', isError: false };
-    renderCard(makeCell({ result }));
-    fireEvent.press(screen.getByTestId('tool-result-tool-1'));
+    await renderCard(makeCell({ result }));
+    await fireEvent.press(screen.getByTestId('tool-result-tool-1'));
     expect(screen.getByText('line one\nline two\nline three')).toBeTruthy();
   });
 
   // The tools below dominate a real Claude Code session and all previously fell
   // through to a bare glyph with an EMPTY summary column, because the mock only
   // ever produced Edit and Bash so nothing exercised them.
-  it('summarizes TodoWrite with its progress and the active item', () => {
-    renderCard(
+  it('summarizes TodoWrite with its progress and the active item', async () => {
+    await renderCard(
       makeCell({
         toolUseId: 'tool-todo',
         toolName: 'TodoWrite',
@@ -119,8 +119,8 @@ describe('ToolCallCard', () => {
     expect(screen.getByText('1 of 3 done - Reject off-site paths')).toBeTruthy();
   });
 
-  it('reads an MCP tool as its server plus the tool it called', () => {
-    renderCard(
+  it('reads an MCP tool as its server plus the tool it called', async () => {
+    await renderCard(
       makeCell({
         toolUseId: 'tool-mcp',
         toolName: 'mcp__github__list_pull_requests',
@@ -132,19 +132,22 @@ describe('ToolCallCard', () => {
     expect(screen.getByText('list_pull_requests')).toBeTruthy();
   });
 
-  it('bounds the JSON fallback so a large input cannot run off the row', () => {
-    renderCard(
+  it('bounds the JSON fallback so a large input cannot run off the row', async () => {
+    await renderCard(
       makeCell({
         toolUseId: 'tool-todo-expand',
         toolName: 'TodoWrite',
         input: { todos: Array.from({ length: 40 }, (_, index) => ({ content: `item ${index}`, status: 'pending' })) },
       }),
     );
-    fireEvent.press(screen.getByTestId('tool-call-tool-todo-expand'));
+    await fireEvent.press(screen.getByTestId('tool-call-tool-todo-expand'));
     // A MonoBlock given a maxHeight renders a nested-scrollable ScrollView
     // capped at that height; without one it is a plain View that grows without
     // limit inside a FlashList row.
-    const scrollables = screen.UNSAFE_getAllByProps({ nestedScrollEnabled: true });
+    // RNTL 14 has no props query (UNSAFE_getAllByProps is gone); host
+    // instances only, so this finds the native scroll view that carries the
+    // flag rather than the composite ScrollView wrapper it used to return too.
+    const scrollables = screen.container.queryAll((node) => node.props.nestedScrollEnabled === true);
     expect(scrollables.length).toBeGreaterThan(0);
     expect(StyleSheet.flatten(scrollables[0].props.style).maxHeight).toBe(300);
   });

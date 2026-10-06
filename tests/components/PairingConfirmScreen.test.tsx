@@ -61,18 +61,18 @@ describe('PairingConfirmScreen', () => {
     jest.clearAllMocks();
   });
 
-  afterEach(() => {
-    cleanup();
+  afterEach(async () => {
+    await cleanup();
     usePairingStore.getState().reset();
   });
 
-  it('renders the SAS digits with both a confirm and a cancel action (no emoji row)', () => {
+  it('renders the SAS digits with both a confirm and a cancel action (no emoji row)', async () => {
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
       sas: sasFixture('042917'),
     });
 
-    render(<PairingConfirmScreen />);
+    await render(<PairingConfirmScreen />);
 
     expect(screen.getByTestId('sas-digits').props.children).toBe('042917');
     expect(screen.getByTestId('sas-accept')).toBeTruthy();
@@ -85,15 +85,15 @@ describe('PairingConfirmScreen', () => {
     expect(screen.getByTestId('sas-reject')).toBeTruthy();
   });
 
-  it('rejects the ceremony when the user cancels on a mismatch', () => {
+  it('rejects the ceremony when the user cancels on a mismatch', async () => {
     const { rejectActivePairing } = jest.requireMock<{ rejectActivePairing: jest.Mock }>('@/pairing/activePairing');
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
       sas: sasFixture('042917'),
     });
 
-    render(<PairingConfirmScreen />);
-    fireEvent.press(screen.getByTestId('sas-reject'));
+    await render(<PairingConfirmScreen />);
+    await fireEvent.press(screen.getByTestId('sas-reject'));
 
     expect(rejectActivePairing).toHaveBeenCalled();
   });
@@ -106,8 +106,8 @@ describe('PairingConfirmScreen', () => {
       sas: sasFixture('042917'),
     });
 
-    render(<PairingConfirmScreen />);
-    fireEvent.press(screen.getByTestId('sas-accept'));
+    await render(<PairingConfirmScreen />);
+    await fireEvent.press(screen.getByTestId('sas-accept'));
 
     await waitFor(() => expect(confirmActivePairing).toHaveBeenCalledTimes(1));
     // A fresh pairing is not a goodbye to the OLD desktop - it must reconnect
@@ -118,7 +118,7 @@ describe('PairingConfirmScreen', () => {
     expect(reconnectNow).not.toHaveBeenCalledWith('announce-departure');
   });
 
-  it('calls rejectActivePairing when the user leaves without confirming', () => {
+  it('calls rejectActivePairing when the user leaves without confirming', async () => {
     const { rejectActivePairing } = jest.requireMock<{ rejectActivePairing: jest.Mock }>('@/pairing/activePairing');
     usePairingStore.getState().setMachineState({
       status: 'awaiting-sas',
@@ -128,7 +128,7 @@ describe('PairingConfirmScreen', () => {
     // Backing out (gesture, header back, tab switch) unmounts the screen -
     // that IS the rejection now that the explicit button is gone, and it
     // must still tear down the PairingMachine and its relay socket.
-    render(<PairingConfirmScreen />).unmount();
+    await (await render(<PairingConfirmScreen />)).unmount();
 
     expect(rejectActivePairing).toHaveBeenCalledTimes(1);
   });
@@ -139,8 +139,8 @@ describe('PairingConfirmScreen', () => {
       sas: sasFixture('042917'),
     });
 
-    render(<PairingConfirmScreen />);
-    fireEvent.press(screen.getByTestId('sas-accept'));
+    await render(<PairingConfirmScreen />);
+    await fireEvent.press(screen.getByTestId('sas-accept'));
 
     await waitFor(() => expect(mockNotificationAsync).toHaveBeenCalledWith(Haptics.NotificationFeedbackType.Success));
   });
@@ -162,9 +162,9 @@ describe('PairingConfirmScreen', () => {
         sas: sasFixture('042917'),
       });
 
-      render(<PairingConfirmScreen />);
+      await render(<PairingConfirmScreen />);
       await act(async () => {
-        fireEvent.press(screen.getByTestId('sas-accept'));
+        await fireEvent.press(screen.getByTestId('sas-accept'));
       });
 
       const successHoldMs = overseerOneShotDurationMs['wave-once'] + motionTokens.durations.slow;
@@ -175,12 +175,12 @@ describe('PairingConfirmScreen', () => {
       expect(successHoldMs).toBe(920);
       expect(mockReplace).not.toHaveBeenCalled();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(successHoldMs - 1);
       });
       expect(mockReplace).not.toHaveBeenCalled();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(1);
       });
       expect(mockReplace).toHaveBeenCalledWith('/');
@@ -198,18 +198,18 @@ describe('PairingConfirmScreen', () => {
         sas: sasFixture('042917'),
       });
 
-      const { unmount } = render(<PairingConfirmScreen />);
+      const { unmount } = await render(<PairingConfirmScreen />);
       await act(async () => {
-        fireEvent.press(screen.getByTestId('sas-accept'));
+        await fireEvent.press(screen.getByTestId('sas-accept'));
       });
 
       const successHoldMs = overseerOneShotDurationMs['wave-once'] + motionTokens.durations.slow;
-      unmount();
+      await unmount();
 
       // A stray timer firing setState (or a route replace) after unmount is
       // exactly the class of bug the unmount cleanup effect exists to
       // prevent; advancing well past the hold must produce no navigation.
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(successHoldMs + 1_000);
       });
       expect(mockReplace).not.toHaveBeenCalled();
@@ -218,25 +218,25 @@ describe('PairingConfirmScreen', () => {
     }
   });
 
-  it('shows the blinking Overseer while connecting', () => {
+  it('shows the blinking Overseer while connecting', async () => {
     usePairingStore.getState().setMachineState({ status: 'connecting' });
 
-    render(<PairingConfirmScreen />);
+    await render(<PairingConfirmScreen />);
 
     expect(screen.getByText('Connecting to the desktop...')).toBeTruthy();
     expect(screen.getByTestId('pairing-connecting-overseer', HIDDEN)).toBeTruthy();
   });
 
-  it('shows the waving Overseer on the paired success state', () => {
+  it('shows the waving Overseer on the paired success state', async () => {
     usePairingStore.getState().setMachineState({ status: 'paired' });
 
-    render(<PairingConfirmScreen />);
+    await render(<PairingConfirmScreen />);
 
     expect(screen.getByText('Pairing complete.')).toBeTruthy();
     expect(screen.getByTestId('pairing-success-overseer', HIDDEN)).toBeTruthy();
   });
 
-  it('never claims success on the rejected state', () => {
+  it('never claims success on the rejected state', async () => {
     // The screen stays mounted for the whole pop transition after Cancel, and
     // Cancel drives the machine to 'rejected'. A success branch written as
     // "anything that is not awaiting-sas" therefore rendered "Pairing
@@ -245,20 +245,20 @@ describe('PairingConfirmScreen', () => {
     // give.
     usePairingStore.getState().setMachineState({ status: 'rejected' });
 
-    render(<PairingConfirmScreen />);
+    await render(<PairingConfirmScreen />);
 
     expect(screen.queryByText('Pairing complete.')).toBeNull();
     expect(screen.queryByTestId('pairing-success-overseer', HIDDEN)).toBeNull();
   });
 
-  it('shows the error message and no SAS controls on a handshake failure', () => {
+  it('shows the error message and no SAS controls on a handshake failure', async () => {
     usePairingStore.getState().setMachineState({
       status: 'error',
       errorKind: 'handshake-failed',
       message: 'Pairing failed to authenticate. Rescan the code and try again.',
     });
 
-    render(<PairingConfirmScreen />);
+    await render(<PairingConfirmScreen />);
 
     expect(screen.getByText('Pairing failed to authenticate. Rescan the code and try again.')).toBeTruthy();
     expect(screen.queryByTestId('sas-accept')).toBeNull();

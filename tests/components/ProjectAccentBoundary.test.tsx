@@ -16,8 +16,8 @@ function AccentProbe(): React.JSX.Element {
   );
 }
 
-function renderBoundary(projectId: string | null | undefined): void {
-  render(
+async function renderBoundary(projectId: string | null | undefined): Promise<void> {
+  await render(
     <ThemeProvider>
       <ProjectAccentBoundary projectId={projectId}>
         <AccentProbe />
@@ -32,19 +32,19 @@ function probeText(testID: string): string {
 }
 
 describe('ProjectAccentBoundary', () => {
-  afterEach(() => {
-    act(() => useBoardStore.getState().reset());
+  afterEach(async () => {
+    await act(() => useBoardStore.getState().reset());
   });
 
-  it('overrides the accent family for a project that carries a color', () => {
+  it('overrides the accent family for a project that carries a color', async () => {
     const coloredProject: ReadBoardProjectSummary & { color: string } = {
       id: 'project-colored',
       name: 'Colored',
       color: '#5da9e0',
     };
-    act(() => useBoardStore.setState({ projects: [coloredProject] }));
+    await act(() => useBoardStore.setState({ projects: [coloredProject] }));
 
-    renderBoundary('project-colored');
+    await renderBoundary('project-colored');
 
     expect(probeText('probe-accent')).toBe('#5da9e0');
     // Brand ink stays readable (>= 4.5:1) on this light blue, so ink wins.
@@ -53,44 +53,44 @@ describe('ProjectAccentBoundary', () => {
     expect(probeText('probe-needs-you')).toBe(darkTerminalTheme.colors.statusNeedsYou);
   });
 
-  it('picks cream for onAccent when ink cannot read on the resolved accent', () => {
+  it('picks cream for onAccent when ink cannot read on the resolved accent', async () => {
     const midBlueProject: ReadBoardProjectSummary & { color: string } = {
       id: 'project-mid-blue',
       name: 'MidBlue',
       color: '#3d6ae0',
     };
-    act(() => useBoardStore.setState({ projects: [midBlueProject] }));
+    await act(() => useBoardStore.setState({ projects: [midBlueProject] }));
 
-    renderBoundary('project-mid-blue');
+    await renderBoundary('project-mid-blue');
 
     expect(probeText('probe-accent')).toBe('#3d6ae0');
     expect(probeText('probe-on-accent')).toBe(darkTerminalTheme.brand.cream);
   });
 
-  it('passes the base theme through when the project has no color field', () => {
+  it('passes the base theme through when the project has no color field', async () => {
     const plainProject: ReadBoardProjectSummary = { id: 'project-plain', name: 'Plain' };
-    act(() => useBoardStore.setState({ projects: [plainProject] }));
+    await act(() => useBoardStore.setState({ projects: [plainProject] }));
 
-    renderBoundary('project-plain');
+    await renderBoundary('project-plain');
 
     expect(probeText('probe-accent')).toBe(darkTerminalTheme.colors.accent);
     expect(probeText('probe-on-accent')).toBe(darkTerminalTheme.colors.onAccent);
   });
 
-  it('passes the base theme through for a missing projectId', () => {
-    renderBoundary(null);
+  it('passes the base theme through for a missing projectId', async () => {
+    await renderBoundary(null);
     expect(probeText('probe-accent')).toBe(darkTerminalTheme.colors.accent);
   });
 
-  it('passes the base theme through when the wire color is unusable', () => {
+  it('passes the base theme through when the wire color is unusable', async () => {
     const garbageColorProject: ReadBoardProjectSummary & { color: string } = {
       id: 'project-garbage',
       name: 'Garbage',
       color: 'chartreuse',
     };
-    act(() => useBoardStore.setState({ projects: [garbageColorProject] }));
+    await act(() => useBoardStore.setState({ projects: [garbageColorProject] }));
 
-    renderBoundary('project-garbage');
+    await renderBoundary('project-garbage');
 
     expect(probeText('probe-accent')).toBe(darkTerminalTheme.colors.accent);
   });

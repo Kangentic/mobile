@@ -34,7 +34,7 @@ describe('NowTick reads focus, not motion', () => {
     mockGetRetentionProbeVariant.mockReturnValue('off');
   });
 
-  it('keeps advancing under the no-motion retention probe on a focused screen', () => {
+  it('keeps advancing under the no-motion retention probe on a focused screen', async () => {
     // Guards against a silently-dead mock: this imports the SAME named
     // export ScreenMotion.tsx imports, through the SAME module specifier
     // jest.mock above targets. If that mock never actually intercepted the
@@ -44,7 +44,7 @@ describe('NowTick reads focus, not motion', () => {
     // catch, so it proves the wiring before trusting the rest of the test.
     expect(getRetentionProbeVariant()).toBe('no-motion');
 
-    render(
+    await render(
       <ThemeProvider>
         <ScreenMotionOverride active>
           <NowTickProvider enabled>
@@ -56,7 +56,7 @@ describe('NowTick reads focus, not motion', () => {
 
     expect(screen.getByTestId('wait')).toHaveTextContent('12m');
 
-    act(() => {
+    await act(() => {
       jest.advanceTimersByTime(NOW_TICK_MS * 2);
     });
 
@@ -86,7 +86,7 @@ describe('NowTick catches up on resume', () => {
     jest.useRealTimers();
   });
 
-  it('shows the caught-up elapsed time on refocus, without waiting for the next 30s tick', () => {
+  it('shows the caught-up elapsed time on refocus, without waiting for the next 30s tick', async () => {
     const HOUR_MS = 60 * MINUTE;
     // Computed once, before any clock advance, and reused as the same
     // literal in every render below - `sinceMs` must NOT track "now", or a
@@ -106,16 +106,16 @@ describe('NowTick catches up on resume', () => {
       );
     }
 
-    const view = render(tree(true));
+    const view = await render(tree(true));
     expect(screen.getByTestId('wait')).toHaveTextContent('12m');
 
     // Blur, then let an hour pass while covered - the label must not move
     // (covered by WaitLabel.test.tsx's 'stops ticking while the screen is
     // blurred'; this is only the setup for the resume this test pins).
-    act(() => {
-      view.rerender(tree(false));
+    await act(async () => {
+      await view.rerender(tree(false));
     });
-    act(() => {
+    await act(() => {
       jest.advanceTimersByTime(HOUR_MS);
     });
     expect(screen.getByTestId('wait')).toHaveTextContent('12m');
@@ -123,10 +123,10 @@ describe('NowTick catches up on resume', () => {
     // Refocus, then flush ONLY the zero-delay resume timer - deliberately
     // not a further NOW_TICK_MS advance, which would let the periodic
     // interval do the work the resume timer is supposed to do instead.
-    act(() => {
-      view.rerender(tree(true));
+    await act(async () => {
+      await view.rerender(tree(true));
     });
-    act(() => {
+    await act(() => {
       jest.advanceTimersByTime(0);
     });
 

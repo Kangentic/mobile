@@ -57,9 +57,9 @@ describe('ChangesScreen', () => {
     useActivityStore.getState().reset();
   });
 
-  it('shows the header column chip once a cached board locates the task', () => {
+  it('shows the header column chip once a cached board locates the task', async () => {
     seedLocatedTask();
-    render(
+    await render(
       <ThemeProvider>
         <ChangesScreen />
       </ThemeProvider>,
@@ -69,8 +69,8 @@ describe('ChangesScreen', () => {
     expect(screen.getByText('To Do')).toBeTruthy();
   });
 
-  it('renders no chip while no board has located the task', () => {
-    render(
+  it('renders no chip while no board has located the task', async () => {
+    await render(
       <ThemeProvider>
         <ChangesScreen />
       </ThemeProvider>,

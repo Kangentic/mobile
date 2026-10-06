@@ -17,8 +17,8 @@ jest.mock('react-native-enriched-markdown', () => {
 });
 
 describe('MarkdownBlock', () => {
-  it('passes the markdown string through to the renderer', () => {
-    render(
+  it('passes the markdown string through to the renderer', async () => {
+    await render(
       <ThemeProvider>
         <MarkdownBlock markdown="# Hello **world**" testID="turn-markdown" />
       </ThemeProvider>,
@@ -30,8 +30,8 @@ describe('MarkdownBlock', () => {
     expect(screen.getByTestId('turn-markdown').props.selectable).toBe(true);
   });
 
-  it('derives the markdown styles from theme tokens', () => {
-    render(
+  it('derives the markdown styles from theme tokens', async () => {
+    await render(
       <ThemeProvider>
         <MarkdownBlock markdown="`inline code`" testID="turn-markdown" />
       </ThemeProvider>,

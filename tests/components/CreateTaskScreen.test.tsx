@@ -1,7 +1,7 @@
 import React from 'react';
 import { Dimensions, StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import type { ReactTestInstance } from 'react-test-renderer';
+import type { TestInstance } from 'test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
@@ -17,24 +17,22 @@ import {
 } from '@/lib/sheetContentHeights';
 
 /**
- * Walks up from a queried host node to its nearest HOST ancestor (skipping
- * the composite wrapper layers a mocked ScrollView renders through in this
- * Jest environment), so the caller can assert that ancestor IS the
- * SheetScrollerSlot's View rather than merely that a slot exists somewhere
- * above it. Stopping at anything but the nearest host would let a slot that
- * wraps the wrong element (e.g. the whole Stack, which is exactly the
- * misplacement SheetScrollerSlot's own invariant comment warns against)
+ * Returns the nearest HOST ancestor of a queried host node, so the caller can
+ * assert that ancestor IS the SheetScrollerSlot's View rather than merely that
+ * a slot exists somewhere above it. Test Renderer (RNTL 14) only exposes host
+ * instances, so `parent` is already the nearest host: there are no composite
+ * wrapper layers to skip any more, which the previous react-test-renderer
+ * helper had to walk past. Stopping at anything but the nearest host would let
+ * a slot that wraps the wrong element (e.g. the whole Stack, which is exactly
+ * the misplacement SheetScrollerSlot's own invariant comment warns against)
  * pass this check by accident.
  */
-function nearestHostAncestor(instance: ReactTestInstance): ReactTestInstance {
-  let current = instance.parent;
-  while (current !== null && typeof current.type !== 'string') {
-    current = current.parent;
-  }
-  if (current === null) {
+function nearestHostAncestor(instance: TestInstance): TestInstance {
+  const hostAncestor = instance.parent;
+  if (hostAncestor === null) {
     throw new Error('expected a host ancestor');
   }
-  return current;
+  return hostAncestor;
 }
 
 jest.mock('react-native-safe-area-context', () =>
@@ -103,11 +101,11 @@ describe('CreateTaskScreen', () => {
    * of whatever was being read.
    */
   it('creates in the first column by default and dismisses the sheet on success', async () => {
-    renderCreateTaskScreen();
+    await renderCreateTaskScreen();
 
-    fireEvent.changeText(screen.getByTestId('create-task-title'), 'New feature');
+    await fireEvent.changeText(screen.getByTestId('create-task-title'), 'New feature');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('create-task-confirm'));
+      await fireEvent.press(screen.getByTestId('create-task-confirm'));
     });
 
     expect(mockCreateTask).toHaveBeenCalledWith({
@@ -123,16 +121,16 @@ describe('CreateTaskScreen', () => {
   });
 
   it('sends the tapped column, and offers Backlog alongside the real ones', async () => {
-    renderCreateTaskScreen();
+    await renderCreateTaskScreen();
 
     expect(screen.getByTestId('create-task-column-Backlog')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('create-task-column-Doing'));
+    await fireEvent.press(screen.getByTestId('create-task-column-Doing'));
     expect(screen.getByTestId('create-task-column-Doing').props.accessibilityState).toEqual({ selected: true });
     expect(screen.getByTestId('create-task-column-To Do').props.accessibilityState).toEqual({ selected: false });
 
-    fireEvent.changeText(screen.getByTestId('create-task-title'), 'Ship it');
+    await fireEvent.changeText(screen.getByTestId('create-task-title'), 'Ship it');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('create-task-confirm'));
+      await fireEvent.press(screen.getByTestId('create-task-confirm'));
     });
 
     expect(mockCreateTask).toHaveBeenCalledWith({
@@ -144,19 +142,19 @@ describe('CreateTaskScreen', () => {
   });
 
   it('trims the title and blocks confirm on a blank one', async () => {
-    renderCreateTaskScreen();
+    await renderCreateTaskScreen();
 
     // Whitespace only: the button stays disabled and nothing is sent.
-    fireEvent.changeText(screen.getByTestId('create-task-title'), '   ');
+    await fireEvent.changeText(screen.getByTestId('create-task-title'), '   ');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('create-task-confirm'));
+      await fireEvent.press(screen.getByTestId('create-task-confirm'));
     });
     expect(mockCreateTask).not.toHaveBeenCalled();
 
-    fireEvent.changeText(screen.getByTestId('create-task-title'), '  Padded  ');
-    fireEvent.changeText(screen.getByTestId('create-task-description'), '  notes  ');
+    await fireEvent.changeText(screen.getByTestId('create-task-title'), '  Padded  ');
+    await fireEvent.changeText(screen.getByTestId('create-task-description'), '  notes  ');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('create-task-confirm'));
+      await fireEvent.press(screen.getByTestId('create-task-confirm'));
     });
     expect(mockCreateTask).toHaveBeenCalledWith({
       projectId: 'project-1',
@@ -170,11 +168,11 @@ describe('CreateTaskScreen', () => {
   it('surfaces a failure and stays open', async () => {
     const failure = new Error('relay down');
     mockCreateTask.mockRejectedValueOnce(failure);
-    renderCreateTaskScreen();
+    await renderCreateTaskScreen();
 
-    fireEvent.changeText(screen.getByTestId('create-task-title'), 'New feature');
+    await fireEvent.changeText(screen.getByTestId('create-task-title'), 'New feature');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('create-task-confirm'));
+      await fireEvent.press(screen.getByTestId('create-task-confirm'));
     });
 
     expect(screen.getByText('Create failed - check the connection')).toBeTruthy();
@@ -200,8 +198,8 @@ describe('CreateTaskScreen scroller slot wiring', () => {
     seedBoard();
   });
 
-  it('renders the column-chip scroller inside a SheetScrollerSlot', () => {
-    renderCreateTaskScreen();
+  it('renders the column-chip scroller inside a SheetScrollerSlot', async () => {
+    await renderCreateTaskScreen();
 
     const scroller = screen.getByTestId('create-task-column-scroller');
     const slotHost = nearestHostAncestor(scroller);
@@ -270,9 +268,9 @@ describe('CreateTaskScreen description height cap', () => {
     });
   }
 
-  it('caps the description at the aligned ceiling on a tall window, resting at 120', () => {
+  it('caps the description at the aligned ceiling on a tall window, resting at 120', async () => {
     mockWindowHeight(1280);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('create-task-description').props.style);
     const expectedMaxHeight = expectedDescriptionMaxHeight(1280);
@@ -283,9 +281,9 @@ describe('CreateTaskScreen description height cap', () => {
   });
 
   /** The exact window size from the tester recording that motivated this module. */
-  it('shrinks the description cap on the 852pt tester-recording window', () => {
+  it('shrinks the description cap on the 852pt tester-recording window', async () => {
     mockWindowHeight(852);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('create-task-description').props.style);
     const expectedMaxHeight = expectedDescriptionMaxHeight(852);
@@ -296,9 +294,9 @@ describe('CreateTaskScreen description height cap', () => {
   });
 
   /** Below this window, the cap itself drops under the 120 resting height, and minHeight must follow it down. */
-  it('follows the cap below the 120 resting height on a very small window', () => {
+  it('follows the cap below the 120 resting height on a very small window', async () => {
     mockWindowHeight(830);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('create-task-description').props.style);
     const expectedMaxHeight = expectedDescriptionMaxHeight(830);

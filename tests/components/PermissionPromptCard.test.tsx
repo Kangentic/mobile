@@ -31,8 +31,8 @@ const bashPrompt: PendingPromptDescriptor = {
   options: null,
 };
 
-function renderCard(prompt: PendingPromptDescriptor = bashPrompt): void {
-  render(
+async function renderCard(prompt: PendingPromptDescriptor = bashPrompt): Promise<void> {
+  await render(
     <ThemeProvider>
       <PermissionPromptCard sessionId="sess-1" prompt={prompt} />
     </ThemeProvider>,
@@ -47,8 +47,8 @@ describe('PermissionPromptCard', () => {
     useTerminalUiStore.setState({ requestedModeBySessionId: {}, focusKeyboardRequestBySessionId: {} });
   });
 
-  it('renders the full Bash command being approved', () => {
-    renderCard();
+  it('renders the full Bash command being approved', async () => {
+    await renderCard();
     expect(screen.getByText('Permission requested')).toBeTruthy();
     expect(screen.getByText('Bash')).toBeTruthy();
     expect(screen.getByText('npm run lint\nnpm run test:unit')).toBeTruthy();
@@ -63,8 +63,8 @@ describe('PermissionPromptCard', () => {
    * silently selected "Red". An unidentified prompt must not offer a
    * grant-shaped action.
    */
-  it('offers no blind action when the prompt kind is unknown - only the terminal', () => {
-    renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: null });
+  it('offers no blind action when the prompt kind is unknown - only the terminal', async () => {
+    await renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: null });
 
     // Approve would send '1\r' and could answer "Red" to a question.
     expect(screen.queryByTestId('permission-approve')).toBeNull();
@@ -77,15 +77,15 @@ describe('PermissionPromptCard', () => {
   });
 
 
-  it('approve answers with the approve keystrokes', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+  it('approve answers with the approve keystrokes', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '1\r');
   });
 
-  it('deny answers with escape', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-deny'));
+  it('deny answers with escape', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-deny'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '\u001b');
   });
 
@@ -96,10 +96,10 @@ describe('PermissionPromptCard', () => {
    * permission UI must never be wrong in. Observed on a Pixel against a live
    * desktop, 2026-09-13, while the desktop had already rejected the write.
    */
-  it('shows the in-flight label on the button that was actually pressed', () => {
+  it('shows the in-flight label on the button that was actually pressed', async () => {
     mockAnswerPermissionPrompt.mockReturnValue(new Promise<void>(() => undefined));
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-deny'));
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-deny'));
     expect(screen.queryByText('Approving...')).toBeNull();
     expect(screen.getByText('Denying...')).toBeTruthy();
   });
@@ -116,11 +116,11 @@ describe('PermissionPromptCard', () => {
    * up "Denying..." on the other button, and the queryByText assertion below
    * reddens.
    */
-  it('shows the approving label only when approve was pressed', () => {
+  it('shows the approving label only when approve was pressed', async () => {
     mockAnswerPermissionPrompt.mockReturnValue(new Promise<void>(() => undefined));
-    renderCard();
+    await renderCard();
     expect(screen.getByText('Approve')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     expect(screen.getByText('Approving...')).toBeTruthy();
     expect(screen.queryByText('Denying...')).toBeNull();
   });
@@ -133,8 +133,8 @@ describe('PermissionPromptCard', () => {
    * sends a digit, so a wrong label means a wrong answer with no way to
    * tell. Screen-scraped text is never rendered as a tappable option.
    */
-  it('ignores scraped option labels entirely - they are never rendered as buttons', () => {
-    renderCard({
+  it('ignores scraped option labels entirely - they are never rendered as buttons', async () => {
+    await renderCard({
       ...bashPrompt,
       options: ['Yes', "Yes, and don't ask again for this command", 'No, and tell Claude what to do differently'],
     });
@@ -144,48 +144,48 @@ describe('PermissionPromptCard', () => {
     expect(screen.queryByText("Yes, and don't ask again for this command")).toBeNull();
   });
 
-  it('a transcript-identified tool still gets one-tap Approve/Deny, from structured input', () => {
+  it('a transcript-identified tool still gets one-tap Approve/Deny, from structured input', async () => {
     // toolName + input come from the transcript's tool_use block (real JSON
     // from the session history), which is why acting on them is safe.
-    renderCard({ ...bashPrompt, options: ['Yes', 'No'] });
+    await renderCard({ ...bashPrompt, options: ['Yes', 'No'] });
     expect(screen.getByText('npm run lint\nnpm run test:unit')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-1', '1\r');
   });
 
-  it('routes to the terminal when only scraped options identify the prompt', () => {
+  it('routes to the terminal when only scraped options identify the prompt', async () => {
     // No transcript tool_use: scraped labels alone are not evidence.
-    renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: ['Yes', 'No'] });
+    await renderCard({ ...bashPrompt, toolUseId: null, toolName: null, input: null, options: ['Yes', 'No'] });
     expect(screen.queryByTestId('permission-approve')).toBeNull();
     expect(screen.queryByTestId('permission-deny')).toBeNull();
     expect(screen.getByText('Open in terminal')).toBeTruthy();
   });
 
-  it('fires the promptAnswered haptic on approve', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+  it('fires the promptAnswered haptic on approve', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     expect(mockImpactAsync).toHaveBeenCalledTimes(1);
     expect(mockImpactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Medium);
   });
 
-  it('fires the promptAnswered haptic on deny', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-deny'));
+  it('fires the promptAnswered haptic on deny', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-deny'));
     expect(mockImpactAsync).toHaveBeenCalledTimes(1);
     expect(mockImpactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Medium);
   });
 
-  it('disables both buttons while the answer is pending', () => {
+  it('disables both buttons while the answer is pending', async () => {
     mockAnswerPermissionPrompt.mockReturnValue(new Promise<void>(() => undefined));
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     expect(screen.getByTestId('permission-approve').props.accessibilityState.disabled).toBe(true);
     expect(screen.getByTestId('permission-deny').props.accessibilityState.disabled).toBe(true);
   });
 
   it('stays disabled after a successful answer', async () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     await waitFor(() =>
       expect(screen.getByTestId('permission-approve').props.accessibilityState.disabled).toBe(true),
     );
@@ -195,8 +195,8 @@ describe('PermissionPromptCard', () => {
     mockAnswerPermissionPrompt.mockRejectedValue(
       new Error('Prompt sess-1:tool-1 does not match the awaited prompt'),
     );
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     expect(await screen.findByText('Already answered on the desktop')).toBeTruthy();
     expect(screen.getByTestId('permission-approve').props.accessibilityState.disabled).toBe(true);
     expect(screen.getByTestId('permission-deny').props.accessibilityState.disabled).toBe(true);
@@ -204,15 +204,15 @@ describe('PermissionPromptCard', () => {
 
   it('re-enables and shows the message on any other error', async () => {
     mockAnswerPermissionPrompt.mockRejectedValue(new Error('Relay unreachable'));
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-approve'));
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-approve'));
     expect(await screen.findByText('Relay unreachable')).toBeTruthy();
     expect(screen.getByTestId('permission-approve').props.accessibilityState.disabled).toBe(false);
   });
 
-  it('"More options in terminal" flips the lens and requests keyboard focus, sending no keystrokes', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('permission-answer-in-terminal'));
+  it('"More options in terminal" flips the lens and requests keyboard focus, sending no keystrokes', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('permission-answer-in-terminal'));
 
     expect(useTerminalUiStore.getState().requestedModeBySessionId['sess-1']).toBe('terminal');
     expect(useTerminalUiStore.getState().focusKeyboardRequestBySessionId['sess-1']).toBe(true);

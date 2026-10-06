@@ -104,8 +104,8 @@ function seedPausedSession({ resumable }: { resumable: boolean }): void {
   }
 }
 
-function renderSessionScreen(): void {
-  render(
+async function renderSessionScreen(): Promise<void> {
+  await render(
     <ThemeProvider>
       <SessionScreen />
     </ThemeProvider>,
@@ -123,14 +123,14 @@ describe('SessionScreen Resume (a paused session)', () => {
 
   it('shows the desktop\'s Resume session button in place of the terminal, and drops the quick keys', async () => {
     seedPausedSession({ resumable: true });
-    renderSessionScreen();
+    await renderSessionScreen();
 
     expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
     expect(screen.getByText('Resume session')).toBeTruthy();
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-hidden' });
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('session-resume-button'));
+      await fireEvent.press(screen.getByTestId('session-resume-button'));
     });
     expect(resumeTaskSessionMock).toHaveBeenCalledWith('task-1', 'project-1');
   });
@@ -140,19 +140,19 @@ describe('SessionScreen Resume (a paused session)', () => {
    * `start-session` by re-running the column's automations, so there the
    * phone offers no Resume at all, on any surface, rather than a different one.
    */
-  it('offers no Resume for a paused session the desktop does not mark resumable', () => {
+  it('offers no Resume for a paused session the desktop does not mark resumable', async () => {
     seedPausedSession({ resumable: false });
-    renderSessionScreen();
+    await renderSessionScreen();
 
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
     expect(screen.queryByTestId('task-header-resume')).toBeNull();
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-shown' });
   });
 
-  it('reads "Resuming agent..." with a spinner, and takes no second tap, while the resume runs', () => {
+  it('reads "Resuming agent..." with a spinner, and takes no second tap, while the resume runs', async () => {
     seedPausedSession({ resumable: true });
     useResumeStore.getState().markResuming('task-1', Date.now());
-    renderSessionScreen();
+    await renderSessionScreen();
 
     expect(screen.getByText('Resuming agent...')).toBeTruthy();
     expect(screen.getByTestId('session-resume-spinner')).toBeTruthy();
@@ -162,10 +162,10 @@ describe('SessionScreen Resume (a paused session)', () => {
   it.each([
     ['the desktop\'s failure line when no reason came back', null, 'Session could not be resumed.'],
     ['the desktop\'s own refusal text when it sent one', 'Cannot resume a task in To Do', 'Cannot resume a task in To Do'],
-  ])('shows %s under a live button after a failed resume', (_case, message, expected) => {
+  ])('shows %s under a live button after a failed resume', async (_case, message, expected) => {
     seedPausedSession({ resumable: true });
     useResumeStore.getState().markFailed('task-1', message);
-    renderSessionScreen();
+    await renderSessionScreen();
 
     expect(screen.getByTestId('session-resume-error').props.children).toBe(expected);
     expect(screen.getByText('Resume session')).toBeTruthy();
@@ -177,13 +177,13 @@ describe('SessionScreen Resume (a paused session)', () => {
    * desktop's resume label, and binds a successor. The label reads as
    * preparing, never as paused, so the panel gives way and the attempt ends.
    */
-  it('gives way and ends the attempt when the paused session ends into its resume', () => {
+  it('gives way and ends the attempt when the paused session ends into its resume', async () => {
     seedPausedSession({ resumable: true });
     useResumeStore.getState().markResuming('task-1', Date.now());
-    renderSessionScreen();
+    await renderSessionScreen();
     expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
 
-    act(() => {
+    await act(() => {
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
         sessionId: 'sess-1',
@@ -223,15 +223,15 @@ describe('SessionScreen Resume (a paused session)', () => {
           .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }));
       },
     ],
-  ])('clears a FAILED attempt once %s, so its error cannot resurface under a later pause', (_case, leavePaused) => {
+  ])('clears a FAILED attempt once %s, so its error cannot resurface under a later pause', async (_case, leavePaused) => {
     seedPausedSession({ resumable: true });
     useResumeStore.getState().markFailed('task-1', 'Cannot resume a task in To Do');
-    renderSessionScreen();
+    await renderSessionScreen();
     // Held, and drawn, for as long as the session stays paused.
     expect(screen.getByTestId('session-resume-error')).toBeTruthy();
     expect(useResumeStore.getState().byTaskId['task-1']).toEqual({ phase: 'failed', message: 'Cannot resume a task in To Do' });
 
-    act(() => {
+    await act(() => {
       leavePaused();
     });
 
@@ -248,12 +248,12 @@ describe('SessionScreen Resume (a paused session)', () => {
    * the board's word alone here (not a `session-ended`, which would end the
    * session's paused display and take the panel with it).
    */
-  it('yields the swap veil to the Resume panel while the quiet window is open on a paused session', () => {
+  it('yields the swap veil to the Resume panel while the quiet window is open on a paused session', async () => {
     seedPausedSession({ resumable: true });
-    renderSessionScreen();
+    await renderSessionScreen();
     expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
 
-    act(() => {
+    await act(() => {
       seedBoard({ sessionId: null });
     });
 
@@ -265,7 +265,7 @@ describe('SessionScreen Resume (a paused session)', () => {
 
     // Control: the quiet window really is open. Once the desktop no longer
     // offers Resume, the same open window shows its veil.
-    act(() => {
+    await act(() => {
       useActivityStore.setState((state) => ({
         bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: false } },
       }));
@@ -281,14 +281,14 @@ describe('SessionScreen Resume (a paused session)', () => {
    * pin a cell no ordinary session ever uses. The pane says so by not being a
    * fit reference while the panel shows, and is one again as soon as it goes.
    */
-  it('tells the terminal its pane is not a fit reference while the Resume panel shows, and again once it is gone', () => {
+  it('tells the terminal its pane is not a fit reference while the Resume panel shows, and again once it is gone', async () => {
     seedPausedSession({ resumable: true });
-    renderSessionScreen();
+    await renderSessionScreen();
     expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
 
     expect(screen.getByTestId('stub-terminal-tab').props.accessibilityValue).toEqual({ text: 'fit-layout-is-reference-false' });
 
-    act(() => {
+    await act(() => {
       useActivityStore
         .getState()
         .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }));
@@ -298,15 +298,15 @@ describe('SessionScreen Resume (a paused session)', () => {
     expect(screen.getByTestId('stub-terminal-tab').props.accessibilityValue).toEqual({ text: 'fit-layout-is-reference-true' });
   });
 
-  it('keeps the terminal pane a fit reference when no Resume panel shows (a paused session the desktop does not mark resumable)', () => {
+  it('keeps the terminal pane a fit reference when no Resume panel shows (a paused session the desktop does not mark resumable)', async () => {
     seedPausedSession({ resumable: false });
-    renderSessionScreen();
+    await renderSessionScreen();
 
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
     expect(screen.getByTestId('stub-terminal-tab').props.accessibilityValue).toEqual({ text: 'fit-layout-is-reference-true' });
   });
 
-  it('shows no Resume for a running session', () => {
+  it('shows no Resume for a running session', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
@@ -314,7 +314,7 @@ describe('SessionScreen Resume (a paused session)', () => {
     useActivityStore.setState((state) => ({
       bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: true } },
     }));
-    renderSessionScreen();
+    await renderSessionScreen();
 
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-shown' });

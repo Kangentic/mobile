@@ -67,22 +67,22 @@ describe('EditTaskScreen', () => {
     seedBoard();
   });
 
-  it('prefills the current values and gates save on dirtiness', () => {
-    renderEditTaskScreen();
+  it('prefills the current values and gates save on dirtiness', async () => {
+    await renderEditTaskScreen();
     expect(screen.getByTestId('edit-task-title').props.value).toBe('Original title');
     expect(screen.getByTestId('edit-task-description').props.value).toBe('Original description');
 
     // Unchanged: save is disabled, so an untouched open cannot overwrite a
     // field the desktop changed underneath.
-    fireEvent.press(screen.getByTestId('edit-task-save'));
+    await fireEvent.press(screen.getByTestId('edit-task-save'));
     expect(mockUpdateTaskFields).not.toHaveBeenCalled();
   });
 
   it('sends only the changed fields, with the task and project from the params', async () => {
-    renderEditTaskScreen();
-    fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Renamed title');
+    await renderEditTaskScreen();
+    await fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Renamed title');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('edit-task-save'));
+      await fireEvent.press(screen.getByTestId('edit-task-save'));
     });
 
     expect(mockUpdateTaskFields).toHaveBeenCalledWith({
@@ -94,20 +94,20 @@ describe('EditTaskScreen', () => {
   });
 
   it('never saves an empty title', async () => {
-    renderEditTaskScreen();
-    fireEvent.changeText(screen.getByTestId('edit-task-title'), '   ');
+    await renderEditTaskScreen();
+    await fireEvent.changeText(screen.getByTestId('edit-task-title'), '   ');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('edit-task-save'));
+      await fireEvent.press(screen.getByTestId('edit-task-save'));
     });
     expect(mockUpdateTaskFields).not.toHaveBeenCalled();
   });
 
   it('keeps the sheet open with the reason when the save fails', async () => {
     mockUpdateTaskFields.mockRejectedValueOnce(new Error('The desktop rejected the edit'));
-    renderEditTaskScreen();
-    fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Renamed title');
+    await renderEditTaskScreen();
+    await fireEvent.changeText(screen.getByTestId('edit-task-title'), 'Renamed title');
     await act(async () => {
-      fireEvent.press(screen.getByTestId('edit-task-save'));
+      await fireEvent.press(screen.getByTestId('edit-task-save'));
     });
 
     expect(screen.getByText('The desktop rejected the edit')).toBeTruthy();
@@ -115,9 +115,9 @@ describe('EditTaskScreen', () => {
   });
 
   /** A task the board has not located yet must not render a form over empty values. */
-  it('renders nothing for an unknown task', () => {
+  it('renders nothing for an unknown task', async () => {
     mockParams = { taskId: 'task-missing', projectId: 'project-1' };
-    renderEditTaskScreen();
+    await renderEditTaskScreen();
     expect(screen.queryByTestId('edit-task-title')).toBeNull();
   });
 });
@@ -181,9 +181,9 @@ describe('EditTaskScreen description height cap', () => {
     });
   }
 
-  it('caps the description at the aligned ceiling on a tall window, resting at 160', () => {
+  it('caps the description at the aligned ceiling on a tall window, resting at 160', async () => {
     mockWindowHeight(1280);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('edit-task-description').props.style);
     const expectedMaxHeight = expectedDescriptionMaxHeight(1280);
@@ -194,9 +194,9 @@ describe('EditTaskScreen description height cap', () => {
   });
 
   /** The exact window size from the tester recording that motivated this module. */
-  it('shrinks the description cap on the 852pt tester-recording window', () => {
+  it('shrinks the description cap on the 852pt tester-recording window', async () => {
     mockWindowHeight(852);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('edit-task-description').props.style);
     const expectedMaxHeight = expectedDescriptionMaxHeight(852);
@@ -207,9 +207,9 @@ describe('EditTaskScreen description height cap', () => {
   });
 
   /** Below this window, the cap itself drops under the 160 resting height, and minHeight must follow it down. */
-  it('follows the cap below the 160 resting height on a small window', () => {
+  it('follows the cap below the 160 resting height on a small window', async () => {
     mockWindowHeight(820);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('edit-task-description').props.style);
     const expectedMaxHeight = expectedDescriptionMaxHeight(820);

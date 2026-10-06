@@ -99,12 +99,12 @@ describe('CompletedTaskScreen', () => {
    * task.session_id instead of summary.sessionId hands the conversation pane
    * a null id and it renders empty forever.
    */
-  it('anchors the conversation on the summary sessionId, not the (nulled) task session_id', () => {
+  it('anchors the conversation on the summary sessionId, not the (nulled) task session_id', async () => {
     const task = boardTaskFixture({ id: 'task-1', session_id: null, archived_at: '2026-07-01T00:20:00.000Z' });
     const summary = summaryFixture({ sessionId: 'sess-summary-1' });
     seedArchived('project-1', task, summary);
 
-    renderCompletedTask();
+    await renderCompletedTask();
 
     expect(screen.getByTestId('stub-conversation-tab').props.accessibilityLabel).toBe('sess-summary-1');
   });
@@ -123,7 +123,7 @@ describe('CompletedTaskScreen', () => {
     seedArchived('project-1', task, summary);
     const retainSessionSpy = jest.spyOn(useTranscriptStore.getState(), 'retainSession');
 
-    renderCompletedTask();
+    await renderCompletedTask();
     await act(async () => {});
 
     expect(retainSessionSpy).toHaveBeenCalledWith('sess-summary-1');
@@ -133,19 +133,19 @@ describe('CompletedTaskScreen', () => {
     expect(retainCallOrder).toBeLessThan(fetchCallOrder);
   });
 
-  it('shows the not-found empty state when the task id has no archived match', () => {
+  it('shows the not-found empty state when the task id has no archived match', async () => {
     mockParams = { taskId: 'ghost-task', projectId: 'project-1' };
-    renderCompletedTask();
+    await renderCompletedTask();
 
     expect(screen.getByTestId('completed-task-missing')).toBeTruthy();
     expect(screen.getByText('Task unavailable')).toBeTruthy();
   });
 
-  it('shows the no-conversation empty state for a task archived without ever running an agent', () => {
+  it('shows the no-conversation empty state for a task archived without ever running an agent', async () => {
     const task = boardTaskFixture({ id: 'task-1', session_id: null, archived_at: '2026-07-02T00:00:00.000Z' });
     seedArchived('project-1', task, null);
 
-    renderCompletedTask();
+    await renderCompletedTask();
 
     expect(screen.getByTestId('completed-task-no-conversation')).toBeTruthy();
     expect(screen.queryByTestId('stub-conversation-tab')).toBeNull();
@@ -153,50 +153,50 @@ describe('CompletedTaskScreen', () => {
   });
 
   describe('summary formatters', () => {
-    function seedAndOpenSummary(summaryOverrides: Partial<SessionSummaryWire>): void {
+    async function seedAndOpenSummary(summaryOverrides: Partial<SessionSummaryWire>): Promise<void> {
       const task = boardTaskFixture({ id: 'task-1', session_id: null, archived_at: '2026-07-02T00:00:00.000Z' });
       seedArchived('project-1', task, summaryFixture(summaryOverrides));
-      renderCompletedTask();
-      fireEvent.press(screen.getByTestId('completed-mode-summary'));
+      await renderCompletedTask();
+      await fireEvent.press(screen.getByTestId('completed-mode-summary'));
     }
 
-    it('shows a sub-cent cost as <$0.01 rather than rounding down to free', () => {
-      seedAndOpenSummary({ totalCostUsd: 0.004 });
+    it('shows a sub-cent cost as <$0.01 rather than rounding down to free', async () => {
+      await seedAndOpenSummary({ totalCostUsd: 0.004 });
       expect(screen.getByText('<$0.01')).toBeTruthy();
     });
 
-    it('shows a zero cost as $0.00', () => {
-      seedAndOpenSummary({ totalCostUsd: 0 });
+    it('shows a zero cost as $0.00', async () => {
+      await seedAndOpenSummary({ totalCostUsd: 0 });
       expect(screen.getByText('$0.00')).toBeTruthy();
     });
 
-    it('renders a zero-duration session as 0m rather than blank or negative', () => {
-      seedAndOpenSummary({ durationMs: 0 });
+    it('renders a zero-duration session as 0m rather than blank or negative', async () => {
+      await seedAndOpenSummary({ durationMs: 0 });
       expect(screen.getByText('0m')).toBeTruthy();
     });
 
-    it('rounds a positive sub-30s duration down to 0m rather than skipping the minutes label', () => {
-      seedAndOpenSummary({ durationMs: 20_000 });
+    it('rounds a positive sub-30s duration down to 0m rather than skipping the minutes label', async () => {
+      await seedAndOpenSummary({ durationMs: 20_000 });
       expect(screen.getByText('0m')).toBeTruthy();
     });
 
-    it('drops the minutes when a duration lands on an exact hour', () => {
-      seedAndOpenSummary({ durationMs: 7_200_000 });
+    it('drops the minutes when a duration lands on an exact hour', async () => {
+      await seedAndOpenSummary({ durationMs: 7_200_000 });
       expect(screen.getByText('2h')).toBeTruthy();
     });
 
-    it('shows both hours and minutes for a duration that is neither', () => {
-      seedAndOpenSummary({ durationMs: 5_400_000 });
+    it('shows both hours and minutes for a duration that is neither', async () => {
+      await seedAndOpenSummary({ durationMs: 5_400_000 });
       expect(screen.getByText('1h 30m')).toBeTruthy();
     });
 
-    it('formats large token counts compactly', () => {
-      seedAndOpenSummary({ totalInputTokens: 1_500_000, totalOutputTokens: 2_500 });
+    it('formats large token counts compactly', async () => {
+      await seedAndOpenSummary({ totalInputTokens: 1_500_000, totalOutputTokens: 2_500 });
       expect(screen.getByText('1.5M in / 2.5k out')).toBeTruthy();
     });
 
-    it('leaves a small token count as a plain number', () => {
-      seedAndOpenSummary({ totalInputTokens: 42, totalOutputTokens: 7 });
+    it('leaves a small token count as a plain number', async () => {
+      await seedAndOpenSummary({ totalInputTokens: 42, totalOutputTokens: 7 });
       expect(screen.getByText('42 in / 7 out')).toBeTruthy();
     });
 
@@ -207,11 +207,11 @@ describe('CompletedTaskScreen', () => {
      * formatter that always returns Unknown, so this counts the exact number
      * of matches rather than just checking presence.
      */
-    it('shows Unknown for a completed timestamp that cannot be parsed, and nowhere else', () => {
+    it('shows Unknown for a completed timestamp that cannot be parsed, and nowhere else', async () => {
       const task = boardTaskFixture({ id: 'task-1', session_id: null, archived_at: 'not-a-real-date' });
       seedArchived('project-1', task, summaryFixture());
-      renderCompletedTask();
-      fireEvent.press(screen.getByTestId('completed-mode-summary'));
+      await renderCompletedTask();
+      await fireEvent.press(screen.getByTestId('completed-mode-summary'));
 
       expect(screen.getAllByText('Unknown')).toHaveLength(1);
     });

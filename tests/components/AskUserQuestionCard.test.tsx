@@ -44,8 +44,8 @@ const questionPrompt: PendingPromptDescriptor = {
   options: null,
 };
 
-function renderCard(prompt: PendingPromptDescriptor = questionPrompt): void {
-  render(
+async function renderCard(prompt: PendingPromptDescriptor = questionPrompt): Promise<void> {
+  await render(
     <ThemeProvider>
       <AskUserQuestionCard sessionId="sess-1" prompt={prompt} />
     </ThemeProvider>,
@@ -79,8 +79,8 @@ describe('AskUserQuestionCard', () => {
     useTerminalUiStore.setState({ requestedModeBySessionId: {}, focusKeyboardRequestBySessionId: {} });
   });
 
-  it('renders the first question with its header and options', () => {
-    renderCard();
+  it('renders the first question with its header and options', async () => {
+    await renderCard();
     expect(screen.getByText('Approach')).toBeTruthy();
     expect(screen.getByText('Which approach should I take?')).toBeTruthy();
     expect(screen.getByText('Refactor in place')).toBeTruthy();
@@ -96,32 +96,32 @@ describe('AskUserQuestionCard', () => {
   // "fix" the Changes tab's top-pinned badge) and this header stretches to
   // the full card width. A default of `center` would not stretch it, but it
   // would still be wrong here, so the assertion pins the exact value.
-  it('keeps the question header badge shrink-wrapped in its Stack', () => {
-    renderCard();
+  it('keeps the question header badge shrink-wrapped in its Stack', async () => {
+    await renderCard();
     expect(headerBadgeAlignSelf('Approach')).toBe('flex-start');
   });
 
-  it('sends the digit keystroke for the tapped option', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('ask-option-0-1'));
+  it('sends the digit keystroke for the tapped option', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('ask-option-0-1'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-9', '2');
   });
 
-  it('fires the promptAnswered haptic when an option is tapped', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('ask-option-0-0'));
+  it('fires the promptAnswered haptic when an option is tapped', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('ask-option-0-0'));
     expect(mockImpactAsync).toHaveBeenCalledTimes(1);
     expect(mockImpactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Medium);
   });
 
-  it('falls back to the generic permission card on malformed input', () => {
-    renderCard({ ...questionPrompt, input: { unexpected: 'shape' } });
+  it('falls back to the generic permission card on malformed input', async () => {
+    await renderCard({ ...questionPrompt, input: { unexpected: 'shape' } });
     expect(screen.getByText('Permission requested')).toBeTruthy();
     expect(screen.getByTestId('permission-approve')).toBeTruthy();
   });
 
-  it('warns on multi-select but still allows single-select taps', () => {
-    renderCard({
+  it('warns on multi-select but still allows single-select taps', async () => {
+    await renderCard({
       ...questionPrompt,
       input: {
         questions: [
@@ -134,12 +134,12 @@ describe('AskUserQuestionCard', () => {
       },
     });
     expect(screen.getByText('Multi-select question - answer in the Terminal tab for full control')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('ask-option-0-0'));
+    await fireEvent.press(screen.getByTestId('ask-option-0-0'));
     expect(mockAnswerPermissionPrompt).toHaveBeenCalledWith('sess-1', 'sess-1:tool-9', '1');
   });
 
-  it('notes when more questions follow', () => {
-    renderCard({
+  it('notes when more questions follow', async () => {
+    await renderCard({
       ...questionPrompt,
       input: {
         questions: [
@@ -151,9 +151,9 @@ describe('AskUserQuestionCard', () => {
     expect(screen.getByText('More questions follow on the desktop after this one')).toBeTruthy();
   });
 
-  it('"Type your own answer..." flips the lens and requests keyboard focus, sending no keystrokes', () => {
-    renderCard();
-    fireEvent.press(screen.getByTestId('ask-answer-in-terminal'));
+  it('"Type your own answer..." flips the lens and requests keyboard focus, sending no keystrokes', async () => {
+    await renderCard();
+    await fireEvent.press(screen.getByTestId('ask-answer-in-terminal'));
 
     expect(useTerminalUiStore.getState().requestedModeBySessionId['sess-1']).toBe('terminal');
     expect(useTerminalUiStore.getState().focusKeyboardRequestBySessionId['sess-1']).toBe(true);

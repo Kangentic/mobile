@@ -47,7 +47,11 @@ function pulseOpacity(): unknown {
 
 describe('SectionLandingPulse', () => {
   beforeEach(() => {
-    jest.useFakeTimers();
+    // RNTL 14 awaits React's act, which schedules its flush with queueMicrotask.
+    // Faked, those jobs sit on the fake clock and jest.getTimerCount() counts
+    // them. Leave queueMicrotask real so the assertions below count the bound's
+    // own setTimeout alone.
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask'] });
     jest.setSystemTime(new Date('2026-10-05T10:29:00Z'));
   });
 
@@ -57,8 +61,8 @@ describe('SectionLandingPulse', () => {
   });
 
   describe('the window', () => {
-    it('tints a row that changed section just now, at full strength, in the accent', () => {
-      renderPulse(Date.now());
+    it('tints a row that changed section just now, at full strength, in the accent', async () => {
+      await renderPulse(Date.now());
 
       const overlay = screen.getByTestId(PULSE_TEST_ID);
       expect(pulseOpacity()).toBe(SECTION_PULSE_MAX_OPACITY);
@@ -67,13 +71,13 @@ describe('SectionLandingPulse', () => {
       expect(overlay.props.pointerEvents).toBe('none');
     });
 
-    it('still tints a row mounted on the last millisecond of the window', () => {
-      renderPulse(Date.now() - (SECTION_PULSE_WINDOW_MS - 1));
+    it('still tints a row mounted on the last millisecond of the window', async () => {
+      await renderPulse(Date.now() - (SECTION_PULSE_WINDOW_MS - 1));
       expect(screen.getByTestId(PULSE_TEST_ID)).toBeTruthy();
     });
 
-    it('mounts nothing once the window has passed', () => {
-      renderPulse(Date.now() - SECTION_PULSE_WINDOW_MS);
+    it('mounts nothing once the window has passed', async () => {
+      await renderPulse(Date.now() - SECTION_PULSE_WINDOW_MS);
       expect(screen.queryByTestId(PULSE_TEST_ID)).toBeNull();
     });
   });
@@ -85,7 +89,7 @@ describe('SectionLandingPulse', () => {
      * calls because the jest mock never runs a tween, so the drawn output is
      * identical on any curve.
      */
-    it('fades to 0 over the theme duration on the accelerate curve', () => {
+    it('fades to 0 over the theme duration on the accelerate curve', async () => {
       // The bezier spy hands back a sentinel, so the options assertion below
       // proves the value the accelerate curve PRODUCED reached withTiming. Only
       // asserting the bezier call would pass with `easing:` dropped from the
@@ -94,7 +98,7 @@ describe('SectionLandingPulse', () => {
       const accelerateEasing: Reanimated.EasingFunctionFactory = { factory: () => (progress: number) => progress };
       const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
       const bezierSpy = jest.spyOn(Reanimated.Easing, 'bezier').mockReturnValue(accelerateEasing);
-      renderPulse(Date.now());
+      await renderPulse(Date.now());
 
       const { x1, y1, x2, y2 } = darkTerminalTheme.motion.easing.accelerate;
       expect(bezierSpy).toHaveBeenCalledWith(x1, y1, x2, y2);
@@ -120,32 +124,32 @@ describe('SectionLandingPulse', () => {
      * wrote 0 into it). The zero-calls check on the way in proves the later call
      * is the cleanup's and not the mount's.
      */
-    it('cancels the fade on its own shared value when the row unmounts mid-pulse', () => {
+    it('cancels the fade on its own shared value when the row unmounts mid-pulse', async () => {
       const sharedValueSpy = jest.spyOn(Reanimated, 'useSharedValue');
       const cancelSpy = jest.spyOn(Reanimated, 'cancelAnimation');
-      const { unmount } = renderPulse(Date.now());
+      const { unmount } = await renderPulse(Date.now());
       const fadeOpacity = sharedValueSpy.mock.results[sharedValueSpy.mock.results.length - 1]?.value;
       expect(fadeOpacity).toBeDefined();
       expect(cancelSpy).not.toHaveBeenCalled();
 
-      unmount();
+      await unmount();
       expect(cancelSpy).toHaveBeenCalledTimes(1);
       expect(cancelSpy.mock.calls[0][0]).toBe(fadeOpacity);
     });
 
-    it('cancels the fade on its own shared value when the JS timer unmounts the overlay', () => {
+    it('cancels the fade on its own shared value when the JS timer unmounts the overlay', async () => {
       const sharedValueSpy = jest.spyOn(Reanimated, 'useSharedValue');
       const cancelSpy = jest.spyOn(Reanimated, 'cancelAnimation');
-      renderPulse(Date.now());
+      await renderPulse(Date.now());
       const fadeOpacity = sharedValueSpy.mock.results[sharedValueSpy.mock.results.length - 1]?.value;
       expect(fadeOpacity).toBeDefined();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS - 1);
       });
       expect(cancelSpy).not.toHaveBeenCalled();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(1);
       });
       expect(screen.queryByTestId(PULSE_TEST_ID)).toBeNull();
@@ -155,45 +159,45 @@ describe('SectionLandingPulse', () => {
   });
 
   describe('the JS-timer bound', () => {
-    it('unmounts after SECTION_PULSE_MOUNT_MS although no fade frame ever arrived', () => {
-      renderPulse(Date.now());
+    it('unmounts after SECTION_PULSE_MOUNT_MS although no fade frame ever arrived', async () => {
+      await renderPulse(Date.now());
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS - 1);
       });
       // Still the first write: the stuck iOS card's exact state.
       expect(pulseOpacity()).toBe(SECTION_PULSE_MAX_OPACITY);
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(1);
       });
       expect(screen.queryByTestId(PULSE_TEST_ID)).toBeNull();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(SECTION_PULSE_WINDOW_MS * 2);
       });
       expect(screen.queryByTestId(PULSE_TEST_ID)).toBeNull();
     });
 
-    it('clears its timer when the row unmounts mid-pulse', () => {
-      const { unmount } = renderPulse(Date.now());
+    it('clears its timer when the row unmounts mid-pulse', async () => {
+      const { unmount } = await renderPulse(Date.now());
       // The positive arm: proves the count can see the bound's timer at all.
       expect(jest.getTimerCount()).toBe(1);
 
-      unmount();
+      await unmount();
       expect(jest.getTimerCount()).toBe(0);
     });
 
-    it('arms no timer outside the window', () => {
-      renderPulse(Date.now() - SECTION_PULSE_WINDOW_MS);
+    it('arms no timer outside the window', async () => {
+      await renderPulse(Date.now() - SECTION_PULSE_WINDOW_MS);
       expect(jest.getTimerCount()).toBe(0);
     });
   });
 
   describe('registered mappers (the idle-CPU lever)', () => {
-    it('registers no animated mapper outside the window', () => {
+    it('registers no animated mapper outside the window', async () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
-      renderPulse(Date.now() - SECTION_PULSE_WINDOW_MS);
+      await renderPulse(Date.now() - SECTION_PULSE_WINDOW_MS);
       expect(animatedStyleSpy).not.toHaveBeenCalled();
     });
 
@@ -203,17 +207,17 @@ describe('SectionLandingPulse', () => {
      * a tint there either; mounting this one would paint a frame at full
      * strength and then cut.
      */
-    it('mounts nothing and registers no animated mapper under reduced motion', () => {
+    it('mounts nothing and registers no animated mapper under reduced motion', async () => {
       jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
-      renderPulse(Date.now());
+      await renderPulse(Date.now());
       expect(screen.queryByTestId(PULSE_TEST_ID)).toBeNull();
       expect(animatedStyleSpy).not.toHaveBeenCalled();
     });
 
-    it('registers exactly one animated mapper while pulsing', () => {
+    it('registers exactly one animated mapper while pulsing', async () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
-      renderPulse(Date.now());
+      await renderPulse(Date.now());
       expect(animatedStyleSpy).toHaveBeenCalledTimes(1);
     });
   });

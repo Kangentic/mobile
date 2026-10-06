@@ -19,8 +19,8 @@ jest.mock('react-native-svg', () => {
 });
 
 describe('Brandmark', () => {
-  it('defaults to the themed (mono-amber) mark tinted with the primary text color', () => {
-    render(
+  it('defaults to the themed (mono-amber) mark tinted with the primary text color', async () => {
+    await render(
       <ThemeProvider>
         <Brandmark size={28} testID="brandmark" />
       </ThemeProvider>,
@@ -33,8 +33,8 @@ describe('Brandmark', () => {
     expect(svgProps.height).toBe(28);
   });
 
-  it('renders the pure mono mark for variant mono, honoring a color override', () => {
-    render(
+  it('renders the pure mono mark for variant mono, honoring a color override', async () => {
+    await render(
       <ThemeProvider>
         <Brandmark size={28} variant="mono" color={darkTerminalTheme.colors.accent} testID="brandmark" />
       </ThemeProvider>,
@@ -45,8 +45,8 @@ describe('Brandmark', () => {
     expect(svgProps.color).toBe(darkTerminalTheme.colors.accent);
   });
 
-  it('renders the detailed full-color mark at or above the 64dp tier', () => {
-    render(
+  it('renders the detailed full-color mark at or above the 64dp tier', async () => {
+    await render(
       <ThemeProvider>
         <Brandmark size={64} variant="full" testID="brandmark" />
       </ThemeProvider>,
@@ -55,8 +55,8 @@ describe('Brandmark', () => {
     expect(screen.getByTestId('brandmark').props.xml).toBe(brandmarkXml);
   });
 
-  it('drops to the simplified small mark below the 64dp tier', () => {
-    render(
+  it('drops to the simplified small mark below the 64dp tier', async () => {
+    await render(
       <ThemeProvider>
         <Brandmark size={40} variant="full" testID="brandmark" />
       </ThemeProvider>,

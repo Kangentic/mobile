@@ -117,10 +117,10 @@ describe('TaskActionsScreen', () => {
     it('closes once the desktop accepts the resume', async () => {
       seedPausedSession({ resumable: true });
       mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0 });
-      renderTaskActions();
+      await renderTaskActions();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-resume'));
+        await fireEvent.press(screen.getByTestId('task-action-resume'));
       });
 
       expect(mockResumeTaskSession).toHaveBeenCalledWith('task-1', 'project-1');
@@ -130,10 +130,10 @@ describe('TaskActionsScreen', () => {
     it('stays open with the desktop\'s refusal when the resume is refused', async () => {
       seedPausedSession({ resumable: true });
       mockResumeTaskSession.mockResolvedValue({ phase: 'failed', message: null });
-      renderTaskActions();
+      await renderTaskActions();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-resume'));
+        await fireEvent.press(screen.getByTestId('task-action-resume'));
       });
 
       expect(mockBack).not.toHaveBeenCalled();
@@ -143,10 +143,10 @@ describe('TaskActionsScreen', () => {
     it('stays open with the desktop\'s own refusal text when it sent one, not the generic line', async () => {
       seedPausedSession({ resumable: true });
       mockResumeTaskSession.mockResolvedValueOnce({ phase: 'failed', message: 'Cannot resume a task in To Do' });
-      renderTaskActions();
+      await renderTaskActions();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-resume'));
+        await fireEvent.press(screen.getByTestId('task-action-resume'));
       });
 
       expect(mockBack).not.toHaveBeenCalled();
@@ -159,17 +159,17 @@ describe('TaskActionsScreen', () => {
      * Nothing is in flight in THIS sheet at mount, so the disable can only
      * come from the attempt's phase.
      */
-    it('disables the row while an attempt is resuming, and takes no tap', () => {
+    it('disables the row while an attempt is resuming, and takes no tap', async () => {
       seedPausedSession({ resumable: true });
-      renderTaskActions();
+      await renderTaskActions();
       expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
 
-      act(() => {
+      await act(() => {
         useResumeStore.getState().markResuming('task-1', 0);
       });
 
       expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
-      fireEvent.press(screen.getByTestId('task-action-resume'));
+      await fireEvent.press(screen.getByTestId('task-action-resume'));
       expect(mockResumeTaskSession).not.toHaveBeenCalled();
     });
 
@@ -187,14 +187,14 @@ describe('TaskActionsScreen', () => {
           resolveResume = resolve;
         }),
       );
-      const { unmount } = renderTaskActions();
+      const { unmount } = await renderTaskActions();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-resume'));
+        await fireEvent.press(screen.getByTestId('task-action-resume'));
       });
       expect(mockResumeTaskSession).toHaveBeenCalledTimes(1);
 
-      unmount();
+      await unmount();
       await act(async () => {
         resolveResume({ phase: 'resuming', startedAt: 0 });
       });
@@ -215,11 +215,11 @@ describe('TaskActionsScreen', () => {
       seedPausedSession({ resumable: true });
       mockParams = { taskId: 'task-1' };
       mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0 });
-      renderTaskActions();
+      await renderTaskActions();
       expect(screen.getByTestId('task-action-resume')).toBeTruthy();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-resume'));
+        await fireEvent.press(screen.getByTestId('task-action-resume'));
       });
 
       expect(mockResumeTaskSession).not.toHaveBeenCalled();
@@ -229,15 +229,15 @@ describe('TaskActionsScreen', () => {
       expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
     });
 
-    it('is not offered for a paused session the desktop does not mark resumable', () => {
+    it('is not offered for a paused session the desktop does not mark resumable', async () => {
       seedPausedSession({ resumable: false });
-      renderTaskActions();
+      await renderTaskActions();
 
       expect(screen.queryByTestId('task-action-resume')).toBeNull();
     });
 
-    it('is not offered for a task with no paused session', () => {
-      renderTaskActions();
+    it('is not offered for a task with no paused session', async () => {
+      await renderTaskActions();
 
       expect(screen.queryByTestId('task-action-resume')).toBeNull();
     });
@@ -251,30 +251,30 @@ describe('TaskActionsScreen', () => {
       pr_merge_readiness: 'conflicting',
     } satisfies Partial<BoardTaskWire>;
 
-    it('is absent when the task has no linked PR', () => {
-      renderTaskActions();
+    it('is absent when the task has no linked PR', async () => {
+      await renderTaskActions();
       expect(screen.queryByTestId('task-action-view-pr')).toBeNull();
     });
 
-    it('opens the PR through the OS handler, so an installed GitHub app gets the handoff', () => {
+    it('opens the PR through the OS handler, so an installed GitHub app gets the handoff', async () => {
       seedBoard({ withDoneColumn: true, task: linkedPr });
-      renderTaskActions();
+      await renderTaskActions();
 
-      fireEvent.press(screen.getByTestId('task-action-view-pr'));
+      await fireEvent.press(screen.getByTestId('task-action-view-pr'));
 
       // Assert the argument, not merely that it fired: a row wired to the
       // wrong task's URL would still "work" under a bare toHaveBeenCalled.
       expect(mockOpenURL).toHaveBeenCalledWith('https://github.com/Kangentic/kangentic-mobile/pull/42');
     });
 
-    it('captions itself with the PR number and the same verdict word the card chip uses', () => {
+    it('captions itself with the PR number and the same verdict word the card chip uses', async () => {
       seedBoard({ withDoneColumn: true, task: linkedPr });
-      renderTaskActions();
+      await renderTaskActions();
 
       expect(screen.getByText('#42 - conflicts')).toBeTruthy();
     });
 
-    it('captions an open PR whose wire omits the readiness field entirely as plain open', () => {
+    it('captions an open PR whose wire omits the readiness field entirely as plain open', async () => {
       // `pr_merge_readiness` became OPTIONAL in protocol 0.13.1, so a desktop
       // may leave the key off rather than send null. `prStateSummary`'s only
       // production caller is this screen's caption, reading the field
@@ -297,7 +297,7 @@ describe('TaskActionsScreen', () => {
       expect('pr_merge_readiness' in task).toBe(false);
 
       seedBoard({ withDoneColumn: true, taskOverride: task });
-      renderTaskActions();
+      await renderTaskActions();
 
       // Verified failing: resolving the absent-readiness arm of
       // `presentationForReadiness` to the `ready` entry instead of `undefined`
@@ -307,31 +307,31 @@ describe('TaskActionsScreen', () => {
       expect(screen.getByText('#42 - open')).toBeTruthy();
     });
 
-    it('captions a merged PR without leaking its stale verdict', () => {
+    it('captions a merged PR without leaking its stale verdict', async () => {
       seedBoard({
         withDoneColumn: true,
         task: { ...linkedPr, pr_state: 'merged', pr_merge_readiness: 'ready' },
       });
-      renderTaskActions();
+      await renderTaskActions();
 
       expect(screen.getByText('#42 - merged')).toBeTruthy();
     });
 
-    it('drops the number rather than captioning "#null" when a PR was linked before number tracking', () => {
+    it('drops the number rather than captioning "#null" when a PR was linked before number tracking', async () => {
       seedBoard({ withDoneColumn: true, task: { ...linkedPr, pr_number: null } });
-      renderTaskActions();
+      await renderTaskActions();
 
       expect(screen.getByText('conflicts')).toBeTruthy();
     });
 
-    it('accepts an uppercase scheme, which is case-insensitive, without lowercasing the path', () => {
+    it('accepts an uppercase scheme, which is case-insensitive, without lowercasing the path', async () => {
       seedBoard({
         withDoneColumn: true,
         task: { ...linkedPr, pr_url: 'HTTPS://github.com/Kangentic/Kangentic-Mobile/pull/42' },
       });
-      renderTaskActions();
+      await renderTaskActions();
 
-      fireEvent.press(screen.getByTestId('task-action-view-pr'));
+      await fireEvent.press(screen.getByTestId('task-action-view-pr'));
 
       expect(mockOpenURL).toHaveBeenCalledWith('HTTPS://github.com/Kangentic/Kangentic-Mobile/pull/42');
     });
@@ -342,10 +342,10 @@ describe('TaskActionsScreen', () => {
       // archive-failure test below for the same handler shape.
       seedBoard({ withDoneColumn: true, task: linkedPr });
       mockOpenURL.mockRejectedValueOnce(new Error('No app can handle this link'));
-      renderTaskActions();
+      await renderTaskActions();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-view-pr'));
+        await fireEvent.press(screen.getByTestId('task-action-view-pr'));
       });
 
       expect(screen.getByText('No app can handle this link')).toBeTruthy();
@@ -358,17 +358,17 @@ describe('TaskActionsScreen', () => {
       ['not a url at all'],
       ['https://'],
       [' https://github.com/x/y/pull/1'],
-    ])('refuses to render a row for %s rather than handing it to the opener', (prUrl) => {
+    ])('refuses to render a row for %s rather than handing it to the opener', async (prUrl) => {
       seedBoard({ withDoneColumn: true, task: { ...linkedPr, pr_url: prUrl } });
-      renderTaskActions();
+      await renderTaskActions();
 
       expect(screen.queryByTestId('task-action-view-pr')).toBeNull();
       expect(mockOpenURL).not.toHaveBeenCalled();
     });
   });
 
-  it('titles itself with the task and offers the full lifecycle', () => {
-    renderTaskActions();
+  it('titles itself with the task and offers the full lifecycle', async () => {
+    await renderTaskActions();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
     expect(screen.getByTestId('task-action-move')).toBeTruthy();
     expect(screen.getByTestId('task-action-edit')).toBeTruthy();
@@ -380,16 +380,16 @@ describe('TaskActionsScreen', () => {
    * REPLACE, not push: dismissing the sheet these open should return to the
    * board, not to a menu the user has already finished with.
    */
-  it('replaces itself with the move and edit sheets rather than stacking on them', () => {
-    renderTaskActions();
+  it('replaces itself with the move and edit sheets rather than stacking on them', async () => {
+    await renderTaskActions();
 
-    fireEvent.press(screen.getByTestId('task-action-move'));
+    await fireEvent.press(screen.getByTestId('task-action-move'));
     expect(mockReplace).toHaveBeenCalledWith({
       pathname: '/move-task',
       params: { taskId: 'task-1', projectId: 'project-1' },
     });
 
-    fireEvent.press(screen.getByTestId('task-action-edit'));
+    await fireEvent.press(screen.getByTestId('task-action-edit'));
     expect(mockReplace).toHaveBeenCalledWith({
       pathname: '/edit-task',
       params: { taskId: 'task-1', projectId: 'project-1' },
@@ -397,9 +397,9 @@ describe('TaskActionsScreen', () => {
   });
 
   it('archives and dismisses', async () => {
-    renderTaskActions();
+    await renderTaskActions();
     await act(async () => {
-      fireEvent.press(screen.getByTestId('task-action-archive'));
+      await fireEvent.press(screen.getByTestId('task-action-archive'));
     });
     expect(mockArchiveTask).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
     expect(mockBack).toHaveBeenCalled();
@@ -418,14 +418,14 @@ describe('TaskActionsScreen', () => {
         resolveArchive = resolve;
       }),
     );
-    const { unmount } = renderTaskActions();
+    const { unmount } = await renderTaskActions();
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('task-action-archive'));
+      await fireEvent.press(screen.getByTestId('task-action-archive'));
     });
     expect(mockArchiveTask).toHaveBeenCalledTimes(1);
 
-    unmount();
+    await unmount();
     await act(async () => {
       resolveArchive();
     });
@@ -440,15 +440,15 @@ describe('TaskActionsScreen', () => {
         resolveDelete = resolve;
       }),
     );
-    const { unmount } = renderTaskActions();
+    const { unmount } = await renderTaskActions();
 
-    fireEvent.press(screen.getByTestId('task-action-delete'));
+    await fireEvent.press(screen.getByTestId('task-action-delete'));
     await act(async () => {
-      fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+      await fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
     });
     expect(mockDeleteTaskFromBoard).toHaveBeenCalledTimes(1);
 
-    unmount();
+    await unmount();
     await act(async () => {
       resolveDelete();
     });
@@ -457,23 +457,23 @@ describe('TaskActionsScreen', () => {
   });
 
   /** Archive is a move into the done column, so a board without one cannot offer it. */
-  it('disables archive on a board with no done column, and says why', () => {
+  it('disables archive on a board with no done column, and says why', async () => {
     seedBoard({ withDoneColumn: false });
-    renderTaskActions();
+    await renderTaskActions();
     expect(screen.getByTestId('task-action-archive').props.accessibilityState.disabled).toBe(true);
     expect(screen.getByText('No Done column on this board')).toBeTruthy();
   });
 
   /** Delete also kills the task's live desktop session, so one tap must never fire it. */
   it('requires a second tap to delete', async () => {
-    renderTaskActions();
+    await renderTaskActions();
 
-    fireEvent.press(screen.getByTestId('task-action-delete'));
+    await fireEvent.press(screen.getByTestId('task-action-delete'));
     expect(mockDeleteTaskFromBoard).not.toHaveBeenCalled();
     expect(screen.getByText('Removes the task and stops its session on your desktop')).toBeTruthy();
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+      await fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
     });
     expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
     expect(mockBack).toHaveBeenCalled();
@@ -494,20 +494,20 @@ describe('TaskActionsScreen', () => {
   it('still deletes on the second tap long after the first, with no confirmation deadline', async () => {
     jest.useFakeTimers();
     try {
-      renderTaskActions();
+      await renderTaskActions();
 
-      fireEvent.press(screen.getByTestId('task-action-delete'));
+      await fireEvent.press(screen.getByTestId('task-action-delete'));
       expect(screen.getByTestId('task-action-delete-confirm')).toBeTruthy();
 
       // Well past both the removed 10s window and any successor to it.
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(120_000);
       });
       expect(screen.getByTestId('task-action-delete-confirm')).toBeTruthy();
       expect(screen.queryByTestId('task-action-delete')).toBeNull();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+        await fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
       });
       expect(mockDeleteTaskFromBoard).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
     } finally {
@@ -522,11 +522,11 @@ describe('TaskActionsScreen', () => {
    */
   it('says why instead of doing nothing when the route params are missing', async () => {
     mockParams = {};
-    renderTaskActions();
+    await renderTaskActions();
 
-    fireEvent.press(screen.getByTestId('task-action-delete'));
+    await fireEvent.press(screen.getByTestId('task-action-delete'));
     await act(async () => {
-      fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+      await fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
     });
 
     expect(mockDeleteTaskFromBoard).not.toHaveBeenCalled();
@@ -536,9 +536,9 @@ describe('TaskActionsScreen', () => {
 
   it('keeps the sheet open with the reason when an action fails', async () => {
     mockArchiveTask.mockRejectedValueOnce(new Error('The desktop refused'));
-    renderTaskActions();
+    await renderTaskActions();
     await act(async () => {
-      fireEvent.press(screen.getByTestId('task-action-archive'));
+      await fireEvent.press(screen.getByTestId('task-action-archive'));
     });
     expect(screen.getByText('The desktop refused')).toBeTruthy();
     expect(mockBack).not.toHaveBeenCalled();

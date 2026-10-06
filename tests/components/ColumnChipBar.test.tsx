@@ -35,8 +35,8 @@ describe('ColumnChipBar', () => {
   const columns: BoardColumnWire[] = [buildColumn('lane-todo', 'To Do', 0), buildColumn('lane-doing', 'Doing', 1)];
   const taskCounts = [2, 0];
 
-  it('renders a named, counted chip per column and marks the active one', () => {
-    render(
+  it('renders a named, counted chip per column and marks the active one', async () => {
+    await render(
       <ThemeProvider>
         <ColumnChipBar columns={columns} taskCounts={taskCounts} activeIndex={0} onSelect={jest.fn()} />
       </ThemeProvider>,
@@ -48,15 +48,15 @@ describe('ColumnChipBar', () => {
     expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: false });
   });
 
-  it('calls onSelect with the tapped column index', () => {
+  it('calls onSelect with the tapped column index', async () => {
     const onSelect = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <ColumnChipBar columns={columns} taskCounts={taskCounts} activeIndex={0} onSelect={onSelect} />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
+    await fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
 
     expect(onSelect).toHaveBeenCalledWith(1);
   });
@@ -65,8 +65,8 @@ describe('ColumnChipBar', () => {
   // comment); an empty column's chip shows no count pill at all. If the
   // `> 0` guard regresses back to an unconditional badge, "0" renders next
   // to "Doing" and this fails.
-  it('hides the count badge for an empty column but shows it for a non-empty one', () => {
-    render(
+  it('hides the count badge for an empty column but shows it for a non-empty one', async () => {
+    await render(
       <ThemeProvider>
         <ColumnChipBar columns={columns} taskCounts={taskCounts} activeIndex={0} onSelect={jest.fn()} />
       </ThemeProvider>,

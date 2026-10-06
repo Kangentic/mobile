@@ -173,15 +173,15 @@ function seedTaskWithSession(sessionId: string | null): void {
   });
 }
 
-function postFromWebView(data: string): void {
-  act(() => {
+async function postFromWebView(data: string): Promise<void> {
+  await act(() => {
     webViewMock.__capturedProps.current?.onMessage?.({ nativeEvent: { data } });
   });
 }
 
 /** Fires the WebView's onLayout, as the native layout pass would. */
-function layoutWebView(width: number, height: number): void {
-  act(() => {
+async function layoutWebView(width: number, height: number): Promise<void> {
+  await act(() => {
     webViewMock.__capturedProps.current?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width, height } } });
   });
 }
@@ -230,18 +230,18 @@ describe('SessionScreen terminal pane across a session swap', () => {
 
   it('keeps the mounted terminal pane fed when the board swaps the task session', async () => {
     seedTaskWithSession('sess-a');
-    render(
+    await render(
       <ThemeProvider>
         <SessionScreen />
       </ThemeProvider>,
     );
     await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-    postFromWebView(JSON.stringify({ type: 'ready' }));
+    await postFromWebView(JSON.stringify({ type: 'ready' }));
 
     // Mount path: the pane attached to the ORIGINAL session's ring.
     expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-a', listeners: 1 })]);
 
-    act(() => {
+    await act(() => {
       seedScrollback('sess-a', 'ORIGINAL FRAME');
     });
     const postCountBeforeSwap = webViewMock.__postMessageMock.mock.calls.length;
@@ -249,7 +249,7 @@ describe('SessionScreen terminal pane across a session swap', () => {
     // The desktop respawned the task under a successor id: one board
     // snapshot, no intermediate null (the sessions projection + nav-param
     // fallback path, or a full-board race that skips the null snapshot).
-    act(() => {
+    await act(() => {
       seedTaskWithSession('sess-b');
     });
 
@@ -269,7 +269,7 @@ describe('SessionScreen terminal pane across a session swap', () => {
 
     // The consequence, not just the bookkeeping: the successor's seed must
     // reach the WebView. Nothing else repaints the pane after a swap.
-    act(() => {
+    await act(() => {
       seedScrollback('sess-b', 'SUCCESSOR FRAME');
     });
     expect(postsCarrying('SUCCESSOR FRAME')).toHaveLength(1);
@@ -277,25 +277,25 @@ describe('SessionScreen terminal pane across a session swap', () => {
 
   it('re-inits immediately when the successor ring is already seeded', async () => {
     seedTaskWithSession('sess-a');
-    render(
+    await render(
       <ThemeProvider>
         <SessionScreen />
       </ThemeProvider>,
     );
     await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-    postFromWebView(JSON.stringify({ type: 'ready' }));
+    await postFromWebView(JSON.stringify({ type: 'ready' }));
 
     // The successor's snapshot landed while the pane was still bound to the
     // dead session: its ring is retained and seeded BEFORE the screen sees
     // the new id. Waiting for a 'seed' event would hang forever here, so the
     // swap has to init from the ring it finds.
-    act(() => {
+    await act(() => {
       retainTerminal('sess-b');
       seedScrollback('sess-b', 'ALREADY HERE');
     });
     expect(postsCarrying('ALREADY HERE')).toHaveLength(0);
 
-    act(() => {
+    await act(() => {
       seedTaskWithSession('sess-b');
     });
 
@@ -316,36 +316,36 @@ describe('SessionScreen terminal pane across a session swap', () => {
     jest.useFakeTimers();
     try {
       seedTaskWithSession('sess-a');
-      render(
+      await render(
         <ThemeProvider>
           <SessionScreen />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      postFromWebView(JSON.stringify({ type: 'ready' }));
-      act(() => {
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
+      await act(() => {
         seedScrollback('sess-a', 'ORIGINAL FRAME');
       });
-      act(() => {
+      await act(() => {
         seedTaskWithSession('sess-b');
       });
       const postCountAfterSwap = webViewMock.__postMessageMock.mock.calls.length;
 
-      act(() => {
+      await act(() => {
         seedScrollback('sess-b', '');
       });
-      act(() => {
+      await act(() => {
         appendChunk('sess-b', '\x1b[?1049h\x1b[H\x1b[2J');
       });
       // Past the chunk batch timer (CHUNK_BATCH_INTERVAL_MS is 32ms): a chunk
       // merely queued would flush as a write here, into the OLD frame.
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(100);
       });
       // Nothing reached the WebView: no empty init, no write into the old frame.
       expect(webViewMock.__postMessageMock.mock.calls.length).toBe(postCountAfterSwap);
 
-      act(() => {
+      await act(() => {
         appendChunk('sess-b', 'hello');
       });
       const postsSinceSwap = decodedPosts().slice(postCountAfterSwap);
@@ -375,32 +375,32 @@ describe('SessionScreen terminal pane across a session swap', () => {
     jest.useFakeTimers();
     try {
       seedTaskWithSession('sess-a');
-      render(
+      await render(
         <ThemeProvider>
           <SessionScreen />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      postFromWebView(JSON.stringify({ type: 'ready' }));
-      act(() => {
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
+      await act(() => {
         seedScrollback('sess-a', 'ORIGINAL FRAME');
       });
-      act(() => {
+      await act(() => {
         seedTaskWithSession('sess-b');
       });
       const postCountAfterSwap = webViewMock.__postMessageMock.mock.calls.length;
 
-      act(() => {
+      await act(() => {
         appendChunk('sess-b', 'Claude Code v2 booting');
       });
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(100);
       });
       // Glyphs arrived, but the snapshot that will replace them has not:
       // nothing reached the WebView, so nothing will be torn down later.
       expect(webViewMock.__postMessageMock.mock.calls.length).toBe(postCountAfterSwap);
 
-      act(() => {
+      await act(() => {
         seedScrollback('sess-b', 'SUCCESSOR FRAME');
       });
       const postsSinceSwap = decodedPosts().slice(postCountAfterSwap);
@@ -429,13 +429,13 @@ describe('SessionScreen terminal pane across a session swap', () => {
    */
   it('re-inits on a clean-feed flip even with an empty ring, on the SAME session', async () => {
     seedTaskWithSession('sess-a');
-    render(
+    await render(
       <ThemeProvider>
         <SessionScreen />
       </ThemeProvider>,
     );
     await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-    postFromWebView(JSON.stringify({ type: 'ready' }));
+    await postFromWebView(JSON.stringify({ type: 'ready' }));
 
     // The precondition that makes this case distinct from the swap tests
     // above: nothing has ever seeded this session's ring.
@@ -446,7 +446,7 @@ describe('SessionScreen terminal pane across a session swap', () => {
     // The window lands empty: selectChatLens flips to 'reading-view', which
     // is what SessionScreen forwards to TerminalTab as cleanFeedEnabled - no
     // session change at all.
-    act(() => {
+    await act(() => {
       useTranscriptStore.getState().retainSession('sess-a');
       useTranscriptStore.getState().applyWindow('sess-a', { revision: 1, totalEntries: 0, startIndex: 0, entries: [] });
     });
@@ -478,23 +478,23 @@ describe('SessionScreen terminal pane across a session swap', () => {
         </ThemeProvider>
       );
     }
-    const result = render(<Screens showDuplicate={false} />);
+    const result = await render(<Screens showDuplicate={false} />);
     await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-    postFromWebView(JSON.stringify({ type: 'ready' }));
+    await postFromWebView(JSON.stringify({ type: 'ready' }));
 
-    result.rerender(<Screens showDuplicate />);
+    await result.rerender(<Screens showDuplicate />);
     await waitFor(() => expect(screen.getAllByTestId('terminal-webview')).toHaveLength(2));
     // The duplicate's page reports ready too (the WebView mock captures the
     // latest-mounted view's props).
-    postFromWebView(JSON.stringify({ type: 'ready' }));
+    await postFromWebView(JSON.stringify({ type: 'ready' }));
     expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-a', retainCount: 2 })]);
 
-    result.rerender(<Screens showDuplicate={false} />);
+    await result.rerender(<Screens showDuplicate={false} />);
 
     expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-a', retainCount: 1, listeners: 1 })]);
     // The consequence, not just the bookkeeping: a fresh frame for the
     // session still reaches the survivor's WebView.
-    act(() => {
+    await act(() => {
       seedScrollback('sess-a', 'SURVIVOR FRAME');
     });
     expect(postsCarrying('SURVIVOR FRAME')).toHaveLength(1);
@@ -521,21 +521,21 @@ describe('SessionScreen terminal pane across a session swap', () => {
     jest.useFakeTimers();
     try {
       seedTaskWithSession('sess-a');
-      render(
+      await render(
         <ThemeProvider>
           <SessionScreen />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 635);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await layoutWebView(411, 635);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
 
       // The session ends with no successor, and the quiet window runs out:
       // the veil enters its waiting phase (the empty layer is its marker).
-      act(() => {
+      await act(() => {
         seedTaskWithSession(null);
       });
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(SESSION_SWAP_QUIET_MS + 1);
       });
       expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
@@ -543,23 +543,23 @@ describe('SessionScreen terminal pane across a session swap', () => {
       // The taller, keyless pane: not a reference layout, so nothing is told
       // to the page.
       webViewMock.__postMessageMock.mockClear();
-      layoutWebView(411, 690);
+      await layoutWebView(411, 690);
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
 
       // A successor binds: the footer is whole again, so the layouts that
       // follow are the real ones. 650 differs from the 635 the page has,
       // which is what makes an adopted layout observable as a post.
-      act(() => {
+      await act(() => {
         seedTaskWithSession('sess-b');
       });
-      layoutWebView(411, 650);
+      await layoutWebView(411, 650);
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
         { type: 'fit-height', fitHeightPx: 650 },
       ]);
 
       // And the consumer of the height, the successor's next init, carries
       // the settled 650, never the waiting phase's 690.
-      act(() => {
+      await act(() => {
         seedScrollback('sess-b', 'SUCCESSOR FRAME');
       });
       const successorInit = postsCarrying('SUCCESSOR FRAME').find((message) => message?.type === 'init');

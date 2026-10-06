@@ -155,27 +155,27 @@ afterEach(() => {
 });
 
 describe('AgentStatusIcon', () => {
-  it('falls back to a per-kind testID so a caller need not supply one', () => {
-    renderIcon({ kind: 'working' });
+  it('falls back to a per-kind testID so a caller need not supply one', async () => {
+    await renderIcon({ kind: 'working' });
     expect(screen.getByTestId('agent-status-working')).toBeTruthy();
 
-    screen.unmount();
-    renderIcon({ kind: 'idle-unread' });
+    await screen.unmount();
+    await renderIcon({ kind: 'idle-unread' });
     expect(screen.getByTestId('agent-status-idle-unread')).toBeTruthy();
 
-    screen.unmount();
-    renderIcon({ kind: 'idle' });
+    await screen.unmount();
+    await renderIcon({ kind: 'idle' });
     expect(screen.getByTestId('agent-status-idle')).toBeTruthy();
   });
 
-  it('prefers an explicit testID, which is what the board cards pass', () => {
-    renderIcon({ kind: 'working', testID: 'task-1-status' });
+  it('prefers an explicit testID, which is what the board cards pass', async () => {
+    await renderIcon({ kind: 'working', testID: 'task-1-status' });
     expect(screen.getByTestId('task-1-status')).toBeTruthy();
     expect(screen.queryByTestId('agent-status-working')).toBeNull();
   });
 
-  it('draws on the branding grid and tints through currentColor', () => {
-    renderIcon({ kind: 'working' });
+  it('draws on the branding grid and tints through currentColor', async () => {
+    await renderIcon({ kind: 'working' });
     const { props } = screen.getByTestId('agent-status-working');
 
     expect(props.viewBox).toBe(ACTIVITY_VIEW_BOX);
@@ -193,17 +193,17 @@ describe('AgentStatusIcon', () => {
     expect(props.color).toBe(darkTerminalTheme.colors.statusWorking);
   });
 
-  it('tints the idle envelope with the true-yellow warning token, not brand amber', () => {
+  it('tints the idle envelope with the true-yellow warning token, not brand amber', async () => {
     // activity.json labels agent-idle's tone "attention", whose token here would
     // be brand amber - but tokens.ts forbids pointing a warning role at amber,
     // and the package publishes #d9b83f as the mobile value. Advisory, not law.
-    renderIcon({ kind: 'idle' });
+    await renderIcon({ kind: 'idle' });
     expect(screen.getByTestId('agent-status-idle').props.color).toBe(darkTerminalTheme.colors.warning);
     expect(screen.getByTestId('agent-status-idle').props.color).not.toBe(darkTerminalTheme.brand.amber);
   });
 
-  it('honours the caller size, which the project picker sets to 15', () => {
-    renderIcon({ kind: 'working', size: 15 });
+  it('honours the caller size, which the project picker sets to 15', async () => {
+    await renderIcon({ kind: 'working', size: 15 });
     const { props } = screen.getByTestId('agent-status-working');
     expect(props.width).toBe(15);
     expect(props.height).toBe(15);
@@ -211,8 +211,8 @@ describe('AgentStatusIcon', () => {
 });
 
 describe('the working ring', () => {
-  it('renders one dashed circle carrying the generated user-unit dash', () => {
-    renderIcon({ kind: 'working' });
+  it('renders one dashed circle carrying the generated user-unit dash', async () => {
+    await renderIcon({ kind: 'working' });
     const circle = screen.getByTestId('svg-circle');
 
     expect(circle.props.r).toBe(workingRing.r);
@@ -220,7 +220,7 @@ describe('the working ring', () => {
     expect(circle.props.strokeDasharray).toEqual([...workingDash]);
   });
 
-  it('turns a full revolution at the manifest duration', () => {
+  it('turns a full revolution at the manifest duration', async () => {
     // The drawn output cannot distinguish a running spin from a static arc, so
     // this asserts the timing call itself. The duration comes from the
     // generated data: a hardcoded 1400 in the component would fail here.
@@ -234,7 +234,7 @@ describe('the working ring', () => {
     // a real device) would leave every other assertion in this file green. This
     // spy is the only thing that would catch it.
     const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
-    renderIcon({ kind: 'working' });
+    await renderIcon({ kind: 'working' });
 
     expect(withTimingSpy).toHaveBeenCalledWith(
       // One TURN, not one degree count: the shared value counts turns, and the
@@ -267,8 +267,8 @@ describe('the working ring', () => {
    * rebind rather than leaving a stale rotation behind and tilting the envelope
    * (e4e5524). Nothing inside the SVG is animated any more.
    */
-  it('turns the wrapping view, leaving every SVG node unanimated', () => {
-    renderIcon({ kind: 'working' });
+  it('turns the wrapping view, leaving every SVG node unanimated', async () => {
+    await renderIcon({ kind: 'working' });
 
     // The SVG itself and everything in it is static: no animatedProps anywhere.
     expect(screen.getByTestId('agent-status-working').props.animatedProps).toBeUndefined();
@@ -277,15 +277,15 @@ describe('the working ring', () => {
     expect(screen.queryByTestId('svg-g')).toBeNull();
   });
 
-  it('keeps the dash on the circle itself now that no group wraps it', () => {
-    renderIcon({ kind: 'working' });
+  it('keeps the dash on the circle itself now that no group wraps it', async () => {
+    await renderIcon({ kind: 'working' });
     expect(screen.getByTestId('svg-circle').props.strokeDasharray).toEqual([...workingDash]);
   });
 });
 
 describe('the idle envelope', () => {
-  it('draws the corrected 18 x 16 body with its flap, and no ring', () => {
-    renderIcon({ kind: 'idle' });
+  it('draws the corrected 18 x 16 body with its flap, and no ring', async () => {
+    await renderIcon({ kind: 'idle' });
 
     const rect = screen.getByTestId('svg-rect');
     expect(rect.props.x).toBe(idleEnvelope.x);
@@ -299,15 +299,15 @@ describe('the idle envelope', () => {
     expect(screen.queryByTestId('svg-circle')).toBeNull();
   });
 
-  it('renders identically for idle-unread, which is a semantic kind only', () => {
-    renderIcon({ kind: 'idle-unread' });
+  it('renders identically for idle-unread, which is a semantic kind only', async () => {
+    await renderIcon({ kind: 'idle-unread' });
     expect(screen.getByTestId('svg-rect').props.height).toBe(idleEnvelopeHeight);
     expect(screen.getByTestId('agent-status-idle-unread').props.color).toBe(darkTerminalTheme.colors.warning);
   });
 
-  it('never animates: a static mark has no march to run', () => {
+  it('never animates: a static mark has no march to run', async () => {
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-    renderIcon({ kind: 'idle' });
+    await renderIcon({ kind: 'idle' });
 
     expect(idleMark.march).toBeUndefined();
     expect(withTimingSpy).not.toHaveBeenCalled();
@@ -315,11 +315,11 @@ describe('the idle envelope', () => {
 });
 
 describe('reduced motion', () => {
-  it('rests the ring holding its arc instead of closing it into a solid circle', () => {
+  it('rests the ring holding its arc instead of closing it into a solid circle', async () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
 
-    renderIcon({ kind: 'working' });
+    await renderIcon({ kind: 'working' });
     const circle = screen.getByTestId('svg-circle');
 
     // 'keep-dash': the dash SURVIVES, so the mark reads as a paused spinner.
@@ -333,9 +333,9 @@ describe('reduced motion', () => {
     expect(withTimingSpy).not.toHaveBeenCalled();
   });
 
-  it('leaves the static envelope unchanged', () => {
+  it('leaves the static envelope unchanged', async () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
-    renderIcon({ kind: 'idle' });
+    await renderIcon({ kind: 'idle' });
 
     expect(screen.getByTestId('svg-rect').props.height).toBe(idleEnvelopeHeight);
     expect(screen.getByTestId('svg-rect').props.animatedProps).toBeUndefined();
@@ -353,8 +353,8 @@ describe('list recycling', () => {
    * So the assertion is about survival, not about pixels: after rebinding, no
    * rotating group may exist and no node in the envelope may carry a matrix.
    */
-  it('leaves no rotating node, matrix or dash behind when a row rebinds working to idle', () => {
-    const { rerender } = renderIcon({ kind: 'working', testID: 'row-status' });
+  it('leaves no rotating node, matrix or dash behind when a row rebinds working to idle', async () => {
+    const { rerender } = await renderIcon({ kind: 'working', testID: 'row-status' });
     // The rotation now lives on a wrapping view's transform rather than on an
     // SVG group's matrix, so the survival check reads the whole tree for a
     // transform instead of naming one node. Written this way deliberately: the
@@ -363,7 +363,7 @@ describe('list recycling', () => {
     // mechanism change slip past this test.
     expect(rotatingNodeCount()).toBeGreaterThan(0);
 
-    rerender(
+    await rerender(
       <ThemeProvider>
         <AgentStatusIcon kind="idle" testID="row-status" />
       </ThemeProvider>,
@@ -392,11 +392,11 @@ describe('list recycling', () => {
     expect(root.props.color).toBe(darkTerminalTheme.colors.warning);
   });
 
-  it('restarts the spin when a row rebinds idle back to working', () => {
-    const { rerender } = renderIcon({ kind: 'idle', testID: 'row-status' });
+  it('restarts the spin when a row rebinds idle back to working', async () => {
+    const { rerender } = await renderIcon({ kind: 'idle', testID: 'row-status' });
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
 
-    rerender(
+    await rerender(
       <ThemeProvider>
         <AgentStatusIcon kind="working" testID="row-status" />
       </ThemeProvider>,
@@ -429,15 +429,15 @@ describe('the screen motion gate', () => {
     );
   }
 
-  it('does not start the spin while the screen is blurred', () => {
+  it('does not start the spin while the screen is blurred', async () => {
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-    renderGated(false, { kind: 'working' });
+    await renderGated(false, { kind: 'working' });
     expect(withTimingSpy).not.toHaveBeenCalled();
   });
 
-  it('still spins when the gate is active, so the gate cannot silently kill the ring', () => {
+  it('still spins when the gate is active, so the gate cannot silently kill the ring', async () => {
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-    renderGated(true, { kind: 'working' });
+    await renderGated(true, { kind: 'working' });
     expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: workingSpin.durationMs }));
   });
 
@@ -453,19 +453,19 @@ describe('the screen motion gate', () => {
    * mount-level form is chosen on correctness grounds; it is not a measured
    * win over cancelling the driver.
    */
-  it('drops the rotating wrapper entirely while blurred, not just its driver', () => {
-    renderGated(false, { kind: 'working' });
+  it('drops the rotating wrapper entirely while blurred, not just its driver', async () => {
+    await renderGated(false, { kind: 'working' });
     expect(rotatingNodeCount()).toBe(0);
   });
 
-  it('brings the wrapper back on focus', () => {
-    renderGated(true, { kind: 'working' });
+  it('brings the wrapper back on focus', async () => {
+    await renderGated(true, { kind: 'working' });
     expect(rotatingNodeCount()).toBe(1);
   });
 
-  it('leaves the static envelope alone, which has no loop to gate', () => {
+  it('leaves the static envelope alone, which has no loop to gate', async () => {
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-    renderGated(false, { kind: 'idle' });
+    await renderGated(false, { kind: 'idle' });
     expect(screen.getByTestId('agent-status-idle')).toBeTruthy();
     expect(withTimingSpy).not.toHaveBeenCalled();
   });
@@ -484,27 +484,27 @@ describe('the screen motion gate', () => {
  * asks for a mechanism assertion here.
  */
 describe('registered mappers (the idle-CPU lever)', () => {
-  it('registers no animated mapper for an idle envelope', () => {
+  it('registers no animated mapper for an idle envelope', async () => {
     const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
     const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
-    renderIcon({ kind: 'idle' });
+    await renderIcon({ kind: 'idle' });
     expect(animatedStyleSpy).not.toHaveBeenCalled();
     expect(animatedPropsSpy).not.toHaveBeenCalled();
   });
 
-  it('registers no animated mapper under reduced motion', () => {
+  it('registers no animated mapper under reduced motion', async () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
     const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
     const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
-    renderIcon({ kind: 'working' });
+    await renderIcon({ kind: 'working' });
     expect(animatedStyleSpy).not.toHaveBeenCalled();
     expect(animatedPropsSpy).not.toHaveBeenCalled();
   });
 
-  it('registers no animated mapper while the screen is blurred, not just no driver', () => {
+  it('registers no animated mapper while the screen is blurred, not just no driver', async () => {
     const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
     const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
-    render(
+    await render(
       <ThemeProvider>
         <ScreenMotionOverride active={false}>
           <AgentStatusIcon kind="working" />
@@ -515,10 +515,10 @@ describe('registered mappers (the idle-CPU lever)', () => {
     expect(animatedPropsSpy).not.toHaveBeenCalled();
   });
 
-  it('registers exactly one animated style (the spin transform) for a working ring, and no animated props', () => {
+  it('registers exactly one animated style (the spin transform) for a working ring, and no animated props', async () => {
     const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
     const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
-    renderIcon({ kind: 'working' });
+    await renderIcon({ kind: 'working' });
     // The turn is a view transform, so exactly one useAnimatedStyle and - since
     // no mark marches today - zero useAnimatedProps. If a future change hoists
     // the march hook back onto every spinning row, this fails.
@@ -534,8 +534,8 @@ describe('the legibility floor', () => {
    * No caller is below it today (they render at 15 and 16); this is the contract
    * being honoured, not a bug being fixed.
    */
-  it('draws a filled dot instead of the mark below the floor', () => {
-    renderIcon({ kind: 'idle', size: idleMark.minPx - 1 });
+  it('draws a filled dot instead of the mark below the floor', async () => {
+    await renderIcon({ kind: 'idle', size: idleMark.minPx - 1 });
 
     expect(screen.queryByTestId('svg-rect')).toBeNull();
     expect(screen.queryByTestId('svg-path')).toBeNull();
@@ -544,15 +544,15 @@ describe('the legibility floor', () => {
     expect(dot.props.strokeDasharray).toBeUndefined();
   });
 
-  it('draws the full mark at the floor exactly', () => {
-    renderIcon({ kind: 'idle', size: idleMark.minPx });
+  it('draws the full mark at the floor exactly', async () => {
+    await renderIcon({ kind: 'idle', size: idleMark.minPx });
     expect(screen.getByTestId('svg-rect')).toBeTruthy();
     expect(screen.getByTestId('svg-path')).toBeTruthy();
   });
 
-  it('does not spin the below-floor dot', () => {
+  it('does not spin the below-floor dot', async () => {
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-    renderIcon({ kind: 'working', size: workingMark.minPx - 1 });
+    await renderIcon({ kind: 'working', size: workingMark.minPx - 1 });
 
     const dot = screen.getByTestId('svg-circle');
     expect(dot.props.fill).toBe('currentColor');
