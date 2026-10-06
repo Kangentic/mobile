@@ -76,7 +76,18 @@ Testing section for the three measurement commands and which question each one a
    Mode meanings: `mock` = in-app fake desktop, no peers needed; `live` = the user's real
    running Kangentic desktop through a local relay; `pair` = reset to unpaired and exercise the
    pairing ceremony. For a plain UI preview with no mode, follow steps 1-6 as written.
-1. **Check for an attached device.** Run `adb devices`.
+1. **Check for an attached device.** First start the adb server from your home folder, never
+   the worktree (PowerShell):
+   `(Start-Process -FilePath adb -ArgumentList 'start-server' -WorkingDirectory $HOME -NoNewWindow -PassThru).WaitForExit()`.
+   Never `-Wait` instead: it waits for the process's descendants too, and the server `adb
+   start-server` forks never exits, so the call hangs exactly when it starts one (measured on a
+   detached node child standing in for the daemon: `-Wait` held for the child's whole life,
+   `.WaitForExit()` returned in 0.08s).
+   A server already running is reused. The server keeps the working directory of whichever adb
+   call started it, and Kangentic's Done reap stops a tagged process working inside the task's
+   worktree, so a server your first `adb devices` started here would be reaped with this task,
+   out from under every other task using it (see "The emulator and the adb server are
+   machine-wide" in `docs/developer-guide.md`). Then run `adb devices`.
    - If a device is already listed, skip to step 3. A **physical phone** counts and is often the
      better target (real GPU, real touch, real relay latency) - see "Physical devices" in the
      Notes for the three things that differ from an emulator.
@@ -132,9 +143,13 @@ Testing section for the three measurement commands and which question each one a
        requires a deliberate system-image/API-level choice.
      - If the user passed `--avd <name>`, use that one (error if it isn't in the list).
      - Otherwise use the first AVD listed.
-   - Launch it in the background: `emulator -avd <name> -no-snapshot-load -gpu host`
-     (use `run_in_background: true` - this process stays alive for the life of the emulator
-     window). The `-gpu host` flag is deliberate: it pins the accelerated host GPU renderer
+   - Launch it detached, from your home folder (PowerShell):
+     `Start-Process -FilePath emulator -ArgumentList '-avd','<name>','-no-snapshot-load','-gpu','host' -WorkingDirectory $HOME`.
+     It returns at once and the emulator outlives the call. Never launch it from the worktree
+     (a plain `emulator ...` in a background shell): the emulator, and the qemu child it hands
+     off to, would work inside the task's folder, so this task's Done reap would stop it and,
+     on Windows, a running one pins the worktree on disk. The `-gpu host` flag is deliberate: it
+     pins the accelerated host GPU renderer
      (the same flag `scripts/dev.mjs` passes) instead of leaving it to the AVD config or
      `auto`, which can leave the emulator in software rendering that degrades over long
      sessions. Verified against Android emulator 36.6.11.0 - that version rejects the older
@@ -144,7 +159,7 @@ Testing section for the three measurement commands and which question each one a
      wedging on this Windows host (stale frames while the device keeps running; clicks land
      invisibly) - if a running emulator shows a frozen frame, diagnose with a device-side
      `node scripts/mobileInspect.mjs screenshot` (device fine + window stale = the wedge), then
-     `adb -s emulator-5554 emu kill` and relaunch with this flag.
+     `adb -s emulator-5554 emu kill` and relaunch with the same `Start-Process` line.
    - Wait for it to come up: `adb wait-for-device`.
    - Wait for it to finish booting (not just the ADB bridge):
      `adb wait-for-device shell "while [[ -z \$(getprop sys.boot_completed) ]]; do sleep 1; done; echo booted"`.
@@ -366,8 +381,9 @@ and consumes an `ios.buildNumber` if submitted.
 
 ## Allowed Tools
 
-Use `Bash` (for `adb`, `emulator`, and `npx expo`) and `PowerShell` (only for
-`Get-NetTCPConnection`/`Get-Process`/`Stop-Process`, and only per step 3's safety check - never
-kill a process you have not first identified as a stray Metro/Node instance). Run from the
-current working directory, do not chain Bash commands - each step above may take several
-separate tool calls.
+Use `Bash` (for `adb`, `emulator -list-avds`, and `npx expo`) and `PowerShell` for two things
+only: the `Start-Process` launches in steps 1 and 2, which start the adb server and the emulator
+from your home folder; and `Get-NetTCPConnection`/`Get-Process`/`Stop-Process`, only per step 3's
+safety check - never kill a process you have not first identified as a stray Metro/Node
+instance. Run from the current working directory, do not chain Bash commands - each step above
+may take several separate tool calls.

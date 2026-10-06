@@ -34,6 +34,16 @@
  *                                    the rig booted, by serial and verified
  *                                    AVD name; one it merely adopted is never
  *                                    recorded and never touched.
+ *   node scripts/dev.mjs adb      Wedged adb server recovery: restart the
+ *                                    server, restore every device's reverses,
+ *                                    relaunch the app. The restart kills EVERY
+ *                                    adb process on the machine, so it refuses
+ *                                    while any other process is connected to
+ *                                    the server (another task's logcat,
+ *                                    install or Maestro run would fail with
+ *                                    "daemon not running"). --force restarts
+ *                                    anyway; --dry-run lists who is connected
+ *                                    and kills nothing.
  *
  * Flags: --avd <name>, --serial <adb serial>, --relay-repo <path>,
  *        --relay <wss://host> (use a HOSTED relay instead of the local one:
@@ -95,16 +105,28 @@
  * or agent session launched it - the desktop's bridge and the phone both
  * depend on it, and neither should die with a dev-loop restart. The
  * emulator stays up too.
+ *
+ * The emulator and the adb server are machine-wide, so both start from the
+ * HOME folder, never this checkout. Kangentic's Done reap stops every process
+ * that carries the task's tag and works inside the task's project or
+ * worktree, and both would otherwise qualify: the emulator inherits the rig's
+ * working directory, and the adb server keeps the working directory of
+ * whichever adb client happened to start it (kangentic #766). That is why
+ * run() defaults every adb call to the home folder, not just the first one:
+ * the reverse watchdog's `adb devices` restarts a server someone else killed.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
+  adbServerClientPids,
+  adbServerPort,
+  decideAdbServerRestart,
   decideEmulatorAction,
   decideRecordAction,
   emulatorRecordFileName,
@@ -247,6 +269,8 @@ function parseRigArgs(argv) {
       // stop mode only: also shut down emulators the rig booted.
       emulator: { type: 'boolean', default: false },
       all: { type: 'boolean', default: false },
+      // adb mode only: restart the server even with other clients connected.
+      force: { type: 'boolean', default: false },
       // mock mode only: build the bundle the store capture runs against.
       shots: { type: 'boolean', default: false },
       // stub mode only: drive the stub peer's synthetic fleet, for measuring
@@ -282,11 +306,19 @@ function resolveKangenticRepo(flags, state) {
 // ---------------------------------------------------------------------------
 // Small process helpers
 
-// All run() callers invoke real executables (adb, emulator, netstat,
-// tasklist, taskkill), so no shell is needed; npm/npx (.cmd shims on
-// Windows) go through spawnPrefixed, which uses a shell command string.
+// All run() callers invoke real executables (adb, emulator, maestro,
+// netstat, tasklist), so no shell is needed; npm/npx (.cmd shims on Windows)
+// go through spawnPrefixed, which uses a shell command string.
+//
+// They run from the HOME folder: any adb call can be the one that starts the
+// machine-wide adb server, which keeps its starter's working directory, and a
+// server working inside this checkout is stopped by the task's Done reap (see
+// the header). So every path handed to run() must be absolute: a
+// repo-relative one resolves against the home folder (Maestro is itself an
+// adb client, so its flow file is joined onto repoRoot rather than given a
+// cwd back inside the checkout).
 function run(command, args, options = {}) {
-  return spawnSync(command, args, { encoding: 'utf8', ...options });
+  return spawnSync(command, args, { encoding: 'utf8', cwd: homedir(), ...options });
 }
 
 function commandExists(command, args) {
@@ -735,6 +767,47 @@ function listAdbDevices() {
 }
 
 /**
+ * Start the adb server now, from the home folder (run()'s default), before
+ * anything the rig launches can be the client that starts it: Metro, Maestro
+ * and mobileInspect would start it from wherever they run. A server already
+ * running is reused as it is, working directory included. Best-effort: a
+ * missing adb is reported by the checks that follow, and a server that does
+ * not answer is the wedge `dev:adb` exists for.
+ */
+function startAdbServer() {
+  const started = run('adb', ['start-server'], { timeout: 20_000 });
+  if (started.error?.code === 'ETIMEDOUT') {
+    warn('the adb server did not answer `adb start-server` within 20s - a WEDGED server is what npm run dev:adb recovers');
+  }
+}
+
+/**
+ * Who is connected to the adb server right now, for adb mode's guard: an
+ * array of { pid, commandLine }, or null when it cannot be told (netstat
+ * failed, or off Windows, where `netstat -ano` has other columns). The command line is
+ * read only to SHOW the user what would break; it never selects a target.
+ */
+function listAdbServerClients() {
+  if (process.platform !== 'win32') return null;
+  // Bounded: a hung netstat would otherwise hang the guard itself.
+  const netstat = run('netstat', ['-ano'], { timeout: 10_000 });
+  if (netstat.status !== 0) return null;
+  return adbServerClientPids(netstat.stdout, { port: adbServerPort(process.env) }).map((pid) => ({
+    pid,
+    commandLine: processIdentity(pid)?.commandLine ?? '',
+  }));
+}
+
+function describeAdbServerClients(clients) {
+  return clients
+    .map(({ pid, commandLine }) => {
+      const shown = commandLine.length > 120 ? `${commandLine.slice(0, 117)}...` : commandLine;
+      return `  pid ${pid}: ${shown || '(exited, or its command line is unreadable)'}`;
+    })
+    .join('\n');
+}
+
+/**
  * Move a USB-attached physical device onto wireless adb.
  *
  * The adb server wedges under repeated large bulk transfers over USB: adb's
@@ -857,7 +930,11 @@ async function bootEmulator(avdName, { headless = false, readOnly = false } = {}
   const emulatorArgs = ['-avd', avdName, '-no-snapshot-load', '-gpu', 'host'];
   if (headless) emulatorArgs.push('-no-window');
   if (readOnly) emulatorArgs.push('-read-only');
+  // From the home folder: the emulator (and the qemu child it hands off to)
+  // outlives this rig by design, and one working inside this checkout is
+  // stopped by the task's Done reap and, on Windows, pins the worktree.
   const emulatorChild = spawn('emulator', emulatorArgs, {
+    cwd: homedir(),
     detached: true,
     stdio: 'ignore',
   });
@@ -1205,7 +1282,8 @@ async function runPairingBootstrap(serial) {
   }
   log('clearing app state and running the pairing bootstrap...');
   run('adb', ['-s', serial, 'shell', 'pm', 'clear', APP_PACKAGE]);
-  const result = run('maestro', ['--device', serial, 'test', '-e', `PAIRING_URI=${lastPairingUri}`, '.maestro/setup/pairing-bootstrap.yaml'], {
+  const bootstrapFlow = join(repoRoot, '.maestro', 'setup', 'pairing-bootstrap.yaml');
+  const result = run('maestro', ['--device', serial, 'test', '-e', `PAIRING_URI=${lastPairingUri}`, bootstrapFlow], {
     stdio: 'inherit',
   });
   if (result.status === 0) log('paired; the suite can run now');
@@ -1415,7 +1493,10 @@ async function doctor({ relayRepo, avdName, requestedSerial }) {
     add(
       missing.length === 0,
       `reverse tunnels on ${device.serial} (${REQUIRED_REVERSE_PORTS.join(', ')})`,
-      `missing ${missing.join(', ')} - run: npm run dev:adb (restores every device), or adb -s ${device.serial} reverse tcp:<port> tcp:<port>`,
+      // The exact commands, not dev:adb: a missing tunnel needs no server
+      // restart, and that restart kills every other task's adb command.
+      `missing ${missing.join(', ')} - run each: ${missing.map((port) => `adb -s ${device.serial} reverse tcp:${port} tcp:${port}`).join(', ')}. ` +
+        '(npm run dev:adb is for a WEDGED server only: it restarts the machine-wide adb server and breaks every other task\'s in-flight adb command.)',
     );
     process.env.ANDROID_SERIAL = device.serial;
     add(devClientInstalled(), `app (${APP_PACKAGE}) installed on ${device.serial}`, 'run npx expo run:android once, or install an e2e/preview APK');
@@ -1561,6 +1642,9 @@ async function main() {
     log(`relay: ${RELAY_URL}${relayIsRemote ? ' (hosted - nothing local started)' : ''}`);
   }
   const needsRelay = !relayIsRemote && (mode === 'live' || mode === 'pair' || mode === 'stub');
+  // Before ANY adb call in any mode. `adb` mode restarts the server itself,
+  // and only after its guard.
+  if (mode !== 'adb') startAdbServer();
 
   if (mode === 'stop') {
     // Back to a known-good machine in one command. Metro and the stub always
@@ -1590,7 +1674,7 @@ async function main() {
         log(`STILL RUNNING: emulator ${rigBooted.join(', ')} (booted by the rig) - stop it with: npm run dev:stop -- --emulator`);
       }
     }
-    log('relay left running (npm run dev:adb recovers a wedged adb server)');
+    log('relay left running (a WEDGED adb server: npm run dev:adb, which refuses while another task has adb connected)');
     process.exit(0);
   }
 
@@ -1607,9 +1691,33 @@ async function main() {
     // needs a relaunch because its retry loops can stall through the
     // outage. (Windows: adb.exe must be force-killed - kill-server hangs
     // against a wedged server.)
+    //
+    // That force-kill takes EVERY adb process on the machine, so it is
+    // guarded: another task's logcat, install or Maestro run connected to the
+    // server right now would fail with "daemon not running" (task #102 hit
+    // exactly that). The guard reads who is connected to REPORT and REFUSE;
+    // the kill target stays the named singleton, never a pid off the port.
+    const clients = listAdbServerClients();
+    const decision = decideAdbServerRestart(clients === null ? null : clients.map((client) => client.pid), { force: flags.force });
+    if (clients !== null && clients.length > 0) log(`connected to the adb server right now:\n${describeAdbServerClients(clients)}`);
+    if (flags['dry-run']) {
+      log(`--dry-run: ${decision.allowed ? 'would restart' : 'would refuse'} (${decision.reason}); nothing was killed`);
+      process.exit(0);
+    }
+    if (!decision.allowed) {
+      fail(
+        `refusing to restart the adb server: ${decision.reason}. The restart force-kills every adb process on this ` +
+          'machine, so each of them fails with "daemon not running". Wait for them to finish, or, if they are hung ' +
+          'on the very wedge this mode recovers, re-run with: npm run dev:adb -- --force',
+      );
+    }
+    // Reached with someone connected (or unknown) only under --force.
+    if (clients === null || clients.length > 0) warn(decision.reason);
     log('restarting the adb server (forwarding wedge recovery)...');
     spawnSync('taskkill', ['/IM', 'adb.exe', '/F'], { encoding: 'utf8' });
     await sleep(1000);
+    // From the home folder (run()'s default), so the fresh server is not
+    // stopped by this task's Done reap.
     const started = run('adb', ['start-server']);
     if (started.status !== 0) fail(`adb start-server failed: ${started.stderr?.trim() ?? ''}`);
     // USB devices take a moment to re-handshake with the fresh server.
