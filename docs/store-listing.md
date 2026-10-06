@@ -342,9 +342,20 @@ two entries, App Store Connect takes four, because Apple splits Diagnostics into
   service-provider wording when filling the form rather than trusting this note: answering
   **yes** would be a conservative overstatement, and answering **no** incorrectly is a policy
   violation, so this is the one entry worth reading the guidance for.
-- Declare **no** other type. In particular: no personal info, no approximate or precise location,
-  no photos, no audio, no contacts, no app-usage analytics, and no "Diagnostics" beyond the two
-  types above (performance tracing and session tracking are disabled). Note this is a statement
+- **Approximate location: an OPEN question, raised 2026-10-06.** Sentry attaches a city-level
+  location it derives server-side from each report's IP address, and the maintainer decided to
+  keep it (diagnosability; see `.claude/rules/crash-reporting-scope.md`), so
+  `docs/privacy-policy.md` now discloses it. The app itself reads no location and holds no
+  location permission. Whether that server-side lookup makes "Approximate location" a collected
+  type on Play (and "Coarse Location" on Apple, which would also have to be added to
+  `app.config.ts`'s `ios.privacyManifests` with `tests/unit/appConfigBrand.test.ts`, since Apple
+  cross-checks the two) has not been settled against either store's current guidance. Over-
+  declaring is allowed and under-declaring is the violation, so read both stores' definitions
+  before the next submission rather than relying on this note. The alternative is Sentry's
+  project setting that stops storing IP addresses, which removes the location at the source.
+- Declare **no** other type. In particular: no personal info, no precise location, no photos,
+  no audio, no contacts, no app-usage analytics, and no "Diagnostics" beyond the two types above
+  (performance tracing and session tracking are disabled). Note this is a statement
   about collected TYPES and does not contradict the Analytics PURPOSE above: the app ships no
   analytics product and gathers no usage telemetry, but Play models "why crash data is
   collected" with its Analytics purpose, which is the box the crash payload falls in.

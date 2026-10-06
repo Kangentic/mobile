@@ -1,6 +1,6 @@
 # Kangentic Privacy Policy
 
-Last updated: 2026-07-27
+Last updated: 2026-10-06
 
 Kangentic Mobile is a remote-control companion for agent sessions running in the desktop
 Kangentic app. This policy explains what the app accesses and why.
@@ -51,6 +51,10 @@ doing in the app:
   longer send a low-memory notice of this kind, and the app deliberately does not count the
   notice they do send when you switch away, so this never records how often you moved between
   apps
+- an approximate location, at the level of a city and country, which Sentry works out from the
+  IP address the report arrives from. The app never reads your location and has no location
+  permission; this is Sentry's own lookup when the report reaches it. It is kept because where a
+  failure happens can matter to fixing it, for example a network problem limited to one region
 
 It deliberately does **not** contain your session content. No screenshots, no screen recording,
 no on-screen text, no keystrokes, no console output, no network request details, no transcripts,
@@ -95,7 +99,8 @@ metadata. We would rather say so than imply otherwise.
   delivery timing. They receive only the encrypted payload and the generic placeholder text, never
   the decrypted content.
 - **Crash reporting** goes to Sentry, and only when the app actually fails. Sending a crash
-  report necessarily reveals your device's IP address to Sentry, as any network request does.
+  report necessarily reveals your device's IP address to Sentry, as any network request does,
+  and Sentry uses it to attach the approximate city-level location described above.
 
 ## Data storage
 
