@@ -26,8 +26,9 @@
  * recorded-grid seed reproduces the capture's screen, and the widened frame
  * matches that seed cell for cell inside the recorded width except where a
  * border moved out or a band or rule crossed the CLI's right padding, with
- * only fill past it. One deliberate departure from the desktop's serializer
- * is documented at looksBlank().
+ * only fill past it. Two deliberate departures from the desktop's serializer
+ * are documented where they are made: looksBlank(), and the bold/dim fix in
+ * diffStyle().
  *
  * PROVENANCE. Ported from the desktop repo (kangentic, AGPL-3.0, same owner as
  * this one): the serializer from scripts/lib/demo-frame-serializer.js, and the
@@ -58,12 +59,12 @@ const FRAME_SEQUENCE = /^\x1b\[[0-9;?]*[A-Za-z]/;
 const CURSOR_FORWARD = /^\x1b\[(\d*)C$/;
 const ERASE_CHARACTERS = /^\x1b\[(\d*)X$/;
 
-const HORIZONTAL_RULE_GLYPHS = '─━┄┅┈┉╌╍═╴╶╸╺╼╾▀▁▂▃▄▅▆▇█▔';
+export const HORIZONTAL_RULE_GLYPHS = '─━┄┅┈┉╌╍═╴╶╸╺╼╾▀▁▂▃▄▅▆▇█▔';
 /**
  * What a CLI draws down its right edge: vertical box sides, the right-hand
  * corners and tees of a box, and a scrollbar track.
  */
-const VERTICAL_EDGE_GLYPHS = '│┃┆┇┊┋╎╏║▐▕┐┓┘┛┤┫╗╝╢╣╮╯';
+export const VERTICAL_EDGE_GLYPHS = '│┃┆┇┊┋╎╏║▐▕┐┓┘┛┤┫╗╝╢╣╮╯';
 
 /**
  * How far short of the recorded edge a row may stop and still be one the CLI
@@ -110,7 +111,14 @@ function equalFlags(cell, other) {
   );
 }
 
-/** The SGR parameters that take the terminal from `previous` to `cell`, as the addon computes them. */
+/**
+ * The SGR parameters that take the terminal from `previous` to `cell`, as the
+ * addon computes them, with one fix the addon lacks: SGR 22 turns off bold AND
+ * dim together, so a step that turns one of them off writes a single 22 and
+ * then sets again whichever of the two the cell keeps. The addon writes the
+ * 22 alone (bold+dim to dim) or before the survivor's own code (dim to bold),
+ * and the survivor is lost on replay.
+ */
 export function diffStyle(cell, previous) {
   const parameters = [];
   const foregroundChanged = !equalForeground(cell, previous);
@@ -138,14 +146,21 @@ export function diffStyle(cell, previous) {
     } else parameters.push(49);
   }
   if (flagsChanged) {
+    const boldChanged = cell.isBold() !== previous.isBold();
+    const dimChanged = cell.isDim() !== previous.isDim();
+    const clearsIntensity = (boldChanged && !cell.isBold()) || (dimChanged && !cell.isDim());
     if (cell.isInverse() !== previous.isInverse()) parameters.push(cell.isInverse() ? 7 : 27);
-    if (cell.isBold() !== previous.isBold()) parameters.push(cell.isBold() ? 1 : 22);
+    if (clearsIntensity) {
+      parameters.push(22);
+      if (cell.isBold()) parameters.push(1);
+      if (cell.isDim()) parameters.push(2);
+    } else if (boldChanged) parameters.push(1);
     if (cell.isUnderline() !== previous.isUnderline()) parameters.push(cell.isUnderline() ? 4 : 24);
     if (cell.isOverline() !== previous.isOverline()) parameters.push(cell.isOverline() ? 53 : 55);
     if (cell.isBlink() !== previous.isBlink()) parameters.push(cell.isBlink() ? 5 : 25);
     if (cell.isInvisible() !== previous.isInvisible()) parameters.push(cell.isInvisible() ? 8 : 28);
     if (cell.isItalic() !== previous.isItalic()) parameters.push(cell.isItalic() ? 3 : 23);
-    if (cell.isDim() !== previous.isDim()) parameters.push(cell.isDim() ? 2 : 22);
+    if (dimChanged && !clearsIntensity) parameters.push(2);
     if (cell.isStrikethrough() !== previous.isStrikethrough()) parameters.push(cell.isStrikethrough() ? 9 : 29);
   }
   return parameters;

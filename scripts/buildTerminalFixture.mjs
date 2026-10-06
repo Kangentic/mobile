@@ -89,7 +89,14 @@ import { createRequire } from 'node:module';
 import { isAbsolute, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { serializeModes, serializePhysicalRows, widenFrame, withRelativeCursor } from './terminalFrame.mjs';
+import {
+  HORIZONTAL_RULE_GLYPHS,
+  VERTICAL_EDGE_GLYPHS,
+  serializeModes,
+  serializePhysicalRows,
+  widenFrame,
+  withRelativeCursor,
+} from './terminalFrame.mjs';
 
 const require = createRequire(import.meta.url);
 const { Terminal } = require('@xterm/headless');
@@ -109,10 +116,22 @@ const { Terminal } = require('@xterm/headless');
  */
 const SERIALIZED_SCROLLBACK_LINES = 500;
 
-/** What widening may put past the recorded width: blanks, rules run on, and borders moved out. */
-const WIDENING_FILL_GLYPHS = ' ─━┄┅┈┉╌╍═╴╶╸╺╼╾▀▁▂▃▄▅▆▇█▔│┃┆┇┊┋╎╏║▐▕┐┓┘┛┤┫╗╝╢╣╮╯';
+/**
+ * What widening may put past the recorded width: blanks, rules run on, and
+ * borders moved out. Taken from the widener's own glyph sets, so the check
+ * accepts exactly what terminalFrame.mjs can draw there.
+ */
+const WIDENING_FILL_GLYPHS = ` ${HORIZONTAL_RULE_GLYPHS}${VERTICAL_EDGE_GLYPHS}`;
 /** The right-edge glyphs widening MOVES out to the new edge, so they may vanish from inside the recorded width. */
-const MOVABLE_EDGE_GLYPHS = '│┃┆┇┊┋╎╏║▐▕┐┓┘┛┤┫╗╝╢╣╮╯';
+const MOVABLE_EDGE_GLYPHS = VERTICAL_EDGE_GLYPHS;
+/**
+ * Private modes a chunk may still toggle after a widened seed: cursor keys and
+ * blink, cursor visibility, mouse and focus reporting, bracketed paste and
+ * synchronized output. None of them paints a cell. An alternate-screen swap
+ * (47, 1047, 1049), a column-mode switch or reverse video repaints the screen,
+ * so it is not on the list.
+ */
+const CELL_FREE_PRIVATE_MODES = new Set([1, 12, 25, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 2004, 2026]);
 
 /**
  * Terms that must never reach a committed fixture. Kept in step with
@@ -430,9 +449,13 @@ if (widening) {
   // its wrapping are wrong inside a wider one. Only cell-free chunks (a mode
   // toggle such as synchronized output) may follow a widened seed.
   for (const [index, chunk] of chunks.entries()) {
-    if (chunk.data.replace(/\x1b\[\?[0-9;]*[hl]/g, '').length > 0) {
+    const paints = chunk.data.replace(/\x1b\[\?[0-9;]*[hl]/g, '').length > 0;
+    const togglesScreen = [...chunk.data.matchAll(/\x1b\[\?([0-9;]*)[hl]/g)].some((match) =>
+      match[1].split(';').some((mode) => !CELL_FREE_PRIVATE_MODES.has(Number(mode))),
+    );
+    if (paints || togglesScreen) {
       fail(
-        `chunk ${index} after the seed paints or moves the cursor, and was recorded at ${cols} columns. ` +
+        `chunk ${index} after the seed paints, moves the cursor or swaps the screen, and was recorded at ${cols} columns. ` +
           'A widened fixture must be seed-only: set --seed-end to the settled frame.',
       );
     }
@@ -501,7 +524,10 @@ if (widening) {
       const widenedCell = widenedScreen[row][column];
       if (column < cols) {
         const recordedCell = recordedScreen[row][column];
-        if (MOVABLE_EDGE_GLYPHS.includes(recordedCell.glyph)) continue;
+        // Only the border AFTER the row's last glyph moves out. One before it
+        // (a box's left side, a table's column rule) must stay exactly where
+        // it was recorded.
+        if (column > lastRecordedGlyph && MOVABLE_EDGE_GLYPHS.includes(recordedCell.glyph)) continue;
         // Trailing padding only: a blank between two words that changed would
         // be a background leaking into the text, which is exactly what this
         // check exists to catch, along with text that moved.
@@ -521,24 +547,34 @@ if (widening) {
   console.log(`buildTerminalFixture: widened ${cols}x${rows} -> ${gridCols}x${gridRows}, recorded cells unchanged`);
 }
 
+/** The settled screen as a viewer reads it: one line of text per row. */
+async function visibleScreen(terminal) {
+  await settle(terminal);
+  const buffer = terminal.buffer.active;
+  const visible = [];
+  for (let lineIndex = buffer.baseY; lineIndex < buffer.baseY + gridRows; lineIndex += 1) {
+    const line = buffer.getLine(lineIndex);
+    visible.push(line ? line.translateToString(true) : '');
+  }
+  return visible.join('\n');
+}
+
 // Check what the viewer SEES, frame by frame, not just the endpoints. A banner
 // carrying the operator's name can be on screen for the opening seconds of the
 // window and gone by the last chunk, and a store capture takes its shot
-// somewhere in the middle.
+// somewhere in the middle. The seed is a frame of its own, and for a seed-only
+// fixture the only one: the raw-byte check alone misses a banned word that
+// follows a cursor-forward gap, which rejoins onto its neighbour once the
+// sequences are stripped.
 assertClean('the raw fixture bytes', seedFrame + chunks.map((chunk) => chunk.data).join(''));
 const progressive = createTerminal(gridCols, gridRows);
 progressive.write(seedFrame);
+assertClean('the seed frame', await visibleScreen(progressive));
 for (const [index, chunk] of chunks.entries()) {
   progressive.write(chunk.data);
-  await settle(progressive);
-  const buffer = progressive.buffer.active;
-  const visible = [];
-  for (let y = buffer.baseY; y < buffer.baseY + gridRows; y += 1) {
-    const line = buffer.getLine(y);
-    visible.push(line ? line.translateToString(true) : '');
-  }
-  assertClean(`the frame after chunk ${index} (${chunk.offsetMs}ms)`, visible.join('\n'));
+  assertClean(`the frame after chunk ${index} (${chunk.offsetMs}ms)`, await visibleScreen(progressive));
 }
+progressive.dispose();
 console.log(`buildTerminalFixture: all ${chunks.length + 1} rendered frames are clean`);
 
 const spanMs = chunks.length > 0 ? chunks[chunks.length - 1].offsetMs : 0;
