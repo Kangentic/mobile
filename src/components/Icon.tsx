@@ -19,7 +19,7 @@ import {
   ShieldHalf,
   Shrink,
   SquarePen,
-  Trash2,
+  Trash,
   User,
   type LucideIcon,
 } from 'lucide-react-native';
@@ -62,7 +62,9 @@ const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   'swap-horizontal': ArrowLeftRight,
   create: SquarePen,
   archive: Archive,
-  trash: Trash2,
+  // `Trash`, not the old `Trash2`: lucide 1.41 folded the two glyphs together
+  // and kept `Trash2` only as a deprecated alias of the same module.
+  trash: Trash,
   mic: Mic,
   add: Plus,
   send: Send,

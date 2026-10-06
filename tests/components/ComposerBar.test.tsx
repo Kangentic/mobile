@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { ThemeProvider } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
 import { sendUserMessage } from '@/connection/actions';
+import type { RetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 
@@ -26,8 +27,16 @@ const mockDictationControls = {
   start: jest.fn(),
   stop: jest.fn(),
 };
+// Counted, not just stubbed: the retention probe test below asserts the
+// subscription never registers, which no rendered output can show.
+const mockUseDictation = jest.fn(() => mockDictationControls);
 jest.mock('@/voice/useDictation', () => ({
-  useDictation: () => mockDictationControls,
+  useDictation: () => mockUseDictation(),
+}));
+
+let mockRetentionProbeVariant: RetentionProbeVariant = 'off';
+jest.mock('@/devsupport/retentionProbe', () => ({
+  getRetentionProbeVariant: () => mockRetentionProbeVariant,
 }));
 
 const mockSendUserMessage = jest.mocked(sendUserMessage);
@@ -49,6 +58,8 @@ describe('ComposerBar', () => {
     mockDictationControls.listening = false;
     mockDictationControls.start.mockClear();
     mockDictationControls.stop.mockClear();
+    mockUseDictation.mockClear();
+    mockRetentionProbeVariant = 'off';
     useChannelStore.setState({ established: true });
     useSettingsStore.setState({ dictationMode: 'auto-send', hydrated: true });
   });
@@ -111,5 +122,24 @@ describe('ComposerBar', () => {
     expect(screen.queryByTestId('composer-mic')).toBeNull();
     fireEvent.press(activeMicButton);
     expect(mockDictationControls.stop).toHaveBeenCalled();
+  });
+
+  it('still subscribes the dictation engine when dictation mode is off', () => {
+    // The shipped behaviour the mic-button extraction must preserve: the engine
+    // subscription is independent of the setting, only the mic is hidden.
+    useSettingsStore.setState({ dictationMode: 'off' });
+    renderComposer();
+    expect(mockUseDictation).toHaveBeenCalled();
+  });
+
+  it("registers no dictation listeners under the retention probe's composer-no-dictation arm", () => {
+    // The arm exists to isolate expo-modules-core #50603 (removed listeners
+    // retained as GC roots), so it has to remove the SUBSCRIPTION, not merely
+    // hide the mic. Asserted on the hook call because the two look identical.
+    mockRetentionProbeVariant = 'composer-no-dictation';
+    renderComposer();
+    expect(mockUseDictation).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('composer-mic')).toBeNull();
+    expect(screen.getByTestId('composer-input')).toBeTruthy();
   });
 });
