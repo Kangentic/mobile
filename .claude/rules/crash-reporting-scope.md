@@ -70,7 +70,14 @@ scrubber is therefore a second line of defence, never the control itself.
   means removing the integration or disabling the feature in `Sentry.init()`. Specifically:
   no screenshots, no view hierarchy, no console breadcrumbs, no network (`xhr`/`fetch`)
   breadcrumbs, no captured failed requests, no structured logs, no session tracking, no
-  performance tracing, no Session Replay, no PII, no message text from a handled catch. The one
+  performance tracing, no Session Replay, no PII, no message text from a handled catch, no iOS
+  memory introspection (`enableMemoryIntrospection: false`), and none of the three default
+  integrations @sentry/react-native 8.x added that attach data with no option of their own:
+  `ExpoConstants` (a per-launch session id and project metadata on every event),
+  `TurboModuleContext` and `ExpoUpdatesListener`, all dropped by name in
+  `DROPPED_DEFAULT_INTEGRATIONS`. `tests/unit/crashReporting.test.ts` pins the INSTALLED SDK's
+  full default-integration list, so the next default an upgrade adds fails CI until it is
+  reviewed here, rather than shipping because nothing asked. The one
   thing the app itself ADDS to the payload is a single diagnostic breadcrumb: when the OS reports
   memory pressure, `src/observability/memoryPressure.ts` records category `app.memory` carrying a
   count of warnings this launch and nothing else - no byte figure, no free text, no session
@@ -133,10 +140,19 @@ the Sentry MCP - not inferred from source): `app.lifecycle` (foreground/backgrou
 more detailed than "coarse app-lifecycle timing" suggests - it carries `action`,
 `network_type`, `vpn_active`, `signal_strength`, `download_bandwidth`, and `upload_bandwidth`.
 None of it is session content, but "the allowlist is default-deny" is true of the JS path and
-not of the native one. Closing it needs native configuration through a config plugin (Android
-reads `io.sentry.breadcrumbs.*` manifest meta-data; iOS has no equivalent plist switch), which
-is a larger change than this rule should smuggle in. Say "JS breadcrumbs are allowlisted", not
-"breadcrumbs are allowlisted".
+not of the native one. Say "JS breadcrumbs are allowlisted", not "breadcrumbs are allowlisted".
+
+**It is now closable from `Sentry.init()`, and is deliberately still open.** An earlier revision
+said closing it needed a config plugin and that iOS had no switch at all. Since
+@sentry/react-native 8.28 (in this app from 8.29, task #102) every family has an init option that
+reaches native: Android `enableAppLifecycleBreadcrumbs` (`app.lifecycle`),
+`enableSystemEventBreadcrumbs` (`device.event`), `enableNetworkEventBreadcrumbs`
+(`network.event`), `enableActivityLifecycleBreadcrumbs` and `enableAppComponentBreadcrumbs`; iOS
+`enableAutoBreadcrumbTracking` and `enableNetworkBreadcrumbs` (the latter a native breadcrumb per
+network request). They are left at their defaults (on) because the upgrade was not the place to
+change what leaves a device: the lifecycle context is diagnostic signal this project has used, and
+switching it off is a privacy-policy decision that edits `docs/privacy-policy.md` and
+`docs/security.md` in the same change.
 
 **The native breadcrumbs also ride a JS-CAPTURED event, and there the allowlist does reach
 them.** Observed on the first iOS event the project ever received (the handled canary from
@@ -150,7 +166,9 @@ That closes the ride-along for JS-captured events on both platforms and changes 
 native crash, which still never passes through JS.
 
 **An iOS memory warning is recorded by this app because the SDK does not record it.**
-sentry-cocoa's `SentrySystemEventBreadcrumbs` (8.58.0) observes keyboard, screenshot, battery,
+sentry-cocoa's `SentrySystemEventBreadcrumbs` (read at 8.58.0; the sentry-cocoa changelog through
+9.30.0, which @sentry/react-native 8.29 bundles, records "Remove MemoryWarningIntegration #537" and
+nothing re-adding it) observes keyboard, screenshot, battery,
 orientation, timezone and significant-time-change notifications, and **not**
 `UIApplicationDidReceiveMemoryWarningNotification`. So on iOS there is no memory-warning
 breadcrumb to be absent, and the absence of one says nothing - a trap worth knowing before

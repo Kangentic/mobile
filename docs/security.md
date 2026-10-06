@@ -392,9 +392,14 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
 
 - **What Sentry cannot see:** session content. No screenshots, no view hierarchy, no console
   output, no captured network requests, no JS network breadcrumbs, no Session Replay, no
-  performance traces, no structured logs, no PII, and no message text from a failure reported
-  through the handled-error door (`reportHandledError`) - each disabled explicitly, several of
-  them ON by default in the SDK. The one deliberate exception is a render throw caught by the
+  performance traces, no structured logs, no PII, no iOS memory introspection (memory near a
+  native crash site), and no message text from a failure reported through the handled-error door
+  (`reportHandledError`) - each disabled explicitly, several of them ON by default in the SDK.
+  Three default integrations that @sentry/react-native 8.x added are removed outright, because
+  each attaches data and none has an option of its own: `ExpoConstants` (a per-launch session id
+  and project metadata on every event), `TurboModuleContext` and `ExpoUpdatesListener`. A unit
+  test pins the installed SDK's whole default-integration list, so a default a future upgrade adds
+  fails CI until it has been reviewed. The one deliberate exception is a render throw caught by the
   app's root error boundary, which keeps its message: that text is written by this app, not by
   a peer or a user, and it is what makes the crash diagnosable.
   The one thing the app deliberately ADDS is a single diagnostic breadcrumb, recorded when the OS
@@ -441,8 +446,12 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   screen on/off), and `network.event`, which carries `action`, `network_type`, `vpn_active`,
   `signal_strength`, `download_bandwidth`, and `upload_bandwidth` - more detail than "coarse
   app-lifecycle timing" suggested before this was verified. None of it is session content.
-  Closing this needs native configuration through a config plugin, not a JS option; it is a named
-  gap, not an oversight. The same native breadcrumbs also rode a JS-captured event on iOS
+  Since @sentry/react-native 8.28 each of these families has an init option that reaches native
+  (`enableAppLifecycleBreadcrumbs`, `enableSystemEventBreadcrumbs`,
+  `enableNetworkEventBreadcrumbs` and two more on Android; `enableAutoBreadcrumbTracking` and
+  `enableNetworkBreadcrumbs` on iOS), so this is no longer a gap that needs a config plugin. They
+  are left on deliberately for now - the lifecycle context is diagnostic signal - and switching
+  them off is a privacy-policy decision that would update this section in the same change. The same native breadcrumbs also rode a JS-captured event on iOS
   (`started` and `ui.lifecycle`, observed on the first iOS event the project received, 2026-09-12),
   because the SDK merges the native scope's breadcrumbs into every JS event before `beforeSend`;
   that half IS reachable from JS, so `scrubEvent` now applies the same default-deny allowlist to
