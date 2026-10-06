@@ -15,6 +15,7 @@
 // early instead of letting adb error.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 
 const nodeRequire = createRequire(import.meta.url);
 const WebSocket = nodeRequire('ws');
@@ -37,8 +38,11 @@ if (!expression) {
   process.exit(1);
 }
 
+// From the home folder: if no adb server is running, this call starts the
+// machine-wide one, which keeps its starter's working directory and would
+// otherwise be stopped by the task's Done reap (see scripts/dev.mjs).
 function adb(...adbArguments) {
-  return execFileSync('adb', adbArguments, { encoding: 'utf8' });
+  return execFileSync('adb', adbArguments, { cwd: homedir(), encoding: 'utf8' });
 }
 
 if (!process.env.ANDROID_SERIAL) {

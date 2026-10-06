@@ -33,10 +33,11 @@
  */
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
+import { adbServerClientPids, adbServerPort, decideAdbServerRestart } from './rigProcessRegistry.mjs';
 
 const INSPECT_PORT = 8791;
 // 'terminal-eval' is deliberately absent: it is a real protocol kind, but its
@@ -70,7 +71,7 @@ function extractSerialFlag(args) {
 /** Fail early when several ready devices are attached and none was chosen. */
 function ensureSingleAdbTarget() {
   if (process.env.ANDROID_SERIAL) return;
-  const listed = spawnSync('adb', ['devices'], { encoding: 'utf8' });
+  const listed = spawnAdb(['devices']);
   if (listed.status !== 0) return; // let the actual command surface adb errors
   const ready = listed.stdout
     .split('\n')
@@ -95,13 +96,22 @@ function ensureSingleAdbTarget() {
  * "received too many bytes while waiting for payload".
  *
  * So: bound the call, and on a timeout restart the server once (the documented
- * host:kill recovery) before giving up. Reverse tunnels do NOT survive a server
+ * host:kill recovery) before giving up - unless another process is connected
+ * to it, see recoverAdbServer. Reverse tunnels do NOT survive a server
  * restart, so they are re-applied too.
  */
 const ADB_TIMEOUT_MS = 20_000;
 
+/**
+ * The one place this script runs adb, always from the HOME folder: any adb
+ * call can be the one that starts the machine-wide server, which keeps its
+ * starter's working directory, and Kangentic's Done reap stops a tagged
+ * process working inside the task's worktree. So every path handed to adb
+ * must be absolute.
+ */
 function spawnAdb(args, options = {}) {
   return spawnSync('adb', args, {
+    cwd: homedir(),
     encoding: options.binary ? 'buffer' : 'utf8',
     maxBuffer: 64 * 1024 * 1024,
     timeout: options.timeoutMs ?? ADB_TIMEOUT_MS,
@@ -109,33 +119,70 @@ function spawnAdb(args, options = {}) {
 }
 
 /**
+ * Pids connected to the adb server right now, or null when that cannot be
+ * told (netstat failed, or off Windows, where `netstat -ano` has other columns).
+ */
+function listAdbServerClientPids() {
+  if (process.platform !== 'win32') return null;
+  const netstat = spawnSync('netstat', ['-ano'], { encoding: 'utf8', timeout: 10_000 });
+  if (netstat.status !== 0) return null;
+  return adbServerClientPids(netstat.stdout, { port: adbServerPort(process.env) });
+}
+
+/**
  * Restart a wedged server and restore the reverses the rig depends on.
+ * Returns false when it refused to.
  *
  * `adb kill-server` is the polite route, but a server wedged mid-transfer
  * cannot answer that either - it is itself an adb client. When the polite
- * route times out, the process has to be terminated directly; adb is a daemon
- * that any later command restarts on demand, so this is recoverable, not
- * destructive.
+ * route times out, the process has to be terminated directly.
+ *
+ * Either route stops the ONE server the whole machine shares, and the
+ * force-kill takes every adb process with it, so another task's logcat,
+ * install or Maestro run fails with "daemon not running". This path runs on
+ * its own after a timeout, so it never decides that for anyone: with any
+ * other process connected (or no way to tell, which is always the case off
+ * Windows) it refuses and points at `npm run dev:adb`, which names them and
+ * takes --force, or off Windows at a manual restart.
  */
 function recoverAdbServer() {
+  const clientPids = listAdbServerClientPids();
+  const decision = decideAdbServerRestart(clientPids, { force: false });
+  if (!decision.allowed) {
+    const pidNote = clientPids && clientPids.length > 0 ? ` (pids ${clientPids.join(', ')})` : '';
+    // dev:adb lists clients and force-kills through Windows tools only, so
+    // off Windows the restart is a manual one.
+    const remedy =
+      process.platform === 'win32'
+        ? '`npm run dev:adb -- --dry-run` names them; `npm run dev:adb -- --force` restarts anyway.'
+        : 'Once nothing else needs adb, restart it by hand from your home folder: `adb kill-server`, then `adb start-server`.';
+    console.error(
+      `[inspect] adb stopped responding, and the server is NOT being restarted: ${decision.reason}${pidNote}. ` +
+        `A restart would break every other adb command in flight. ${remedy}`,
+    );
+    return false;
+  }
   console.error('[inspect] adb stopped responding; restarting the server');
-  const killed = spawnSync('adb', ['kill-server'], { encoding: 'utf8', timeout: 5000 });
+  const killed = spawnAdb(['kill-server'], { timeoutMs: 5000 });
   if (killed.error || killed.status !== 0) {
-    console.error('[inspect] kill-server did not answer either; terminating adb.exe');
-    spawnSync(process.platform === 'win32' ? 'taskkill' : 'pkill', process.platform === 'win32' ? ['/F', '/IM', 'adb.exe'] : ['-f', 'adb'], {
+    console.error('[inspect] kill-server did not answer either; terminating adb');
+    // An exact image name, never a pattern: `pkill -f adb` matched any
+    // command line containing "adb".
+    spawnSync(process.platform === 'win32' ? 'taskkill' : 'pkill', process.platform === 'win32' ? ['/F', '/IM', 'adb.exe'] : ['-x', 'adb'], {
       encoding: 'utf8',
       timeout: 10_000,
     });
   }
-  const started = spawnSync('adb', ['start-server'], { encoding: 'utf8', timeout: ADB_TIMEOUT_MS });
+  const started = spawnAdb(['start-server']);
   if (started.error) {
     console.error('[inspect] adb server would not restart; check the USB cable or use the rig --wifi flag');
-    return;
+    return true;
   }
   // Reverse tunnels never survive a server restart.
   for (const port of ['8080', '8081', '8791']) {
-    spawnSync('adb', ['reverse', `tcp:${port}`, `tcp:${port}`], { encoding: 'utf8', timeout: ADB_TIMEOUT_MS });
+    spawnAdb(['reverse', `tcp:${port}`, `tcp:${port}`]);
   }
+  return true;
 }
 
 function runAdb(args, options = {}) {
@@ -143,7 +190,7 @@ function runAdb(args, options = {}) {
   // ETIMEDOUT (or a killed process with no status) means the server hung
   // rather than answered. Recover once, then retry the same command.
   if (result.error?.code === 'ETIMEDOUT' || (result.signal !== null && result.status === null)) {
-    recoverAdbServer();
+    if (!recoverAdbServer()) fail(`adb ${args.join(' ')} timed out after ${(options.timeoutMs ?? ADB_TIMEOUT_MS) / 1000}s`);
     result = spawnAdb(args, options);
   }
   if (result.error) fail(`adb failed to start: ${result.error.message}`);
@@ -173,7 +220,9 @@ function flagValue(args, name) {
  * chunks them itself, so it does not hit that path.
  */
 function commandScreenshot(args) {
-  const outPath = flagValue(args, '--out') ?? join(tmpdir(), 'kangentic-mobile-inspect', `shot-${Date.now()}.png`);
+  // Absolute: adb runs from the home folder (spawnAdb), so a relative --out
+  // would land there instead of beside the caller.
+  const outPath = resolve(flagValue(args, '--out') ?? join(tmpdir(), 'kangentic-mobile-inspect', `shot-${Date.now()}.png`));
   mkdirSync(dirname(outPath), { recursive: true });
   const devicePath = `/sdcard/kangentic-inspect-shot.png`;
   runAdb(['shell', 'screencap', '-p', devicePath]);

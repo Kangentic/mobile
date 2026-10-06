@@ -48,7 +48,7 @@ For anything beyond a bare Metro session, use the dev rig below.
 | `npm run dev:stub` | Relay + `scripts/stubDesktopPeer.mjs` - the Maestro E2E rig. Reuses the saved phone key for a session-only reconnect when it can (`-- --fresh` forces a re-pair). |
 | `npm run dev:doctor` | Read-only preflight: adb/emulator/AVD, the `hw.keyboard=yes` typing check, relay repo and port states, dev-client install, Node version. |
 | `npm run dev:emu` | Emulator hygiene: kill + reboot on host GPU, restore the adb reverses, relaunch the app foreground-verified. The cure for progressive emulator lag (a long-lived qemu process degrades under sustained WebGL load). |
-| `npm run dev:adb` | adb-server wedge recovery: force-kill adb, fresh server, reverses, relaunch. The cure when the phone reconnect-loops while the relay and desktop are healthy (forwarding silently stops moving data). |
+| `npm run dev:adb` | adb-server wedge recovery: force-kill adb, fresh server (started from your home folder), reverses, relaunch. The cure when the phone reconnect-loops while the relay and desktop are healthy (forwarding silently stops moving data). The force-kill takes **every** adb process on the machine, so every other task's in-flight adb command (a logcat, an install, a Maestro run) fails with "daemon not running". The mode therefore lists the processes connected to the adb server first and **refuses while any are**. `-- --dry-run` lists them and kills nothing; `-- --force` restarts anyway, which is right only when they are hung on the very wedge being recovered. A missing reverse tunnel never needs this: `adb -s <serial> reverse tcp:<port> tcp:<port>` restores one without touching the server. |
 | `npm run dev:stop` | Stops the processes **the rig itself started**, this run's and any left by an interrupted earlier one, leaving the relay up. Starting any mode does this first, so it is only needed to hand the machine back clean - or to free Metro before switching rig mode, since only one mode can own port 8081. The **emulator survives by default** (slow to boot, usually wanted next run) but is now NAMED in the output when it does, because "stopped 1 rig process" while a phone window sits on screen reads as a clean stop and is not one. `-- --emulator` (or `--all`) shuts down the emulators the rig booted; `-- --dry-run` prints every target and kills nothing. |
 
 Details worth knowing:
@@ -84,6 +84,33 @@ Details worth knowing:
   tells you the pid, rather than taking it. Stop it yourself, or pass `--no-metro` to use it -
   after checking it serves THIS repo, since an adopted bundler from another checkout serves the
   wrong bundle and every symptom then looks like an app bug.
+- **The emulator and the adb server are machine-wide, so they start from your home folder.**
+  Kangentic's Done reap stops every process that carries the task's tag and works inside the
+  task's project or worktree. The emulator inherits the working directory of whatever spawned it,
+  and the adb server keeps the working directory of whichever adb client happened to start it
+  (measured on Linux, macOS and Windows in kangentic #766). Started from a task worktree, both
+  qualify for that task's reap: #766 spares them only while another task has an adb command
+  connected at that moment, so an idle server, and a headless emulator only it connects to, went
+  with the task. On Windows a spared emulator also pins the worktree on disk. So the rig
+  spawns the emulator with the home folder as its working directory, starts the adb server from
+  there before any mode touches adb, and runs **every** adb call from there. Doing it once is not
+  enough, because the reverse watchdog's `adb devices` restarts a server something else killed,
+  and that restart would otherwise happen inside the worktree. `mobileInspect.mjs`,
+  `storeScreenshots.mjs` and `webviewEval.mjs` do the same, which is why `mobileInspect
+  screenshot --out` resolves a relative path before handing it to adb. A server already running
+  keeps whatever folder it started in; `npm run dev:adb` with nothing connected brings it back
+  from home. The tag itself is left alone, because a process outside the task's folders is never
+  reaped.
+
+  The `dev:adb` guard, and the same guard in `mobileInspect.mjs`'s automatic recovery after an
+  adb timeout, read port 5037 (`netstat -ano`) only to **report and refuse**. An ESTABLISHED
+  connection whose foreign end is 5037 is a client; a running emulator holds none, so an emulator
+  never reads as one. The kill target stays the named singleton, never a pid taken off the port,
+  per the rule above. Off Windows the clients are not listed (the parser reads Windows'
+  `netstat -ano` columns), so both refuse unless forced, and forcing does not help there either:
+  `dev:adb`'s force-kill is `taskkill`. Off Windows, restart a wedged server by hand from your
+  home folder (`adb kill-server`, then `adb start-server`), which is what `mobileInspect.mjs`'s
+  refusal says.
 - **Live-mode quick pair (dev-only hot path):** `dev:live` skips the in-app QR/SAS ceremony
   entirely. The desktop dev instance (bridge enabled, dev build) publishes its static public key
   and relay URL to its repo's gitignored `.kangentic/mobile-dev-pairing/desktop.json`; the rig

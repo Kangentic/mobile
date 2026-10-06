@@ -32,7 +32,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -177,11 +177,15 @@ const ADB_TIMEOUT_MS = 20_000;
  * transfers, which is the case that actually stalls adb. Nothing here moves
  * more than a line of text: Maestro takes the screenshots. Bounding the call is
  * still worth it, because a wedged server BLOCKS rather than erroring.
+ *
+ * From the home folder: if no adb server is running, this call starts the
+ * machine-wide one, which keeps its starter's working directory and would
+ * otherwise be stopped by the task's Done reap (see scripts/dev.mjs).
  */
 function adb(args, { allowFailure = false } = {}) {
   const serial = process.env.ANDROID_SERIAL;
   const fullArgs = serial ? ['-s', serial, ...args] : args;
-  const result = spawnSync('adb', fullArgs, { encoding: 'utf8', timeout: ADB_TIMEOUT_MS });
+  const result = spawnSync('adb', fullArgs, { cwd: homedir(), encoding: 'utf8', timeout: ADB_TIMEOUT_MS });
   if (result.error) {
     if (allowFailure) return '';
     fail(`adb ${args.join(' ')} failed to start: ${result.error.message}`);

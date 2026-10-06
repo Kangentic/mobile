@@ -164,3 +164,80 @@ export function decideEmulatorAction(record, live) {
     ? { action: 'kill', reason: 'serial still runs the AVD the rig booted' }
     : { action: 'prune', reason: `serial now runs a different AVD (${live.avdName})` };
 }
+
+// ---------------------------------------------------------------------------
+// The adb server
+// ---------------------------------------------------------------------------
+
+/** The port every adb client on the machine talks to the one adb server on. */
+export const ADB_SERVER_PORT = 5037;
+
+/**
+ * The port adb actually uses: ANDROID_ADB_SERVER_PORT moves the server, and a
+ * guard watching 5037 while the server sits elsewhere would see no clients and
+ * wave through a kill that takes every one of them.
+ */
+export function adbServerPort(environment = {}) {
+  const configured = Number(environment.ANDROID_ADB_SERVER_PORT);
+  return Number.isInteger(configured) && configured > 0 ? configured : ADB_SERVER_PORT;
+}
+
+/** The port at the end of a netstat address: `127.0.0.1:5037`, `[::1]:5037`. */
+function addressPort(address) {
+  const match = address.match(/:(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * The pids of the processes connected to the adb server right now, read from
+ * `netstat -ano` text (Windows column order: proto, local, foreign, state, pid).
+ *
+ * The adb server is a machine-wide singleton, and restarting it is a
+ * `taskkill /IM adb.exe /F`: every adb process on the machine dies, and every
+ * other task's in-flight command (a logcat, an install, a Maestro run) fails
+ * with "daemon not running". So before a restart the rig asks who is connected.
+ *
+ * A client holds an ESTABLISHED connection whose FOREIGN end is port 5037.
+ * Loopback lists each connection twice, but the server's own row has 5037 as
+ * its LOCAL end and the client's port as its foreign end, so it never matches.
+ * A running emulator holds no such connection (measured on Windows: its qemu
+ * process had none while the server tracked it), so an emulator never reads as
+ * a client.
+ *
+ * This reads the port to REPORT and to REFUSE, never to choose a kill target:
+ * the target stays the named singleton, and these pids are only printed.
+ * State names are English, the same assumption findPortListenerPid makes.
+ */
+export function adbServerClientPids(netstatText, { port = ADB_SERVER_PORT } = {}) {
+  const clientPids = new Set();
+  for (const line of String(netstatText ?? '').split('\n')) {
+    const columns = line.trim().split(/\s+/);
+    if (columns[0] !== 'TCP' || columns.length < 5) continue;
+    if (columns[3] !== 'ESTABLISHED' || addressPort(columns[2]) !== port) continue;
+    const pid = Number(columns[4]);
+    if (Number.isInteger(pid) && pid > 0) clientPids.add(pid);
+  }
+  return [...clientPids].sort((first, second) => first - second);
+}
+
+/**
+ * May the adb server be restarted now?
+ *
+ * `clientPids` is what adbServerClientPids found, or null when the clients
+ * could not be listed at all. Unknown is treated like "someone is connected":
+ * the cost of refusing is one re-run with --force, the cost of guessing wrong
+ * is every other task's adb command.
+ */
+export function decideAdbServerRestart(clientPids, { force = false } = {}) {
+  if (clientPids === null || clientPids === undefined) {
+    return force
+      ? { allowed: true, reason: '--force: restarting without knowing who is connected' }
+      : { allowed: false, reason: 'could not list the processes connected to the adb server' };
+  }
+  if (clientPids.length > 0) {
+    return force
+      ? { allowed: true, reason: `--force: restarting under ${clientPids.length} connected client(s)` }
+      : { allowed: false, reason: `${clientPids.length} other process(es) are connected to the adb server` };
+  }
+  return { allowed: true, reason: 'nothing else is connected to the adb server' };
+}

@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
+  adbServerClientPids,
+  adbServerPort,
+  decideAdbServerRestart,
   decideEmulatorAction,
   decideRecordAction,
   emulatorRecordFileName,
@@ -199,11 +202,184 @@ describe('scripts/dev.mjs never derives a kill target from a command line', () =
     // talks to - so there is no "ours" to record, and `adb kill-server` hangs
     // against the wedged server that mode exists to recover. It is kill-by-
     // name, and it is allowed because the target is a named singleton service,
-    // not a guess about which of many processes might be ours.
+    // not a guess about which of many processes might be ours. Because it
+    // takes EVERY adb process, it sits behind a guard that refuses while
+    // another process is connected to the server (asserted below).
     const killTargets = [...devRig.matchAll(/taskkill',\s*\[([^\]]*)\]/g)].map((match) => match[1]);
     expect(killTargets.length).toBeGreaterThan(0);
     for (const target of killTargets) {
       expect(target).toMatch(/String\((record|child)\.pid\)|'\/IM',\s*'adb\.exe'/);
     }
+  });
+});
+
+/**
+ * `netstat -ano` as Windows prints it (CRLF, padded columns). Loopback lists
+ * each connection twice, once from each end, so the server's own side has to
+ * be told apart from its clients'.
+ */
+const NETSTAT_WITH_ADB_CLIENTS = [
+  '',
+  'Active Connections',
+  '',
+  '  Proto  Local Address          Foreign Address        State           PID',
+  '  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1234',
+  '  TCP    127.0.0.1:5037         0.0.0.0:0              LISTENING       15116',
+  // A logcat: the client's end, then the server's end of the same socket.
+  '  TCP    127.0.0.1:61001        127.0.0.1:5037         ESTABLISHED     4412',
+  '  TCP    127.0.0.1:5037         127.0.0.1:61001        ESTABLISHED     15116',
+  // The same client holding a second connection is still one client.
+  '  TCP    127.0.0.1:61005        127.0.0.1:5037         ESTABLISHED     4412',
+  // Finished short commands linger as pid-0 TIME_WAIT rows.
+  '  TCP    127.0.0.1:5037         127.0.0.1:60844        TIME_WAIT       0',
+  '  TCP    127.0.0.1:60845        127.0.0.1:5037         TIME_WAIT       0',
+  // A client mid-close is not an in-flight command.
+  '  TCP    127.0.0.1:61003        127.0.0.1:5037         CLOSE_WAIT      5555',
+  // Port 50370 is not port 5037.
+  '  TCP    127.0.0.1:61002        127.0.0.1:50370        ESTABLISHED     3333',
+  '  TCP    [::1]:61004            [::1]:5037             ESTABLISHED     7777',
+  '  UDP    0.0.0.0:5037           *:*                                    9999',
+  '',
+].join('\r\n');
+
+describe('adbServerClientPids', () => {
+  it('finds the processes connected to the adb server, not the server itself', () => {
+    expect(adbServerClientPids(NETSTAT_WITH_ADB_CLIENTS)).toEqual([4412, 7777]);
+  });
+
+  it('finds nothing when only the server and finished commands are left', () => {
+    const idle = [
+      '  TCP    127.0.0.1:5037         0.0.0.0:0              LISTENING       15116',
+      '  TCP    127.0.0.1:5037         127.0.0.1:60844        TIME_WAIT       0',
+    ].join('\r\n');
+    expect(adbServerClientPids(idle)).toEqual([]);
+  });
+
+  it('tolerates empty or missing output', () => {
+    expect(adbServerClientPids('')).toEqual([]);
+    expect(adbServerClientPids(undefined)).toEqual([]);
+  });
+
+  it('watches the port the server actually moved to', () => {
+    const movedServer = [
+      '  TCP    127.0.0.1:5038         0.0.0.0:0              LISTENING       15116',
+      '  TCP    127.0.0.1:61001        127.0.0.1:5038         ESTABLISHED     4412',
+    ].join('\r\n');
+    expect(adbServerClientPids(movedServer, { port: 5038 })).toEqual([4412]);
+    expect(adbServerClientPids(movedServer)).toEqual([]);
+  });
+});
+
+describe('adbServerPort', () => {
+  it('follows ANDROID_ADB_SERVER_PORT, and falls back to 5037', () => {
+    expect(adbServerPort({ ANDROID_ADB_SERVER_PORT: '5038' })).toBe(5038);
+    expect(adbServerPort({})).toBe(5037);
+    expect(adbServerPort({ ANDROID_ADB_SERVER_PORT: 'not-a-port' })).toBe(5037);
+  });
+});
+
+describe('decideAdbServerRestart', () => {
+  it('restarts when nothing else is connected', () => {
+    expect(decideAdbServerRestart([]).allowed).toBe(true);
+  });
+
+  it('refuses while another process is connected, and says how many', () => {
+    const decision = decideAdbServerRestart([4412, 7777]);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('2 other process(es)');
+  });
+
+  it('refuses when the clients cannot be listed', () => {
+    expect(decideAdbServerRestart(null).allowed).toBe(false);
+  });
+
+  it('restarts anyway under --force, whatever is connected', () => {
+    expect(decideAdbServerRestart([4412], { force: true }).allowed).toBe(true);
+    expect(decideAdbServerRestart(null, { force: true }).allowed).toBe(true);
+    expect(decideAdbServerRestart([], { force: true }).allowed).toBe(true);
+  });
+});
+
+/**
+ * Kangentic's Done reap stops every process that carries the task's tag and
+ * works inside the task's project or worktree. The emulator inherits the
+ * rig's working directory, and the adb server keeps the working directory of
+ * whichever client started it, so both must start from the home folder. A
+ * static scan, like the one above, because the failure is a REINTRODUCED
+ * spawn without the cwd, and dev.mjs runs main() on import.
+ */
+describe('the adb server and the emulator never start inside a task worktree', () => {
+  const devRig = readFileSync(join(scriptsDir, 'dev.mjs'), 'utf8');
+
+  it('runs every rig adb call from the home folder', () => {
+    const runStart = devRig.indexOf('function run(command, args');
+    expect(runStart).toBeGreaterThanOrEqual(0);
+    const runDefinition = devRig.slice(runStart, devRig.indexOf('\n}\n', runStart));
+    expect(runDefinition).toMatch(/cwd: homedir\(\),\s*\.\.\.options/);
+    // run() is the only way the rig reaches adb: a direct spawn skips its cwd.
+    expect(devRig).toMatch(/run\('adb'/);
+    expect(devRig).not.toMatch(/(?:spawnSync|execFileSync|spawn)\(\s*'adb'/);
+  });
+
+  it('hands run() no repo-relative path, since run() works from the home folder', () => {
+    // A relative argument resolves against the home folder, not this checkout:
+    // the stub rig's pairing bootstrap handed Maestro `.maestro/setup/...` and
+    // Maestro looked for the flow under the home folder instead.
+    const runCalls = [...devRig.matchAll(/\brun\('([^']+)',\s*\[([^\]]*)\]/g)].map((match) => ({
+      command: match[1],
+      runArguments: match[2],
+    }));
+    // Non-vacuity: the scan must reach the one call that takes a flow file.
+    expect(runCalls.some((runCall) => runCall.command === 'maestro')).toBe(true);
+    for (const { runArguments } of runCalls) {
+      expect(runArguments).not.toMatch(/['`](?:\.{1,2}\/|\.maestro\/|scripts\/|node_modules\/)/);
+    }
+  });
+
+  it('boots the emulator from the home folder', () => {
+    const emulatorSpawn = devRig.match(/spawn\('emulator', emulatorArgs, \{[^}]*\}/)?.[0];
+    expect(emulatorSpawn).toBeDefined();
+    expect(emulatorSpawn).toContain('cwd: homedir()');
+  });
+
+  it('starts the adb server before any mode reaches adb', () => {
+    const mainStart = devRig.indexOf('async function main()');
+    const startIndex = devRig.indexOf('startAdbServer();', mainStart);
+    expect(startIndex).toBeGreaterThan(mainStart);
+    expect(startIndex).toBeLessThan(devRig.indexOf("if (mode === 'stop')", mainStart));
+  });
+
+  it('guards the adb-mode restart before its force-kill', () => {
+    const adbModeStart = devRig.indexOf("if (mode === 'adb') {");
+    const killIndex = devRig.indexOf("spawnSync('taskkill', ['/IM', 'adb.exe', '/F']", adbModeStart);
+    expect(adbModeStart).toBeGreaterThanOrEqual(0);
+    expect(killIndex).toBeGreaterThan(adbModeStart);
+    for (const step of ['decideAdbServerRestart(', "if (flags['dry-run'])", 'if (!decision.allowed)']) {
+      const stepIndex = devRig.indexOf(step, adbModeStart);
+      expect(stepIndex, step).toBeGreaterThan(adbModeStart);
+      expect(stepIndex, step).toBeLessThan(killIndex);
+    }
+  });
+
+  it.each(['mobileInspect.mjs', 'storeScreenshots.mjs', 'webviewEval.mjs'])('%s runs adb from the home folder', (fileName) => {
+    const source = readFileSync(join(scriptsDir, fileName), 'utf8');
+    const callSites = [...source.matchAll(/(?:spawnSync|execFileSync|spawn)\(\s*'adb',/g)];
+    expect(callSites.length).toBeGreaterThan(0);
+    for (const site of callSites) {
+      const siteIndex = site.index ?? 0;
+      expect(source.slice(siteIndex, source.indexOf(';', siteIndex))).toContain('cwd: homedir()');
+    }
+  });
+
+  it("mobileInspect's automatic recovery never restarts the server past another client", () => {
+    const inspect = readFileSync(join(scriptsDir, 'mobileInspect.mjs'), 'utf8');
+    const recoveryStart = inspect.indexOf('function recoverAdbServer()');
+    expect(recoveryStart).toBeGreaterThanOrEqual(0);
+    const guardIndex = inspect.indexOf('if (!decision.allowed)', recoveryStart);
+    const killServerIndex = inspect.indexOf("['kill-server']", recoveryStart);
+    expect(guardIndex).toBeGreaterThan(recoveryStart);
+    expect(killServerIndex).toBeGreaterThan(guardIndex);
+    // An exact process name, never a command-line pattern.
+    expect(inspect).not.toMatch(/\['-f',\s*'adb'\]/);
   });
 });
