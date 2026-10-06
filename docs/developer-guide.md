@@ -688,10 +688,13 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
      to 13.63 MB and removed 214 resource files. Optimized resource shrinking puts resources into
      the code reference graph, which is the risk the table above names, and `xterm.html` survives
      it (`verify-android-assets.sh` passes on both artifacts), as do `notification_icon`, the
-     splash and launcher art, and every Firebase string. **R8 sits off the production build's
-     critical path**: its task logs at 19:25 in that run, and the last native compile
-     (`buildCMakeRelWithDebInfo[x86_64]`) starts at 19:42, so whatever optimization adds to the
-     R8 task does not lengthen a four-ABI build. **Delete the plugin at the Expo SDK 58 upgrade**,
+     splash and launcher art, and every Firebase string (and the splash was checked drawing on a
+     Pixel 11 Pro). **R8 looks to be off the production build's critical path, read from task
+     ordering rather than timed**: the plain console prints when a task starts, never how long it
+     ran, so no R8 duration exists in the log. What it does show is R8's task line at 19:25, the
+     native compiles running until 19:45, and `packageReleaseBundle` starting seconds after
+     `extractReleaseNativeSymbolTables`, so in that run the native chain, not R8, gated the
+     bundle. **Delete the plugin at the Expo SDK 58 upgrade**,
      whose template already reads the optimize preset, on AGP 9, which needs no property.
 
   `build-android.yml` uploads `mapping.txt` as its own run artifact (`mapping-<artifact-name>`)
@@ -3793,7 +3796,10 @@ probe compiled in:** `base` is `main` before the task (18d7bdd, plus the probe v
 cherry-picked locally), `deps` is every dependency move without the R8 plugin, and `r8` is
 `deps` plus the plugin. `deps` and `r8` bundle byte-identical JavaScript (the bundle's sha256
 matches), so those two differ only in dex and resources. Every comparison across arms is a
-cross-build A/B by necessity; the in-process probe arms are the exception, and say so.
+cross-build A/B by necessity; the in-process probe arms are the exception, and say so. All three
+were built BEFORE the branch was rebased onto main's Agents-feed redesign (the project and column
+strip, task numbers, section filter), so the screen-level numbers below describe the older feed
+layout.
 
 **Size (measured).**
 
@@ -3816,9 +3822,9 @@ baseline profile:
 | `r8` | 924 ms (884-949) | 414 ms (380-436) | 1010 ms (950-1055) |
 
 The medians fall in the order the changes would predict, but every gap is smaller than one
-arm's interquartile range, and the per-round medians cross over, so none of it is a result. R8
-optimizing the Java and Kotlin startup path is expected to be worth tens of milliseconds at
-most, which this rig cannot resolve.
+arm's interquartile range, and the per-round medians cross over, so none of it is a result.
+Inferred, not measured: whatever R8 optimization saves on the Java and Kotlin startup path is
+smaller than this rig's spread, which on these numbers means well under 100 ms.
 
 **Session-screen retention (measured): the leak stays fixed without the patch.** This section's
 protocol on `deps` (enriched-markdown 1.1.1, no patch) and `base` (0.7.4, patched), on the same
@@ -3849,10 +3855,14 @@ so; there is no measurement either way.
 in one process per build: idle CPU with it off, on, then off again. It did not produce a usable
 arm. On the `base` build (Reanimated 4.5.1, where the same probe measured +29 points on
 2026-08-30), the on phase read 48.5% against 42% and 52.5% for the two off phases, inside a
-22-60% sample spread. `dumpsys meminfo` Views rose by only 8 to 9 with the probe on, where 64 were
-expected. That count cannot prove registration either way, because React Native may cull a
-zero-size native view while its JS-side mapper still registers. With no evidence that the arm
-took effect on the build where its effect is known, a null on 4.7.1 would mean nothing, so it
+22-60% sample spread. `dumpsys meminfo` Views rose by 8 or 9 with the probe on, where 64 were
+expected, and 8 is exactly one row's `EXTRA_MAPPERS_PER_ROW`. The likely reason (inferred): feed
+rows are memoized and `MapperLoad` reads the variant at render time without subscribing to it,
+so after the Settings switch only a row that happened to re-render mounted its mappers. Scrolling
+the list to its end and back did not change the count. **For the next attempt, remount the rows
+after switching** (collapse and re-expand a section) and check that Views jumps by about 64
+BEFORE reading any CPU number; if it does not, the arm has not taken. With no evidence that the
+arm took effect on the build where its effect is known, a null on 4.7.1 would mean nothing, so it
 was not run there. `.claude/rules/motion-conventions.md` keeps treating registered mappers as
 costly until a probe that demonstrably mounts settles it.
 
