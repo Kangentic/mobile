@@ -25,20 +25,23 @@ const OBJECT_PROTOTYPE_MEMBER_NAMES = ['constructor', 'toString', 'valueOf', 'ha
 describe('prChipPresentation', () => {
   describe('an open PR, where readiness is consulted', () => {
     it.each([
-      ['ready', 'ready', 'success'],
-      ['blocked', 'blocked', 'warning'],
-      ['conflicting', 'conflicts', 'conflict'],
-      ['queued', 'queued', 'info'],
-      ['running', 'running', 'info'],
-    ])('%s renders the label %s in %s', (readiness, label, color) => {
-      expect(prChipPresentation('open', readiness)).toEqual({ label, color });
+      ['ready', 'pull-request', 'success'],
+      ['blocked', 'pull-request', 'warning'],
+      ['conflicting', 'merge-conflict', 'conflict'],
+      ['queued', 'pull-request', 'info'],
+      ['running', 'pull-request', 'info'],
+    ])('%s draws the %s icon in %s', (readiness, glyph, color) => {
+      expect(prChipPresentation('open', readiness)).toEqual({ glyph, color });
     });
 
-    it('renders conflicting as the word "conflicts", not the wire value', () => {
-      // The label is deliberately not the wire string. Porting it verbatim is
-      // the easy mistake, and it reads wrong on a card ("conflicting" is a
-      // state of being, "conflicts" is what the PR has).
-      expect(prChipPresentation('open', 'conflicting').label).toBe('conflicts');
+    /**
+     * The point of the icon-only chip (design review, 2026-10-05). With no word
+     * on the chip, color is the only thing that says "ready", so plain open
+     * must never share its green - the old chip did, and only the word "ready"
+     * told the two apart.
+     */
+    it('never paints plain open in the ready green', () => {
+      expect(prChipPresentation('open', null).color).not.toBe(prChipPresentation('open', 'ready').color);
     });
 
     it('paints conflicts in its own role, never danger - a conflicting PR is stuck, not closed', () => {
@@ -47,13 +50,13 @@ describe('prChipPresentation', () => {
       );
     });
 
-    it.each([[null], [undefined], ['unknown']])('%s spends no width: plain open, no label', (readiness) => {
-      expect(prChipPresentation('open', readiness)).toEqual({ label: null, color: 'success' });
+    it.each([[null], [undefined], ['unknown']])('%s draws plain open: the PR icon in the quiet secondary color', (readiness) => {
+      expect(prChipPresentation('open', readiness)).toEqual({ glyph: 'pull-request', color: 'secondary' });
     });
 
     it('degrades an unrecognised verdict to plain open, per the protocol instruction', () => {
       // A desktop that grows a seventh verdict must not blank the chip here.
-      expect(prChipPresentation('open', 'awaiting-signoff')).toEqual({ label: null, color: 'success' });
+      expect(prChipPresentation('open', 'awaiting-signoff')).toEqual({ glyph: 'pull-request', color: 'secondary' });
     });
   });
 
@@ -62,18 +65,18 @@ describe('prChipPresentation', () => {
     // lands, so a merged row keeps whatever it last said - and a merged PR
     // advertising "ready" would be actively misleading.
     it.each([
-      ['draft', 'success'],
-      ['merged', 'info'],
-      ['closed', 'danger'],
-      [null, 'success'],
-    ])('%s renders a bare glyph whatever the verdict says', (state, color) => {
+      ['draft', 'draft', 'muted'],
+      ['merged', 'merge', 'info'],
+      ['closed', 'closed', 'danger'],
+      [null, 'pull-request', 'secondary'],
+    ])('%s draws the %s icon in %s whatever the verdict says', (state, glyph, color) => {
       for (const readiness of ['ready', 'blocked', 'conflicting', 'queued', 'running', 'unknown', null, undefined]) {
-        expect(prChipPresentation(state, readiness)).toEqual({ label: null, color });
+        expect(prChipPresentation(state, readiness)).toEqual({ glyph, color });
       }
     });
 
     it('an unrecognised state falls back to plain open rather than vanishing', () => {
-      expect(prChipPresentation('rebasing', 'ready')).toEqual({ label: null, color: 'success' });
+      expect(prChipPresentation('rebasing', 'ready')).toEqual({ glyph: 'pull-request', color: 'secondary' });
     });
   });
 });
@@ -109,13 +112,13 @@ describe('an absent readiness field reads exactly like a null one', () => {
   it('states the absent-field reading outright, so the shared expectation above cannot drift as a pair', () => {
     // The assertions above compare undefined against null, which would stay
     // green if BOTH moved together. These pin the actual values.
-    expect(prChipPresentation('open', undefined)).toEqual({ label: null, color: 'success' });
+    expect(prChipPresentation('open', undefined)).toEqual({ glyph: 'pull-request', color: 'secondary' });
     expect(prStateSummary('open', undefined)).toBe('open');
     expect(prChipAccessibilityLabel('open', undefined)).toBe('Pull request open');
   });
 
   it('ignores an absent verdict on a non-open PR, same as every other readiness value', () => {
-    expect(prChipPresentation('merged', undefined)).toEqual({ label: null, color: 'info' });
+    expect(prChipPresentation('merged', undefined)).toEqual({ glyph: 'merge', color: 'info' });
     expect(prStateSummary('merged', undefined)).toBe('merged');
     expect(prChipAccessibilityLabel('merged', undefined)).toBe('Pull request merged');
   });
@@ -127,7 +130,7 @@ describe('a prototype-chain member as the readiness value degrades to plain open
   // rejects. Before the `Map` change, `READINESS_PRESENTATION['constructor']`
   // returned `Object.prototype.constructor` (a function), so `?? PLAIN_OPEN`
   // never fired and every one of these three readers produced garbage
-  // (`label: undefined` / `color: undefined`, `undefined?.label`, a crash
+  // (`glyph: undefined` / `color: undefined`, `undefined?.word`, a crash
   // reading `.spokenDetail` off a function). Verified failing: reverting
   // `READINESS_PRESENTATION` to an object literal and indexing it with
   // `table[prMergeReadiness]` instead of `table.get(prMergeReadiness)` turned
@@ -135,7 +138,7 @@ describe('a prototype-chain member as the readiness value degrades to plain open
   it.each(OBJECT_PROTOTYPE_MEMBER_NAMES)(
     '%s renders as plain open across prChipPresentation, prStateSummary and prChipAccessibilityLabel',
     (prototypeMemberName) => {
-      expect(prChipPresentation('open', prototypeMemberName)).toEqual({ label: null, color: 'success' });
+      expect(prChipPresentation('open', prototypeMemberName)).toEqual({ glyph: 'pull-request', color: 'secondary' });
       expect(prStateSummary('open', prototypeMemberName)).toBe('open');
       expect(prChipAccessibilityLabel('open', prototypeMemberName)).toBe('Pull request open');
     },
@@ -153,19 +156,21 @@ describe('every recognised verdict is wired into all three functions the same wa
   // turned this test red for exactly that verdict, while every hand-copied
   // list elsewhere in this file stayed green because it never saw the new key.
   it.each(PR_READINESS_VERDICTS)(
-    '%s has a non-empty chip label that the summary reuses, plus a spoken caveat',
+    '%s changes the chip from plain open, has its own summary word, and carries the spoken caveat',
     (verdict) => {
-      const presentation = prChipPresentation('open', verdict);
-      expect(typeof presentation.label).toBe('string');
-      expect(presentation.label).not.toBe('');
-      expect(prStateSummary('open', verdict)).toBe(presentation.label);
+      // A verdict that drew exactly plain open would be invisible on the card,
+      // which now has no word to fall back on.
+      expect(prChipPresentation('open', verdict)).not.toEqual(prChipPresentation('open', null));
+      const word = prStateSummary('open', verdict);
+      expect(word).not.toBe('');
+      expect(word).not.toBe('open');
       expect(prChipAccessibilityLabel('open', verdict)).toContain(PR_READINESS_FRESHNESS_CAVEAT);
     },
   );
 });
 
 describe('prStateSummary', () => {
-  it('is always populated, including where the chip shows no label', () => {
+  it('is always populated, for a chip that never shows a word', () => {
     expect(prStateSummary('open', null)).toBe('open');
     expect(prStateSummary('open', 'unknown')).toBe('open');
     expect(prStateSummary(null, null)).toBe('open');
@@ -174,10 +179,16 @@ describe('prStateSummary', () => {
     expect(prStateSummary('closed', null)).toBe('closed');
   });
 
-  it('reuses the chip vocabulary, so the menu and the card never disagree', () => {
-    for (const readiness of ['ready', 'blocked', 'conflicting', 'queued', 'running']) {
-      expect(prStateSummary('open', readiness)).toBe(prChipPresentation('open', readiness).label);
-    }
+  it.each([
+    ['ready', 'ready'],
+    ['blocked', 'blocked'],
+    ['conflicting', 'conflicts'],
+    ['queued', 'queued'],
+    ['running', 'running'],
+  ])('names the %s verdict "%s" - for conflicting, the word, not the wire value', (readiness, word) => {
+    // "conflicting" is a state of being; "conflicts" is what the PR has. The
+    // chip no longer carries a word, so the menu caption is where this lives.
+    expect(prStateSummary('open', readiness)).toBe(word);
   });
 
   it.each(['draft', 'merged', 'closed'] as const)(
