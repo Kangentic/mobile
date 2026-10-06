@@ -32,7 +32,9 @@ const PREFERRED_SESSION_LENS_STORAGE_KEY = 'settings.preferredSessionLensByTaskI
 const PUSH_CATEGORIES_ENABLED_STORAGE_KEY = 'settings.pushCategoriesEnabled.v2';
 /** Read-only now; the v2 key is the only one written. Left in place as dead data. */
 const PUSH_CATEGORIES_ENABLED_LEGACY_STORAGE_KEY = 'settings.pushCategoriesEnabled';
-const COLLAPSED_TRIAGE_SECTION_STORAGE_KEY = 'settings.collapsedTriageSection';
+const COLLAPSED_TRIAGE_SECTIONS_STORAGE_KEY = 'settings.collapsedTriageSections';
+/** Read-only now: the one-collapsed-section value the list replaced. Left in place as dead data. */
+const COLLAPSED_TRIAGE_SECTION_LEGACY_STORAGE_KEY = 'settings.collapsedTriageSection';
 const HIDDEN_TRIAGE_SECTIONS_STORAGE_KEY = 'settings.hiddenTriageSections';
 const NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY = 'settings.hasRequestedNotificationPermission';
 
@@ -83,9 +85,16 @@ function parsePreferredLensMap(raw: string | null): Record<string, PreferredSess
 }
 
 /**
- * The single Agents-feed section (by display TITLE, e.g. "Idle") the user
- * has collapsed - at most one at a time, not independent per-section
- * booleans: collapsing one expands whichever was collapsed before.
+ * The Agents-feed sections (by display TITLE, e.g. "Idle") the user has
+ * collapsed. Each header collapses on its own, any number at once.
+ *
+ * It used to be ONE nullable title, where collapsing a section re-expanded
+ * whichever was collapsed before. That was harmless with two sections and
+ * broke at four (Idle, Active, Queued, Paused): with Idle collapsed, tapping
+ * Active collapsed Active and re-opened Idle above it, which pushed Active
+ * down the screen and read as a tap that did nothing. The desktop's Agent
+ * Monitor has no collapsible sections at all (it hides them with toolbar
+ * filters, which the section filter mirrors), so there was no rule to copy.
  *
  * Keyed by title, so a renamed section needs its old title migrated here:
  * the running sessions' section was "Thinking" until it became "Active", and
@@ -93,22 +102,38 @@ function parsePreferredLensMap(raw: string | null): Record<string, PreferredSess
  */
 const LEGACY_COLLAPSED_TRIAGE_TITLES: ReadonlyMap<string, string> = new Map([['Thinking', 'Active']]);
 
-function parseCollapsedTriageSection(raw: string | null): string | null {
-  if (raw === null) return null;
+function currentCollapsedTitle(title: string): string {
+  return LEGACY_COLLAPSED_TRIAGE_TITLES.get(title) ?? title;
+}
+
+/** The list under the current key. Anything that is not an array of strings reads as nothing collapsed. */
+function parseCollapsedTriageSections(raw: string): string[] {
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'string') return null;
-    return LEGACY_COLLAPSED_TRIAGE_TITLES.get(parsed) ?? parsed;
+    if (!Array.isArray(parsed)) return [];
+    const titles = parsed.filter((title): title is string => typeof title === 'string').map(currentCollapsedTitle);
+    return Array.from(new Set(titles));
   } catch {
-    return null;
+    return [];
+  }
+}
+
+/** The single title the legacy key held, as a one-entry list (or none). */
+function parseLegacyCollapsedTriageSection(raw: string | null): string[] {
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'string' ? [currentCollapsedTitle(parsed)] : [];
+  } catch {
+    return [];
   }
 }
 
 /**
  * The Agents-feed sections (by display TITLE) the user has hidden with the
- * section filter. A list rather than one value: unlike the collapse, any number
- * can be hidden at once. Anything that is not an array of strings reads as
- * nothing hidden, so a corrupt value can never blank the feed.
+ * section filter. A list, like the collapse: any number can be hidden at
+ * once. Anything that is not an array of strings reads as nothing hidden, so
+ * a corrupt value can never blank the feed.
  */
 function parseHiddenTriageSections(raw: string | null): string[] {
   if (raw === null) return [];
@@ -194,8 +219,8 @@ interface SettingsStoreState {
   preferredSessionLensByTaskId: Record<string, PreferredSessionLens>;
   /** Per-category push + local-notification opt-in; see PUSH_CATEGORY_DEFAULTS. */
   pushCategoriesEnabled: Record<PushCategory, boolean>;
-  /** The one Agents-feed section (by title) the user has collapsed, or null if both are expanded. */
-  collapsedTriageSection: string | null;
+  /** The Agents-feed sections (by title) the user has collapsed, each independently; empty expands them all. */
+  collapsedTriageSections: string[];
   /** The Agents-feed sections (by title) the section filter hides; empty shows them all. Never applies to the Board. */
   hiddenTriageSections: string[];
   /**
@@ -239,7 +264,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   backgroundNotificationsMode: 'foreground-service',
   preferredSessionLensByTaskId: {},
   pushCategoriesEnabled: defaultPushCategoriesEnabled(),
-  collapsedTriageSection: null,
+  collapsedTriageSections: [],
   hiddenTriageSections: [],
   hasRequestedNotificationPermission: false,
   hydrated: false,
@@ -269,7 +294,8 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedLensMap,
       storedPushCategoriesEnabled,
       storedLegacyPushCategoriesEnabled,
-      storedCollapsedTriageSection,
+      storedCollapsedTriageSections,
+      storedLegacyCollapsedTriageSection,
       storedHiddenTriageSections,
       storedNotificationPermissionRequested,
     ] = await Promise.all([
@@ -280,7 +306,8 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       readSetting(PREFERRED_SESSION_LENS_STORAGE_KEY),
       readSetting(PUSH_CATEGORIES_ENABLED_STORAGE_KEY),
       readSetting(PUSH_CATEGORIES_ENABLED_LEGACY_STORAGE_KEY),
-      readSetting(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY),
+      readSetting(COLLAPSED_TRIAGE_SECTIONS_STORAGE_KEY),
+      readSetting(COLLAPSED_TRIAGE_SECTION_LEGACY_STORAGE_KEY),
       readSetting(HIDDEN_TRIAGE_SECTIONS_STORAGE_KEY),
       readSetting(NOTIFICATION_PERMISSION_REQUESTED_STORAGE_KEY),
     ]);
@@ -301,7 +328,14 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
         storedPushCategoriesEnabled !== null
           ? parsePushCategoriesEnabled(storedPushCategoriesEnabled)
           : parsePushCategoriesEnabled(storedLegacyPushCategoriesEnabled, true),
-      collapsedTriageSection: parseCollapsedTriageSection(storedCollapsedTriageSection),
+      // The list key present means it was written under the per-section rule;
+      // absent means this install still has at most the old single title,
+      // which carries over as a one-entry list. Read-only, like the push map:
+      // the migration re-runs until the first toggle writes the list key.
+      collapsedTriageSections:
+        storedCollapsedTriageSections !== null
+          ? parseCollapsedTriageSections(storedCollapsedTriageSections)
+          : parseLegacyCollapsedTriageSection(storedLegacyCollapsedTriageSection),
       hiddenTriageSections: parseHiddenTriageSections(storedHiddenTriageSections),
       hasRequestedNotificationPermission: storedNotificationPermissionRequested === 'true',
       hydrated: true,
@@ -356,11 +390,13 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   },
 
   toggleTriageSectionCollapsed: async (title) => {
-    // At most one section is ever collapsed: collapsing one expands whichever
-    // was collapsed before, so this is a single nullable value, not a map.
-    const next = get().collapsedTriageSection === title ? null : title;
-    set({ collapsedTriageSection: next });
-    await SecureStore.setItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY, JSON.stringify(next));
+    // Flips this section alone; every other section keeps its state.
+    const current = get().collapsedTriageSections;
+    const next = current.includes(title)
+      ? current.filter((collapsedTitle) => collapsedTitle !== title)
+      : [...current, title];
+    set({ collapsedTriageSections: next });
+    await SecureStore.setItemAsync(COLLAPSED_TRIAGE_SECTIONS_STORAGE_KEY, JSON.stringify(next));
   },
 
   toggleTriageSectionHidden: async (title) => {

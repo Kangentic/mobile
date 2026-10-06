@@ -753,6 +753,13 @@ skips it, the header button carries an accent dot while anything is hidden, and 
 session is hidden shows `FilteredEmptyState` with Show all rather than "All quiet". The grouping
 lives in `screens/home/feedSections.ts`, so the sheet counts exactly what the feed draws.
 
+**Collapsing a section** is also phone-only (the Monitor's headers are plain labels). Tapping a
+header hides its rows and keeps the header and its count, and each section collapses
+independently: `collapsedTriageSections` in the settings store is a list keyed by title. It was
+one title at a time until the feed grew to four sections, when collapsing a second section
+re-expanded the first above it and read as a tap that did nothing; an install still holding the
+old single value (`settings.collapsedTriageSection`) carries it over on hydrate.
+
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`
 outside React). While backgrounded in foreground-service mode, `localNotifier.ts` turns
