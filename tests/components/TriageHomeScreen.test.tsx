@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import { NOW_TICK_MS, ThemeProvider } from '@/components';
+import { NOW_TICK_MS, ThemeProvider, darkTerminalTheme } from '@/components';
 import { SNIPPET_WARM_CONCURRENCY, TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
