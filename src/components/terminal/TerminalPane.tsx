@@ -199,7 +199,14 @@ export function TerminalPane({
   fitLayoutIsReference = true,
 }: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
-  const webViewRef = useRef<WebView>(null);
+  // `WebView<object>`, not bare `WebView`: react-native-webview 14 changed its
+  // class declaration's props generic default from `{}` to `undefined`
+  // (`declare class WebView<P = undefined> extends Component<WebViewProps & P>`),
+  // and `WebViewProps & undefined` is `never`, so the bare type accepts no props
+  // at all. A typing regression only - the runtime component is unchanged.
+  // `object` restores `WebViewProps & object`, which is exactly the 13.x props.
+  // Drop the explicit generic once upstream restores a usable default.
+  const webViewRef = useRef<WebView<object>>(null);
   const directKeyRef = useRef<DirectKeyInputHandle>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
@@ -1015,7 +1022,7 @@ export function TerminalPane({
   return (
     <GestureDetector gesture={pinchGesture}>
       <View style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}>
-        <WebView
+        <WebView<object>
           key={`terminal-webview-${webViewGeneration}`}
           ref={webViewRef}
           testID="terminal-webview"
