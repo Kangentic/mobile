@@ -483,6 +483,41 @@ jobs:
           done
           echo "R8 minification and resource shrinking are enabled for release builds."
 
+      # R8 OPTIMIZATION, which minification alone does not imply: the SDK 57
+      # template's `proguard-android.txt` preset carries `-dontoptimize`, so R8
+      # shrank and obfuscated but never optimized (the Play 0.8.1 advisory).
+      # plugins/withAndroidR8Optimization.ts swaps the preset and sets the AGP
+      # 8.12 opt-in for optimized resource shrinking.
+      #
+      # A separate step from the one above on purpose: that one reads
+      # gradle.properties only (buildWorkflow.test.ts pins that it never names
+      # build.gradle), and the preset lives in build.gradle.
+      #
+      # This proves the request reached the generated project. Whether
+      # optimization is actually ON is proved later, against the merged R8
+      # configuration a real release build writes
+      # (.github/scripts/verify-r8-optimization.sh in e2e.yml and
+      # build-android.yml): a library's consumer rule can still carry
+      # `-dontoptimize`, and nothing at prebuild time can see it.
+      - name: Confirm R8 optimization is requested for release builds
+        run: |
+          set -euo pipefail
+          build_gradle=android/app/build.gradle
+          if ! grep -q 'getDefaultProguardFile("proguard-android-optimize.txt")' "$build_gradle"; then
+            echo "::error::The generated $build_gradle does not use the proguard-android-optimize.txt preset, so R8 never optimizes. Check plugins/withAndroidR8Optimization.ts is registered in app.config.ts."
+            grep -n "getDefaultProguardFile" "$build_gradle" || true
+            exit 1
+          fi
+          if grep -q 'getDefaultProguardFile("proguard-android.txt")' "$build_gradle"; then
+            echo "::error::The generated $build_gradle still references the proguard-android.txt preset, whose -dontoptimize turns optimization off app-wide."
+            exit 1
+          fi
+          if ! grep -q '^android\.r8\.optimizedResourceShrinking=true$' android/gradle.properties; then
+            echo "::error::android.r8.optimizedResourceShrinking is not set to true in the generated android/gradle.properties, so R8 shrinks resources outside its code graph."
+            exit 1
+          fi
+          echo "R8 optimization and optimized resource shrinking are requested for release builds."
+
       # The CMake staging relocation, which is what lets a local Android build
       # succeed from a Kangentic task worktree at any path depth. Checked HERE,
       # on Linux, and that is the whole
