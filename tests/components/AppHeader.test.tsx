@@ -17,8 +17,8 @@ describe('AppHeader', () => {
     mockPush.mockClear();
   });
 
-  it('renders the brandmark and the title', () => {
-    render(
+  it('renders the brandmark and the title', async () => {
+    await render(
       <ThemeProvider>
         <AppHeader title="Home" />
       </ThemeProvider>,
@@ -28,21 +28,21 @@ describe('AppHeader', () => {
     expect(screen.getByText('Home')).toBeTruthy();
   });
 
-  it('routes to /settings when the settings button is pressed', () => {
-    render(
+  it('routes to /settings when the settings button is pressed', async () => {
+    await render(
       <ThemeProvider>
         <AppHeader title="Home" />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('header-settings-button'));
+    await fireEvent.press(screen.getByTestId('header-settings-button'));
 
     expect(mockPush).toHaveBeenCalledWith('/settings');
   });
 
-  it('renders a pressable title with a chevron and fires onTitlePress when supplied', () => {
+  it('renders a pressable title with a chevron and fires onTitlePress when supplied', async () => {
     const onTitlePress = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <AppHeader title="Alpha" onTitlePress={onTitlePress} />
       </ThemeProvider>,
@@ -52,13 +52,13 @@ describe('AppHeader', () => {
     expect(titleButton.props.accessibilityRole).toBe('button');
     expect(titleButton.props.accessibilityLabel).toBe('Switch project (current: Alpha)');
 
-    fireEvent.press(titleButton);
+    await fireEvent.press(titleButton);
 
     expect(onTitlePress).toHaveBeenCalledTimes(1);
   });
 
-  it('renders a plain, non-pressable title when onTitlePress is omitted', () => {
-    render(
+  it('renders a plain, non-pressable title when onTitlePress is omitted', async () => {
+    await render(
       <ThemeProvider>
         <AppHeader title="Home" />
       </ThemeProvider>,

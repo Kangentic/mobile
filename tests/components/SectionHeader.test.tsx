@@ -12,9 +12,9 @@ import { ThemeProvider, SectionHeader } from '@/components';
  */
 function countPillAlignSelf(headerTestID: string, countLabel: string): string | undefined {
   let ancestor = within(screen.getByTestId(headerTestID)).getByText(countLabel).parent;
-  // RNTL's parent chain includes composite wrappers (the RN Text class and our
-  // own Text), so a fixed hop count would break on any refactor. Badge's root
-  // View is the only node in this subtree that sets alignSelf at all.
+  // Walk up rather than hop a fixed count, which would break on any refactor
+  // that adds or removes a wrapper View. Badge's root View is the only node in
+  // this subtree that sets alignSelf at all.
   while (ancestor !== null) {
     const flattenedStyle = StyleSheet.flatten(ancestor.props.style);
     if (flattenedStyle?.alignSelf !== undefined) {
@@ -27,9 +27,9 @@ function countPillAlignSelf(headerTestID: string, countLabel: string): string | 
 
 describe('SectionHeader', () => {
   describe('collapsible variant (count + collapsed + onToggle)', () => {
-    it('renders the title and the count badge, and fires onToggle when pressed', () => {
+    it('renders the title and the count badge, and fires onToggle when pressed', async () => {
       const onToggle = jest.fn();
-      render(
+      await render(
         <ThemeProvider>
           <SectionHeader title="Idle" count={4} collapsed={false} onToggle={onToggle} testID="section-idle" />
         </ThemeProvider>,
@@ -38,7 +38,7 @@ describe('SectionHeader', () => {
       expect(screen.getByText('Idle')).toBeTruthy();
       expect(within(screen.getByTestId('section-idle')).getByText('4')).toBeTruthy();
 
-      fireEvent.press(screen.getByTestId('section-idle'));
+      await fireEvent.press(screen.getByTestId('section-idle'));
 
       expect(onToggle).toHaveBeenCalledTimes(1);
     });
@@ -48,8 +48,8 @@ describe('SectionHeader', () => {
     // Row's alignItems: 'center' (see Badge.tsx's `align` prop doc). Without
     // it the compact pill (about 19pt) sits at the top of the row the 24pt
     // title defines, floating above the title it labels.
-    it('centers the count badge on the row cross axis', () => {
-      render(
+    it('centers the count badge on the row cross axis', async () => {
+      await render(
         <ThemeProvider>
           <SectionHeader title="Idle" count={4} collapsed={false} onToggle={jest.fn()} testID="section-idle" />
         </ThemeProvider>,
@@ -58,8 +58,8 @@ describe('SectionHeader', () => {
       expect(countPillAlignSelf('section-idle', '4')).toBe('center');
     });
 
-    it('sets accessibilityState.expanded and the accessibilityLabel for the expanded state', () => {
-      render(
+    it('sets accessibilityState.expanded and the accessibilityLabel for the expanded state', async () => {
+      await render(
         <ThemeProvider>
           <SectionHeader title="Idle" count={4} collapsed={false} onToggle={jest.fn()} testID="section-idle" />
         </ThemeProvider>,
@@ -70,8 +70,8 @@ describe('SectionHeader', () => {
       expect(header.props.accessibilityLabel).toBe('Idle, 4, expanded');
     });
 
-    it('sets accessibilityState.expanded and the accessibilityLabel for the collapsed state', () => {
-      render(
+    it('sets accessibilityState.expanded and the accessibilityLabel for the collapsed state', async () => {
+      await render(
         <ThemeProvider>
           <SectionHeader title="Thinking" count={2} collapsed onToggle={jest.fn()} testID="section-thinking" />
         </ThemeProvider>,
@@ -82,8 +82,8 @@ describe('SectionHeader', () => {
       expect(header.props.accessibilityLabel).toBe('Thinking, 2, collapsed');
     });
 
-    it('falls back to a 0 count in the accessibilityLabel when count is omitted', () => {
-      render(
+    it('falls back to a 0 count in the accessibilityLabel when count is omitted', async () => {
+      await render(
         <ThemeProvider>
           <SectionHeader title="Idle" collapsed={false} onToggle={jest.fn()} testID="section-idle" />
         </ThemeProvider>,
@@ -96,8 +96,8 @@ describe('SectionHeader', () => {
   });
 
   describe('plain variant (no onToggle)', () => {
-    it('renders only the title, with no count badge and no press handling', () => {
-      render(
+    it('renders only the title, with no count badge and no press handling', async () => {
+      await render(
         <ThemeProvider>
           <SectionHeader title="Settings" testID="section-settings" />
         </ThemeProvider>,
@@ -110,8 +110,8 @@ describe('SectionHeader', () => {
       expect(header.props.onPress).toBeUndefined();
     });
 
-    it('ignores a count prop when onToggle is not provided', () => {
-      render(
+    it('ignores a count prop when onToggle is not provided', async () => {
+      await render(
         <ThemeProvider>
           <SectionHeader title="Settings" count={9} testID="section-settings" />
         </ThemeProvider>,

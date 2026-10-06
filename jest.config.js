@@ -29,6 +29,23 @@ const sharedProjectConfig = {
   // whenever jest runs inside one - collecting nothing and passing vacuously.
   modulePathIgnorePatterns: ['<rootDir>[/\\\\]\\.kangentic[/\\\\]'],
   testPathIgnorePatterns: ['[/\\\\]node_modules[/\\\\]', '<rootDir>[/\\\\]\\.kangentic[/\\\\]'],
+  // jest-expo's own transformIgnorePatterns, restated with two additions.
+  // Jest does not merge this key with the preset's, so a project that sets it
+  // replaces the whole list, hence the two trailing entries copied as they are.
+  //
+  // `@shopify/flash-list` 2.3.x ships an ES-module `dist/index.js` (no CJS
+  // build), and Sentry's 10.7x packages (`@sentry/core`, `@sentry/react`,
+  // `@sentry/browser`, `@sentry-internal/*`) resolve to `build/esm` entries
+  // through the `react-native` export condition. None is in the preset's
+  // allowlist, so the first import of either failed to PARSE ("Cannot use
+  // import statement outside a module"): BoardScreen, TriageHomeScreen,
+  // SessionScreen, SettingsScreen and every suite that reaches them. The
+  // allowlist is a prefix match, so the bare `@sentry` covers both scopes.
+  transformIgnorePatterns: [
+    '/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry|@shopify/flash-list|native-base|standard-navigation))',
+    '/node_modules/react-native-reanimated/plugin/',
+    '/node_modules/@react-native/babel-preset/',
+  ],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',

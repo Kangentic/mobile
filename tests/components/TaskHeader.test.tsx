@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { CirclePlay, Clock, LoaderCircle } from 'lucide-react-native';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { TaskHeader } from '@/screens/task/TaskHeader';
@@ -7,6 +7,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore } from '@/state/resumeStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { getLucideGlyph } from '../helpers/lucideGlyphs';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -49,8 +50,8 @@ function seedLocatedTask(swimlaneId: string = 'lane-todo'): void {
   });
 }
 
-function renderTaskHeader(props: Partial<React.ComponentProps<typeof TaskHeader>> = {}): void {
-  render(
+async function renderTaskHeader(props: Partial<React.ComponentProps<typeof TaskHeader>> = {}): Promise<void> {
+  await render(
     <ThemeProvider>
       <TaskHeader taskTitle="Fix the login bug" sessionId={null} taskId="task-1" {...props} />
     </ThemeProvider>,
@@ -64,36 +65,36 @@ describe('TaskHeader column chip', () => {
     useActivityStore.getState().reset();
   });
 
-  it('shows the current-column chip when a cached board locates the task', () => {
+  it('shows the current-column chip when a cached board locates the task', async () => {
     seedLocatedTask();
-    renderTaskHeader();
+    await renderTaskHeader();
     expect(screen.getByTestId('task-header-column')).toBeTruthy();
     expect(screen.getByText('To Do')).toBeTruthy();
   });
 
-  it('renders no chip when no board has located the task', () => {
-    renderTaskHeader();
+  it('renders no chip when no board has located the task', async () => {
+    await renderTaskHeader();
     expect(screen.queryByTestId('task-header-column')).toBeNull();
   });
 
-  it("renders no chip when the task's swimlane names no column", () => {
+  it("renders no chip when the task's swimlane names no column", async () => {
     seedLocatedTask('lane-gone');
-    renderTaskHeader();
+    await renderTaskHeader();
     expect(screen.queryByTestId('task-header-column')).toBeNull();
   });
 
   /** The CompletedTaskScreen contract: archived tasks are on no board, so it passes no taskId and gets no chip. */
-  it('renders no chip without a taskId', () => {
+  it('renders no chip without a taskId', async () => {
     seedLocatedTask();
-    renderTaskHeader({ taskId: null });
+    await renderTaskHeader({ taskId: null });
     expect(screen.queryByTestId('task-header-column')).toBeNull();
   });
 
-  it("tapping the chip pushes the move-task form sheet with the task and its board's project", () => {
+  it("tapping the chip pushes the move-task form sheet with the task and its board's project", async () => {
     seedLocatedTask();
-    renderTaskHeader();
+    await renderTaskHeader();
 
-    fireEvent.press(screen.getByTestId('task-header-column'));
+    await fireEvent.press(screen.getByTestId('task-header-column'));
 
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/move-task',
@@ -101,11 +102,11 @@ describe('TaskHeader column chip', () => {
     });
   });
 
-  it('long-pressing the chip pushes the task-actions hub with the same params', () => {
+  it('long-pressing the chip pushes the task-actions hub with the same params', async () => {
     seedLocatedTask();
-    renderTaskHeader();
+    await renderTaskHeader();
 
-    fireEvent(screen.getByTestId('task-header-column'), 'longPress');
+    await fireEvent(screen.getByTestId('task-header-column'), 'longPress');
 
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/task-actions',
@@ -121,12 +122,12 @@ describe('TaskHeader column chip', () => {
    * half of that; this locks that the mounted chip actually re-renders
    * against it, rather than freezing on the column it first subscribed to.
    */
-  it('re-labels the chip when an optimistic move lands under an unchanged columns array', () => {
+  it('re-labels the chip when an optimistic move lands under an unchanged columns array', async () => {
     seedLocatedTask();
-    renderTaskHeader();
+    await renderTaskHeader();
     expect(screen.getByText('To Do')).toBeTruthy();
 
-    act(() => {
+    await act(() => {
       useBoardStore.getState().applyOptimisticMove({
         projectId: 'project-1',
         taskId: 'task-1',
@@ -176,7 +177,7 @@ describe('TaskHeader status glyph', () => {
     return `unknown:${String(color)}`;
   };
 
-  it('shows the desktop\'s still clock for a queued session, and no agent icon', () => {
+  it('shows the desktop\'s still clock for a queued session, and no agent icon', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applySnapshot(
       'sess-1',
@@ -185,9 +186,9 @@ describe('TaskHeader status glyph', () => {
       streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
     );
 
-    renderTaskHeader({ sessionId: 'sess-1' });
+    await renderTaskHeader({ sessionId: 'sess-1' });
 
-    expect(within(screen.getByTestId('task-header-status-queued')).UNSAFE_getByType(Clock)).toBeTruthy();
+    expect(getLucideGlyph(screen.getByTestId('task-header-status-queued'), Clock)).toBeTruthy();
     expect(renderedStatusTone()).toBeNull();
   });
 
@@ -196,7 +197,7 @@ describe('TaskHeader status glyph', () => {
    * renders something": the SAME idle entry without the queued status must
    * still draw the envelope.
    */
-  it('still shows the idle envelope for an ordinary settled session', () => {
+  it('still shows the idle envelope for an ordinary settled session', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applySnapshot(
       'sess-1',
@@ -205,7 +206,7 @@ describe('TaskHeader status glyph', () => {
       streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
     );
 
-    renderTaskHeader({ sessionId: 'sess-1' });
+    await renderTaskHeader({ sessionId: 'sess-1' });
 
     expect(renderedStatusTone()).toBe('idle');
   });
@@ -218,7 +219,7 @@ describe('TaskHeader status glyph', () => {
   it.each([
     ['still has its outgoing entry', 'sess-1'],
     ['has no session bound', null],
-  ])('shows the desktop\'s spinner for a respawning task that %s, and no agent icon', (_case, sessionId) => {
+  ])('shows the desktop\'s spinner for a respawning task that %s, and no agent icon', async (_case, sessionId) => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
@@ -227,9 +228,9 @@ describe('TaskHeader status glyph', () => {
       payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
     });
 
-    renderTaskHeader({ sessionId });
+    await renderTaskHeader({ sessionId });
 
-    expect(within(screen.getByTestId('task-header-status-preparing')).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+    expect(getLucideGlyph(screen.getByTestId('task-header-status-preparing'), LoaderCircle)).toBeTruthy();
     expect(renderedStatusTone()).toBeNull();
   });
 
@@ -238,7 +239,7 @@ describe('TaskHeader status glyph', () => {
    * nothing for. The seeded entry is idle, so a header that ignored the end
    * would draw the envelope.
    */
-  it('draws nothing for a task whose session ended without a label', () => {
+  it('draws nothing for a task whose session ended without a label', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
@@ -247,15 +248,15 @@ describe('TaskHeader status glyph', () => {
       payload: { type: 'session-ended', intentional: true },
     });
 
-    renderTaskHeader({ sessionId: 'sess-1' });
+    await renderTaskHeader({ sessionId: 'sess-1' });
 
     expect(renderedStatusTone()).toBeNull();
     expect(screen.queryByTestId('task-header-status-queued')).toBeNull();
     expect(screen.queryByTestId('task-header-status-preparing')).toBeNull();
   });
 
-  it('draws no glyph at all when no session is bound and nothing is in flight', () => {
-    renderTaskHeader({ sessionId: null });
+  it('draws no glyph at all when no session is bound and nothing is in flight', async () => {
+    await renderTaskHeader({ sessionId: null });
 
     expect(renderedStatusTone()).toBeNull();
     expect(screen.queryByTestId('task-header-status-preparing')).toBeNull();
@@ -282,14 +283,14 @@ describe('TaskHeader status glyph', () => {
     useResumeStore.setState({ byTaskId: {} });
     seedPausedSession({ resumable: true });
 
-    renderTaskHeader({ sessionId: 'sess-1' });
+    await renderTaskHeader({ sessionId: 'sess-1' });
 
     const resumeButton = screen.getByTestId('task-header-resume');
-    expect(within(resumeButton).UNSAFE_getByType(CirclePlay)).toBeTruthy();
+    expect(getLucideGlyph(resumeButton, CirclePlay)).toBeTruthy();
     expect(resumeButton.props.accessibilityLabel).toBe('Resume session');
     expect(renderedStatusTone()).toBeNull();
     await act(async () => {
-      fireEvent.press(resumeButton);
+      await fireEvent.press(resumeButton);
     });
     expect(mockResumeTaskSession).toHaveBeenCalledWith('task-1', 'project-1');
   });
@@ -300,21 +301,21 @@ describe('TaskHeader status glyph', () => {
    * seeded entry is idle, so a header that fell through would draw the
    * envelope, which is what it drew for a paused session before Resume.
    */
-  it('draws nothing for a paused session the desktop does not mark resumable', () => {
+  it('draws nothing for a paused session the desktop does not mark resumable', async () => {
     seedPausedSession({ resumable: false });
 
-    renderTaskHeader({ sessionId: 'sess-1' });
+    await renderTaskHeader({ sessionId: 'sess-1' });
 
     expect(screen.queryByTestId('task-header-resume')).toBeNull();
     expect(renderedStatusTone()).toBeNull();
   });
 
-  it('spins the muted spinner, and takes no second tap, while the resume runs', () => {
+  it('spins the muted spinner, and takes no second tap, while the resume runs', async () => {
     useResumeStore.setState({ byTaskId: {} });
     useResumeStore.getState().markResuming('task-1', Date.now());
     seedPausedSession({ resumable: true });
 
-    renderTaskHeader({ sessionId: 'sess-1' });
+    await renderTaskHeader({ sessionId: 'sess-1' });
 
     expect(screen.getByTestId('task-header-resume-spinner')).toBeTruthy();
     expect(screen.getByTestId('task-header-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));

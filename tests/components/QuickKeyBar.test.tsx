@@ -41,45 +41,45 @@ describe('QuickKeyBar', () => {
     useTerminalUiStore.setState({ applicationCursorModeBySessionId: {} });
   });
 
-  it.each(EXPECTED_SEQUENCES)('writes the CSI byte sequence for $testID in normal cursor mode', ({ testID, sequence }) => {
+  it.each(EXPECTED_SEQUENCES)('writes the CSI byte sequence for $testID in normal cursor mode', async ({ testID, sequence }) => {
     const { writeTerminal } = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
 
-    render(
+    await render(
       <ThemeProvider>
         <QuickKeyBar sessionId="sess-1" />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId(testID));
+    await fireEvent.press(screen.getByTestId(testID));
     expect(writeTerminal).toHaveBeenCalledTimes(1);
     expect(writeTerminal).toHaveBeenCalledWith('sess-1', sequence);
   });
 
-  it.each(SS3_ARROWS)('writes the SS3 arrow sequence for $testID when the session is in application cursor mode', ({ testID, sequence }) => {
+  it.each(SS3_ARROWS)('writes the SS3 arrow sequence for $testID when the session is in application cursor mode', async ({ testID, sequence }) => {
     const { writeTerminal } = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
     useTerminalUiStore.getState().setApplicationCursorMode('sess-1', true);
 
-    render(
+    await render(
       <ThemeProvider>
         <QuickKeyBar sessionId="sess-1" />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId(testID));
+    await fireEvent.press(screen.getByTestId(testID));
     expect(writeTerminal).toHaveBeenCalledWith('sess-1', sequence);
   });
 
-  it('keys DECCKM by session id: a different session stays in CSI mode', () => {
+  it('keys DECCKM by session id: a different session stays in CSI mode', async () => {
     const { writeTerminal } = jest.requireMock<{ writeTerminal: jest.Mock }>('@/connection/actions');
     useTerminalUiStore.getState().setApplicationCursorMode('other-session', true);
 
-    render(
+    await render(
       <ThemeProvider>
         <QuickKeyBar sessionId="sess-1" />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('quick-key-up'));
+    await fireEvent.press(screen.getByTestId('quick-key-up'));
     expect(writeTerminal).toHaveBeenCalledWith('sess-1', '\x1b[A');
   });
 });

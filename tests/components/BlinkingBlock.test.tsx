@@ -16,20 +16,20 @@ import { BlinkingBlock } from '@/components/motion/BlinkingBlock';
 describe('BlinkingBlock', () => {
   const baseStyle = { width: 8, height: 8 };
 
-  it('starts lit and toggles opacity between max and min on the interval', () => {
+  it('starts lit and toggles opacity between max and min on the interval', async () => {
     jest.useFakeTimers();
     try {
-      render(<BlinkingBlock testID="blink" baseStyle={baseStyle} intervalMs={500} opacityMin={0.2} opacityMax={0.9} />);
+      await render(<BlinkingBlock testID="blink" baseStyle={baseStyle} intervalMs={500} opacityMin={0.2} opacityMax={0.9} />);
 
       const opacity = (): number => StyleSheet.flatten(screen.getByTestId('blink').props.style).opacity as number;
       expect(opacity()).toBe(0.9);
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(500);
       });
       expect(opacity()).toBe(0.2);
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(500);
       });
       expect(opacity()).toBe(0.9);
@@ -52,15 +52,19 @@ describe('BlinkingBlock', () => {
    * cleanup from BlinkingBlock's effect left one pending timer after unmount
    * instead of zero - "expected 1 to be 0".
    */
-  it('clears its interval on unmount, leaving no pending timer', () => {
-    jest.useFakeTimers();
+  it('clears its interval on unmount, leaving no pending timer', async () => {
+    // RNTL 14 awaits React's act, which schedules its flush with queueMicrotask.
+    // Faked, those jobs sit on the fake clock and jest.getTimerCount() counts
+    // them. Leave queueMicrotask real so the count is the component's own
+    // interval alone, which is what this test is about.
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask'] });
     try {
-      const { unmount } = render(
+      const { unmount } = await render(
         <BlinkingBlock testID="blink" baseStyle={baseStyle} intervalMs={500} opacityMin={0.2} opacityMax={0.9} />,
       );
       expect(jest.getTimerCount()).toBe(1);
 
-      unmount();
+      await unmount();
 
       expect(jest.getTimerCount()).toBe(0);
     } finally {

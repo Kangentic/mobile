@@ -136,7 +136,7 @@ describe('PendingNavigationRunner', () => {
   it('performs a navigation published before it mounted, exactly once', async () => {
     await publishTap('cold-start-notification');
 
-    render(<PendingNavigationRunner />);
+    await render(<PendingNavigationRunner />);
 
     expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
     expect(mockRouterNavigate).toHaveBeenCalledWith(EXPECTED_NAVIGATION);
@@ -153,8 +153,8 @@ describe('PendingNavigationRunner', () => {
   it('does not perform the same navigation again when it remounts', async () => {
     await publishTap('remount-notification');
 
-    render(<PendingNavigationRunner />).unmount();
-    render(<PendingNavigationRunner />);
+    await (await render(<PendingNavigationRunner />)).unmount();
+    await render(<PendingNavigationRunner />);
 
     expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
   });
@@ -166,7 +166,7 @@ describe('PendingNavigationRunner', () => {
    * notification would leave the cold-start case above still green.
    */
   it('performs a navigation published while it is already mounted', async () => {
-    render(<PendingNavigationRunner />);
+    await render(<PendingNavigationRunner />);
 
     expect(mockRouterNavigate).not.toHaveBeenCalled();
 
@@ -184,22 +184,22 @@ describe('PendingNavigationRunner', () => {
    * call router.navigate('/') directly from connectionManager, behind a
    * try/catch whose comment named the one case it could not handle.
    */
-  it('resets to root for a reset-to-root intent, dismissing an open sheet first', () => {
+  it('resets to root for a reset-to-root intent, dismissing an open sheet first', async () => {
     mockRouterCanDismiss.mockReturnValue(true);
     publishPendingNavigation({ kind: 'reset-to-root' });
 
-    render(<PendingNavigationRunner />);
+    await render(<PendingNavigationRunner />);
 
     expect(mockRouterDismissAll).toHaveBeenCalledTimes(1);
     expect(mockRouterNavigate).toHaveBeenCalledWith('/');
     expect(mockRouterPush).not.toHaveBeenCalled();
   });
 
-  it('skips dismissAll when there is nothing to dismiss', () => {
+  it('skips dismissAll when there is nothing to dismiss', async () => {
     mockRouterCanDismiss.mockReturnValue(false);
     publishPendingNavigation({ kind: 'reset-to-root' });
 
-    render(<PendingNavigationRunner />);
+    await render(<PendingNavigationRunner />);
 
     expect(mockRouterDismissAll).not.toHaveBeenCalled();
     expect(mockRouterNavigate).toHaveBeenCalledWith('/');
@@ -220,7 +220,7 @@ describe('PendingNavigationRunner', () => {
    * rather than through `publishTap`, so this case is about the runner's
    * consume/perform ordering, not about tapRouter's own dedupe latch.
    */
-  it('performs a newer reset-to-root published mid-commit, not the older open-task it superseded', () => {
+  it('performs a newer reset-to-root published mid-commit, not the older open-task it superseded', async () => {
     mockRouterCanDismiss.mockReturnValue(false);
     publishPendingNavigation({
       kind: 'open-task',
@@ -229,7 +229,7 @@ describe('PendingNavigationRunner', () => {
       sessionId: 'superseded-session',
     });
 
-    render(
+    await render(
       <>
         <PendingNavigationRunner />
         <PublishNewerIntentDuringLayout />
@@ -241,8 +241,8 @@ describe('PendingNavigationRunner', () => {
     expect(mockRouterPush).not.toHaveBeenCalled();
   });
 
-  it('navigates nowhere when nothing was ever published', () => {
-    render(<PendingNavigationRunner />);
+  it('navigates nowhere when nothing was ever published', async () => {
+    await render(<PendingNavigationRunner />);
 
     expect(mockRouterPush).not.toHaveBeenCalled();
     expect(mockRouterNavigate).not.toHaveBeenCalled();

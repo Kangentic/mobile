@@ -32,8 +32,8 @@ function seedSessions(): void {
   useActivityStore.getState().applySnapshot('sess-paused', 'task-4', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
 }
 
-function renderSheet(): void {
-  render(
+async function renderSheet(): Promise<void> {
+  await render(
     <ThemeProvider>
       <SectionFilterScreen />
     </ThemeProvider>,
@@ -46,8 +46,8 @@ describe('SectionFilterScreen', () => {
     useSettingsStore.setState({ hiddenTriageSections: [] });
   });
 
-  it('lists all four sections with how many sessions each holds, an empty one included', () => {
-    renderSheet();
+  it('lists all four sections with how many sessions each holds, an empty one included', async () => {
+    await renderSheet();
     expect(screen.getByTestId('section-filter-row-idle').props.accessibilityLabel).toBe('Idle, 2 sessions');
     expect(screen.getByTestId('section-filter-row-active').props.accessibilityLabel).toBe('Active, 1 session');
     expect(screen.getByTestId('section-filter-row-queued').props.accessibilityLabel).toBe('Queued, 0 sessions');
@@ -58,9 +58,9 @@ describe('SectionFilterScreen', () => {
    * The whole row is the target, at Material's 48 dp (above the 44 pt iOS
    * minimum), and a screen reader hears it as a checkbox with its state.
    */
-  it('makes each whole row a 48 dp checkbox target', () => {
+  it('makes each whole row a 48 dp checkbox target', async () => {
     useSettingsStore.setState({ hiddenTriageSections: ['Queued'] });
-    renderSheet();
+    await renderSheet();
     const idleRow = screen.getByTestId('section-filter-row-idle');
     expect(idleRow.props.accessibilityRole).toBe('checkbox');
     expect(idleRow.props.accessibilityState).toEqual(expect.objectContaining({ checked: true }));
@@ -69,31 +69,31 @@ describe('SectionFilterScreen', () => {
   });
 
   it('hides a section on tap and shows it again on a second tap, remembered in settings', async () => {
-    renderSheet();
+    await renderSheet();
     await act(async () => {
-      fireEvent.press(screen.getByTestId('section-filter-row-paused'));
+      await fireEvent.press(screen.getByTestId('section-filter-row-paused'));
     });
     expect(useSettingsStore.getState().hiddenTriageSections).toEqual(['Paused']);
     expect(screen.getByTestId('section-filter-row-paused').props.accessibilityState).toEqual(expect.objectContaining({ checked: false }));
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('section-filter-row-paused'));
+      await fireEvent.press(screen.getByTestId('section-filter-row-paused'));
     });
     expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
   });
 
   it('greys out Show all while nothing is hidden, and clears every hidden section when tapped', async () => {
-    renderSheet();
+    await renderSheet();
     expect(screen.getByTestId('section-filter-show-all').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('section-filter-row-queued'));
-      fireEvent.press(screen.getByTestId('section-filter-row-paused'));
+      await fireEvent.press(screen.getByTestId('section-filter-row-queued'));
+      await fireEvent.press(screen.getByTestId('section-filter-row-paused'));
     });
     expect(screen.getByTestId('section-filter-show-all').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('section-filter-show-all'));
+      await fireEvent.press(screen.getByTestId('section-filter-show-all'));
     });
     expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
   });
@@ -104,9 +104,9 @@ describe('SectionFilterScreen', () => {
    * so this asserts the timing call, with screen motion explicitly ON so a
    * gate closed by default could not pass it vacuously.
    */
-  it('draws the Active glyph still, starting no spin, even where motion is allowed', () => {
+  it('draws the Active glyph still, starting no spin, even where motion is allowed', async () => {
     const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-    render(
+    await render(
       <ThemeProvider>
         <ScreenMotionOverride active>
           <SectionFilterScreen />
@@ -125,9 +125,9 @@ describe('SectionFilterScreen', () => {
    * selection list. This file runs once per jest project, so each run asserts
    * its own platform and the absence of the other's mark.
    */
-  it('draws the platform\'s own selection mark', () => {
+  it('draws the platform\'s own selection mark', async () => {
     useSettingsStore.setState({ hiddenTriageSections: ['Queued'] });
-    renderSheet();
+    await renderSheet();
     if (Platform.OS === 'ios') {
       expect(screen.getByTestId('section-filter-row-idle-checkmark')).toBeTruthy();
       expect(screen.queryByTestId('section-filter-row-idle-checkbox')).toBeNull();

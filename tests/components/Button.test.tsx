@@ -1,15 +1,15 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react-native';
 import { StyleSheet, View, type ColorValue, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
-import type { ReactTestRendererNode } from 'react-test-renderer';
+import type { JsonNode } from 'test-renderer';
 import { ThemeProvider, Button } from '@/components';
 import type { ButtonVariant } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 
 const { colors } = darkTerminalTheme;
 
-function renderButton(variant: ButtonVariant | undefined, leading?: React.ReactNode): void {
-  render(
+async function renderButton(variant: ButtonVariant | undefined, leading?: React.ReactNode): Promise<void> {
+  await render(
     <ThemeProvider>
       <Button label="Resume" onPress={jest.fn()} testID="button" variant={variant} leading={leading} />
     </ThemeProvider>,
@@ -29,19 +29,18 @@ function labelInk(): ColorValue | undefined {
  * The rendered host tree as one compact string, so a structural assertion fails
  * with a readable diff rather than a dump of the whole React fiber. A View is
  * `View#testID`, or `Row` when it has no testID and lays out horizontally (the
- * `Row` primitive); a Text is `Text(content)`.
+ * `Row` primitive); a Text is `Text(content)`. Test Renderer's toJSON() returns
+ * one element or null, never the array the previous react-test-renderer
+ * returned for a multi-root tree, so there is no array case to join.
  */
-function outline(node: ReactTestRendererNode | ReactTestRendererNode[] | null): string {
+function outline(node: JsonNode | null): string {
   if (node === null) {
     return 'null';
-  }
-  if (Array.isArray(node)) {
-    return node.map(outline).join(', ');
   }
   if (typeof node === 'string') {
     return node;
   }
-  const children = (node.children ?? []).map(outline).join(', ');
+  const children = node.children.map(outline).join(', ');
   if (node.type === 'Text') {
     return `Text(${children})`;
   }
@@ -51,8 +50,8 @@ function outline(node: ReactTestRendererNode | ReactTestRendererNode[] | null): 
 }
 
 describe('Button variants', () => {
-  it('draws the tinted variant as an accent wash with a 1-wide accent-muted outline and accent ink', () => {
-    renderButton('tinted');
+  it('draws the tinted variant as an accent wash with a 1-wide accent-muted outline and accent ink', async () => {
+    await renderButton('tinted');
 
     const surface = buttonSurfaceStyle();
     expect(surface.backgroundColor).toBe(colors.accentSubtle);
@@ -63,8 +62,8 @@ describe('Button variants', () => {
     expect(labelInk()).toBe(colors.accent);
   });
 
-  it('keeps onAccent ink on the solid primary fill, with no outline', () => {
-    renderButton('primary');
+  it('keeps onAccent ink on the solid primary fill, with no outline', async () => {
+    await renderButton('primary');
 
     const surface = buttonSurfaceStyle();
     expect(surface.backgroundColor).toBe(colors.accent);
@@ -72,15 +71,15 @@ describe('Button variants', () => {
     expect(labelInk()).toBe(colors.onAccent);
   });
 
-  it('defaults to the primary variant', () => {
-    renderButton(undefined);
+  it('defaults to the primary variant', async () => {
+    await renderButton(undefined);
 
     expect(buttonSurfaceStyle().backgroundColor).toBe(colors.accent);
     expect(labelInk()).toBe(colors.onAccent);
   });
 
-  it('keeps onAccent ink on the solid danger fill, with no outline', () => {
-    renderButton('danger');
+  it('keeps onAccent ink on the solid danger fill, with no outline', async () => {
+    await renderButton('danger');
 
     const surface = buttonSurfaceStyle();
     expect(surface.backgroundColor).toBe(colors.danger);
@@ -88,8 +87,8 @@ describe('Button variants', () => {
     expect(labelInk()).toBe(colors.onAccent);
   });
 
-  it('keeps textPrimary ink on the transparent ghost variant, with no outline', () => {
-    renderButton('ghost');
+  it('keeps textPrimary ink on the transparent ghost variant, with no outline', async () => {
+    await renderButton('ghost');
 
     const surface = buttonSurfaceStyle();
     expect(surface.backgroundColor).toBe('transparent');
@@ -99,29 +98,29 @@ describe('Button variants', () => {
 });
 
 describe('Button leading glyph', () => {
-  it('renders the leading node before the label, together in one row inside the pressable', () => {
-    renderButton('tinted', <View testID="button-leading" />);
+  it('renders the leading node before the label, together in one row inside the pressable', async () => {
+    await renderButton('tinted', <View testID="button-leading" />);
 
     // One shared row holding the glyph THEN the label, as the pressable's only
     // content: a press on either is a press on the button, and they centre together.
     expect(outline(screen.toJSON())).toBe('View#button(Row(View#button-leading(), Text(Resume)))');
   });
 
-  it('still fires onPress when the press lands on the leading node', () => {
+  it('still fires onPress when the press lands on the leading node', async () => {
     const onPress = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <Button label="Resume" onPress={onPress} testID="button" leading={<View testID="button-leading" />} />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('button-leading'));
+    await fireEvent.press(screen.getByTestId('button-leading'));
 
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the label straight into the pressable, with no row wrapper, when there is no leading node', () => {
-    renderButton('tinted');
+  it('renders the label straight into the pressable, with no row wrapper, when there is no leading node', async () => {
+    await renderButton('tinted');
 
     expect(outline(screen.toJSON())).toBe('View#button(Text(Resume))');
   });

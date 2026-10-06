@@ -1,7 +1,7 @@
 import React from 'react';
 import { Dimensions, StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import type { ReactTestInstance } from 'react-test-renderer';
+import type { TestInstance } from 'test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { MoveTaskScreen } from '@/screens/MoveTaskScreen';
@@ -16,24 +16,22 @@ import {
 } from '@/lib/sheetContentHeights';
 
 /**
- * Walks up from a queried host node to its nearest HOST ancestor (skipping
- * the composite wrapper layers a mocked ScrollView renders through in this
- * Jest environment), so the caller can assert that ancestor IS the
- * SheetScrollerSlot's View rather than merely that a slot exists somewhere
- * above it. Stopping at anything but the nearest host would let a slot that
- * wraps the wrong element (e.g. the whole Stack, which is exactly the
- * misplacement SheetScrollerSlot's own invariant comment warns against)
+ * Returns the nearest HOST ancestor of a queried host node, so the caller can
+ * assert that ancestor IS the SheetScrollerSlot's View rather than merely that
+ * a slot exists somewhere above it. Test Renderer (RNTL 14) only exposes host
+ * instances, so `parent` is already the nearest host: there are no composite
+ * wrapper layers to skip any more, which the previous react-test-renderer
+ * helper had to walk past. Stopping at anything but the nearest host would let
+ * a slot that wraps the wrong element (e.g. the whole Stack, which is exactly
+ * the misplacement SheetScrollerSlot's own invariant comment warns against)
  * pass this check by accident.
  */
-function nearestHostAncestor(instance: ReactTestInstance): ReactTestInstance {
-  let current = instance.parent;
-  while (current !== null && typeof current.type !== 'string') {
-    current = current.parent;
-  }
-  if (current === null) {
+function nearestHostAncestor(instance: TestInstance): TestInstance {
+  const hostAncestor = instance.parent;
+  if (hostAncestor === null) {
     throw new Error('expected a host ancestor');
   }
-  return current;
+  return hostAncestor;
 }
 
 jest.mock('react-native-safe-area-context', () =>
@@ -94,8 +92,8 @@ describe('MoveTaskScreen', () => {
     seedBoard();
   });
 
-  it('shows the task and disables its current column', () => {
-    renderMoveTaskScreen();
+  it('shows the task and disables its current column', async () => {
+    await renderMoveTaskScreen();
 
     expect(screen.getByText('Fix the login redirect')).toBeTruthy();
     expect(screen.getByTestId('move-target-lane-todo').props.accessibilityState.disabled).toBe(true);
@@ -110,11 +108,11 @@ describe('MoveTaskScreen', () => {
    * Hardcoding 0 would silently move every task to the top instead.
    */
   it('appends after the tasks already in the target column', async () => {
-    renderMoveTaskScreen();
+    await renderMoveTaskScreen();
 
-    fireEvent.press(screen.getByTestId('move-target-lane-doing'));
+    await fireEvent.press(screen.getByTestId('move-target-lane-doing'));
     await act(async () => {
-      fireEvent.press(screen.getByTestId('move-confirm'));
+      await fireEvent.press(screen.getByTestId('move-confirm'));
     });
 
     expect(mockMoveTaskOptimistic).toHaveBeenCalledWith({
@@ -133,20 +131,20 @@ describe('MoveTaskScreen', () => {
    */
   it('shows a CapabilityError verbatim but generalises any other failure', async () => {
     mockMoveTaskOptimistic.mockRejectedValueOnce(new CapabilityError('move-task', 'The desktop rejected the move'));
-    const refused = renderMoveTaskScreen();
-    fireEvent.press(screen.getByTestId('move-target-lane-doing'));
+    const refused = await renderMoveTaskScreen();
+    await fireEvent.press(screen.getByTestId('move-target-lane-doing'));
     await act(async () => {
-      fireEvent.press(screen.getByTestId('move-confirm'));
+      await fireEvent.press(screen.getByTestId('move-confirm'));
     });
     expect(screen.getByText('The desktop rejected the move')).toBeTruthy();
     expect(mockBack).not.toHaveBeenCalled();
-    refused.unmount();
+    await refused.unmount();
 
     mockMoveTaskOptimistic.mockRejectedValueOnce(new Error('some transport blip'));
-    renderMoveTaskScreen();
-    fireEvent.press(screen.getByTestId('move-target-lane-doing'));
+    await renderMoveTaskScreen();
+    await fireEvent.press(screen.getByTestId('move-target-lane-doing'));
     await act(async () => {
-      fireEvent.press(screen.getByTestId('move-confirm'));
+      await fireEvent.press(screen.getByTestId('move-confirm'));
     });
     expect(screen.getByText('Move failed - check the connection')).toBeTruthy();
     expect(screen.queryByText('some transport blip')).toBeNull();
@@ -156,7 +154,7 @@ describe('MoveTaskScreen', () => {
    * The feed spans every paired project, so the columns offered must come from
    * the TASK's own board, not from whichever board was last looked at.
    */
-  it('renders the columns of the project named in the params', () => {
+  it('renders the columns of the project named in the params', async () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: {
         ...state.boardsByProjectId,
@@ -172,7 +170,7 @@ describe('MoveTaskScreen', () => {
     }));
     mockParams = { taskId: 'task-9', projectId: 'project-2' };
 
-    renderMoveTaskScreen();
+    await renderMoveTaskScreen();
 
     expect(screen.getByTestId('move-target-p2-triage')).toBeTruthy();
     expect(screen.queryByTestId('move-target-lane-doing')).toBeNull();
@@ -195,8 +193,8 @@ describe('MoveTaskScreen scroller slot wiring', () => {
     seedBoard();
   });
 
-  it('renders the column list inside a SheetScrollerSlot', () => {
-    renderMoveTaskScreen();
+  it('renders the column list inside a SheetScrollerSlot', async () => {
+    await renderMoveTaskScreen();
 
     const scroller = screen.getByTestId('move-target-list');
     const slotHost = nearestHostAncestor(scroller);
@@ -261,9 +259,9 @@ describe('MoveTaskScreen column list height cap', () => {
     });
   }
 
-  it('rests at the historical 420 ceiling on a tall window, unaligned (lists stay unaligned)', () => {
+  it('rests at the historical 420 ceiling on a tall window, unaligned (lists stay unaligned)', async () => {
     mockWindowHeight(1280);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('move-target-list').props.style);
 
@@ -271,9 +269,9 @@ describe('MoveTaskScreen column list height cap', () => {
     expect(style.maxHeight).toBe(SHEET_CONTENT_CEILING);
   });
 
-  it('shrinks the list cap on a short window, strictly between the floor and the ceiling', () => {
+  it('shrinks the list cap on a short window, strictly between the floor and the ceiling', async () => {
     mockWindowHeight(600);
-    renderWithInsets();
+    await renderWithInsets();
 
     const style = StyleSheet.flatten(screen.getByTestId('move-target-list').props.style);
     const expectedMaxHeight = expectedListMaxHeight(600);

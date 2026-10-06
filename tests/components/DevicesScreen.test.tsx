@@ -50,8 +50,8 @@ jest.mock('@/connection/connectionManager', () => ({
   revokePushRegistrationForUnpair: () => mockRevokePushRegistrationForUnpair(),
 }));
 
-function renderDevices(): void {
-  render(
+async function renderDevices(): Promise<void> {
+  await render(
     <ThemeProvider>
       <DevicesScreen />
     </ThemeProvider>,
@@ -73,20 +73,20 @@ describe('DevicesScreen', () => {
     };
   });
 
-  it('renders the paired-desktop and this-phone cards with fingerprints', () => {
-    renderDevices();
+  it('renders the paired-desktop and this-phone cards with fingerprints', async () => {
+    await renderDevices();
     expect(screen.getByTestId('devices-desktop-fingerprint').props.children).toBe('a1b2 c3d4 e5f6 0718');
     expect(screen.getByTestId('devices-phone-fingerprint').props.children).toBe('1122 3344 5566 7788');
     expect(screen.getByTestId('devices-connection-dot')).toBeTruthy();
   });
 
   it('unpairs only after the two-step confirm, announcing the departure', async () => {
-    renderDevices();
-    fireEvent.press(screen.getByTestId('devices-unpair'));
+    await renderDevices();
+    await fireEvent.press(screen.getByTestId('devices-unpair'));
     expect(mockUnpairLocally).not.toHaveBeenCalled();
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
+      await fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
     });
     expect(mockRevokePushRegistrationForUnpair).toHaveBeenCalled();
     // Unpair is a deliberate departure: the desktop should be told, so its
@@ -108,16 +108,16 @@ describe('DevicesScreen', () => {
   it('still unpairs on the second tap long after the first', async () => {
     jest.useFakeTimers();
     try {
-      renderDevices();
-      fireEvent.press(screen.getByTestId('devices-unpair'));
+      await renderDevices();
+      await fireEvent.press(screen.getByTestId('devices-unpair'));
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(120_000);
       });
       expect(screen.getByTestId('devices-unpair-confirm')).toBeTruthy();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
+        await fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
       });
       expect(mockUnpairLocally).toHaveBeenCalled();
     } finally {
@@ -129,19 +129,19 @@ describe('DevicesScreen', () => {
   it('says why when the unpair fails instead of silently staying paired', async () => {
     // A locked Keystore rejects the trust-anchor clear inside unpairLocally.
     mockUnpairLocally.mockRejectedValueOnce(new Error('Keystore is locked'));
-    renderDevices();
-    fireEvent.press(screen.getByTestId('devices-unpair'));
+    await renderDevices();
+    await fireEvent.press(screen.getByTestId('devices-unpair'));
 
     await act(async () => {
-      fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
+      await fireEvent.press(screen.getByTestId('devices-unpair-confirm'));
     });
     expect(screen.getByText('Keystore is locked')).toBeTruthy();
     expect(mockBack).not.toHaveBeenCalled();
   });
 
-  it('shows the pairing CTA when nothing is paired', () => {
+  it('shows the pairing CTA when nothing is paired', async () => {
     mockPairedState = { status: 'unpaired' };
-    renderDevices();
+    await renderDevices();
     expect(screen.getByTestId('devices-pair-cta')).toBeTruthy();
   });
 });

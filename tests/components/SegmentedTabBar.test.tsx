@@ -25,8 +25,8 @@ describe('SegmentedTabBar', () => {
     mockSelectionAsync.mockClear();
   });
 
-  it('renders every item with its label and per-item testID', () => {
-    render(
+  it('renders every item with its label and per-item testID', async () => {
+    await render(
       <ThemeProvider>
         <SegmentedTabBar items={items} activeKey="chat" onChange={jest.fn()} testID="session-tabs" />
       </ThemeProvider>,
@@ -40,39 +40,39 @@ describe('SegmentedTabBar', () => {
     expect(screen.getByTestId('session-tabs-terminal')).toBeTruthy();
   });
 
-  it('fires onChange with the tapped item key', () => {
+  it('fires onChange with the tapped item key', async () => {
     const onChange = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <SegmentedTabBar items={items} activeKey="chat" onChange={onChange} testID="session-tabs" />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('session-tabs-diff'));
+    await fireEvent.press(screen.getByTestId('session-tabs-diff'));
 
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith('diff');
   });
 
-  it('fires the modeToggled selection haptic only on an actual change', () => {
+  it('fires the modeToggled selection haptic only on an actual change', async () => {
     const onChange = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <SegmentedTabBar items={items} activeKey="chat" onChange={onChange} testID="session-tabs" />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('session-tabs-diff'));
+    await fireEvent.press(screen.getByTestId('session-tabs-diff'));
     expect(mockSelectionAsync).toHaveBeenCalledTimes(1);
 
     // Re-tapping the already-active segment stays silent (but still notifies).
-    fireEvent.press(screen.getByTestId('session-tabs-chat'));
+    await fireEvent.press(screen.getByTestId('session-tabs-chat'));
     expect(mockSelectionAsync).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 
-  it('marks only the active item as selected', () => {
-    render(
+  it('marks only the active item as selected', async () => {
+    await render(
       <ThemeProvider>
         <SegmentedTabBar items={items} activeKey="diff" onChange={jest.fn()} testID="session-tabs" />
       </ThemeProvider>,
@@ -82,8 +82,8 @@ describe('SegmentedTabBar', () => {
     expect(screen.getByTestId('session-tabs-chat').props.accessibilityState).toEqual({ selected: false });
   });
 
-  it('renders a count badge when badgeCount is set', () => {
-    render(
+  it('renders a count badge when badgeCount is set', async () => {
+    await render(
       <ThemeProvider>
         <SegmentedTabBar items={items} activeKey="chat" onChange={jest.fn()} testID="session-tabs" />
       </ThemeProvider>,

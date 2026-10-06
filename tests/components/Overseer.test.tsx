@@ -27,8 +27,8 @@ const HALF_WINDOW_BLINK_DELAY_MS = blinkIdle.minMs + (blinkIdle.maxMs - blinkIdl
 // art), which also hides it from default RNTL queries.
 const HIDDEN = { includeHiddenElements: true } as const;
 
-function renderOverseer(animate: OverseerAnimation, size = 90): void {
-  render(
+async function renderOverseer(animate: OverseerAnimation, size = 90): Promise<void> {
+  await render(
     <ThemeProvider>
       <Overseer size={size} animate={animate} testID="overseer" />
     </ThemeProvider>,
@@ -39,7 +39,11 @@ describe('Overseer', () => {
   let randomSpy: jest.SpiedFunction<typeof Math.random>;
 
   beforeEach(() => {
-    jest.useFakeTimers();
+    // RNTL 14 awaits React's act, which schedules its flush with queueMicrotask.
+    // Faked, those jobs sit on the fake clock and jest.getTimerCount() counts
+    // them. Leave queueMicrotask real so the assertions below count the
+    // mascot's own frame timer alone.
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask'] });
     randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
   });
 
@@ -48,23 +52,23 @@ describe('Overseer', () => {
     jest.restoreAllMocks();
   });
 
-  it('renders the rest frame and swaps to blink and back on the blink loop', () => {
-    renderOverseer('blink-loop');
+  it('renders the rest frame and swaps to blink and back on the blink loop', async () => {
+    await renderOverseer('blink-loop');
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
 
-    act(() => jest.advanceTimersByTime(HALF_WINDOW_BLINK_DELAY_MS));
+    await act(() => jest.advanceTimersByTime(HALF_WINDOW_BLINK_DELAY_MS));
     expect(screen.getByTestId('overseer-frame-blink', HIDDEN)).toBeTruthy();
 
-    act(() => jest.advanceTimersByTime(blinkLoop.clip[0].durationMs));
+    await act(() => jest.advanceTimersByTime(blinkLoop.clip[0].durationMs));
     // 0.5 < 0.3 is false, so the repeat roll declines and the loop restarts.
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
 
     // The loop reschedules: a second blink arrives after another interval.
-    act(() => jest.advanceTimersByTime(HALF_WINDOW_BLINK_DELAY_MS));
+    await act(() => jest.advanceTimersByTime(HALF_WINDOW_BLINK_DELAY_MS));
     expect(screen.getByTestId('overseer-frame-blink', HIDDEN)).toBeTruthy();
   });
 
-  it('plays a double blink when the repeat roll succeeds, but not a triple', () => {
+  it('plays a double blink when the repeat roll succeeds, but not a triple', async () => {
     // Draw order: idle gap (squared), repeat roll, repeat gap - see the
     // comment in Overseer.tsx pinning this order.
     randomSpy
@@ -72,65 +76,65 @@ describe('Overseer', () => {
       .mockReturnValueOnce(0.1) // repeat roll: 0.1 < 0.3, triggers the double
       .mockReturnValueOnce(0.5); // repeat gap: midpoint of 270-400ms
 
-    renderOverseer('blink-loop');
+    await renderOverseer('blink-loop');
     const firstIdleGapMs = blinkIdle.minMs + (blinkIdle.maxMs - blinkIdle.minMs) * 0.1 * 0.1;
-    act(() => jest.advanceTimersByTime(firstIdleGapMs));
+    await act(() => jest.advanceTimersByTime(firstIdleGapMs));
     expect(screen.getByTestId('overseer-frame-blink', HIDDEN)).toBeTruthy();
 
-    act(() => jest.advanceTimersByTime(blinkLoop.clip[0].durationMs));
+    await act(() => jest.advanceTimersByTime(blinkLoop.clip[0].durationMs));
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
 
     const repeatGapMs = blinkRepeat.gapMinMs + 0.5 * (blinkRepeat.gapMaxMs - blinkRepeat.gapMinMs);
-    act(() => jest.advanceTimersByTime(repeatGapMs));
+    await act(() => jest.advanceTimersByTime(repeatGapMs));
     expect(screen.getByTestId('overseer-frame-blink', HIDDEN)).toBeTruthy();
 
     // The repeat is gated to once per pass: the second blink's end does not
     // roll again, however long the repeat window is held open for.
-    act(() => jest.advanceTimersByTime(blinkLoop.clip[0].durationMs));
-    act(() => jest.advanceTimersByTime(blinkRepeat.gapMaxMs));
+    await act(() => jest.advanceTimersByTime(blinkLoop.clip[0].durationMs));
+    await act(() => jest.advanceTimersByTime(blinkRepeat.gapMaxMs));
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
     expect(screen.queryByTestId('overseer-frame-blink', HIDDEN)).toBeNull();
   });
 
-  it('plays the single arm wave (rest, wave, rest, wave, rest) and stops', () => {
-    renderOverseer('wave-once');
+  it('plays the single arm wave (rest, wave, rest, wave, rest) and stops', async () => {
+    await renderOverseer('wave-once');
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
 
     // Advance by the duration of the step being LEFT, not a fixed one: the
     // whole point of the manifest is that upstream can retime any single step
     // without a code change here.
-    waveOnce.clip.slice(1).forEach((step, precedingStepIndex) => {
-      act(() => jest.advanceTimersByTime(waveOnce.clip[precedingStepIndex].durationMs));
+    for (const [precedingStepIndex, step] of waveOnce.clip.slice(1).entries()) {
+      await act(() => jest.advanceTimersByTime(waveOnce.clip[precedingStepIndex].durationMs));
       expect(screen.getByTestId(`overseer-frame-${step.frame}`, HIDDEN)).toBeTruthy();
-    });
+    }
 
     // One-shot: no further frame changes however long we wait. The frame alone
     // cannot prove this - wave-once both starts and ends on rest, so a runner
     // that wrongly looped would still be showing rest at most sampled times.
     // The pending-timer count is what actually distinguishes stopped from
     // looping.
-    act(() => jest.advanceTimersByTime(blinkIdle.maxMs * 2));
+    await act(() => jest.advanceTimersByTime(blinkIdle.maxMs * 2));
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  it('keeps stepping on the waiting loop (legs never stop)', () => {
-    renderOverseer('waiting-loop');
+  it('keeps stepping on the waiting loop (legs never stop)', async () => {
+    await renderOverseer('waiting-loop');
     expect(screen.getByTestId(`overseer-frame-${waitingLoop.clip[0].frame}`, HIDDEN)).toBeTruthy();
 
-    waitingLoop.clip.slice(1).forEach((step, precedingStepIndex) => {
-      act(() => jest.advanceTimersByTime(waitingLoop.clip[precedingStepIndex].durationMs));
+    for (const [precedingStepIndex, step] of waitingLoop.clip.slice(1).entries()) {
+      await act(() => jest.advanceTimersByTime(waitingLoop.clip[precedingStepIndex].durationMs));
       expect(screen.getByTestId(`overseer-frame-${step.frame}`, HIDDEN)).toBeTruthy();
-    });
+    }
 
     // Loops: the last step's own duration elapses and the clip restarts from
     // its first frame.
-    act(() => jest.advanceTimersByTime(waitingLoop.clip[waitingLoop.clip.length - 1].durationMs));
+    await act(() => jest.advanceTimersByTime(waitingLoop.clip[waitingLoop.clip.length - 1].durationMs));
     expect(screen.getByTestId(`overseer-frame-${waitingLoop.clip[0].frame}`, HIDDEN)).toBeTruthy();
   });
 
-  it('cancels its pending frame timer on unmount', () => {
-    const { unmount } = render(
+  it('cancels its pending frame timer on unmount', async () => {
+    const { unmount } = await render(
       <ThemeProvider>
         <Overseer size={90} animate="waiting-loop" testID="overseer" />
       </ThemeProvider>,
@@ -138,12 +142,12 @@ describe('Overseer', () => {
     // waiting-loop has no idle gap, so a clip timer is always pending.
     expect(jest.getTimerCount()).toBeGreaterThan(0);
 
-    unmount();
+    await unmount();
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  it('drops the outgoing animation timer when animate changes mid-clip', () => {
-    const { rerender } = render(
+  it('drops the outgoing animation timer when animate changes mid-clip', async () => {
+    const { rerender } = await render(
       <ThemeProvider>
         <Overseer size={90} animate="waiting-loop" testID="overseer" />
       </ThemeProvider>,
@@ -153,38 +157,38 @@ describe('Overseer', () => {
 
     // Swap before the first step elapses. The stale timer must not survive to
     // advance the retired sequence's frame.
-    rerender(
+    await rerender(
       <ThemeProvider>
         <Overseer size={90} animate="blink-loop" testID="overseer" />
       </ThemeProvider>,
     );
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
 
-    act(() => jest.advanceTimersByTime(firstStep.durationMs));
+    await act(() => jest.advanceTimersByTime(firstStep.durationMs));
     expect(screen.queryByTestId(`overseer-frame-${secondStep.frame}`, HIDDEN)).toBeNull();
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
   });
 
-  it('rests on the rest frame under OS reduced motion', () => {
+  it('rests on the rest frame under OS reduced motion', async () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
 
-    renderOverseer('blink-loop');
+    await renderOverseer('blink-loop');
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
 
-    act(() => jest.advanceTimersByTime(blinkIdle.maxMs * 2));
+    await act(() => jest.advanceTimersByTime(blinkIdle.maxMs * 2));
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
     expect(screen.queryByTestId('overseer-frame-blink', HIDDEN)).toBeNull();
   });
 
-  it('does not animate when animate is none', () => {
-    renderOverseer('none');
-    act(() => jest.advanceTimersByTime(blinkIdle.maxMs * 2));
+  it('does not animate when animate is none', async () => {
+    await renderOverseer('none');
+    await act(() => jest.advanceTimersByTime(blinkIdle.maxMs * 2));
     expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
   });
 
-  it('snaps the requested size down to an integer pixel scale', () => {
+  it('snaps the requested size down to an integer pixel scale', async () => {
     // 100dp over an 18-column grid floors to a 5dp pixel: 90 wide, 60 tall.
-    renderOverseer('none', 100);
+    await renderOverseer('none', 100);
     const flattenedStyle = StyleSheet.flatten(screen.getByTestId('overseer', HIDDEN).props.style);
     expect(flattenedStyle.width).toBe(90);
     expect(flattenedStyle.height).toBe(60);
@@ -204,8 +208,8 @@ describe('Overseer', () => {
    * instant could still be fooled by timing; the timer count cannot.
    */
   describe('the screen motion gate', () => {
-    function renderGated(active: boolean, animate: OverseerAnimation): void {
-      render(
+    async function renderGated(active: boolean, animate: OverseerAnimation): Promise<void> {
+      await render(
         <ThemeProvider>
           <ScreenMotionOverride active={active}>
             <Overseer size={90} animate={animate} testID="overseer" />
@@ -214,18 +218,18 @@ describe('Overseer', () => {
       );
     }
 
-    it('rests on the rest frame and schedules no timer while the screen is blurred', () => {
-      renderGated(false, 'waiting-loop');
+    it('rests on the rest frame and schedules no timer while the screen is blurred', async () => {
+      await renderGated(false, 'waiting-loop');
       expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
       expect(jest.getTimerCount()).toBe(0);
 
       // And it stays rested however long the loop would otherwise run for.
-      act(() => jest.advanceTimersByTime(waitingLoop.clip[0].durationMs * 4));
+      await act(() => jest.advanceTimersByTime(waitingLoop.clip[0].durationMs * 4));
       expect(screen.getByTestId('overseer-frame-rest', HIDDEN)).toBeTruthy();
     });
 
-    it('animates when the gate is active, so the gate cannot silently freeze the mascot', () => {
-      renderGated(true, 'waiting-loop');
+    it('animates when the gate is active, so the gate cannot silently freeze the mascot', async () => {
+      await renderGated(true, 'waiting-loop');
       expect(screen.getByTestId(`overseer-frame-${waitingLoop.clip[0].frame}`, HIDDEN)).toBeTruthy();
       expect(jest.getTimerCount()).toBeGreaterThan(0);
     });

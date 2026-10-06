@@ -26,27 +26,27 @@ describe('AppErrorBoundaryScreen', () => {
     mockReportCaughtError.mockClear();
   });
 
-  it('reports the caught error, so a boundary cannot silently swallow a crash', () => {
+  it('reports the caught error, so a boundary cannot silently swallow a crash', async () => {
     const error = new Error('render blew up');
 
-    render(<AppErrorBoundaryScreen error={error} retry={async () => undefined} />);
+    await render(<AppErrorBoundaryScreen error={error} retry={async () => undefined} />);
 
     expect(mockReportCaughtError).toHaveBeenCalledTimes(1);
     expect(mockReportCaughtError).toHaveBeenCalledWith(error, 'root-layout');
   });
 
-  it('renders a recovery affordance instead of a blank screen', () => {
-    render(<AppErrorBoundaryScreen error={new Error('render blew up')} retry={async () => undefined} />);
+  it('renders a recovery affordance instead of a blank screen', async () => {
+    await render(<AppErrorBoundaryScreen error={new Error('render blew up')} retry={async () => undefined} />);
 
     expect(screen.getByTestId('app-error-boundary')).toBeTruthy();
     expect(screen.getByText('Something went wrong')).toBeTruthy();
   });
 
-  it('retries on press', () => {
+  it('retries on press', async () => {
     const retry = jest.fn(async () => undefined);
 
-    render(<AppErrorBoundaryScreen error={new Error('render blew up')} retry={retry} />);
-    fireEvent.press(screen.getByTestId('app-error-boundary-retry'));
+    await render(<AppErrorBoundaryScreen error={new Error('render blew up')} retry={retry} />);
+    await fireEvent.press(screen.getByTestId('app-error-boundary-retry'));
 
     expect(retry).toHaveBeenCalledTimes(1);
   });

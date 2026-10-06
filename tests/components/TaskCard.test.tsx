@@ -1,7 +1,7 @@
 import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { View } from 'react-native';
-import type { ReactTestInstance } from 'react-test-renderer';
+import type { TestInstance } from 'test-renderer';
 import * as Reanimated from 'react-native-reanimated';
 import {
   CirclePause,
@@ -11,6 +11,7 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   LoaderCircle,
+  type LucideIcon,
 } from 'lucide-react-native';
 import { ThemeProvider } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
@@ -18,10 +19,11 @@ import { darkTerminalTheme } from '@/components/theme/tokens';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
 import { PR_READINESS_FRESHNESS_CAVEAT } from '@/components/board/prChipPresentation';
 import { boardColumnFixture, boardTaskFixture, usageFixture } from '@/devsupport/desktopFixtures';
+import { getLucideGlyph, lucideGlyphs } from '../helpers/lucideGlyphs';
 
 const BASE_TEST_ID = 'task-card';
 
-function renderTaskCard(overrides: Partial<TaskCardProps> = {}): void {
+async function renderTaskCard(overrides: Partial<TaskCardProps> = {}): Promise<void> {
   const props: TaskCardProps = {
     testID: BASE_TEST_ID,
     task: boardTaskFixture(),
@@ -33,7 +35,7 @@ function renderTaskCard(overrides: Partial<TaskCardProps> = {}): void {
     onPress: jest.fn(),
     ...overrides,
   };
-  render(
+  await render(
     <ThemeProvider>
       <TaskCard {...props} />
     </ThemeProvider>,
@@ -46,8 +48,8 @@ function renderTaskCard(overrides: Partial<TaskCardProps> = {}): void {
  * rendered label and walk up the tree to the nearest ancestor that actually
  * owns the handler.
  */
-function findAncestorWithLayoutHandler(instance: ReactTestInstance): ReactTestInstance {
-  let currentInstance: ReactTestInstance | null = instance;
+function findAncestorWithLayoutHandler(instance: TestInstance): TestInstance {
+  let currentInstance: TestInstance | null = instance;
   while (currentInstance !== null) {
     if (typeof currentInstance.props.onLayout === 'function') return currentInstance;
     currentInstance = currentInstance.parent;
@@ -56,8 +58,8 @@ function findAncestorWithLayoutHandler(instance: ReactTestInstance): ReactTestIn
 }
 
 describe('TaskCard', () => {
-  it('every sub-part testID is queryable - regression guard for lucide forwarding testID as the web-only data-testid, which RNTL cannot select unless the glyph is wrapped', () => {
-    renderTaskCard({
+  it('every sub-part testID is queryable - regression guard for lucide forwarding testID as the web-only data-testid, which RNTL cannot select unless the glyph is wrapped', async () => {
+    await renderTaskCard({
       task: boardTaskFixture({ pr_number: 42 }),
       statusKind: 'working',
       showTicketNumbers: true,
@@ -81,12 +83,12 @@ describe('TaskCard', () => {
     expect(screen.getByTestId(`${BASE_TEST_ID}-snippet`)).toBeTruthy();
   });
 
-  it('renders the utility strip for an over-budget usage report instead of hiding it - desktop parity for a critical, not untrustworthy, state', () => {
+  it('renders the utility strip for an over-budget usage report instead of hiding it - desktop parity for a critical, not untrustworthy, state', async () => {
     // Kills a restoration of the old hide-when-over-budget gate
     // (`isContextWindowKnown(usage) && usedTokens <= contextWindowSize`):
     // that mutation stays green against every other fixture in this file,
     // which all report usedTokens comfortably under contextWindowSize.
-    renderTaskCard({
+    await renderTaskCard({
       sessionDisplay: { kind: 'running' },
       usage: usageFixture({
         contextWindow: {
@@ -103,8 +105,8 @@ describe('TaskCard', () => {
     expect(screen.getByTestId(`${BASE_TEST_ID}-usage`)).toBeTruthy();
   });
 
-  it('showMetaRow={false} suppresses the labels row and the PR icon - its only coverage, since no caller passes this yet', () => {
-    renderTaskCard({
+  it('showMetaRow={false} suppresses the labels row and the PR icon - its only coverage, since no caller passes this yet', async () => {
+    await renderTaskCard({
       task: boardTaskFixture({ pr_number: 42, labels: ['backend', 'p0'] }),
       showMetaRow: false,
     });
@@ -130,10 +132,10 @@ describe('TaskCard', () => {
       contextWindow: { usedPercentage: 0, usedTokens: 0, cacheTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, contextWindowSize: 0 },
     });
 
-    it('shows "Starting agent..." with a spinner while a running session has not reported its model', () => {
-      renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: null });
+    it('shows "Starting agent..." with a spinner while a running session has not reported its model', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: null });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
-      expect(within(screen.getByTestId(`${STATUS_BAR}-spinner`)).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+      expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-spinner`), LoaderCircle)).toBeTruthy();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
     });
 
@@ -142,9 +144,9 @@ describe('TaskCard', () => {
      * report whose display name is blank has not told the card its model, so it
      * reads as still starting rather than drawing a nameless bar.
      */
-    it('shows "Starting agent..." for a usage report whose model has no display name, never the raw id', () => {
+    it('shows "Starting agent..." for a usage report whose model has no display name, never the raw id', async () => {
       const unnamedModelUsage = usageFixture({ model: { id: 'claude-opus-4-8', displayName: '' } });
-      renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unnamedModelUsage });
+      await renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unnamedModelUsage });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
       expect(screen.queryByText(/claude-opus-4-8/)).toBeNull();
@@ -155,8 +157,8 @@ describe('TaskCard', () => {
      * at 0% until the window size lands, so the card never grows when it
      * does. The phone used to draw nothing until then.
      */
-    it('shows the model at 0% over an empty bar once the model is known but the window size is not', () => {
-      renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unknownWindowUsage });
+    it('shows the model at 0% over an empty bar once the model is known but the window size is not', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unknownWindowUsage });
       const usageBar = screen.getByTestId(`${BASE_TEST_ID}-usage`);
       expect(usageBar).toHaveTextContent(new RegExp(unknownWindowUsage.model.displayName));
       expect(usageBar).toHaveTextContent(/0%/);
@@ -164,36 +166,36 @@ describe('TaskCard', () => {
       expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
     });
 
-    it('shows "Queued..." with a spinner for a queued session, and no usage bar even when usage is known', () => {
-      renderTaskCard({ sessionDisplay: { kind: 'queued' }, usage: usageFixture() });
+    it('shows "Queued..." with a spinner for a queued session, and no usage bar even when usage is known', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'queued' }, usage: usageFixture() });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Queued...');
       expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
     });
 
-    it('shows "Paused" with a still pause circle for a suspended session', () => {
-      renderTaskCard({ sessionDisplay: { kind: 'suspended' }, usage: usageFixture() });
+    it('shows "Paused" with a still pause circle for a suspended session', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'suspended' }, usage: usageFixture() });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Paused');
-      expect(within(screen.getByTestId(`${STATUS_BAR}-paused`)).UNSAFE_getByType(CirclePause)).toBeTruthy();
+      expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-paused`), CirclePause)).toBeTruthy();
       expect(screen.queryByTestId(`${STATUS_BAR}-spinner`)).toBeNull();
     });
 
-    it('shows the desktop\'s own step, verbatim, for a respawn in flight', () => {
-      renderTaskCard({ sessionDisplay: { kind: 'preparing', label: 'Switching model...' }, usage: usageFixture() });
+    it('shows the desktop\'s own step, verbatim, for a respawn in flight', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'preparing', label: 'Switching model...' }, usage: usageFixture() });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Switching model...');
       expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
     });
 
-    it.each([['none' as const], ['exited' as const]])('draws no footer at all for %s', (kind) => {
-      renderTaskCard({ sessionDisplay: { kind }, usage: usageFixture() });
+    it.each([['none' as const], ['exited' as const]])('draws no footer at all for %s', async (kind) => {
+      await renderTaskCard({ sessionDisplay: { kind }, usage: usageFixture() });
       expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
     });
 
-    it('spins with the desktop\'s 1s linear turn, looping forever', () => {
+    it('spins with the desktop\'s 1s linear turn, looping forever', async () => {
       const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
       const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
-      renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      await renderTaskCard({ sessionDisplay: { kind: 'queued' } });
       expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: darkTerminalTheme.motion.statusSpinner.turnMs }));
       expect(withRepeatSpy).toHaveBeenCalledWith(expect.anything(), -1, false);
     });
@@ -204,27 +206,27 @@ describe('TaskCard', () => {
      * Counted against a paused card's own baseline, since the card's press
      * feedback (PressScale) registers one of its own.
      */
-    it('registers exactly one more animated mapper for a spinning footer than for a paused one', () => {
+    it('registers exactly one more animated mapper for a spinning footer than for a paused one', async () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
-      renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
+      await renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
       const pausedCardCalls = animatedStyleSpy.mock.calls.length;
-      renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      await renderTaskCard({ sessionDisplay: { kind: 'queued' } });
       expect(animatedStyleSpy.mock.calls.length - pausedCardCalls).toBe(pausedCardCalls + 1);
     });
 
-    it('holds the spinner still under reduced motion, which the desktop does not, registering no extra mapper', () => {
+    it('holds the spinner still under reduced motion, which the desktop does not, registering no extra mapper', async () => {
       jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
-      renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
+      await renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
       const pausedCardCalls = animatedStyleSpy.mock.calls.length;
-      renderTaskCard({ sessionDisplay: { kind: 'queued' } });
-      expect(within(screen.getByTestId(`${STATUS_BAR}-spinner`)).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+      await renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-spinner`), LoaderCircle)).toBeTruthy();
       expect(animatedStyleSpy.mock.calls.length - pausedCardCalls).toBe(pausedCardCalls);
     });
 
-    it('holds the spinner still while the screen is blurred', () => {
+    it('holds the spinner still while the screen is blurred', async () => {
       const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
-      render(
+      await render(
         <ThemeProvider>
           <ScreenMotionOverride active={false}>
             <TaskCard
@@ -286,8 +288,8 @@ describe('TaskCard', () => {
         jest.useRealTimers();
       });
 
-      it('holds the glyph still once the bound passes, under the same testID, registering no animated mapper', () => {
-        render(queuedCard(BASE_TEST_ID));
+      it('holds the glyph still once the bound passes, under the same testID, registering no animated mapper', async () => {
+        await render(queuedCard(BASE_TEST_ID));
         const spinnerTestID = `${STATUS_BAR}-spinner`;
         // Control: it IS spinning to begin with, so the still assertions below
         // cannot pass merely because it never spun.
@@ -295,18 +297,18 @@ describe('TaskCard', () => {
         const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
         const cancelAnimationSpy = jest.spyOn(Reanimated, 'cancelAnimation');
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(holdAfterMs - 1);
         });
         expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
         expect(cancelAnimationSpy).not.toHaveBeenCalled();
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(1);
         });
         const stillSpinner = screen.getByTestId(spinnerTestID);
         expect(stillSpinner.props.style).toBeUndefined();
-        expect(within(stillSpinner).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+        expect(getLucideGlyph(stillSpinner, LoaderCircle)).toBeTruthy();
         expect(animatedStyleSpy).not.toHaveBeenCalled();
         expect(cancelAnimationSpy).toHaveBeenCalled();
       });
@@ -319,24 +321,24 @@ describe('TaskCard', () => {
        * instance, which is the whole point: a second `render` would be a fresh
        * tree with fresh state and could not tell the two designs apart.
        */
-      it('spins again, for a full window of its own, when the instance is recycled into another row', () => {
-        const { rerender } = render(queuedCard('card-first'));
-        act(() => {
+      it('spins again, for a full window of its own, when the instance is recycled into another row', async () => {
+        const { rerender } = await render(queuedCard('card-first'));
+        await act(() => {
           jest.advanceTimersByTime(holdAfterMs + 1);
         });
         expect(screen.getByTestId('card-first-status-bar-spinner').props.style).toBeUndefined();
 
         const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
-        rerender(queuedCard('card-second'));
+        await rerender(queuedCard('card-second'));
         const recycledTestID = 'card-second-status-bar-spinner';
         expect(screen.getByTestId(recycledTestID).props.style).toBeDefined();
         expect(withRepeatSpy).toHaveBeenCalledWith(expect.anything(), -1, false);
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(holdAfterMs - 1);
         });
         expect(screen.getByTestId(recycledTestID).props.style).toBeDefined();
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(1);
         });
         expect(screen.getByTestId(recycledTestID).props.style).toBeUndefined();
@@ -354,7 +356,7 @@ describe('TaskCard', () => {
        * the testID-keyed expiry cannot help here, and `rerender` keeps the
        * instance so only the key can tell them apart.
        */
-      it('spins again, for a full window of its own, when the same card moves from "Queued..." to "Starting agent..."', () => {
+      it('spins again, for a full window of its own, when the same card moves from "Queued..." to "Starting agent..."', async () => {
         const footerCard = (sessionDisplay: TaskCardProps['sessionDisplay']): React.JSX.Element => (
           <ThemeProvider>
             <TaskCard
@@ -371,24 +373,24 @@ describe('TaskCard', () => {
         );
         const spinnerTestID = `${STATUS_BAR}-spinner`;
 
-        const { rerender } = render(footerCard({ kind: 'queued' }));
+        const { rerender } = await render(footerCard({ kind: 'queued' }));
         expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Queued...');
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(holdAfterMs + 1);
         });
         // Control: the queue's spin really is spent, so what follows cannot be
         // a window that was simply never used up.
         expect(screen.getByTestId(spinnerTestID).props.style).toBeUndefined();
 
-        rerender(footerCard({ kind: 'running' }));
+        await rerender(footerCard({ kind: 'running' }));
         expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
         expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(holdAfterMs - 1);
         });
         expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(1);
         });
         expect(screen.getByTestId(spinnerTestID).props.style).toBeUndefined();
@@ -397,13 +399,13 @@ describe('TaskCard', () => {
   });
 
   describe('the column strip (Agents only)', () => {
-    it('draws no strip when the caller passes none - the Board, where the column is the page being viewed', () => {
-      renderTaskCard();
+    it('draws no strip when the caller passes none - the Board, where the column is the page being viewed', async () => {
+      await renderTaskCard();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-column`)).toBeNull();
     });
 
-    it('draws the strip, keyed off the card testID, when the Agents feed passes one', () => {
-      renderTaskCard({
+    it('draws the strip, keyed off the card testID, when the Agents feed passes one', async () => {
+      await renderTaskCard({
         columnStrip: {
           column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }),
           track: [{ columnId: 'lane-doing', name: 'Doing', color: '#3fb950', state: 'current' }],
@@ -421,8 +423,8 @@ describe('TaskCard', () => {
      * row is the board's, and the pill was taking characters from the title.
      * The project must appear exactly once, in the band.
      */
-    it('names the project once, in the band, never as a title-row pill', () => {
-      renderTaskCard({
+    it('names the project once, in the band, never as a title-row pill', async () => {
+      await renderTaskCard({
         columnStrip: { column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null }), track: [], projectName: 'Alpha', waitingSinceMs: null },
       });
       expect(screen.getAllByText('Alpha')).toHaveLength(1);
@@ -435,8 +437,8 @@ describe('TaskCard', () => {
      * before the strip, the pulse would tint the whole card except its top
      * band - invisible in any static render, so this pins the sibling order.
      */
-    it('paints the overlay after the strip, so the pulse tints the band too', () => {
-      render(
+    it('paints the overlay after the strip, so the pulse tints the band too', async () => {
+      await render(
         <ThemeProvider>
           <TaskCard
             testID={BASE_TEST_ID}
@@ -454,15 +456,15 @@ describe('TaskCard', () => {
       );
       // Pre-order over the whole tree is render order, and neither node
       // contains the other, so a later index is a later-painted sibling branch.
-      const renderOrder = screen.UNSAFE_root.findAll(() => true);
+      const renderOrder = screen.container.queryAll(() => true);
       const stripIndex = renderOrder.indexOf(screen.getByTestId(`${BASE_TEST_ID}-column`));
       const overlayIndex = renderOrder.indexOf(screen.getByTestId('task-card-overlay'));
       expect(stripIndex).toBeGreaterThanOrEqual(0);
       expect(overlayIndex).toBeGreaterThan(stripIndex);
     });
 
-    it('still draws the band for an unlocated task, with no marker', () => {
-      renderTaskCard({ columnStrip: { column: null, track: [], projectName: 'Alpha', waitingSinceMs: null } });
+    it('still draws the band for an unlocated task, with no marker', async () => {
+      await renderTaskCard({ columnStrip: { column: null, track: [], projectName: 'Alpha', waitingSinceMs: null } });
       expect(screen.getByTestId(`${BASE_TEST_ID}-column`)).toBeTruthy();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-column-marker`)).toBeNull();
     });
@@ -470,38 +472,38 @@ describe('TaskCard', () => {
 
   describe('PR chip (icon only: shape is the state, color the verdict)', () => {
     /** The glyph drawn inside the chip's wrapper, by its lucide component type. */
-    function prChipGlyph(glyphType: React.ComponentType): ReactTestInstance {
-      return within(screen.getByTestId(`${BASE_TEST_ID}-pr`)).UNSAFE_getByType(glyphType);
+    function prChipGlyph(glyphType: LucideIcon): TestInstance {
+      return getLucideGlyph(screen.getByTestId(`${BASE_TEST_ID}-pr`), glyphType);
     }
 
-    it('draws the merge-conflict icon in the conflict color, and no word, for a conflicting open PR', () => {
-      renderTaskCard({
+    it('draws the merge-conflict icon in the conflict color, and no word, for a conflicting open PR', async () => {
+      await renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: 'conflicting' }),
       });
 
-      expect(prChipGlyph(GitMergeConflict).props.color).toBe(darkTerminalTheme.colors.conflict);
+      expect(prChipGlyph(GitMergeConflict).props.stroke).toBe(darkTerminalTheme.colors.conflict);
       expect(screen.queryByText('conflicts')).toBeNull();
     });
 
-    it('draws the ready verdict as the PR icon in green, and no word', () => {
-      renderTaskCard({
+    it('draws the ready verdict as the PR icon in green, and no word', async () => {
+      await renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: 'ready' }),
       });
 
-      expect(prChipGlyph(GitPullRequest).props.color).toBe(darkTerminalTheme.colors.success);
+      expect(prChipGlyph(GitPullRequest).props.stroke).toBe(darkTerminalTheme.colors.success);
       expect(screen.queryByText('ready')).toBeNull();
     });
 
-    it('draws an open PR with no verdict in the quiet secondary color, so green can only mean ready', () => {
-      renderTaskCard({
+    it('draws an open PR with no verdict in the quiet secondary color, so green can only mean ready', async () => {
+      await renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: null }),
       });
 
-      expect(prChipGlyph(GitPullRequest).props.color).toBe(darkTerminalTheme.colors.textSecondary);
+      expect(prChipGlyph(GitPullRequest).props.stroke).toBe(darkTerminalTheme.colors.textSecondary);
       expect(screen.queryByText('open')).toBeNull();
     });
 
-    it('reads an open PR whose wire omits the readiness field entirely as plain open', () => {
+    it('reads an open PR whose wire omits the readiness field entirely as plain open', async () => {
       // `pr_merge_readiness` became OPTIONAL in protocol 0.13.1, so a desktop
       // may leave the key off rather than send null. Every other undefined
       // case in this change is a literal handed straight to the presentation
@@ -530,20 +532,20 @@ describe('TaskCard', () => {
       delete task.pr_merge_readiness;
       expect('pr_merge_readiness' in task).toBe(false);
 
-      renderTaskCard({ task });
+      await renderTaskCard({ task });
 
-      expect(prChipGlyph(GitPullRequest).props.color).toBe(darkTerminalTheme.colors.textSecondary);
+      expect(prChipGlyph(GitPullRequest).props.stroke).toBe(darkTerminalTheme.colors.textSecondary);
       expect(screen.getByTestId(`${BASE_TEST_ID}-pr`).props.accessibilityLabel).toBe('Pull request open');
     });
 
-    it('never shows a stale verdict on a merged PR: the merge icon, never the ready green', () => {
+    it('never shows a stale verdict on a merged PR: the merge icon, never the ready green', async () => {
       // The desktop stops refreshing readiness once a PR lands, so this is
       // what the wire really looks like afterwards.
-      renderTaskCard({
+      await renderTaskCard({
         task: boardTaskFixture({ pr_number: 103, pr_state: 'merged', pr_merge_readiness: 'ready' }),
       });
 
-      expect(prChipGlyph(GitMerge).props.color).toBe(darkTerminalTheme.colors.info);
+      expect(prChipGlyph(GitMerge).props.stroke).toBe(darkTerminalTheme.colors.info);
       expect(screen.queryByText('ready')).toBeNull();
     });
 
@@ -557,20 +559,20 @@ describe('TaskCard', () => {
     it.each([
       ['closed', GitPullRequestClosed, darkTerminalTheme.colors.danger],
       ['draft', GitPullRequestDraft, darkTerminalTheme.colors.textMuted],
-    ] as const)('draws the %s state as its own icon in its own tone, never the open PR icon', (prState, expectedGlyph, expectedColor) => {
-      renderTaskCard({
+    ] as const)('draws the %s state as its own icon in its own tone, never the open PR icon', async (prState, expectedGlyph, expectedColor) => {
+      await renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: prState, pr_merge_readiness: 'ready' }),
       });
 
-      expect(prChipGlyph(expectedGlyph).props.color).toBe(expectedColor);
-      expect(within(screen.getByTestId(`${BASE_TEST_ID}-pr`)).UNSAFE_queryByType(GitPullRequest)).toBeNull();
+      expect(prChipGlyph(expectedGlyph).props.stroke).toBe(expectedColor);
+      expect(lucideGlyphs(screen.getByTestId(`${BASE_TEST_ID}-pr`), GitPullRequest)).toHaveLength(0);
     });
 
-    it('reaches a screen reader as its own node, carrying the freshness caveat', () => {
+    it('reaches a screen reader as its own node, carrying the freshness caveat', async () => {
       // The Card around this is pressable, so an `accessible` View nested
       // inside it could have been collapsed into the card's own label. This
       // asserts the node actually resolves rather than assuming it does.
-      renderTaskCard({
+      await renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: 'blocked' }),
       });
 
@@ -581,8 +583,8 @@ describe('TaskCard', () => {
   describe('label overflow', () => {
     const manyLabels = ['backend', 'notifications', 'migration', 'breaking-change', 'p0'];
 
-    it('shows the fallback limit (3) before the labels row has been measured', () => {
-      renderTaskCard({ task: boardTaskFixture({ labels: manyLabels }) });
+    it('shows the fallback limit (3) before the labels row has been measured', async () => {
+      await renderTaskCard({ task: boardTaskFixture({ labels: manyLabels }) });
 
       expect(screen.getByText('backend')).toBeTruthy();
       expect(screen.getByText('notifications')).toBeTruthy();
@@ -592,11 +594,11 @@ describe('TaskCard', () => {
       expect(screen.getByText('+2')).toBeTruthy();
     });
 
-    it('recomputes the visible count once the labels row reports its real width', () => {
-      renderTaskCard({ task: boardTaskFixture({ labels: manyLabels }) });
+    it('recomputes the visible count once the labels row reports its real width', async () => {
+      await renderTaskCard({ task: boardTaskFixture({ labels: manyLabels }) });
 
       const labelsRow = findAncestorWithLayoutHandler(screen.getByText('backend'));
-      fireEvent(labelsRow, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 24 } } });
+      await fireEvent(labelsRow, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 24 } } });
 
       // At 300px, computeVisibleLabelCount fits exactly 2 (see labelFit.test.ts).
       expect(screen.getByText('backend')).toBeTruthy();
@@ -615,10 +617,10 @@ describe('TaskCard', () => {
      * whatever Date.now() returns during render. Fake timers pin it, which is
      * what lets these assert an exact string rather than a regex.
      */
-    function renderWithWait(waitedMs: number | null): void {
+    async function renderWithWait(waitedMs: number | null): Promise<void> {
       jest.useFakeTimers();
       jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
-      renderTaskCard({
+      await renderTaskCard({
         bodyMinHeight: BODY_HEIGHT,
         bodyNumberOfLines: 2,
         columnStrip: {
@@ -634,8 +636,8 @@ describe('TaskCard', () => {
       jest.useRealTimers();
     });
 
-    it('renders how long the session has been waiting, at its unchanged <card>-wait testID', () => {
-      renderWithWait(4 * 60 * MINUTE + 7 * MINUTE);
+    it('renders how long the session has been waiting, at its unchanged <card>-wait testID', async () => {
+      await renderWithWait(4 * 60 * MINUTE + 7 * MINUTE);
       expect(screen.getByTestId(`${BASE_TEST_ID}-wait`)).toHaveTextContent('4h 7m');
     });
 
@@ -644,15 +646,15 @@ describe('TaskCard', () => {
      * the body line would put amber at the card's right edge again, under the
      * PR icon, which is the stacking the review removed.
      */
-    it('renders inside the band, not on the body line', () => {
-      renderWithWait(26 * MINUTE);
+    it('renders inside the band, not on the body line', async () => {
+      await renderWithWait(26 * MINUTE);
       const wait = screen.getByTestId(`${BASE_TEST_ID}-wait`);
-      expect(screen.getByTestId(`${BASE_TEST_ID}-column`).findAll(() => true)).toContain(wait);
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column`).queryAll(() => true)).toContain(wait);
       expect(findAncestorWithHeight(wait, BODY_HEIGHT)).toBeNull();
     });
 
-    it('spells the span out for a screen reader, since "4h 7m" read alone says nothing', () => {
-      renderWithWait(4 * 60 * MINUTE + 7 * MINUTE);
+    it('spells the span out for a screen reader, since "4h 7m" read alone says nothing', async () => {
+      await renderWithWait(4 * 60 * MINUTE + 7 * MINUTE);
       expect(screen.getByTestId(`${BASE_TEST_ID}-wait`).props.accessibilityLabel).toBe('Waiting 4 hours 7 minutes');
     });
 
@@ -661,14 +663,14 @@ describe('TaskCard', () => {
      * cares about, and a label blinking on at every turn boundary is exactly
      * the status filler the Agents feed deliberately has none of.
      */
-    it('renders nothing at all below a minute - never "0m"', () => {
-      renderWithWait(45_000);
+    it('renders nothing at all below a minute - never "0m"', async () => {
+      await renderWithWait(45_000);
       expect(screen.queryByTestId(`${BASE_TEST_ID}-wait`)).toBeNull();
       expect(screen.queryByText('0m')).toBeNull();
     });
 
-    it('renders nothing for a working row, which passes null', () => {
-      renderWithWait(null);
+    it('renders nothing for a working row, which passes null', async () => {
+      await renderWithWait(null);
       expect(screen.queryByTestId(`${BASE_TEST_ID}-wait`)).toBeNull();
     });
 
@@ -677,8 +679,8 @@ describe('TaskCard', () => {
      * thumb; the wait label rides in the fixed-height band for the same reason.
      * A session crossing its first minute must not change the slot.
      */
-    it('keeps the fixed body slot at exactly its reserved height', () => {
-      renderWithWait(12 * MINUTE);
+    it('keeps the fixed body slot at exactly its reserved height', async () => {
+      await renderWithWait(12 * MINUTE);
       const snippet = screen.getByTestId(`${BASE_TEST_ID}-snippet`);
       const slot = findAncestorWithHeight(snippet, BODY_HEIGHT);
       expect(slot).toBeTruthy();
@@ -687,8 +689,8 @@ describe('TaskCard', () => {
 });
 
 /** Walks up from a node to the ancestor whose style fixes the given height. */
-function findAncestorWithHeight(instance: ReactTestInstance, height: number): ReactTestInstance | null {
-  let currentInstance: ReactTestInstance | null = instance;
+function findAncestorWithHeight(instance: TestInstance, height: number): TestInstance | null {
+  let currentInstance: TestInstance | null = instance;
   while (currentInstance !== null) {
     const style: unknown = currentInstance.props.style;
     if (style !== null && typeof style === 'object' && (style as { height?: number }).height === height) {

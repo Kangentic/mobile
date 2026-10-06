@@ -1,6 +1,6 @@
 import React from 'react';
 import { AppState, DeviceEventEmitter, type AppStateStatus, type NativeEventSubscription } from 'react-native';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
@@ -171,34 +171,34 @@ const directKeyInputMock = jest.requireMock<DirectKeyInputMockModule>('@/compone
 const gestureHandlerMock = jest.requireMock<GestureHandlerMockModule>('react-native-gesture-handler');
 const connectionTraceMock = jest.requireMock<{ traceConnection: jest.Mock }>('@/devsupport/connectionTrace');
 
-async function renderPaneAndReady(isActive = true): Promise<ReturnType<typeof render>> {
-  const result = render(
+async function renderPaneAndReady(isActive = true): Promise<RenderResult> {
+  const result = await render(
     <ThemeProvider>
       <TerminalPane sessionId="sess-1" isActive={isActive} />
     </ThemeProvider>,
   );
   await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-  postFromWebView(JSON.stringify({ type: 'ready' }));
+  await postFromWebView(JSON.stringify({ type: 'ready' }));
   return result;
 }
 
-function rerenderPane(result: ReturnType<typeof render>, isActive: boolean): void {
-  result.rerender(
+async function rerenderPane(result: RenderResult, isActive: boolean): Promise<void> {
+  await result.rerender(
     <ThemeProvider>
       <TerminalPane sessionId="sess-1" isActive={isActive} />
     </ThemeProvider>,
   );
 }
 
-function postFromWebView(data: string): void {
-  act(() => {
+async function postFromWebView(data: string): Promise<void> {
+  await act(() => {
     webViewMock.__capturedProps.current?.onMessage?.({ nativeEvent: { data } });
   });
 }
 
 /** Fires the WebView's onLayout, as the native layout pass would. */
-function layoutWebView(width: number, height: number): void {
-  act(() => {
+async function layoutWebView(width: number, height: number): Promise<void> {
+  await act(() => {
     webViewMock.__capturedProps.current?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width, height } } });
   });
 }
@@ -208,8 +208,8 @@ function layoutWebView(width: number, height: number): void {
  * Keyboard listens through a NativeEventEmitter, which delivers through the
  * device event emitter.
  */
-function emitKeyboardEvent(eventName: 'keyboardWillShow' | 'keyboardDidShow' | 'keyboardWillHide' | 'keyboardDidHide'): void {
-  act(() => {
+async function emitKeyboardEvent(eventName: 'keyboardWillShow' | 'keyboardDidShow' | 'keyboardWillHide' | 'keyboardDidHide'): Promise<void> {
+  await act(() => {
     DeviceEventEmitter.emit(eventName, {
       duration: 0,
       easing: 'keyboard',
@@ -233,8 +233,8 @@ function findPinchMessage(): { type: 'pinch'; active: boolean } | undefined {
 }
 
 /** Fires the pinch-gesture callback the component registered under this method name. */
-function firePinchCallback(methodName: string, touchesEvent?: { numberOfTouches: number }): void {
-  act(() => {
+async function firePinchCallback(methodName: string, touchesEvent?: { numberOfTouches: number }): Promise<void> {
+  await act(() => {
     gestureHandlerMock.__pinchCallbacksByMethodName[methodName]?.(touchesEvent);
   });
 }
@@ -295,7 +295,7 @@ describe('TerminalPane (faithful mirror)', () => {
     await renderPaneAndReady();
     webViewMock.__postMessageMock.mockClear();
 
-    act(() => setTerminalDimensions('sess-1', { cols: 48, rows: 26 }));
+    await act(() => setTerminalDimensions('sess-1', { cols: 48, rows: 26 }));
 
     const resizeMessage = decodedPosts().find((message) => message?.type === 'resize');
     expect(resizeMessage).toEqual({ type: 'resize', cols: 48, rows: 26 });
@@ -305,7 +305,7 @@ describe('TerminalPane (faithful mirror)', () => {
     retainTerminal('sess-1');
     await renderPaneAndReady();
 
-    postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
+    await postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
 
     expect(actionsMock.writeTerminal).toHaveBeenCalledWith('sess-1', 'ls');
   });
@@ -314,7 +314,7 @@ describe('TerminalPane (faithful mirror)', () => {
     retainTerminal('sess-1');
     await renderPaneAndReady();
 
-    postFromWebView(JSON.stringify({ type: 'modes', applicationCursorKeys: true }));
+    await postFromWebView(JSON.stringify({ type: 'modes', applicationCursorKeys: true }));
 
     expect(useTerminalUiStore.getState().applicationCursorModeBySessionId['sess-1']).toBe(true);
   });
@@ -339,7 +339,7 @@ describe('TerminalPane (faithful mirror)', () => {
     retainTerminal('sess-1');
     await renderPaneAndReady();
 
-    postFromWebView(JSON.stringify({ type: 'renderer', renderer: 'dom' }));
+    await postFromWebView(JSON.stringify({ type: 'renderer', renderer: 'dom' }));
 
     expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-renderer', { renderer: 'dom' });
   });
@@ -356,7 +356,7 @@ describe('TerminalPane (faithful mirror)', () => {
     retainTerminal('sess-1');
     await renderPaneAndReady();
 
-    postFromWebView(
+    await postFromWebView(
       JSON.stringify({
         type: 'modes',
         applicationCursorKeys: true,
@@ -375,7 +375,7 @@ describe('TerminalPane (faithful mirror)', () => {
 
     // A degraded baseline (initial: true) for a re-init that lacked the
     // DECSETs must not overwrite what is already stored.
-    postFromWebView(
+    await postFromWebView(
       JSON.stringify({
         type: 'modes',
         applicationCursorKeys: true,
@@ -394,7 +394,7 @@ describe('TerminalPane (faithful mirror)', () => {
 
     // The same degraded fields, but as a REAL transition (initial: false):
     // this one is allowed to overwrite.
-    postFromWebView(
+    await postFromWebView(
       JSON.stringify({
         type: 'modes',
         applicationCursorKeys: true,
@@ -421,17 +421,17 @@ describe('TerminalPane (faithful mirror)', () => {
     const result = await renderPaneAndReady(true);
 
     // Go inactive (user switched to another tab).
-    rerenderPane(result, false);
+    await rerenderPane(result, false);
     webViewMock.__postMessageMock.mockClear();
 
     // A chunk arrives while paused: nothing is posted to the WebView, though
     // the ring still buffers it.
-    act(() => appendChunk('sess-1', 'while-hidden'));
+    await act(() => appendChunk('sess-1', 'while-hidden'));
     expect(decodedPosts().some((message) => message?.type === 'write')).toBe(false);
 
     // Back to active: it re-seeds (init) so the WebView jumps to the latest
     // frame, including what streamed while it was hidden.
-    rerenderPane(result, true);
+    await rerenderPane(result, true);
     const reseed = decodedPosts().find((message) => message?.type === 'init');
     expect(reseed).toBeDefined();
     if (reseed?.type === 'init') {
@@ -454,10 +454,10 @@ describe('TerminalPane (faithful mirror)', () => {
     await renderPaneAndReady(true);
     webViewMock.__postMessageMock.mockClear();
 
-    act(() => emitAppState('background'));
+    await act(() => emitAppState('background'));
     expect(decodedPosts().some((message) => message?.type === 'repaint')).toBe(false);
 
-    act(() => emitAppState('active'));
+    await act(() => emitAppState('active'));
     expect(decodedPosts().some((message) => message?.type === 'repaint')).toBe(true);
     expect(decodedPosts().some((message) => message?.type === 'refit')).toBe(false);
   });
@@ -465,10 +465,10 @@ describe('TerminalPane (faithful mirror)', () => {
   it('does not repaint a pane the user is not looking at', async () => {
     retainTerminal('sess-1');
     const result = await renderPaneAndReady(true);
-    rerenderPane(result, false);
+    await rerenderPane(result, false);
     webViewMock.__postMessageMock.mockClear();
 
-    act(() => emitAppState('active'));
+    await act(() => emitAppState('active'));
     expect(decodedPosts().some((message) => message?.type === 'repaint')).toBe(false);
   });
 
@@ -477,7 +477,7 @@ describe('TerminalPane (faithful mirror)', () => {
     await renderPaneAndReady();
     webViewMock.__postMessageMock.mockClear();
 
-    postFromWebView('not json at all');
+    await postFromWebView('not json at all');
 
     expect(webViewMock.__postMessageMock).not.toHaveBeenCalled();
     expect(actionsMock.writeTerminal).not.toHaveBeenCalled();
@@ -487,7 +487,7 @@ describe('TerminalPane (faithful mirror)', () => {
     retainTerminal('sess-1');
     useTerminalUiStore.getState().requestSessionMode('sess-1', 'terminal', { focusKeyboard: true });
 
-    render(
+    await render(
       <ThemeProvider>
         <TerminalPane sessionId="sess-1" isActive />
       </ThemeProvider>,
@@ -497,7 +497,7 @@ describe('TerminalPane (faithful mirror)', () => {
     // not-yet-constructed WebView.
     expect(directKeyInputMock.__focusMock).not.toHaveBeenCalled();
 
-    postFromWebView(JSON.stringify({ type: 'ready' }));
+    await postFromWebView(JSON.stringify({ type: 'ready' }));
 
     await waitFor(() => expect(directKeyInputMock.__focusMock).toHaveBeenCalledTimes(1));
     // Consumed once: the store no longer carries the request.
@@ -516,7 +516,7 @@ describe('TerminalPane (faithful mirror)', () => {
     await renderPaneAndReady();
     webViewMock.__postMessageMock.mockClear();
 
-    fireEvent.press(screen.getByTestId('terminal-scroll-latest'));
+    await fireEvent.press(screen.getByTestId('terminal-scroll-latest'));
 
     expect(decodedPosts().some((message) => message?.type === 'scroll-latest')).toBe(true);
   });
@@ -537,7 +537,7 @@ describe('TerminalPane (faithful mirror)', () => {
     await renderPaneAndReady();
     webViewMock.__postMessageMock.mockClear();
 
-    fireEvent.press(screen.getByTestId('terminal-refit'));
+    await fireEvent.press(screen.getByTestId('terminal-refit'));
 
     expect(decodedPosts()).toEqual([{ type: 'refit', cols: 120, rows: 30 }]);
     expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
@@ -548,7 +548,7 @@ describe('TerminalPane (faithful mirror)', () => {
     await renderPaneAndReady();
     webViewMock.__postMessageMock.mockClear();
 
-    fireEvent.press(screen.getByTestId('terminal-refit'));
+    await fireEvent.press(screen.getByTestId('terminal-refit'));
 
     expect(decodedPosts()).toEqual([{ type: 'refit', cols: null, rows: null }]);
   });
@@ -568,20 +568,20 @@ describe('TerminalPane (faithful mirror)', () => {
 
       // Negative control: with no preceding input, a chunk waits out the
       // CHUNK_BATCH_INTERVAL_MS (32ms) batch timer.
-      act(() => appendChunk('sess-1', 'unprompted-output'));
+      await act(() => appendChunk('sess-1', 'unprompted-output'));
       expect(decodedPosts().some((message) => message?.type === 'write')).toBe(false);
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(32);
       });
       expect(decodedPosts().some((message) => message?.type === 'write')).toBe(true);
       webViewMock.__postMessageMock.mockClear();
 
       // The WebView reports it sent input (a typed key, or a scroll burst).
-      postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
+      await postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
 
       // The echo arrives inside the input-echo window: it posts immediately,
       // with zero timer advance.
-      act(() => appendChunk('sess-1', 'echo-of-input'));
+      await act(() => appendChunk('sess-1', 'echo-of-input'));
       const echoWrite = decodedPosts().find((message) => message?.type === 'write');
       expect(echoWrite).toBeDefined();
       if (echoWrite?.type === 'write') {
@@ -609,7 +609,7 @@ describe('TerminalPane (faithful mirror)', () => {
 
     // A REAL mode transition (not a baseline): the desktop's TUI entered the
     // alternate screen with 'any' mouse tracking, SGR-encoded.
-    postFromWebView(
+    await postFromWebView(
       JSON.stringify({
         type: 'modes',
         applicationCursorKeys: false,
@@ -621,9 +621,9 @@ describe('TerminalPane (faithful mirror)', () => {
     );
 
     // Take the re-seed path a tab switch exercises: away, then back.
-    rerenderPane(result, false);
+    await rerenderPane(result, false);
     webViewMock.__postMessageMock.mockClear();
-    rerenderPane(result, true);
+    await rerenderPane(result, true);
 
     const reseed = decodedPosts().find((message) => message?.type === 'init');
     expect(reseed).toBeDefined();
@@ -653,7 +653,7 @@ describe('TerminalPane (faithful mirror)', () => {
         await renderPaneAndReady();
         webViewMock.__postMessageMock.mockClear();
 
-        act(() => {
+        await act(() => {
           webViewMock.__capturedProps.current?.[crashPropName]?.();
         });
 
@@ -662,8 +662,8 @@ describe('TerminalPane (faithful mirror)', () => {
         // once the batch timer that would otherwise flush them has fully
         // elapsed (CHUNK_BATCH_INTERVAL_MS is 32ms) - advancing past it is
         // what tells "torn down" apart from "just hasn't flushed yet".
-        act(() => appendChunk('sess-1', 'lost-in-the-crash'));
-        act(() => {
+        await act(() => appendChunk('sess-1', 'lost-in-the-crash'));
+        await act(() => {
           jest.advanceTimersByTime(100);
         });
         expect(decodedPosts().some((message) => message?.type === 'write')).toBe(false);
@@ -671,7 +671,7 @@ describe('TerminalPane (faithful mirror)', () => {
         // The remounted page finishes loading and reports ready: normal
         // service resumes with a fresh re-seed, proving the pane actually
         // recovered rather than staying permanently blank.
-        postFromWebView(JSON.stringify({ type: 'ready' }));
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
         expect(decodedPosts().some((message) => message?.type === 'init')).toBe(true);
       } finally {
         jest.useRealTimers();
@@ -693,8 +693,8 @@ describe('TerminalPane (faithful mirror)', () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
       const result = await renderPaneAndReady();
-      rerenderPane(result, false);
-      rerenderPane(result, true);
+      await rerenderPane(result, false);
+      await rerenderPane(result, true);
 
       const initSeqs = decodedPosts().flatMap((message) => (message?.type === 'init' ? [message.seq] : []));
       expect(initSeqs).toEqual([1, 2]);
@@ -720,22 +720,22 @@ describe('TerminalPane (faithful mirror)', () => {
         // same shape as a successor's ring right after a swap. Live output has
         // ALREADY landed in it by the time the pane looks (the re-init path's
         // own check), and more lands while the hold is up (the chunk path's).
-        rerenderPane(result, false);
+        await rerenderPane(result, false);
         releaseTerminal('sess-1');
         retainTerminal('sess-1');
         appendChunk('sess-1', 'early live output');
         webViewMock.__postMessageMock.mockClear();
-        rerenderPane(result, true);
+        await rerenderPane(result, true);
         expect(decodedPosts()).toEqual([]);
 
-        act(() => appendChunk('sess-1', 'more live output'));
-        act(() => {
+        await act(() => appendChunk('sess-1', 'more live output'));
+        await act(() => {
           jest.advanceTimersByTime(100);
         });
         // Glyphs twice over, but no snapshot yet: nothing may reach the WebView.
         expect(decodedPosts()).toEqual([]);
 
-        act(() => seedScrollback('sess-1', 'the snapshot'));
+        await act(() => seedScrollback('sess-1', 'the snapshot'));
         const posts = decodedPosts();
         expect(posts).toHaveLength(1);
         expect(posts[0]?.type).toBe('init');
@@ -755,8 +755,8 @@ describe('TerminalPane (faithful mirror)', () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
       const result = await renderPaneAndReady();
-      rerenderPane(result, false);
-      rerenderPane(result, true);
+      await rerenderPane(result, false);
+      await rerenderPane(result, true);
 
       const flagsByInit = decodedPosts().flatMap((message) =>
         message?.type === 'init' ? [{ holdFrame: message.holdFrame, preservePinch: message.preservePinch }] : [],
@@ -778,14 +778,14 @@ describe('TerminalPane (faithful mirror)', () => {
     it('carries the measured Terminal lens height on the very first init', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      render(
+      await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 635);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await layoutWebView(411, 635);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
 
       const firstInit = decodedPosts().find((message) => message?.type === 'init');
       expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(635);
@@ -811,14 +811,14 @@ describe('TerminalPane (faithful mirror)', () => {
     it('tells a page that just reported ready its fit height when a layout lands in the same tick', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      render(
+      await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
 
-      act(() => {
+      await act(() => {
         const liveProps = webViewMock.__capturedProps.current;
         liveProps?.onMessage?.({ nativeEvent: { data: JSON.stringify({ type: 'ready' }) } });
         liveProps?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 411, height: 635 } } });
@@ -845,23 +845,23 @@ describe('TerminalPane (faithful mirror)', () => {
     it('fits the settled pane, not a taller layout that came before it', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      render(
+      await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 693);
-      layoutWebView(411, 670);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await layoutWebView(411, 693);
+      await layoutWebView(411, 670);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
 
       const firstInit = decodedPosts().find((message) => message?.type === 'init');
       expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(670);
 
       // And after ready: a transient taller pane is followed back down.
       webViewMock.__postMessageMock.mockClear();
-      layoutWebView(411, 693);
-      layoutWebView(411, 670);
+      await layoutWebView(411, 693);
+      await layoutWebView(411, 670);
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
         { type: 'fit-height', fitHeightPx: 693 },
         { type: 'fit-height', fitHeightPx: 670 },
@@ -876,22 +876,22 @@ describe('TerminalPane (faithful mirror)', () => {
     it("ignores a layout padded on iOS's keyboardWillShow, before keyboardDidShow", async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      render(
+      await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 635);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await layoutWebView(411, 635);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
       webViewMock.__postMessageMock.mockClear();
 
-      emitKeyboardEvent('keyboardWillShow');
-      layoutWebView(411, 380);
-      emitKeyboardEvent('keyboardDidShow');
-      emitKeyboardEvent('keyboardWillHide');
-      layoutWebView(411, 635);
-      emitKeyboardEvent('keyboardDidHide');
+      await emitKeyboardEvent('keyboardWillShow');
+      await layoutWebView(411, 380);
+      await emitKeyboardEvent('keyboardDidShow');
+      await emitKeyboardEvent('keyboardWillHide');
+      await layoutWebView(411, 635);
+      await emitKeyboardEvent('keyboardDidHide');
 
       expect(decodedPosts().some((message) => message?.type === 'fit-height')).toBe(false);
     });
@@ -906,38 +906,38 @@ describe('TerminalPane (faithful mirror)', () => {
     it('reports a rotation, and ignores the keyboard and layouts the lens is not read at', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      const result = render(
+      const result = await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive fitLayoutIsReference />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 635);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await layoutWebView(411, 635);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
       webViewMock.__postMessageMock.mockClear();
 
       // The keyboard opens (Android's order): same width, shorter. Not a fit
       // height, and the closed pane after it is the same one as before.
-      emitKeyboardEvent('keyboardDidShow');
-      layoutWebView(411, 380);
-      emitKeyboardEvent('keyboardDidHide');
-      layoutWebView(411, 635);
+      await emitKeyboardEvent('keyboardDidShow');
+      await layoutWebView(411, 380);
+      await emitKeyboardEvent('keyboardDidHide');
+      await layoutWebView(411, 635);
       // The veil's switcher-only phase: taller, but not a reference layout.
-      result.rerender(
+      await result.rerender(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive fitLayoutIsReference={false} />
         </ThemeProvider>,
       );
-      layoutWebView(411, 690);
+      await layoutWebView(411, 690);
       expect(decodedPosts().some((message) => message?.type === 'fit-height')).toBe(false);
 
       // Back to the reference footer, then a rotation: a new width's height.
-      result.rerender(
+      await result.rerender(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive fitLayoutIsReference />
         </ThemeProvider>,
       );
-      layoutWebView(845, 300);
+      await layoutWebView(845, 300);
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
         { type: 'fit-height', fitHeightPx: 300 },
       ]);
@@ -955,28 +955,28 @@ describe('TerminalPane (faithful mirror)', () => {
     it('takes a layout from another lens provisionally, until the Terminal lens measures one', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      const result = render(
+      const result = await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive={false} />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 669);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await layoutWebView(411, 669);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
 
       const firstInit = decodedPosts().find((message) => message?.type === 'init');
       expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(669);
 
       // The taller Changes pane, still provisional: the latest layout wins...
       webViewMock.__postMessageMock.mockClear();
-      layoutWebView(411, 718);
+      await layoutWebView(411, 718);
       // ...and the Terminal lens's own layout overrides it.
-      result.rerender(
+      await result.rerender(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
-      layoutWebView(411, 669);
+      await layoutWebView(411, 669);
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
         { type: 'fit-height', fitHeightPx: 718 },
         { type: 'fit-height', fitHeightPx: 669 },
@@ -993,25 +993,25 @@ describe('TerminalPane (faithful mirror)', () => {
     it('keeps a Terminal-lens height against other lenses at the same width, but follows a rotation', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      const result = render(
+      const result = await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 669);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
-      result.rerender(
+      await layoutWebView(411, 669);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
+      await result.rerender(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive={false} />
         </ThemeProvider>,
       );
       webViewMock.__postMessageMock.mockClear();
 
-      layoutWebView(411, 600);
+      await layoutWebView(411, 600);
       expect(decodedPosts().some((message) => message?.type === 'fit-height')).toBe(false);
 
-      layoutWebView(845, 300);
+      await layoutWebView(845, 300);
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
         { type: 'fit-height', fitHeightPx: 300 },
       ]);
@@ -1029,24 +1029,24 @@ describe('TerminalPane (faithful mirror)', () => {
     it('ignores a layout that carries no size, and keeps the last real fit height', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      const result = render(
+      const result = await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-      layoutWebView(411, 635);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await layoutWebView(411, 635);
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
       webViewMock.__postMessageMock.mockClear();
 
-      layoutWebView(0, 0);
-      layoutWebView(411, 0);
-      layoutWebView(0, 635);
+      await layoutWebView(0, 0);
+      await layoutWebView(411, 0);
+      await layoutWebView(0, 635);
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
 
       // The consumer of the stored height: the re-init on becoming active again.
-      rerenderPane(result, false);
-      rerenderPane(result, true);
+      await rerenderPane(result, false);
+      await rerenderPane(result, true);
       const reinit = decodedPosts().find((message) => message?.type === 'init');
       expect(reinit?.type === 'init' ? reinit.fitHeightPx : 'no init').toBe(635);
     });
@@ -1062,17 +1062,17 @@ describe('TerminalPane (faithful mirror)', () => {
     it('records a layout that lands before the page is ready without posting it', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
-      render(
+      await render(
         <ThemeProvider>
           <TerminalPane sessionId="sess-1" isActive />
         </ThemeProvider>,
       );
       await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
 
-      layoutWebView(411, 635);
+      await layoutWebView(411, 635);
 
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
       const firstInit = decodedPosts().find((message) => message?.type === 'init');
       expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBe(635);
     });
@@ -1091,17 +1091,17 @@ describe('TerminalPane (faithful mirror)', () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
       await renderPaneAndReady();
-      layoutWebView(411, 635);
+      await layoutWebView(411, 635);
       webViewMock.__postMessageMock.mockClear();
 
-      act(() => {
+      await act(() => {
         const liveProps = webViewMock.__capturedProps.current;
         liveProps?.onRenderProcessGone?.();
         liveProps?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 411, height: 650 } } });
       });
       expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([]);
 
-      postFromWebView(JSON.stringify({ type: 'ready' }));
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
       const remountedInit = decodedPosts().find((message) => message?.type === 'init');
       expect(remountedInit?.type === 'init' ? remountedInit.fitHeightPx : 'no init').toBe(650);
     });
@@ -1117,7 +1117,7 @@ describe('TerminalPane (faithful mirror)', () => {
       await renderPaneAndReady();
       webViewMock.__postMessageMock.mockClear();
 
-      postFromWebView(JSON.stringify({ type: 'font-size', fontSizePx: 10, source: 'settled', trigger: 'init' }));
+      await postFromWebView(JSON.stringify({ type: 'font-size', fontSizePx: 10, source: 'settled', trigger: 'init' }));
       expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith(
         'terminal-fit',
         expect.objectContaining({ source: 'settled', trigger: 'init', fontSizePx: 10 }),
@@ -1127,7 +1127,7 @@ describe('TerminalPane (faithful mirror)', () => {
       const secureStore = jest.requireMock<{ __stored: Map<string, string> }>('expo-secure-store');
       expect([...secureStore.__stored.keys()]).toEqual([]);
 
-      firePinchCallback('onUpdate', { numberOfTouches: 2, scale: 2 } as unknown as { numberOfTouches: number });
+      await firePinchCallback('onUpdate', { numberOfTouches: 2, scale: 2 } as unknown as { numberOfTouches: number });
       expect(decodedPosts()).toContainEqual({ type: 'set-font-size', fontSizePx: 20 });
     });
 
@@ -1137,13 +1137,13 @@ describe('TerminalPane (faithful mirror)', () => {
       await renderPaneAndReady();
 
       // Blank: the page is up, but nothing is on screen yet.
-      postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
       expect(selectTerminalPainted(useTerminalUiStore.getState(), 'sess-1')).toBe(false);
       // A stale seq: a late report for an init this pane has since superseded.
-      postFromWebView(JSON.stringify({ type: 'painted', seq: 0, blank: false }));
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 0, blank: false }));
       expect(selectTerminalPainted(useTerminalUiStore.getState(), 'sess-1')).toBe(false);
 
-      postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
       expect(selectTerminalPainted(useTerminalUiStore.getState(), 'sess-1')).toBe(true);
     });
 
@@ -1156,17 +1156,17 @@ describe('TerminalPane (faithful mirror)', () => {
         webViewMock.__postMessageMock.mockClear();
 
         // The stream refresh came back with nothing: the frame on screen stays.
-        act(() => seedScrollback('sess-1', ''));
+        await act(() => seedScrollback('sess-1', ''));
         expect(decodedPosts()).toEqual([]);
         // An escape-only chunk still paints nothing - and it must not be
         // WRITTEN into the held frame either, even once the batch timer fires.
-        act(() => appendChunk('sess-1', '\x1b[2J'));
-        act(() => {
+        await act(() => appendChunk('sess-1', '\x1b[2J'));
+        await act(() => {
           jest.advanceTimersByTime(100);
         });
         expect(decodedPosts()).toEqual([]);
 
-        act(() => appendChunk('sess-1', 'world'));
+        await act(() => appendChunk('sess-1', 'world'));
         const posts = decodedPosts();
         expect(posts).toHaveLength(1);
         expect(posts[0]?.type).toBe('init');
@@ -1183,11 +1183,11 @@ describe('TerminalPane (faithful mirror)', () => {
       retainTerminal('sess-1');
       appendChunk('sess-1', 'hello');
       const result = await renderPaneAndReady();
-      rerenderPane(result, false);
+      await rerenderPane(result, false);
       releaseTerminal('sess-1');
       webViewMock.__postMessageMock.mockClear();
 
-      rerenderPane(result, true);
+      await rerenderPane(result, true);
 
       expect(decodedPosts().some((message) => message?.type === 'init')).toBe(false);
     });
@@ -1220,9 +1220,9 @@ describe('TerminalPane (faithful mirror)', () => {
       originalCurrentState = appStateRecord.currentState;
     });
 
-    afterEach(() => {
+    afterEach(async () => {
       appStateRecord.currentState = originalCurrentState;
-      act(() => useChannelStore.getState().reset());
+      await act(() => useChannelStore.getState().reset());
     });
 
     it('asks the desktop for a fresh frame when the ring never gets a seed, at most twice', async () => {
@@ -1232,15 +1232,15 @@ describe('TerminalPane (faithful mirror)', () => {
         retainTerminal('sess-1');
         await renderPaneAndReady();
         // The page is alive and honestly blank: nothing ever arrived.
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledWith('sess-1');
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(2);
@@ -1258,7 +1258,7 @@ describe('TerminalPane (faithful mirror)', () => {
         await renderPaneAndReady();
         // No 'painted' report for init 1: the renderer is gone.
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
 
@@ -1266,7 +1266,7 @@ describe('TerminalPane (faithful mirror)', () => {
         expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
         // The remounted page reports ready and is re-inited from the ring.
         webViewMock.__postMessageMock.mockClear();
-        postFromWebView(JSON.stringify({ type: 'ready' }));
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
         const reinit = decodedPosts().find((message) => message?.type === 'init');
         expect(reinit?.type === 'init' ? reinit.scrollback : null).toBe('the frame');
       } finally {
@@ -1282,9 +1282,9 @@ describe('TerminalPane (faithful mirror)', () => {
         seedScrollback('sess-1', 'old output\x1b[2J');
         await renderPaneAndReady();
         // The viewport really is blank after the clear; the page says so.
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
         });
 
@@ -1301,15 +1301,15 @@ describe('TerminalPane (faithful mirror)', () => {
         foreground();
         retainTerminal('sess-1');
         await renderPaneAndReady();
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
         });
         expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
 
-        act(() => useChannelStore.setState({ established: true }));
-        act(() => {
+        await act(() => useChannelStore.setState({ established: true }));
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
@@ -1341,7 +1341,7 @@ describe('TerminalPane (faithful mirror)', () => {
         // No 'painted' report for init 1: the page is silent. Hidden, so it is
         // nobody's problem.
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
         });
         expect(connectionTraceMock.traceConnection).not.toHaveBeenCalledWith('terminal-recovery', expect.anything());
@@ -1349,8 +1349,8 @@ describe('TerminalPane (faithful mirror)', () => {
 
         // Shown: the reactivate init re-arms the check, the page is still
         // silent for it, and the repair runs with the attempts untouched.
-        rerenderPane(result, true);
-        act(() => {
+        await rerenderPane(result, true);
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
         expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-recovery', {
@@ -1369,9 +1369,9 @@ describe('TerminalPane (faithful mirror)', () => {
         retainTerminal('sess-1');
         const result = await renderPaneAndReady(false);
         // The page is alive and honestly blank: nothing ever arrived.
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS * 3);
         });
         expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
@@ -1379,9 +1379,9 @@ describe('TerminalPane (faithful mirror)', () => {
 
         // Shown: the reactivate init is seq 2, and the page answers it blank
         // too, so the only thing wrong is the missing seed.
-        rerenderPane(result, true);
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 2, blank: true }));
-        act(() => {
+        await rerenderPane(result, true);
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 2, blank: true }));
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
@@ -1411,22 +1411,22 @@ describe('TerminalPane (faithful mirror)', () => {
         liveForegroundChannel();
         retainTerminal('sess-1');
         await renderPaneAndReady();
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
 
         // Episode one spends the whole budget (two attempts) and then stops,
         // however long it is left.
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS * 5);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(2);
 
         // The page finally paints real content for the current init: over.
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
 
         // A separate, later failure: back from the background re-arms the
         // check while the ring is still unseeded.
-        act(() => emitAppState('active'));
-        act(() => {
+        await act(() => emitAppState('active'));
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(3);
@@ -1455,10 +1455,10 @@ describe('TerminalPane (faithful mirror)', () => {
         liveForegroundChannel();
         retainTerminal('sess-1');
         const result = await renderPaneAndReady();
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
 
         // The predecessor spends its whole budget and never paints.
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS * 5);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(2);
@@ -1466,13 +1466,13 @@ describe('TerminalPane (faithful mirror)', () => {
         // Nothing was ever displayed, so the swap posts its init at once (seq 2)
         // rather than holding; the page answers it honestly blank.
         retainTerminal('sess-2');
-        result.rerender(
+        await result.rerender(
           <ThemeProvider>
             <TerminalPane sessionId="sess-2" isActive />
           </ThemeProvider>,
         );
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 2, blank: true }));
-        act(() => {
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 2, blank: true }));
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS);
         });
 
@@ -1503,22 +1503,22 @@ describe('TerminalPane (faithful mirror)', () => {
         liveForegroundChannel();
         retainTerminal('sess-1');
         seedScrollback('sess-1', 'the frame');
-        const result = render(
+        const result = await render(
           <ThemeProvider>
             <TerminalPane sessionId="sess-1" isActive />
           </ThemeProvider>,
         );
         await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
-        postFromWebView(JSON.stringify({ type: 'ready' }));
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
         // The frame is on screen: this ends the episode and clears the ready
         // init's deadline.
-        postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+        await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
 
         // The desktop respawned the task: the successor's ring is retained
         // (the screen's open does that) but its snapshot has not landed.
         retainTerminal('sess-2');
         webViewMock.__postMessageMock.mockClear();
-        result.rerender(
+        await result.rerender(
           <ThemeProvider>
             <TerminalPane sessionId="sess-2" isActive />
           </ThemeProvider>,
@@ -1526,11 +1526,11 @@ describe('TerminalPane (faithful mirror)', () => {
         // Held: the dead session's frame stays, nothing is posted over it.
         expect(decodedPosts().some((message) => message?.type === 'init')).toBe(false);
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(RECOVERY_DELAY_MS - 1);
         });
         expect(actionsMock.refreshTerminalStream).not.toHaveBeenCalled();
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(1);
         });
         expect(actionsMock.refreshTerminalStream).toHaveBeenCalledTimes(1);
@@ -1557,10 +1557,10 @@ describe('TerminalPane (faithful mirror)', () => {
       await renderPaneAndReady();
       webViewMock.__postMessageMock.mockClear();
 
-      firePinchCallback('onTouchesDown', { numberOfTouches: 1 });
+      await firePinchCallback('onTouchesDown', { numberOfTouches: 1 });
       expect(findPinchMessage()).toBeUndefined();
 
-      firePinchCallback('onTouchesDown', { numberOfTouches: 2 });
+      await firePinchCallback('onTouchesDown', { numberOfTouches: 2 });
       expect(findPinchMessage()?.active).toBe(true);
     });
 
@@ -1569,7 +1569,7 @@ describe('TerminalPane (faithful mirror)', () => {
       await renderPaneAndReady();
       webViewMock.__postMessageMock.mockClear();
 
-      firePinchCallback('onStart');
+      await firePinchCallback('onStart');
       expect(findPinchMessage()?.active).toBe(true);
     });
 
@@ -1578,10 +1578,10 @@ describe('TerminalPane (faithful mirror)', () => {
       await renderPaneAndReady();
       webViewMock.__postMessageMock.mockClear();
 
-      firePinchCallback('onTouchesUp', { numberOfTouches: 2 });
+      await firePinchCallback('onTouchesUp', { numberOfTouches: 2 });
       expect(findPinchMessage()).toBeUndefined();
 
-      firePinchCallback('onTouchesUp', { numberOfTouches: 1 });
+      await firePinchCallback('onTouchesUp', { numberOfTouches: 1 });
       expect(findPinchMessage()?.active).toBe(false);
     });
 
@@ -1590,12 +1590,12 @@ describe('TerminalPane (faithful mirror)', () => {
       await renderPaneAndReady();
       webViewMock.__postMessageMock.mockClear();
 
-      firePinchCallback('onTouchesCancelled', { numberOfTouches: 2 });
+      await firePinchCallback('onTouchesCancelled', { numberOfTouches: 2 });
       expect(findPinchMessage()).toBeUndefined();
 
       // 1, not 0: the boundary value is what actually distinguishes <= 1
       // from a narrower threshold - a call with 0 would pass either way.
-      firePinchCallback('onTouchesCancelled', { numberOfTouches: 1 });
+      await firePinchCallback('onTouchesCancelled', { numberOfTouches: 1 });
       expect(findPinchMessage()?.active).toBe(false);
     });
 
@@ -1604,7 +1604,7 @@ describe('TerminalPane (faithful mirror)', () => {
       await renderPaneAndReady();
       webViewMock.__postMessageMock.mockClear();
 
-      firePinchCallback('onFinalize');
+      await firePinchCallback('onFinalize');
       expect(findPinchMessage()?.active).toBe(false);
     });
   });

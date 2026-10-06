@@ -3,8 +3,8 @@ import { render, screen, fireEvent } from '@testing-library/react-native';
 import { ThemeProvider, Card, Text } from '@/components';
 
 describe('Card', () => {
-  it('renders children as a display-only card without a press handler', () => {
-    render(
+  it('renders children as a display-only card without a press handler', async () => {
+    await render(
       <ThemeProvider>
         <Card>
           <Text>Static content</Text>
@@ -16,9 +16,9 @@ describe('Card', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('fires onPress when pressable', () => {
+  it('fires onPress when pressable', async () => {
     const onPress = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <Card onPress={onPress} testID="task-card">
           <Text>Tap me</Text>
@@ -26,14 +26,14 @@ describe('Card', () => {
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('task-card'));
+    await fireEvent.press(screen.getByTestId('task-card'));
 
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
-  it('fires onLongPress when pressable', () => {
+  it('fires onLongPress when pressable', async () => {
     const onLongPress = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <Card onLongPress={onLongPress} testID="task-card">
           <Text>Hold me</Text>
@@ -41,7 +41,7 @@ describe('Card', () => {
       </ThemeProvider>,
     );
 
-    fireEvent(screen.getByTestId('task-card'), 'longPress');
+    await fireEvent(screen.getByTestId('task-card'), 'longPress');
 
     expect(onLongPress).toHaveBeenCalledTimes(1);
   });

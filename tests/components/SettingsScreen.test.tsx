@@ -1,6 +1,6 @@
 import React from 'react';
-import { AppState, Platform, Switch, type AppStateStatus, type NativeEventSubscription } from 'react-native';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import type { BackgroundPushTaskStatus, PushRegistrationStatus } from '@/notifications';
 import { SettingsScreen } from '@/screens/SettingsScreen';
@@ -102,8 +102,8 @@ jest.mock('@/observability/crashReporting', () => ({
   reportHandledTestError: () => mockReportHandledTestError(),
 }));
 
-function renderSettings(): void {
-  render(
+async function renderSettings(): Promise<void> {
+  await render(
     <ThemeProvider>
       <SettingsScreen />
     </ThemeProvider>,
@@ -182,21 +182,21 @@ describe('SettingsScreen', () => {
     setCrashTestFlag(originalCrashTestFlag);
   });
 
-  it('renders the connection section with live status and relay', () => {
-    renderSettings();
+  it('renders the connection section with live status and relay', async () => {
+    await renderSettings();
     expect(screen.getByTestId('settings-connection-label').props.children).toBe('Connected');
     expect(screen.getByTestId('settings-relay-url')).toBeTruthy();
   });
 
-  it('navigates to the devices screen from the paired-devices row', () => {
-    renderSettings();
-    fireEvent.press(screen.getByTestId('settings-devices-row'));
+  it('navigates to the devices screen from the paired-devices row', async () => {
+    await renderSettings();
+    await fireEvent.press(screen.getByTestId('settings-devices-row'));
     expect(mockPush).toHaveBeenCalledWith('/devices');
   });
 
-  it('persists the background notifications mode selection', () => {
-    renderSettings();
-    fireEvent.press(screen.getByTestId('settings-notifications-push-only'));
+  it('persists the background notifications mode selection', async () => {
+    await renderSettings();
+    await fireEvent.press(screen.getByTestId('settings-notifications-push-only'));
     expect(useSettingsStore.getState().backgroundNotificationsMode).toBe('push-only');
   });
 
@@ -210,11 +210,11 @@ describe('SettingsScreen', () => {
    * saw a screen full of enabled-looking toggles and nothing else. That is
    * exactly the state the bug reporter was in.
    */
-  it('offers a route to system settings when the notification permission is denied', () => {
+  it('offers a route to system settings when the notification permission is denied', async () => {
     mockNotificationPermissionStatus.mockReturnValue('denied');
-    renderSettings();
+    await renderSettings();
 
-    fireEvent.press(screen.getByTestId('settings-open-notification-settings'));
+    await fireEvent.press(screen.getByTestId('settings-open-notification-settings'));
     expect(mockOpenSystemNotificationSettings).toHaveBeenCalledTimes(1);
   });
 
@@ -229,13 +229,13 @@ describe('SettingsScreen', () => {
    */
   it('clears the blocked notice once the permission reads back granted after returning to the app', async () => {
     mockNotificationPermissionStatus.mockReturnValue('denied');
-    renderSettings();
+    await renderSettings();
 
     expect(screen.getByTestId('settings-open-notification-settings')).toBeTruthy();
 
     mockRefreshNotificationPermission.mockResolvedValue(true);
     mockNotificationPermissionStatus.mockReturnValue('granted');
-    act(() => {
+    await act(() => {
       emitAppState('active');
     });
 
@@ -254,10 +254,10 @@ describe('SettingsScreen', () => {
    * regression that added the flag check to iOS too would pass every existing
    * test in this file.
    */
-  it('shows the blocked notice on iOS independent of the persisted flag, but keeps it hidden on Android', () => {
+  it('shows the blocked notice on iOS independent of the persisted flag, but keeps it hidden on Android', async () => {
     mockNotificationPermissionStatus.mockReturnValue('denied');
     useSettingsStore.setState({ hasRequestedNotificationPermission: false });
-    renderSettings();
+    await renderSettings();
 
     if (Platform.OS === 'ios') {
       expect(screen.getByTestId('settings-open-notification-settings')).toBeTruthy();
@@ -266,14 +266,14 @@ describe('SettingsScreen', () => {
     }
   });
 
-  it('hides the blocked-notifications notice when the permission is granted or unknown', () => {
-    renderSettings();
+  it('hides the blocked-notifications notice when the permission is granted or unknown', async () => {
+    await renderSettings();
     expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
 
     // null is "nothing has looked yet", which must read as unknown rather than
     // as a denial - otherwise every cold start flashes a blocked warning.
     mockNotificationPermissionStatus.mockReturnValue(null);
-    renderSettings();
+    await renderSettings();
     expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
   });
 
@@ -292,7 +292,7 @@ describe('SettingsScreen', () => {
    * items survive app deletion, so the persisted flag can outlive the
    * authorization it describes.
    */
-  it('does not claim notifications are blocked before the app has ever asked', () => {
+  it('does not claim notifications are blocked before the app has ever asked', async () => {
     if (Platform.OS === 'android') {
       mockNotificationPermissionStatus.mockReturnValue('denied');
       useSettingsStore.setState({ hasRequestedNotificationPermission: false });
@@ -302,7 +302,7 @@ describe('SettingsScreen', () => {
       // this, or a reinstall shows a blocked notice it has no business showing.
       useSettingsStore.setState({ hasRequestedNotificationPermission: true });
     }
-    renderSettings();
+    await renderSettings();
 
     expect(screen.queryByTestId('settings-open-notification-settings')).toBeNull();
   });
@@ -312,8 +312,8 @@ describe('SettingsScreen', () => {
    * starts it requires Platform.OS === 'android' - so on iOS the option is
    * inert and offering it misdescribes what the app will do.
    */
-  it('offers the background-keepalive mode on Android only', () => {
-    renderSettings();
+  it('offers the background-keepalive mode on Android only', async () => {
+    await renderSettings();
 
     if (Platform.OS === 'android') {
       expect(screen.getByTestId('settings-notifications-foreground-service')).toBeTruthy();
@@ -327,15 +327,15 @@ describe('SettingsScreen', () => {
     expect(useSettingsStore.getState().backgroundNotificationsMode).toBe('foreground-service');
   });
 
-  it('flips the haptics toggle', () => {
-    renderSettings();
-    fireEvent.press(screen.getByTestId('settings-haptics-toggle'));
+  it('flips the haptics toggle', async () => {
+    await renderSettings();
+    await fireEvent.press(screen.getByTestId('settings-haptics-toggle'));
     expect(useSettingsStore.getState().hapticsEnabled).toBe(false);
   });
 
   /**
    * STRUCTURAL guard only, not proof of the native touch fix. RNTL renders
-   * against react-test-renderer, never a real Android SwitchCompat, so it
+   * against Test Renderer, never a real Android SwitchCompat, so it
    * cannot reproduce the touch-swallowing this change fixes (see the comment
    * on `pointerEvents="none"` in SwitchRow) - that is on-device only. What
    * this pins is the structure the fix depends on: `pointerEvents="none"`
@@ -344,10 +344,18 @@ describe('SettingsScreen', () => {
    * to `pointerEvents="none"` directly on the Switch reintroduces the
    * swallowed-tap bug invisibly to every tier except a real device.
    */
-  it('keeps pointerEvents="none" on the View wrapping the Switch, never on the Switch itself', () => {
-    renderSettings();
+  it('keeps pointerEvents="none" on the View wrapping the Switch, never on the Switch itself', async () => {
+    await renderSettings();
     const row = screen.getByTestId('settings-haptics-toggle');
-    const switchElement = within(row).UNSAFE_getByType(Switch);
+    // RNTL 14 has no composite-type query (UNSAFE_getByType is gone), so the
+    // inner Switch is found as its native HOST, which jest-expo names per
+    // platform. A role query cannot reach it on Android: its host is not an
+    // accessibility element there, and SwitchRow hides it on purpose anyway.
+    const switchHostType = Platform.OS === 'android' ? 'AndroidSwitch' : 'RCTSwitch';
+    const [switchElement] = row.queryAll((node) => node.type === switchHostType);
+    if (switchElement === undefined) {
+      throw new Error(`expected a ${switchHostType} host inside the settings-haptics-toggle row`);
+    }
     expect(switchElement.props.pointerEvents).toBeUndefined();
 
     const wrappingView = switchElement.parent;
@@ -356,15 +364,15 @@ describe('SettingsScreen', () => {
     expect(wrappingView?.props.pointerEvents).toBe('none');
   });
 
-  it('keeps the dictation radios working', () => {
-    renderSettings();
-    fireEvent.press(screen.getByTestId('settings-dictation-off'));
+  it('keeps the dictation radios working', async () => {
+    await renderSettings();
+    await fireEvent.press(screen.getByTestId('settings-dictation-off'));
     expect(useSettingsStore.getState().dictationMode).toBe('off');
   });
 
-  it('toggles a push category without disturbing the others', () => {
-    renderSettings();
-    fireEvent.press(screen.getByTestId('settings-category-turn-complete'));
+  it('toggles a push category without disturbing the others', async () => {
+    await renderSettings();
+    await fireEvent.press(screen.getByTestId('settings-category-turn-complete'));
     expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
       'input-required': true,
       'turn-complete': false,
@@ -375,14 +383,14 @@ describe('SettingsScreen', () => {
   });
 
   /** The default lands in the UI, not just the store: the row reads as off. */
-  it('shows the slow-starts category switched off by default', () => {
-    renderSettings();
+  it('shows the slow-starts category switched off by default', async () => {
+    await renderSettings();
     expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(false);
   });
 
   it('resyncs the desktop registration when a category toggle changes', async () => {
-    renderSettings();
-    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
+    await renderSettings();
+    await fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
     // waitFor, not a bare `await fireEvent.press`: the resync fires after
     // setPushCategoryEnabled's awaited SecureStore write resolves, so a
     // single-microtask await couples this assertion to the exact number of
@@ -390,8 +398,8 @@ describe('SettingsScreen', () => {
     await waitFor(() => expect(mockResyncPushRegistrationCategories).toHaveBeenCalled());
   });
 
-  it('round-trips a category switch off then on, on both the store and the row accessibilityState', () => {
-    renderSettings();
+  it('round-trips a category switch off then on, on both the store and the row accessibilityState', async () => {
+    await renderSettings();
     // SwitchRow's inner native Switch is presentational (pointerEvents="none",
     // hidden from the a11y tree); the wrapping Pressable owns the switch
     // role AND accessibilityState, so assert against the element carrying
@@ -399,26 +407,26 @@ describe('SettingsScreen', () => {
     const row = screen.getByTestId('settings-category-spawn-stalled');
     expect(row.props.accessibilityState.checked).toBe(false);
 
-    fireEvent.press(row);
+    await fireEvent.press(row);
     expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(true);
     expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(true);
 
-    fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
+    await fireEvent.press(screen.getByTestId('settings-category-spawn-stalled'));
     expect(useSettingsStore.getState().pushCategoriesEnabled['spawn-stalled']).toBe(false);
     expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(false);
   });
 
-  it('hides the crash-test section by default', () => {
-    renderSettings();
+  it('hides the crash-test section by default', async () => {
+    await renderSettings();
     expect(screen.queryByTestId('settings-section-crash-test')).toBeNull();
     expect(screen.queryByTestId('settings-crash-test-js')).toBeNull();
     expect(screen.queryByTestId('settings-crash-test-native')).toBeNull();
     expect(screen.queryByTestId('settings-crash-test-handled')).toBeNull();
   });
 
-  it('reveals the crash-test rows only when EXPO_PUBLIC_KANGENTIC_CRASHTEST is "1"', () => {
+  it('reveals the crash-test rows only when EXPO_PUBLIC_KANGENTIC_CRASHTEST is "1"', async () => {
     setCrashTestFlag('1');
-    renderSettings();
+    await renderSettings();
     expect(screen.getByTestId('settings-section-crash-test')).toBeTruthy();
     expect(screen.getByTestId('settings-crash-test-js')).toBeTruthy();
     expect(screen.getByTestId('settings-crash-test-native')).toBeTruthy();
@@ -431,36 +439,36 @@ describe('SettingsScreen', () => {
   // filter, so wiring it to the JS throw would silently verify nothing, and
   // the handled-error row is the only way to verify the door's redaction
   // against a delivered payload.
-  it('wires each crash-test row to its own trigger', () => {
+  it('wires each crash-test row to its own trigger', async () => {
     setCrashTestFlag('1');
-    renderSettings();
+    await renderSettings();
 
-    fireEvent.press(screen.getByTestId('settings-crash-test-js'));
+    await fireEvent.press(screen.getByTestId('settings-crash-test-js'));
     expect(mockThrowTestError).toHaveBeenCalledTimes(1);
     expect(mockCrashNatively).not.toHaveBeenCalled();
     expect(mockReportHandledTestError).not.toHaveBeenCalled();
 
-    fireEvent.press(screen.getByTestId('settings-crash-test-native'));
+    await fireEvent.press(screen.getByTestId('settings-crash-test-native'));
     expect(mockCrashNatively).toHaveBeenCalledTimes(1);
     expect(mockThrowTestError).toHaveBeenCalledTimes(1);
     expect(mockReportHandledTestError).not.toHaveBeenCalled();
 
-    fireEvent.press(screen.getByTestId('settings-crash-test-handled'));
+    await fireEvent.press(screen.getByTestId('settings-crash-test-handled'));
     expect(mockReportHandledTestError).toHaveBeenCalledTimes(1);
     expect(mockThrowTestError).toHaveBeenCalledTimes(1);
     expect(mockCrashNatively).toHaveBeenCalledTimes(1);
   });
 
-  it('hides the NSE probe section by default', () => {
-    renderSettings();
+  it('hides the NSE probe section by default', async () => {
+    await renderSettings();
     expect(screen.queryByTestId('settings-section-nse-probe')).toBeNull();
     expect(screen.queryByTestId('settings-nse-probe-seed')).toBeNull();
     expect(screen.queryByTestId('settings-nse-probe-read')).toBeNull();
   });
 
-  it('reveals the NSE probe rows only when the probe flag is on', () => {
+  it('reveals the NSE probe rows only when the probe flag is on', async () => {
     mockNseProbeEnabled.mockReturnValueOnce(true);
-    renderSettings();
+    await renderSettings();
     expect(screen.getByTestId('settings-section-nse-probe')).toBeTruthy();
     expect(screen.getByTestId('settings-nse-probe-seed')).toBeTruthy();
     expect(screen.getByTestId('settings-nse-probe-read')).toBeTruthy();
@@ -468,9 +476,9 @@ describe('SettingsScreen', () => {
 
   it('seeds the probe keys and shows the outcome, including the permission answer', async () => {
     mockNseProbeEnabled.mockReturnValue(true);
-    renderSettings();
+    await renderSettings();
 
-    fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+    await fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
 
     expect(await screen.findByTestId('settings-nse-probe-seeded')).toBeTruthy();
     expect(screen.getByText(/permission granted/)).toBeTruthy();
@@ -483,10 +491,10 @@ describe('SettingsScreen', () => {
     mockSeedNseProbe.mockImplementationOnce(
       () => new Promise<{ permissionGranted: boolean }>((resolve) => { resolveSeed = resolve; }),
     );
-    renderSettings();
+    await renderSettings();
 
-    fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
-    fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+    await fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+    await fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
     expect(mockSeedNseProbe).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -496,7 +504,7 @@ describe('SettingsScreen', () => {
 
     // Released once the first seed settles: a deliberate re-seed still works.
     await act(async () => {
-      fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+      await fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
     });
     expect(mockSeedNseProbe).toHaveBeenCalledTimes(2);
   });
@@ -507,9 +515,9 @@ describe('SettingsScreen', () => {
     // differently from a decrypt failure, which is the point.
     mockNseProbeEnabled.mockReturnValue(true);
     mockSeedNseProbe.mockRejectedValueOnce(new Error('A required entitlement is not present (errSecMissingEntitlement)'));
-    renderSettings();
+    await renderSettings();
 
-    fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
+    await fireEvent.press(screen.getByTestId('settings-nse-probe-seed'));
 
     expect(await screen.findByTestId('settings-nse-probe-seed-error')).toBeTruthy();
     expect(screen.getByText(/errSecMissingEntitlement/)).toBeTruthy();
@@ -518,9 +526,9 @@ describe('SettingsScreen', () => {
 
   it('reads the delivered notification into the result row', async () => {
     mockNseProbeEnabled.mockReturnValue(true);
-    renderSettings();
+    await renderSettings();
 
-    fireEvent.press(screen.getByTestId('settings-nse-probe-read'));
+    await fireEvent.press(screen.getByTestId('settings-nse-probe-read'));
 
     expect(await screen.findByTestId('settings-nse-probe-result')).toBeTruthy();
     expect(screen.getByText('Agent needs your input | NSE probe - decrypted on device')).toBeTruthy();
@@ -538,8 +546,8 @@ describe('SettingsScreen', () => {
    * an unconditional render - "expected element with testID
    * settings-section-connection-trace to not exist" (it existed).
    */
-  it('hides the connection-trace section by default', () => {
-    renderSettings();
+  it('hides the connection-trace section by default', async () => {
+    await renderSettings();
     expect(screen.queryByTestId('settings-section-connection-trace')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-foreground-kick')).toBeNull();
   });
@@ -557,16 +565,16 @@ describe('SettingsScreen', () => {
    * with `onValueChange={() => {}}` - "Expected: false / Number of calls: 0"
    * against `expect(mockSetForegroundKickEnabled).toHaveBeenCalledWith(false)`.
    */
-  it('reveals the foreground-recovery switch when the trace flag is on, and wires it to setForegroundKickEnabled', () => {
+  it('reveals the foreground-recovery switch when the trace flag is on, and wires it to setForegroundKickEnabled', async () => {
     mockConnectionTraceEnabled.mockReturnValue(true);
     mockForegroundKickEnabled.mockReturnValue(true);
-    renderSettings();
+    await renderSettings();
 
     expect(screen.getByTestId('settings-section-connection-trace')).toBeTruthy();
     const row = screen.getByTestId('settings-connection-trace-foreground-kick');
     expect(row.props.accessibilityState.checked).toBe(true);
 
-    fireEvent.press(row);
+    await fireEvent.press(row);
 
     expect(mockSetForegroundKickEnabled).toHaveBeenCalledWith(false);
   });
@@ -577,10 +585,10 @@ describe('SettingsScreen', () => {
    * a user whether remote push actually works.
    */
   describe('remote push status', () => {
-    it('reports the registration status while the receive task is healthy', () => {
+    it('reports the registration status while the receive task is healthy', async () => {
       mockGetPushRegistrationStatus.mockReturnValue('registered');
       mockGetBackgroundPushTaskStatus.mockReturnValue('registered');
-      renderSettings();
+      await renderSettings();
 
       expect(screen.getByTestId('settings-push-status')).toBeTruthy();
       expect(screen.getByText('Remote push: registered')).toBeTruthy();
@@ -593,10 +601,10 @@ describe('SettingsScreen', () => {
      * "Remote push: registered" is the one label that is actively wrong there,
      * so the task status has to outrank it.
      */
-    it('overrides a registered status when the receive task never registered', () => {
+    it('overrides a registered status when the receive task never registered', async () => {
       mockGetPushRegistrationStatus.mockReturnValue('registered');
       mockGetBackgroundPushTaskStatus.mockReturnValue('unavailable');
-      renderSettings();
+      await renderSettings();
 
       expect(screen.getByText('Remote push: unavailable on this device')).toBeTruthy();
       expect(screen.queryByText('Remote push: registered')).toBeNull();
@@ -611,10 +619,10 @@ describe('SettingsScreen', () => {
      * "unavailable" line does not. An unconditional override would replace the
      * good copy with the vague copy in exactly the case the good copy is for.
      */
-    it('keeps the no-FCM label when both halves fail together', () => {
+    it('keeps the no-FCM label when both halves fail together', async () => {
       mockGetPushRegistrationStatus.mockReturnValue('unavailable-no-fcm');
       mockGetBackgroundPushTaskStatus.mockReturnValue('unavailable');
-      renderSettings();
+      await renderSettings();
 
       expect(screen.getByText('Remote push: off on this build - brief background alerts only')).toBeTruthy();
       expect(screen.queryByText('Remote push: unavailable on this device')).toBeNull();
@@ -624,10 +632,10 @@ describe('SettingsScreen', () => {
      * iOS never registers the task at all (it is Android-only by design), so
      * 'pending' must read as "nothing to report", not as a failure.
      */
-    it('leaves the registration status alone while the task status is pending', () => {
+    it('leaves the registration status alone while the task status is pending', async () => {
       mockGetPushRegistrationStatus.mockReturnValue('capability-denied');
       mockGetBackgroundPushTaskStatus.mockReturnValue('pending');
-      renderSettings();
+      await renderSettings();
 
       expect(screen.getByText('Remote push: not granted by your desktop')).toBeTruthy();
     });
@@ -645,10 +653,10 @@ describe('SettingsScreen', () => {
      * and every other test here still passes while every working iOS user is
      * told push is broken.
      */
-    it('reports a registered status on iOS, where the task stays pending forever', () => {
+    it('reports a registered status on iOS, where the task stays pending forever', async () => {
       mockGetPushRegistrationStatus.mockReturnValue('registered');
       mockGetBackgroundPushTaskStatus.mockReturnValue('pending');
-      renderSettings();
+      await renderSettings();
 
       expect(screen.getByText('Remote push: registered')).toBeTruthy();
       expect(screen.queryByText('Remote push: unavailable on this device')).toBeNull();

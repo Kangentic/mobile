@@ -56,15 +56,15 @@ describe('FileDiffScreen', () => {
     seedFileContent();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // Unmount before resetting the store so the reset does not re-render a
     // still-mounted subscriber outside act().
-    cleanup();
+    await cleanup();
     useDiffStore.getState().reset();
   });
 
-  it('titles the header with the file name and pins no back label', () => {
-    render(
+  it('titles the header with the file name and pins no back label', async () => {
+    await render(
       <ThemeProvider>
         <FileDiffScreen />
       </ThemeProvider>,
@@ -79,8 +79,8 @@ describe('FileDiffScreen', () => {
     expect(options?.headerBackTitle).toBeUndefined();
   });
 
-  it('renders add and remove lines from the stored file content', () => {
-    render(
+  it('renders add and remove lines from the stored file content', async () => {
+    await render(
       <ThemeProvider>
         <FileDiffScreen />
       </ThemeProvider>,
@@ -93,10 +93,10 @@ describe('FileDiffScreen', () => {
     expect(screen.getByText('@@ -1,2 +1,2 @@')).toBeTruthy();
   });
 
-  it('fetches the file content once on mount with the route params', () => {
+  it('fetches the file content once on mount with the route params', async () => {
     const { fetchDiffFileContent } = jest.requireMock<{ fetchDiffFileContent: jest.Mock }>('@/connection/actions');
 
-    render(
+    await render(
       <ThemeProvider>
         <FileDiffScreen />
       </ThemeProvider>,
@@ -111,10 +111,10 @@ describe('FileDiffScreen', () => {
     });
   });
 
-  it('shows the mono-line skeleton while no content is stored yet', () => {
+  it('shows the mono-line skeleton while no content is stored yet', async () => {
     useDiffStore.getState().reset();
 
-    render(
+    await render(
       <ThemeProvider>
         <FileDiffScreen />
       </ThemeProvider>,
