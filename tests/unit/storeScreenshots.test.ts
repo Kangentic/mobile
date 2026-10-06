@@ -243,6 +243,28 @@ describe('the shot list matches the capture flow', () => {
     expect(hintDismissalCompletesAt).toBeLessThan(chatTapAt);
     expect(chatTapAt).toBeLessThan(permissionCardAssertedAt);
   });
+
+  /**
+   * Regression cover for a capture taken mid-transition: the file-diff screen's
+   * lines exist as soon as it mounts, which on iOS 26 is before the push
+   * animation ends, so a shot straight after the `file-diff-lines` wait caught
+   * the page still sliding in (rounded corners, the window background at its
+   * edge, the back button half-animated). The wait on the lines is satisfied by
+   * the first frame, so only an explicit settle step between it and the shot
+   * keeps the frame clean.
+   */
+  it('settles after the file diff opens and before its screenshot, so the push is not captured', () => {
+    // Anchored on the takeScreenshot path, not the bare shot name: comments mention both.
+    const shotMatch = /path:\s*\$\{OUTPUT_DIR\}\/06-file-diff/.exec(flowSource);
+    expect(shotMatch, 'the flow still takes 06-file-diff').not.toBeNull();
+    const shotAt = shotMatch?.index ?? -1;
+    const linesWaitAt = flowSource.lastIndexOf('id: "file-diff-lines"', shotAt);
+    expect(linesWaitAt, 'the flow still waits for file-diff-lines before the shot').toBeGreaterThanOrEqual(0);
+
+    // Only a command line counts: a comment that mentions the step must not satisfy this.
+    const settleCommand = /^[ \t]*- waitForAnimationToEnd:/m;
+    expect(flowSource.slice(linesWaitAt, shotAt)).toMatch(settleCommand);
+  });
 });
 
 /**

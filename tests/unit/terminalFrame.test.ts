@@ -476,6 +476,21 @@ describe('serializePhysicalRows gaps inside a row', () => {
   });
 });
 
+describe('serializePhysicalRows wide glyphs', () => {
+  it('skips the placeholder cell after a wide glyph, so the text after it stays where it was', async () => {
+    // A double-width glyph owns two cells: the glyph, then a zero-width placeholder that holds no
+    // characters. Read as an unwritten gap, the placeholder would be written as a cursor-forward of
+    // zero, which a terminal reads as one, and every cell after the glyph would land a column late.
+    const { source, replay, frame } = await roundTrip('a中b');
+    const sourceRow = snapshotScreenRich(source)[0];
+    // Non-vacuity: this terminal really does give the glyph two cells, with 'b' after both.
+    expect(sourceRow[1].glyph).toBe('中');
+    expect(sourceRow[3].glyph).toBe('b');
+    expect(parsePhysicalFrame(frame).rows[0]).toBe('a中b');
+    expect(describeScreen(replay)).toEqual(describeScreen(source));
+  });
+});
+
 describe('serializePhysicalRows style diff', () => {
   interface StyleCase {
     readonly label: string;
@@ -678,6 +693,29 @@ describe('widenRow branches the desktop vectors do not reach', () => {
     expect(fitWider('abc\x1b[4Cdefghijklmn', 24, 20)).toBe('abc\x1b[4Cdefghijklmn');
     // The tail is three cells, well inside the cap: moves.
     expect(fitWider('abcdefghijk\x1b[4Cxyz', 24, 20)).toBe('abcdefghijk\x1b[8Cxyz');
+  });
+
+  // U+1D538 (a double-struck A) is outside the BMP, so it is two UTF-16 units and ONE cell wide. The
+  // widener counts cells by code point, so it has to read such a glyph as one cell wherever it is
+  // measured or located.
+  const ASTRAL_GLYPH = '\u{1D538}';
+
+  it('counts an astral one-cell glyph as one cell, so a label of them is still moved to the new edge', () => {
+    // 4 cells + a 4-cell gap + a 10-glyph tail is 18 cells at 20 columns, and half of 20 is 10: the
+    // tail is exactly as wide as a label may be. Counted by UTF-16 unit the row would be 28 cells
+    // and throw as wider than its grid, and a tail measured that way alone would read as 20 cells,
+    // past half, and be left where it was as text the CLI laid out itself.
+    const tail = ASTRAL_GLYPH.repeat(10);
+    expect(fitWider(`abcd\x1b[4C${tail}`, 24, 20)).toBe(`abcd\x1b[8C${tail}`);
+  });
+
+  it('puts the extra cells at the gap even when astral glyphs come before it in the same run', () => {
+    // The gap is plain spaces here, so the widener inserts into the text itself, at an offset it
+    // tracks in UTF-16 units. Four astral glyphs are eight units, so an offset counted in glyphs
+    // would land four units early, inside the last glyph's surrogate pair.
+    const lead = ASTRAL_GLYPH.repeat(4);
+    const widened = fitWider(`${lead}    xyzxyzxyzx`, 24, 20);
+    expect(widened).toBe(`${lead}${' '.repeat(8)}xyzxyzxyzx`);
   });
 
   it('returns a row byte for byte when there are no extra columns to fill', () => {
