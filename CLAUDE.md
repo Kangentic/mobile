@@ -32,8 +32,9 @@ app/                           # expo-router route wrappers (thin - render the s
   task/[taskId]/               # index.tsx = the SESSION view (terminal/chat/changes segments)
   file-diff.tsx                 # per-file unified diff, pushed over the session's changes segment
   completed-task.tsx            # a finished task's transcript + run summary
-  create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx
-                                #   native form-sheet routes (they replaced the custom board sheets)
+  create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx,
+  section-filter.tsx            #   native form-sheet routes (they replaced the custom board sheets;
+                                #   section-filter is the Agents feed's Show sections sheet)
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen
   +native-intent.ts             # deep links; routes ONLY the demo code (kangentic-pair://demo).
                                 #   OS routing of a REAL kangentic-pair:// payload is still a later
@@ -130,9 +131,10 @@ targets/nse/                  # iOS Notification Service Extension source (Swift
                               #   needs no Pods entry. Cross-checked against @kangentic/protocol by
                               #   the NSE crypto (swiftc) job in ci.yml
 src/
-  screens/        # TriageHome (+ home/ needs-you cards), Board, task/ (SessionScreen, mode toggle,
-                  #   input bar, ChatPane, ChangesTab), CompletedTask, the form-sheet screens
-                  #   (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker), FileDiff,
+  screens/        # TriageHome (+ home/ needs-you cards, feed sections and the section filter's
+                  #   header button and empty state), Board, task/ (SessionScreen, mode toggle,
+                  #   input bar, ChatPane, ChangesTab, ResumePanel), CompletedTask, the form-sheet
+                  #   screens (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker/SectionFilter), FileDiff,
                   #   Pairing (Scan/Confirm), Settings, Devices
   components/     # Design system primitives (incl. the shared SegmentedSwitcher) + brand/ (Overseer,
                   #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/

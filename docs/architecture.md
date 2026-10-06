@@ -729,7 +729,20 @@ feed-level (`selectFeedSections` in `TriageHomeScreen`), deliberately **not** a 
 `sectionForEntry` stays a pure function of `entry.state`, which the wait time, the notifier and
 section re-stamping read, which keeps both states structurally unable to reach `endedSessionIds`
 or `SessionScreen`'s `sessionEnded`, and which keeps a swapping row in its existing section rather
-than bouncing it through a new one twice in five seconds.
+than bouncing it through a new one twice in five seconds. An empty section is never drawn.
+
+**The section filter** is the phone's own addition (the desktop Monitor has no equivalent): a
+filter button beside Settings in the Agents header opens the "Show sections" form sheet
+(`SectionFilterScreen`, route `section-filter`), which lists all four sections, empty ones
+included, each with the glyph its cards wear (drawn still: it is a legend) and how many sessions
+it holds. A tap applies at once and persists as `hiddenTriageSections` in the settings store; it
+never applies to the Board. Each row is a whole-row 48 dp target, and the control is each
+platform's own pick-several list: Android's leading Material checkbox on a tinted row, iOS's
+trailing checkmark, untinted (a switch was rejected, since both guidelines keep it for an
+independent on/off setting). A hidden section draws neither header nor rows, the snippet pre-warm
+skips it, the header button carries an accent dot while anything is hidden, and a feed whose every
+session is hidden shows `FilteredEmptyState` with Show all rather than "All quiet". The grouping
+lives in `screens/home/feedSections.ts`, so the sheet counts exactly what the feed draws.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`
