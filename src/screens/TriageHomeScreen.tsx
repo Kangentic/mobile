@@ -83,7 +83,7 @@ export function TriageHomeScreen(): React.JSX.Element {
   const pairedState = useChannelStore((state) => state.pairedState);
   const [refreshing, setRefreshing] = useState(false);
 
-  const collapsedTriageSection = useSettingsStore((state) => state.collapsedTriageSection);
+  const collapsedTriageSections = useSettingsStore((state) => state.collapsedTriageSections);
   // The section filter (SectionFilterScreen). A hidden section draws neither
   // its header nor its rows, where a collapsed one keeps its header.
   const hiddenTriageSections = useSettingsStore((state) => state.hiddenTriageSections);
@@ -118,11 +118,11 @@ export function TriageHomeScreen(): React.JSX.Element {
       // a collapsed title just skips the rows underneath it. No exception
       // for needs-you - a user may want to defer even a pending prompt
       // until they're back at their desk.
-      if (collapsedTriageSection === title) continue;
+      if (collapsedTriageSections.includes(title)) continue;
       for (const entry of section.entries) listRows.push({ kind: 'activity', entry });
     }
     return listRows;
-  }, [bySessionId, collapsedTriageSection, hiddenTriageSections]);
+  }, [bySessionId, collapsedTriageSections, hiddenTriageSections]);
 
   // Whether anything on screen actually needs a clock. Correct for an empty or
   // all-working feed and nothing more: one idle session makes it true, and a
@@ -427,7 +427,7 @@ export function TriageHomeScreen(): React.JSX.Element {
                 // The collapse state is title-keyed for the same reason.
                 testID={`section-header-${item.title.toLowerCase()}`}
                 count={item.count}
-                collapsed={collapsedTriageSection === item.title}
+                collapsed={collapsedTriageSections.includes(item.title)}
                 onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}
               />
             ) : (

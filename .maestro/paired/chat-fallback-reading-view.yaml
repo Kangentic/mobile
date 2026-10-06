@@ -6,7 +6,7 @@ appId: com.kangentic.mobile
 # the honest caption and real content lines.
 - launchApp
 # 60s: cold boot + channel re-establish after launchApp's force-stop.
-# The Agents feed's section collapse is PERSISTED (settings.collapsedTriageSection),
+# The Agents feed's section collapse is PERSISTED (settings.collapsedTriageSections),
 # so it survives launchApp and leaks between flows: any earlier tap that landed
 # on a header - which happens when a recycling FlashList moves a row out from
 # under a resolved coordinate - leaves the section this flow needs collapsed,

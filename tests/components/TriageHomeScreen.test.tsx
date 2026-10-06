@@ -70,7 +70,7 @@ jest.mock('@/observability/memoryPressure', () => ({
 }));
 
 function seedStores(): void {
-  useSettingsStore.setState({ collapsedTriageSection: null });
+  useSettingsStore.setState({ collapsedTriageSections: [] });
   useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true });
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
@@ -138,7 +138,7 @@ async function renderHome(): Promise<void> {
  * (e.g. a screen-level default sneaking back in).
  */
 function seedTwoProjectBoards(): void {
-  useSettingsStore.setState({ collapsedTriageSection: null });
+  useSettingsStore.setState({ collapsedTriageSections: [] });
   useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true });
   useBoardStore.setState({
     projects: [
@@ -588,6 +588,32 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
   });
 
+  /**
+   * Reported on device: with Idle collapsed, tapping Active collapsed Active
+   * and RE-EXPANDED Idle above it (the collapse used to be one-at-a-time),
+   * which pushed Active down the screen and read as a tap that did nothing.
+   * Each section now keeps its own state.
+   */
+  it('collapses a second section without re-expanding the first', async () => {
+    useActivityStore.getState().registerSession('sess-working', 'task-working', 'project-1');
+    useActivityStore.getState().applySnapshot('sess-working', 'task-working', 'project-1', streamSnapshotFixture({ activity: { state: 'thinking', reason: { kind: 'turn-active' } } }));
+    await renderHome();
+    await act(async () => {});
+
+    await fireEvent.press(screen.getByTestId('section-header-idle'));
+    await fireEvent.press(screen.getByTestId('section-header-active'));
+
+    expect(screen.getByTestId('section-header-idle').props.accessibilityState).toEqual({ expanded: false });
+    expect(screen.getByTestId('section-header-active').props.accessibilityState).toEqual({ expanded: false });
+    expect(screen.queryByTestId('activity-row-sess-1')).toBeNull();
+    expect(screen.queryByTestId('activity-row-sess-working')).toBeNull();
+
+    // Re-expanding one leaves the other collapsed.
+    await fireEvent.press(screen.getByTestId('section-header-idle'));
+    expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+    expect(screen.queryByTestId('activity-row-sess-working')).toBeNull();
+  });
+
   it('shows the all-quiet state when connected with no sessions', async () => {
     useActivityStore.getState().reset();
     await renderHome();
@@ -1019,7 +1045,7 @@ describe('TriageHomeScreen', () => {
     const workingSessionIds = Array.from({ length: 12 }, (_, index) => `warm-sess-${index}`);
 
     function seedManyWorkingSessions(): void {
-      useSettingsStore.setState({ collapsedTriageSection: 'Active' });
+      useSettingsStore.setState({ collapsedTriageSections: ['Active'] });
       useActivityStore.getState().reset();
       for (const sessionId of workingSessionIds) {
         useActivityStore.getState().registerSession(sessionId, `task-${sessionId}`, 'project-1');
@@ -1143,7 +1169,7 @@ describe('TriageHomeScreen', () => {
    */
   describe('snippet pre-warm skips what nothing draws', () => {
     function registerWorkingControl(): void {
-      useSettingsStore.setState({ collapsedTriageSection: 'Active' });
+      useSettingsStore.setState({ collapsedTriageSections: ['Active'] });
       useActivityStore.getState().registerSession('warm-control', 'task-warm-control', 'project-1');
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
@@ -1169,7 +1195,7 @@ describe('TriageHomeScreen', () => {
     // after it (a synchronous act returns before the mocked peek resolves).
     afterEach(async () => {
       await act(async () => {
-        useSettingsStore.setState({ hiddenTriageSections: [], collapsedTriageSection: null });
+        useSettingsStore.setState({ hiddenTriageSections: [], collapsedTriageSections: [] });
       });
     });
 
