@@ -1,11 +1,12 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
 import { sendUserMessage } from '@/connection/actions';
 import type { RetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
+import type { UseDictationOptions } from '@/voice/useDictation';
 
 jest.mock('@/connection/actions', () => ({
   sendUserMessage: jest.fn(),
@@ -28,10 +29,13 @@ const mockDictationControls = {
   stop: jest.fn(),
 };
 // Counted, not just stubbed: the retention probe test below asserts the
-// subscription never registers, which no rendered output can show.
-const mockUseDictation = jest.fn(() => mockDictationControls);
+// subscription never registers, which no rendered output can show. It also
+// keeps the options each call received, because the dictation tests below
+// drive the composer the way the speech engine does: by invoking the
+// onPartialResult / onFinalResult it was handed.
+const mockUseDictation = jest.fn((_options: UseDictationOptions) => mockDictationControls);
 jest.mock('@/voice/useDictation', () => ({
-  useDictation: () => mockUseDictation(),
+  useDictation: (options: UseDictationOptions) => mockUseDictation(options),
 }));
 
 let mockRetentionProbeVariant: RetentionProbeVariant = 'off';
@@ -130,6 +134,68 @@ describe('ComposerBar', () => {
     useSettingsStore.setState({ dictationMode: 'off' });
     await renderComposer();
     expect(mockUseDictation).toHaveBeenCalled();
+  });
+
+  describe('dictation results', () => {
+    /**
+     * The speech engine reaches the composer only through the two callbacks
+     * `ComposerBar` hands `DictationMicButton`, which hands them to
+     * `useDictation`. The mock above keeps what that hook was called with, so
+     * these tests drive the composer exactly as the engine does, and they fail
+     * if the mic-button extraction stops forwarding a callback or stops calling
+     * `onStart` before the engine starts.
+     */
+    function latestDictationOptions(): UseDictationOptions {
+      const latestCall = mockUseDictation.mock.calls.at(-1);
+      if (latestCall === undefined) throw new Error('useDictation was never called');
+      return latestCall[0];
+    }
+
+    it('appends a partial result to what was typed before the mic was tapped', async () => {
+      await renderComposer();
+      await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello');
+      await fireEvent.press(screen.getByTestId('composer-mic'));
+
+      await act(() => {
+        latestDictationOptions().onPartialResult('world');
+      });
+      expect(screen.getByTestId('composer-input').props.value).toBe('hello world');
+
+      // A later partial replaces the earlier one after the same typed prefix,
+      // rather than stacking on top of it.
+      await act(() => {
+        latestDictationOptions().onPartialResult('world again');
+      });
+      expect(screen.getByTestId('composer-input').props.value).toBe('hello world again');
+      expect(mockSendUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends the typed text plus the final result in auto-send mode, then clears the input', async () => {
+      await renderComposer();
+      await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello');
+      await fireEvent.press(screen.getByTestId('composer-mic'));
+
+      await act(() => {
+        latestDictationOptions().onFinalResult('world');
+      });
+
+      expect(mockSendUserMessage).toHaveBeenCalledWith('sess-1', 'hello world');
+      await waitFor(() => expect(screen.getByTestId('composer-input').props.value).toBe(''));
+    });
+
+    it('keeps the final result in the input without sending in manual-send mode', async () => {
+      useSettingsStore.setState({ dictationMode: 'manual-send' });
+      await renderComposer();
+      await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello');
+      await fireEvent.press(screen.getByTestId('composer-mic'));
+
+      await act(() => {
+        latestDictationOptions().onFinalResult('world');
+      });
+
+      expect(screen.getByTestId('composer-input').props.value).toBe('hello world');
+      expect(mockSendUserMessage).not.toHaveBeenCalled();
+    });
   });
 
   it("registers no dictation listeners under the retention probe's composer-no-dictation arm", async () => {
