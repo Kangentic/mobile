@@ -169,19 +169,23 @@ export interface SessionActivityEntry {
    */
   sessionStatus: ReadStreamSessionStatusWire | null;
   /**
-   * Whether the desktop offers Resume for this paused session, which gates
-   * every Resume surface on the phone (the session screen's button, the
-   * header's play button, the long-press item). Its source is the read-stream
-   * snapshot's and the `status` payload's `resumable`, added for this purpose
-   * by desktop task #762 in protocol 0.16.0: true only when `start-session`
-   * will resume the session exactly as the desktop's own Resume button does,
-   * with no on-enter automations and no column message.
+   * The stream's copy of whether the desktop offers Resume for this paused
+   * session, one of the inputs to `useResumeOffer`, which gates every Resume
+   * surface on the phone. Desktop task #762 adds the flag in protocol 0.16.0,
+   * on the read-stream snapshot and the `status` payload, and AUTHORITATIVELY
+   * on the board row (`BoardTaskWire.resumable`): a desktop pause clears the
+   * task's `session_id`, so once the board refreshes the phone holds no stream
+   * on a paused session, and this copy only keeps an already-open session
+   * screen current through the suspend. True only when `start-session` will
+   * resume the session exactly as the desktop's own Resume button does, with
+   * no on-enter automations and no column message.
    *
-   * Always false until the phone adopts 0.16.0 (mobile task #101). That is
-   * the point, not a gap: every desktop before it answers `start-session`
-   * on a paused task the way a move into the column does, re-running the
-   * column's automations, so on those desktops Resume stays hidden rather
-   * than meaning something different from the desktop's.
+   * Always false until the phone adopts 0.16.0 (mobile task #101, which also
+   * adds the board-row source to `useResumeOffer`). That is the point, not a
+   * gap: every desktop before it answers `start-session` on a paused task the
+   * way a move into the column does, re-running the column's automations, so
+   * on those desktops Resume stays hidden rather than meaning something
+   * different from the desktop's.
    */
   resumable: boolean;
 }
