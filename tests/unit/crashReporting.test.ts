@@ -129,6 +129,9 @@ describe('initializeCrashReporting', () => {
     expect(options.enableAutoPerformanceTracing).toBe(false);
     expect(options.enableUserInteractionTracing).toBe(false);
     expect(options.enableLogs).toBe(false);
+    // iOS memory near the crash site, embedded as string-shaped stack
+    // contents. sentry-cocoa 9.24 defaults it off; pinned so it stays off.
+    expect(options.enableMemoryIntrospection).toBe(false);
     // Absent, NOT 0. The SDK gates its tracing integrations on
     // `typeof tracesSampleRate === 'number'`, so an explicit 0 registers them
     // and merely samples every span away. `in` rather than a value check,
@@ -153,12 +156,28 @@ describe('initializeCrashReporting', () => {
     const defaultDedupeEntry = { name: 'Dedupe' };
     const defaultBreadcrumbsEntry = { name: 'Breadcrumbs' };
     const defaultHttpContextEntry = { name: 'HttpContext' };
-    const syntheticDefaultIntegrations = [defaultDedupeEntry, defaultBreadcrumbsEntry, defaultHttpContextEntry];
+    // Added by @sentry/react-native 8.x; each attaches data with no option of
+    // its own to turn it off (see DROPPED_DEFAULT_INTEGRATIONS).
+    const defaultExpoConstantsEntry = { name: 'ExpoConstants' };
+    const defaultTurboModuleContextEntry = { name: 'TurboModuleContext' };
+    const defaultExpoUpdatesListenerEntry = { name: 'ExpoUpdatesListener' };
+    const syntheticDefaultIntegrations = [
+      defaultDedupeEntry,
+      defaultBreadcrumbsEntry,
+      defaultHttpContextEntry,
+      defaultExpoConstantsEntry,
+      defaultTurboModuleContextEntry,
+      defaultExpoUpdatesListenerEntry,
+    ];
 
     const resultIntegrations = integrationsFactory(syntheticDefaultIntegrations);
 
     // The default's own Breadcrumbs instance must not survive the filter.
     expect(resultIntegrations).not.toContain(defaultBreadcrumbsEntry);
+    // Nor any of the 8.x additions that attach unreviewed data.
+    expect(resultIntegrations).not.toContain(defaultExpoConstantsEntry);
+    expect(resultIntegrations).not.toContain(defaultTurboModuleContextEntry);
+    expect(resultIntegrations).not.toContain(defaultExpoUpdatesListenerEntry);
     // Unrelated defaults pass through untouched.
     expect(resultIntegrations).toContain(defaultDedupeEntry);
     expect(resultIntegrations).toContain(defaultHttpContextEntry);
@@ -341,6 +360,100 @@ describe('initializeCrashReporting', () => {
     crashReporting.initializeCrashReporting();
 
     expect(sentryState.init).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The default integration list of the INSTALLED SDK, against the list these
+ * controls were last reviewed against.
+ *
+ * Every control above is a decision about a specific integration. A future SDK
+ * version that adds a default integration is not covered by any of them, and
+ * nothing else fails: @sentry/react-native 8.x added ExpoConstants (a
+ * per-launch session id on every event), TurboModuleContext and
+ * ExpoUpdatesListener as defaults, none behind an option this app sets, and
+ * every check stayed green until they were read for. This test is what makes
+ * the next one fail CI instead.
+ *
+ * Read from the shipped source rather than mocked, the same approach as
+ * secureStoreKeychainLayout.test.ts: the claim being pinned is a property of the
+ * dependency, not of this repo's code. When it fails, read the new
+ * integration, decide (keep, drop in DROPPED_DEFAULT_INTEGRATIONS in
+ * src/observability/crashReporting.ts, or switch off with an init option), and
+ * only then add it here.
+ */
+describe('installed @sentry/react-native default integrations', () => {
+  const REVIEWED_DEFAULT_INTEGRATION_PUSHES = [
+    // Always on, reviewed: errors, linking, filtering, symbolication, context.
+    'reactNativeErrorHandlersIntegration',
+    'nativeLinkedErrorsIntegration',
+    'browserApiErrorsIntegration',
+    'browserGlobalHandlersIntegration',
+    'browserLinkedErrorsIntegration',
+    'inboundFiltersIntegration',
+    'functionToStringIntegration',
+    'dedupeIntegration',
+    'httpContextIntegration',
+    'nativeReleaseIntegration',
+    'eventOriginIntegration',
+    'sdkInfoIntegration',
+    'reactNativeInfoIntegration',
+    'createReactNativeRewriteFrames',
+    'debugMetaIntegration',
+    'deviceContextIntegration',
+    'modulesLoaderIntegration',
+    'expoContextIntegration',
+    'debugSymbolicatorIntegration',
+    'primitiveTagIntegration',
+    // Replaced by a hardened instance.
+    'breadcrumbsIntegration',
+    // Dropped by name in DROPPED_DEFAULT_INTEGRATIONS.
+    'expoConstantsIntegration',
+    'expoUpdatesListenerIntegration',
+    'turboModuleContextIntegration',
+    // Gated off by an option this app sets (or leaves absent on purpose):
+    // sessions, logs, screenshots, view hierarchy, profiling, tracing,
+    // performance, failed requests, replay, spotlight.
+    'browserSessionIntegration',
+    'logEnricherIntegration',
+    'consoleLoggingIntegration',
+    'screenshotIntegration',
+    'viewHierarchyIntegration',
+    'hermesProfilingIntegration',
+    'appStartIntegration',
+    'nativeFramesIntegrationInstance',
+    'stallTrackingIntegration',
+    'userInteractionIntegration',
+    'appRegistryIntegration',
+    'reactNativeTracingIntegration',
+    'timeToDisplayIntegration',
+    'httpClientIntegration',
+    'expoRouterIntegration',
+    'spotlightIntegration',
+    'mobileReplayIntegration',
+    // An object-literal marker pushed only under
+    // `_experiments.enableStandaloneAppStartTracing`, which is never set.
+    '{object literal}',
+  ];
+
+  function installedDefaultIntegrationPushes(): string[] {
+    const defaultIntegrationsSource = readFileSync(
+      join(__dirname, '..', '..', 'node_modules', '@sentry', 'react-native', 'dist', 'js', 'integrations', 'default.js'),
+      'utf8',
+    );
+    const pushed = new Set<string>();
+    for (const match of defaultIntegrationsSource.matchAll(/integrations\.push\(\s*([A-Za-z_$][\w$]*|\{)/g)) {
+      pushed.add(match[1] === '{' ? '{object literal}' : match[1]);
+    }
+    return [...pushed].sort();
+  }
+
+  it('finds the push sites at all (guards the comparison below against a parser that matches nothing)', () => {
+    expect(installedDefaultIntegrationPushes().length).toBeGreaterThan(30);
+  });
+
+  it('matches the reviewed list exactly, so a new default integration fails until it is reviewed', () => {
+    expect(installedDefaultIntegrationPushes()).toEqual([...REVIEWED_DEFAULT_INTEGRATION_PUSHES].sort());
   });
 });
 
