@@ -10,9 +10,10 @@
  *   every test here runs in exactly that stuck state: the overlay holds full
  *   strength until the gate's JS timer unmounts it, and nothing else can.
  *
- *   A MAPPER ON A RESTING ROW. A registered mapper is walked on every frame,
- *   dirty or not (~0.47 CPU points each, measured on a release build; see
- *   motion-conventions.md). An overlay that rendered nothing visible but kept
+ *   A MAPPER ON A RESTING ROW. Its writes outlive a FlashList rebind, and on
+ *   Reanimated 4.5.1 a registered mapper was walked on every frame, dirty or
+ *   not (~0.47 CPU points each, measured on a release build; 4.7.1 measures
+ *   them free; see motion-conventions.md). An overlay that rendered nothing visible but kept
  *   its useAnimatedStyle would pass every rendering assertion, which is why the
  *   "registered mappers" block asserts the hook itself, copied from
  *   AgentStatusIcon.test.tsx.

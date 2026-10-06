@@ -279,6 +279,24 @@ describe('settingsStore - collapsed triage sections', () => {
     expect(useSettingsStore.getState().collapsedTriageSections).toEqual([]);
   });
 
+  // The list key being PRESENT is what says "written under the per-section
+  // rule", whatever it holds. A value that does not parse to a list must read as
+  // nothing collapsed, and must not hand the decision back to the legacy key: an
+  // install that reached the list key has already left the one-title world, so a
+  // stale title there (distinct from anything in the list value, so the output
+  // names which key won) would re-collapse a section the user never collapsed.
+  it.each([
+    ['malformed JSON', 'not json'],
+    ['a bare string', JSON.stringify('Idle')],
+    ['null', 'null'],
+  ])('hydrate ignores a valid legacy title when the list key is present but holds %s', async (_description, raw) => {
+    storedValues.set(COLLAPSED_KEY, raw);
+    storedValues.set(LEGACY_COLLAPSED_KEY, JSON.stringify('Paused'));
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().collapsedTriageSections).toEqual([]);
+  });
+
   it.each([
     ['malformed JSON', 'not json'],
     ['a bare number', '5'],

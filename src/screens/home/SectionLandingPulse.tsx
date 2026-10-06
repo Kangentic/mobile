@@ -44,8 +44,10 @@ export interface SectionLandingPulseProps {
  *
  * It also keeps the mapper off a resting row. The animated half
  * (`SectionPulseFade`) is mounted only while pulsing, the same split as
- * `AgentStatusIcon`'s `SpinningMark`: a registered mapper is walked on every
- * frame whether or not it is dirty (see motion-conventions.md).
+ * `AgentStatusIcon`'s `SpinningMark`: a mapper's writes outlive a FlashList
+ * rebind, and on Reanimated 4.5.1 a registered mapper also cost idle CPU
+ * whether or not it was dirty (4.7.1 measures them free; see
+ * motion-conventions.md).
  */
 export function SectionLandingPulse({ changedAtMs, testID }: SectionLandingPulseProps): React.JSX.Element | null {
   const theme = useTheme();

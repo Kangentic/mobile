@@ -7,33 +7,35 @@ import { retentionProbeEnabled, useRetentionProbeVariant } from './retentionProb
  * How many extra clean mappers each feed row mounts under the `extra-mappers`
  * probe variant. Eight rows on the Agents list therefore add ~64 registered
  * (never dirty) mappers - a large enough load that if idle CPU tracks the count
- * of REGISTERED mappers at all, it moves; if `mapperRun()` genuinely skips
- * clean mappers for free, it does not.
+ * of REGISTERED mappers at all, it moves.
  */
 const EXTRA_MAPPERS_PER_ROW = 8;
 
-/** How long a burst of mounts or unmounts settles before its count is logged. */
+/** How long the mounted count must hold still before it is logged. */
 const MOUNT_REPORT_DEBOUNCE_MS = 500;
 
 /**
  * A RUNTIME probe for the idle-CPU investigation, NOT shippable behaviour.
  *
- * The open question after the Reanimated fast-path flag is whether the residual
- * idle CPU scales with the number of Reanimated mappers merely REGISTERED on a
- * screen (`useAnimatedStyle` registers one per mounted component; the per-frame
- * flush walks the registered set even when nothing animates), or only with the
- * number of DIRTY mappers running a driver. `no-motion` cancels every driver
- * but leaves the mappers registered; this variant adds a large, deliberately
- * inert block of registered mappers on top, so the delta between the two arms
- * isolates the registration cost from the driver cost - measured in ONE process
- * per `.claude/rules/performance-claims-are-measured.md`.
+ * It asks whether idle CPU scales with the number of Reanimated mappers merely
+ * REGISTERED on a screen (`useAnimatedStyle` registers one per mounted
+ * component), or only with the number of DIRTY mappers running a driver.
+ * `no-motion` cancels every driver but leaves the mappers registered; this
+ * variant adds a large, deliberately inert block of registered mappers on top,
+ * so the delta between the two arms isolates the registration cost from the
+ * driver cost - measured in ONE process per
+ * `.claude/rules/performance-claims-are-measured.md`. Answered twice: ~0.47 CPU
+ * points per registered mapper on Reanimated 4.5.1, whose per-frame flush
+ * walked the registered set, and no measurable cost on 4.7.1, which removed
+ * that loop (task #102; motion-conventions.md). Re-run it on a Reanimated bump.
  *
  * It SUBSCRIBES to the variant. It used to read it at render time, so a switch
  * reached only rows that happened to re-render (the feed's rows are memoized):
  * on 2026-10-06 the arm mounted one row's mappers instead of the whole list's,
- * and its CPU reading was meaningless. And it REPORTS what it mounted: every
- * change in the count of mounted units is logged on the connection trace as
- * `mapper-load mounted=N`, so an arm is checked before its CPU is read.
+ * and its CPU reading was meaningless. And it REPORTS what it mounted: once the
+ * count of mounted units has held still for MOUNT_REPORT_DEBOUNCE_MS, it is
+ * logged on the connection trace as `mapper-load mounted=N`, so an arm is
+ * checked before its CPU is read.
  *
  * Gated exactly like the rest of `retentionProbe.ts`: without the probe flag
  * this is a component that renders nothing and calls no hook, so a shipped
@@ -62,7 +64,9 @@ let mountReportTimer: ReturnType<typeof setTimeout> | null = null;
 
 function noteMountedMapperUnits(delta: number): void {
   mountedMapperUnits += delta;
-  if (mountReportTimer !== null) return;
+  // Re-armed on every change, so the count logged is the settled one rather
+  // than whatever it was partway through a list's worth of mounts.
+  if (mountReportTimer !== null) clearTimeout(mountReportTimer);
   mountReportTimer = setTimeout(() => {
     mountReportTimer = null;
     traceConnection('mapper-load', { mounted: mountedMapperUnits });

@@ -38,9 +38,10 @@ import { allowlistBreadcrumb, scrubEvent } from './scrubEvent';
  * `enableSystemEventBreadcrumbs`, `enableNetworkEventBreadcrumbs` and two
  * more on Android, `enableAutoBreadcrumbTracking` and
  * `enableNetworkBreadcrumbs` on iOS). They are deliberately left at their
- * defaults (on) for now: the lifecycle context is diagnostic signal this
- * project has used, and turning them off changes what leaves the device, which
- * is a privacy-policy decision rather than a side effect of an upgrade.
+ * defaults (on): a maintainer decision recorded 2026-10-06 in
+ * .claude/rules/crash-reporting-scope.md and disclosed in
+ * docs/privacy-policy.md, not a pending TODO. Reversing it is a privacy-policy
+ * change that edits both documents, never a side effect of an upgrade.
  * A crash the OS catches also carries a
  * per-install identifier (`contexts.device.id`, promoted into `user.id`)
  * that `sendDefaultPii: false` does not stop and `scrubEvent` never sees;

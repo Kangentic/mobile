@@ -201,8 +201,9 @@ describe('TaskCard', () => {
     });
 
     /**
-     * Idle CPU scales with REGISTERED Reanimated mappers (~0.47 points each on
-     * a release build), so the spin's hook must exist only on a spinning row.
+     * On Reanimated 4.5.1 idle CPU scaled with REGISTERED mappers (~0.47 points
+     * each on a release build; 4.7.1 measures them free), and a mapper's writes
+     * outlive a FlashList recycle, so the spin's hook exists only on a spinning row.
      * Counted against a paused card's own baseline, since the card's press
      * feedback (PressScale) registers one of its own.
      */

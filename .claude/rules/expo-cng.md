@@ -78,6 +78,9 @@ unreproducible for any other contributor or CI machine.
 - **Check (live now, on dispatch):** `.github/workflows/build-android.yml` and
   `build-ios.yml` each also prebuild for real before building, so the same class of breakage
   fails a build even if it somehow reached `main`.
+- **Test (live now):** `tests/unit/expoInstallExclude.test.ts` ties every `expo.install.exclude`
+  entry to a row of the held-dependency table in `docs/developer-guide.md`, in both directions,
+  so a hold cannot be added without its recorded reason or outlive the row that justified it.
 
 Mind the read-trigger gap: because `ios/`/`android/` are gitignored, this path-scoped rule
 rarely enters context on its own. The same summary is restated always-on in `CLAUDE.md`'s

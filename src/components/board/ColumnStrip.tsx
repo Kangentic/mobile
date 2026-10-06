@@ -95,7 +95,8 @@ export interface ColumnStripProps {
  * column move IS a swap, and that is precisely when the new column should show.
  *
  * Static by design - no animated hooks. The feed is a 100-times-a-day surface
- * (motion-conventions.md), and every registered mapper costs idle CPU per row.
+ * (motion-conventions.md). On Reanimated 4.5.1 every registered mapper also
+ * cost idle CPU per row; 4.7.1 measures them free, but the frequency gate stands.
  */
 export const ColumnStrip = React.memo(function ColumnStrip({
   column,

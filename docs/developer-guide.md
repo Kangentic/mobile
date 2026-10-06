@@ -3378,9 +3378,11 @@ only buys back the safety net. This sentence used to end "fixing the unmount is 
 which named the wrong cause: React unmounts correctly, and six pops produce six clean unmounts
 while the native views are retained anyway.
 
-### Idle CPU: the app costs half a core doing nothing, and it is Reanimated's per-frame flush
+### Idle CPU: the app costs half a core doing nothing, and it is Reanimated's per-frame flush (Reanimated 4.5.1)
 
-**Open finding, measured but not fixed.** An idle Agents list on a release build costs **~50% of a
+**Open finding, measured but not fixed** - on Reanimated 4.5.1. The registered-mapper part of it
+went away with 4.7.1, which removed the per-frame loop; see "Registered mappers on Reanimated
+4.7.1 (measured): free" below before quoting anything in this section as current. An idle Agents list on a release build costs **~50% of a
 core** while rendering ~84 frames per second that nobody asked for. Jank is 0.11%, the GPU is at
 1 ms, and `dumpsys gfxinfo` calls it perfectly smooth - which is exactly the blind spot the
 frequency gate in `.claude/rules/motion-conventions.md` warns about.
@@ -3497,7 +3499,7 @@ across runs, never bare percentages.
 `preventShadowTreeCommitExhaustion`, which requires building RN from source (patching a C++ header
 and substituting the Gradle module). Disproportionate here, and recorded so nobody re-derives it.
 
-### The residual is the mapper walk: idle CPU scales with REGISTERED mappers
+### The residual was the mapper walk: on Reanimated 4.5.1, idle CPU scaled with REGISTERED mappers
 
 **Attributed 2026-08-30, by two in-process experiments the earlier rounds never ran** - reading
 frames alongside every CPU number, and varying registered-mapper count at runtime (the probe's

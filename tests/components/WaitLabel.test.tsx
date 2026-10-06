@@ -105,9 +105,11 @@ describe('WaitLabel', () => {
 
 /**
  * The idle-CPU lever, asserted at the source - the same mechanism assertion
- * AgentStatusIcon carries, for the same reason. A registered mapper costs
- * ~0.47 CPU points on every frame whether it is dirty or not, and this label
- * sits on every waiting row of a scrolling feed. Reanimated here would render
+ * AgentStatusIcon carries, for the same reason. On Reanimated 4.5.1 a
+ * registered mapper cost ~0.47 CPU points on every frame whether it was dirty
+ * or not (4.7.1 measures them free), and this label sits on every waiting row
+ * of a scrolling feed, where the frequency gate puts it on the platform
+ * default regardless (motion-conventions.md). Reanimated here would render
  * identically and pass every other test in this file, so nothing but a spy can
  * hold the decision in place.
  */
