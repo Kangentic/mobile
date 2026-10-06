@@ -2,11 +2,12 @@ import React, { useCallback } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GitCompareArrows } from 'lucide-react-native';
+import { Clock, GitCompareArrows } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
-import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, Text, useTheme } from '@/components';
+import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, StatusSpinner, Text, useTheme } from '@/components';
+import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
 import { getColumnIcon } from '@/components/board/columnIcons';
-import { isStartingSession, sectionForEntry, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
+import { sectionForEntry, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { findTaskById, selectTaskColumn, useBoardStore } from '@/state/boardStore';
 
 export interface TaskHeaderProps {
@@ -26,6 +27,8 @@ export interface TaskHeaderProps {
   onOpenChanges?: () => void;
 }
 
+/** The header's status glyph size, the agent icon's own. */
+const STATUS_GLYPH_SIZE = 16;
 const COLUMN_CHIP_MAX_WIDTH = 120;
 const COLUMN_CHIP_ICON_SIZE = 14;
 const COLUMN_CHIP_DOT_SIZE = 8;
@@ -36,17 +39,16 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
   const insets = useSafeAreaInsets();
   const activityEntry = useActivityStore((state) => (sessionId ? (state.bySessionId[sessionId] ?? null) : null));
   /**
-   * The same transitional read the feed row and board card make, so one task
-   * cannot report two different states on two screens at once. A queued
-   * session is the case that bit: its entry is `state: 'idle'`, so this header
-   * drew the yellow idle envelope while the feed drew the muted starting ring
-   * for the very same session.
+   * The same state read the feed row and board card make (cardSessionDisplay),
+   * so one task cannot report two different states on two screens at once. A
+   * queued session is the case that bit: its entry is `state: 'idle'`, so this
+   * header once drew the yellow idle envelope for it.
    *
    * Task-keyed like the other two, and guarded on `taskId` because this header
    * is also used by CompletedTaskScreen, which passes none.
    */
   const respawn = useActivityStore((state) => (taskId ? selectTaskRespawn(state, taskId) : null));
-  const starting = isStartingSession(respawn, activityEntry?.sessionStatus);
+  const sessionDisplay = cardSessionDisplay({ hasSession: activityEntry !== null, sessionStatus: activityEntry?.sessionStatus, respawn });
   const column = useBoardStore((state) => (taskId ? selectTaskColumn(state, taskId) : null));
   // locatedProjectId deliberately, never a route-param fallback: MoveTaskScreen
   // needs the board that actually HOLDS the task, which is findTaskById's
@@ -80,18 +82,19 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
         ]}
       >
         <IconButton iconName="chevron-back" onPress={() => router.back()} testID="task-back-button" accessibilityLabel="Back" />
-        {/* The same status language as the feed and board cards: green
-            spinner while working, muted still ring while queued or mid-swap,
-            yellow mail for every other idle state.
-
-            Still gated on `activityEntry`, so a transitional state adds no
-            glyph where there was none: a header that had nothing bound draws
-            nothing, and a swap may change the glyph but never conjure one. */}
-        {activityEntry ? (
-          <AgentStatusIcon
-            kind={starting ? 'starting' : sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'}
-            testID="task-header-status"
-          />
+        {/* The desktop task view header's glyph for each state
+            (TaskDetailHeader.tsx): the agent's own icon while it runs (green
+            spinner working, yellow mail otherwise), a still clock while
+            queued, the spinner while a respawn is in flight, and nothing once
+            the session has ended. */}
+        {sessionDisplay.kind === 'queued' ? (
+          <View testID="task-header-status-queued">
+            <Clock size={STATUS_GLYPH_SIZE} color={theme.colors.textMuted} />
+          </View>
+        ) : sessionDisplay.kind === 'preparing' ? (
+          <StatusSpinner size={STATUS_GLYPH_SIZE} color={theme.colors.textMuted} testID="task-header-status-preparing" />
+        ) : activityEntry !== null && (sessionDisplay.kind === 'running' || sessionDisplay.kind === 'suspended') ? (
+          <AgentStatusIcon kind={sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'} testID="task-header-status" />
         ) : null}
         <Text variant="bodyStrong" numberOfLines={1} style={styles.title}>
           {taskTitle}

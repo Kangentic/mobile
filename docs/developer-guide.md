@@ -3319,7 +3319,7 @@ number of REGISTERED Reanimated mappers, dirty or not.
 
 **Things that are NOT the cause**, each eliminated by measurement rather than argument:
 
-- **Not the count of visible spinners.** Collapsing the Thinking section (seven rows, three visible
+- **Not the count of visible spinners.** Collapsing the Active section, then called Thinking (seven rows, three visible
   rings) moved 50.5% to 43%; collapsing *every* section, leaving no rows on screen at all, measured
   54% - higher, not lower.
 - **Not screen identity.** Home 50%, Home fully collapsed 54%, Settings on top 50%, Board 66%.
@@ -3474,12 +3474,12 @@ release build, idle, no interaction, against the demo pairing:
 | State | CPU |
 |---|---|
 | Backgrounded | ~24% |
-| Agents list, Thinking section collapsed (no spinners rendered) | ~43% |
+| Agents list, Active (then Thinking) section collapsed (no spinners rendered) | ~43% |
 | Settings pushed over a collapsed Agents list | ~46% |
 | **Settings pushed over an EXPANDED one (8 spinners animating, invisible)** | **~72%** |
 | **Agents list, 8 spinners visible** | **~106%** |
 
-Two independent wastes, both isolated by A/B on the same screen (collapsing the Thinking section
+Two independent wastes, both isolated by A/B on the same screen (collapsing the Active section, then called Thinking
 removes the spinners and changes nothing else):
 
 1. **~63 points for eight visible spinners** - roughly 8 points per icon. **FIXED 2026-08-29.**
