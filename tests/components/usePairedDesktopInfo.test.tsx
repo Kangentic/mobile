@@ -41,7 +41,7 @@ describe('usePairedDesktopInfo', () => {
     const failure = new Error('keychain unavailable');
     mockLoad.mockRejectedValue(failure);
 
-    const { result } = renderHook(() => usePairedDesktopInfo());
+    const { result } = await renderHook(() => usePairedDesktopInfo());
 
     await waitFor(() => expect(result.current.status).toBe('unpaired'));
     expect(mockReportHandledError).toHaveBeenCalledWith('devices-paired-info', failure);
@@ -51,7 +51,7 @@ describe('usePairedDesktopInfo', () => {
     // The non-vacuity half: an honest "unpaired" is not a failure.
     mockLoad.mockResolvedValue(null);
 
-    const { result } = renderHook(() => usePairedDesktopInfo());
+    const { result } = await renderHook(() => usePairedDesktopInfo());
 
     await waitFor(() => expect(result.current.status).toBe('unpaired'));
     expect(mockReportHandledError).not.toHaveBeenCalled();
@@ -64,7 +64,7 @@ describe('usePairedDesktopInfo', () => {
       pairedAt: '2026-09-11T00:00:00.000Z',
     });
 
-    const { result } = renderHook(() => usePairedDesktopInfo());
+    const { result } = await renderHook(() => usePairedDesktopInfo());
 
     await waitFor(() => expect(result.current.status).toBe('paired'));
     expect(result.current).toEqual({

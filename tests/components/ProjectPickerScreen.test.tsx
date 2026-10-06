@@ -1,7 +1,7 @@
 import React from 'react';
 import { Dimensions, StyleSheet } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import type { ReactTestInstance } from 'react-test-renderer';
+import type { TestInstance } from 'test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { ProjectPickerScreen } from '@/screens/ProjectPickerScreen';
@@ -16,24 +16,22 @@ import {
 } from '@/lib/sheetContentHeights';
 
 /**
- * Walks up from a queried host node to its nearest HOST ancestor (skipping
- * the composite wrapper layers a mocked ScrollView renders through in this
- * Jest environment), so the caller can assert that ancestor IS the
- * SheetScrollerSlot's View rather than merely that a slot exists somewhere
- * above it. Stopping at anything but the nearest host would let a slot that
- * wraps the wrong element (e.g. the whole Stack, which is exactly the
- * misplacement SheetScrollerSlot's own invariant comment warns against)
+ * Returns the nearest HOST ancestor of a queried host node, so the caller can
+ * assert that ancestor IS the SheetScrollerSlot's View rather than merely that
+ * a slot exists somewhere above it. Test Renderer (RNTL 14) only exposes host
+ * instances, so `parent` is already the nearest host: there are no composite
+ * wrapper layers to skip any more, which the previous react-test-renderer
+ * helper had to walk past. Stopping at anything but the nearest host would let
+ * a slot that wraps the wrong element (e.g. the whole Stack, which is exactly
+ * the misplacement SheetScrollerSlot's own invariant comment warns against)
  * pass this check by accident.
  */
-function nearestHostAncestor(instance: ReactTestInstance): ReactTestInstance {
-  let current = instance.parent;
-  while (current !== null && typeof current.type !== 'string') {
-    current = current.parent;
-  }
-  if (current === null) {
+function nearestHostAncestor(instance: TestInstance): TestInstance {
+  const hostAncestor = instance.parent;
+  if (hostAncestor === null) {
     throw new Error('expected a host ancestor');
   }
-  return current;
+  return hostAncestor;
 }
 
 jest.mock('react-native-safe-area-context', () =>
@@ -67,24 +65,24 @@ describe('ProjectPickerScreen', () => {
   });
 
   /** With nothing chosen yet the board shows the first project, so the picker must agree. */
-  it('marks the first project selected before an explicit choice', () => {
-    renderProjectPicker();
+  it('marks the first project selected before an explicit choice', async () => {
+    await renderProjectPicker();
     expect(screen.getByTestId('board-project-project-1').props.accessibilityState.selected).toBe(true);
     expect(screen.getByTestId('board-project-project-2').props.accessibilityState.selected).toBe(false);
   });
 
-  it('writes the choice to the store and dismisses', () => {
-    renderProjectPicker();
+  it('writes the choice to the store and dismisses', async () => {
+    await renderProjectPicker();
 
-    fireEvent.press(screen.getByTestId('board-project-project-2'));
+    await fireEvent.press(screen.getByTestId('board-project-project-2'));
 
     expect(useBoardStore.getState().selectedProjectId).toBe('project-2');
     expect(mockBack).toHaveBeenCalled();
   });
 
-  it('reflects an already-selected project', () => {
+  it('reflects an already-selected project', async () => {
     useBoardStore.getState().selectProject('project-2');
-    renderProjectPicker();
+    await renderProjectPicker();
 
     expect(screen.getByTestId('board-project-project-2').props.accessibilityState.selected).toBe(true);
     expect(screen.getByTestId('board-project-project-1').props.accessibilityState.selected).toBe(false);
@@ -96,7 +94,7 @@ describe('ProjectPickerScreen', () => {
    * the phone has never seen a group for. Dropping it would make a paired
    * project unreachable from the only screen that can switch to it.
    */
-  it('still shows a project whose groupId matches no known group, rather than dropping it', () => {
+  it('still shows a project whose groupId matches no known group, rather than dropping it', async () => {
     useBoardStore.setState({
       projects: [
         { id: 'project-1', name: 'Alpha', groupId: 'real-group', position: 0 },
@@ -105,7 +103,7 @@ describe('ProjectPickerScreen', () => {
       projectGroups: [{ id: 'real-group', name: 'Real Group', position: 0 }],
     });
 
-    renderProjectPicker();
+    await renderProjectPicker();
 
     expect(screen.getByTestId('board-project-project-1')).toBeTruthy();
     expect(screen.getByTestId('board-project-project-2')).toBeTruthy();
@@ -119,7 +117,7 @@ describe('ProjectPickerScreen', () => {
    * orphaned-group project SECOND, which is the one arrangement Map
    * insertion order and position order actually disagree on.
    */
-  it('orders the ungrouped section by position across the null bucket and orphan buckets combined', () => {
+  it('orders the ungrouped section by position across the null bucket and orphan buckets combined', async () => {
     useBoardStore.setState({
       projects: [
         { id: 'project-late', name: 'Late (position 5)', groupId: null, position: 5 },
@@ -128,7 +126,7 @@ describe('ProjectPickerScreen', () => {
       projectGroups: [],
     });
 
-    renderProjectPicker();
+    await renderProjectPicker();
 
     const rows = screen.getAllByRole('radio');
     expect(rows.map((row) => row.props.testID)).toEqual(['board-project-project-early', 'board-project-project-late']);
@@ -155,8 +153,8 @@ describe('ProjectPickerScreen scroller slot wiring', () => {
     });
   });
 
-  it('renders the project list inside a SheetScrollerSlot', () => {
-    renderProjectPicker();
+  it('renders the project list inside a SheetScrollerSlot', async () => {
+    await renderProjectPicker();
 
     const scroller = screen.getByTestId('board-project-list');
     const slotHost = nearestHostAncestor(scroller);
@@ -231,10 +229,10 @@ describe('ProjectPickerScreen project list height cap', () => {
   }
 
   /** Below SEARCH_THRESHOLD (8): no filter field, so no filter/keyboard reserve. */
-  it('reserves only the base budget when there is no filter field', () => {
+  it('reserves only the base budget when there is no filter field', async () => {
     mockWindowHeight(500);
     // This describe's own beforeEach seeds 2 projects, below SEARCH_THRESHOLD.
-    renderWithInsets();
+    await renderWithInsets();
 
     expect(screen.queryByTestId('board-project-search')).toBeNull();
     const style = StyleSheet.flatten(screen.getByTestId('board-project-list').props.style);
@@ -245,7 +243,7 @@ describe('ProjectPickerScreen project list height cap', () => {
   });
 
   /** Above SEARCH_THRESHOLD (8): the filter field and its keyboard allowance join the reserve. */
-  it('reserves the filter field and its keyboard allowance once past SEARCH_THRESHOLD projects', () => {
+  it('reserves the filter field and its keyboard allowance once past SEARCH_THRESHOLD projects', async () => {
     useBoardStore.setState({
       projects: Array.from({ length: 9 }, (_, projectIndex) => ({
         id: `project-${projectIndex}`,
@@ -253,7 +251,7 @@ describe('ProjectPickerScreen project list height cap', () => {
       })),
     });
     mockWindowHeight(850);
-    renderWithInsets();
+    await renderWithInsets();
 
     expect(screen.getByTestId('board-project-search')).toBeTruthy();
     const style = StyleSheet.flatten(screen.getByTestId('board-project-list').props.style);

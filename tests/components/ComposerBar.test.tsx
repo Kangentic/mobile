@@ -41,8 +41,8 @@ jest.mock('@/devsupport/retentionProbe', () => ({
 
 const mockSendUserMessage = jest.mocked(sendUserMessage);
 
-function renderComposer(): void {
-  render(
+async function renderComposer(): Promise<void> {
+  await render(
     <ThemeProvider>
       <ComposerBar sessionId="sess-1" />
     </ThemeProvider>,
@@ -65,79 +65,79 @@ describe('ComposerBar', () => {
   });
 
   it('sends the trimmed message and clears the input on success', async () => {
-    renderComposer();
-    fireEvent.changeText(screen.getByTestId('composer-input'), 'hello agent ');
-    fireEvent.press(screen.getByTestId('composer-send'));
+    await renderComposer();
+    await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello agent ');
+    await fireEvent.press(screen.getByTestId('composer-send'));
     expect(mockSendUserMessage).toHaveBeenCalledWith('sess-1', 'hello agent');
     await waitFor(() => expect(screen.getByTestId('composer-input').props.value).toBe(''));
     expect(mockReportHandledError).not.toHaveBeenCalled();
   });
 
-  it('disables send while the channel is not established', () => {
+  it('disables send while the channel is not established', async () => {
     useChannelStore.setState({ established: false });
-    renderComposer();
-    fireEvent.changeText(screen.getByTestId('composer-input'), 'hello');
+    await renderComposer();
+    await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello');
     expect(screen.getByTestId('composer-send').props.accessibilityState.disabled).toBe(true);
   });
 
-  it('disables send while the input is empty', () => {
-    renderComposer();
+  it('disables send while the input is empty', async () => {
+    await renderComposer();
     expect(screen.getByTestId('composer-send').props.accessibilityState.disabled).toBe(true);
   });
 
   it('keeps the text and shows an inline error when sending fails, and reports it through the door', async () => {
     const failure = new Error('Not connected');
     mockSendUserMessage.mockRejectedValue(failure);
-    renderComposer();
-    fireEvent.changeText(screen.getByTestId('composer-input'), 'hello agent');
-    fireEvent.press(screen.getByTestId('composer-send'));
+    await renderComposer();
+    await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello agent');
+    await fireEvent.press(screen.getByTestId('composer-send'));
     expect(await screen.findByText('Not connected')).toBeTruthy();
     expect(screen.getByTestId('composer-input').props.value).toBe('hello agent');
     expect(mockReportHandledError).toHaveBeenCalledWith('composer-send', failure);
   });
 
-  it('hides the mic when dictation mode is off', () => {
+  it('hides the mic when dictation mode is off', async () => {
     useSettingsStore.setState({ dictationMode: 'off' });
-    renderComposer();
+    await renderComposer();
     expect(screen.queryByTestId('composer-mic')).toBeNull();
     expect(screen.queryByTestId('composer-mic-active')).toBeNull();
   });
 
-  it('hides the mic when the engine is unavailable', () => {
+  it('hides the mic when the engine is unavailable', async () => {
     mockDictationControls.available = false;
-    renderComposer();
+    await renderComposer();
     expect(screen.queryByTestId('composer-mic')).toBeNull();
   });
 
-  it('starts dictation on mic tap and shows the active state while listening', () => {
-    renderComposer();
-    fireEvent.press(screen.getByTestId('composer-mic'));
+  it('starts dictation on mic tap and shows the active state while listening', async () => {
+    await renderComposer();
+    await fireEvent.press(screen.getByTestId('composer-mic'));
     expect(mockDictationControls.start).toHaveBeenCalled();
   });
 
-  it('shows the active mic and stops on tap while listening', () => {
+  it('shows the active mic and stops on tap while listening', async () => {
     mockDictationControls.listening = true;
-    renderComposer();
+    await renderComposer();
     const activeMicButton = screen.getByTestId('composer-mic-active');
     expect(screen.queryByTestId('composer-mic')).toBeNull();
-    fireEvent.press(activeMicButton);
+    await fireEvent.press(activeMicButton);
     expect(mockDictationControls.stop).toHaveBeenCalled();
   });
 
-  it('still subscribes the dictation engine when dictation mode is off', () => {
+  it('still subscribes the dictation engine when dictation mode is off', async () => {
     // The shipped behaviour the mic-button extraction must preserve: the engine
     // subscription is independent of the setting, only the mic is hidden.
     useSettingsStore.setState({ dictationMode: 'off' });
-    renderComposer();
+    await renderComposer();
     expect(mockUseDictation).toHaveBeenCalled();
   });
 
-  it("registers no dictation listeners under the retention probe's composer-no-dictation arm", () => {
+  it("registers no dictation listeners under the retention probe's composer-no-dictation arm", async () => {
     // The arm exists to isolate expo-modules-core #50603 (removed listeners
     // retained as GC roots), so it has to remove the SUBSCRIPTION, not merely
     // hide the mic. Asserted on the hook call because the two look identical.
     mockRetentionProbeVariant = 'composer-no-dictation';
-    renderComposer();
+    await renderComposer();
     expect(mockUseDictation).not.toHaveBeenCalled();
     expect(screen.queryByTestId('composer-mic')).toBeNull();
     expect(screen.getByTestId('composer-input')).toBeTruthy();

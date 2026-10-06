@@ -152,9 +152,9 @@ describe('contextUsageColor', () => {
 });
 
 describe('ContextUsageBar', () => {
-  it('renders a full critical bar for an over-budget usage report instead of hiding it', () => {
+  it('renders a full critical bar for an over-budget usage report instead of hiding it', async () => {
     const usage = buildUsage({ contextWindowSize: 200_000, usedTokens: 210_000, usedPercentage: 92 });
-    render(
+    await render(
       <ThemeProvider>
         <ContextUsageBar usage={usage} testID="usage-bar" />
       </ThemeProvider>,
@@ -171,8 +171,8 @@ describe('ContextUsageBar', () => {
     expect(screen.getByTestId('usage-bar').props.accessibilityValue).toEqual({ min: 0, max: 100, now: 100 });
   });
 
-  it('renders nothing for a null usage report', () => {
-    render(
+  it('renders nothing for a null usage report', async () => {
+    await render(
       <ThemeProvider>
         <ContextUsageBar usage={null} testID="usage-bar" />
       </ThemeProvider>,
@@ -186,9 +186,9 @@ describe('ContextUsageBar', () => {
    * draws the full footer and holds it at 0% until a window size lands, so the
    * card does not grow when it does. This used to render nothing.
    */
-  it('renders the bar at 0% with an empty fill for a zero-size (unknown) context window', () => {
+  it('renders the bar at 0% with an empty fill for a zero-size (unknown) context window', async () => {
     const usage = buildUsage({ contextWindowSize: 0, usedTokens: 0 });
-    render(
+    await render(
       <ThemeProvider>
         <ContextUsageBar usage={usage} testID="usage-bar" />
       </ThemeProvider>,
@@ -199,12 +199,12 @@ describe('ContextUsageBar', () => {
     expect(screen.getByTestId('usage-bar').props.accessibilityLabel).toMatch(/context window size not reported yet/);
   });
 
-  it('sets the fill width and color to danger for an over-budget usage report', () => {
+  it('sets the fill width and color to danger for an over-budget usage report', async () => {
     // Kills both a hardcoded fill width (replacing `${usedPercentage}%`) and
     // a fixed contextUsageColor token: this over-budget case must land on
     // 100% / danger.
     const usage = buildUsage({ contextWindowSize: 200_000, usedTokens: 210_000, usedPercentage: 92 });
-    render(
+    await render(
       <ThemeProvider>
         <ContextUsageBar usage={usage} testID="usage-bar" />
       </ThemeProvider>,
@@ -215,11 +215,11 @@ describe('ContextUsageBar', () => {
     expect(fillStyle.backgroundColor).toBe(darkTerminalTheme.colors.danger);
   });
 
-  it('sets the fill width and color to statusWorking for a normal in-range usage report', () => {
+  it('sets the fill width and color to statusWorking for a normal in-range usage report', async () => {
     // The complementary case: proves the width/color track the actual
     // percentage rather than always landing on the over-budget values above.
     const usage = buildUsage({ contextWindowSize: 200_000, usedTokens: 40_000, usedPercentage: 20 });
-    render(
+    await render(
       <ThemeProvider>
         <ContextUsageBar usage={usage} testID="usage-bar" />
       </ThemeProvider>,

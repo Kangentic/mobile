@@ -1,7 +1,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text } from 'react-native';
 import { render, screen } from '@testing-library/react-native';
-import type { ReactTestRendererJSON } from 'react-test-renderer';
+import type { JsonElement } from 'test-renderer';
 import { SheetScrollerSlot } from '@/components';
 
 /**
@@ -13,17 +13,19 @@ import { SheetScrollerSlot } from '@/components';
  * from being flattened away by a future refactor.
  */
 
-function renderedSlotHost(): ReactTestRendererJSON {
+function renderedSlotHost(): JsonElement {
+  // Test Renderer's toJSON() returns one element or null, never the array the
+  // previous react-test-renderer returned for a multi-root tree.
   const rendered = screen.toJSON();
-  if (rendered === null || Array.isArray(rendered)) {
+  if (rendered === null) {
     throw new Error('expected a single rendered root host element');
   }
   return rendered;
 }
 
 describe('SheetScrollerSlot', () => {
-  it('renders its scroller child', () => {
-    render(
+  it('renders its scroller child', async () => {
+    await render(
       <SheetScrollerSlot>
         <ScrollView testID="slot-child">
           <Text>row</Text>
@@ -35,8 +37,8 @@ describe('SheetScrollerSlot', () => {
     expect(screen.getByText('row')).toBeTruthy();
   });
 
-  it('is a real, clipping native view: collapsable false and overflow hidden', () => {
-    render(
+  it('is a real, clipping native view: collapsable false and overflow hidden', async () => {
+    await render(
       <SheetScrollerSlot>
         <ScrollView testID="slot-child" />
       </SheetScrollerSlot>,
@@ -49,8 +51,8 @@ describe('SheetScrollerSlot', () => {
     expect(slotHost.children?.[0]).toMatchObject({ props: { testID: 'slot-child' } });
   });
 
-  it('keeps the height cap on the scroller child, not the wrapper', () => {
-    render(
+  it('keeps the height cap on the scroller child, not the wrapper', async () => {
+    await render(
       <SheetScrollerSlot>
         <ScrollView testID="slot-child" style={{ maxHeight: 420 }} />
       </SheetScrollerSlot>,
@@ -58,7 +60,7 @@ describe('SheetScrollerSlot', () => {
 
     const slotHost = renderedSlotHost();
     expect(StyleSheet.flatten(slotHost.props.style).maxHeight).toBeUndefined();
-    const scrollerHost = slotHost.children?.[0] as ReactTestRendererJSON;
+    const scrollerHost = slotHost.children?.[0] as JsonElement;
     expect(StyleSheet.flatten(scrollerHost.props.style).maxHeight).toBe(420);
   });
 });

@@ -8,8 +8,8 @@ import { ThemeProvider, MonoText, darkTerminalTheme } from '@/components';
 const expectedMonoFontFamily = Platform.select({ ios: 'Menlo', default: darkTerminalTheme.fontFamilyMono });
 
 describe('MonoText', () => {
-  it('renders its children in the platform monospace font', () => {
-    render(
+  it('renders its children in the platform monospace font', async () => {
+    await render(
       <ThemeProvider>
         <MonoText testID="commit-hash">ea1651b</MonoText>
       </ThemeProvider>,
@@ -21,8 +21,8 @@ describe('MonoText', () => {
     expect(flattenedStyle.fontSize).toBe(darkTerminalTheme.typography.body.fontSize);
   });
 
-  it('uses the caption token for size="caption"', () => {
-    render(
+  it('uses the caption token for size="caption"', async () => {
+    await render(
       <ThemeProvider>
         <MonoText testID="dense-label" size="caption">
           src/components/MonoText.tsx
@@ -34,8 +34,8 @@ describe('MonoText', () => {
     expect(flattenedStyle.fontSize).toBe(darkTerminalTheme.typography.caption.fontSize);
   });
 
-  it('applies the requested color role', () => {
-    render(
+  it('applies the requested color role', async () => {
+    await render(
       <ThemeProvider>
         <MonoText testID="accent-path" color="accent">
           kangentic://

@@ -12,8 +12,8 @@ describe('Skeleton', () => {
     jest.restoreAllMocks();
   });
 
-  it('renders a placeholder block with the requested dimensions', () => {
-    render(
+  it('renders a placeholder block with the requested dimensions', async () => {
+    await render(
       <ThemeProvider>
         <Skeleton width="58%" height={12} testID="loading-line" />
       </ThemeProvider>,
@@ -25,8 +25,8 @@ describe('Skeleton', () => {
     expect(flattenedStyle.backgroundColor).toBe(darkTerminalTheme.colors.surfaceRaised);
   });
 
-  it('starts the pulse at the max opacity when motion is allowed', () => {
-    render(
+  it('starts the pulse at the max opacity when motion is allowed', async () => {
+    await render(
       <ThemeProvider>
         <Skeleton testID="loading-line" />
       </ThemeProvider>,
@@ -36,10 +36,10 @@ describe('Skeleton', () => {
     expect(flattenedStyle.opacity).toBe(opacityMax);
   });
 
-  it('rests at the mid opacity under OS reduced motion (no pulse)', () => {
+  it('rests at the mid opacity under OS reduced motion (no pulse)', async () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
 
-    render(
+    await render(
       <ThemeProvider>
         <Skeleton testID="loading-line" />
       </ThemeProvider>,
@@ -49,8 +49,8 @@ describe('Skeleton', () => {
     expect(flattenedStyle.opacity).toBe((opacityMin + opacityMax) / 2);
   });
 
-  it('renders the row and card composites', () => {
-    render(
+  it('renders the row and card composites', async () => {
+    await render(
       <ThemeProvider>
         <SkeletonRow testID="skeleton-row" />
         <SkeletonCard testID="skeleton-card" />
@@ -81,10 +81,10 @@ describe('Skeleton', () => {
    * only be caught here.
    */
   describe('the screen motion gate', () => {
-    it('rests at mid opacity and registers no animated mapper while the screen is blurred', () => {
+    it('rests at mid opacity and registers no animated mapper while the screen is blurred', async () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
 
-      render(
+      await render(
         <ThemeProvider>
           <ScreenMotionOverride active={false}>
             <Skeleton testID="loading-line" />
@@ -97,10 +97,10 @@ describe('Skeleton', () => {
       expect(animatedStyleSpy).not.toHaveBeenCalled();
     });
 
-    it('starts the pulse and registers exactly one animated mapper once the screen is focused', () => {
+    it('starts the pulse and registers exactly one animated mapper once the screen is focused', async () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
 
-      render(
+      await render(
         <ThemeProvider>
           <ScreenMotionOverride active={true}>
             <Skeleton testID="loading-line" />
@@ -124,10 +124,10 @@ describe('Skeleton', () => {
    * opacity exactly as it does under reduced motion.
    */
   describe('the pulse stops on its own', () => {
-    it('rests at the mid opacity once holdAfterMs has passed, and stays there', () => {
+    it('rests at the mid opacity once holdAfterMs has passed, and stays there', async () => {
       jest.useFakeTimers();
       try {
-        render(
+        await render(
           <ThemeProvider>
             <ScreenMotionOverride active={true}>
               <Skeleton testID="loading-line" />
@@ -137,17 +137,17 @@ describe('Skeleton', () => {
         const opacity = (): number => StyleSheet.flatten(screen.getByTestId('loading-line').props.style).opacity as number;
         expect(opacity()).toBe(opacityMax);
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(holdAfterMs - 1);
         });
         expect(opacity()).toBe(opacityMax);
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(1);
         });
         expect(opacity()).toBe((opacityMin + opacityMax) / 2);
 
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(holdAfterMs * 3);
         });
         expect(opacity()).toBe((opacityMin + opacityMax) / 2);
@@ -170,18 +170,22 @@ describe('Skeleton', () => {
      * cleanup from Skeleton's effect left one pending timer after unmount
      * instead of zero - "expected 1 to be 0".
      */
-    it('clears the holdAfterMs timer on unmount, leaving no pending timer', () => {
-      jest.useFakeTimers();
+    it('clears the holdAfterMs timer on unmount, leaving no pending timer', async () => {
+      // RNTL 14 awaits React's act, which schedules its flush with
+      // queueMicrotask. Faked, those jobs sit on the fake clock and
+      // jest.getTimerCount() counts them. Leave queueMicrotask real so the
+      // count is this component's own setTimeout alone.
+      jest.useFakeTimers({ doNotFake: ['queueMicrotask'] });
       jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
       try {
-        const { unmount } = render(
+        const { unmount } = await render(
           <ThemeProvider>
             <Skeleton testID="loading-line" />
           </ThemeProvider>,
         );
         expect(jest.getTimerCount()).toBe(1);
 
-        unmount();
+        await unmount();
 
         expect(jest.getTimerCount()).toBe(0);
       } finally {

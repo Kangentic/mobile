@@ -4,8 +4,8 @@ import { Text, ThemeProvider } from '@/components';
 import { TurnFrame } from '@/components/conversation/TurnFrame';
 import type { TurnMeta } from '@/conversation/transcriptCells';
 
-function renderTurn(turn: TurnMeta): void {
-  render(
+async function renderTurn(turn: TurnMeta): Promise<void> {
+  await render(
     <ThemeProvider>
       <TurnFrame turn={turn}>
         <Text testID="turn-body">body content</Text>
@@ -15,16 +15,16 @@ function renderTurn(turn: TurnMeta): void {
 }
 
 describe('TurnFrame', () => {
-  it('renders the "You" badge for a user turn\'s header', () => {
-    renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now(), outputTokens: null } });
+  it('renders the "You" badge for a user turn\'s header', async () => {
+    await renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now(), outputTokens: null } });
 
     const badge = screen.getByTestId('turn-role-user');
     expect(within(badge).getByText('You')).toBeTruthy();
     expect(screen.getByTestId('turn-body')).toBeTruthy();
   });
 
-  it('renders the agent\'s name and model for an assistant turn\'s header', () => {
-    renderTurn({
+  it('renders the agent\'s name and model for an assistant turn\'s header', async () => {
+    await renderTurn({
       role: 'assistant',
       position: 'solo',
       header: { agentName: 'Claude Code', model: 'claude-fable-5', ts: Date.now(), outputTokens: null },
@@ -39,8 +39,8 @@ describe('TurnFrame', () => {
   // in transcriptCells.test.ts passes `outputTokens: null` - those were
   // mechanical field additions, so without the cases below neither branch of
   // formatOutputTokens ever ran and the caption never rendered in any test.
-  it('omits the output-token caption when the turn carried no usage', () => {
-    renderTurn({
+  it('omits the output-token caption when the turn carried no usage', async () => {
+    await renderTurn({
       role: 'assistant',
       position: 'solo',
       header: { agentName: 'Claude Code', model: null, ts: Date.now(), outputTokens: null },
@@ -49,52 +49,54 @@ describe('TurnFrame', () => {
     expect(screen.queryByTestId('turn-output-tokens')).toBeNull();
   });
 
-  it('shows a sub-1k output count in full', () => {
-    renderTurn({
+  it('shows a sub-1k output count in full', async () => {
+    await renderTurn({
       role: 'assistant',
       position: 'solo',
       header: { agentName: 'Claude Code', model: null, ts: Date.now(), outputTokens: 640 },
     });
 
-    expect(within(screen.getByTestId('turn-output-tokens')).getByText('↓ 640')).toBeTruthy();
+    // The testID sits on the caption Text itself, and RNTL 14's `within` no
+    // longer matches its own root, so assert the element's text directly.
+    expect(screen.getByTestId('turn-output-tokens')).toHaveTextContent('↓ 640');
   });
 
-  it('abbreviates an output count of 1k or more to one decimal', () => {
-    renderTurn({
+  it('abbreviates an output count of 1k or more to one decimal', async () => {
+    await renderTurn({
       role: 'assistant',
       position: 'solo',
       header: { agentName: 'Claude Code', model: null, ts: Date.now(), outputTokens: 1240 },
     });
 
-    expect(within(screen.getByTestId('turn-output-tokens')).getByText('↓ 1.2k')).toBeTruthy();
+    expect(screen.getByTestId('turn-output-tokens')).toHaveTextContent('↓ 1.2k');
   });
 
-  it('abbreviates at exactly 1000, the boundary the branch turns on', () => {
+  it('abbreviates at exactly 1000, the boundary the branch turns on', async () => {
     // The comparison is `>= 1000`, so 1000 itself is the case an off-by-one
     // would flip to the literal "↓ 1000".
-    renderTurn({
+    await renderTurn({
       role: 'assistant',
       position: 'solo',
       header: { agentName: 'Claude Code', model: null, ts: Date.now(), outputTokens: 1000 },
     });
 
-    expect(within(screen.getByTestId('turn-output-tokens')).getByText('↓ 1.0k')).toBeTruthy();
+    expect(screen.getByTestId('turn-output-tokens')).toHaveTextContent('↓ 1.0k');
   });
 
-  it('renders a zero output count rather than hiding it', () => {
+  it('renders a zero output count rather than hiding it', async () => {
     // 0 is falsy and `!== null` is the guard, so a `header.outputTokens ?`
     // rewrite would silently drop this turn's caption.
-    renderTurn({
+    await renderTurn({
       role: 'assistant',
       position: 'solo',
       header: { agentName: 'Claude Code', model: null, ts: Date.now(), outputTokens: 0 },
     });
 
-    expect(within(screen.getByTestId('turn-output-tokens')).getByText('↓ 0')).toBeTruthy();
+    expect(screen.getByTestId('turn-output-tokens')).toHaveTextContent('↓ 0');
   });
 
-  it('falls back to "Agent" and omits the model text when the header carries neither', () => {
-    renderTurn({
+  it('falls back to "Agent" and omits the model text when the header carries neither', async () => {
+    await renderTurn({
       role: 'assistant',
       position: 'solo',
       header: { agentName: null, model: null, ts: Date.now(), outputTokens: null },
@@ -108,22 +110,22 @@ describe('TurnFrame', () => {
     expect(screen.queryByText('claude-fable-5')).toBeNull();
   });
 
-  it('renders no header row for a middle-position cell (the turn\'s header lives only on its first cell)', () => {
-    renderTurn({ role: 'assistant', position: 'middle' });
+  it('renders no header row for a middle-position cell (the turn\'s header lives only on its first cell)', async () => {
+    await renderTurn({ role: 'assistant', position: 'middle' });
 
     expect(screen.queryByTestId('turn-role-assistant')).toBeNull();
     expect(screen.queryByTestId('turn-role-user')).toBeNull();
     expect(screen.getByTestId('turn-body')).toBeTruthy();
   });
 
-  it('labels a just-landed message "just now"', () => {
-    renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now(), outputTokens: null } });
+  it('labels a just-landed message "just now"', async () => {
+    await renderTurn({ role: 'user', position: 'solo', header: { agentName: null, model: null, ts: Date.now(), outputTokens: null } });
 
     expect(screen.getByText('just now')).toBeTruthy();
   });
 
-  it('labels a message from a few minutes ago with the minute count', () => {
-    renderTurn({
+  it('labels a message from a few minutes ago with the minute count', async () => {
+    await renderTurn({
       role: 'user',
       position: 'solo',
       header: { agentName: null, model: null, ts: Date.now() - 90_000, outputTokens: null },

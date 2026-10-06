@@ -14,13 +14,13 @@ describe('ConnectingEmptyState', () => {
     mockPush.mockClear();
   });
 
-  afterEach(() => {
-    cleanup();
+  afterEach(async () => {
+    await cleanup();
     jest.useRealTimers();
   });
 
-  it('narrates progress without offering recovery while connecting is still plausible', () => {
-    render(<ConnectingEmptyState />);
+  it('narrates progress without offering recovery while connecting is still plausible', async () => {
+    await render(<ConnectingEmptyState />);
 
     expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
     // A cold start over a hosted relay takes seconds; offering "something is
@@ -33,15 +33,15 @@ describe('ConnectingEmptyState', () => {
    * never establishes has no timeout, no error, and no route to unpairing -
    * leaving reinstalling the app as the only way out.
    */
-  it('offers a route to the device screen once it has been connecting too long', () => {
-    render(<ConnectingEmptyState />);
+  it('offers a route to the device screen once it has been connecting too long', async () => {
+    await render(<ConnectingEmptyState />);
 
-    act(() => {
+    await act(() => {
       jest.advanceTimersByTime(20_000);
     });
 
     expect(screen.getByTestId('connecting-manage-device')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('connecting-manage-device'));
+    await fireEvent.press(screen.getByTestId('connecting-manage-device'));
     // Devices is where unpairing lives, and unpairing is local: it clears the
     // trust anchor and needs no working channel, which is exactly why it is
     // reachable from a screen that is stuck.

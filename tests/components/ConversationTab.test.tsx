@@ -101,8 +101,8 @@ function seedStores(): void {
   useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
 }
 
-function renderTab(sessionId: string | null = 'sess-1'): void {
-  render(
+async function renderTab(sessionId: string | null = 'sess-1'): Promise<void> {
+  await render(
     <ThemeProvider>
       <ConversationTab taskId="task-1" sessionId={sessionId} projectId="project-1" />
     </ThemeProvider>,
@@ -111,7 +111,7 @@ function renderTab(sessionId: string | null = 'sess-1'): void {
     // FlashList renders nothing (or, with startRenderingFromBottom, only the
     // bottom item) until it has a measured viewport; jest never lays out, so
     // hand it one.
-    fireEvent(screen.getByTestId('conversation-list'), 'layout', {
+    await fireEvent(screen.getByTestId('conversation-list'), 'layout', {
       nativeEvent: { layout: { x: 0, y: 0, width: 400, height: 800 } },
     });
   }
@@ -134,8 +134,8 @@ describe('ConversationTab', () => {
     mockFlashListScrollToEnd.mockClear();
   });
 
-  function scrollTo(offsetFromTop: number): void {
-    fireEvent.scroll(screen.getByTestId('conversation-list'), {
+  async function scrollTo(offsetFromTop: number): Promise<void> {
+    await fireEvent.scroll(screen.getByTestId('conversation-list'), {
       nativeEvent: {
         contentOffset: { x: 0, y: offsetFromTop },
         contentSize: { width: 400, height: 12_000 },
@@ -151,20 +151,20 @@ describe('ConversationTab', () => {
    * scroll offset: the chat opened blank and only filled in once the user
    * scrolled. History paging is a scroll-up affordance and waits for a drag.
    */
-  it('does not page older history before the user has scrolled', () => {
+  it('does not page older history before the user has scrolled', async () => {
     seedWindowWithOlderHistory();
-    renderTab();
+    await renderTab();
 
-    scrollTo(0);
+    await scrollTo(0);
     expect(loadOlderTranscript).not.toHaveBeenCalled();
   });
 
-  it('pages older history once the user drags the feed near the top', () => {
+  it('pages older history once the user drags the feed near the top', async () => {
     seedWindowWithOlderHistory();
-    renderTab();
+    await renderTab();
 
-    fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
-    scrollTo(0);
+    await fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
+    await scrollTo(0);
     expect(loadOlderTranscript).toHaveBeenCalledWith('sess-1');
   });
 
@@ -175,49 +175,49 @@ describe('ConversationTab', () => {
    * and left the list pinned at the top of its window, loading nothing. A
    * level-triggered offset check still pages on the next scroll event.
    */
-  it('still pages after an earlier near-top scroll was declined', () => {
+  it('still pages after an earlier near-top scroll was declined', async () => {
     seedWindowWithOlderHistory();
-    renderTab();
+    await renderTab();
 
-    scrollTo(0);
+    await scrollTo(0);
     expect(loadOlderTranscript).not.toHaveBeenCalled();
 
-    fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
-    scrollTo(0);
+    await fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
+    await scrollTo(0);
     expect(loadOlderTranscript).toHaveBeenCalledWith('sess-1');
   });
 
-  it('does not page while the user is scrolled far from the top', () => {
+  it('does not page while the user is scrolled far from the top', async () => {
     seedWindowWithOlderHistory();
-    renderTab();
+    await renderTab();
 
-    fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
-    scrollTo(9000);
+    await fireEvent(screen.getByTestId('conversation-list'), 'scrollBeginDrag');
+    await scrollTo(9000);
     expect(loadOlderTranscript).not.toHaveBeenCalled();
   });
 
-  it('shows the empty state without a session', () => {
-    renderTab(null);
+  it('shows the empty state without a session', async () => {
+    await renderTab(null);
     expect(screen.getByText('No active session for this task')).toBeTruthy();
   });
 
-  it('renders the flattened transcript cells from the store', () => {
-    renderTab();
+  it('renders the flattened transcript cells from the store', async () => {
+    await renderTab();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
     expect(screen.getByTestId('markdown-cell-assist-1-0').props.markdown).toBe('Looking at the auth flow now.');
     expect(screen.getByTestId('tool-call-tool-1')).toBeTruthy();
     expect(screen.getByText('context compacted')).toBeTruthy();
   });
 
-  it('shows the live tail only while the session is thinking', () => {
+  it('shows the live tail only while the session is thinking', async () => {
     retainTerminal('sess-1');
     appendChunk('sess-1', 'npm install\ncompiling module graph\n');
-    renderTab();
+    await renderTab();
 
     // Idle: buffered bytes exist but the tail stays hidden.
     expect(screen.queryByText('▌ live')).toBeNull();
 
-    act(() => {
+    await act(() => {
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
         sessionId: 'sess-1',
@@ -229,7 +229,7 @@ describe('ConversationTab', () => {
     expect(screen.getByText('npm install')).toBeTruthy();
     expect(screen.getByText('compiling module graph')).toBeTruthy();
 
-    act(() => {
+    await act(() => {
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
         sessionId: 'sess-1',
@@ -240,14 +240,14 @@ describe('ConversationTab', () => {
     expect(screen.queryByText('▌ live')).toBeNull();
   });
 
-  it('renders the permission card when a prompt is awaited', () => {
+  it('renders the permission card when a prompt is awaited', async () => {
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
       sessionId: 'sess-1',
       taskId: 'task-1',
       payload: { type: 'permission', promptId: 'sess-1:tool-1', pending: true },
     });
-    renderTab();
+    await renderTab();
 
     expect(screen.getByText('Permission requested')).toBeTruthy();
     expect(screen.getByTestId('permission-approve')).toBeTruthy();
@@ -257,14 +257,14 @@ describe('ConversationTab', () => {
     expect(screen.getAllByText('npm run lint').length).toBeGreaterThan(0);
   });
 
-  it('routes to the terminal, with no blind action, when the awaited tool_use is not in the transcript', () => {
+  it('routes to the terminal, with no blind action, when the awaited tool_use is not in the transcript', async () => {
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
       sessionId: 'sess-1',
       taskId: 'task-1',
       payload: { type: 'permission', promptId: 'sess-1:tool-unknown', pending: true },
     });
-    renderTab();
+    await renderTab();
 
     // Without a tool_use the app cannot say what approving would grant, and
     // Approve sends a digit that could answer the wrong question.
@@ -282,22 +282,22 @@ describe('ConversationTab', () => {
    * empty space - it must re-anchor on every growth until the user actually
    * takes over scrolling.
    */
-  it('re-anchors to the end on every content-size change, not just the first, until the user drags', () => {
-    renderTab();
+  it('re-anchors to the end on every content-size change, not just the first, until the user drags', async () => {
+    await renderTab();
     const list = screen.getByTestId('conversation-list');
 
-    fireEvent(list, 'contentSizeChange', 400, 2000);
+    await fireEvent(list, 'contentSizeChange', 400, 2000);
     const callsAfterFirstGrowth = mockFlashListScrollToEnd.mock.calls.length;
     expect(callsAfterFirstGrowth).toBeGreaterThan(0);
 
     // A second, later growth must re-anchor too, not be a no-op because the
     // list already anchored once.
-    fireEvent(list, 'contentSizeChange', 400, 2400);
+    await fireEvent(list, 'contentSizeChange', 400, 2400);
     expect(mockFlashListScrollToEnd.mock.calls.length).toBeGreaterThan(callsAfterFirstGrowth);
 
     const callsBeforeDrag = mockFlashListScrollToEnd.mock.calls.length;
-    fireEvent(list, 'scrollBeginDrag');
-    fireEvent(list, 'contentSizeChange', 400, 2800);
+    await fireEvent(list, 'scrollBeginDrag');
+    await fireEvent(list, 'contentSizeChange', 400, 2800);
     expect(mockFlashListScrollToEnd.mock.calls.length).toBe(callsBeforeDrag);
   });
 });
@@ -328,21 +328,21 @@ describe('ConversationTab - newest-window fetch retry', () => {
     await flushFetches();
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.useFakeTimers();
     seedStores();
     // A window the store has flagged as unpatchable: the fetch is owed.
     useTranscriptStore.setState((state) => ({
       bySessionId: { 'sess-1': { ...state.bySessionId['sess-1'], needsTailFetch: true } },
     }));
-    act(() => {
+    await act(() => {
       useChannelStore.setState({ established: true });
     });
     tailFetch.mockReset();
   });
 
-  afterEach(() => {
-    act(() => {
+  afterEach(async () => {
+    await act(() => {
       useChannelStore.getState().reset();
     });
     tailFetch.mockReset();
@@ -353,7 +353,7 @@ describe('ConversationTab - newest-window fetch retry', () => {
   it('retries a failed fetch until one lands, then stops', async () => {
     tailFetch.mockRejectedValueOnce(new Error('capability timeout')).mockRejectedValueOnce(new Error('capability timeout'));
     tailFetch.mockResolvedValue(undefined);
-    renderTab();
+    await renderTab();
     await flushFetches();
     expect(tailFetch).toHaveBeenCalledTimes(1);
 
@@ -369,7 +369,7 @@ describe('ConversationTab - newest-window fetch retry', () => {
 
   it('gives up after three retries against a desktop that keeps failing', async () => {
     tailFetch.mockRejectedValue(new Error('refused'));
-    renderTab();
+    await renderTab();
     await flushFetches();
     await advance(2000);
     await advance(5000);
@@ -382,11 +382,11 @@ describe('ConversationTab - newest-window fetch retry', () => {
 
   it('drops a pending retry once the window lands some other way', async () => {
     tailFetch.mockRejectedValue(new Error('capability timeout'));
-    renderTab();
+    await renderTab();
     await flushFetches();
     expect(tailFetch).toHaveBeenCalledTimes(1);
 
-    act(() => {
+    await act(() => {
       useTranscriptStore.setState((state) => ({
         bySessionId: { 'sess-1': { ...state.bySessionId['sess-1'], needsTailFetch: false } },
       }));

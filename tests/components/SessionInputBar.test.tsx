@@ -21,8 +21,8 @@ jest.mock('expo-speech-recognition', () => ({
   useSpeechRecognitionEvent: jest.fn(),
 }));
 
-function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): void {
-  render(
+async function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): Promise<void> {
+  await render(
     <ThemeProvider>
       <SessionInputBar sessionId={sessionId} mode={mode} onModeChange={jest.fn()} chatAttention={false} />
     </ThemeProvider>,
@@ -30,8 +30,8 @@ function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): void
 }
 
 describe('SessionInputBar', () => {
-  it('renders the quick keys in terminal mode (no staging field, no mic)', () => {
-    renderBar('terminal');
+  it('renders the quick keys in terminal mode (no staging field, no mic)', async () => {
+    await renderBar('terminal');
     expect(screen.getByTestId('quick-key-esc')).toBeTruthy();
     // Typing happens directly in the terminal (tap raises the keyboard);
     // there is no staging text field and no composer.
@@ -42,27 +42,27 @@ describe('SessionInputBar', () => {
     expect(screen.queryByTestId('terminal-mic')).toBeNull();
   });
 
-  it('renders the agent composer in chat mode', () => {
-    renderBar('chat');
+  it('renders the agent composer in chat mode', async () => {
+    await renderBar('chat');
     expect(screen.getByTestId('composer-input')).toBeTruthy();
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
   });
 
-  it('renders only the switcher in changes mode', () => {
-    renderBar('changes');
+  it('renders only the switcher in changes mode', async () => {
+    await renderBar('changes');
     expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
     expect(screen.queryByTestId('composer-input')).toBeNull();
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
   });
 
   /** The switcher anchors the footer in every mode; only what sits above it changes. */
-  it('renders the surface switcher in every mode', () => {
-    renderBar('terminal');
+  it('renders the surface switcher in every mode', async () => {
+    await renderBar('terminal');
     expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
   });
 
-  it('renders nothing without a session', () => {
-    renderBar('terminal', null);
+  it('renders nothing without a session', async () => {
+    await renderBar('terminal', null);
     expect(screen.queryByTestId('session-input-bar')).toBeNull();
   });
 
@@ -73,9 +73,9 @@ describe('SessionInputBar', () => {
    * stays live - it is the way out to Changes.
    */
   describe('suspended (the quiet swap window)', () => {
-    it('takes no touches on the mode row while suspended, and still switches modes from the pill', () => {
+    it('takes no touches on the mode row while suspended, and still switches modes from the pill', async () => {
       const onModeChange = jest.fn();
-      render(
+      await render(
         <ThemeProvider>
           <SessionInputBar sessionId="sess-1" mode="terminal" onModeChange={onModeChange} chatAttention={false} suspended />
         </ThemeProvider>,
@@ -88,20 +88,20 @@ describe('SessionInputBar', () => {
       // Held in place: the keys are still there, just inert.
       expect(screen.getByTestId('quick-key-esc', { includeHiddenElements: true })).toBeTruthy();
 
-      fireEvent.press(screen.getByTestId('session-mode-chat'));
+      await fireEvent.press(screen.getByTestId('session-mode-chat'));
       expect(onModeChange).toHaveBeenCalledWith('chat');
     });
 
-    it('keeps the mode row live when not suspended', () => {
-      renderBar('chat');
+    it('keeps the mode row live when not suspended', async () => {
+      await renderBar('chat');
 
       const modeRow = screen.getByTestId('session-input-row');
       expect(modeRow.props.pointerEvents).toBe('auto');
       expect(modeRow.props.accessibilityElementsHidden).toBe(false);
     });
 
-    it('renders no mode-row wrapper in changes mode, so nothing adds a gap above the pill', () => {
-      renderBar('changes');
+    it('renders no mode-row wrapper in changes mode, so nothing adds a gap above the pill', async () => {
+      await renderBar('changes');
       expect(screen.queryByTestId('session-input-row')).toBeNull();
     });
   });
@@ -113,9 +113,9 @@ describe('SessionInputBar', () => {
    * `suspended`: the row is gone, so nothing under the card invites a tap.
    */
   describe('switcherOnly (past the end of the session)', () => {
-    it.each(['terminal', 'chat'] as const)('renders the switcher alone in %s mode, and it still switches', (mode) => {
+    it.each(['terminal', 'chat'] as const)('renders the switcher alone in %s mode, and it still switches', async (mode) => {
       const onModeChange = jest.fn();
-      render(
+      await render(
         <ThemeProvider>
           <SessionInputBar sessionId="sess-1" mode={mode} onModeChange={onModeChange} chatAttention={false} switcherOnly />
         </ThemeProvider>,
@@ -126,7 +126,7 @@ describe('SessionInputBar', () => {
       expect(screen.queryByTestId('quick-key-esc', { includeHiddenElements: true })).toBeNull();
       expect(screen.queryByTestId('composer-input', { includeHiddenElements: true })).toBeNull();
 
-      fireEvent.press(screen.getByTestId('session-mode-changes'));
+      await fireEvent.press(screen.getByTestId('session-mode-changes'));
       expect(onModeChange).toHaveBeenCalledWith('changes');
     });
   });
@@ -137,8 +137,8 @@ describe('SessionInputBar', () => {
    * Chat keeps its composer, unlike switcherOnly.
    */
   describe('quickKeysHidden (a paused session)', () => {
-    it('drops the quick keys in terminal mode', () => {
-      render(
+    it('drops the quick keys in terminal mode', async () => {
+      await render(
         <ThemeProvider>
           <SessionInputBar sessionId="sess-1" mode="terminal" onModeChange={jest.fn()} chatAttention={false} quickKeysHidden />
         </ThemeProvider>,
@@ -148,8 +148,8 @@ describe('SessionInputBar', () => {
       expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
     });
 
-    it('keeps the composer in chat mode', () => {
-      render(
+    it('keeps the composer in chat mode', async () => {
+      await render(
         <ThemeProvider>
           <SessionInputBar sessionId="sess-1" mode="chat" onModeChange={jest.fn()} chatAttention={false} quickKeysHidden />
         </ThemeProvider>,

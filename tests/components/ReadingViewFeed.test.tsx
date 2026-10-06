@@ -19,8 +19,8 @@ jest.mock('@shopify/flash-list', () => ({
   },
 }));
 
-function renderFeed(): { rerender: () => void } {
-  const view = render(
+async function renderFeed(): Promise<{ rerender: () => Promise<void> }> {
+  const view = await render(
     <ThemeProvider>
       <ReadingViewFeed sessionId="sess-1" agentLabel="codex" />
     </ThemeProvider>,
@@ -47,26 +47,26 @@ describe('ReadingViewFeed list data identity', () => {
    * rows inline meant re-laying-out the feed on every frame of a streaming
    * turn - the hot path, not an edge case.
    */
-  it('hands FlashList the same rows array when the lines have not changed', () => {
-    act(() => {
+  it('hands FlashList the same rows array when the lines have not changed', async () => {
+    await act(() => {
       useReadingViewStore.getState().applyCleanLines('sess-1', ['npm run lint', 'All checks passed'], false);
     });
-    const { rerender } = renderFeed();
-    rerender();
+    const { rerender } = await renderFeed();
+    await rerender();
 
     expect(capturedData.length).toBeGreaterThanOrEqual(2);
     const [firstRows, secondRows] = capturedData;
     expect(secondRows).toBe(firstRows);
   });
 
-  it('hands FlashList a new rows array once the lines change', () => {
-    act(() => {
+  it('hands FlashList a new rows array once the lines change', async () => {
+    await act(() => {
       useReadingViewStore.getState().applyCleanLines('sess-1', ['npm run lint'], false);
     });
-    renderFeed();
+    await renderFeed();
     const beforeAppend = capturedData[capturedData.length - 1];
 
-    act(() => {
+    await act(() => {
       useReadingViewStore.getState().applyCleanLines('sess-1', ['All checks passed'], false);
     });
 

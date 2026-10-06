@@ -212,8 +212,8 @@ describe('PairingScanScreen', () => {
     );
   });
 
-  afterEach(() => {
-    cleanup();
+  afterEach(async () => {
+    await cleanup();
     // Restores every spy trackSpy recorded (the jest.spyOn(Linking,
     // 'openSettings') calls in the camera-permission-recovery tests below,
     // and the AppState.addEventListener spy just installed above).
@@ -228,11 +228,11 @@ describe('PairingScanScreen', () => {
   // without ever mounting the CameraView.
   describe('paste path', () => {
     it('begins pairing and enters confirm on a valid pasted link', async () => {
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(beginPairing).toHaveBeenCalledTimes(1);
@@ -242,18 +242,22 @@ describe('PairingScanScreen', () => {
     });
 
     it('a same-tick double tap of the paste submit begins pairing and enters confirm exactly once', async () => {
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       const submitButton = screen.getByTestId('pairing-paste-link-submit');
       // Both presses inside ONE act: nested-act deferral keeps React from
       // re-rendering between them, so the second press observes the same
       // closure state as the first - the same-tick condition a double tap
       // (or two camera frames) produces on a real device. A single-press
       // test passes against the useState-guard bug and proves nothing.
+      // (RNTL 14: each await lets the first handler's async continuation run
+      // before the second press, but never a re-render, which is the part the
+      // guard has to survive. Firing both with Promise.all instead would
+      // overlap two internal act() scopes and React logs an error for that.)
       await act(async () => {
-        fireEvent.press(submitButton);
-        fireEvent.press(submitButton);
+        await fireEvent.press(submitButton);
+        await fireEvent.press(submitButton);
       });
 
       // Two calls here is the recorded iOS failure: two beginPairing dials
@@ -263,11 +267,11 @@ describe('PairingScanScreen', () => {
     });
 
     it('a validation failure shows the error and does not block an immediately following valid submit', async () => {
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), 'not-a-pairing-uri');
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), 'not-a-pairing-uri');
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(screen.getByTestId('pairing-scan-error')).toBeTruthy();
@@ -275,9 +279,9 @@ describe('PairingScanScreen', () => {
 
       // A rejected code must never latch the in-flight guard: the user
       // corrects the link and retries immediately.
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(beginPairing).toHaveBeenCalledTimes(1);
@@ -290,11 +294,16 @@ describe('PairingScanScreen', () => {
 
     it('disables the paste submit while pairing is in flight', async () => {
       beginPairing.mockReturnValueOnce(new Promise(() => {}));
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      // RNTL 14 settles fireEvent.press with the promise its handler returned,
+      // and that promise is beginPairing's, which never settles here: that IS
+      // the in-flight state under test. So the press is started but not
+      // awaited, and waitFor lets React flush the in-flight render.
+      void fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+      await waitFor(() => {
+        expect(screen.getByTestId('pairing-paste-link-submit').props.accessibilityState.disabled).toBe(true);
       });
 
       // Assert the disabled prop rather than firing a second press: the
@@ -308,11 +317,11 @@ describe('PairingScanScreen', () => {
       // settles into its own error state); a rejection means it failed
       // BEFORE the machine existed, e.g. the SecureStore identity load.
       beginPairing.mockRejectedValueOnce(new Error('secure-store unavailable'));
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       await waitFor(() =>
@@ -323,7 +332,7 @@ describe('PairingScanScreen', () => {
       // No navigation happened, so no focus change will re-arm the screen;
       // the failure path itself must release the guard.
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(beginPairing).toHaveBeenCalledTimes(2);
@@ -331,11 +340,11 @@ describe('PairingScanScreen', () => {
     });
 
     it('stays latched after entering confirm, and re-arms when focus returns', async () => {
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
       expect(beginPairing).toHaveBeenCalledTimes(1);
       expect(mockNavigate).toHaveBeenCalledTimes(1);
@@ -353,13 +362,13 @@ describe('PairingScanScreen', () => {
       // Popping back to the scan screen ("Go back" after a failed ceremony)
       // refires the focus effect; that is the moment a rescan becomes
       // legitimate again.
-      act(() => {
+      await act(() => {
         mockLatestFocusEffect.current?.();
       });
       expect(screen.getByTestId('pairing-paste-link-submit').props.accessibilityState.disabled).toBe(false);
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
       expect(beginPairing).toHaveBeenCalledTimes(2);
       // The re-armed attempt must actually reach the confirm screen, not
@@ -373,34 +382,34 @@ describe('PairingScanScreen', () => {
   // button's wording, so the labels here are a compliance contract rather than
   // decoration, and a test that lets them drift back is not doing its job.
   describe('camera permission recovery', () => {
-    it('asks the OS while the system prompt is still available', () => {
+    it('asks the OS while the system prompt is still available', async () => {
       const openSettings = trackSpy(jest.spyOn(Linking, 'openSettings')).mockResolvedValue(undefined);
 
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       // Pinned alongside the button label: only the label was asserted
       // before, so swapping the two explainer strings between branches would
       // have passed every test in this file.
       expect(screen.getByText('Camera access is needed to scan a desktop pairing code.')).toBeTruthy();
       expect(screen.getByText('Continue')).toBeTruthy();
-      fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+      await fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
 
       expect(mockRequestPermission).toHaveBeenCalledTimes(1);
       expect(openSettings).not.toHaveBeenCalled();
     });
 
-    it('routes to Settings once the OS will not prompt again', () => {
+    it('routes to Settings once the OS will not prompt again', async () => {
       // iOS prompts once per install. After a refusal requestPermission()
       // resolves without showing anything, so the pre-fix button rendered
       // normally and did nothing at all - the whole reason for this branch.
       mockCameraPermission.canAskAgain = false;
       const openSettings = trackSpy(jest.spyOn(Linking, 'openSettings')).mockResolvedValue(undefined);
 
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       expect(screen.getByText('Turn on camera access in Settings to scan a code.')).toBeTruthy();
       expect(screen.getByText('Open Settings')).toBeTruthy();
-      fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+      await fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
 
       expect(openSettings).toHaveBeenCalledTimes(1);
       expect(mockRequestPermission).not.toHaveBeenCalled();
@@ -410,10 +419,10 @@ describe('PairingScanScreen', () => {
       mockCameraPermission.canAskAgain = false;
       trackSpy(jest.spyOn(Linking, 'openSettings')).mockRejectedValue(new Error('cannot open'));
 
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+        await fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
       });
 
       // The exact string, not just presence: the file uses this same pattern
@@ -430,15 +439,15 @@ describe('PairingScanScreen', () => {
         .mockRejectedValueOnce(new Error('cannot open'))
         .mockResolvedValue(undefined);
 
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+        await fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
       });
       expect(screen.getByTestId('pairing-scan-error').props.children).toBe('Could not open Settings.');
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
+        await fireEvent.press(screen.getByTestId('pairing-request-camera-permission'));
       });
 
       // openAppSettings clears the error before opening Settings, not only on
@@ -454,8 +463,8 @@ describe('PairingScanScreen', () => {
     // effect refreshes only on 'active', and cleans up its listener so it
     // cannot keep firing against an unmounted screen.
     describe('AppState refresh on return from Settings', () => {
-      it('refreshes camera permission when the app returns to active', () => {
-        render(<PairingScanScreen />);
+      it('refreshes camera permission when the app returns to active', async () => {
+        await render(<PairingScanScreen />);
 
         // Pins the subscribed event name itself, not just the behavior once
         // fired: emitAppState replays whatever listener the mock captured
@@ -465,31 +474,31 @@ describe('PairingScanScreen', () => {
         // block without this line catching it.
         expect(AppState.addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
 
-        act(() => {
+        await act(() => {
           emitAppState('active');
         });
 
         expect(mockRefreshCameraPermission).toHaveBeenCalledTimes(1);
       });
 
-      it('does not refresh camera permission on a non-active AppState transition', () => {
-        render(<PairingScanScreen />);
+      it('does not refresh camera permission on a non-active AppState transition', async () => {
+        await render(<PairingScanScreen />);
 
-        act(() => {
+        await act(() => {
           emitAppState('background');
         });
 
         expect(mockRefreshCameraPermission).not.toHaveBeenCalled();
       });
 
-      it('removes the AppState listener on unmount', () => {
-        const { unmount } = render(<PairingScanScreen />);
+      it('removes the AppState listener on unmount', async () => {
+        const { unmount } = await render(<PairingScanScreen />);
         // Precondition guard: exactly one listener registered, so the
         // behavioral assertion below actually exercises the cleanup path
         // rather than passing vacuously against an empty set.
         expect(appStateListeners.size).toBe(1);
 
-        unmount();
+        await unmount();
 
         // A leaked listener is the failure mode worth pinning: it would keep
         // calling refreshCameraPermission against an unmounted screen on
@@ -497,7 +506,7 @@ describe('PairingScanScreen', () => {
         // lifetime. Asserting the behavior (not called after unmount),
         // rather than only the bookkeeping Set size, is what actually proves
         // the leak is gone.
-        act(() => {
+        await act(() => {
           emitAppState('active');
         });
         expect(mockRefreshCameraPermission).not.toHaveBeenCalled();
@@ -508,7 +517,7 @@ describe('PairingScanScreen', () => {
   describe('camera path', () => {
     it('a same-tick burst of barcode events begins pairing exactly once', async () => {
       mockCameraPermission.granted = true;
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       const onBarcodeScanned = mockLatestCameraViewProps.current?.onBarcodeScanned;
       expect(onBarcodeScanned).toBeDefined();
@@ -531,13 +540,13 @@ describe('PairingScanScreen', () => {
     it('unwires the camera handler while pairing is in flight', async () => {
       beginPairing.mockReturnValueOnce(new Promise(() => {}));
       mockCameraPermission.granted = true;
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       // Non-empty so the paste submit's `pastedLink.length === 0` disabled
       // term is false going in; otherwise the assertion below would pass
       // regardless of isSubmitInFlight and prove nothing about this call
       // site's wiring.
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       expect(screen.getByTestId('pairing-paste-link-submit').props.accessibilityState.disabled).toBe(false);
 
       await act(async () => {
@@ -558,7 +567,7 @@ describe('PairingScanScreen', () => {
 
     it('re-wires the camera handler and allows a second scan after focus regain', async () => {
       mockCameraPermission.granted = true;
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       const scannedUri = validPairingUri();
       await act(async () => {
@@ -578,7 +587,7 @@ describe('PairingScanScreen', () => {
       // barcode event could push a second confirm frame - so the re-arm
       // must actually reach the camera surface, not just the paste button's
       // disabled state proven above.
-      act(() => {
+      await act(() => {
         mockLatestFocusEffect.current?.();
       });
 
@@ -602,13 +611,13 @@ describe('PairingScanScreen', () => {
 
     it('a same-tick burst mixing the paste submit and a barcode scan begins pairing exactly once', async () => {
       mockCameraPermission.granted = true;
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       const onBarcodeScanned = mockLatestCameraViewProps.current?.onBarcodeScanned;
       expect(onBarcodeScanned).toBeDefined();
 
       const scannedUri = validPairingUri();
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), scannedUri);
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), scannedUri);
       const submitButton = screen.getByTestId('pairing-paste-link-submit');
 
       // On the camera-granted branch both entry points render in the same
@@ -616,8 +625,11 @@ describe('PairingScanScreen', () => {
       // mixed-entry-point version of the same-tick bursts above, which each
       // only exercised a single entry point at a time.
       await act(async () => {
-        fireEvent.press(submitButton);
+        // Started, then the scan, then awaited: RNTL 14 runs the press handler
+        // synchronously on the call, so this keeps both entry points in one tick.
+        const pressSettled = fireEvent.press(submitButton);
         onBarcodeScanned?.({ data: scannedUri });
+        await pressSettled;
       });
 
       expect(beginPairing).toHaveBeenCalledTimes(1);
@@ -626,7 +638,7 @@ describe('PairingScanScreen', () => {
 
     it('a barcode event delivered through an already-unwired handler reference does not start a second ceremony', async () => {
       mockCameraPermission.granted = true;
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       // Stashed BEFORE any scan: this is the handler reference the native
       // camera layer already holds. Once pairing is in flight, React flips
@@ -673,11 +685,11 @@ describe('PairingScanScreen', () => {
       ['a shortcut with pasted whitespace', `  ${DEMO_PAIRING_SHORTCUT}\n`],
       ['a shortcut typed in caps', DEMO_PAIRING_SHORTCUT.toUpperCase()],
     ])('routes %s to the demo ceremony and into confirm', async (_label, code) => {
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), code);
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), code);
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(beginDemoPairing).toHaveBeenCalledTimes(1);
@@ -692,7 +704,7 @@ describe('PairingScanScreen', () => {
 
     it('routes a scanned demo QR the same way as a pasted one', async () => {
       mockCameraPermission.granted = true;
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
       await act(async () => {
         mockLatestCameraViewProps.current?.onBarcodeScanned?.({ data: DEMO_PAIRING_URI });
@@ -706,11 +718,11 @@ describe('PairingScanScreen', () => {
     it('still sends a real pairing URI down the real path', async () => {
       // The other half of the branch. Without this, deleting the demo check's
       // `return` would leave every test above passing.
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(validateScannedQr).toHaveBeenCalledTimes(1);
@@ -719,13 +731,13 @@ describe('PairingScanScreen', () => {
     });
 
     it('a same-tick double tap starts the demo exactly once', async () => {
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
       const submitButton = screen.getByTestId('pairing-paste-link-submit');
       await act(async () => {
-        fireEvent.press(submitButton);
-        fireEvent.press(submitButton);
+        await fireEvent.press(submitButton);
+        await fireEvent.press(submitButton);
       });
 
       expect(beginDemoPairing).toHaveBeenCalledTimes(1);
@@ -736,11 +748,11 @@ describe('PairingScanScreen', () => {
       // "Could not start pairing" on a phone that is working perfectly reads as
       // a broken app, so the refusal has to say which refusal it is.
       beginDemoPairing.mockRejectedValueOnce(new AlreadyPairedError());
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(screen.getByTestId('pairing-scan-error')).toHaveTextContent(
@@ -758,11 +770,11 @@ describe('PairingScanScreen', () => {
       // second check - only its own error type. Asserted here by its own
       // distinct message so a regression names which refusal broke.
       beginDemoPairing.mockRejectedValueOnce(new PairingInProgressError());
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(screen.getByTestId('pairing-scan-error')).toHaveTextContent(
@@ -773,16 +785,16 @@ describe('PairingScanScreen', () => {
 
     it('releases the guard after a refusal so a real code still works', async () => {
       beginDemoPairing.mockRejectedValueOnce(new AlreadyPairedError());
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), validPairingUri());
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(beginPairing).toHaveBeenCalledTimes(1);
@@ -791,11 +803,11 @@ describe('PairingScanScreen', () => {
 
     it('reports an unexpected ceremony failure with the generic message', async () => {
       beginDemoPairing.mockRejectedValueOnce(new Error('loopback exploded'));
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
 
-      fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
+      await fireEvent.changeText(screen.getByTestId('pairing-paste-link-input'), DEMO_PAIRING_SHORTCUT);
       await act(async () => {
-        fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
+        await fireEvent.press(screen.getByTestId('pairing-paste-link-submit'));
       });
 
       expect(screen.getByTestId('pairing-scan-error')).toHaveTextContent('Could not start pairing. Try again.');
@@ -806,7 +818,7 @@ describe('PairingScanScreen', () => {
       // app/+native-intent.ts turns kangentic-pair://demo into /pair?demo=1.
       mockSearchParams.current = { demo: '1' };
 
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
       // render() already acts; this empty act flushes the mount effect's own
       // async continuation (beginDemoPairing resolves, then navigate fires).
       await act(async () => {});
@@ -817,7 +829,7 @@ describe('PairingScanScreen', () => {
     });
 
     it('does not start the demo on an ordinary visit to the pairing screen', async () => {
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
       await act(async () => {});
 
       expect(beginDemoPairing).not.toHaveBeenCalled();
@@ -828,7 +840,7 @@ describe('PairingScanScreen', () => {
       // without the once-per-mount ref, backing out of the confirm screen would
       // immediately restart the ceremony the user just left.
       mockSearchParams.current = { demo: '1' };
-      render(<PairingScanScreen />);
+      await render(<PairingScanScreen />);
       await act(async () => {});
       expect(beginDemoPairing).toHaveBeenCalledTimes(1);
 

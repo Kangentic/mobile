@@ -10,8 +10,8 @@ import { ThemeProvider, Badge } from '@/components';
  * for this pill, which is exactly the pair a future edit is likely to conflate.
  */
 describe('Badge', () => {
-  it('shrink-wraps by default so a Badge in a Stack does not stretch to the container width', () => {
-    render(
+  it('shrink-wraps by default so a Badge in a Stack does not stretch to the container width', async () => {
+    await render(
       <ThemeProvider>
         <Badge label="Deployment target" testID="question-header" />
       </ThemeProvider>,
@@ -24,8 +24,8 @@ describe('Badge', () => {
     expect(flattenedStyle.alignSelf).toBe('flex-start');
   });
 
-  it('centers on the cross axis for align="center", so a Badge in a tall Row is not top-pinned', () => {
-    render(
+  it('centers on the cross axis for align="center", so a Badge in a tall Row is not top-pinned', async () => {
+    await render(
       <ThemeProvider>
         <Badge label="M" align="center" testID="changes-file-0-status" />
       </ThemeProvider>,
@@ -35,8 +35,8 @@ describe('Badge', () => {
     expect(flattenedStyle.alignSelf).toBe('center');
   });
 
-  it('keeps the alignment independent of shape and compact', () => {
-    render(
+  it('keeps the alignment independent of shape and compact', async () => {
+    await render(
       <ThemeProvider>
         <Badge label="7" shape="pill" compact align="center" testID="section-count" />
       </ThemeProvider>,

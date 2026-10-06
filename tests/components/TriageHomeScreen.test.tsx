@@ -121,8 +121,8 @@ function seedStores(): void {
   });
 }
 
-function renderHome(): void {
-  render(
+async function renderHome(): Promise<void> {
+  await render(
     <ThemeProvider>
       <TriageHomeScreen />
     </ThemeProvider>,
@@ -220,10 +220,12 @@ describe('TriageHomeScreen', () => {
    * 11 warnings without this flush, 4 with it. The one left per test is the
    * first peek to settle, which needs only a few microtask turns and lands in
    * the gap between the test body returning and this hook starting, so no
-   * afterEach can reach it. Removing it would take renderHome awaiting the
-   * flush itself, which makes the ~50 sync call sites async AND resolves every
-   * snippet before the first assertion, changing what the pre-resolution tests
-   * observe. Left as is deliberately.
+   * afterEach can reach it. Since RNTL 14 renderHome is async and its awaited
+   * render() already flushes those microtasks, which resolves every snippet
+   * before the first assertion; the tests that observe the PRE-resolution state
+   * (the prompt-pending rows and the description fallback) hold their prompt
+   * peek unresolved instead. Left as is: it still covers updates that land
+   * after the test body.
    */
   afterEach(async () => {
     await act(async () => {
@@ -231,8 +233,8 @@ describe('TriageHomeScreen', () => {
     });
   });
 
-  it('files prompt-pending rows under Idle (the user\'s move) and hides empty sections', () => {
-    renderHome();
+  it('files prompt-pending rows under Idle (the user\'s move) and hides empty sections', async () => {
+    await renderHome();
     // The lone session is prompt-pending: desktop semantics count it in the
     // idle bucket, so its row sits under one Idle header - styled exactly
     // like every other idle row - and the empty Active section renders
@@ -243,8 +245,15 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByText('Needs you')).toBeNull();
   });
 
-  it('prompt-pending rows carry no inline controls or status filler and route to chat on tap', () => {
-    renderHome();
+  it('prompt-pending rows carry no inline controls or status filler and route to chat on tap', async () => {
+    // Hold the prompt peek unresolved. The old sync render() observed the row
+    // before its peek landed, and that is the state this test is about: once
+    // the peek resolves null the snippet legitimately reads "Waiting for your
+    // approval" (the generic pending-prompt summary), and RNTL 14's awaited
+    // render() flushes that microtask before the first assertion. A separate
+    // status-filler line would show in the unresolved state too.
+    mockPeekAwaitedPrompt.mockReturnValue(new Promise(() => {}));
+    await renderHome();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
     // No filler status lines and no inline answering: the section + icon
     // say the state, the snippet teases the decision, and answering lives
@@ -253,15 +262,15 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByTestId('permission-approve')).toBeNull();
     expect(screen.queryByText('Review and approve')).toBeNull();
 
-    fireEvent.press(screen.getByTestId('activity-row-sess-1'));
+    await fireEvent.press(screen.getByTestId('activity-row-sess-1'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/task/[taskId]',
       params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1', mode: 'chat' },
     });
   });
 
-  it('renders board-card parity (project in the band, ticket number in the title row) and the context-usage bar', () => {
-    renderHome();
+  it('renders board-card parity (project in the band, ticket number in the title row) and the context-usage bar', async () => {
+    await renderHome();
     // The project names the band across the top of the card, not the title row.
     expect(screen.getByTestId('activity-row-sess-1-column-project')).toHaveTextContent('Alpha');
     expect(screen.queryByTestId('activity-row-sess-1-project')).toBeNull();
@@ -271,7 +280,7 @@ describe('TriageHomeScreen', () => {
     // No usage yet: the bar stays hidden rather than showing an untrusted 0%.
     expect(screen.queryByTestId('activity-row-sess-1-usage')).toBeNull();
 
-    act(() => {
+    await act(() => {
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
         sessionId: 'sess-1',
@@ -291,24 +300,24 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByText('47%')).toBeTruthy();
   });
 
-  it('falls back to a minimal card when a session outlives its board task entry', () => {
+  it('falls back to a minimal card when a session outlives its board task entry', async () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...state.boardsByProjectId['project-1'], tasksById: {} } },
     }));
-    renderHome();
+    await renderHome();
     expect(screen.getByText('Untitled task')).toBeTruthy();
     // Its board has Ticket Numbers on, but the stand-in's display_id is a placeholder 0.
     expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
   });
 
   /** The feed spans every project, so each row follows its OWN board's setting, as the Board tab does. */
-  it('hides the ticket number on a row whose board has Ticket Numbers off', () => {
+  it('hides the ticket number on a row whose board has Ticket Numbers off', async () => {
     useBoardStore.setState((state) => {
       const board = state.boardsByProjectId['project-1'];
       if (board === undefined) throw new Error('seedStores did not seed project-1');
       return { boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...board, showTicketNumbers: false } } };
     });
-    renderHome();
+    await renderHome();
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
     expect(screen.queryByTestId('activity-row-sess-1-display-id')).toBeNull();
   });
@@ -335,7 +344,7 @@ describe('TriageHomeScreen', () => {
 
     it('names the project and marks a To Do column on its own, with no track (the desktop track never draws To Do)', async () => {
       seedTwoProjectBoards();
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(screen.getByTestId('activity-row-sess-2-column-project')).toHaveTextContent('Beta');
       expect(stripLabel('sess-2')).toBe('Beta, Backlog');
@@ -346,7 +355,7 @@ describe('TriageHomeScreen', () => {
     it('marks a working column inside its track', async () => {
       seedTwoProjectBoards();
       moveTask2To('p2-doing');
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 1 of 1');
       expect(screen.getByTestId('activity-row-sess-2-column-marker')).toBeTruthy();
@@ -359,7 +368,7 @@ describe('TriageHomeScreen', () => {
      */
     it('relabels in place when the task moves column', async () => {
       seedTwoProjectBoards();
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(stripLabel('sess-2')).toBe('Beta, Backlog');
       await act(async () => moveTask2To('p2-doing'));
@@ -370,7 +379,7 @@ describe('TriageHomeScreen', () => {
       useBoardStore.setState((state) => ({
         boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...state.boardsByProjectId['project-1'], tasksById: {} } },
       }));
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(screen.getByText('Untitled task')).toBeTruthy();
       expect(screen.getByTestId('activity-row-sess-1-column-project')).toHaveTextContent('Alpha');
@@ -392,10 +401,10 @@ describe('TriageHomeScreen', () => {
     useActivityStore.getState().registerSession('sess-paused', 'task-paused', 'project-1');
     useActivityStore.getState().applySnapshot('sess-paused', 'task-paused', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
 
-    renderHome();
+    await renderHome();
     await act(async () => {});
 
-    const renderOrder = screen.UNSAFE_root.findAll(() => true);
+    const renderOrder = screen.container.queryAll(() => true);
     const position = (testID: string): number => renderOrder.indexOf(screen.getByTestId(testID));
     expect(position('section-header-idle')).toBeLessThan(position('section-header-active'));
     expect(position('section-header-active')).toBeLessThan(position('section-header-queued'));
@@ -417,7 +426,7 @@ describe('TriageHomeScreen', () => {
     useActivityStore.getState().applySnapshot('sess-paused', 'task-paused', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
     useSettingsStore.setState({ hiddenTriageSections: ['Paused'] });
 
-    renderHome();
+    await renderHome();
     await act(async () => {});
 
     expect(screen.getByTestId('section-header-idle')).toBeTruthy();
@@ -434,7 +443,7 @@ describe('TriageHomeScreen', () => {
   it('says the filter is hiding everything, with Show all, rather than "All quiet"', async () => {
     useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
 
-    renderHome();
+    await renderHome();
     await act(async () => {});
 
     expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
@@ -448,7 +457,7 @@ describe('TriageHomeScreen', () => {
   it('names every section hidden without repeating it as a count', async () => {
     useSettingsStore.setState({ hiddenTriageSections: ['Idle', 'Active', 'Queued', 'Paused'] });
 
-    renderHome();
+    await renderHome();
     await act(async () => {});
 
     expect(screen.getByText('All sections hidden')).toBeTruthy();
@@ -477,7 +486,7 @@ describe('TriageHomeScreen', () => {
     it('counts the hidden sections in the plural when several are hidden and sessions exist', async () => {
       useSettingsStore.setState({ hiddenTriageSections: ['Idle', 'Active'] });
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
@@ -488,13 +497,13 @@ describe('TriageHomeScreen', () => {
     it('brings the rows back, and clears the filter, when Show all is pressed', async () => {
       useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
       expect(screen.queryByTestId('activity-row-sess-1')).toBeNull();
 
       await act(async () => {
-        fireEvent.press(screen.getByTestId('filtered-empty-show-all'));
+        await fireEvent.press(screen.getByTestId('filtered-empty-show-all'));
       });
 
       expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
@@ -512,7 +521,7 @@ describe('TriageHomeScreen', () => {
       useActivityStore.getState().reset();
       useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(screen.queryByTestId('filtered-empty-state')).toBeNull();
@@ -521,7 +530,7 @@ describe('TriageHomeScreen', () => {
 
     describe('the header button', () => {
       it('carries no dot and the plain label while nothing is hidden', async () => {
-        renderHome();
+        await renderHome();
         await act(async () => {});
 
         expect(screen.getByTestId('header-section-filter-button').props.accessibilityLabel).toBe('Show sections');
@@ -529,11 +538,11 @@ describe('TriageHomeScreen', () => {
       });
 
       it('opens the Show sections sheet', async () => {
-        renderHome();
+        await renderHome();
         await act(async () => {});
         expect(mockPush).not.toHaveBeenCalled();
 
-        fireEvent.press(screen.getByTestId('header-section-filter-button'));
+        await fireEvent.press(screen.getByTestId('header-section-filter-button'));
 
         expect(mockPush).toHaveBeenCalledTimes(1);
         expect(mockPush).toHaveBeenCalledWith('/section-filter');
@@ -541,11 +550,11 @@ describe('TriageHomeScreen', () => {
     });
   });
 
-  it('reacts to store changes (a session moving sections re-renders)', () => {
-    renderHome();
+  it('reacts to store changes (a session moving sections re-renders)', async () => {
+    await renderHome();
     expect(screen.getAllByText('Idle')).toHaveLength(1);
 
-    act(() => {
+    await act(() => {
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
         sessionId: 'sess-1',
@@ -557,8 +566,8 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByText('Idle')).toBeNull();
   });
 
-  it('tapping the section header collapses its rows (but keeps the header and its count visible), and tapping again re-expands', () => {
-    renderHome();
+  it('tapping the section header collapses its rows (but keeps the header and its count visible), and tapping again re-expands', async () => {
+    await renderHome();
     // needs-you and idle share the "Idle" title; our lone permission-pending
     // session lands in needs-you, so that is the section kind whose header
     // actually gets emitted.
@@ -566,44 +575,44 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
     expect(within(screen.getByTestId('section-header-idle')).getByText('1')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('section-header-idle'));
+    await fireEvent.press(screen.getByTestId('section-header-idle'));
 
     expect(screen.getByTestId('section-header-idle').props.accessibilityState).toEqual({ expanded: false });
     expect(screen.queryByTestId('activity-row-sess-1')).toBeNull();
     // The count stays visible while collapsed - collapsing hides the rows, not the fact that there are some.
     expect(within(screen.getByTestId('section-header-idle')).getByText('1')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('section-header-idle'));
+    await fireEvent.press(screen.getByTestId('section-header-idle'));
 
     expect(screen.getByTestId('section-header-idle').props.accessibilityState).toEqual({ expanded: true });
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
   });
 
-  it('shows the all-quiet state when connected with no sessions', () => {
+  it('shows the all-quiet state when connected with no sessions', async () => {
     useActivityStore.getState().reset();
-    renderHome();
+    await renderHome();
     expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
   });
 
-  it('shows the connecting state (Overseer, not a void) while paired but not established', () => {
+  it('shows the connecting state (Overseer, not a void) while paired but not established', async () => {
     useActivityStore.getState().reset();
     useChannelStore.setState({ established: false, transportState: 'connecting' });
-    renderHome();
+    await renderHome();
     expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
     expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
   });
 
-  it('stays on Connecting (not a flash of All quiet) once established but before the first board snapshot lands', () => {
+  it('stays on Connecting (not a flash of All quiet) once established but before the first board snapshot lands', async () => {
     // The exact bootstrap-ordering window: channel-established flips true
     // before any board snapshot has arrived, so hasHydratedSnapshot is
     // still false even though established is already true.
     useActivityStore.getState().reset();
     useBoardStore.setState({ hasHydratedSnapshot: false });
-    renderHome();
+    await renderHome();
     expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
     expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
 
-    act(() => {
+    await act(() => {
       useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', columns: [], tasks: [] }));
     });
     expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
@@ -617,7 +626,7 @@ describe('TriageHomeScreen', () => {
    * list re-sorting and re-anchoring under the thumb. It now reveals once,
    * when the declared set is complete.
    */
-  it('waits for every declared board before revealing the feed', () => {
+  it('waits for every declared board before revealing the feed', async () => {
     useActivityStore.getState().reset();
     useBoardStore.setState({
       projects: [
@@ -627,18 +636,18 @@ describe('TriageHomeScreen', () => {
       boardsByProjectId: {},
       hasHydratedSnapshot: false,
     });
-    renderHome();
+    await renderHome();
     expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
 
     // First of two boards answers: still incomplete, so nothing is revealed
     // (and in particular no premature "All quiet").
-    act(() => {
+    await act(() => {
       useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', columns: [], tasks: [] }));
     });
     expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
     expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
 
-    act(() => {
+    await act(() => {
       useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-2', columns: [], tasks: [] }));
     });
     expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
@@ -652,7 +661,7 @@ describe('TriageHomeScreen', () => {
    * allBoardsAnswered alone), a board that never answers would strand the
    * feed on "Connecting" forever instead of revealing what it does have.
    */
-  it('reveals the feed past the deadline even when a declared board never answers', () => {
+  it('reveals the feed past the deadline even when a declared board never answers', async () => {
     jest.useFakeTimers();
     try {
       useActivityStore.getState().reset();
@@ -664,18 +673,18 @@ describe('TriageHomeScreen', () => {
         boardsByProjectId: {},
         hasHydratedSnapshot: false,
       });
-      renderHome();
+      await renderHome();
       expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
 
       // project-1 answers; project-2 never does - allBoardsAnswered stays
       // false for the rest of the test.
-      act(() => {
+      await act(() => {
         useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', columns: [], tasks: [] }));
       });
       expect(screen.getByTestId('connecting-empty-state')).toBeTruthy();
 
       // FEED_REVEAL_DEADLINE_MS (2500ms): the only other path to feedReady.
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(2500);
       });
 
@@ -701,7 +710,7 @@ describe('TriageHomeScreen', () => {
       jest.mocked(peekLastAssistantMessage).mockResolvedValue('Latest.');
       // seedStores leaves sess-1 awaiting a prompt (the prompt-peek path);
       // resolve it so the row peeks the message path this test is pinning.
-      act(() => {
+      await act(() => {
         useActivityStore.getState().applyActivityEvent({
           kind: 'activity',
           sessionId: 'sess-1',
@@ -710,7 +719,7 @@ describe('TriageHomeScreen', () => {
         });
       });
 
-      renderHome();
+      await renderHome();
       // The first peek (this row's pre-warm plus its own mount) has no
       // burst to settle and fires immediately - capture that count as the
       // baseline rather than assuming it is exactly one call.
@@ -769,7 +778,12 @@ describe('TriageHomeScreen', () => {
       },
     }));
 
-    renderHome();
+    // The row is prompt-pending, so its snippet comes from the prompt peek.
+    // Hold that peek unresolved: this test is about the state BEFORE it lands,
+    // and RNTL 14's awaited render() otherwise flushes the resolved null (whose
+    // summary is the generic "Waiting for your approval") before the assertion.
+    mockPeekAwaitedPrompt.mockReturnValue(new Promise(() => {}));
+    await renderHome();
 
     // Markdown decoration is collapsed the same way a live snippet is.
     expect(screen.getByText('Heading Repro the auth redirect loop.')).toBeTruthy();
@@ -803,7 +817,7 @@ describe('TriageHomeScreen', () => {
       },
     }));
 
-    renderHome();
+    await renderHome();
 
     expect((await screen.findAllByText('Fixed the redirect, running tests.')).length).toBeGreaterThan(0);
     expect(screen.queryByText('Repro the auth redirect loop.')).toBeNull();
@@ -832,7 +846,7 @@ describe('TriageHomeScreen', () => {
       payload: { type: 'message-preview', text: 'Pushed straight from the desktop.' },
     });
 
-    renderHome();
+    await renderHome();
 
     expect(screen.getByText('Pushed straight from the desktop.')).toBeTruthy();
     await act(async () => {});
@@ -852,7 +866,7 @@ describe('TriageHomeScreen', () => {
       payload: { type: 'message-preview', text: 'Not what this row should show.' },
     });
 
-    renderHome();
+    await renderHome();
     await act(async () => {});
 
     expect(mockPeekAwaitedPrompt).toHaveBeenCalled();
@@ -889,7 +903,7 @@ describe('TriageHomeScreen', () => {
       payload: { type: 'message-preview', text: 'Already pushed by the desktop.' },
     });
 
-    renderHome();
+    await renderHome();
     await act(async () => {});
 
     expect(peekLastAssistantMessage).toHaveBeenCalledWith('sess-idle-no-preview', 0);
@@ -917,10 +931,10 @@ describe('TriageHomeScreen', () => {
       payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
     });
 
-    renderHome();
+    await renderHome();
     expect(await screen.findByText('Older fetched snippet.')).toBeTruthy();
 
-    act(() => {
+    await act(() => {
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',
         sessionId: 'sess-1',
@@ -934,9 +948,9 @@ describe('TriageHomeScreen', () => {
     jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
   });
 
-  it('shows the pairing CTA when unpaired', () => {
+  it('shows the pairing CTA when unpaired', async () => {
     useChannelStore.setState({ pairedState: 'unpaired' });
-    renderHome();
+    await renderHome();
     expect(screen.getByTestId('triage-pair-cta')).toBeTruthy();
   });
 
@@ -950,35 +964,35 @@ describe('TriageHomeScreen', () => {
    * latch that, once tripped, could never resume pinning).
    */
   it('re-anchors the feed to the top on every insertion while resting there, and resumes after scrolling back (not a one-way latch)', async () => {
-    renderHome();
+    await renderHome();
     const list = screen.getByTestId('triage-home-list');
 
-    function scrollTo(offsetFromTop: number): void {
-      fireEvent.scroll(list, { nativeEvent: { contentOffset: { x: 0, y: offsetFromTop } } });
+    async function scrollTo(offsetFromTop: number): Promise<void> {
+      await fireEvent.scroll(list, { nativeEvent: { contentOffset: { x: 0, y: offsetFromTop } } });
     }
 
     // Fresh mount: resting at the top, so a row insertion re-anchors.
-    fireEvent(list, 'contentSizeChange', 400, 800);
+    await fireEvent(list, 'contentSizeChange', 400, 800);
     expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(1);
     expect(mockFlashListScrollToOffset).toHaveBeenLastCalledWith({ offset: 0, animated: false });
 
     // Still within the 8px tolerance: another insertion re-anchors again -
     // this is NOT a one-shot "anchor once on mount" behavior.
-    scrollTo(8);
-    fireEvent(list, 'contentSizeChange', 400, 900);
+    await scrollTo(8);
+    await fireEvent(list, 'contentSizeChange', 400, 900);
     expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(2);
 
     // Scrolled past the tolerance: a later insertion must not yank the list
     // back out from under the user.
-    scrollTo(400);
-    fireEvent(list, 'contentSizeChange', 400, 1000);
+    await scrollTo(400);
+    await fireEvent(list, 'contentSizeChange', 400, 1000);
     expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(2);
 
     // Scrolling back to the top resumes anchoring - proves this reads the
     // live offset each time rather than latching "the user scrolled away"
     // permanently.
-    scrollTo(0);
-    fireEvent(list, 'contentSizeChange', 400, 1100);
+    await scrollTo(0);
+    await fireEvent(list, 'contentSizeChange', 400, 1100);
     expect(mockFlashListScrollToOffset).toHaveBeenCalledTimes(3);
 
     // The lone row is prompt-pending, which kicks off an async snippet peek;
@@ -1024,7 +1038,7 @@ describe('TriageHomeScreen', () => {
       // count IS the concurrency.
       jest.mocked(peekLastAssistantMessage).mockReturnValue(new Promise<string | null>(() => undefined));
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       // Exactly the queue depth, not merely "fewer than twelve": all twelve
@@ -1043,7 +1057,7 @@ describe('TriageHomeScreen', () => {
       // session, concurrently, at cold start.
       jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(jest.mocked(peekLastTerminalLine)).not.toHaveBeenCalled();
@@ -1071,7 +1085,7 @@ describe('TriageHomeScreen', () => {
       });
       jest.mocked(peekLastAssistantMessage).mockResolvedValue(null);
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
@@ -1096,12 +1110,12 @@ describe('TriageHomeScreen', () => {
           }),
       );
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(jest.mocked(peekLastAssistantMessage)).toHaveBeenCalledTimes(SNIPPET_WARM_CONCURRENCY);
       expect(mockMemoryPressureListeners.size).toBeGreaterThan(0);
 
-      act(() => {
+      await act(() => {
         for (const listener of [...mockMemoryPressureListeners]) listener();
       });
       await act(async () => {
@@ -1170,7 +1184,7 @@ describe('TriageHomeScreen', () => {
       });
       useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(peekedSessionIds()).toEqual(['warm-control']);
@@ -1186,7 +1200,7 @@ describe('TriageHomeScreen', () => {
           .getState()
           .applySnapshot('warm-not-running', 'task-warm-not-running', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus }));
 
-        renderHome();
+        await renderHome();
         await act(async () => {});
 
         expect(peekedSessionIds()).toEqual(['warm-control']);
@@ -1212,11 +1226,11 @@ describe('TriageHomeScreen', () => {
      * two-step delete, failure messages) is in
      * tests/components/TaskActionsScreen.test.tsx.
      */
-    it("long-press navigates to the actions hub with the row's own project", () => {
-      renderHome();
+    it("long-press navigates to the actions hub with the row's own project", async () => {
+      await renderHome();
 
       // task-2/sess-2 lives in project-2, not project-1.
-      fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
+      await fireEvent(screen.getByTestId('activity-row-sess-2'), 'longPress');
 
       expect(mockPush).toHaveBeenCalledWith({
         pathname: '/task-actions',
@@ -1254,22 +1268,22 @@ describe('TriageHomeScreen', () => {
       jest.useRealTimers();
     });
 
-    it('shows the wait on the row and advances it on the shared clock', () => {
+    it('shows the wait on the row and advances it on the shared clock', async () => {
       jest.useFakeTimers();
       jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
       seedWaitingSession(12 * MINUTE);
-      renderHome();
+      await renderHome();
 
       expect(screen.getByTestId('activity-row-sess-1-wait')).toHaveTextContent('12m');
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(NOW_TICK_MS * 2);
       });
 
       expect(screen.getByTestId('activity-row-sess-1-wait')).toHaveTextContent('13m');
     });
 
-    it('shows nothing on a working row', () => {
+    it('shows nothing on a working row', async () => {
       jest.useFakeTimers();
       jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
       seedStores();
@@ -1278,7 +1292,7 @@ describe('TriageHomeScreen', () => {
         .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({
           activity: { state: 'thinking', reason: { kind: 'turn-active' } },
         }));
-      renderHome();
+      await renderHome();
 
       expect(screen.queryByTestId('activity-row-sess-1-wait')).toBeNull();
     });
@@ -1299,7 +1313,7 @@ describe('TriageHomeScreen', () => {
      * real NOW_TICK_MS interval, rather than merely never seeing one because
      * it never would.
      */
-    it('starts no 30s clock when every session is working (enabled={anySessionWaiting} pinned false)', () => {
+    it('starts no 30s clock when every session is working (enabled={anySessionWaiting} pinned false)', async () => {
       jest.useFakeTimers();
       jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
       seedStores();
@@ -1310,7 +1324,7 @@ describe('TriageHomeScreen', () => {
         }));
       const setIntervalSpy = jest.spyOn(global, 'setInterval');
 
-      renderHome();
+      await renderHome();
 
       // Confirms the list (and so the NowTickProvider wrapping it) actually
       // rendered, rather than this passing because an empty/connecting state
@@ -1323,13 +1337,13 @@ describe('TriageHomeScreen', () => {
       setIntervalSpy.mockRestore();
     });
 
-    it('starts the 30s clock when at least one session is idle (enabled={anySessionWaiting} pinned true)', () => {
+    it('starts the 30s clock when at least one session is idle (enabled={anySessionWaiting} pinned true)', async () => {
       jest.useFakeTimers();
       jest.setSystemTime(new Date('2026-09-13T12:00:00Z'));
       seedWaitingSession(12 * MINUTE);
       const setIntervalSpy = jest.spyOn(global, 'setInterval');
 
-      renderHome();
+      await renderHome();
 
       expect(screen.getByTestId('activity-row-sess-1-wait')).toBeTruthy();
       const nowTickIntervalCalls = setIntervalSpy.mock.calls.filter(
@@ -1381,49 +1395,49 @@ describe('TriageHomeScreen', () => {
       jest.useRealTimers();
     });
 
-    it('mounts no overlay on a row whose section change is older than the window', () => {
+    it('mounts no overlay on a row whose section change is older than the window', async () => {
       expect(useActivityStore.getState().bySessionId['sess-1'].sectionChangedAt).toBe(Date.now());
       jest.advanceTimersByTime(SECTION_PULSE_WINDOW_MS);
-      renderHome();
+      await renderHome();
 
       expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
       expect(screen.queryByTestId(pulseTestId)).toBeNull();
     });
 
-    it('mounts no overlay on a row that has never changed section', () => {
+    it('mounts no overlay on a row that has never changed section', async () => {
       useActivityStore.getState().reset();
       useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
       expect(useActivityStore.getState().bySessionId['sess-1'].sectionChangedAt).toBeNull();
-      renderHome();
+      await renderHome();
 
       expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
       expect(screen.queryByTestId(pulseTestId)).toBeNull();
     });
 
-    it('unmounts the pulse on a JS timer, with no fade frame ever arriving', () => {
-      renderHome();
+    it('unmounts the pulse on a JS timer, with no fade frame ever arriving', async () => {
+      await renderHome();
       expect(screen.getByTestId(pulseTestId)).toBeTruthy();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS - 1);
       });
       expect(screen.getByTestId(pulseTestId)).toBeTruthy();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(1);
       });
       expect(screen.queryByTestId(pulseTestId)).toBeNull();
       expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
     });
 
-    it('pulses again when the row changes section after the last pulse ended', () => {
-      renderHome();
-      act(() => {
+    it('pulses again when the row changes section after the last pulse ended', async () => {
+      await renderHome();
+      await act(() => {
         jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS);
       });
       expect(screen.queryByTestId(pulseTestId)).toBeNull();
 
-      act(() => {
+      await act(() => {
         pushThinking();
       });
       expect(screen.getByTestId(pulseTestId)).toBeTruthy();
@@ -1434,23 +1448,23 @@ describe('TriageHomeScreen', () => {
      * one's deadline: the overlay is keyed by the change instant, so the new
      * change mounts a fresh gate with its own timer.
      */
-    it('restarts the bound when a second change lands mid-pulse', () => {
-      renderHome();
+    it('restarts the bound when a second change lands mid-pulse', async () => {
+      await renderHome();
       const firstChangeDelayMs = Math.floor(SECTION_PULSE_MOUNT_MS / 2);
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(firstChangeDelayMs);
       });
-      act(() => {
+      await act(() => {
         pushThinking();
       });
 
       // Past the FIRST pulse's deadline, inside the second one's.
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS - 1);
       });
       expect(screen.getByTestId(pulseTestId)).toBeTruthy();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(1);
       });
       expect(screen.queryByTestId(pulseTestId)).toBeNull();
@@ -1466,17 +1480,17 @@ describe('TriageHomeScreen', () => {
      * read the clock inside the window, and the card would flash for the whole
      * window. The key is the session and the change instant and nothing else.
      */
-    it('stays down when a same-section event lands after the pulse ended but inside the window', () => {
+    it('stays down when a same-section event lands after the pulse ended but inside the window', async () => {
       // The premise: a gap between the end of the mount and the end of the window.
       expect(SECTION_PULSE_MOUNT_MS).toBeLessThan(SECTION_PULSE_WINDOW_MS);
-      renderHome();
-      act(() => {
+      await renderHome();
+      await act(() => {
         jest.advanceTimersByTime(SECTION_PULSE_MOUNT_MS);
       });
       expect(screen.queryByTestId(pulseTestId)).toBeNull();
       const entryBeforeEvent = useActivityStore.getState().bySessionId['sess-1'];
 
-      act(() => {
+      await act(() => {
         useActivityStore.getState().applyActivityEvent({
           kind: 'activity',
           sessionId: 'sess-1',
@@ -1511,7 +1525,7 @@ describe('TriageHomeScreen', () => {
      * rebind's fresh gate reads the clock past the window, while the survivor
      * is still inside its own mount.
      */
-    it('remounts the pulse when a recycled cell rebinds to another session with the same stamp', () => {
+    it('remounts the pulse when a recycled cell rebinds to another session with the same stamp', async () => {
       const sharedStampMs = Date.now();
       const firstSessionEntry = useActivityStore.getState().bySessionId['sess-1'];
       expect(firstSessionEntry.sectionChangedAt).toBe(sharedStampMs);
@@ -1523,18 +1537,18 @@ describe('TriageHomeScreen', () => {
       const rebindAgeMs = SECTION_PULSE_WINDOW_MS + 100;
       expect(rebindAgeMs).toBeLessThan(firstRenderAgeMs + SECTION_PULSE_MOUNT_MS);
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(firstRenderAgeMs);
       });
-      renderHome();
+      await renderHome();
       expect(screen.getByTestId(pulseTestId)).toBeTruthy();
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(rebindAgeMs - firstRenderAgeMs);
       });
       expect(screen.getByTestId(pulseTestId)).toBeTruthy();
 
-      act(() => {
+      await act(() => {
         useActivityStore.setState({
           bySessionId: { 'sess-2': { ...firstSessionEntry, sessionId: 'sess-2', taskId: 'task-2' } },
         });
@@ -1624,13 +1638,13 @@ describe('TriageHomeScreen', () => {
         taskId: 'task-1',
         payload: { type: 'message-preview', text: 'Summary written to the task notes.' },
       });
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(screen.getByText('Summary written to the task notes.')).toBeTruthy();
       expect(screen.getByTestId('activity-row-sess-1-status')).toBeTruthy();
       expect(screen.getByTestId('activity-row-sess-1-wait')).toBeTruthy();
 
-      act(() => {
+      await act(() => {
         pushRespawnEnded(label);
       });
 
@@ -1679,7 +1693,7 @@ describe('TriageHomeScreen', () => {
       jest.mocked(peekLastAssistantMessage).mockClear();
       mockPeekAwaitedPrompt.mockClear();
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(mockPeekAwaitedPrompt).not.toHaveBeenCalled();
@@ -1705,7 +1719,7 @@ describe('TriageHomeScreen', () => {
           streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 12 * MINUTE } }, sessionStatus: 'queued' }),
         );
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Queued...');
@@ -1733,7 +1747,7 @@ describe('TriageHomeScreen', () => {
           streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 12 * MINUTE } }, sessionStatus: 'running' }),
         );
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(screen.getByTestId('activity-row-sess-1-status')).toBeTruthy();
@@ -1754,7 +1768,7 @@ describe('TriageHomeScreen', () => {
           streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 12 * MINUTE } }, sessionStatus: 'suspended' }),
         );
 
-      renderHome();
+      await renderHome();
       await act(async () => {});
 
       expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Paused');
@@ -1778,11 +1792,11 @@ describe('TriageHomeScreen', () => {
           'project-1',
           streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
         );
-      renderHome();
+      await renderHome();
       await act(async () => {});
       expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Queued...');
 
-      act(() => {
+      await act(() => {
         pushRespawnEnded(null);
       });
 

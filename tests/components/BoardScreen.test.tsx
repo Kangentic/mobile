@@ -123,8 +123,8 @@ describe('BoardScreen', () => {
    * one here would show a board missing most of its cards, which then fill in
    * a beat later - the staggered cold start this release set out to remove.
    */
-  it('asks for the full board on focus and shows placeholders until it lands', () => {
-    act(() => {
+  it('asks for the full board on focus and shows placeholders until it lands', async () => {
+    await act(() => {
       useBoardStore.setState((state) => ({
         boardsByProjectId: {
           ...state.boardsByProjectId,
@@ -132,7 +132,7 @@ describe('BoardScreen', () => {
         },
       }));
     });
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -146,7 +146,7 @@ describe('BoardScreen', () => {
     // one round trip away from being complete.
     expect(screen.queryByTestId('board-empty-state')).toBeNull();
 
-    act(() => {
+    await act(() => {
       useBoardStore.setState((state) => ({
         boardsByProjectId: {
           ...state.boardsByProjectId,
@@ -158,8 +158,8 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-column-lane-todo')).toBeTruthy();
   });
 
-  it('renders columns from the live store and navigates on card tap', () => {
-    render(
+  it('renders columns from the live store and navigates on card tap', async () => {
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -167,22 +167,22 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-column-lane-todo')).toBeTruthy();
     expect(screen.getByText('Fix the login bug')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('board-card-task-1'));
+    await fireEvent.press(screen.getByTestId('board-card-task-1'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/task/[taskId]',
       params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1' },
     });
   });
 
-  it('shows the ticket number only when the board setting is on', () => {
-    render(
+  it('shows the ticket number only when the board setting is on', async () => {
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
     expect(screen.getByTestId('board-card-task-1-display-id')).toBeTruthy();
 
-    act(() => {
+    await act(() => {
       useBoardStore.setState((state) => ({
         boardsByProjectId: {
           ...state.boardsByProjectId,
@@ -193,7 +193,7 @@ describe('BoardScreen', () => {
     expect(screen.queryByTestId('board-card-task-1-display-id')).toBeNull();
   });
 
-  it('renders the model + context-usage row for a session with trusted usage', () => {
+  it('renders the model + context-usage row for a session with trusted usage', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
@@ -208,7 +208,7 @@ describe('BoardScreen', () => {
         },
       },
     });
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -229,7 +229,7 @@ describe('BoardScreen', () => {
    * step in the footer, and no status icon. Seeded with `session_id: null`
    * because that is exactly the state the gap leaves the board in.
    */
-  it('shows the desktop\'s step in the footer for a sessionless task the desktop is respawning', () => {
+  it('shows the desktop\'s step in the footer for a sessionless task the desktop is respawning', async () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: {
         ...state.boardsByProjectId,
@@ -246,7 +246,7 @@ describe('BoardScreen', () => {
       payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
     });
 
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -261,7 +261,7 @@ describe('BoardScreen', () => {
    * footer at all. Without this, a change that always drew a step would
    * satisfy the test above.
    */
-  it('still shows no glyph and no footer for a sessionless task with no respawn in flight', () => {
+  it('still shows no glyph and no footer for a sessionless task with no respawn in flight', async () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: {
         ...state.boardsByProjectId,
@@ -272,7 +272,7 @@ describe('BoardScreen', () => {
       },
     }));
 
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -286,7 +286,7 @@ describe('BoardScreen', () => {
    * An end with NO step to show is an ended session, which the desktop card
    * draws with no icon and no footer: the phone never guesses a step.
    */
-  it('draws an ended card, no icon and no footer, for a sessionless task whose session ended without a label', () => {
+  it('draws an ended card, no icon and no footer, for a sessionless task whose session ended without a label', async () => {
     useBoardStore.setState((state) => ({
       boardsByProjectId: {
         ...state.boardsByProjectId,
@@ -303,7 +303,7 @@ describe('BoardScreen', () => {
       payload: { type: 'session-ended', intentional: true },
     });
 
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -313,7 +313,7 @@ describe('BoardScreen', () => {
     expect(screen.queryByTestId('board-card-task-1-status-bar')).toBeNull();
   });
 
-  it('shows no glyph once an unlabelled end has outlived its short grace', () => {
+  it('shows no glyph once an unlabelled end has outlived its short grace', async () => {
     jest.useFakeTimers();
     try {
       useBoardStore.setState((state) => ({
@@ -333,7 +333,7 @@ describe('BoardScreen', () => {
       });
       jest.advanceTimersByTime(ENDED_ROW_GRACE_MS);
 
-      render(
+      await render(
         <ThemeProvider>
           <BoardScreen />
         </ThemeProvider>,
@@ -363,7 +363,7 @@ describe('BoardScreen', () => {
    * for a queued session. The desktop card draws no icon and "Queued..." in
    * its footer.
    */
-  it('draws a queued task that still has a live session entry with "Queued..." and no icon', () => {
+  it('draws a queued task that still has a live session entry with "Queued..." and no icon', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
@@ -374,7 +374,7 @@ describe('BoardScreen', () => {
         streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
       );
 
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -393,7 +393,7 @@ describe('BoardScreen', () => {
    * fixture's trusted usage (a model and a percentage): a card that read a
    * suspended session as running would draw that bar and an icon instead.
    */
-  it('draws a suspended task with "Paused", the pause glyph, no icon and no usage bar', () => {
+  it('draws a suspended task with "Paused", the pause glyph, no icon and no usage bar', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
@@ -404,7 +404,7 @@ describe('BoardScreen', () => {
         streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }),
       );
 
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -426,7 +426,7 @@ describe('BoardScreen', () => {
    * drawing the ordinary idle envelope, so the test above cannot be passing
    * merely because idle-with-a-live-entry always draws the starting tint.
    */
-  it('still shows the idle envelope for an ordinary settled task, not the starting tint', () => {
+  it('still shows the idle envelope for an ordinary settled task, not the starting tint', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
@@ -437,7 +437,7 @@ describe('BoardScreen', () => {
         streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }),
       );
 
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -452,14 +452,14 @@ describe('BoardScreen', () => {
    * hub then does - Move/Edit replacing it, the archive gate, the two-step
    * delete - is in tests/components/TaskActionsScreen.test.tsx.
    */
-  it('long-press navigates to the actions hub for that card', () => {
-    render(
+  it('long-press navigates to the actions hub for that card', async () => {
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
 
-    fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
+    await fireEvent(screen.getByTestId('board-card-task-1'), 'longPress');
 
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/task-actions',
@@ -473,14 +473,14 @@ describe('BoardScreen', () => {
    * the board's only job is to navigate to it carrying the project. The form's
    * own behaviour is covered by tests/components/CreateTaskScreen.test.tsx.
    */
-  it('the FAB navigates to the create-task form sheet with the current project', () => {
-    render(
+  it('the FAB navigates to the create-task form sheet with the current project', async () => {
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('board-create-task'));
+    await fireEvent.press(screen.getByTestId('board-create-task'));
 
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/create-task', params: { projectId: 'project-1' } });
     // The board must not render the form itself any more - that was the
@@ -489,8 +489,8 @@ describe('BoardScreen', () => {
     expect(screen.queryByTestId('create-task-title')).toBeNull();
   });
 
-  it('renders named column chips, highlights the tapped one, and states empty columns', () => {
-    render(
+  it('renders named column chips, highlights the tapped one, and states empty columns', async () => {
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -498,44 +498,44 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: true });
     expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: false });
 
-    fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
+    await fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
     expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: true });
 
     // The empty Doing column states itself instead of blank space.
     expect(screen.getByTestId('board-column-lane-doing-empty')).toBeTruthy();
   });
 
-  it('a pager swipe moves the active chip highlight (swipe -> chip sync)', () => {
-    render(
+  it('a pager swipe moves the active chip highlight (swipe -> chip sync)', async () => {
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
     expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: true });
 
-    fireEvent(screen.getByTestId('board-list'), 'pageSelected', { nativeEvent: { position: 1 } });
+    await fireEvent(screen.getByTestId('board-list'), 'pageSelected', { nativeEvent: { position: 1 } });
 
     expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: true });
     expect(screen.getByTestId('board-column-chip-lane-todo').props.accessibilityState).toEqual({ selected: false });
   });
 
-  it('resets the active column id (not just the clamped display index) when it disappears, so a later re-add does not re-select it', () => {
+  it('resets the active column id (not just the clamped display index) when it disappears, so a later re-add does not re-select it', async () => {
     // The chip highlight alone (activeIndex === columnIndex) cannot tell
     // this apart from a naive Math.max(0, ...) clamp with no id reset: both
     // show column 0 the instant the active column vanishes. The two
     // diverge only once the vanished column REAPPEARS - only the id-level
     // reset stays on the fallback column instead of snapping back.
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
     );
-    fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
+    await fireEvent.press(screen.getByTestId('board-column-chip-lane-doing'));
     expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: true });
 
     // Doing disappears from the board entirely (e.g. the desktop deletes
     // the column while the phone is viewing it).
-    act(() => {
+    await act(() => {
       useBoardStore.setState((state) => ({
         boardsByProjectId: {
           ...state.boardsByProjectId,
@@ -548,7 +548,7 @@ describe('BoardScreen', () => {
     // Doing reappears at the same position. A stale activeColumnId would
     // now resolve back to it (its index is real again); the reconciled id
     // ('lane-todo') stays put instead.
-    act(() => {
+    await act(() => {
       useBoardStore.setState((state) => ({
         boardsByProjectId: {
           ...state.boardsByProjectId,
@@ -563,7 +563,7 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-column-chip-lane-doing').props.accessibilityState).toEqual({ selected: false });
   });
 
-  it('the header title switches the active project via the project sheet', () => {
+  it('the header title switches the active project via the project sheet', async () => {
     useBoardStore.setState({
       projects: [
         { id: 'project-1', name: 'Alpha' },
@@ -594,7 +594,7 @@ describe('BoardScreen', () => {
       pendingMoves: [],
     });
 
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -603,13 +603,13 @@ describe('BoardScreen', () => {
     expect(screen.getByText('Alpha')).toBeTruthy();
 
     // The picker is a form sheet ROUTE now; tapping the title navigates to it.
-    fireEvent.press(screen.getByTestId('board-header-title'));
+    await fireEvent.press(screen.getByTestId('board-header-title'));
     expect(mockPush).toHaveBeenCalledWith('/project-picker');
     expect(screen.queryByTestId('board-project-sheet')).toBeNull();
 
     // The picker writes the choice to the board store, which is what this
     // screen reacts to - the redraw is the part that still belongs here.
-    act(() => {
+    await act(() => {
       useBoardStore.getState().selectProject('project-2');
     });
 
@@ -618,9 +618,9 @@ describe('BoardScreen', () => {
     expect(screen.queryByText('Fix the login bug')).toBeNull();
   });
 
-  it('shows the disconnected empty state when no boards are cached', () => {
+  it('shows the disconnected empty state when no boards are cached', async () => {
     useBoardStore.setState({ projects: [], boardsByProjectId: {}, pendingMoves: [] });
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -636,7 +636,7 @@ describe('BoardScreen', () => {
    * tab was left and re-entered.
    */
   it('pull-to-refresh reloads the archive alongside the board snapshots', async () => {
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,
@@ -667,7 +667,7 @@ describe('BoardScreen', () => {
     // silenced so the run output stays readable, and restored either way.
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
-      render(
+      await render(
         <ThemeProvider>
           <BoardScreen />
         </ThemeProvider>,
@@ -682,7 +682,7 @@ describe('BoardScreen', () => {
 
   it('reports nothing through the door when the archived read succeeds', async () => {
     // The non-vacuity half: the call above must be conditional on the failure.
-    render(
+    await render(
       <ThemeProvider>
         <BoardScreen />
       </ThemeProvider>,

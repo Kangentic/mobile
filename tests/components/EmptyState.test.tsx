@@ -8,8 +8,8 @@ import { ThemeProvider, EmptyState, Button } from '@/components';
 const HIDDEN = { includeHiddenElements: true } as const;
 
 describe('EmptyState', () => {
-  it('renders the title, caption, and its Overseer', () => {
-    render(
+  it('renders the title, caption, and its Overseer', async () => {
+    await render(
       <ThemeProvider>
         <EmptyState testID="quiet-state" title="All quiet" caption="Nothing needs you right now." />
       </ThemeProvider>,
@@ -20,8 +20,8 @@ describe('EmptyState', () => {
     expect(screen.getByTestId('quiet-state-overseer', HIDDEN)).toBeTruthy();
   });
 
-  it('sizes the Overseer from overseerSize (default 90)', () => {
-    render(
+  it('sizes the Overseer from overseerSize (default 90)', async () => {
+    await render(
       <ThemeProvider>
         <EmptyState testID="quiet-state" title="All quiet" />
       </ThemeProvider>,
@@ -31,9 +31,9 @@ describe('EmptyState', () => {
     expect(flattenedStyle.width).toBe(90);
   });
 
-  it('renders and forwards presses to the CTA slot', () => {
+  it('renders and forwards presses to the CTA slot', async () => {
     const onPress = jest.fn();
-    render(
+    await render(
       <ThemeProvider>
         <EmptyState testID="quiet-state" title="No desktop paired">
           <Button label="Pair with your desktop" onPress={onPress} testID="pair-cta" />
@@ -41,12 +41,12 @@ describe('EmptyState', () => {
       </ThemeProvider>,
     );
 
-    fireEvent.press(screen.getByTestId('pair-cta'));
+    await fireEvent.press(screen.getByTestId('pair-cta'));
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
-  it('omits the caption node when no caption is given', () => {
-    render(
+  it('omits the caption node when no caption is given', async () => {
+    await render(
       <ThemeProvider>
         <EmptyState testID="quiet-state" title="No changes" />
       </ThemeProvider>,

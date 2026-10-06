@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, render, screen } from '@testing-library/react-native';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet } from 'react-native';
+import type { TestInstance } from 'test-renderer';
 import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
@@ -11,6 +12,17 @@ import {
 } from '@/screens/task/SessionSwapVeil';
 
 const { opacityMin, opacityMax } = darkTerminalTheme.motion.swapVeilPulse;
+
+/**
+ * Every rendered Text host. RNTL 14 renders host elements only, so the old
+ * `UNSAFE_queryAllByType(Text)` (a composite-component query, removed in v14)
+ * becomes a query on the host type name: both react-native's Text and
+ * Animated.Text render the host 'Text' element in this Jest environment, and
+ * nothing at all can render a bare string outside one (v14 throws on that).
+ */
+function renderedTextHosts(): TestInstance[] {
+  return screen.container.queryAll((node) => node.type === 'Text');
+}
 
 /**
  * The veil's own contract: silent, covering, breathing only when motion is
@@ -26,19 +38,19 @@ describe('SessionSwapVeil', () => {
    * The whole ask: nothing to read. A caption or title added "for clarity"
    * would pass every other test here and fail exactly this one.
    */
-  it('renders no text at all', () => {
-    render(
+  it('renders no text at all', async () => {
+    await render(
       <ThemeProvider>
         <SessionSwapVeil />
       </ThemeProvider>,
     );
 
     expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
-    expect(screen.UNSAFE_queryAllByType(Text)).toHaveLength(0);
+    expect(renderedTextHosts()).toHaveLength(0);
   });
 
-  it('is one modal, busy progress stop for a screen reader, with a descriptive label', () => {
-    render(
+  it('is one modal, busy progress stop for a screen reader, with a descriptive label', async () => {
+    await render(
       <ThemeProvider>
         <SessionSwapVeil />
       </ThemeProvider>,
@@ -57,8 +69,8 @@ describe('SessionSwapVeil', () => {
    * default pointer behaviour. `pointerEvents="none"` on the root would look
    * harmless and let taps fall through.
    */
-  it('keeps its root tappable so the covered pane cannot be reached', () => {
-    render(
+  it('keeps its root tappable so the covered pane cannot be reached', async () => {
+    await render(
       <ThemeProvider>
         <SessionSwapVeil />
       </ThemeProvider>,
@@ -68,8 +80,8 @@ describe('SessionSwapVeil', () => {
   });
 
   /** Above the panes' zIndex: 1, the same stacking pin the two text overlays carry. */
-  it('stacks above the session panes', () => {
-    render(
+  it('stacks above the session panes', async () => {
+    await render(
       <ThemeProvider>
         <SessionSwapVeil />
       </ThemeProvider>,
@@ -80,8 +92,8 @@ describe('SessionSwapVeil', () => {
     expect(flattenedStyle.zIndex).toBeGreaterThanOrEqual(2);
   });
 
-  it('starts the pulse at the max opacity over the theme background when motion is allowed', () => {
-    render(
+  it('starts the pulse at the max opacity over the theme background when motion is allowed', async () => {
+    await render(
       <ThemeProvider>
         <SessionSwapVeil />
       </ThemeProvider>,
@@ -100,8 +112,8 @@ describe('SessionSwapVeil', () => {
    * spinner over a blank terminal area; this is the terminal's own version.
    */
   describe('the waiting phase', () => {
-    it('paints the empty terminal under a static scrim with a cursor above it, and still renders no text', () => {
-      render(
+    it('paints the empty terminal under a static scrim with a cursor above it, and still renders no text', async () => {
+      await render(
         <ThemeProvider>
           <SessionSwapVeil waiting />
         </ThemeProvider>,
@@ -121,7 +133,7 @@ describe('SessionSwapVeil', () => {
       const cursorStyle = StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style);
       expect(cursorStyle.backgroundColor).toBe(darkTerminalTheme.colors.textSecondary);
       expect(cursorStyle.opacity).toBe(darkTerminalTheme.motion.waitCursorBlink.opacityMax);
-      expect(screen.UNSAFE_queryAllByType(Text)).toHaveLength(0);
+      expect(renderedTextHosts()).toHaveLength(0);
     });
 
     /**
@@ -136,13 +148,13 @@ describe('SessionSwapVeil', () => {
      * Reanimated mapper in the waiting phase at all, one commit per
      * half-period, lit then dim.
      */
-    it('holds the scrim static once cleared, registers no mapper, and blinks the cursor on the interval', () => {
+    it('holds the scrim static once cleared, registers no mapper, and blinks the cursor on the interval', async () => {
       jest.useFakeTimers();
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
       const { intervalMs, opacityMin: cursorMin, opacityMax: cursorMax } = darkTerminalTheme.motion.waitCursorBlink;
 
       try {
-        render(
+        await render(
           <ThemeProvider>
             <ScreenMotionOverride active={true}>
               <SessionSwapVeil waiting />
@@ -157,11 +169,11 @@ describe('SessionSwapVeil', () => {
         const cursorOpacity = (): number =>
           StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style).opacity as number;
         expect(cursorOpacity()).toBe(cursorMax);
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(intervalMs);
         });
         expect(cursorOpacity()).toBe(cursorMin);
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(intervalMs);
         });
         expect(cursorOpacity()).toBe(cursorMax);
@@ -170,14 +182,14 @@ describe('SessionSwapVeil', () => {
       }
     });
 
-    it('rests the cursor at its mid opacity, never toggling, under OS reduced motion', () => {
+    it('rests the cursor at its mid opacity, never toggling, under OS reduced motion', async () => {
       jest.useFakeTimers();
       jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
       const { intervalMs, opacityMin: cursorMin, opacityMax: cursorMax } = darkTerminalTheme.motion.waitCursorBlink;
 
       try {
-        render(
+        await render(
           <ThemeProvider>
             <SessionSwapVeil waiting />
           </ThemeProvider>,
@@ -186,7 +198,7 @@ describe('SessionSwapVeil', () => {
         const cursorOpacity = (): number =>
           StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style).opacity as number;
         expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(intervalMs * 2);
         });
         expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
@@ -196,12 +208,12 @@ describe('SessionSwapVeil', () => {
       }
     });
 
-    it('rests the cursor at its mid opacity, never toggling, while the screen is blurred', () => {
+    it('rests the cursor at its mid opacity, never toggling, while the screen is blurred', async () => {
       jest.useFakeTimers();
       const { intervalMs, opacityMin: cursorMin, opacityMax: cursorMax } = darkTerminalTheme.motion.waitCursorBlink;
 
       try {
-        render(
+        await render(
           <ThemeProvider>
             <ScreenMotionOverride active={false}>
               <SessionSwapVeil waiting />
@@ -212,7 +224,7 @@ describe('SessionSwapVeil', () => {
         const cursorOpacity = (): number =>
           StyleSheet.flatten(screen.getByTestId('session-swap-veil-cursor').props.style).opacity as number;
         expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(intervalMs * 2);
         });
         expect(cursorOpacity()).toBe((cursorMin + cursorMax) / 2);
@@ -221,8 +233,8 @@ describe('SessionSwapVeil', () => {
       }
     });
 
-    it('paints no empty layer and no cursor through the quiet phase, where the last frame is the point', () => {
-      render(
+    it('paints no empty layer and no cursor through the quiet phase, where the last frame is the point', async () => {
+      await render(
         <ThemeProvider>
           <SessionSwapVeil />
         </ThemeProvider>,
@@ -246,11 +258,11 @@ describe('SessionSwapVeil', () => {
    * only on the animating branch.
    */
   describe('the motion gate', () => {
-    it('rests at the mid opacity and registers no animated mapper under OS reduced motion', () => {
+    it('rests at the mid opacity and registers no animated mapper under OS reduced motion', async () => {
       jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
 
-      render(
+      await render(
         <ThemeProvider>
           <SessionSwapVeil />
         </ThemeProvider>,
@@ -261,10 +273,10 @@ describe('SessionSwapVeil', () => {
       expect(animatedStyleSpy).not.toHaveBeenCalled();
     });
 
-    it('rests at the mid opacity and registers no animated mapper while the screen is blurred', () => {
+    it('rests at the mid opacity and registers no animated mapper while the screen is blurred', async () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
 
-      render(
+      await render(
         <ThemeProvider>
           <ScreenMotionOverride active={false}>
             <SessionSwapVeil />
@@ -277,10 +289,10 @@ describe('SessionSwapVeil', () => {
       expect(animatedStyleSpy).not.toHaveBeenCalled();
     });
 
-    it('registers exactly one animated mapper once the screen is focused', () => {
+    it('registers exactly one animated mapper once the screen is focused', async () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
 
-      render(
+      await render(
         <ThemeProvider>
           <ScreenMotionOverride active={true}>
             <SessionSwapVeil />
