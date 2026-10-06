@@ -151,6 +151,8 @@ right PICTURE, and this is where every real defect has been found:
 - an un-navigated feed shot that a filename collision let through
 - a Maestro *failure* frame collected as a listing image
 - two wifi icons, from a status bar left in demo mode by an earlier run
+- a horizontal scrollbar along the bottom of the phone's file-diff frame, caught
+  before Android faded it out (the diff is wider than a phone)
 - status badges floating 12pt above the row they label
 - **a completely BLANK terminal**, on one run out of two
 
