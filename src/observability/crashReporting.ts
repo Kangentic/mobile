@@ -32,9 +32,16 @@ import { allowlistBreadcrumb, scrubEvent } from './scrubEvent';
  * device-context integration merges the native scope's breadcrumbs into
  * every JS event before `beforeSend` - which is why scrubEvent applies the
  * allowlist to `event.breadcrumbs` as well. They carry no session content,
- * but do not read the block below as covering a NATIVE crash's breadcrumbs:
- * closing that needs native config through a config plugin. A crash the OS
- * catches also carries a
+ * but do not read the block below as covering a NATIVE crash's breadcrumbs.
+ * Since @sentry/react-native 8.28 each family has its own off switch in
+ * `Sentry.init` (`enableAppLifecycleBreadcrumbs`,
+ * `enableSystemEventBreadcrumbs`, `enableNetworkEventBreadcrumbs` and two
+ * more on Android, `enableAutoBreadcrumbTracking` and
+ * `enableNetworkBreadcrumbs` on iOS). They are deliberately left at their
+ * defaults (on) for now: the lifecycle context is diagnostic signal this
+ * project has used, and turning them off changes what leaves the device, which
+ * is a privacy-policy decision rather than a side effect of an upgrade.
+ * A crash the OS catches also carries a
  * per-install identifier (`contexts.device.id`, promoted into `user.id`)
  * that `sendDefaultPii: false` does not stop and `scrubEvent` never sees;
  * it is disclosed in docs/privacy-policy.md rather than suppressed.
@@ -77,6 +84,36 @@ const EXPECTED_TRANSPORT_NOISE: RegExp[] = [
   /Relay connection closed before it opened/i,
   /RelayTransport\.send\(\) called while not connected/i,
 ];
+
+/**
+ * Default integrations removed outright, by name. `Breadcrumbs` is replaced
+ * by a hardened instance below; the other three are dropped, because each
+ * adds data this app never asked for and none has an option of its own to
+ * switch it off. All three arrived in @sentry/react-native 8.x, after these
+ * controls were first written against 7.11, which is exactly how a privacy
+ * posture erodes on an upgrade with every check green:
+ *
+ *   ExpoConstants (8.3.0)        `contexts.expo_constants` on every
+ *                                JS-captured event: a per-launch session id,
+ *                                the EAS project id, app name/slug/version,
+ *                                execution environment.
+ *   TurboModuleContext (8.14.0)  tags a native crash with the active
+ *                                TurboModule method, and since 8.19 can send
+ *                                a periodic info-level event of its own,
+ *                                past the handled-error door's rate limit.
+ *   ExpoUpdatesListener (8.5.0)  inert today (expo-updates is not installed),
+ *                                but it starts capturing events the day it
+ *                                is, with nobody having reviewed them.
+ *
+ * tests/unit/crashReporting.test.ts pins the installed SDK's full default
+ * integration list, so a NEW default fails CI until it has been reviewed here.
+ */
+const DROPPED_DEFAULT_INTEGRATIONS: ReadonlySet<string> = new Set([
+  'Breadcrumbs',
+  'ExpoConstants',
+  'TurboModuleContext',
+  'ExpoUpdatesListener',
+]);
 
 let initialized = false;
 
@@ -376,12 +413,17 @@ export function initializeCrashReporting(): void {
     // Sentry's Logs product forwards console output as structured logs -
     // exactly the egress the console breadcrumb removal below prevents.
     enableLogs: false,
+    // iOS: SentryCrash reads memory near the crash site and embeds
+    // string-shaped stack contents in the event, which the SDK's own docs warn
+    // can carry personal data. sentry-cocoa 9.24 flipped its default to false;
+    // pinned here so a later default cannot flip it back.
+    enableMemoryIntrospection: false,
 
     // Session Replay is absent rather than disabled: no
     // `mobileReplayIntegration()` is registered and no replay sample rate
     // is set, so the SDK never loads it (it records screen content).
     integrations: (defaultIntegrations) => [
-      ...defaultIntegrations.filter((integration) => integration.name !== 'Breadcrumbs'),
+      ...defaultIntegrations.filter((integration) => !DROPPED_DEFAULT_INTEGRATIONS.has(integration.name)),
       Sentry.breadcrumbsIntegration({
         // `console` defaults to TRUE. Every console.* call in the app would
         // otherwise become a breadcrumb and sync to the native scope.
