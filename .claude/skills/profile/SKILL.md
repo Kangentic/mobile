@@ -92,12 +92,16 @@ reset gfxinfo before each `top` sample settled it in one afternoon (23% CPU at l
 frames = non-drawing work, compositing exonerated). Reset gfxinfo at the start of every CPU
 sample window and read `Total frames rendered` at its end.
 
-**Idle CPU scales with REGISTERED Reanimated mappers, dirty or not (~0.47 points each).**
-Measured with the probe's `extra-mappers` variant (`src/devsupport/MapperLoad.tsx`): +64 clean,
-never-animating mappers took the idle Agents list 41% -> 70%, back to 39% when toggled off in
-the same process. So when hunting idle CPU, count mounted `useAnimatedStyle`/`useAnimatedProps`
-call sites (hooks above an early return register on EVERY branch), and use that variant to test
-whether a screen's number tracks mapper count before blaming anything else.
+**Registered Reanimated mappers: a cost on 4.5.1, free on 4.7.1. Know which one you are on.**
+Measured both times with the probe's `extra-mappers` variant (`src/devsupport/MapperLoad.tsx`),
+toggled in ONE process. On Reanimated 4.5.1 (2026-08-30), +64 clean, never-animating mappers took
+the idle Agents list 41% -> 70% and back to 39%, ~0.47 points each, because a native frame loop
+walked every registered mapper. Reanimated 4.7.1 removed that loop, and on 2026-10-06 (task #102)
+the same 64 mappers read 21-24% against 23-30% without them over five alternating phases: no
+measurable cost. So on 4.7.1, hunt idle CPU through FRAMES (what is moving), not through how many
+animated hooks are mounted. **Before reading CPU from that variant, check the mount count**: it
+logs `mapper-load mounted=N` on the connection trace (`EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1`),
+and its first 4.7.1 run was void because only one memoized row had mounted anything.
 
 **Percentages from `simpleperf report` renormalise after any win - compare cycles/second, not
 shares.** After the sync-ui-props flag halved total cycles, `libhwui.so` "rose" from 16.5% to

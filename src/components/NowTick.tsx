@@ -20,9 +20,9 @@ export const NOW_TICK_MS = 30_000;
  *
  * WHY NOT REANIMATED: this drives a text label that changes twice a minute.
  * `motion-conventions.md` puts something at that frequency on "the platform
- * default or nothing", and a registered mapper costs ~0.47 CPU points whether
- * it is dirty or not (measured, release build). A plain setState is cheaper
- * than the hook that would animate it, so the number never animates.
+ * default or nothing". (It was also a CPU cost on Reanimated 4.5.1, where a
+ * registered mapper cost ~0.47 points dirty or not; 4.7.1 measures them free.)
+ * A plain setState is the whole job, so the number never animates.
  *
  * Outside a provider this returns the mount instant and never advances, which
  * is the right degradation: a label renders correctly once instead of throwing
