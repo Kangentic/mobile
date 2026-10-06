@@ -549,7 +549,10 @@ async function peekSnippet(
   allowTerminalFallback = true,
 ): Promise<string | null> {
   if (isPermission && awaitedPromptId !== null) {
-    return buildPendingPromptSummary(await peekAwaitedPrompt(sessionId, awaitedPromptId));
+    const promptSummary = buildPendingPromptSummary(await peekAwaitedPrompt(sessionId, awaitedPromptId));
+    if (promptSummary !== null) return promptSummary;
+    // Nothing specific to say about the prompt: show what the agent last said
+    // rather than a line restating the Idle section, so fall through.
   }
   let messagePeekFailed = false;
   const messageText = await peekLastAssistantMessage(sessionId, freshnessMs).catch(() => {
@@ -790,9 +793,16 @@ const ActivityRow = React.memo(function ActivityRow({
    *      transcript fetch that can take seconds on a long session. Without it
    *      the feed revealed with every body empty and filled them a beat later,
    *      which read as a second load.
+   * A prompt-pending row puts its own peek first, since the pending decision
+   * is the most useful line it can show. When the prompt has nothing specific
+   * to say, the peek falls through to the agent's last message (peekSnippet),
+   * and the pushed preview covers the wait: never a generic "waiting for
+   * approval" line, which would only restate the Idle section and its icon.
    */
   const descriptionText = collapseToSnippetText(task.description);
-  const bodyText = isRunning ? ((isPermission ? snippet : (entry.messagePreview ?? snippet)) ?? descriptionText) : descriptionText;
+  const bodyText = isRunning
+    ? ((isPermission ? (snippet ?? entry.messagePreview) : (entry.messagePreview ?? snippet)) ?? descriptionText)
+    : descriptionText;
 
   return (
     <>
