@@ -13,13 +13,12 @@ import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
 import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
 import { buildPositionalTrack } from '@/components/board/columnTrack';
+import { FEED_SECTION_ORDER, FEED_SECTION_TITLES, selectFeedSections, type FeedSection } from '@/screens/home/feedSections';
 import {
   selectTaskRespawn,
-  selectTriageRows,
   selectWaitingSince,
   sectionForEntry,
   type SessionActivityEntry,
-  type TriageSection,
   useActivityStore,
 } from '@/state/activityStore';
 import { selectTaskColumn, useBoardStore } from '@/state/boardStore';
@@ -38,6 +37,8 @@ import { MapperLoad } from '@/devsupport/MapperLoad';
 import { useConcurrencyProbeDepth } from '@/devsupport/concurrencyProbe';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
+import { FilteredEmptyState } from './home/FilteredEmptyState';
+import { SectionFilterButton } from './home/SectionFilterButton';
 import { SectionLandingPulse } from './home/SectionLandingPulse';
 
 /**
@@ -71,69 +72,12 @@ function fallbackTask(entry: SessionActivityEntry): BoardTaskWire {
   };
 }
 
-/**
- * The feed's sections: the activity buckets (`TriageSection`) for running
- * sessions, plus one section each for the two session STATUSES that are not
- * running. Feed-level on purpose: `sectionForEntry` stays a pure function of
- * `entry.state`, which the wait time, the notifier and section re-stamping all
- * read, and none of them should change because a session is queued or paused.
- */
-type FeedSection = TriageSection | 'queued' | 'paused';
-
 type TriageListRow =
   | { kind: 'section-header'; section: FeedSection; title: string; count: number }
   | { kind: 'activity'; entry: SessionActivityEntry };
 
-// The desktop Agent Monitor's groups (monitor-view-model.ts BUCKET_LABELS), in
-// its order: Idle (waiting on you), Active, then the sessions that are not
-// running. Running sessions are bucketed by TURN, not presence: Active while a
-// turn is in flight, Idle once it ends OR a prompt waits on the user (both are
-// the user's move), so prompt cards lead Idle under the shared header. The one
-// departure is Queued: the Monitor files queued and paused together under
-// Paused; here Queued is its own section and Paused holds only suspended
-// sessions, the ones Resume applies to.
-const SECTION_ORDER: FeedSection[] = ['needs-you', 'idle', 'working', 'queued', 'paused'];
-const SECTION_TITLES: Record<FeedSection, string> = {
-  'needs-you': 'Idle',
-  idle: 'Idle',
-  working: 'Active',
-  queued: 'Queued',
-  paused: 'Paused',
-};
-
-/**
- * `selectTriageRows` re-partitioned into the feed's sections: queued and
- * suspended sessions leave their activity bucket for Queued and Paused. Order
- * within those two follows the store's own rule, newest arrival first with a
- * stable value-based tiebreak, so neither reshuffles on a re-render.
- */
-function selectFeedSections(bySessionId: Record<string, SessionActivityEntry>): { section: FeedSection; entries: SessionActivityEntry[] }[] {
-  const queued: SessionActivityEntry[] = [];
-  const paused: SessionActivityEntry[] = [];
-  const running = selectTriageRows({ bySessionId }).map(({ section, entries }) => ({
-    section: section as FeedSection,
-    entries: entries.filter((entry) => {
-      if (entry.sessionStatus === 'queued') {
-        queued.push(entry);
-        return false;
-      }
-      if (entry.sessionStatus === 'suspended') {
-        paused.push(entry);
-        return false;
-      }
-      return true;
-    }),
-  }));
-  const newestFirst = (first: SessionActivityEntry, second: SessionActivityEntry): number =>
-    second.enteredSectionAt !== first.enteredSectionAt
-      ? second.enteredSectionAt - first.enteredSectionAt
-      : first.sessionId < second.sessionId
-        ? -1
-        : first.sessionId > second.sessionId
-          ? 1
-          : 0;
-  return [...running, { section: 'queued', entries: queued.sort(newestFirst) }, { section: 'paused', entries: paused.sort(newestFirst) }];
-}
+const SECTION_ORDER = FEED_SECTION_ORDER;
+const SECTION_TITLES = FEED_SECTION_TITLES;
 
 export function TriageHomeScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -143,6 +87,9 @@ export function TriageHomeScreen(): React.JSX.Element {
   const [refreshing, setRefreshing] = useState(false);
 
   const collapsedTriageSection = useSettingsStore((state) => state.collapsedTriageSection);
+  // The section filter (SectionFilterScreen). A hidden section draws neither
+  // its header nor its rows, where a collapsed one keeps its header.
+  const hiddenTriageSections = useSettingsStore((state) => state.hiddenTriageSections);
 
   const rows = useMemo<TriageListRow[]>(() => {
     const sections = selectFeedSections(bySessionId);
@@ -165,6 +112,7 @@ export function TriageHomeScreen(): React.JSX.Element {
       // Idle header (one title, prompt cards first).
       if (!section || section.entries.length === 0) continue;
       const title = SECTION_TITLES[section.section];
+      if (hiddenTriageSections.includes(title)) continue;
       if (!emittedTitles.has(title)) {
         emittedTitles.add(title);
         listRows.push({ kind: 'section-header', section: section.section, title, count: countByTitle.get(title) ?? 0 });
@@ -177,7 +125,7 @@ export function TriageHomeScreen(): React.JSX.Element {
       for (const entry of section.entries) listRows.push({ kind: 'activity', entry });
     }
     return listRows;
-  }, [bySessionId, collapsedTriageSection]);
+  }, [bySessionId, collapsedTriageSection, hiddenTriageSections]);
 
   // Whether anything on screen actually needs a clock. Correct for an empty or
   // all-working feed and nothing more: one idle session makes it true, and a
@@ -311,9 +259,14 @@ export function TriageHomeScreen(): React.JSX.Element {
     // A future section added to the union without being added to SECTION_ORDER
     // would silently stop warming its sessions.
     const sections = selectFeedSections(useActivityStore.getState().bySessionId);
+    // A section the filter hides mounts no rows, so its snippets would be
+    // fetched for nothing; unhiding it mounts the rows, which peek for
+    // themselves.
+    const hiddenTitles = useSettingsStore.getState().hiddenTriageSections;
     for (const sectionKind of SECTION_ORDER) {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       if (!section) continue;
+      if (hiddenTitles.includes(SECTION_TITLES[sectionKind])) continue;
       for (const entry of section.entries) {
         if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
         // A queued or paused card shows the task's description, never the
@@ -408,12 +361,17 @@ export function TriageHomeScreen(): React.JSX.Element {
     );
   }
 
+  // Paired: the header carries the section filter in every state, so a
+  // preference can be set before anything is running.
+  const header = <AppHeader title="Agents" actions={<SectionFilterButton />} />;
+
   if (rows.length === 0 && established && hasHydratedSnapshot && feedReady) {
     return (
       <Screen edges={['left', 'right']}>
-        <AppHeader title="Agents" />
+        {header}
         <ConnectionBanner />
-        <AllQuietEmptyState />
+        {/* Nothing drawn because the filter hides it is not "All quiet". */}
+        {Object.keys(bySessionId).length > 0 && hiddenTriageSections.length > 0 ? <FilteredEmptyState /> : <AllQuietEmptyState />}
       </Screen>
     );
   }
@@ -424,7 +382,7 @@ export function TriageHomeScreen(): React.JSX.Element {
   if (rows.length === 0 || !feedReady) {
     return (
       <Screen edges={['left', 'right']}>
-        <AppHeader title="Agents" />
+        {header}
         <ConnectionBanner />
         <ConnectingEmptyState />
       </Screen>
@@ -433,7 +391,7 @@ export function TriageHomeScreen(): React.JSX.Element {
 
   return (
     <Screen edges={['left', 'right']}>
-      <AppHeader title="Agents" />
+      {header}
       <ConnectionBanner />
       {/* One clock for the whole feed. Wrapping the list rather than each row
           is the point: N rows showing the same instant need one timer, not N,
