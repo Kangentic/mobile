@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { StyleSheet, View, type TextInput } from 'react-native';
 import { IconButton, Row, Text, TextField, useTheme } from '@/components';
 import { sendUserMessage } from '@/connection/actions';
+import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { reportHandledError } from '@/observability/crashReporting';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -67,11 +68,19 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
     [sessionId],
   );
 
-  const dictation = useDictation({
-    onPartialResult: (partialText) => {
+  const onDictationStart = useCallback(() => {
+    dictationBaseRef.current = textRef.current;
+  }, []);
+
+  const onPartialResult = useCallback(
+    (partialText: string) => {
       updateText(joinDictationText(dictationBaseRef.current, partialText));
     },
-    onFinalResult: (finalText) => {
+    [updateText],
+  );
+
+  const onFinalResult = useCallback(
+    (finalText: string) => {
       const combinedText = joinDictationText(dictationBaseRef.current, finalText);
       updateText(combinedText);
       dictationBaseRef.current = combinedText;
@@ -81,18 +90,9 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
         inputRef.current?.focus();
       }
     },
-  });
+    [sendText, updateText],
+  );
 
-  const onMicPress = useCallback(() => {
-    if (dictation.listening) {
-      dictation.stop();
-      return;
-    }
-    dictationBaseRef.current = textRef.current;
-    dictation.start();
-  }, [dictation]);
-
-  const showMicButton = dictationMode !== 'off' && dictation.available;
   const sendDisabled = sending || !established || text.trim().length === 0;
 
   // The parent footer (SessionInputBar) owns the border and outer padding so
@@ -106,15 +106,14 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
         </Text>
       ) : null}
       <Row gap="sm" style={styles.inputRow}>
-        {showMicButton ? (
-          <IconButton
-            iconName="mic"
-            variant={dictation.listening ? 'fab' : 'raised'}
-            testID={dictation.listening ? 'composer-mic-active' : 'composer-mic'}
-            accessibilityLabel={dictation.listening ? 'Stop dictation' : 'Start dictation'}
-            onPress={onMicPress}
+        {getRetentionProbeVariant() === 'composer-no-dictation' ? null : (
+          <DictationMicButton
+            dictationEnabled={dictationMode !== 'off'}
+            onStart={onDictationStart}
+            onPartialResult={onPartialResult}
+            onFinalResult={onFinalResult}
           />
-        ) : null}
+        )}
         <TextField
           ref={inputRef}
           testID="composer-input"
@@ -134,6 +133,54 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
         />
       </Row>
     </View>
+  );
+}
+
+interface DictationMicButtonProps {
+  /** False when the user has dictation off; the engine still subscribes, the mic is just hidden. */
+  dictationEnabled: boolean;
+  /** Runs before a new utterance starts, so partials append to what was typed. */
+  onStart: () => void;
+  onPartialResult: (text: string) => void;
+  onFinalResult: (text: string) => void;
+}
+
+/**
+ * The mic and the dictation engine subscription it needs, as one child.
+ *
+ * A separate component so the speech-event listeners register only where this
+ * mounts. That is what lets the retention probe's 'composer-no-dictation' arm
+ * drop them from a session screen without a conditional hook call. The shipped
+ * path mounts it unconditionally, so registration and rendering are unchanged.
+ * A child that renders null adds no native view, so `Row`'s `gap` is unaffected.
+ */
+function DictationMicButton({
+  dictationEnabled,
+  onStart,
+  onPartialResult,
+  onFinalResult,
+}: DictationMicButtonProps): React.JSX.Element | null {
+  const dictation = useDictation({ onPartialResult, onFinalResult });
+
+  const onMicPress = useCallback(() => {
+    if (dictation.listening) {
+      dictation.stop();
+      return;
+    }
+    onStart();
+    dictation.start();
+  }, [dictation, onStart]);
+
+  if (!dictationEnabled || !dictation.available) return null;
+
+  return (
+    <IconButton
+      iconName="mic"
+      variant={dictation.listening ? 'fab' : 'raised'}
+      testID={dictation.listening ? 'composer-mic-active' : 'composer-mic'}
+      accessibilityLabel={dictation.listening ? 'Stop dictation' : 'Start dictation'}
+      onPress={onMicPress}
+    />
   );
 }
 

@@ -31,7 +31,8 @@ export type RetentionProbeVariant =
   | 'markdown-empty'
   | 'no-motion'
   | 'extra-mappers'
-  | 'no-swap-veil';
+  | 'no-swap-veil'
+  | 'composer-no-dictation';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -76,6 +77,18 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'no-swap-veil',
     label: 'No swap veil',
     description: 'A dead terminal stays bare',
+  },
+  {
+    // Isolates expo-modules-core #50603 (fixed in 57.0.21): a subscription's
+    // remove() kept the emitter and the listener alive as GC roots. The
+    // composer's four `useSpeechRecognitionEvent` listeners are that exact
+    // shape (expo's `useEventListener`), and one composer mounts per session
+    // open. Measured as the open/close retention gap between this arm and
+    // 'off' in ONE build: a gap on 57.0.20 that closes on 57.0.21 ties the
+    // win to that fix rather than to the dependency refresh as a whole.
+    variant: 'composer-no-dictation',
+    label: 'Composer without dictation',
+    description: 'No speech listeners are registered',
   },
 ];
 
