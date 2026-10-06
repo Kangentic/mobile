@@ -165,7 +165,7 @@ src/
                   #   of cold launch -> foreground -> open -> established -> first board snapshot,
                   #   plus the foreground-recovery A/B switch in Settings; see the developer
                   #   guide) - shared
-                  #   by tests + rigs - plus claudeCapture*.ts: RECORDED real Claude Code PTY output
+                  #   by tests + rigs - plus claudeCapture.ts: RECORDED real Claude Code PTY output
                   #   the mock terminal replays (generated, never hand-edited; see scripts/ below),
                   #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE), the concurrency
                   #   probe (EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE: sweeps the Agents feed's
@@ -214,8 +214,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   xterm-page/ (the WebView glue as plain browser .js modules,
                   #   concatenated into one IIFE - shared top-level state, no imports),
                   #   captureClaudeFrames.mjs + buildTerminalFixture.mjs (record real Claude
-                  #   Code PTY output and pack it into src/devsupport/claudeCapture*.ts; dev
-                  #   utilities, not run in CI),
+                  #   Code PTY output narrow, widen its settled frame to the mock's 210x48
+                  #   grid with terminalFrame.mjs - the desktop demo's physical-row
+                  #   serializer and fill-never-letterbox rules, ported - and pack it into
+                  #   src/devsupport/claudeCapture.ts; dev utilities, not run in CI),
                   #   cmakeStaging.mjs (prune/verify the relocated CMake staging root),
                   #   generateNseCryptoFixtures.mjs (seals push envelopes with the protocol
                   #   package so the Swift NSE crypto can be cross-checked by swiftc in CI;

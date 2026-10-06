@@ -49,6 +49,55 @@ export async function renderCaptureRows(
   return rows;
 }
 
+/** One rendered cell: what it shows and what it paints behind it. */
+export interface RenderedCell {
+  /** The cell's text, with a never-written cell read as a space: both look blank. */
+  readonly glyph: string;
+  /** `default`, `palette:<n>` or `rgb:<hex>`. Two cells look alike only if this matches. */
+  readonly background: string;
+}
+
+/**
+ * The settled grid cell by cell, glyph AND background, for assertions that
+ * text alone cannot make: a diff line's colour band is a run of blank cells
+ * whose only content is the background, so it is invisible to
+ * `translateToString`.
+ */
+export async function renderCaptureCells(capture: RecordedTerminalCapture): Promise<RenderedCell[][]> {
+  const terminal = new Terminal({
+    cols: capture.cols,
+    rows: capture.rows,
+    scrollback: 500,
+    allowProposedApi: true,
+  });
+
+  terminal.write(capture.seedFrame);
+  for (const chunk of capture.chunks) terminal.write(chunk.data);
+  await new Promise<void>((resolveFlush) => terminal.write('', resolveFlush));
+
+  const buffer = terminal.buffer.active;
+  const scratchCell = buffer.getNullCell();
+  const rows: RenderedCell[][] = [];
+  for (let y = buffer.baseY; y < buffer.baseY + capture.rows; y += 1) {
+    const line = buffer.getLine(y);
+    const cells: RenderedCell[] = [];
+    for (let x = 0; x < capture.cols; x += 1) {
+      const cell = line?.getCell(x, scratchCell);
+      if (!cell) {
+        cells.push({ glyph: ' ', background: 'default' });
+        continue;
+      }
+      let background = 'default';
+      if (cell.isBgRGB()) background = `rgb:${cell.getBgColor().toString(16).padStart(6, '0')}`;
+      else if (cell.isBgPalette()) background = `palette:${cell.getBgColor()}`;
+      cells.push({ glyph: cell.getChars() === '' ? ' ' : cell.getChars(), background });
+    }
+    rows.push(cells);
+  }
+  terminal.dispose();
+  return rows;
+}
+
 /**
  * Every distinct row the capture puts on screen at any point during the replay.
  *
