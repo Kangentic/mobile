@@ -84,15 +84,21 @@ function parsePreferredLensMap(raw: string | null): Record<string, PreferredSess
 
 /**
  * The single Agents-feed section (by display TITLE, e.g. "Idle") the user
- * has collapsed - with only two sections, this is a two-state accordion
- * (exactly one collapsed at most), not independent per-section booleans:
- * collapsing one always leaves the other expanded.
+ * has collapsed - at most one at a time, not independent per-section
+ * booleans: collapsing one expands whichever was collapsed before.
+ *
+ * Keyed by title, so a renamed section needs its old title migrated here:
+ * the running sessions' section was "Thinking" until it became "Active", and
+ * an install that had it collapsed would otherwise silently lose that.
  */
+const LEGACY_COLLAPSED_TRIAGE_TITLES: ReadonlyMap<string, string> = new Map([['Thinking', 'Active']]);
+
 function parseCollapsedTriageSection(raw: string | null): string | null {
   if (raw === null) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === 'string' ? parsed : null;
+    if (typeof parsed !== 'string') return null;
+    return LEGACY_COLLAPSED_TRIAGE_TITLES.get(parsed) ?? parsed;
   } catch {
     return null;
   }
@@ -350,8 +356,8 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   },
 
   toggleTriageSectionCollapsed: async (title) => {
-    // At most one section is ever collapsed: collapsing one always leaves
-    // the other expanded, so this is a single nullable value, not a map.
+    // At most one section is ever collapsed: collapsing one expands whichever
+    // was collapsed before, so this is a single nullable value, not a map.
     const next = get().collapsedTriageSection === title ? null : title;
     set({ collapsedTriageSection: next });
     await SecureStore.setItemAsync(COLLAPSED_TRIAGE_SECTION_STORAGE_KEY, JSON.stringify(next));

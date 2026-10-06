@@ -5,7 +5,7 @@ import { ThemeProvider } from '@/components';
 import { TaskActionsScreen } from '@/screens/TaskActionsScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
-import { useResumeStore } from '@/state/resumeStore';
+import { useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 jest.mock('react-native-safe-area-context', () =>
@@ -138,6 +138,95 @@ describe('TaskActionsScreen', () => {
 
       expect(mockBack).not.toHaveBeenCalled();
       expect(screen.getByTestId('task-action-error').props.children).toBe('Session could not be resumed.');
+    });
+
+    it('stays open with the desktop\'s own refusal text when it sent one, not the generic line', async () => {
+      seedPausedSession({ resumable: true });
+      mockResumeTaskSession.mockResolvedValueOnce({ phase: 'failed', message: 'Cannot resume a task in To Do' });
+      renderTaskActions();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-resume'));
+      });
+
+      expect(mockBack).not.toHaveBeenCalled();
+      expect(screen.getByTestId('task-action-error').props.children).toBe('Cannot resume a task in To Do');
+    });
+
+    /**
+     * The attempt is shared by every Resume surface, so a resume the session
+     * view (or the header) started shows here too: the row takes no second tap.
+     * Nothing is in flight in THIS sheet at mount, so the disable can only
+     * come from the attempt's phase.
+     */
+    it('disables the row while an attempt is resuming, and takes no tap', () => {
+      seedPausedSession({ resumable: true });
+      renderTaskActions();
+      expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+
+      act(() => {
+        useResumeStore.getState().markResuming('task-1', 0);
+      });
+
+      expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
+      fireEvent.press(screen.getByTestId('task-action-resume'));
+      expect(mockResumeTaskSession).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The desktop's answer arrives after an await, and the user can swipe the
+     * sheet away first. A late `router.back()` would pop whichever screen is
+     * on top by then. The ACCEPTING shape is used on purpose: a refusal never
+     * reaches the close, so it would pass whether or not the guard exists.
+     */
+    it('does not pop a screen underneath when the sheet is dismissed before the desktop accepts', async () => {
+      seedPausedSession({ resumable: true });
+      let resolveResume: (attempt: ResumeAttempt) => void = () => undefined;
+      mockResumeTaskSession.mockReturnValueOnce(
+        new Promise<ResumeAttempt>((resolve) => {
+          resolveResume = resolve;
+        }),
+      );
+      const { unmount } = renderTaskActions();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-resume'));
+      });
+      expect(mockResumeTaskSession).toHaveBeenCalledTimes(1);
+
+      unmount();
+      await act(async () => {
+        resolveResume({ phase: 'resuming', startedAt: 0 });
+      });
+
+      expect(mockBack).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The row is offered from the TASK id alone (the board lookup and the
+     * resume gate never read the project), so a route that lost `projectId`
+     * still draws it, and the press is the one place the missing context can
+     * bite: resuming needs the project to address the right desktop board. It
+     * must say so rather than send `undefined` as a project, or do nothing.
+     * The mock RESOLVES an accepted attempt so that a guard that went missing
+     * would show as a call and a close, not as a crash on an undefined return.
+     */
+    it('says why and never calls the resume action when the route has no projectId', async () => {
+      seedPausedSession({ resumable: true });
+      mockParams = { taskId: 'task-1' };
+      mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0 });
+      renderTaskActions();
+      expect(screen.getByTestId('task-action-resume')).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('task-action-resume'));
+      });
+
+      expect(mockResumeTaskSession).not.toHaveBeenCalled();
+      expect(screen.getByTestId('task-action-error').props.children).toBe('Cannot act on this task - close and reopen it');
+      expect(mockBack).not.toHaveBeenCalled();
+      // Nothing was started, so the row is not left locked behind an in-flight action.
+      expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
     });
 
     it('is not offered for a paused session the desktop does not mark resumable', () => {
@@ -314,6 +403,57 @@ describe('TaskActionsScreen', () => {
     });
     expect(mockArchiveTask).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1' });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  /**
+   * Archive and Delete close the sheet only after an await, and the user can
+   * swipe the sheet away while the request is in flight. A late `router.back()`
+   * would then pop whatever screen is on top by then, so it fires only while
+   * the sheet is still mounted.
+   */
+  it('does not pop a screen underneath when the sheet is dismissed before an archive resolves', async () => {
+    let resolveArchive: () => void = () => undefined;
+    mockArchiveTask.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveArchive = resolve;
+      }),
+    );
+    const { unmount } = renderTaskActions();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('task-action-archive'));
+    });
+    expect(mockArchiveTask).toHaveBeenCalledTimes(1);
+
+    unmount();
+    await act(async () => {
+      resolveArchive();
+    });
+
+    expect(mockBack).not.toHaveBeenCalled();
+  });
+
+  it('does not pop a screen underneath when the sheet is dismissed before a delete resolves', async () => {
+    let resolveDelete: () => void = () => undefined;
+    mockDeleteTaskFromBoard.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    const { unmount } = renderTaskActions();
+
+    fireEvent.press(screen.getByTestId('task-action-delete'));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('task-action-delete-confirm'));
+    });
+    expect(mockDeleteTaskFromBoard).toHaveBeenCalledTimes(1);
+
+    unmount();
+    await act(async () => {
+      resolveDelete();
+    });
+
+    expect(mockBack).not.toHaveBeenCalled();
   });
 
   /** Archive is a move into the done column, so a board without one cannot offer it. */

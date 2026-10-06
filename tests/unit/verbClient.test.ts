@@ -231,4 +231,47 @@ describe('VerbClient', () => {
     const { verbs } = await establishedHarness((request) => okResponse(request, { ok: true }));
     await expect(verbs.registerPush({ action: 'unregister' })).rejects.toThrow(/registered/);
   });
+
+  /**
+   * start-session is keyed by TASK (the session it resumes has already ended, so
+   * there is no session id to name), and the desktop answers on ACCEPT with which
+   * of two accepted shapes it was. Both outcomes parse; the caller decides what
+   * each means.
+   */
+  it.each(['starting', 'live'] as const)('startSession sends the task-keyed payload and parses the "%s" outcome', async (outcome) => {
+    const { verbs, requests } = await establishedHarness((request) => okResponse(request, { ok: true, outcome }));
+
+    await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).resolves.toEqual({ ok: true, outcome });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].verb).toBe('start-session');
+    expect(requests[0].payload).toEqual({ taskId: 'task-1', projectId: 'project-1' });
+  });
+
+  it('startSession throws CapabilityError carrying the desktop\'s own refusal on ok:false', async () => {
+    const { verbs } = await establishedHarness((request) => ({
+      type: 'capability-response',
+      requestId: request.requestId,
+      ok: false,
+      error: 'Cannot resume a task in To Do',
+    }));
+
+    // The desktop's text specifically, not just the class: a request that skipped
+    // the ok check would still throw a CapabilityError, about a missing payload.
+    await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrowError(CapabilityError);
+    await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrow(/^Cannot resume a task in To Do$/);
+    await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toMatchObject({ verb: 'start-session' });
+  });
+
+  it.each([
+    ['an outcome the protocol does not define', { ok: true, outcome: 'spawned' }, /outcome/],
+    ['no outcome at all', { ok: true }, /outcome/],
+    ['no ok flag', { outcome: 'live' }, /ok/],
+    ['an ok flag that is not a boolean', { ok: 'yes', outcome: 'live' }, /ok/],
+  ])('startSession throws CapabilityError for a response with %s', async (_description, payload, expectedMessage) => {
+    const { verbs } = await establishedHarness((request) => okResponse(request, payload));
+
+    await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrowError(CapabilityError);
+    await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrow(expectedMessage);
+  });
 });

@@ -209,11 +209,22 @@ export interface MotionTokens {
   /**
    * The task card footer's spinner (queued, preparing, starting): one full
    * turn, linear. The desktop card's own value - its footer spins lucide's
-   * Loader2 with Tailwind's `animate-spin`, a 1s linear turn. Unlike the
-   * desktop's, ours respects reduced motion (CardStatusFooter).
+   * Loader2 with Tailwind's `animate-spin`, a 1s linear turn.
+   *
+   * Two departures from the desktop's, both in StatusSpinner: it respects
+   * reduced motion, and `holdAfterMs` BOUNDS it, as `skeletonPulse` is bounded.
+   * A queued session can wait minutes for a slot, and an agent that never
+   * reports a model reads "Starting agent..." for as long as it runs, so an
+   * unbounded turn would keep the app drawing frames for the whole wait
+   * (motion-conventions.md: a loop must stop even when what it waits for never
+   * comes). Past the bound the glyph holds still. Longer than the two waits
+   * that are already bounded at 20 s (a respawn's step, and a Resume once the
+   * desktop accepts it), so neither normally freezes mid-wait; a Resume whose
+   * accept is slow can still outlast it.
    */
   statusSpinner: {
     turnMs: number;
+    holdAfterMs: number;
   };
 }
 
@@ -314,6 +325,7 @@ export const motionTokens: MotionTokens = {
   },
   statusSpinner: {
     turnMs: 1000,
+    holdAfterMs: 30_000,
   },
 };
 

@@ -4,11 +4,11 @@ import { Play } from 'lucide-react-native';
 import { Button, StatusSpinner, Stack, Text, useTheme } from '@/components';
 import { resumeTaskSession } from '@/connection/actions';
 import type { ResumeAttempt } from '@/state/resumeStore';
+import { RESUME_FAILED_MESSAGE } from './useResumeOffer';
 
 /** The desktop's wording, verbatim (TaskDetailBody.tsx). */
 const RESUME_LABEL = 'Resume session';
 const RESUMING_LABEL = 'Resuming agent...';
-const RESUME_FAILED_LABEL = 'Session could not be resumed.';
 const GLYPH_SIZE = 16;
 
 /**
@@ -53,7 +53,7 @@ export function ResumePanel({
         />
         {attempt?.phase === 'failed' ? (
           <Text variant="caption" color="muted" style={styles.failure} testID="session-resume-error">
-            {attempt.message ?? RESUME_FAILED_LABEL}
+            {attempt.message ?? RESUME_FAILED_MESSAGE}
           </Text>
         ) : null}
       </Stack>

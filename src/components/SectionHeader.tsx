@@ -23,7 +23,7 @@ export interface SectionHeaderProps {
 /**
  * A list section label. Plain by default (Settings' groups); pass `count`
  * + `collapsed` + `onToggle` together for the collapsible variant (the
- * Agents feed's Idle/Thinking headers) - a tappable disclosure row with
+ * Agents feed's section headers) - a tappable disclosure row with
  * its count visible whether expanded or collapsed.
  */
 export function SectionHeader({ title, testID, count, collapsed, onToggle }: SectionHeaderProps): React.JSX.Element {

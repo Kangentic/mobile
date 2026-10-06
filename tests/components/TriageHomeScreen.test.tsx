@@ -201,6 +201,10 @@ describe('TriageHomeScreen', () => {
     jest.mocked(peekLastTerminalLine).mockReset();
     jest.mocked(peekLastTerminalLine).mockResolvedValue(null);
     mockFlashListScrollToOffset.mockClear();
+    // Before the render rather than at the end of a body, for the same reason
+    // as the mocks above, and because a reset there lands while the screen is
+    // still mounted, outside act().
+    useSettingsStore.setState({ hiddenTriageSections: [] });
     seedStores();
   });
 
@@ -421,7 +425,6 @@ describe('TriageHomeScreen', () => {
     expect(screen.queryByTestId('activity-row-sess-paused')).toBeNull();
     expect(screen.getByTestId('header-section-filter-dot')).toBeTruthy();
     expect(screen.getByTestId('header-section-filter-button').props.accessibilityLabel).toBe('Show sections, 1 hidden');
-    useSettingsStore.setState({ hiddenTriageSections: [] });
   });
 
   /**
@@ -439,7 +442,6 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByTestId('filtered-empty-show-all')).toBeTruthy();
     expect(screen.getByText('Nothing in the shown sections')).toBeTruthy();
     expect(screen.getByText('1 section is hidden.')).toBeTruthy();
-    useSettingsStore.setState({ hiddenTriageSections: [] });
   });
 
   /** With every section hidden the count would only repeat the title, so it is left off. */
@@ -451,7 +453,92 @@ describe('TriageHomeScreen', () => {
 
     expect(screen.getByText('All sections hidden')).toBeTruthy();
     expect(screen.queryByText(/sections? (are|is) hidden\./)).toBeNull();
-    useSettingsStore.setState({ hiddenTriageSections: [] });
+  });
+
+  describe('the section filter', () => {
+    // Reset in a hook rather than at the end of each body, so a red run cannot
+    // leak a hidden section into whichever test runs next.
+    // Inside act: the screen is still mounted when this runs, and the reset
+    // re-renders it. Un-hiding a section mounts its rows, and a mounting row
+    // fires its snippet peek at once, so the act is awaited: that peek's
+    // setState then lands inside it rather than after a synchronous act has
+    // already returned.
+    afterEach(async () => {
+      await act(async () => {
+        useSettingsStore.setState({ hiddenTriageSections: [] });
+      });
+    });
+
+    /**
+     * The caption counts hidden sections only while some are still shown. The
+     * seeded session is the lone Idle card, so hiding Idle and Active leaves
+     * nothing to draw while Queued and Paused stay shown.
+     */
+    it('counts the hidden sections in the plural when several are hidden and sessions exist', async () => {
+      useSettingsStore.setState({ hiddenTriageSections: ['Idle', 'Active'] });
+
+      renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
+      expect(screen.getByText('Nothing in the shown sections')).toBeTruthy();
+      expect(screen.getByText('2 sections are hidden.')).toBeTruthy();
+    });
+
+    it('brings the rows back, and clears the filter, when Show all is pressed', async () => {
+      useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
+
+      renderHome();
+      await act(async () => {});
+      expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
+      expect(screen.queryByTestId('activity-row-sess-1')).toBeNull();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('filtered-empty-show-all'));
+      });
+
+      expect(useSettingsStore.getState().hiddenTriageSections).toEqual([]);
+      expect(screen.queryByTestId('filtered-empty-state')).toBeNull();
+      expect(screen.getByTestId('section-header-idle')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+    });
+
+    /**
+     * "The filter is hiding everything" is only true when there is something
+     * to hide. With no sessions at all, a hidden list changes nothing on
+     * screen, and the honest answer is still All quiet.
+     */
+    it('still says "All quiet", not the filtered state, when there are no sessions at all', async () => {
+      useActivityStore.getState().reset();
+      useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
+
+      renderHome();
+      await act(async () => {});
+
+      expect(screen.queryByTestId('filtered-empty-state')).toBeNull();
+      expect(screen.getByTestId('all-quiet-empty-state')).toBeTruthy();
+    });
+
+    describe('the header button', () => {
+      it('carries no dot and the plain label while nothing is hidden', async () => {
+        renderHome();
+        await act(async () => {});
+
+        expect(screen.getByTestId('header-section-filter-button').props.accessibilityLabel).toBe('Show sections');
+        expect(screen.queryByTestId('header-section-filter-dot')).toBeNull();
+      });
+
+      it('opens the Show sections sheet', async () => {
+        renderHome();
+        await act(async () => {});
+        expect(mockPush).not.toHaveBeenCalled();
+
+        fireEvent.press(screen.getByTestId('header-section-filter-button'));
+
+        expect(mockPush).toHaveBeenCalledTimes(1);
+        expect(mockPush).toHaveBeenCalledWith('/section-filter');
+      });
+    });
   });
 
   it('reacts to store changes (a session moving sections re-renders)', () => {
@@ -1024,6 +1111,88 @@ describe('TriageHomeScreen', () => {
       // Still the original three: the backlog was discarded, not merely paused.
       expect(jest.mocked(peekLastAssistantMessage)).toHaveBeenCalledTimes(SNIPPET_WARM_CONCURRENCY);
     });
+  });
+
+  /**
+   * The pre-warm fetches a line for a session only when something will draw
+   * it. Three cases draw nothing: a section the filter hides mounts no rows
+   * (unhiding mounts them, and they peek for themselves), and a queued or
+   * paused card shows the task's description, never the agent's message.
+   *
+   * Isolation, as in the bounded block above: the control is a working session
+   * in the COLLAPSED Active section, so no row mounts for it and the pre-warm
+   * is the only caller that can peek it. The skipped sessions can only ever be
+   * peeked by the pre-warm either way (no row is mounted for a hidden section,
+   * and a queued or paused row does not peek). The exact list of peeked
+   * sessions is asserted, so a skipped session that slipped through names
+   * itself in the failure.
+   */
+  describe('snippet pre-warm skips what nothing draws', () => {
+    function registerWorkingControl(): void {
+      useSettingsStore.setState({ collapsedTriageSection: 'Active' });
+      useActivityStore.getState().registerSession('warm-control', 'task-warm-control', 'project-1');
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'warm-control',
+        taskId: 'task-warm-control',
+        payload: { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } },
+      });
+    }
+
+    function peekedSessionIds(): string[] {
+      return jest.mocked(peekLastAssistantMessage).mock.calls.map(([sessionId]) => sessionId);
+    }
+
+    beforeEach(() => {
+      // The seeded prompt-pending session would be one more warm candidate.
+      useActivityStore.getState().reset();
+    });
+
+    // Inside act: the screen is still mounted when this runs, and the reset
+    // re-renders it. The reset also EXPANDS the collapsed Active section, which
+    // mounts the control's row, and a mounting row fires its snippet peek at
+    // once. Awaited, so that peek's setState lands inside this act rather than
+    // after it (a synchronous act returns before the mocked peek resolves).
+    afterEach(async () => {
+      await act(async () => {
+        useSettingsStore.setState({ hiddenTriageSections: [], collapsedTriageSection: null });
+      });
+    });
+
+    it('does not warm a running session in a section the filter hides, but warms one in a shown section', async () => {
+      registerWorkingControl();
+      useActivityStore.getState().registerSession('warm-hidden', 'task-warm-hidden', 'project-1');
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'warm-hidden',
+        taskId: 'task-warm-hidden',
+        payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
+      });
+      useSettingsStore.setState({ hiddenTriageSections: ['Idle'] });
+
+      renderHome();
+      await act(async () => {});
+
+      expect(peekedSessionIds()).toEqual(['warm-control']);
+      expect(peekLastAssistantMessage).toHaveBeenCalledWith('warm-control', 0);
+    });
+
+    it.each([['queued' as const], ['suspended' as const]])(
+      'does not warm a %s session, whose card shows the description, but warms a running one',
+      async (sessionStatus) => {
+        registerWorkingControl();
+        useActivityStore.getState().registerSession('warm-not-running', 'task-warm-not-running', 'project-1');
+        useActivityStore
+          .getState()
+          .applySnapshot('warm-not-running', 'task-warm-not-running', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus }));
+
+        renderHome();
+        await act(async () => {});
+
+        expect(peekedSessionIds()).toEqual(['warm-control']);
+        expect(peekLastAssistantMessage).toHaveBeenCalledWith('warm-control', 0);
+      },
+    );
   });
 
   describe('long-press action hub', () => {

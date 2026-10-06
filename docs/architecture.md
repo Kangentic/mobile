@@ -698,8 +698,14 @@ own step ("Switching model..."), a still pause circle and "Paused", or, for a ru
 has not reported its model yet, a spinner and "Starting agent...". An ended session has no footer.
 Every footer keeps the usage bar's box, so a card holds one height from queued through running, and
 the usage bar itself draws at 0% while the window size is unknown rather than mounting late. The
-footer spinner turns, as the desktop's does, but only where motion is allowed (reduced motion off,
-the screen focused), and its one Reanimated mapper is mounted only on a spinning row.
+footer spinner (`StatusSpinner`) turns as the desktop's does, with two departures forced by
+`motion-conventions.md`: it turns only where motion is allowed (reduced motion off, the screen
+focused), and only for `statusSpinner.holdAfterMs` (30 s), then holds still. A queued session can
+wait minutes for a slot, and an agent that never reports a model reads "Starting agent..." for its
+whole run, so an unbounded turn would keep the app drawing frames for the whole wait; the bound is
+longer than the respawn and Resume waits (20 s each, Resume's counted from the desktop's accept),
+so neither normally freezes mid-wait. A footer spinner is keyed on its label, so each new step
+gets a fresh window. Its one Reanimated mapper is mounted only on a spinning row.
 
 **`TaskHeader`** reads the same `cardSessionDisplay` and draws the desktop task view header's glyph
 for each state (`TaskDetailHeader.tsx`): the agent icon while running, a still clock while queued,
@@ -728,7 +734,7 @@ with the desktop's refusal text, or with "Session could not be resumed." after `
 **The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
 you), Active, then the two statuses that are not running: Queued, its own section, and Paused,
 which holds only suspended sessions (the Monitor files the two together under Paused). The split is
-feed-level (`selectFeedSections` in `TriageHomeScreen`), deliberately **not** a new `TriageSection`:
+feed-level (`selectFeedSections` in `screens/home/feedSections.ts`), deliberately **not** a new `TriageSection`:
 `sectionForEntry` stays a pure function of `entry.state`, which the wait time, the notifier and
 section re-stamping read, which keeps both states structurally unable to reach `endedSessionIds`
 or `SessionScreen`'s `sessionEnded`, and which keeps a swapping row in its existing section rather

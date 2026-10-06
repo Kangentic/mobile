@@ -29,9 +29,13 @@ export const FEED_SECTION_TITLES: Record<FeedSection, string> = {
 /**
  * The four sections the user sees, by title, in display order: what the
  * section filter lists, and the keys `hiddenTriageSections` stores (needs-you
- * and idle share the Idle title, so they hide together).
+ * and idle share the Idle title, so they hide together). Derived from the
+ * order and the titles above rather than spelled out again, so a section added
+ * or renamed there cannot be missing or stale here.
  */
-export const FEED_SECTION_DISPLAY_TITLES: readonly string[] = ['Idle', 'Active', 'Queued', 'Paused'];
+export const FEED_SECTION_DISPLAY_TITLES: readonly string[] = Array.from(
+  new Set(FEED_SECTION_ORDER.map((section) => FEED_SECTION_TITLES[section])),
+);
 
 /**
  * `selectTriageRows` re-partitioned into the feed's sections: queued and
@@ -42,8 +46,8 @@ export const FEED_SECTION_DISPLAY_TITLES: readonly string[] = ['Idle', 'Active',
 export function selectFeedSections(bySessionId: Record<string, SessionActivityEntry>): { section: FeedSection; entries: SessionActivityEntry[] }[] {
   const queued: SessionActivityEntry[] = [];
   const paused: SessionActivityEntry[] = [];
-  const running = selectTriageRows({ bySessionId }).map(({ section, entries }) => ({
-    section: section as FeedSection,
+  const running = selectTriageRows({ bySessionId }).map(({ section, entries }): { section: FeedSection; entries: SessionActivityEntry[] } => ({
+    section,
     entries: entries.filter((entry) => {
       if (entry.sessionStatus === 'queued') {
         queued.push(entry);

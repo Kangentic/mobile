@@ -3,6 +3,12 @@ import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
 import { selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { selectResumeAttempt, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 
+/**
+ * The desktop's failure line (TaskDetailBody.tsx), for a failed resume that
+ * carried no refusal text of its own. Shared by every surface that shows one.
+ */
+export const RESUME_FAILED_MESSAGE = 'Session could not be resumed.';
+
 export interface ResumeOffer {
   /** True while the session is paused and the desktop offers Resume for it (see `SessionActivityEntry.resumable`). */
   offered: boolean;
@@ -26,6 +32,11 @@ export interface ResumeOffer {
  * resumes into a NEW session, so the paused one ends (with the desktop's
  * resume label, then a successor the screen binds as it does after a column
  * move). Whichever surface is mounted then clears the attempt.
+ *
+ * A FAILED attempt clears the same way, so its error line cannot resurface
+ * under a fresh Resume button the next time the task pauses (resumed from the
+ * desktop meanwhile, say). That never hides an error anyone could see: every
+ * surface that draws one draws it only while the session is paused.
  */
 export function useResumeOffer(taskId: string | null, sessionId: string | null): ResumeOffer {
   const entry = useActivityStore((state) => (sessionId ? (state.bySessionId[sessionId] ?? null) : null));
@@ -33,7 +44,7 @@ export function useResumeOffer(taskId: string | null, sessionId: string | null):
   const attempt = useResumeStore((state) => selectResumeAttempt(state, taskId));
   const paused = cardSessionDisplay({ hasSession: entry !== null, sessionStatus: entry?.sessionStatus, respawn }).kind === 'suspended';
   useEffect(() => {
-    if (taskId !== null && attempt?.phase === 'resuming' && !paused) useResumeStore.getState().clear(taskId);
+    if (taskId !== null && attempt !== null && !paused) useResumeStore.getState().clear(taskId);
   }, [taskId, attempt, paused]);
   return { offered: paused && entry !== null && entry.resumable, attempt };
 }

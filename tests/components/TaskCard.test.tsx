@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { View } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 import * as Reanimated from 'react-native-reanimated';
@@ -221,6 +221,157 @@ describe('TaskCard', () => {
       );
       expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
       expect(withTimingSpy).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The spin is BOUNDED by `statusSpinner.holdAfterMs`: a queued session can
+     * wait for minutes, and a spin that never ends keeps the app drawing frames
+     * for as long as the row is mounted (motion-conventions.md). Past the bound
+     * the glyph takes the same still branch as reduced motion.
+     *
+     * A still glyph renders correctly either way, so these assert the
+     * mechanism: the animated wrapper carries a `style` (the rotate) and the
+     * still branch's plain View carries none, `useAnimatedStyle` registers no
+     * mapper once it is still, and `cancelAnimation` (the spinning wrapper's
+     * unmount cleanup) runs.
+     */
+    describe('the spin is bounded', () => {
+      const holdAfterMs = darkTerminalTheme.motion.statusSpinner.holdAfterMs;
+      const onPress = jest.fn();
+
+      function queuedCard(testID: string): React.JSX.Element {
+        return (
+          <ThemeProvider>
+            <TaskCard
+              testID={testID}
+              task={boardTaskFixture()}
+              statusKind={null}
+              showTicketNumbers={false}
+              sessionDisplay={{ kind: 'queued' }}
+              usage={null}
+              bodyText="A task worth doing."
+              onPress={onPress}
+            />
+          </ThemeProvider>
+        );
+      }
+
+      beforeEach(() => {
+        // Before any render, so the spinner's expiry timer is the faked one.
+        jest.useFakeTimers();
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      it('holds the glyph still once the bound passes, under the same testID, registering no animated mapper', () => {
+        render(queuedCard(BASE_TEST_ID));
+        const spinnerTestID = `${STATUS_BAR}-spinner`;
+        // Control: it IS spinning to begin with, so the still assertions below
+        // cannot pass merely because it never spun.
+        expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
+        const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+        const cancelAnimationSpy = jest.spyOn(Reanimated, 'cancelAnimation');
+
+        act(() => {
+          jest.advanceTimersByTime(holdAfterMs - 1);
+        });
+        expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
+        expect(cancelAnimationSpy).not.toHaveBeenCalled();
+
+        act(() => {
+          jest.advanceTimersByTime(1);
+        });
+        const stillSpinner = screen.getByTestId(spinnerTestID);
+        expect(stillSpinner.props.style).toBeUndefined();
+        expect(within(stillSpinner).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
+        expect(animatedStyleSpy).not.toHaveBeenCalled();
+        expect(cancelAnimationSpy).toHaveBeenCalled();
+      });
+
+      /**
+       * FlashList recycles a row's instance into another row, so the expiry is
+       * keyed on the testID (which carries the session) rather than held as a
+       * plain flag: the new row starts its own spin and its own full window
+       * instead of inheriting a stopped one. `rerender` keeps the SAME
+       * instance, which is the whole point: a second `render` would be a fresh
+       * tree with fresh state and could not tell the two designs apart.
+       */
+      it('spins again, for a full window of its own, when the instance is recycled into another row', () => {
+        const { rerender } = render(queuedCard('card-first'));
+        act(() => {
+          jest.advanceTimersByTime(holdAfterMs + 1);
+        });
+        expect(screen.getByTestId('card-first-status-bar-spinner').props.style).toBeUndefined();
+
+        const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
+        rerender(queuedCard('card-second'));
+        const recycledTestID = 'card-second-status-bar-spinner';
+        expect(screen.getByTestId(recycledTestID).props.style).toBeDefined();
+        expect(withRepeatSpy).toHaveBeenCalledWith(expect.anything(), -1, false);
+
+        act(() => {
+          jest.advanceTimersByTime(holdAfterMs - 1);
+        });
+        expect(screen.getByTestId(recycledTestID).props.style).toBeDefined();
+        act(() => {
+          jest.advanceTimersByTime(1);
+        });
+        expect(screen.getByTestId(recycledTestID).props.style).toBeUndefined();
+      });
+
+      /**
+       * The OTHER way one instance is reused: the SAME card (same testID) moves
+       * from one footer step to the next. "Queued..." can outlast the whole
+       * window, and the "Starting agent..." that follows is a new step the user
+       * is waiting on, so it spins for a window of its own. The footer keys the
+       * spinner on its label to get that; without the key the card's one
+       * StatusBar and StatusSpinner survive the step change and the new step
+       * inherits the window the queue already used up, drawing a still glyph
+       * from its first frame. The testID does not change between the two, so
+       * the testID-keyed expiry cannot help here, and `rerender` keeps the
+       * instance so only the key can tell them apart.
+       */
+      it('spins again, for a full window of its own, when the same card moves from "Queued..." to "Starting agent..."', () => {
+        const footerCard = (sessionDisplay: TaskCardProps['sessionDisplay']): React.JSX.Element => (
+          <ThemeProvider>
+            <TaskCard
+              testID={BASE_TEST_ID}
+              task={boardTaskFixture()}
+              statusKind={null}
+              showTicketNumbers={false}
+              sessionDisplay={sessionDisplay}
+              usage={null}
+              bodyText="A task worth doing."
+              onPress={onPress}
+            />
+          </ThemeProvider>
+        );
+        const spinnerTestID = `${STATUS_BAR}-spinner`;
+
+        const { rerender } = render(footerCard({ kind: 'queued' }));
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Queued...');
+        act(() => {
+          jest.advanceTimersByTime(holdAfterMs + 1);
+        });
+        // Control: the queue's spin really is spent, so what follows cannot be
+        // a window that was simply never used up.
+        expect(screen.getByTestId(spinnerTestID).props.style).toBeUndefined();
+
+        rerender(footerCard({ kind: 'running' }));
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
+        expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
+
+        act(() => {
+          jest.advanceTimersByTime(holdAfterMs - 1);
+        });
+        expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
+        act(() => {
+          jest.advanceTimersByTime(1);
+        });
+        expect(screen.getByTestId(spinnerTestID).props.style).toBeUndefined();
+      });
     });
   });
 

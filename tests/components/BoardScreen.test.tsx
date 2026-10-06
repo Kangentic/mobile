@@ -385,6 +385,43 @@ describe('BoardScreen', () => {
   });
 
   /**
+   * The third state a kept session entry can be in: a PAUSED session (the
+   * desktop suspended it; Resume is offered). Like a queued one it reports no
+   * live PTY activity, so only `sessionStatus` tells it from a working or settled
+   * card. The desktop draws a still pause circle and "Paused" in the footer, no
+   * status icon, and NO usage bar. The snapshot deliberately carries the
+   * fixture's trusted usage (a model and a percentage): a card that read a
+   * suspended session as running would draw that bar and an icon instead.
+   */
+  it('draws a suspended task with "Paused", the pause glyph, no icon and no usage bar', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }),
+      );
+
+    render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    // What a running read would draw instead, asserted absent first so a card that
+    // mistook the pause for running fails here, naming the bar or icon it drew.
+    expect(screen.queryByTestId('board-card-task-1-usage')).toBeNull();
+    expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
+    expect(screen.getByTestId('board-card-task-1-status-bar')).toBeTruthy();
+    expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Paused');
+    expect(screen.getByTestId('board-card-task-1-status-bar-paused')).toBeTruthy();
+    // A still glyph: the spinner is for queued and starting, not for a pause.
+    expect(screen.queryByTestId('board-card-task-1-status-bar-spinner')).toBeNull();
+  });
+
+  /**
    * The control: the SAME idle entry without the queued status must keep
    * drawing the ordinary idle envelope, so the test above cannot be passing
    * merely because idle-with-a-live-entry always draws the starting tint.

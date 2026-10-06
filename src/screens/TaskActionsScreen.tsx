@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -9,10 +9,7 @@ import { CapabilityError } from '@/channel';
 import { archiveTask, deleteTaskFromBoard, resumeTaskSession } from '@/connection/actions';
 import { findTaskById, isDoneColumn, selectColumnsOrdered, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
-import { useResumeOffer } from './task/useResumeOffer';
-
-/** The desktop's failure line (TaskDetailBody.tsx), for a refusal that carried no text of its own. */
-const RESUME_FAILED_MESSAGE = 'Session could not be resumed.';
+import { RESUME_FAILED_MESSAGE, useResumeOffer } from './task/useResumeOffer';
 
 /**
  * Every row here needs both route params. Missing one is a routing defect the
@@ -85,6 +82,23 @@ export function TaskActionsScreen(): React.JSX.Element {
   // only where the session view would offer Resume.
   const resumeOffer = useResumeOffer(taskId ?? null, task?.session_id ?? null);
 
+  /**
+   * Resume, Archive and Delete each close the sheet only after an await, and
+   * the user can swipe the sheet away while that request is in flight. A late
+   * `router.back()` would then pop whatever screen is on top by then (the
+   * session screen, say), so it only fires while this sheet is still mounted.
+   */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const closeIfStillOpen = useCallback(() => {
+    if (mountedRef.current) router.back();
+  }, [router]);
+
   // The one non-mutating row in the sheet, and the only place the phone can
   // act on the PR the card's readiness chip is talking about.
   const prUrl = httpsPrUrl(task?.pr_url ?? null);
@@ -130,9 +144,9 @@ export function TaskActionsScreen(): React.JSX.Element {
         setErrorMessage(attempt.message ?? RESUME_FAILED_MESSAGE);
         return;
       }
-      router.back();
+      closeIfStillOpen();
     });
-  }, [taskId, projectId, router]);
+  }, [taskId, projectId, closeIfStillOpen]);
 
   const onMove = useCallback(() => {
     if (!taskId || !projectId) {
@@ -158,10 +172,10 @@ export function TaskActionsScreen(): React.JSX.Element {
     setActionInFlight(true);
     setErrorMessage(null);
     void archiveTask({ projectId, taskId })
-      .then(() => router.back())
+      .then(() => closeIfStillOpen())
       .catch((error: unknown) => setErrorMessage(messageForActionError(error, 'Archive failed - check the connection')))
       .finally(() => setActionInFlight(false));
-  }, [taskId, projectId, router]);
+  }, [taskId, projectId, closeIfStillOpen]);
 
   /**
    * Two-step confirm: the first tap arms, the second fires. The armed state
@@ -192,11 +206,11 @@ export function TaskActionsScreen(): React.JSX.Element {
     void deleteTaskFromBoard({ projectId, taskId })
       .then(() => {
         triggerHaptic('destructiveConfirmed');
-        router.back();
+        closeIfStillOpen();
       })
       .catch((error: unknown) => setErrorMessage(messageForActionError(error, 'Delete failed - check the connection')))
       .finally(() => setActionInFlight(false));
-  }, [deleteArmed, taskId, projectId, router]);
+  }, [deleteArmed, taskId, projectId, closeIfStillOpen]);
 
   return (
     <View

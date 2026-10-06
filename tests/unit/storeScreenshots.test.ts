@@ -189,7 +189,7 @@ describe('the shot list matches the capture flow', () => {
    *
    * The activity row this flow searches for sits in one of two places
    * depending on whether the mock's tick-20 permission prompt has landed yet
-   * (Thinking, below the fold, before; the top of Idle, after - and it stays
+   * (Active, below the fold, before; the top of Idle, after - and it stays
    * there, because this flow deliberately leaves the prompt unanswered). A
    * DOWN search races that transition: it wins when the search happens to run
    * before tick 20 and loses when it does not, having scrolled to the end of
