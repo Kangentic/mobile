@@ -136,6 +136,42 @@ describe('resumeTaskSession', () => {
 
     expect(startSession).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * Every surface leaves its button live after a failure, "for a retry". The
+   * in-flight guard only holds back an attempt that is still RESUMING: a failed
+   * one is over, and a second press must send a fresh `start-session` and
+   * replace the failure with a new attempt rather than hand the failure back.
+   */
+  it('sends a fresh start-session on a retry after a failed attempt, replacing the failure', async () => {
+    startSession.mockRejectedValueOnce(new CapabilityError('start-session', 'Cannot resume a task in To Do'));
+    const failed = await resumeTaskSession('task-1', 'project-1');
+    expect(failed.phase).toBe('failed');
+
+    startSession.mockResolvedValueOnce({ ok: true, outcome: 'starting' });
+    const retried = await resumeTaskSession('task-1', 'project-1');
+
+    expect(startSession).toHaveBeenCalledTimes(2);
+    expect(retried.phase).toBe('resuming');
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+  });
+
+  /**
+   * Attempts are task-keyed, so each task's surfaces show their own. Another
+   * task starting a resume must neither be refused by this task's guard nor
+   * disturb a failure this task is still showing.
+   */
+  it('keeps each task\'s attempt apart: a second task resumes while the first still shows its failure', async () => {
+    startSession.mockRejectedValueOnce(new CapabilityError('start-session', 'Cannot resume a task in To Do'));
+    await resumeTaskSession('task-1', 'project-1');
+    startSession.mockResolvedValueOnce({ ok: true, outcome: 'starting' });
+
+    await resumeTaskSession('task-2', 'project-1');
+
+    expect(startSession).toHaveBeenLastCalledWith({ taskId: 'task-2', projectId: 'project-1' });
+    expect(useResumeStore.getState().byTaskId['task-2']?.phase).toBe('resuming');
+    expect(useResumeStore.getState().byTaskId['task-1']).toEqual({ phase: 'failed', message: 'Cannot resume a task in To Do' });
+  });
 });
 
 /**

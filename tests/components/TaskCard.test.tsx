@@ -3,7 +3,15 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react-n
 import { View } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 import * as Reanimated from 'react-native-reanimated';
-import { CirclePause, GitMerge, GitMergeConflict, GitPullRequest, LoaderCircle } from 'lucide-react-native';
+import {
+  CirclePause,
+  GitMerge,
+  GitMergeConflict,
+  GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  LoaderCircle,
+} from 'lucide-react-native';
 import { ThemeProvider } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { darkTerminalTheme } from '@/components/theme/tokens';
@@ -127,6 +135,19 @@ describe('TaskCard', () => {
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
       expect(within(screen.getByTestId(`${STATUS_BAR}-spinner`)).UNSAFE_getByType(LoaderCircle)).toBeTruthy();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
+    });
+
+    /**
+     * The desktop shows the human model name or nothing, never a raw id. A usage
+     * report whose display name is blank has not told the card its model, so it
+     * reads as still starting rather than drawing a nameless bar.
+     */
+    it('shows "Starting agent..." for a usage report whose model has no display name, never the raw id', () => {
+      const unnamedModelUsage = usageFixture({ model: { id: 'claude-opus-4-8', displayName: '' } });
+      renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unnamedModelUsage });
+      expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
+      expect(screen.queryByText(/claude-opus-4-8/)).toBeNull();
     });
 
     /**
@@ -524,6 +545,25 @@ describe('TaskCard', () => {
 
       expect(prChipGlyph(GitMerge).props.color).toBe(darkTerminalTheme.colors.info);
       expect(screen.queryByText('ready')).toBeNull();
+    });
+
+    /**
+     * The card maps each presentation glyph name onto a lucide component, a
+     * mapping the pure-function tests cannot reach: swapping two cases of that
+     * switch leaves every `prChipPresentation` assertion green. Closed is a
+     * crossed-out pull request in the danger tone, draft a dashed one in the
+     * muted tone, and neither wears the open PR's icon.
+     */
+    it.each([
+      ['closed', GitPullRequestClosed, darkTerminalTheme.colors.danger],
+      ['draft', GitPullRequestDraft, darkTerminalTheme.colors.textMuted],
+    ] as const)('draws the %s state as its own icon in its own tone, never the open PR icon', (prState, expectedGlyph, expectedColor) => {
+      renderTaskCard({
+        task: boardTaskFixture({ pr_number: 42, pr_state: prState, pr_merge_readiness: 'ready' }),
+      });
+
+      expect(prChipGlyph(expectedGlyph).props.color).toBe(expectedColor);
+      expect(within(screen.getByTestId(`${BASE_TEST_ID}-pr`)).UNSAFE_queryByType(GitPullRequest)).toBeNull();
     });
 
     it('reaches a screen reader as its own node, carrying the freshness caveat', () => {

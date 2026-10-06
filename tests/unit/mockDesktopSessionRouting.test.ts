@@ -331,6 +331,27 @@ describe('no session in the demo falls back to the reading view', () => {
   });
 });
 
+describe('the demo boards', () => {
+  /**
+   * The Agents feed locates a task's column by its `swimlane_id`, and draws the
+   * band's step marker and track from it. A task naming a column its own board
+   * does not declare (a renamed or removed id, say) leaves that row with no
+   * marker, in the demo App Review walks. The task is named in the failure.
+   */
+  it('puts every task in a column its own board declares', async () => {
+    const strandedTasks: string[] = [];
+    for (const projectId of ['mock-project', MOCK_PROJECT_2_ID]) {
+      const snapshot = await controller.verbs.readBoardSubscribe(projectId, { view: 'full' });
+      const declaredColumnIds = new Set(snapshot.columns.map((column) => column.id));
+      expect(declaredColumnIds.size).toBeGreaterThan(0);
+      for (const task of snapshot.tasks) {
+        if (!declaredColumnIds.has(task.swimlane_id)) strandedTasks.push(`${projectId}/${task.id} -> ${task.swimlane_id}`);
+      }
+    }
+    expect(strandedTasks).toEqual([]);
+  });
+});
+
 describe('archived sessions', () => {
   it('answers the completed-task screen transcript for the Done fixtures', async () => {
     // The archived summary anchors on this sessionId; before these sessions
