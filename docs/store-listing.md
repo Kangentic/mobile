@@ -58,10 +58,45 @@ independently rather than using the emulator's own geometry.
 
 ## Play Console advisories - standing decisions
 
-Play raises "For your next release" notes under **User experience**. They are advice, not gates,
-and two of them are permanent fixtures rather than work items. Both were investigated on
-2026-08-06 against release 0.3.0. **Read this section before acting on either warning**: the
-obvious response to each is wrong, and both look like one-line fixes.
+Play raises "actions recommended" notes on the release dashboard, under **User experience** and
+**Memory usage**. They are advice, not gates: nothing here ever blocked a release in review.
+Four have been raised. Edge-to-edge and orientation were investigated on 2026-08-06 against
+release 0.3.0 and are permanent fixtures. Bitmap downsampling and R8 optimization were raised on
+release 14 (0.8.1) on 2026-10-06, and triaged against the exact artifact Play scanned
+(`build-android.yml` run 37180001044, commit `658c6ce`). **Read this section before acting on any
+of them**: the obvious response to most is wrong, and several look like one-line fixes.
+
+### "Improve your app's memory and performance with R8 optimization" - addressed in the next release
+
+Three rows: "Optimization isn't enabled", "Optimized resource shrinking isn't enabled", and
+"Upgrade AGP to 9.0+".
+
+- **The first two are addressed by `plugins/withAndroidR8Optimization.ts`** (task #102), and only
+  Play's scan of the next release can confirm them cleared. The SDK 57 template's release block
+  used the `proguard-android.txt` preset, which carries `-dontoptimize`, so R8 shrank and
+  obfuscated but never optimized. The plugin swaps in `proguard-android-optimize.txt` and sets
+  `android.r8.optimizedResourceShrinking=true` (AGP 8.12's opt-in). `ci.yml` checks the request
+  reached the generated project, and `verify-r8-optimization.sh` checks the merged R8
+  configuration of every real release build, because one `-dontoptimize` in any library's
+  consumer rules would turn optimization off app-wide with the preset still swapped.
+- **The AGP row stays until the Expo SDK 58 upgrade. Do not bump AGP on its own.** React Native
+  0.86.3 pins AGP 8.12.0; RN 0.87 is the first with AGP 9 support, and it needs the
+  `android.builtInKotlin=false` / `android.newDsl=false` opt-outs. SDK 58 brings AGP 9 tooling and
+  the optimize preset by default (expo/expo #50108), at which point **delete the plugin**.
+
+### "Improve your app's performance with bitmap downsampling" - upstream, no action
+
+Flags one obfuscated call site, `T5.b.c` in the 0.8.1 build. Through that build's mapping file it
+is **`com.facebook.imagepipeline.platform.DefaultDecoder.decodeFromStream`**: Fresco, React
+Native's own image pipeline, which already takes and sets `BitmapFactory.Options` (including
+`inSampleSize`). Fresco IS the "image-loading library" the advisory recommends; Play's scan is
+static and flags the decode call wherever it sits. The call site is in React Native, not app code.
+Rest the decision on where the call site lives, not on reachability.
+
+**To re-derive it on a new build** (the obfuscated name changes every build): download the
+`mapping-kangentic-production-v<version>-vc<code>-<sha>` artifact from that build's
+`build-android.yml` run, take the class half of the flagged name (`T5.b` here), and search
+`mapping.txt` for `-> T5.b:`. **Re-check if the app ever starts rendering large images.**
 
 ### "Your app uses deprecated APIs or parameters for edge-to-edge" - upstream, no action
 
@@ -83,6 +118,13 @@ run.
 
 **Re-check after the next React Native, Expo SDK, or Material bump and expect it to clear itself.
 Do not attempt an app-level workaround**; there is no app-level call to remove.
+
+**Re-verified 2026-10-06 against release 14 (0.8.1, React Native 0.86.3).** The flagged sites are
+still RN's `WindowUtil.kt` (`enableEdgeToEdge`) and `StatusBarModule.kt`
+(`getTypedExportedConstants`), plus Material **1.13.0**'s `BottomSheetDialog` (-> `bottomsheet.a`)
+and `EdgeToEdgeUtils` (-> `internal.c`), both confirmed in the vc14 mapping and both still pulled in
+by `react-native-screens` and `expo-router`. App code still calls none of these APIs. Re-check at
+the SDK 58 upgrade.
 
 ### "Remove resizability and orientation restrictions ... large screen devices" - deliberate, permanent
 
@@ -112,7 +154,8 @@ The reasoning, because the warning implies a deadline that does not exist:
   and every screen would need a visual pass with no forcing function behind it.
 
 So the advisory will fire on every release, forever. That is the correct signal: we do
-deliberately restrict phones to portrait.
+deliberately restrict phones to portrait. (Release 14, 0.8.1, raised it again on 2026-10-06, as
+expected. Nothing changed.)
 
 **Closed doors - do not re-propose:**
 
