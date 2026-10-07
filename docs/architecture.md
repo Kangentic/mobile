@@ -660,7 +660,7 @@ entry can legitimately carry a stale `'idle'`, so only positive proof of work re
 
 On most column moves the desktop suspends the task's session and spawns or resumes a successor: a
 fresh isolated spawn (Executing to Code Review), a `--resume` of the main session (Code Review to
-Tests), or the same session restarted in place. On the wire every one is a **session swap**: a
+Testing), or the same session restarted in place. On the wire every one is a **session swap**: a
 `session-ended` push for the old session (carrying a spawn-progress label; an older desktop sent
 NO label for its own column-move suspend-then-resume, while a 0.16.0 desktop labels every respawn
 before it suspends, so there an unlabelled end is a park), the task sessionless for one to four

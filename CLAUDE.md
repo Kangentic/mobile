@@ -252,10 +252,11 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
                   #   pack in the session scratchpad that every finder reads instead of
                   #   re-gathering, and prints the correctness shards; kept in step with
-                  #   the desktop repo's copy, and its header owns the divergence list),
+                  #   the desktop repo's copy, and its header carries the divergence list
+                  #   that the code-review skill owns),
                   #   review-verdict.mjs (computes the pass's Ready or Blocked verdict and
                   #   the commit ledger from its findings JSON), lib/is-entrypoint.mjs
-                  #   (the real-path "run as a CLI?" guard those two import)
+                  #   (the real-path "run as a CLI?" guard review-verdict.mjs imports)
                   #   + repo scripts
 store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 ```
@@ -464,9 +465,10 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
   (`.maestro/smoke.yaml`, `.maestro/paired`).
 
 If a run would execute tests you did not add or modify, it is a full-tier run regardless of
-mechanism: stop and let `/test` handle it. **One exception:** `/code-review`'s Step 7 runs, scoped
-to each file, at most five existing test files that import a module one of its fixes touched,
-because a review fix can break a test it never mentions.
+mechanism: stop and let `/test` handle it. **Two exceptions, each scoped to the file and capped
+in its own skill:** `/code-review`'s Step 7 importer run (existing tests that import a module one
+of its fixes touched, because a review fix can break a test it never mentions), and
+`/pull-request`'s Step 3.5 re-run of the tests a review pass added.
 
 **Maestro note:** `.maestro/smoke.yaml` runs against a fresh (unpaired) install; the flows under
 `.maestro/paired/` need a running relay plus `node scripts/stubDesktopPeer.mjs` and a completed
@@ -612,7 +614,7 @@ in a gitignored `CLAUDE.local.md` at the project root.
   incoming column's skill's job, never the app's. (The only two destinations that destroy
   worktree state are the `todo` and `done` roles, both behind a confirmation dialog that counts
   uncommitted files first.)
-  **The Code Review column commits its own pass**, as desktop's does. Entering it suspends the
+- **The Code Review column commits its own pass**, as desktop's does. Entering it suspends the
   task agent and kills its PTY, so the two never overlap, but it leaves that agent's UNCOMMITTED
   work in the shared tree, which is why the pass commits by set math over `git status` and never
   `git add -A`. It fixes every finding it verifies (Lows included), applies its recommended
@@ -621,16 +623,18 @@ in a gitignored `CLAUDE.local.md` at the project root.
   expected, not corruption. The pass ends with a verdict computed by `scripts/review-verdict.mjs`:
   **Ready** (move to Testing) or **Blocked** (move back to Executing and do the named steps).
   There is no "skipped" status, and the commit body carries a `Refuted:`/`Decisions:` ledger the
-  next pass reads. A finished pass normally leaves the tree clean; a fix on an already-dirty path
-  stays uncommitted by design, so a dirty tree at Testing means the pass is either in flight or
-  left those paths deliberately mixed (its footer lists them). **Either way, do not stop and ask
-  whether to include it**: everything in the worktree belongs to this task, so the answer is
-  always yes and the question costs a round trip on every review-then-test handoff. Escalate only
-  when the diff is unrelated to the task or genuinely half-written. Never give a commit that is
-  not a review pass the `review` scope: the next pass reads `<type>(review):` subjects as its own.
-  **The review flow diverges from desktop in nine ways**, listed with reasons in
-  `.claude/skills/code-review/SKILL.md` ("Mobile differences") and in the header of
-  `scripts/build-review-pack.mjs`; change all three together:
+  next pass reads. Never give a commit that is not a review pass the `review` scope: the next pass
+  reads `<type>(review):` subjects as its own.
+- **A dirty tree at Testing is normal: do not stop and ask whether to include it.** A finished
+  review pass normally leaves the tree clean, so a dirty one means the pass is still in flight, a
+  fix landed on an already-dirty path and was left mixed (its footer lists those paths), or no
+  review pass ran and it is the task agent's own work. In every case everything in the worktree
+  belongs to this task, so the answer is always yes and the question costs a round trip on every
+  handoff. Escalate only when the diff is unrelated to the task or genuinely half-written.
+  `/pull-request`'s Step 1 carries the procedure.
+- **The review flow diverges from desktop in nine ways.** `.claude/skills/code-review/SKILL.md`
+  ("Mobile differences") owns the list and its reasons; this copy and the one in the header of
+  `scripts/build-review-pack.mjs` follow it, so change all three together:
   1. No HMR vitest: Step 2 is a placeholder, and the verdict checks only `typecheck` and
      `scopedTests`.
   2. No E2E in the pass: a Maestro coverage hole goes to the grouped follow-up task for `/e2e` or

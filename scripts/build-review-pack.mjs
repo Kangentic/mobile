@@ -11,15 +11,16 @@
  * (docs/code-review-fanout-audit.md there) measured that at 50-78k tokens of re-derivation per
  * finder with 38% of all Read bytes duplicated across finders; the pack pays it once.
  *
- * This file owns the divergence list, so a syncer needs nothing but this comment. Everything
- * below the imports is the desktop logic verbatim; if you change it, change it in both repos.
- * Two divergences are in this file, both deliberate:
+ * A syncer of this file needs nothing but this comment. Everything below the imports is the
+ * desktop logic verbatim; if you change it, change it in both repos. Two divergences are in this
+ * file, both deliberate:
  *   (a) this header comment;
  *   (b) the explicit `node:buffer` import. This repo's ESLint config supplies React Native
  *       globals, not Node's, so a bare `Buffer` fails `no-undef`, and `npm run lint` is a
  *       required CI check. Keep the import when syncing.
- * The rest of the review flow diverges from desktop in the same nine ways that CLAUDE.md and
- * .claude/skills/code-review/SKILL.md ("Mobile differences") list, one line each:
+ * The rest of the review flow diverges from desktop in nine ways.
+ * .claude/skills/code-review/SKILL.md ("Mobile differences") owns that list and its reasons;
+ * this copy and CLAUDE.md's follow it, one line each:
  *   1. No HMR vitest: the skill's Step 2 is a placeholder, and scripts/review-verdict.mjs
  *      checks only typecheck and scopedTests.
  *   2. No E2E in the pass: a Maestro coverage hole goes to the grouped follow-up task for /e2e

@@ -90,8 +90,9 @@ If there are uncommitted changes (non-empty `git status --porcelain`):
 If the working tree is clean, there is nothing to stage - but **do not skip item 3.** A clean tree
 usually means the Code Review pass already committed its own work (see below), and that commit can
 touch doc anchors nothing has audited yet. So run item 3 against the **branch diff** instead of the
-uncommitted set (`git diff --name-only origin/<sourceBranch>...HEAD`), commit any doc fixes it
-produces with a `docs:` message, and then go to Step 1.5.
+uncommitted set: run Step 2's `git fetch origin <sourceBranch>` first so the ref is current, then
+`git diff --name-only origin/<sourceBranch>...HEAD`. Commit any doc fixes it produces with a
+`docs:` message (the "doc fix-up" Step 1.5 skips), and then go to Step 1.5.
 
 **Expect a commit you did not author.** A task reaching this column has usually just left **Code
 Review**, which runs `/code-review` as a separate agent in the SAME worktree (`isolated` isolates
@@ -102,22 +103,24 @@ commit: its body is the review ledger the next review pass reads back, and it la
 every fix went into a file that was already dirty. Leave them alone: do not squash, reword, or
 fold them into your own message - their separate authorship is the point.
 
-**And if the tree is dirty with changes you did not write**, that means one of exactly two things,
-because a finished review pass normally leaves the tree clean:
+**And if the tree is dirty with changes you did not write**, that means one of exactly three
+things, because a finished review pass normally leaves the tree clean:
 
 - The review pass is **still running**. Its commit has not landed yet.
 - A review fix touched a file that was already dirty, so it was deliberately left uncommitted and
   mixed with someone else's work. The review's own footer lists those paths by name.
+- **No review pass ran** (the card skipped Code Review, or the pass was `review-only`), so the
+  dirty files are the task agent's own unfinished work, which no review commit accounts for.
 
-**Stage it and keep going. Do NOT ask the user whether to include it** - the answer is always yes,
-so the question only costs a round trip. Moving between active columns performs no git writes (the
-app suspends or respawns a PTY and reuses the worktree untouched), so everything in this worktree
-belongs to this task, and a review pass's uncommitted fixes belong in this PR by definition. They
-also block Step 3 until committed: `git rebase` refuses to start against unstaged changes. Report
-the dirty paths and which carry changes you did not write, sanity-check that the diff is coherent
-follow-up on the same task (`npm run typecheck` is clean, every reference to a renamed symbol is
-updated), and commit. Escalate to the user only when the diff is unrelated to the task or
-genuinely half-written.
+**Stage it and keep going, whichever case it is. Do NOT ask the user whether to include it** - the
+answer is always yes, so the question only costs a round trip. Moving between active columns
+performs no git writes (the app suspends or respawns a PTY and reuses the worktree untouched), so
+everything in this worktree belongs to this task, and its uncommitted work belongs in this PR by
+definition. It also blocks Step 3 until committed: `git rebase` refuses to start against unstaged
+changes. Report the dirty paths and which case they look like, sanity-check that the diff is
+coherent follow-up on the same task (Step 0's typecheck already ran on this tree; every reference
+to a renamed symbol is updated), and commit. Escalate to the user only when the diff is unrelated
+to the task or genuinely half-written.
 
 ## Step 1.5 - Compute the clean public branch name (never rename the local branch)
 
@@ -125,10 +128,11 @@ The local branch, the worktree folder, and the task's stored branch name togethe
 Kangentic board's session identity, the same way they do in the desktop repo. Never rename the
 local branch.
 
-1. `<type>` = the conventional prefix of the Step 1 commit message. If Step 1 created NO commit (a
-   clean tree whose doc-anchor check found no gap, the common case now that the Code Review pass
-   commits its own work), take the prefix of the most recent commit that is NOT a `*(review)`
-   commit, and if there is none, default to `chore`.
+1. `<type>` = the conventional prefix of the Step 1 commit message. If Step 1 created NO commit,
+   or created only the clean-tree doc fix-up (a `docs:` commit that describes the audit, not the
+   change; a clean tree is the common case now that the Code Review pass commits its own work),
+   take the prefix of the most recent commit that is neither a `*(review)` commit nor that doc
+   fix-up, and if there is none, default to `chore`.
 2. `<desc>` = a kebab slug of the work: resolve the task with `kangentic_get_current_task`
    (pass the worktree cwd + the local branch) and slugify its title (lowercase, hyphen-joined,
    drop filler words, cap to ~4-5 meaningful words, `[a-z0-9-]` only, no
@@ -156,12 +160,18 @@ clean no-op is fine if coverage is already adequate."
 
 **Re-run any tests the Code Review pass added.** Those files went green when `/code-review` wrote
 them, but against the tree as it stood then, and Step 3 has since rebased onto a source branch
-that may have moved. Find them in the review commits (the pass committed itself, so they are not
-sitting in the tree untracked). Two Bash calls:
+that may have moved. If Step 3 reported the branch already up to date, nothing moved under them:
+skip this re-run. Otherwise find them in the review commits (the pass committed itself, so they
+are not sitting in the tree untracked), in one Bash call:
 
-1. `git log --format=%H --grep="(review)" origin/<sourceBranch>..HEAD` for the review commit(s).
-   Keep the quotes; unquoted parentheses are a shell syntax error.
-2. `git show --name-only --format= <sha>` for each, and take the `tests/` paths.
+`git log --grep="^[a-z]*(review)[:!]" --name-only --format= origin/<sourceBranch>..HEAD`
+
+It prints the files of every review commit; take the `tests/` paths and drop duplicates. Keep the
+quotes (unquoted parentheses are a shell syntax error), and keep the pattern anchored to a
+`<type>(review):` subject: a bare `--grep="(review)"` also matches any commit whose body merely
+mentions `(review)`, such as a commit that edits these instructions. `/code-review`'s Step 4
+ledger read keeps the bare form on purpose (it is desktop's, and it then keeps only the
+`Refuted:` and `Decisions:` lines), but here every file of every matched commit would count.
 
 Then re-run each, scoped to the file itself: `npx vitest run tests/unit/<file>.test.ts` or
 `npx jest tests/components/<file>.test.tsx`. The pass never writes Maestro flows (it files those
