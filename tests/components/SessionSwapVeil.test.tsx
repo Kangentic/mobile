@@ -90,6 +90,37 @@ describe('SessionSwapVeil', () => {
     expect(screen.getByTestId('session-swap-veil').props.pointerEvents).not.toBe('none');
   });
 
+  /**
+   * The veil mounts already opaque: no entering animation on its root. A fade
+   * in starts at opacity 0, and the native view keeps that first write until a
+   * frame advances it (the last-write-wins class motion-conventions.md records).
+   * On PR #103's paired E2E run (37559159800) that happened. Maestro found the
+   * root mounted at the full pane box but `visible: false` on all 36 polls over
+   * 5.6 s, while the panes beside it were visible. So a surface whose one job is
+   * to cover a session that just ended was in the tree and invisible. Nothing
+   * about covering may depend on a frame arriving. The exit keeps its crossfade:
+   * a stuck exit leaves the veil up rather than missing, and its fade was chosen
+   * because the bare cut read badly at the reveal.
+   *
+   * The second expectation is the control: it proves this environment's
+   * Reanimated mock exposes layout-animation props on the host at all, so the
+   * first cannot pass merely because the mock strips them.
+   *
+   * Mutation seen failing: putting `entering={presets.crossfadeIn}` back on the
+   * root (with the preset restored) fails the first expectation.
+   */
+  it('mounts already opaque, with no entering animation, and keeps its exit crossfade', async () => {
+    await render(
+      <ThemeProvider>
+        <SessionSwapVeil />
+      </ThemeProvider>,
+    );
+
+    const veil = screen.getByTestId('session-swap-veil');
+    expect(veil.props.entering).toBeUndefined();
+    expect(veil.props.exiting).toBeDefined();
+  });
+
   /** Above the panes' zIndex: 1, the same stacking pin the two text overlays carry. */
   it('stacks above the session panes', async () => {
     await render(

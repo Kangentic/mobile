@@ -41,13 +41,23 @@ appId: com.kangentic.mobile
 # is the footer dropping to the switcher.
 #
 # TRIAGE NOTE: this is the one assertion here on a TRANSIENT state, visible
-# for the stub's 6s gap plus the successor's bind-to-paint round trip. A
-# starved emulator can poll first after the successor has already painted,
-# which burns the full timeout and reports "never visible" - indistinguishable
-# from the real regression. Check process state and emulator load BEFORE
-# reading a failure here as a product bug (the same trap the google_apis
-# image set off in the developer guide), and never just raise the timeout: a
-# longer wait cannot see a state that has passed.
+# for the stub's 6s gap plus the successor's bind-to-paint round trip. Two
+# different failures report "never visible" here, and the device log tells
+# them apart. Open maestro-debug/session-respawn-recovery/logs/device-logcat.txt
+# FIRST and search for `Skipping invisible child` with
+# `viewIdResName: session-swap-veil`:
+#   - PRESENT, repeated while the veil is mounted: the veil was in the tree
+#     and invisible (alpha 0). That is an APP bug. It happened once (run
+#     37559159800) when the veil still faded in from opacity 0 and the fade
+#     never advanced; the veil now mounts opaque, and
+#     tests/components/SessionSwapVeil.test.tsx pins that. Look for anything
+#     that puts an opacity-0 first write back on the veil's root.
+#   - ABSENT: a starved emulator polled first after the successor had already
+#     painted. Check process state and emulator load BEFORE reading it as a
+#     product bug (the same trap the google_apis image set off in the
+#     developer guide).
+# Either way, never just raise the timeout: a longer wait cannot see a state
+# that has passed, and on that run Maestro polled 36 times inside the window.
 - extendedWaitUntil:
     visible:
       id: "session-swap-veil"
