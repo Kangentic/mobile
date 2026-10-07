@@ -73,6 +73,16 @@ Tab switches never slide: peers are not a hierarchy.
   layout-animations engine the default), so a lost frame leaves the banner or veil on screen. If one of those is ever reported stuck
   after a resume, start here, and ask whether the spinners still turned: a dead frame loop
   freezes all of them at once.
+- **The ENTERING mirror has been observed, and it is why a covering surface arrives opaque.**
+  A fade-in's first write is opacity 0. On paired E2E run 37559159800 (Reanimated 4.7.1,
+  2026-10-07) the session swap veil sat mounted at its full pane box while Android reported it
+  `visible: false` on all 36 Maestro polls over 5.6 s, with the panes beside it visible: the
+  fade never advanced past that first write. The veil's whole job is to cover, so it lost its
+  `entering` (and `crossfadeIn` its only user). A pinned test asserts the root carries none,
+  `tests/components/SessionSwapVeil.test.tsx`. Never put a from-zero `entering` on a surface
+  whose job is to cover or block; a decorative entrance can keep one. The signature in a
+  failing flow's `device-logcat.txt` is `Skipping invisible child ... viewIdResName: <testID>`
+  repeated while the node is mounted.
 - Never `setState` from a gesture or scroll handler. Use a shared value plus `useAnimatedStyle`.
 - Never read or write a shared value during render. It fires mid-reconciliation, and a re-render
   you did not cause replays the write. Touch shared values only in worklets, handlers and effects.

@@ -29,13 +29,18 @@ export interface MotionPresets {
   bannerIn: ComplexAnimationBuilder;
   bannerOut: ComplexAnimationBuilder;
   /**
-   * A layer arriving over, or leaving from over, content the eye is already
-   * following (the swap veil over a terminal frame). Symmetric on purpose:
-   * the base duration on the standard curve both ways, because what the user
-   * watches is the frame underneath, not the layer. The banner pair is the
-   * asymmetric one, for an element that IS the thing being watched.
+   * A layer leaving from over content the eye is already following (the swap
+   * veil over a terminal frame): the base duration on the standard curve,
+   * because what the user watches is the frame underneath, not the layer. The
+   * banner pair is the asymmetric one, for an element that IS the thing being
+   * watched.
+   *
+   * There is deliberately no `crossfadeIn` any more. Its only user was the swap
+   * veil, a surface whose job is to COVER, and a fade-in starts at opacity 0,
+   * which the native view keeps until a frame advances it: on a CI run the veil
+   * sat mounted and invisible for its whole 5.6 s life (see SessionSwapVeil.tsx).
+   * A covering layer arrives opaque.
    */
-  crossfadeIn: ComplexAnimationBuilder;
   crossfadeOut: ComplexAnimationBuilder;
 }
 
@@ -63,7 +68,6 @@ export function useMotionPresets(): MotionPresets {
       sheetSlideOut: SlideOutDown.duration(durations.fast).easing(accelerate).reduceMotion(ReduceMotion.System),
       bannerIn: FadeIn.duration(durations.fast).easing(decelerate).reduceMotion(ReduceMotion.System),
       bannerOut: FadeOut.duration(durations.fast).easing(accelerate).reduceMotion(ReduceMotion.System),
-      crossfadeIn: FadeIn.duration(durations.base).easing(standard).reduceMotion(ReduceMotion.System),
       crossfadeOut: FadeOut.duration(durations.base).easing(standard).reduceMotion(ReduceMotion.System),
     };
   }, [theme.motion]);

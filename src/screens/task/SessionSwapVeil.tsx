@@ -88,9 +88,23 @@ export interface SessionSwapVeilProps {
  * scale), and with the veil genuinely still the drawn dead pane measured 12
  * frames in 49 s, bare 18 in 45 s. Nothing to hide from.
  *
- * It leaves by the crossfade it arrived by (`crossfadeOut`, the base
- * duration on the standard curve): what the eye follows at the reveal is the
- * successor's frame underneath, and the fast banner exit read as a cut.
+ * It ARRIVES with no animation at all: the root mounts already opaque. It used
+ * to fade in (`crossfadeIn`, from opacity 0), and a fade-in's first write is
+ * what the native view keeps until a frame advances it (the last-write-wins
+ * class in motion-conventions.md). That happened on a paired E2E run
+ * (2026-10-07, run 37559159800). The veil was mounted at the full pane box for
+ * the whole 5.6 s gap, and Android reported it not visible on every one of 36
+ * polls, while the panes beside it were visible. A surface whose one job is to
+ * cover a session that just ended must not depend on a frame arriving to
+ * cover it. Under OS reduced motion the fade was already skipped, so arriving
+ * at once is a look this veil already shipped, and the scrim's own breath
+ * carries the motion.
+ *
+ * It LEAVES by a crossfade (`crossfadeOut`, the base duration on the standard
+ * curve): what the eye follows at the reveal is the successor's frame
+ * underneath, and the fast banner exit read as a cut. That exit carries the
+ * mirror risk (a lost frame leaves the veil up), which motion-conventions.md
+ * records against this component.
  *
  * On the motion: motion-conventions.md says a looping animation that never
  * stops holds the app drawing at full frame rate. The quiet-phase breath is
@@ -134,7 +148,8 @@ export function SessionSwapVeil({ waiting = false }: SessionSwapVeilProps): Reac
     <Animated.View
       testID="session-swap-veil"
       style={styles.overlay}
-      entering={presets.crossfadeIn}
+      // No `entering`, deliberately: see the docblock. A fade-in from opacity
+      // 0 left this veil mounted and invisible on a CI run.
       exiting={presets.crossfadeOut}
       // Modal to VoiceOver, so it cannot reach the covered pane behind the
       // scrim; SessionScreen hides the pane subtree for Android. One atomic
