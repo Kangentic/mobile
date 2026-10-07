@@ -1,8 +1,15 @@
 import React from 'react';
-import { AppState, DeviceEventEmitter, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import {
+  AppState,
+  DeviceEventEmitter,
+  StyleSheet,
+  type AppStateStatus,
+  type NativeEventSubscription,
+} from 'react-native';
 import { act, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react-native';
-import { ThemeProvider } from '@/components';
+import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
+import { TERMINAL_WAIT_CAPTION_AFTER_MS } from '@/components/terminal/TerminalWaitOverlay';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
 import {
   appendChunk,
@@ -1268,6 +1275,162 @@ describe('TerminalPane (faithful mirror)', () => {
       await rerenderPane(result, true);
 
       expect(decodedPosts().some((message) => message?.type === 'init')).toBe(false);
+    });
+  });
+
+  /**
+   * Board task #107: opening a session while the desktop is slow showed a bare
+   * black pane, which read as a broken phone. The pane now covers itself with
+   * the swap veil's wait cursor until the desktop's answer is on screen, and
+   * after TERMINAL_WAIT_CAPTION_AFTER_MS says the wait is the desktop's, but
+   * only while the ring still lacks the desktop's seed.
+   */
+  describe('the wait before the first frame', () => {
+    const { intervalMs, opacityMin, opacityMax } = darkTerminalTheme.motion.waitCursorBlink;
+    const restingOpacity = (opacityMin + opacityMax) / 2;
+    const cursorOpacity = (): number =>
+      StyleSheet.flatten(screen.getByTestId('terminal-wait-cursor').props.style).opacity as number;
+
+    /**
+     * Mutations seen failing: dropping `setAwaitingFirstFrame(false)` from the
+     * painted handler (the wait never ends), and ending the wait on ANY report
+     * (the empty ring's blank report ends it).
+     */
+    it('covers an unseeded pane until the seeded frame paints, through the blank report of the empty ring', async () => {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      expect(screen.getByTestId('terminal-wait')).toBeTruthy();
+      expect(screen.getByTestId('terminal-wait').props.pointerEvents).toBe('none');
+
+      // The 'ready' init came from an empty ring: blank, and still waiting.
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+      expect(screen.queryByTestId('terminal-wait')).not.toBeNull();
+
+      await act(() => seedScrollback('sess-1', 'hello'));
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 2, blank: false }));
+      expect(screen.queryByTestId('terminal-wait')).toBeNull();
+    });
+
+    /**
+     * Measured on the Pixel (release build, 2026-10-07): the seed landed 19 ms
+     * after 'ready', its flush reported blank at +99 ms, and the frame painted
+     * with the next live write at +494 ms. An earlier revision ended the wait
+     * on any report once the ring was seeded, and the screen recording showed
+     * the bare black pane for those 395 ms. Mutation seen failing: restoring
+     * that `|| hasSeed(...)` clause to the painted handler.
+     */
+    it('keeps waiting through a blank report even once the ring holds the seed, until the frame paints', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', '\x1b[?1049h');
+      await renderPaneAndReady();
+
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: true }));
+      expect(screen.queryByTestId('terminal-wait')).not.toBeNull();
+
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+      expect(screen.queryByTestId('terminal-wait')).toBeNull();
+    });
+
+    it('paints the terminal background under the cursor, so xterm\'s own cursor never shows beside it', async () => {
+      retainTerminal('sess-1');
+      await renderPaneAndReady();
+      expect(StyleSheet.flatten(screen.getByTestId('terminal-wait').props.style).backgroundColor).toBe(
+        darkTerminalTheme.colors.terminalBackground,
+      );
+    });
+
+    it('comes back when the renderer is replaced, since the new page starts blank', async () => {
+      retainTerminal('sess-1');
+      appendChunk('sess-1', 'hello');
+      await renderPaneAndReady();
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+      expect(screen.queryByTestId('terminal-wait')).toBeNull();
+
+      await act(() => {
+        webViewMock.__capturedProps.current?.onRenderProcessGone?.();
+      });
+      expect(screen.queryByTestId('terminal-wait')).not.toBeNull();
+    });
+
+    it('names the desktop after the caption delay, and only while the seed is missing', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        await act(() => {
+          jest.advanceTimersByTime(TERMINAL_WAIT_CAPTION_AFTER_MS - 1);
+        });
+        expect(screen.queryByTestId('terminal-wait-caption')).toBeNull();
+        await act(() => {
+          jest.advanceTimersByTime(1);
+        });
+        expect(screen.getByTestId('terminal-wait-caption')).toHaveTextContent('Waiting for desktop');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('never names the desktop once the seed has landed, even with the page yet to report', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        seedScrollback('sess-1', 'hello');
+        await renderPaneAndReady();
+        await act(() => {
+          jest.advanceTimersByTime(TERMINAL_WAIT_CAPTION_AFTER_MS);
+        });
+        expect(screen.queryByTestId('terminal-wait')).not.toBeNull();
+        expect(screen.queryByTestId('terminal-wait-caption')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * motion-conventions.md: a loop must stop even when what it waits for
+     * never comes. The swap veil's cursor is the one sanctioned unbounded
+     * blink; this one holds still at `terminalWaitCursor.holdAfterMs`.
+     * Mutation seen failing: dropping `!blinkExpired` from the blink gate (the
+     * cursor kept toggling past the bound).
+     */
+    it('blinks on the wait-cursor interval and holds still past the bound', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        expect(cursorOpacity()).toBe(opacityMax);
+        await act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(opacityMin);
+
+        await act(() => {
+          jest.advanceTimersByTime(darkTerminalTheme.motion.terminalWaitCursor.holdAfterMs);
+        });
+        expect(cursorOpacity()).toBe(restingOpacity);
+        await act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(restingOpacity);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /** Mutation seen failing: dropping `active` from the blink gate (the hidden pane's cursor started lit at full opacity). */
+    it('holds the cursor still while the pane is not the visible lens', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        await renderPaneAndReady(false);
+        expect(cursorOpacity()).toBe(restingOpacity);
+        await act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(restingOpacity);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

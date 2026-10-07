@@ -830,6 +830,116 @@ describe('connectionManager background keepalive ceiling', () => {
   });
 
   /**
+   * Board task #107: a SLOW desktop, not a dead socket. Measured on the Pixel
+   * (2026-10-07): the desktop pushed a board update 2.2 s into the probe, the
+   * project list itself answered after the 3 s deadline, and the forced
+   * redial that followed cost about 8 s and left the terminal being opened
+   * blank. An event decrypted on the current session while the probe waits
+   * answers the probe's question, so the deadline must leave the socket alone.
+   *
+   * The phone's own receipt of the event is asserted FIRST, through a listener
+   * on the same session, before the deadline-crossing advance: a push that
+   * never reached the phone cannot make the "no forced redial" assertion pass
+   * vacuously.
+   *
+   * Mutation seen failing: removing `desktopSpoke` from the `stale` expression
+   * in probeChannelOnForeground made the deadline's rejection call
+   * `transport.redialNow({ force: true })` after the event had arrived.
+   */
+  it('does not force a redial when the desktop pushes an event inside the probe window', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const connection = getActiveConnection();
+    if (!connection) throw new Error('expected an active connection');
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+    let eventsReceivedByPhone = 0;
+    const unsubscribeEvents = connection.controller.session.onMessage((message) => {
+      if (message.type === 'event') eventsReceivedByPhone += 1;
+    });
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).toHaveBeenCalledWith();
+
+      // The measured shape: a push 2.2 s in, the probe still unanswered.
+      await vi.advanceTimersByTimeAsync(2_200);
+      stub.emitEvent({ kind: 'diff', taskId: 'task-9', payload: null });
+      for (let round = 0; round < 20 && eventsReceivedByPhone === 0; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(eventsReceivedByPhone).toBe(1);
+
+      // Past the probe's own deadline; the unanswered request rejects with a
+      // timeout, but the desktop has spoken, so the transport is left alone.
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).not.toHaveBeenCalledWith({ force: true });
+      expect(getActiveConnection()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+      unsubscribeEvents();
+    }
+  });
+
+  /**
+   * The other side of the same guard: a desktop HEARTBEAT is not a sign of
+   * life for this probe. It is the desktop's presence probe, sent to a phone
+   * it suspects is gone, and it keeps arriving in the task #70 stall the probe
+   * exists for (the relay has stopped hearing the phone, while the phone still
+   * hears the desktop). Counting it would disable the probe in exactly that
+   * case.
+   *
+   * Mutation seen failing: counting every message type as proof (dropping the
+   * `message.type` filter in probeChannelOnForeground's listener) left
+   * redialNow at one call - the forced redial never came.
+   */
+  it('still force-redials when only a desktop heartbeat arrives inside the probe window', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const connection = getActiveConnection();
+    if (!connection) throw new Error('expected an active connection');
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+    let heartbeatsReceivedByPhone = 0;
+    const unsubscribeHeartbeats = connection.controller.session.onMessage((message) => {
+      if (message.type === 'heartbeat') heartbeatsReceivedByPhone += 1;
+    });
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(500);
+      stub.send({ type: 'heartbeat' });
+      for (let round = 0; round < 20 && heartbeatsReceivedByPhone === 0; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(heartbeatsReceivedByPhone).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS);
+      expect(redialNow).toHaveBeenCalledTimes(2);
+      expect(redialNow).toHaveBeenLastCalledWith({ force: true });
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+      unsubscribeHeartbeats();
+    }
+  });
+
+  /**
    * foregroundProbeInFlight's own re-entry guard: two 'active' transitions
    * before the first probe settles must not send two read-board requests.
    * Every existing probe test drives 'active' exactly once, so none of them

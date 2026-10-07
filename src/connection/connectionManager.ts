@@ -900,8 +900,10 @@ function kickTransportOnForeground(): void {
  * How long the foreground probe waits for the desktop's answer before it
  * declares the socket dead. The project list answered in about 90 ms over
  * the hosted relay on the measurement run (task #70); 3 s is thirty times
- * that, and the cost of a wrong verdict is one needless reconnect, about a
- * second of handshake plus bootstrap.
+ * that. The cost of a wrong verdict is one needless reconnect: about a second
+ * of handshake plus bootstrap on that run, but about 8 s against a slow
+ * desktop (task #107), which is why a desktop that speaks inside the window
+ * is never torn down (see probeChannelOnForeground).
  */
 const FOREGROUND_PROBE_TIMEOUT_MS = 3_000;
 let foregroundProbeInFlight = false;
@@ -957,6 +959,22 @@ function probeChannelOnForeground(): void {
   const epoch = establishedEpoch;
   const rekeyEpochAtStart = rekeyEpoch;
   const startedAtMs = Date.now();
+  // Any event or capability-response the desktop sends while the probe waits
+  // answers the same question the probe asks, so it counts. Measured on the
+  // Pixel (task #107, 2026-10-07): a slow desktop pushed a board update 2.2 s
+  // into the probe, the project list itself took longer than 3 s, and the
+  // forced redial that followed cost about 8 s and left the terminal being
+  // opened blank. A desktop HEARTBEAT never counts: it is the desktop's
+  // presence probe, sent to a phone it suspects is gone, and it still flows
+  // in the task #70 failure this probe exists for (the relay had stopped
+  // hearing the phone, not the other way round). An event or a response means
+  // the desktop still holds this phone as present. Messages arrive only
+  // through the current session's streams, and the epoch checks below cover
+  // a session that changed under the probe.
+  let desktopSpoke = false;
+  const unsubscribeDesktopSpoke = controller.session.onMessage((message) => {
+    if (message.type === 'event' || message.type === 'capability-response') desktopSpoke = true;
+  });
   traceConnection('probe-start');
   controller.capabilities
     .request('read-board', {}, { timeoutMs: FOREGROUND_PROBE_TIMEOUT_MS })
@@ -970,16 +988,21 @@ function probeChannelOnForeground(): void {
       // desktop that refuses the verb (a narrowed device) answers the
       // liveness question in the affirmative and never reaches this handler.
       // What is left here is a timeout or a send that threw, and both mean
-      // the socket is not carrying traffic.
+      // the socket is not carrying traffic - unless the desktop spoke anyway.
       const timedOut = error instanceof Error && /timed out/.test(error.message);
       const rekeyed = rekeyEpochAtStart !== rekeyEpoch;
       const stale =
-        activeConnection !== connection || epoch !== establishedEpoch || rekeyed || transport.state !== 'connected';
-      traceConnection('probe-failed', { ms: Date.now() - startedAtMs, timedOut, stale, rekeyed });
+        activeConnection !== connection ||
+        epoch !== establishedEpoch ||
+        rekeyed ||
+        desktopSpoke ||
+        transport.state !== 'connected';
+      traceConnection('probe-failed', { ms: Date.now() - startedAtMs, timedOut, stale, rekeyed, desktopSpoke });
       if (stale) return;
       transport.redialNow({ force: true });
     })
     .finally(() => {
+      unsubscribeDesktopSpoke();
       foregroundProbeInFlight = false;
     });
 }

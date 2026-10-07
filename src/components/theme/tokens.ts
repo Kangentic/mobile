@@ -186,6 +186,18 @@ export interface MotionTokens {
     opacityMax: number;
   };
   /**
+   * The terminal pane's own wait, from opening a session until the desktop's
+   * first frame paints: the same cursor as `waitCursorBlink`, on the same
+   * timing. Unlike the swap veil's, this blink is BOUNDED, as `skeletonPulse`
+   * is: past `holdAfterMs` the cursor holds still, because a loop must stop
+   * even when what it waits for never comes (motion-conventions.md). Longer
+   * than the pane's own blank recovery (two attempts, five seconds apart),
+   * so a wait that recovery can still end keeps blinking through it.
+   */
+  terminalWaitCursor: {
+    holdAfterMs: number;
+  };
+  /**
    * The Agents feed's section-landing pulse: a row that just changed section
    * tints with the accent and fades, so the eye can track the move. A one-shot
    * fade, mounted only for its own window and unmounted on a JS timer
@@ -304,6 +316,9 @@ export const motionTokens: MotionTokens = {
     intervalMs: 600,
     opacityMin: 0.15,
     opacityMax: 1,
+  },
+  terminalWaitCursor: {
+    holdAfterMs: 30_000,
   },
   // Design values, tuned by eye on a release build rather than measured: the
   // max is the switching overlay's own scrim opacity, the min keeps the frame

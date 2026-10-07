@@ -1811,7 +1811,8 @@ code, established flag and keepalive flag at that moment), `dial`, `open`, `clos
 relay's close code), `schedule-reconnect` (the delay armed and the next rung), `redial-now`
 (whether the foreground kick actually dialed, and whether it was forced), `redial-now-skipped`
 and `probe-skipped` (the A/B switch turned off), `probe-start` / `probe-ok` / `probe-failed` (the
-foreground liveness probe and its verdict), `established`, `bootstrap-start`,
+foreground liveness probe and its verdict; `probe-failed` carries `rekeyed` and `desktopSpoke`,
+the two signs of life that leave the socket alone), `established`, `bootstrap-start`,
 `bootstrap-restart` (a bootstrap lost to a rekey, restarted), `project-list`, `board-snapshot`
 (one per board, with its projection and task count), `wake-source` and `ceiling-timer` (the
 keepalive's two enforcement routes), and the session swap's own timeline: `session-swap` with
