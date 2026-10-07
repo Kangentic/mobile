@@ -463,8 +463,9 @@ a release build, Pixel 11 Pro, one process, the same 210x48 session, five fit-bu
 arm (retention probe `measured-fit` as the control): the old chain made 6 canvas writes per press,
 blocked 337-385 ms in them and took 562-590 ms, and a screen recording showed the pane blank for
 425-442 ms on every press; the computed fit made 0 writes, took 1-9 ms, and the pane was never
-blank. (An open still shows an empty pane until the desktop's stream seed arrives, about a second
-in both arms; that is the seed, not the fit.) The `terminal-fit` trace line carries `fitStrategy`,
+blank. Five keyboard open-and-close cycles showed no blank frame in either arm, which matches the
+keyboard running no fit at all (above). (An open still shows an empty pane until the desktop's
+stream seed arrives, about a second in both arms; that is the seed, not the fit.) The `terminal-fit` trace line carries `fitStrategy`,
 `chainMs`, `cellWrites`, `cellWriteMs` and `maxCellWriteMs`, which is how it is checked.
 A pinch is a page-local override: it survives a lens switch back, a foreground and a same-session
 re-seed (`preservePinch` on the bridge's `init`) and is cleared by the fit button, another session
