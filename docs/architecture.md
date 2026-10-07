@@ -261,9 +261,15 @@ the probe is deliberately issued through `capabilities` rather than `verbs` so t
 device's `ok: false` resolves rather than throws. A rekey landing inside the 3 s window is the
 other one: it loses the in-flight probe exactly as a dead socket would, while proving the socket
 is alive (the phone received the frame), so the probe carries a rekey epoch alongside the
-established epoch and treats that verdict as stale. Both guards only ever SUPPRESS a teardown;
-neither can add one. The measurement recipe and the numbers are in the developer guide's
-"Measuring the background-to-foreground reconnect".
+established epoch and treats that verdict as stale. A slow desktop is the third: any event or
+capability-response that arrives while the probe waits answers its question, so the deadline
+leaves the socket alone. Measured on the Pixel (task #107): a board update arrived 2.2 s into a
+probe whose own answer took longer than 3 s, and the forced redial that followed cost about 8 s.
+A desktop heartbeat does not count. It is the desktop's presence probe, sent to a phone it
+suspects is gone, and it keeps arriving in exactly the stall above, where the relay has stopped
+hearing the phone. All three guards only ever SUPPRESS a teardown; none can add one. The
+measurement recipe and the numbers are in the developer guide's "Measuring the
+background-to-foreground reconnect".
 
 **Correction, same issue: the budget does not accumulate across background stretches.** This
 section and `connectionManager.ts` both used to reason about exhausting the 6h budget over many
@@ -464,8 +470,9 @@ arm (retention probe `measured-fit` as the control): the old chain made 6 canvas
 blocked 337-385 ms in them and took 562-590 ms, and a screen recording showed the pane blank for
 425-442 ms on every press; the computed fit made 0 writes, took 1-9 ms, and the pane was never
 blank. Five keyboard open-and-close cycles showed no blank frame in either arm, which matches the
-keyboard running no fit at all (above). (An open still shows an empty pane until the desktop's
-stream seed arrives, about a second in both arms; that is the seed, not the fit.) The `terminal-fit` trace line carries `fitStrategy`,
+keyboard running no fit at all (above). (An open still shows no frame until the desktop's
+stream seed arrives, about a second in both arms; that is the seed, not the fit, and the pane
+shows the wait cursor meanwhile, below.) The `terminal-fit` trace line carries `fitStrategy`,
 `chainMs`, `cellWrites`, `cellWriteMs` and `maxCellWriteMs`, which is how it is checked.
 A pinch is a page-local override: it survives a lens switch back, a foreground and a same-session
 re-seed (`preservePinch` on the bridge's `init`) and is cleared by the fit button, another session
@@ -507,6 +514,25 @@ two showed it), which matches "sometimes" in the report. The native typing
 field (`DirectKeyInput`) is not the source: focusing it started no autofill session
 (`dumpsys autofill`, both with and without a two-line minimum that AOSP's heuristic reads), so
 that field is unchanged.
+
+**An open waits visibly (`TerminalWaitOverlay`).** From opening a session until the desktop's
+answer is on screen, the pane shows the swap veil's wait cursor at the grid's origin instead of a
+bare black pane, which read as a broken phone while the desktop was slow (task #107; the
+slowness itself is the desktop's relay path, desktop task #774). The wait is per PAGE, not per
+session: it ends on the first NON-BLANK paint report only, and it starts again when the renderer
+is replaced. Not on a blank report once the seed is in: measured on the Pixel (release build), a
+seed's own flush parsed to a blank viewport at +99 ms and the frame came with the next live write
+at +494 ms, and a first revision that ended the wait on that blank report showed the bare black
+pane for the 395 ms between (screen recording). The overlay is opaque in the terminal's own
+background, since the grid under it is blank while it waits, so xterm's own cursor (which a seed
+parked halfway down the pane in that recording) never shows beside the wait cursor. A swap never
+shows it, because the held frame stays on screen and the veil owns that wait. After 3 s, and only
+while the seed is still missing, one muted line says "Waiting for desktop". Touches pass through,
+so the keys, the switcher and the pane's buttons stay live, and the blank-recovery retries
+underneath are unchanged. The cursor blinks like the
+veil's (`BlinkingBlock`, `waitCursorBlink`), but unlike the veil's it is bounded
+(`terminalWaitCursor.holdAfterMs`, 30 s, past the two recovery attempts), and it holds still while
+the pane is not the visible lens, under reduced motion, or under a pushed route.
 
 ## Composer and voice dictation
 

@@ -27,6 +27,7 @@ import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { refreshTerminalStream, writeTerminal } from '@/connection/actions';
 import { DirectKeyInput, type DirectKeyInputHandle } from './DirectKeyInput';
+import { TerminalWaitOverlay } from './TerminalWaitOverlay';
 
 export interface TerminalPaneProps {
   sessionId: string;
@@ -221,9 +222,16 @@ export function TerminalPane({
   // Without a handler that surfaces as a native crash or a permanently blank
   // terminal; a remount reloads the page, whose 'ready' re-seeds from the ring.
   const [webViewGeneration, setWebViewGeneration] = useState(0);
+  // True until this PAGE has painted a non-blank frame: the desktop's answer
+  // on screen. TerminalWaitOverlay covers the pane meanwhile.
+  // Pane-local and per page on purpose, never `paintedSessionIds`: on a swap
+  // the bound session changes before its successor paints while the held
+  // frame is still on screen, and that wait is the swap veil's to show.
+  const [awaitingFirstFrame, setAwaitingFirstFrame] = useState(true);
   const recoverWebView = useCallback(() => {
     terminalReadyRef.current = false;
     setTerminalReady(false);
+    setAwaitingFirstFrame(true);
     setWebViewGeneration((generation) => generation + 1);
   }, []);
   // Read inside the live-feed listener so pausing takes effect without
@@ -841,6 +849,7 @@ export function TerminalPane({
         // init unconditionally, even from an empty ring.
         displayedFrameSessionIdRef.current = null;
         heldInitSessionIdRef.current = null;
+        setAwaitingFirstFrame(true);
         postInit('ready');
         terminalReadyRef.current = true;
         setTerminalReady(true);
@@ -866,6 +875,12 @@ export function TerminalPane({
         if (!message.blank && lastInitSessionIdRef.current !== null) {
           useTerminalUiStore.getState().markTerminalPainted(lastInitSessionIdRef.current);
         }
+        // The wait ends with the desktop's answer ON SCREEN, which only a
+        // non-blank report says. Not a blank one even once the ring holds the
+        // seed: measured on the Pixel (task #107), a seed's own flush parsed
+        // to a blank viewport and the frame arrived with the next live write
+        // 395 ms later, so ending the wait there showed a bare black pane.
+        if (!message.blank) setAwaitingFirstFrame(false);
         return;
       }
       if (message.type === 'modes') {
@@ -1051,6 +1066,7 @@ export function TerminalPane({
           onContentProcessDidTerminate={recoverWebView}
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
         />
+        {awaitingFirstFrame ? <TerminalWaitOverlay sessionId={sessionId} active={isActive} /> : null}
         <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />
         <View style={styles.scrollLatestButton}>
           <IconButton
