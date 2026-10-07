@@ -14,6 +14,10 @@
  *   node scripts/mobileInspect.mjs serve
  *   node scripts/mobileInspect.mjs relaunch
  *
+ * `text` undoes Git Bash's path conversion of a leading-slash argument, so a
+ * mock chat command like `text "/pause"` types `/pause` and not
+ * `C:/Program Files/Git/pause` (see scripts/msysPathArgs.mjs).
+ *
  * Every command accepts --serial <adb serial> (or the ANDROID_SERIAL env
  * var, which adb honors natively) to pick the device when more than one is
  * attached; with several ready devices and no selection the command fails
@@ -37,6 +41,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
+import { looksMsysConverted, undoMsysPathConversion } from './msysPathArgs.mjs';
 import { adbServerClientPids, adbServerPort, decideAdbServerRestart } from './rigProcessRegistry.mjs';
 
 const INSPECT_PORT = 8791;
@@ -239,8 +244,15 @@ function commandTap(args) {
 }
 
 function commandText(args) {
-  const text = args[0];
-  if (typeof text !== 'string' || text.length === 0) fail('usage: text "<string>"');
+  const rawText = args[0];
+  if (typeof rawText !== 'string' || rawText.length === 0) fail('usage: text "<string>"');
+  // Git Bash rewrites a leading-slash argument into a Windows path before
+  // this script runs (`/pause` arrives as `C:/Program Files/Git/pause`).
+  const text = undoMsysPathConversion(rawText);
+  if (text !== rawText) console.error(`[inspect] undid Git Bash path conversion: typing ${JSON.stringify(text)}`);
+  else if (looksMsysConverted(text)) {
+    console.error('[inspect] this looks like a Git Bash path conversion; prefix the command with MSYS_NO_PATHCONV=1 if you meant a leading slash');
+  }
   // `adb shell input text` cannot carry spaces; %s is its space escape.
   runAdb(['shell', 'input', 'text', text.replace(/ /g, '%s')]);
   console.log('typed');

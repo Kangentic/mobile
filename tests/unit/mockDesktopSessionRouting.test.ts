@@ -804,9 +804,10 @@ describe('the paused fact (protocol 0.17.0)', () => {
       expect(typeof row.paused).toBe('boolean');
       if (row.resumable === true) expect(row.paused).toBe(true);
     }
-    // The archived task that ran an agent reads paused, with no Resume.
+    // The archived task that ran an agent reads paused, with no Resume, and
+    // names no session: the move into Done nulls it on the desktop.
     const archivedWithAgent = rows.find((row) => row.id === 'mock-project-archived-1');
-    expect(archivedWithAgent).toEqual(expect.objectContaining({ paused: true, resumable: false }));
+    expect(archivedWithAgent).toEqual(expect.objectContaining({ paused: true, resumable: false, session_id: null }));
   });
 
   it('keeps the paused fact and drops the Resume gate when a paused task moves into Done', async () => {
@@ -818,6 +819,7 @@ describe('the paused fact (protocol 0.17.0)', () => {
     expect(archivedTask?.archived_at).not.toBeNull();
     expect(archivedTask?.paused).toBe(true);
     expect(archivedTask?.resumable).toBe(false);
+    expect(archivedTask?.session_id).toBeNull();
   });
 
   it('resets a paused task on a move into To Do: no session, nothing paused, its feed ended', async () => {
