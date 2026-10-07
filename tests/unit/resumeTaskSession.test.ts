@@ -11,6 +11,7 @@ import { RESUME_WAIT_MS, resumeTaskSession } from '@/connection/actions';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 import { useBoardStore } from '@/state/boardStore';
 import { resumeProgress, useResumeStore } from '@/state/resumeStore';
+import { useToastStore } from '@/state/toastStore';
 
 const { startSession, getActiveConnection, requireSubscriptions, runBootstrap } = vi.hoisted(() => ({
   startSession: vi.fn(),
@@ -40,7 +41,11 @@ beforeEach(() => {
   vi.useFakeTimers();
   useResumeStore.setState({ byTaskId: {} });
   useBoardStore.getState().reset();
+  useToastStore.getState().reset();
 });
+
+/** The messages of the toasts up right now. */
+const toastMessages = (): string[] => useToastStore.getState().toasts.map((toast) => toast.message);
 
 afterEach(() => {
   vi.useRealTimers();
@@ -326,6 +331,63 @@ describe('resumeTaskSession - following the board row', () => {
 
     vi.advanceTimersByTime(RESUME_WAIT_MS);
     expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+  });
+});
+
+/**
+ * The desktop reports a failed Resume twice (useTaskActions.ts): the line under
+ * the button, and a warning toast, "Failed to resume session", with the reason
+ * after a colon when there is one. The toast is the half that reaches a user
+ * who has left the task's screen.
+ */
+describe('resumeTaskSession - the failure toast', () => {
+  const PAUSED_ROW: Partial<BoardTaskWire> = { session_id: null, resumable: true, spawn_progress: null };
+  const publishRow = (row: Partial<BoardTaskWire>): void => {
+    useBoardStore
+      .getState()
+      .applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', view: 'sessions', tasks: [boardTaskFixture({ id: 'task-1', ...row })] }));
+  };
+
+  it('raises the desktop\'s warning toast, with the refusal text, when the desktop refuses', async () => {
+    startSession.mockRejectedValue(new CapabilityError('start-session', 'Cannot resume a session for a task in the To Do column'));
+
+    await resumeTaskSession('task-1', 'project-1');
+
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ message: 'Failed to resume session: Cannot resume a session for a task in the To Do column', variant: 'warning' }),
+    ]);
+  });
+
+  it('raises it with no reason when the spawn fails after the label', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+    publishRow({ ...PAUSED_ROW, spawn_progress: 'Resuming session...' });
+
+    publishRow(PAUSED_ROW);
+
+    expect(toastMessages()).toEqual(['Failed to resume session']);
+  });
+
+  it('raises it when the wait bound passes with nothing from the desktop', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+    await resumeTaskSession('task-1', 'project-1');
+
+    vi.advanceTimersByTime(RESUME_WAIT_MS);
+
+    expect(toastMessages()).toEqual(['Failed to resume session']);
+  });
+
+  it('raises nothing when the resume lands', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+    publishRow({ ...PAUSED_ROW, spawn_progress: 'Resuming session...' });
+    publishRow({ session_id: 'sess-new', resumable: false, spawn_progress: null });
+
+    vi.advanceTimersByTime(RESUME_WAIT_MS);
+
+    expect(toastMessages()).toEqual([]);
   });
 });
 

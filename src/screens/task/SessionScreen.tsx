@@ -25,7 +25,7 @@ import {
 import { SessionInputBar } from './SessionInputBar';
 import { ModeToggleHint } from './ModeToggleHint';
 import { ResumePanel } from './ResumePanel';
-import { RESUME_FAILED_MESSAGE, useResumeOffer } from './useResumeOffer';
+import { useResumeOffer } from './useResumeOffer';
 import { resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
 
@@ -824,13 +824,6 @@ export function SessionScreen(): React.JSX.Element {
   // which reads as preparing, never as paused), so the veil yields to it.
   const resumeOffer = useResumeOffer(taskId, displaySessionId);
   const resumePanelShown = resumeOffer.offered && projectId !== null;
-  // A failed Resume's line, wherever the user is looking: the terminal lens
-  // has it in the Resume panel, so the footer carries it in the other two (a
-  // Resume pressed from the header while on Chat otherwise failed in silence).
-  const resumeFailureNotice =
-    resumeOffer.offered && resumeOffer.attempt?.phase === 'failed' && mode !== 'terminal'
-      ? (resumeOffer.attempt.message ?? RESUME_FAILED_MESSAGE)
-      : null;
   const showQuietVeil =
     quietWindowOpen &&
     !leaveScreen &&
@@ -968,7 +961,6 @@ export function SessionScreen(): React.JSX.Element {
           suspended={footerSuspended}
           switcherOnly={footerSwitcherOnly}
           quickKeysHidden={resumePanelShown}
-          notice={resumeFailureNotice}
         />
       </KeyboardAvoidingView>
     </Screen>

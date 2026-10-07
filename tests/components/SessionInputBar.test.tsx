@@ -76,20 +76,6 @@ describe('SessionInputBar', () => {
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
   });
 
-  /** A failed Resume's line, in the composer's error style, above the rest of the footer. */
-  it('shows a notice above the footer when given one, and none otherwise', async () => {
-    const { unmount } = await render(
-      <ThemeProvider>
-        <SessionInputBar sessionId="sess-1" mode="chat" onModeChange={jest.fn()} chatAttention={false} notice="Session could not be resumed." />
-      </ThemeProvider>,
-    );
-    expect(screen.getByTestId('session-footer-notice')).toHaveTextContent('Session could not be resumed.');
-    await unmount();
-
-    await renderBar('chat');
-    expect(screen.queryByTestId('session-footer-notice')).toBeNull();
-  });
-
   /**
    * Held through a session swap: the footer looks exactly as it did (no
    * dimming, nothing new to read) but its mode row takes no touches and

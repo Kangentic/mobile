@@ -201,7 +201,8 @@ src/
                   #   decrypts in the targets/nse/ extension, Android in the Notifee handler)
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory; resume, the one Resume attempt per task that the
-                  #   session screen, header and long-press hub share) + the non-Zustand
+                  #   session screen, header and long-press hub share; toast, the desktop's
+                  #   app-wide toasts, drawn by components/ToastHost) + the non-Zustand
                   #   terminalFeed PTY ring buffers +
                   #   memoryShed (registers the OS-memory-pressure reactions; lives here rather
                   #   than in observability/ because it touches the stores, and here rather than
