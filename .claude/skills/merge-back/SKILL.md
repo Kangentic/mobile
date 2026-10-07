@@ -1,5 +1,5 @@
 ---
-description: Direct quick-push escape hatch - commit, rebase, and push straight to the source branch, bypassing the PR gate. Use only when the user explicitly asks to push, land, or merge back a quick change. The normal flow is the board (Tests -> /pull-request, Ship It -> /merge-pull-request). NOT for a plain local commit (use /commit for that).
+description: Direct quick-push escape hatch - commit, rebase, and push straight to the source branch, bypassing the PR gate. Use only when the user explicitly asks to push, land, or merge back a quick change. The normal flow is the board (Testing -> /pull-request, Merge -> /merge-pull-request). NOT for a plain local commit (use /commit for that).
 allowed-tools: Read, Glob, Grep, Edit, Write, Bash(git:*), Bash(npm:*), Agent
 argument-hint: [commit message]
 ---
@@ -11,7 +11,7 @@ worktrees and the main repo.
 
 This is the **direct quick-push escape hatch**: it bypasses the pull-request gate, so it relies
 on admin push access. It is not wired to a board column. The normal flow goes through a PR: the
-**Tests** column runs `/pull-request` and the **Ship It** column runs `/merge-pull-request`.
+**Testing** column runs `/pull-request` and the **Merge** column runs `/merge-pull-request`.
 Reach for `/merge-back` only for a small, urgent change you want to land without a PR.
 
 **Usage:** `/merge-back [commit message]`

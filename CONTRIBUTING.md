@@ -207,9 +207,9 @@ primitives, the font floor, FlashList for growable lists, and `testID` on intera
 ### How maintainers land your PR
 
 You do not need to run any of this; it is here so the flow is not a mystery. Maintainers drive a
-PR to green and merge it through an internal Kanban board: a Tests column runs `/pull-request`
+PR to green and merge it through an internal Kanban board: a Testing column runs `/pull-request`
 (which pushes the branch and drives the CI checks to green, auto-fixing along the way), and a
-Ship It column runs `/merge-pull-request` (which merges the green PR). The board mechanics, git
+Merge column runs `/merge-pull-request` (which merges the green PR). The board mechanics, git
 worktrees, and agent skills are documented in [CLAUDE.md](CLAUDE.md) and are not something a
 contributor is expected to set up.
 

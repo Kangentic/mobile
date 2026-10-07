@@ -250,8 +250,12 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs, storeScreenshots.mjs
                   #   (listing captures, driven by /store-screenshots),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
-                  #   gitignored pack every finder reads instead of re-gathering; kept in
-                  #   step with the desktop repo's copy, which owns the divergence list)
+                  #   pack in the session scratchpad that every finder reads instead of
+                  #   re-gathering, and prints the correctness shards; kept in step with
+                  #   the desktop repo's copy, and its header owns the divergence list),
+                  #   review-verdict.mjs (computes the pass's Ready or Blocked verdict and
+                  #   the commit ledger from its findings JSON), lib/is-entrypoint.mjs
+                  #   (the real-path "run as a CLI?" guard those two import)
                   #   + repo scripts
 store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 ```
@@ -460,7 +464,9 @@ Four tiers, chosen for the fastest tier that proves the behavior. Full detail:
   (`.maestro/smoke.yaml`, `.maestro/paired`).
 
 If a run would execute tests you did not add or modify, it is a full-tier run regardless of
-mechanism: stop and let `/test` handle it.
+mechanism: stop and let `/test` handle it. **One exception:** `/code-review`'s Step 7 runs, scoped
+to each file, at most five existing test files that import a module one of its fixes touched,
+because a review fix can break a test it never mentions.
 
 **Maestro note:** `.maestro/smoke.yaml` runs against a fresh (unpaired) install; the flows under
 `.maestro/paired/` need a running relay plus `node scripts/stubDesktopPeer.mjs` and a completed
@@ -592,31 +598,53 @@ in a gitignored `CLAUDE.local.md` at the project root.
 - Prefer editing existing files over creating new ones.
 - A plain **local commit** goes through `/commit`: it stages and commits on the current branch
   only, with no push and no rebase. A bare request to "commit" means `/commit`.
-- **Landing changes goes through a PR by default.** The board drives it: the **Tests** column
+- **Landing changes goes through a PR by default.** The board drives it: the **Testing** column
   runs `/pull-request` (commit, conventional branch, push, create the PR, drive its CI checks to
-  green), and the **Ship It** column runs `/merge-pull-request` (merge the green PR, pull back to
+  green), and the **Merge** column runs `/merge-pull-request` (merge the green PR, pull back to
   local `main`). For a deliberate direct quick-push that bypasses the PR gate, use `/merge-back`.
   Only push, land, or merge when the user explicitly asks.
-- **A column hands the next one UNCOMMITTED changes in the worktree, by design.** Moving a task
-  between two active columns performs **zero git writes**: the desktop app suspends or respawns a
-  PTY and injects the destination column's `autoCommand`, and `ensureWorktree` short-circuits as
+- **A column move makes no git writes, so uncommitted work survives it.** Moving a task between
+  two active columns performs **zero git writes**: the desktop app suspends or respawns a PTY and
+  injects the destination column's `autoCommand`, and `ensureWorktree` short-circuits as
   `reused`, leaving the directory exactly as the previous agent left it. The worktree is SHARED
   across all of a task's sessions, and a column marked `isolated` isolates the conversation, not
   the filesystem. So uncommitted work survives a column move intact, and committing is the
   incoming column's skill's job, never the app's. (The only two destinations that destroy
   worktree state are the `todo` and `done` roles, both behind a confirmation dialog that counts
   uncommitted files first.)
-  Concretely: the column that runs `/code-review` hands the column that runs `/pull-request` a
-  dirty tree. **This repo's `/code-review` does not commit at all** - its fixes land in the
-  working tree and the next step commits them, and `.claude/skills/code-review/SKILL.md` notes
-  the desktop repo's "commit the pass" step has no counterpart here. That divergence matters: on
-  desktop a finished pass normally leaves a CLEAN tree, so a dirty one there means something
-  unusual, while here a dirty one is simply what a finished pass looks like. `git rebase` then
-  refuses to start until those changes are committed.
-  **That is the normal case, not a concurrent writer. Do not stop and ask whether to include it**:
-  everything in the worktree belongs to this task, so the answer is always yes and the question
-  costs a round trip on every review-then-test handoff. Escalate only when the diff is unrelated
-  to the task or genuinely half-written.
+  **The Code Review column commits its own pass**, as desktop's does. Entering it suspends the
+  task agent and kills its PTY, so the two never overlap, but it leaves that agent's UNCOMMITTED
+  work in the shared tree, which is why the pass commits by set math over `git status` and never
+  `git add -A`. It fixes every finding it verifies (Lows included), applies its recommended
+  option on a decision and lists the alternative, adds tests, and commits that pass itself, so
+  Testing can open on a branch carrying a `*(review)` commit no local agent authored. That is
+  expected, not corruption. The pass ends with a verdict computed by `scripts/review-verdict.mjs`:
+  **Ready** (move to Testing) or **Blocked** (move back to Executing and do the named steps).
+  There is no "skipped" status, and the commit body carries a `Refuted:`/`Decisions:` ledger the
+  next pass reads. A finished pass normally leaves the tree clean; a fix on an already-dirty path
+  stays uncommitted by design, so a dirty tree at Testing means the pass is either in flight or
+  left those paths deliberately mixed (its footer lists them). **Either way, do not stop and ask
+  whether to include it**: everything in the worktree belongs to this task, so the answer is
+  always yes and the question costs a round trip on every review-then-test handoff. Escalate only
+  when the diff is unrelated to the task or genuinely half-written. Never give a commit that is
+  not a review pass the `review` scope: the next pass reads `<type>(review):` subjects as its own.
+  **The review flow diverges from desktop in nine ways**, listed with reasons in
+  `.claude/skills/code-review/SKILL.md` ("Mobile differences") and in the header of
+  `scripts/build-review-pack.mjs`; change all three together:
+  1. No HMR vitest: Step 2 is a placeholder, and the verdict checks only `typecheck` and
+     `scopedTests`.
+  2. No E2E in the pass: a Maestro coverage hole goes to the grouped follow-up task for `/e2e` or
+     CI, never written, never run, never `blocked`.
+  3. The gated auditors are `crypto-pairing-auditor` and `expo-rn-reviewer`.
+  4. The "try first" packaged-build example is
+     `npx expo run:android --variant release --no-bundler`.
+  5. No commitlint and no `.husky/` hook, so desktop's `footer-max-line-length` change does not
+     apply.
+  6. New `.mjs` files import Node-only globals explicitly (`Buffer` from `node:buffer`).
+  7. Step 7's importer run covers `tests/unit/` (vitest) and `tests/components/` (jest), five
+     files in all.
+  8. `<reviewDir>` is the session scratchpad for parity; nothing here moves `.kangentic/`.
+  9. The script header comments, each naming its own divergences.
 - `/commit`, `/pull-request`, `/merge-pull-request`, and `/merge-back` all write conventional-commit
   messages.
 - `/sync-docs` keeps `docs/` aligned with source; the doc-anchor check runs inside `/pull-request`

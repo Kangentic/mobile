@@ -574,8 +574,12 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   cmakeStaging.mjs (npm run clean:staging prunes CMake staging trees whose
                   #   checkout is gone; --verify proves the object-path flag reached CMake),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
-                  #   gitignored pack every finder reads instead of re-gathering; kept in step
-                  #   with the desktop repo's copy)
+                  #   pack in the session scratchpad that every finder reads instead of
+                  #   re-gathering, and prints the correctness shards; kept in step with
+                  #   the desktop repo's copy, and its header owns the divergence list),
+                  #   review-verdict.mjs (computes the pass's Ready or Blocked verdict and
+                  #   the commit ledger from its findings JSON), lib/is-entrypoint.mjs
+                  #   (the real-path "run as a CLI?" guard those two import)
                   #   + repo scripts
 ```
 

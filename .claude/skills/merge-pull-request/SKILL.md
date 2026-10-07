@@ -1,17 +1,17 @@
 ---
-description: Merge an already-green PR (rebase merge, delete branch) and fast-forward the local main checkout. This is the Ship It column skill. It assumes the Tests column (/pull-request) already drove the PR to green. Not for creating a PR (use /pull-request) or a direct quick-push (use /merge-back).
+description: Merge an already-green PR (rebase merge, delete branch) and fast-forward the local main checkout. This is the Merge column skill. It assumes the Testing column (/pull-request) already drove the PR to green. Not for creating a PR (use /pull-request) or a direct quick-push (use /merge-back).
 allowed-tools: Read, Glob, Grep, Edit, Write, Bash(git:*), Bash(npm:*), Bash(gh:*), Agent, mcp__kangentic__kangentic_get_current_task, mcp__kangentic__kangentic_link_pr
 ---
 
 # Merge Pull Request
 
 Merge a green pull request and pull the result back into the local `main` checkout. This is the
-**Ship It column** skill. It assumes the **Tests column** (`/pull-request`) already created the
+**Merge column** skill. It assumes the **Testing column** (`/pull-request`) already created the
 PR and drove its CI checks to all-green.
 
 It verifies the required CI checks are green, then merges with `--admin` to waive the review
 requirement: `main` requires one approving review, but a maintainer's own PRs get no second
-reviewer, so that bypass is the normal Ship It path. It NEVER bypasses the CI checks - those are
+reviewer, so that bypass is the normal Merge-column path. It NEVER bypasses the CI checks - those are
 confirmed green first; `--admin` only waives the missing review. For a deliberate direct
 quick-push that skips the whole PR gate, use `/merge-back` instead.
 
@@ -41,7 +41,7 @@ All git commands run from the **current working directory** - never `cd <path> &
 
 1. **Detect mode:** worktree mode requires CWD to contain `.kangentic/worktrees/`. If this is
    the main repo (no worktree), stop and tell the user this skill runs from a task worktree (the
-   Ship It column); a direct push from the main checkout is `/merge-back`.
+   Merge column); a direct push from the main checkout is `/merge-back`.
 2. Get the current branch: `git rev-parse --abbrev-ref HEAD`. If `HEAD` (detached), warn and
    stop.
 3. Derive the project root: two directories above `.kangentic/worktrees/<slug>/`.
@@ -62,7 +62,7 @@ stored `pr_number` first, falling back to the head branch only when there is no 
    `gh pr list --head <branch> --state open --json number`.
 3. `gh pr view <pr> --json number,url,state,mergeable,mergeStateStatus,statusCheckRollup,headRefName`.
    Record `<prHead>` = `headRefName` (the PR's remote head branch, the push and merge target).
-4. If no PR resolves either way, stop and report that the Tests column should have created one
+4. If no PR resolves either way, stop and report that the Testing column should have created one
    (`/pull-request` first). Do not create a PR here.
 
 Every later `gh pr` command targets `<pr>` or `<prHead>`; the local `<branch>` is for local git
