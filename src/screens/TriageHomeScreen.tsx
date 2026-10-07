@@ -158,7 +158,8 @@ export function TriageHomeScreen(): React.JSX.Element {
         emittedTitles.add(title);
         listRows.push({ kind: 'section-header', section: section.section, title, count: countByTitle.get(title) ?? 0, alwaysOpen });
       }
-      // The header row always renders (so it stays tappable to re-expand);
+      // The header row always renders (so it stays tappable to re-expand,
+      // except the lone section's, which is held open and never collapses);
       // a collapsed title just skips the rows underneath it. No exception
       // for needs-you - a user may want to defer even a pending prompt
       // until they're back at their desk.

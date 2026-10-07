@@ -822,6 +822,34 @@ describe('the paused fact (protocol 0.17.0)', () => {
     expect(archivedTask?.session_id).toBeNull();
   });
 
+  /**
+   * The other way into the same archived shape: a LIVE task (it holds a session
+   * and is not paused) moved into Done. The desktop pauses what it kills on the
+   * way out, so the archived row reads paused with no Resume and no session,
+   * exactly like the paused task above.
+   *
+   * Mutation seen failing: dropping `|| located.task.session_id !== null` from
+   * the Done branch of the mock's move handling left the archived row at
+   * `paused: false` ("expected false to be true").
+   */
+  it('reads a LIVE task as paused, with no Resume and no session, once it moves into Done', async () => {
+    const liveBoard = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+    const liveTask = liveBoard.tasks.find((task) => task.id === 'mock-task-1');
+    // Non-vacuity: the task starts live, so the archived `paused: true` below is the move's doing.
+    expect(liveTask?.paused).toBe(false);
+    expect(liveTask?.session_id).not.toBeNull();
+
+    const moved = await controller.verbs.moveTask({ projectId: 'mock-project', taskId: 'mock-task-1', targetSwimlaneId: 'lane-done', targetPosition: 0 });
+    expect(moved.ok).toBe(true);
+
+    const archivedPage = await controller.verbs.readBoardArchived('mock-project', {});
+    const archivedTask = archivedPage.archivedTasks.find((task) => task.id === 'mock-task-1');
+    expect(archivedTask?.archived_at).not.toBeNull();
+    expect(archivedTask?.paused).toBe(true);
+    expect(archivedTask?.resumable).toBe(false);
+    expect(archivedTask?.session_id).toBeNull();
+  });
+
   it('resets a paused task on a move into To Do: no session, nothing paused, its feed ended', async () => {
     const moved = await controller.verbs.moveTask({ projectId: 'mock-project', taskId: PAUSED_TASK_ID, targetSwimlaneId: 'lane-todo', targetPosition: 0 });
     expect(moved.ok).toBe(true);

@@ -23,8 +23,9 @@
   // of 'W' on an OffscreenCanvas, font box ascent plus descent. The fit takes
   // the largest font, from the reference guess down, whose reference rows fit
   // at line height 1, then the tallest whole device-pixel cell that still fits
-  // under the line-height ceiling, and writes both ONCE, from a task rather
-  // than a frame, so xterm's repaint lands before the next paint. One measure
+  // under the line-height ceiling, and writes both in ONE task (at most two
+  // option writes, font size and line height), from a task rather than a
+  // frame, so xterm's repaint lands before the next paint. One measure
   // afterwards confirms it, and a miss hands over to the measured chain.
 
   var charMeasureContext = null;

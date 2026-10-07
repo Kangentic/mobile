@@ -12,7 +12,8 @@
   //   re-pin the pan. Only the fit button, another session or another grid
   //   clears it.
   // - The computed fit (cellFit.js, the default): the converged cell for this
-  //   key, or one computed from the font's metrics, written ONCE from a task.
+  //   key, or one computed from the font's metrics, written in ONE task, at
+  //   most two option writes (font size, line height).
   //   A fit that lands on the cell already showing writes nothing, so the fit
   //   button over a fitted frame no longer resizes the canvas at all.
   // - The measured chain, as the fallback and the probe's control arm:

@@ -2,8 +2,8 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { useReducedMotion } from 'react-native-reanimated';
 import { useMotionPresets, useTheme } from '@/components';
-import { BlinkingBlock } from '@/components/motion/BlinkingBlock';
 import { PulsingBlock } from '@/components/motion/PulsingBlock';
+import { WaitCursor } from '@/components/motion/WaitCursor';
 import { useScreenMotionActive } from '@/components/motion/ScreenMotion';
 
 /**
@@ -134,15 +134,6 @@ export function SessionSwapVeil({ waiting = false }: SessionSwapVeilProps): Reac
   const { durationMs, opacityMin, opacityMax } = theme.motion.swapVeilPulse;
   const restingOpacity = (opacityMin + opacityMax) / 2;
   const scrimStyle = { ...styles.fill, backgroundColor: theme.colors.background };
-  const cursorBlink = theme.motion.waitCursorBlink;
-  const cursorStyle = {
-    ...styles.cursor,
-    left: theme.spacing.sm,
-    top: theme.spacing.sm,
-    width: theme.spacing.sm,
-    height: theme.spacing.lg,
-    backgroundColor: theme.colors.textSecondary,
-  };
 
   return (
     <Animated.View
@@ -190,22 +181,7 @@ export function SessionSwapVeil({ waiting = false }: SessionSwapVeilProps): Reac
       )}
       {/* The wait cursor, ABOVE the scrim so it is not dimmed by it: one cell
           at the grid's origin, blinking while the screen is waiting. */}
-      {waiting && motionAllowed ? (
-        <BlinkingBlock
-          testID="session-swap-veil-cursor"
-          baseStyle={cursorStyle}
-          intervalMs={cursorBlink.intervalMs}
-          opacityMin={cursorBlink.opacityMin}
-          opacityMax={cursorBlink.opacityMax}
-        />
-      ) : null}
-      {waiting && !motionAllowed ? (
-        <View
-          testID="session-swap-veil-cursor"
-          pointerEvents="none"
-          style={[cursorStyle, { opacity: (cursorBlink.opacityMin + cursorBlink.opacityMax) / 2 }]}
-        />
-      ) : null}
+      {waiting ? <WaitCursor testID="session-swap-veil-cursor" blinking={motionAllowed} /> : null}
     </Animated.View>
   );
 }
@@ -217,9 +193,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-  },
-  cursor: {
-    position: 'absolute',
   },
   overlay: {
     position: 'absolute',

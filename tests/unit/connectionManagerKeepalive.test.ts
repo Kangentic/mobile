@@ -940,6 +940,111 @@ describe('connectionManager background keepalive ceiling', () => {
   });
 
   /**
+   * The third thing that counts as the desktop speaking: a capability-response.
+   * A slow desktop can answer an EARLIER request (a bootstrap read still in
+   * flight) while the probe's own read-board is still unanswered, and that
+   * response proves the socket carries traffic exactly as an event does. The
+   * response here carries an unrelated request id, so the probe's own request
+   * is never answered and the deadline still rejects: only the listener's
+   * clause can keep the transport alone.
+   *
+   * Mutation seen failing: dropping `|| message.type === 'capability-response'`
+   * from the probe's onMessage listener left redialNow at two calls, the second
+   * being the forced `{ force: true }` redial.
+   */
+  it('does not force a redial when a response to another request arrives inside the probe window', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const connection = getActiveConnection();
+    if (!connection) throw new Error('expected an active connection');
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+    let responsesReceivedByPhone = 0;
+    const unsubscribeResponses = connection.controller.session.onMessage((message) => {
+      if (message.type === 'capability-response') responsesReceivedByPhone += 1;
+    });
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).toHaveBeenCalledWith();
+
+      await vi.advanceTimersByTimeAsync(2_200);
+      stub.send({
+        type: 'capability-response',
+        requestId: 'a-request-the-probe-did-not-send',
+        ok: true,
+        payload: { projects: [] },
+      });
+      for (let round = 0; round < 20 && responsesReceivedByPhone === 0; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(responsesReceivedByPhone).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+      expect(redialNow).not.toHaveBeenCalledWith({ force: true });
+      expect(getActiveConnection()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+      unsubscribeResponses();
+    }
+  });
+
+  /**
+   * The probe's message listener must not outlive the probe: it is attached to
+   * the long-lived session, so one left behind per foreground would accumulate
+   * a closure over every probe's state for the life of the connection. Counted
+   * from the test side by wrapping the session's own onMessage, which adds no
+   * production surface: every subscription the probe makes must be unsubscribed
+   * once its request settles.
+   *
+   * Mutation seen failing: deleting `unsubscribeDesktopSpoke()` from the probe's
+   * `.finally` left the unsubscribe count at 0 against 1 subscription.
+   */
+  it('removes the probe listener from the session once the probe settles', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const connection = getActiveConnection();
+    if (!connection) throw new Error('expected an active connection');
+    const session = connection.controller.session;
+    const originalOnMessage = session.onMessage.bind(session);
+    let subscriptionsMade = 0;
+    let subscriptionsRemoved = 0;
+    const onMessageSpy = vi.spyOn(session, 'onMessage').mockImplementation((listener) => {
+      subscriptionsMade += 1;
+      const removeListener = originalOnMessage(listener);
+      return () => {
+        subscriptionsRemoved += 1;
+        removeListener();
+      };
+    });
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      // Non-vacuity: the probe is in flight and has subscribed exactly once.
+      expect(subscriptionsMade).toBe(1);
+      expect(subscriptionsRemoved).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS + 1);
+      expect(subscriptionsRemoved).toBe(subscriptionsMade);
+    } finally {
+      vi.useRealTimers();
+      onMessageSpy.mockRestore();
+    }
+  });
+
+  /**
    * foregroundProbeInFlight's own re-entry guard: two 'active' transitions
    * before the first probe settles must not send two read-board requests.
    * Every existing probe test drives 'active' exactly once, so none of them

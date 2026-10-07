@@ -24,8 +24,9 @@ export type TerminalFitSource = 'settled' | 'texture-cap' | 'unknown';
 
 /**
  * How the page finds the cell (scripts/xterm-page/cellFit.js): 'computed'
- * works the final cell out from the font's metrics and writes it once, which
- * resizes (and so clears) the renderer's canvas at most twice; 'measured' is
+ * works the final cell out from the font's metrics and writes it in one task,
+ * at most two option writes (font size, line height), so the renderer's canvas
+ * is resized (and so cleared) at most twice; 'measured' is
  * the older chain that stretches the line height a frame at a time, resizing
  * the canvas on every pass. 'measured' is the retention probe's control arm.
  */

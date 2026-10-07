@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build d9e459c94ad9) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 1c5b3bda6da6) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -414,7 +414,8 @@ return exports; })();
   // the renderer does not draw.
   var TERMINAL_FONT_FAMILY = 'Menlo, Consolas, monospace';
   // How a fit finds its cell (see cellFit.js): 'computed' works the final cell
-  // out from the font's own metrics and writes it once; 'measured' is the
+  // out from the font's own metrics and writes it in one task, at most two
+  // option writes (font size, line height); 'measured' is the
   // older chain that stretches the line height a frame at a time and
   // re-measures (heightFit.js). The host picks per init. 'measured' stays as
   // the fallback when a computed cell misses, and as the control arm of the
@@ -783,18 +784,20 @@ return exports; })();
   // and how long they blocked, since each one resized and cleared the canvas.
   // A texture-cap report is no chain and carries nulls.
   function reportFit(source, gridHeightPx) {
-    var chain = source === 'settled' ? fitChainStats : null;
-    if (chain !== null) {
-      lastFitChainStats = {
-        strategy: chain.strategy,
-        chainMs: Math.round(performance.now() - chain.startedAt),
-        cellWrites: chain.cellWrites,
-        cellWriteMs: Math.round(chain.cellWriteMs),
-        maxCellWriteMs: Math.round(chain.maxCellWriteMs),
+    // This settle's chain, or none: a texture cap and a settle with no chain
+    // in flight report nulls, never the previous chain's numbers.
+    var chainReport = { strategy: null, chainMs: null, cellWrites: null, cellWriteMs: null, maxCellWriteMs: null };
+    if (source === 'settled' && fitChainStats !== null) {
+      chainReport = {
+        strategy: fitChainStats.strategy,
+        chainMs: Math.round(performance.now() - fitChainStats.startedAt),
+        cellWrites: fitChainStats.cellWrites,
+        cellWriteMs: Math.round(fitChainStats.cellWriteMs),
+        maxCellWriteMs: Math.round(fitChainStats.maxCellWriteMs),
       };
+      lastFitChainStats = chainReport;
       fitChainStats = null;
     }
-    var reported = chain !== null ? lastFitChainStats : null;
     postToHost({
       type: 'font-size',
       fontSizePx: currentFontSizePx,
@@ -809,11 +812,11 @@ return exports; })();
       gridHeightPx: Math.round(gridHeightPx),
       devicePixelRatio: window.devicePixelRatio,
       maxTextureSize: maxGlTextureSize,
-      fitStrategy: reported !== null ? reported.strategy : null,
-      chainMs: reported !== null ? reported.chainMs : null,
-      cellWrites: reported !== null ? reported.cellWrites : null,
-      cellWriteMs: reported !== null ? reported.cellWriteMs : null,
-      maxCellWriteMs: reported !== null ? reported.maxCellWriteMs : null,
+      fitStrategy: chainReport.strategy,
+      chainMs: chainReport.chainMs,
+      cellWrites: chainReport.cellWrites,
+      cellWriteMs: chainReport.cellWriteMs,
+      maxCellWriteMs: chainReport.maxCellWriteMs,
     });
   }
 
@@ -2018,8 +2021,9 @@ return exports; })();
   // of 'W' on an OffscreenCanvas, font box ascent plus descent. The fit takes
   // the largest font, from the reference guess down, whose reference rows fit
   // at line height 1, then the tallest whole device-pixel cell that still fits
-  // under the line-height ceiling, and writes both ONCE, from a task rather
-  // than a frame, so xterm's repaint lands before the next paint. One measure
+  // under the line-height ceiling, and writes both in ONE task (at most two
+  // option writes, font size and line height), from a task rather than a
+  // frame, so xterm's repaint lands before the next paint. One measure
   // afterwards confirms it, and a miss hands over to the measured chain.
 
   var charMeasureContext = null;
@@ -2215,7 +2219,8 @@ return exports; })();
   //   re-pin the pan. Only the fit button, another session or another grid
   //   clears it.
   // - The computed fit (cellFit.js, the default): the converged cell for this
-  //   key, or one computed from the font's metrics, written ONCE from a task.
+  //   key, or one computed from the font's metrics, written in ONE task, at
+  //   most two option writes (font size, line height).
   //   A fit that lands on the cell already showing writes nothing, so the fit
   //   button over a fitted frame no longer resizes the canvas at all.
   // - The measured chain, as the fallback and the probe's control arm:
@@ -2523,7 +2528,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: 'd9e459c94ad9',
+      buildId: '1c5b3bda6da6',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,

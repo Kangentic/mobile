@@ -87,18 +87,20 @@
   // and how long they blocked, since each one resized and cleared the canvas.
   // A texture-cap report is no chain and carries nulls.
   function reportFit(source, gridHeightPx) {
-    var chain = source === 'settled' ? fitChainStats : null;
-    if (chain !== null) {
-      lastFitChainStats = {
-        strategy: chain.strategy,
-        chainMs: Math.round(performance.now() - chain.startedAt),
-        cellWrites: chain.cellWrites,
-        cellWriteMs: Math.round(chain.cellWriteMs),
-        maxCellWriteMs: Math.round(chain.maxCellWriteMs),
+    // This settle's chain, or none: a texture cap and a settle with no chain
+    // in flight report nulls, never the previous chain's numbers.
+    var chainReport = { strategy: null, chainMs: null, cellWrites: null, cellWriteMs: null, maxCellWriteMs: null };
+    if (source === 'settled' && fitChainStats !== null) {
+      chainReport = {
+        strategy: fitChainStats.strategy,
+        chainMs: Math.round(performance.now() - fitChainStats.startedAt),
+        cellWrites: fitChainStats.cellWrites,
+        cellWriteMs: Math.round(fitChainStats.cellWriteMs),
+        maxCellWriteMs: Math.round(fitChainStats.maxCellWriteMs),
       };
+      lastFitChainStats = chainReport;
       fitChainStats = null;
     }
-    var reported = chain !== null ? lastFitChainStats : null;
     postToHost({
       type: 'font-size',
       fontSizePx: currentFontSizePx,
@@ -113,11 +115,11 @@
       gridHeightPx: Math.round(gridHeightPx),
       devicePixelRatio: window.devicePixelRatio,
       maxTextureSize: maxGlTextureSize,
-      fitStrategy: reported !== null ? reported.strategy : null,
-      chainMs: reported !== null ? reported.chainMs : null,
-      cellWrites: reported !== null ? reported.cellWrites : null,
-      cellWriteMs: reported !== null ? reported.cellWriteMs : null,
-      maxCellWriteMs: reported !== null ? reported.maxCellWriteMs : null,
+      fitStrategy: chainReport.strategy,
+      chainMs: chainReport.chainMs,
+      cellWrites: chainReport.cellWrites,
+      cellWriteMs: chainReport.cellWriteMs,
+      maxCellWriteMs: chainReport.maxCellWriteMs,
     });
   }
 
