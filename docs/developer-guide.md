@@ -278,6 +278,25 @@ bridge itself is suspect, or when the JS bundle is too broken to answer - it is 
 `MAX_TEXTURE_SIZE` canvas clamp was diagnosed. Both can call `window.__kangenticTerminal`,
 which is where the page's own state is exposed.
 
+### The mock desktop's chat commands
+
+Under `dev:mock` (or the demo pairing on a release build) a few chat messages are commands to the
+fake desktop rather than messages to the agent. They exist to reach session-lifecycle paths a
+real desktop only hits on a model switch, a pause or a failure, and live in
+`src/connection/mockDesktop.ts`'s `send-user-message` handler:
+
+| Send | From | What the fake desktop does |
+|---|---|---|
+| `/respawn` | the streaming task (#1) | A labelled model switch, in a 0.16.0 desktop's order: the board row takes "Switching model...", the live `suspended` status goes out, the session ends 1.2 s later, and a new session binds after a 6 s gap. |
+| `/respawn-quiet` | the streaming task | The same swap with no label and no status push: an older desktop's column-move swap. |
+| `/end-session` | the streaming task | Ends the session for good; the task is left sessionless. |
+| `/pause` | the streaming task | A user's Pause: `suspended`, then the end, then the board row loses its `session_id` and gains `resumable: true`. Resume then runs from the board row alone. |
+| `/stall-resume` | any session | Arms the NEXT Resume to be accepted and then followed by nothing, the path to the phone's own 20 s "Session could not be resumed." |
+| `/fail-resume` | any session | Arms the NEXT Resume to be labelled "Resuming session..." and then fail its spawn: the label clears and the task stays paused, which the phone fails at once. |
+
+The two Resume arms are one-shot, and the fake desktop's state (including a pause) resets on every
+launch.
+
 ## Store listing screenshots
 
 `scripts/storeScreenshots.mjs` captures the Play listing images. It needs the MOCK rig
