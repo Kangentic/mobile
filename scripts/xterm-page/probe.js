@@ -116,6 +116,10 @@
       viewportSettleRefits: viewportSettleRefits,
       heightFitTrace: JSON.parse(JSON.stringify(heightFitTrace)),
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
+      // The fit strategy in force and what the last settled chain cost (see
+      // cellFit.js): the black-pane fix's before/after, read in place.
+      fitStrategy: fitStrategy,
+      lastFitChain: lastFitChainStats === null ? null : JSON.parse(JSON.stringify(lastFitChainStats)),
     };
   }
 
@@ -139,6 +143,13 @@
     },
     scroll: function (units) {
       scrollHistoryByUnits(units, scrollMechanism());
+      return terminalProbeState();
+    },
+    // Switch the fit strategy in place, for an A/B in one page: the next
+    // refit (the fit button, `term refit`) runs it. The host's own choice
+    // returns with the next init.
+    setFitStrategy: function (strategy) {
+      fitStrategy = strategy === 'measured' ? 'measured' : 'computed';
       return terminalProbeState();
     },
     /**

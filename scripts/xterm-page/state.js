@@ -62,6 +62,30 @@
   // What started the current fit chain, carried on the fit report so a
   // release-build trace can tell an init's fit from a keyboard's.
   var activeFitTrigger = 'init';
+  // The font the terminal is constructed with AND the font the computed fit
+  // measures (cellFit.js). One string, or the fit works out a cell for a font
+  // the renderer does not draw.
+  var TERMINAL_FONT_FAMILY = 'Menlo, Consolas, monospace';
+  // How a fit finds its cell (see cellFit.js): 'computed' works the final cell
+  // out from the font's own metrics and writes it once; 'measured' is the
+  // older chain that stretches the line height a frame at a time and
+  // re-measures (heightFit.js). The host picks per init. 'measured' stays as
+  // the fallback when a computed cell misses, and as the control arm of the
+  // A/B that measured the difference (retention probe 'measured-fit').
+  var fitStrategy = 'computed';
+  // True cancels the WebView's long-press menu (bootstrap.js). A long-press
+  // on the terminal otherwise raises Android's text menu over xterm's hidden
+  // textarea, which offers only "Autofill" where an autofill service is set.
+  // The host turns it off only for the retention probe's control arm.
+  var longPressMenuGuard = true;
+  // The fit chain in flight, for the fit report: which strategy ran, when it
+  // started, and how many font or line-height writes it made and how long
+  // they blocked. Each such write resizes the renderer's canvas, which clears
+  // it (see cellFit.js), so these are the numbers the black-pane fix is
+  // judged by. Null outside a chain; the last settled chain stays readable
+  // for the dev probe.
+  var fitChainStats = null;
+  var lastFitChainStats = null;
   // How many frame holds have been raised (see holdFrameSnapshot). Probe only.
   var frameHoldCount = 0;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does

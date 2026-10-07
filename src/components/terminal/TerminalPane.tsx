@@ -14,6 +14,7 @@ import { buildModeRestoreSequence } from '@/terminal/modeRestore';
 import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import type { InspectTerminalHandle, InspectTerminalWriteStats } from '@/devsupport/inspectState';
+import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import {
   getBufferedData,
   getTerminalDimensions,
@@ -606,6 +607,12 @@ export function TerminalPane({
         cleanFeed: cleanFeedEnabled,
         holdFrame,
         preservePinch,
+        // The computed fit (scripts/xterm-page/cellFit.js); the retention
+        // probe's control arm selects the older measured chain.
+        fitStrategy: getRetentionProbeVariant() === 'measured-fit' ? 'measured' : 'computed',
+        // The page cancels the long-press menu (the "Autofill" pill); the
+        // probe's control arm leaves it to the WebView.
+        longPressMenuGuard: getRetentionProbeVariant() !== 'autofillable-terminal-input',
       });
       armBlankRecovery();
     },
@@ -908,6 +915,12 @@ export function TerminalPane({
           gridHeightPx: message.gridHeightPx ?? 'n/a',
           devicePixelRatio: message.devicePixelRatio ?? 'n/a',
           maxTextureSize: message.maxTextureSize ?? 'n/a',
+          // The chain's cost: each cell write resized and cleared the canvas.
+          fitStrategy: message.fitStrategy ?? 'n/a',
+          chainMs: message.chainMs ?? 'n/a',
+          cellWrites: message.cellWrites ?? 'n/a',
+          cellWriteMs: message.cellWriteMs ?? 'n/a',
+          maxCellWriteMs: message.maxCellWriteMs ?? 'n/a',
           active: isActiveRef.current,
         });
         return;

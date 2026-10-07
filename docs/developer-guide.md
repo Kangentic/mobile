@@ -1836,7 +1836,12 @@ whether a pinch survives it), `terminal-fit` on every fit report the page sends 
 `refit-msg`, `resize-msg` or `fit-height`; the settled `fontSizePx` and `lineHeight`; the grid's
 `cols` and `rows`; the page's `fitHeightPx` beside the host's `hostFitHeightPx`; the page's
 `innerHeightPx` and `innerWidthPx`; the measured `gridHeightPx`; `devicePixelRatio`;
-`maxTextureSize`; and `active`, whether the pane was the visible one). Every open of a grid of 48
+`maxTextureSize`; the chain's cost: `fitStrategy` (`computed`, `computed-miss` when the computed
+cell failed its confirm and the measured chain took over, or `measured` under the retention
+probe's `measured-fit` arm), `chainMs`, `cellWrites` (font and line-height writes, each a WebGL
+canvas resize that clears the pane), `cellWriteMs` and `maxCellWriteMs`, all `n/a` on a
+`texture-cap` report; and `active`, whether the pane was the visible one). A `cellWrites` above 2
+on a `computed` chain, or any `computed-miss` at 48 rows, is the regression to look for. Every open of a grid of 48
 rows or fewer should settle on the SAME `fontSizePx` and `lineHeight`, which is the reference-cell
 rule's whole claim, so this line is how it is checked on a release build. Then
 `terminal-recovery` when the blank-recovery deadline fires (`action`, `refresh` when no seed ever

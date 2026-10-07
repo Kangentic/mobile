@@ -7,17 +7,22 @@
   //
   // DETERMINISTIC, whoever calls it: every refit lands on the reference cell
   // for this grid and pane (state.js), so it no longer matters which path ran
-  // last. Three cases:
+  // last. Cases:
   // - A pinch is in force: the user owns the size. Keep it, re-lay the grid,
   //   re-pin the pan. Only the fit button, another session or another grid
   //   clears it.
-  // - This grid and pane already converged (settledFit): apply that font and
-  //   line height directly, and run the chain stretch-locked, so it measures
-  //   once and finds nothing to do. Re-running it from line height 1 instead
-  //   is what made every re-init and every foreground visibly snap short and
-  //   re-stretch.
-  // - Otherwise: the reference font, a clean line height of 1, and the
-  //   measured height fit converges from there.
+  // - The computed fit (cellFit.js, the default): the converged cell for this
+  //   key, or one computed from the font's metrics, written ONCE from a task.
+  //   A fit that lands on the cell already showing writes nothing, so the fit
+  //   button over a fitted frame no longer resizes the canvas at all.
+  // - The measured chain, as the fallback and the probe's control arm:
+  //   - This grid and pane already converged (settledFit): apply that font
+  //     and line height directly, and run the chain stretch-locked, so it
+  //     measures once and finds nothing to do. Re-running it from line height
+  //     1 instead is what made every re-init and every foreground visibly
+  //     snap short and re-stretch.
+  //   - Otherwise: the reference font, a clean line height of 1, and the
+  //     measured height fit converges from there.
   //
   // `trigger` names what started it, for the fit report. The window 'resize'
   // listener hands this function an Event, which reads as 'window-resize'.
@@ -36,22 +41,32 @@
     if (pinchOverrideFontPx !== null) {
       applyGeometry();
       // Cancels a fit still converging: it would step the font under the
-      // user's chosen size.
+      // user's chosen size. Its stats go with it.
       heightFitGeneration += 1;
+      fitChainStats = null;
       requestAnimationFrame(function () {
         manualPanUntil = 0;
         clampHorizontalPan();
       });
       return;
     }
+    // Each refit owns a generation, so a chain still converging (or a computed
+    // write still queued) cannot adjust the grid under the one that replaced it.
+    heightFitGeneration += 1;
+    var generation = heightFitGeneration;
+    beginFitChainStats();
+    if (fitStrategy === 'computed' && runComputedFit(generation)) return;
+    // The measured chain: chosen by the host, or the computed fit could not
+    // measure the font the way xterm does.
+    fitChainStats.strategy = fitStrategy === 'computed' ? 'computed-miss' : 'measured';
     var settled = settledFitForCurrentGrid();
     if (settled !== null) {
       currentFontSizePx = settled.fontSizePx;
-      terminal.options.fontSize = settled.fontSizePx;
-      terminal.options.lineHeight = settled.lineHeight;
+      setCellOption('fontSize', settled.fontSizePx);
+      setCellOption('lineHeight', settled.lineHeight);
     } else {
       autoFitFontToScreen();
-      terminal.options.fontSize = currentFontSizePx;
+      setCellOption('fontSize', currentFontSizePx);
       // The fit chain below must start from the same clean slate a constructed
       // terminal does: a line-height stretch left over from the PREVIOUS
       // chain makes the new font x old stretch overflow. The chain then
@@ -60,11 +75,9 @@
       // reclaim the slack. Caught live by the fit trace on a fresh open of a
       // parked 210x48 session: settled at line height 1 with a 530px grid in a
       // 635px viewport, stretchLocked by a giveback of the prior chain's 1.194.
-      terminal.options.lineHeight = 1;
+      setCellOption('lineHeight', 1);
     }
     applyGeometry();
-    heightFitGeneration += 1;
-    var generation = heightFitGeneration;
     // A converged cell runs its chain STRETCH-LOCKED: it is already known to
     // fit this key, and a cell that settled through a giveback is not a fixed
     // point of the stretch step (xterm ceils every row to device pixels), so

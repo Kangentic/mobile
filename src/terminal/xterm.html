@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build 2f535d66f227) -->
+<!-- GENERATED FILE - do not hand-edit. Regenerate with: node scripts/buildXtermHtml.mjs (xterm 6.0.0, build d9e459c94ad9) -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -318,6 +318,12 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    promotion, Android WebView sometimes skips recompositing a fully repainted
    canvas (a black terminal until a 1px scroll invalidates the layer). */
 #terminal { width: max-content; margin: 0; transform: translateZ(0); }
+/* xterm parks its hidden textarea on the cursor cell (for IME placement), so a
+   long-press there placed Chromium's caret and insertion handle in it, one tap
+   from Android's Paste / Autofill menu. Focus is always programmatic
+   (terminal.focus()), so the textarea needs no hit testing at all. The class is
+   the long-press guard's (lifecycle.js), off only for the retention probe arm. */
+body.long-press-guard .xterm .xterm-helper-textarea { pointer-events: none; }
 </style>
 </head>
 <body>
@@ -403,6 +409,30 @@ return exports; })();
   // What started the current fit chain, carried on the fit report so a
   // release-build trace can tell an init's fit from a keyboard's.
   var activeFitTrigger = 'init';
+  // The font the terminal is constructed with AND the font the computed fit
+  // measures (cellFit.js). One string, or the fit works out a cell for a font
+  // the renderer does not draw.
+  var TERMINAL_FONT_FAMILY = 'Menlo, Consolas, monospace';
+  // How a fit finds its cell (see cellFit.js): 'computed' works the final cell
+  // out from the font's own metrics and writes it once; 'measured' is the
+  // older chain that stretches the line height a frame at a time and
+  // re-measures (heightFit.js). The host picks per init. 'measured' stays as
+  // the fallback when a computed cell misses, and as the control arm of the
+  // A/B that measured the difference (retention probe 'measured-fit').
+  var fitStrategy = 'computed';
+  // True cancels the WebView's long-press menu (bootstrap.js). A long-press
+  // on the terminal otherwise raises Android's text menu over xterm's hidden
+  // textarea, which offers only "Autofill" where an autofill service is set.
+  // The host turns it off only for the retention probe's control arm.
+  var longPressMenuGuard = true;
+  // The fit chain in flight, for the fit report: which strategy ran, when it
+  // started, and how many font or line-height writes it made and how long
+  // they blocked. Each such write resizes the renderer's canvas, which clears
+  // it (see cellFit.js), so these are the numbers the black-pane fix is
+  // judged by. Null outside a chain; the last settled chain stays readable
+  // for the dev probe.
+  var fitChainStats = null;
+  var lastFitChainStats = null;
   // How many frame holds have been raised (see holdFrameSnapshot). Probe only.
   var frameHoldCount = 0;
   // Manual pan suppresses follow-the-cursor briefly so incoming output does
@@ -709,18 +739,24 @@ return exports; })();
     return settledFit !== null && settledFit.key === currentFitKey() ? settledFit : null;
   }
 
-  // The font an init starts from: the converged cell when this grid and pane
-  // already have one, the reference font otherwise.
-  function fittedFontPxForGrid() {
+  // The cell an init starts from: the converged cell when this grid and pane
+  // already have one; under the computed fit, the computed cell, so a fresh
+  // terminal is CONSTRUCTED at its final size and the init's refit finds
+  // nothing to write; otherwise the reference font at the clean slate (line
+  // height 1) the measured chain converges from.
+  function initialCellForGrid() {
     var settled = settledFitForCurrentGrid();
-    return settled !== null ? settled.fontSizePx : referenceFontPx();
+    if (settled !== null) return { fontSizePx: settled.fontSizePx, lineHeight: settled.lineHeight };
+    var computed = fitStrategy === 'computed' ? computeFittedCell() : null;
+    return computed !== null ? computed : { fontSizePx: referenceFontPx(), lineHeight: 1 };
   }
 
-  // The line height an init starts from, by the same rule: the converged
-  // stretch, or the clean slate (1) the height fit starts a fresh chain from.
+  function fittedFontPxForGrid() {
+    return initialCellForGrid().fontSizePx;
+  }
+
   function fittedLineHeightForGrid() {
-    var settled = settledFitForCurrentGrid();
-    return settled !== null ? settled.lineHeight : 1;
+    return initialCellForGrid().lineHeight;
   }
 
   // Set the font to the reference cell's. Pick the font so the REFERENCE
@@ -732,7 +768,7 @@ return exports; })();
     var next = referenceFontPx();
     if (next !== currentFontSizePx) {
       currentFontSizePx = next;
-      if (terminal) terminal.options.fontSize = next;
+      setCellOption('fontSize', next);
     }
   }
 
@@ -741,7 +777,24 @@ return exports; })();
   // not, so a release-build trace shows every open's cell, not only the ones
   // that moved - and when the texture cap clamps a pinch ('texture-cap').
   // Primitives only: the host's connection trace never carries content.
+  //
+  // A settle also carries the chain's cost (cellFit.js): which strategy ran,
+  // how long the chain took, and how many font or line-height writes it made
+  // and how long they blocked, since each one resized and cleared the canvas.
+  // A texture-cap report is no chain and carries nulls.
   function reportFit(source, gridHeightPx) {
+    var chain = source === 'settled' ? fitChainStats : null;
+    if (chain !== null) {
+      lastFitChainStats = {
+        strategy: chain.strategy,
+        chainMs: Math.round(performance.now() - chain.startedAt),
+        cellWrites: chain.cellWrites,
+        cellWriteMs: Math.round(chain.cellWriteMs),
+        maxCellWriteMs: Math.round(chain.maxCellWriteMs),
+      };
+      fitChainStats = null;
+    }
+    var reported = chain !== null ? lastFitChainStats : null;
     postToHost({
       type: 'font-size',
       fontSizePx: currentFontSizePx,
@@ -756,6 +809,11 @@ return exports; })();
       gridHeightPx: Math.round(gridHeightPx),
       devicePixelRatio: window.devicePixelRatio,
       maxTextureSize: maxGlTextureSize,
+      fitStrategy: reported !== null ? reported.strategy : null,
+      chainMs: reported !== null ? reported.chainMs : null,
+      cellWrites: reported !== null ? reported.cellWrites : null,
+      cellWriteMs: reported !== null ? reported.cellWriteMs : null,
+      maxCellWriteMs: reported !== null ? reported.maxCellWriteMs : null,
     });
   }
 
@@ -1555,6 +1613,17 @@ return exports; })();
     if (initMessage.preservePinch !== true || previousCols !== knownCols || previousRows !== knownRows) {
       pinchOverrideFontPx = null;
     }
+    // The host picks the fit strategy per init (cellFit.js). Before the font
+    // below, which the computed fit already shapes.
+    fitStrategy = initMessage.fitStrategy === 'measured' ? 'measured' : 'computed';
+    // Only an explicit false (the retention probe's control arm) lets the
+    // WebView's long-press menu through (bootstrap.js). The body class takes
+    // xterm's hidden textarea out of hit testing (the page CSS): it sits on the
+    // cursor cell, and a long-press landing there placed Chromium's caret and
+    // insertion handle in it, one tap from the same "Autofill" menu. Nothing
+    // touches it directly; focus is always terminal.focus().
+    longPressMenuGuard = initMessage.longPressMenuGuard !== false;
+    document.body.classList.toggle('long-press-guard', longPressMenuGuard);
     // The page owns the font: the reference cell for this grid (or the cell
     // it already converged on), or the pinch. Capped either way, which on the
     // legacy no-dims path is the only guard between a wide grid and the GPU
@@ -1644,7 +1713,7 @@ return exports; })();
       // fresh page (a remount after a killed renderer, a clean-feed rebuild)
       // comes up at the final cell instead of re-converging from 1.
       lineHeight: pinchOverrideFontPx !== null ? 1 : fittedLineHeightForGrid(),
-      fontFamily: 'Menlo, Consolas, monospace',
+      fontFamily: TERMINAL_FONT_FAMILY,
       theme: initMessage.theme,
       scrollback: 2000,
       convertEol: false,
@@ -1693,9 +1762,11 @@ return exports; })();
     terminal.options.theme = initMessage.theme;
     // The font resetSessionViewState chose (the reference cell, the cell
     // already converged for this grid, or the pinch), and the line height
-    // that goes with it. A pinch keeps the stretch it was made over.
-    terminal.options.fontSize = currentFontSizePx;
-    if (pinchOverrideFontPx === null) terminal.options.lineHeight = fittedLineHeightForGrid();
+    // that goes with it. A pinch keeps the stretch it was made over. Unchanged
+    // values write nothing, so a re-seed of a fitted frame never resizes the
+    // canvas.
+    setCellOption('fontSize', currentFontSizePx);
+    if (pinchOverrideFontPx === null) setCellOption('lineHeight', fittedLineHeightForGrid());
     applyGeometry();
     seedAndSettle(initMessage);
   }
@@ -1712,7 +1783,7 @@ return exports; })();
     // another grid (see refit.js and resetSessionViewState).
     pinchOverrideFontPx = capped;
     currentFontSizePx = capped;
-    terminal.options.fontSize = capped;
+    setCellOption('fontSize', capped);
     // Keep the host's pinch baseline honest when the cap engaged.
     if (capped !== fontSizePx) {
       var screen = document.querySelector('.xterm-screen');
@@ -1723,8 +1794,10 @@ return exports; })();
     // Zoom deliberately does NOT re-fit (the user owns the size now), so it
     // also CANCELS a fit still converging - otherwise that fit keeps stepping
     // the font under the pinching finger. The grid stays pinned to the top,
-    // so there is no padding to follow the new cell height.
+    // so there is no padding to follow the new cell height. A cancelled
+    // chain's stats go with it.
     heightFitGeneration += 1;
+    fitChainStats = null;
     requestAnimationFrame(function () {
       // Forced: the pinch just changed the geometry deliberately, and the
       // manual-pan pause would otherwise leave the zoomed frame top-anchored
@@ -1796,7 +1869,7 @@ return exports; })();
       // adjustment pass used to be left overflowing, with the bottom row
       // sliced off by exactly that extra pixel per row.
       if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX && currentLineHeight > 1.005) {
-        terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+        setCellOption('lineHeight', Math.max(1, currentLineHeight * (viewportHeight / screenHeight)));
         traceHeightFit('final-giveback', generation, passesLeft, screenHeight);
         // Settle on the NEXT frame's measurement: the one above is the
         // overflowing grid this pass just corrected, and settling on it used
@@ -1820,7 +1893,7 @@ return exports; })();
         // The stretch overshot: hand back exactly the excess, and stop
         // stretching for the rest of this fit - a stretch that re-runs after
         // its own correction just trades the overflow back and forth.
-        terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+        setCellOption('lineHeight', Math.max(1, currentLineHeight * (viewportHeight / screenHeight)));
         stretchLocked = true;
         adjusted = true;
       } else if (currentFontSizePx > MIN_AUTO_FONT_PX) {
@@ -1828,7 +1901,7 @@ return exports; })();
         // this row count, not that the stretch was. Stretching stays legal
         // after this step, and is how the leftover row gets reclaimed.
         currentFontSizePx -= 1;
-        terminal.options.fontSize = currentFontSizePx;
+        setCellOption('fontSize', currentFontSizePx);
         adjusted = true;
         fontStepped = true;
       }
@@ -1836,7 +1909,7 @@ return exports; })();
       var desiredLineHeight = viewportHeight / (referenceRows * baseCellHeight);
       var next = Math.max(1, Math.min(MAX_LINE_HEIGHT, desiredLineHeight));
       if (Math.abs(next - currentLineHeight) > 0.005) {
-        terminal.options.lineHeight = next;
+        setCellOption('lineHeight', next);
         adjusted = true;
       }
     }
@@ -1920,6 +1993,181 @@ return exports; })();
     return Math.min(fontPx, Math.max(1, cap));
   }
 
+  // THE COMPUTED FIT. Any write that changes the terminal's font size or line
+  // height makes xterm resize its renderer's canvas, and a resized canvas is
+  // CLEARED: it shows nothing until xterm's next animation frame repaints it.
+  // The measured chain (heightFit.js) stretches the line height one frame at a
+  // time and re-measures, so a full fit resized the ~3780x1970 device-px WebGL
+  // canvas 4-5 times, every time from inside an animation frame, where xterm's
+  // repaint lands a frame late. Measured 2026-10-07 on the emulator
+  // (kangentic_tablet_36, dev client, mock session): the canvas height setter
+  // blocked 6123, 12676 and 3115 ms on the chain's three grow steps, and the
+  // pane read fully black for the whole chain. On a Pixel 11 Pro release
+  // build the same chain made 6 writes per fit-button press and a screen
+  // recording showed the pane blank for 425-442 ms on every press; this fit
+  // made 0 writes and the pane never blanked (docs/architecture.md). That
+  // chain runs on the fit button, on any change to the Terminal pane's height
+  // (the first-run hint, a rotation) and on a first open.
+  //
+  // So the cell is computed rather than converged. The renderer's arithmetic
+  // (xterm's WebglRenderer and DomRenderer _updateDimensions agree) is
+  //   device char height = ceil(char height x devicePixelRatio)
+  //   device cell height = floor(device char height x lineHeight)
+  //   grid height        = round(rows x device cell height / devicePixelRatio)
+  // and the char height is what xterm's CharSizeService measures: measureText
+  // of 'W' on an OffscreenCanvas, font box ascent plus descent. The fit takes
+  // the largest font, from the reference guess down, whose reference rows fit
+  // at line height 1, then the tallest whole device-pixel cell that still fits
+  // under the line-height ceiling, and writes both ONCE, from a task rather
+  // than a frame, so xterm's repaint lands before the next paint. One measure
+  // afterwards confirms it, and a miss hands over to the measured chain.
+
+  var charMeasureContext = null;
+
+  // The char height xterm's CharSizeService reports for this font, in CSS px,
+  // or null where the API it relies on is missing (xterm then measures a DOM
+  // span instead, which this cannot reproduce exactly, so the measured chain
+  // takes over).
+  function measureCharHeightPx(fontSizePx) {
+    try {
+      if (charMeasureContext === null) charMeasureContext = new OffscreenCanvas(100, 100).getContext('2d');
+      charMeasureContext.font = fontSizePx + 'px ' + TERMINAL_FONT_FAMILY;
+      var metrics = charMeasureContext.measureText('W');
+      if (!('fontBoundingBoxAscent' in metrics) || !('fontBoundingBoxDescent' in metrics)) return null;
+      var height = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
+      return height > 0 ? height : null;
+    } catch (measureError) {
+      return null;
+    }
+  }
+
+  // The tallest whole device-pixel cell whose `rows` rows render no taller
+  // than `limitPx` CSS px, by the renderer's own rounding of the grid height.
+  function tallestFittingDeviceCell(rows, devicePixelRatio, limitPx) {
+    var cell = Math.floor(((limitPx + 1) * devicePixelRatio) / rows);
+    while (cell > 0 && Math.round((rows * cell) / devicePixelRatio) > limitPx) cell -= 1;
+    return cell;
+  }
+
+  // The cell this grid gets in this pane, or null when the char height cannot
+  // be measured the way xterm measures it. Same limit as the measured chain:
+  // the fit height less the bottom clearance, plus the tolerance it accepts.
+  function computeFittedCell() {
+    var devicePixelRatio = window.devicePixelRatio || 1;
+    var referenceRows = referenceRowsForFit();
+    var limitPx = fitViewportHeight() - HEIGHT_FIT_BOTTOM_CLEARANCE_PX + HEIGHT_FIT_TOLERANCE_PX;
+    var maxDeviceCell = tallestFittingDeviceCell(referenceRows, devicePixelRatio, limitPx);
+    for (var fontSizePx = referenceFontPx(); fontSizePx >= MIN_AUTO_FONT_PX; fontSizePx -= 1) {
+      var charHeight = measureCharHeightPx(fontSizePx);
+      if (charHeight === null) return null;
+      var deviceCharHeight = Math.ceil(charHeight * devicePixelRatio);
+      if (maxDeviceCell < deviceCharHeight) continue;
+      var deviceCell = Math.min(maxDeviceCell, Math.floor(deviceCharHeight * MAX_LINE_HEIGHT));
+      // Half a device pixel above the target, so the renderer's floor lands ON
+      // the target cell rather than a float's width below it. Where the
+      // ceiling binds, the ceiling itself floors to the same cell.
+      var lineHeight = Math.max(1, Math.min(MAX_LINE_HEIGHT, (deviceCell + 0.5) / deviceCharHeight));
+      return { fontSizePx: fontSizePx, lineHeight: lineHeight };
+    }
+    // Nothing fits even at the smallest auto font: the measured chain floors
+    // at the same place.
+    return { fontSizePx: MIN_AUTO_FONT_PX, lineHeight: 1 };
+  }
+
+  // Writes the terminal's font size or line height when it changes, timing
+  // the write: xterm resizes (and so clears) the renderer's canvas inside it,
+  // which is the cost the fit report counts.
+  function setCellOption(name, value) {
+    if (!terminal || terminal.options[name] === value) return;
+    var startedAt = performance.now();
+    terminal.options[name] = value;
+    var elapsedMs = performance.now() - startedAt;
+    if (fitChainStats !== null) {
+      fitChainStats.cellWrites += 1;
+      fitChainStats.cellWriteMs += elapsedMs;
+      if (elapsedMs > fitChainStats.maxCellWriteMs) fitChainStats.maxCellWriteMs = elapsedMs;
+    }
+  }
+
+  function beginFitChainStats() {
+    fitChainStats = { strategy: fitStrategy, startedAt: performance.now(), cellWrites: 0, cellWriteMs: 0, maxCellWriteMs: 0 };
+  }
+
+  // The device-pixel cell the renderer draws for a font and line height, by
+  // its own arithmetic (see above), or null when the font cannot be measured
+  // the way xterm measures it.
+  function expectedDeviceCell(cell) {
+    var charHeight = measureCharHeightPx(cell.fontSizePx);
+    if (charHeight === null) return null;
+    return Math.floor(Math.ceil(charHeight * (window.devicePixelRatio || 1)) * cell.lineHeight);
+  }
+
+  // Run a computed fit for this generation. False when the cell cannot be
+  // computed here, so the caller runs the measured chain instead.
+  function runComputedFit(generation) {
+    var settled = settledFitForCurrentGrid();
+    var cell = settled !== null ? { fontSizePx: settled.fontSizePx, lineHeight: settled.lineHeight } : computeFittedCell();
+    if (cell === null) return false;
+    var deviceCell = expectedDeviceCell(cell);
+    // From a TASK, never inside a frame. xterm repaints on its next animation
+    // frame: a write made inside a frame callback (a ResizeObserver, a
+    // requestAnimationFrame) is presented cleared for a frame first, while a
+    // write from a task is repainted before the next paint.
+    setTimeout(function () {
+      if (!terminal || generation !== heightFitGeneration) return;
+      currentFontSizePx = cell.fontSizePx;
+      setCellOption('fontSize', cell.fontSizePx);
+      setCellOption('lineHeight', cell.lineHeight);
+      applyGeometry();
+      requestAnimationFrame(function () {
+        confirmComputedFit(generation, deviceCell);
+      });
+    }, 0);
+    return true;
+  }
+
+  // The computed cell has painted: measure it once. The grid this page
+  // expected settles exactly as the measured chain does. A grid of any other
+  // height means the renderer measured the font differently from this page,
+  // taller or shorter, and the measured chain corrects it from here.
+  //
+  // Compared at THIS grid's rows, never scaled to the reference rows: xterm
+  // rounds the grid's css height to a whole pixel, and scaling a rounded
+  // height by 48/rows amplified that half pixel past the tolerance on a
+  // short grid, reading a cell that fits as an overflow (a 30-row grid at
+  // dpr 2.625 in a 587px pane). The reference grid is then derived from the
+  // device cell itself, by the renderer's own rounding.
+  function confirmComputedFit(generation, deviceCell) {
+    if (!terminal || generation !== heightFitGeneration) return;
+    var screen = document.querySelector('.xterm-screen');
+    var measuredHeight = screen ? screen.getBoundingClientRect().height : 0;
+    if (!(measuredHeight > 0) || terminal.rows < 1) {
+      traceHeightFit('bail-zero-measure', generation, 0, measuredHeight);
+      return;
+    }
+    var devicePixelRatio = window.devicePixelRatio || 1;
+    var expectedHeight = deviceCell !== null ? Math.round((terminal.rows * deviceCell) / devicePixelRatio) : null;
+    var drawnAsExpected = expectedHeight === null || Math.abs(measuredHeight - expectedHeight) <= 1;
+    // The cell the renderer actually drew, recovered from the drawn grid
+    // (exact for any grid of four rows or more), so the overflow check below
+    // tests what painted, not what this page expected. It is the only check
+    // left when the font cannot be measured (only a settled cell gets here).
+    var drawnCell = Math.round((measuredHeight * devicePixelRatio) / terminal.rows);
+    var referenceRows = Math.max(terminal.rows, referenceRowsForFit());
+    var screenHeight = Math.round((referenceRows * drawnCell) / devicePixelRatio);
+    var limitPx = fitViewportHeight() - HEIGHT_FIT_BOTTOM_CLEARANCE_PX + HEIGHT_FIT_TOLERANCE_PX;
+    if (!drawnAsExpected || screenHeight > limitPx) {
+      if (fitChainStats !== null) fitChainStats.strategy = 'computed-miss';
+      traceHeightFit('computed-miss', generation, HEIGHT_FIT_PASSES, screenHeight);
+      fitGridHeightToViewport(HEIGHT_FIT_PASSES, false, generation);
+      return;
+    }
+    traceHeightFit('computed', generation, 0, screenHeight);
+    settleFit(measuredHeight);
+    manualPanUntil = 0;
+    clampHorizontalPan();
+    followCursorVertically(true);
+  }
   // A refit can SHRINK the grid (the soft keyboard halves the viewport
   // height, so the height-fitted font drops and the frame narrows). The
   // horizontal pan is not automatically reconciled, so a scrollLeft from the
@@ -1962,17 +2210,22 @@ return exports; })();
   //
   // DETERMINISTIC, whoever calls it: every refit lands on the reference cell
   // for this grid and pane (state.js), so it no longer matters which path ran
-  // last. Three cases:
+  // last. Cases:
   // - A pinch is in force: the user owns the size. Keep it, re-lay the grid,
   //   re-pin the pan. Only the fit button, another session or another grid
   //   clears it.
-  // - This grid and pane already converged (settledFit): apply that font and
-  //   line height directly, and run the chain stretch-locked, so it measures
-  //   once and finds nothing to do. Re-running it from line height 1 instead
-  //   is what made every re-init and every foreground visibly snap short and
-  //   re-stretch.
-  // - Otherwise: the reference font, a clean line height of 1, and the
-  //   measured height fit converges from there.
+  // - The computed fit (cellFit.js, the default): the converged cell for this
+  //   key, or one computed from the font's metrics, written ONCE from a task.
+  //   A fit that lands on the cell already showing writes nothing, so the fit
+  //   button over a fitted frame no longer resizes the canvas at all.
+  // - The measured chain, as the fallback and the probe's control arm:
+  //   - This grid and pane already converged (settledFit): apply that font
+  //     and line height directly, and run the chain stretch-locked, so it
+  //     measures once and finds nothing to do. Re-running it from line height
+  //     1 instead is what made every re-init and every foreground visibly
+  //     snap short and re-stretch.
+  //   - Otherwise: the reference font, a clean line height of 1, and the
+  //     measured height fit converges from there.
   //
   // `trigger` names what started it, for the fit report. The window 'resize'
   // listener hands this function an Event, which reads as 'window-resize'.
@@ -1991,22 +2244,32 @@ return exports; })();
     if (pinchOverrideFontPx !== null) {
       applyGeometry();
       // Cancels a fit still converging: it would step the font under the
-      // user's chosen size.
+      // user's chosen size. Its stats go with it.
       heightFitGeneration += 1;
+      fitChainStats = null;
       requestAnimationFrame(function () {
         manualPanUntil = 0;
         clampHorizontalPan();
       });
       return;
     }
+    // Each refit owns a generation, so a chain still converging (or a computed
+    // write still queued) cannot adjust the grid under the one that replaced it.
+    heightFitGeneration += 1;
+    var generation = heightFitGeneration;
+    beginFitChainStats();
+    if (fitStrategy === 'computed' && runComputedFit(generation)) return;
+    // The measured chain: chosen by the host, or the computed fit could not
+    // measure the font the way xterm does.
+    fitChainStats.strategy = fitStrategy === 'computed' ? 'computed-miss' : 'measured';
     var settled = settledFitForCurrentGrid();
     if (settled !== null) {
       currentFontSizePx = settled.fontSizePx;
-      terminal.options.fontSize = settled.fontSizePx;
-      terminal.options.lineHeight = settled.lineHeight;
+      setCellOption('fontSize', settled.fontSizePx);
+      setCellOption('lineHeight', settled.lineHeight);
     } else {
       autoFitFontToScreen();
-      terminal.options.fontSize = currentFontSizePx;
+      setCellOption('fontSize', currentFontSizePx);
       // The fit chain below must start from the same clean slate a constructed
       // terminal does: a line-height stretch left over from the PREVIOUS
       // chain makes the new font x old stretch overflow. The chain then
@@ -2015,11 +2278,9 @@ return exports; })();
       // reclaim the slack. Caught live by the fit trace on a fresh open of a
       // parked 210x48 session: settled at line height 1 with a 530px grid in a
       // 635px viewport, stretchLocked by a giveback of the prior chain's 1.194.
-      terminal.options.lineHeight = 1;
+      setCellOption('lineHeight', 1);
     }
     applyGeometry();
-    heightFitGeneration += 1;
-    var generation = heightFitGeneration;
     // A converged cell runs its chain STRETCH-LOCKED: it is already known to
     // fit this key, and a cell that settled through a giveback is not a fixed
     // point of the stretch step (xterm ceils every row to device pixels), so
@@ -2262,7 +2523,7 @@ return exports; })();
     var modes = terminal && terminal.modes ? terminal.modes : null;
     var effectiveRows = knownRows !== null ? knownRows : terminal ? terminal.rows : null;
     return {
-      buildId: '2f535d66f227',
+      buildId: 'd9e459c94ad9',
       hasTerminal: terminal !== null,
       cols: terminal ? terminal.cols : null,
       rows: terminal ? terminal.rows : null,
@@ -2337,6 +2598,10 @@ return exports; })();
       viewportSettleRefits: viewportSettleRefits,
       heightFitTrace: JSON.parse(JSON.stringify(heightFitTrace)),
       touchCounts: JSON.parse(JSON.stringify(touchCounts)),
+      // The fit strategy in force and what the last settled chain cost (see
+      // cellFit.js): the black-pane fix's before/after, read in place.
+      fitStrategy: fitStrategy,
+      lastFitChain: lastFitChainStats === null ? null : JSON.parse(JSON.stringify(lastFitChainStats)),
     };
   }
 
@@ -2360,6 +2625,13 @@ return exports; })();
     },
     scroll: function (units) {
       scrollHistoryByUnits(units, scrollMechanism());
+      return terminalProbeState();
+    },
+    // Switch the fit strategy in place, for an A/B in one page: the next
+    // refit (the fit button, `term refit`) runs it. The host's own choice
+    // returns with the next init.
+    setFitStrategy: function (strategy) {
+      fitStrategy = strategy === 'measured' ? 'measured' : 'computed';
       return terminalProbeState();
     },
     /**
@@ -2455,6 +2727,21 @@ return exports; })();
       container.addEventListener('click', function () {
         if (terminal) terminal.focus();
       });
+      // A long-press on the terminal is a contextmenu event, and xterm's own
+      // listener for it (its desktop right-click paste, CoreBrowserTerminal)
+      // moves the hidden textarea under the finger, raises it to z-index 1000
+      // and FOCUSES it, which raises the WebView's keyboard on the very field
+      // DirectKeyInput exists to keep typing away from. Left uncancelled,
+      // Chromium then draws Android's floating text menu over that textarea:
+      // with an autofill service set and nothing to paste, a lone "Autofill"
+      // pill (seen on a Pixel with 1Password). So the event is cancelled in
+      // the CAPTURE phase on window and goes no further: xterm's listener never
+      // runs, and no menu is drawn. Nothing in the terminal needs either.
+      window.addEventListener('contextmenu', function (menuEvent) {
+        if (!longPressMenuGuard) return;
+        menuEvent.preventDefault();
+        menuEvent.stopPropagation();
+      }, true);
       // The scroll-container is 100% of the WebView, so its box height tracks
       // window.innerHeight. Observing it re-fits the moment the viewport box
       // actually settles - which a plain 'resize' listener misses on first open

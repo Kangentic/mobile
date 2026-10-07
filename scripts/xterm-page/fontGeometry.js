@@ -43,18 +43,24 @@
     return settledFit !== null && settledFit.key === currentFitKey() ? settledFit : null;
   }
 
-  // The font an init starts from: the converged cell when this grid and pane
-  // already have one, the reference font otherwise.
-  function fittedFontPxForGrid() {
+  // The cell an init starts from: the converged cell when this grid and pane
+  // already have one; under the computed fit, the computed cell, so a fresh
+  // terminal is CONSTRUCTED at its final size and the init's refit finds
+  // nothing to write; otherwise the reference font at the clean slate (line
+  // height 1) the measured chain converges from.
+  function initialCellForGrid() {
     var settled = settledFitForCurrentGrid();
-    return settled !== null ? settled.fontSizePx : referenceFontPx();
+    if (settled !== null) return { fontSizePx: settled.fontSizePx, lineHeight: settled.lineHeight };
+    var computed = fitStrategy === 'computed' ? computeFittedCell() : null;
+    return computed !== null ? computed : { fontSizePx: referenceFontPx(), lineHeight: 1 };
   }
 
-  // The line height an init starts from, by the same rule: the converged
-  // stretch, or the clean slate (1) the height fit starts a fresh chain from.
+  function fittedFontPxForGrid() {
+    return initialCellForGrid().fontSizePx;
+  }
+
   function fittedLineHeightForGrid() {
-    var settled = settledFitForCurrentGrid();
-    return settled !== null ? settled.lineHeight : 1;
+    return initialCellForGrid().lineHeight;
   }
 
   // Set the font to the reference cell's. Pick the font so the REFERENCE
@@ -66,7 +72,7 @@
     var next = referenceFontPx();
     if (next !== currentFontSizePx) {
       currentFontSizePx = next;
-      if (terminal) terminal.options.fontSize = next;
+      setCellOption('fontSize', next);
     }
   }
 
@@ -75,7 +81,24 @@
   // not, so a release-build trace shows every open's cell, not only the ones
   // that moved - and when the texture cap clamps a pinch ('texture-cap').
   // Primitives only: the host's connection trace never carries content.
+  //
+  // A settle also carries the chain's cost (cellFit.js): which strategy ran,
+  // how long the chain took, and how many font or line-height writes it made
+  // and how long they blocked, since each one resized and cleared the canvas.
+  // A texture-cap report is no chain and carries nulls.
   function reportFit(source, gridHeightPx) {
+    var chain = source === 'settled' ? fitChainStats : null;
+    if (chain !== null) {
+      lastFitChainStats = {
+        strategy: chain.strategy,
+        chainMs: Math.round(performance.now() - chain.startedAt),
+        cellWrites: chain.cellWrites,
+        cellWriteMs: Math.round(chain.cellWriteMs),
+        maxCellWriteMs: Math.round(chain.maxCellWriteMs),
+      };
+      fitChainStats = null;
+    }
+    var reported = chain !== null ? lastFitChainStats : null;
     postToHost({
       type: 'font-size',
       fontSizePx: currentFontSizePx,
@@ -90,6 +113,11 @@
       gridHeightPx: Math.round(gridHeightPx),
       devicePixelRatio: window.devicePixelRatio,
       maxTextureSize: maxGlTextureSize,
+      fitStrategy: reported !== null ? reported.strategy : null,
+      chainMs: reported !== null ? reported.chainMs : null,
+      cellWrites: reported !== null ? reported.cellWrites : null,
+      cellWriteMs: reported !== null ? reported.cellWriteMs : null,
+      maxCellWriteMs: reported !== null ? reported.maxCellWriteMs : null,
     });
   }
 

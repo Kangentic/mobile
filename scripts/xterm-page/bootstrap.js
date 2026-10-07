@@ -69,6 +69,21 @@
       container.addEventListener('click', function () {
         if (terminal) terminal.focus();
       });
+      // A long-press on the terminal is a contextmenu event, and xterm's own
+      // listener for it (its desktop right-click paste, CoreBrowserTerminal)
+      // moves the hidden textarea under the finger, raises it to z-index 1000
+      // and FOCUSES it, which raises the WebView's keyboard on the very field
+      // DirectKeyInput exists to keep typing away from. Left uncancelled,
+      // Chromium then draws Android's floating text menu over that textarea:
+      // with an autofill service set and nothing to paste, a lone "Autofill"
+      // pill (seen on a Pixel with 1Password). So the event is cancelled in
+      // the CAPTURE phase on window and goes no further: xterm's listener never
+      // runs, and no menu is drawn. Nothing in the terminal needs either.
+      window.addEventListener('contextmenu', function (menuEvent) {
+        if (!longPressMenuGuard) return;
+        menuEvent.preventDefault();
+        menuEvent.stopPropagation();
+      }, true);
       // The scroll-container is 100% of the WebView, so its box height tracks
       // window.innerHeight. Observing it re-fits the moment the viewport box
       // actually settles - which a plain 'resize' listener misses on first open

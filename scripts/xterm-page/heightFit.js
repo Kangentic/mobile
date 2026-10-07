@@ -60,7 +60,7 @@
       // adjustment pass used to be left overflowing, with the bottom row
       // sliced off by exactly that extra pixel per row.
       if (screenHeight > viewportHeight + HEIGHT_FIT_TOLERANCE_PX && currentLineHeight > 1.005) {
-        terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+        setCellOption('lineHeight', Math.max(1, currentLineHeight * (viewportHeight / screenHeight)));
         traceHeightFit('final-giveback', generation, passesLeft, screenHeight);
         // Settle on the NEXT frame's measurement: the one above is the
         // overflowing grid this pass just corrected, and settling on it used
@@ -84,7 +84,7 @@
         // The stretch overshot: hand back exactly the excess, and stop
         // stretching for the rest of this fit - a stretch that re-runs after
         // its own correction just trades the overflow back and forth.
-        terminal.options.lineHeight = Math.max(1, currentLineHeight * (viewportHeight / screenHeight));
+        setCellOption('lineHeight', Math.max(1, currentLineHeight * (viewportHeight / screenHeight)));
         stretchLocked = true;
         adjusted = true;
       } else if (currentFontSizePx > MIN_AUTO_FONT_PX) {
@@ -92,7 +92,7 @@
         // this row count, not that the stretch was. Stretching stays legal
         // after this step, and is how the leftover row gets reclaimed.
         currentFontSizePx -= 1;
-        terminal.options.fontSize = currentFontSizePx;
+        setCellOption('fontSize', currentFontSizePx);
         adjusted = true;
         fontStepped = true;
       }
@@ -100,7 +100,7 @@
       var desiredLineHeight = viewportHeight / (referenceRows * baseCellHeight);
       var next = Math.max(1, Math.min(MAX_LINE_HEIGHT, desiredLineHeight));
       if (Math.abs(next - currentLineHeight) > 0.005) {
-        terminal.options.lineHeight = next;
+        setCellOption('lineHeight', next);
         adjusted = true;
       }
     }

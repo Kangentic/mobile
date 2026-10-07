@@ -28,6 +28,13 @@ jest.mock('@/devsupport/connectionTrace', () => ({
   traceConnection: jest.fn(),
 }));
 
+// The retention probe is compiled out without its build flag; a holder lets a
+// test select an arm (the measured fit) and the rest see the shipped 'off'.
+const mockRetentionProbeVariant = { current: 'off' };
+jest.mock('@/devsupport/retentionProbe', () => ({
+  getRetentionProbeVariant: () => mockRetentionProbeVariant.current,
+}));
+
 // An in-memory stand-in keeps the component tier free of the native module and
 // lets a test read back what was written: the pane used to persist a
 // remembered fit size here, and nothing may be remembered across opens now.
@@ -1129,6 +1136,77 @@ describe('TerminalPane (faithful mirror)', () => {
 
       await firePinchCallback('onUpdate', { numberOfTouches: 2, scale: 2 } as unknown as { numberOfTouches: number });
       expect(decodedPosts()).toContainEqual({ type: 'set-font-size', fontSizePx: 20 });
+    });
+
+    /**
+     * The black-terminal fix ships as the computed fit, and the trace carries
+     * each chain's cost so the fix is measurable on a release build. The
+     * retention probe's 'measured-fit' arm sends the older chain instead, which
+     * is what makes the A/B possible in one build.
+     *
+     * Mutation that reddens this: hardcode fitStrategy in postInit, or drop the
+     * chain fields from the 'terminal-fit' trace.
+     */
+    it('inits with the computed fit, the measured one under the probe arm, and traces the chain cost', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      const shippedInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(shippedInit?.type === 'init' ? shippedInit.fitStrategy : 'no init').toBe('computed');
+
+      await postFromWebView(
+        JSON.stringify({
+          type: 'font-size',
+          fontSizePx: 10,
+          source: 'settled',
+          trigger: 'refit-msg',
+          fitStrategy: 'computed',
+          chainMs: 41,
+          cellWrites: 1,
+          cellWriteMs: 9,
+          maxCellWriteMs: 8,
+        }),
+      );
+      expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith(
+        'terminal-fit',
+        expect.objectContaining({ fitStrategy: 'computed', chainMs: 41, cellWrites: 1, cellWriteMs: 9, maxCellWriteMs: 8 }),
+      );
+
+      mockRetentionProbeVariant.current = 'measured-fit';
+      try {
+        webViewMock.__postMessageMock.mockClear();
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
+        const probedInit = decodedPosts().find((message) => message?.type === 'init');
+        expect(probedInit?.type === 'init' ? probedInit.fitStrategy : 'no init').toBe('measured');
+      } finally {
+        mockRetentionProbeVariant.current = 'off';
+      }
+    });
+
+    /**
+     * The long-press guard (the "Autofill" pill over the terminal) ships on,
+     * and only the probe's control arm sends it off, so the A/B compares the
+     * one listener. Mutation that reddens this: send the guard as the probe
+     * check without the negation, or drop the field.
+     */
+    it('inits with the long-press menu guard on, and off only under the probe arm', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      const shippedInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(shippedInit?.type === 'init' ? shippedInit.longPressMenuGuard : 'no init').toBe(true);
+
+      mockRetentionProbeVariant.current = 'autofillable-terminal-input';
+      try {
+        webViewMock.__postMessageMock.mockClear();
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
+        const probedInit = decodedPosts().find((message) => message?.type === 'init');
+        expect(probedInit?.type === 'init' ? probedInit.longPressMenuGuard : 'no init').toBe(false);
+        // The arm moves nothing else.
+        expect(probedInit?.type === 'init' ? probedInit.fitStrategy : 'no init').toBe('computed');
+      } finally {
+        mockRetentionProbeVariant.current = 'off';
+      }
     });
 
     it('marks the session painted only on a non-blank report that answers the latest init', async () => {

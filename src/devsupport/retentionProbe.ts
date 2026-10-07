@@ -32,7 +32,9 @@ export type RetentionProbeVariant =
   | 'no-motion'
   | 'extra-mappers'
   | 'no-swap-veil'
-  | 'composer-no-dictation';
+  | 'composer-no-dictation'
+  | 'measured-fit'
+  | 'autofillable-terminal-input';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -89,6 +91,26 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'composer-no-dictation',
     label: 'Composer without dictation',
     description: 'No speech listeners are registered',
+  },
+  {
+    // The control arm of the black-terminal fix (scripts/xterm-page/cellFit.js):
+    // the older fit that stretches the line height a frame at a time, resizing
+    // and clearing the WebGL canvas on every pass. Read the `terminal-fit`
+    // trace's cellWrites and chainMs for each arm, on the fit button, in one
+    // build. Takes effect from the next terminal init (reopen the session).
+    variant: 'measured-fit',
+    label: 'Old terminal fit',
+    description: 'Multi-pass fit, one canvas resize per pass',
+  },
+  {
+    // The control arm of the terminal autofill fix: the page stops cancelling
+    // the long-press `contextmenu`, so a long-press on the terminal raises
+    // Android's text menu over xterm's hidden textarea, which offers only
+    // "Autofill" when an autofill service is set. Long-press the cursor in
+    // each arm and screenshot. Takes effect from the next terminal init.
+    variant: 'autofillable-terminal-input',
+    label: 'Terminal long-press menu',
+    description: 'Long-press shows the Autofill menu',
   },
 ];
 
