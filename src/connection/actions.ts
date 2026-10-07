@@ -1,5 +1,5 @@
 import type { JsonValue, ReadDiffScope } from '@kangentic/protocol';
-import { CapabilityError } from '@/channel';
+import { CapabilityError, CapabilityTimeoutError } from '@/channel';
 import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { useActivityStore } from '@/state/activityStore';
@@ -51,7 +51,7 @@ export async function writeTerminal(sessionId: string, data: string): Promise<vo
  */
 export const RESUME_WAIT_MS = 20_000;
 
-/** The desktop's refusal text is shown as the desktop shows it, capped: it is peer-supplied display text. */
+/** The desktop's refusal text (Resume's and Pause's) is shown as the desktop shows it, capped: it is peer-supplied display text. */
 const RESUME_FAILURE_MESSAGE_MAX_LENGTH = 160;
 
 /**
@@ -153,6 +153,62 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
   unsubscribe = useBoardStore.subscribe(readProgress);
   readProgress();
   setTimeout(checkWaitBound, RESUME_WAIT_MS);
+}
+
+/**
+ * How long the long-press sheet waits, from the tap, for the task's row to
+ * read paused. It covers the verb's own 10 s timeout, after which the desktop
+ * may still be waiting on the task lock (a long move can hold it), and the
+ * agent shutdown of about 3 s that runs behind an accepted pause. The same
+ * 20 s Resume gives its own settle (RESUME_WAIT_MS).
+ */
+export const PAUSE_WAIT_MS = 20_000;
+
+/** What the desktop said to a pause. The paused row itself arrives later, as a board event. */
+export type PauseRequestOutcome =
+  | { kind: 'accepted' }
+  /**
+   * The verb timed out. The desktop takes the task lock before it pauses, so
+   * the pause may still apply: the board is re-read, and the caller keeps
+   * waiting on the row rather than reporting a failure.
+   */
+  | { kind: 'unconfirmed' }
+  /** `message` is the desktop's own refusal text when it gave one, or null for the caller's generic line. */
+  | { kind: 'refused'; message: string | null };
+
+/**
+ * The desktop task view's Pause, from the phone: pauses a task's LIVE session
+ * by sending `pause-session` (protocol 0.18.0). Only ever called from a
+ * surface gated on the row's `pausable`, the desktop's promise that the verb
+ * takes its own Pause path: the conversation is kept for a later Resume, and
+ * the pause sticks on a column with auto-spawn.
+ *
+ * The response means ACCEPTED, not paused: the agent's shutdown runs on behind
+ * it, and the paused state reaches the phone as the task's next board row
+ * (`paused: true`). A caller settles on that row, never on this promise.
+ *
+ * Every refusal re-reads the board. The desktop's usual one, "This task has no
+ * running session to pause.", means the phone's view was stale, and the
+ * re-read takes the Pause away from the row that should not have had it.
+ */
+export async function pauseTaskSession(taskId: string, projectId: string): Promise<PauseRequestOutcome> {
+  try {
+    await requireVerbClient().pauseSession({ taskId, projectId });
+    return { kind: 'accepted' };
+  } catch (error) {
+    if (error instanceof CapabilityTimeoutError) {
+      void refreshSnapshots().catch(() => undefined);
+      return { kind: 'unconfirmed' };
+    }
+    if (error instanceof CapabilityError) {
+      void refreshSnapshots().catch(() => undefined);
+      const refusalText = error.message.trim().slice(0, RESUME_FAILURE_MESSAGE_MAX_LENGTH);
+      return { kind: 'refused', message: refusalText.length > 0 ? refusalText : null };
+    }
+    // Not connected, or the channel dropped mid-request: nothing reached the
+    // desktop that it could still act on, so this one fails outright.
+    return { kind: 'refused', message: null };
+  }
 }
 
 export async function moveTaskOptimistic(input: {

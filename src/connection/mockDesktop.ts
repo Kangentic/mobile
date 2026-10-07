@@ -3086,6 +3086,18 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     MOCK_STATIC_SESSIONS.map((spec) => [spec.sessionId, { spec, transcript: staticSessionSeedTranscript(spec), revision: 1, usageReported: true }]),
   );
   /**
+   * Static sessions a user paused through `pause-session`: the conversation a
+   * later Resume picks back up. Keyed by TASK, because a user's pause clears
+   * the row's `session_id`, so nothing else still names the session.
+   */
+  const userPausedStaticStates = new Map<string, MockStaticSessionState>();
+  /**
+   * Tasks whose pause was accepted while their agent is still shutting down.
+   * The desktop records a pause before the shutdown runs, so a second
+   * `pause-session` in that window is refused and the row reads unpausable.
+   */
+  const pausingTaskIds = new Set<string>();
+  /**
    * Tasks archived DURING this connection (a move into the done-role column),
    * per project. archivedPage serves these ahead of the fixed fixtures, so an
    * archived card lands in the Done column instead of vanishing entirely.
@@ -3322,6 +3334,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   function pauseActiveSession(): void {
     const pausedSessionId = activeSessionId;
     if (pausedSessionId === null) return;
+    pausingTaskIds.add(MOCK_TASK_ID);
     pendingPromptId = null;
     pendingTickResult = null;
     emit({
@@ -3331,6 +3344,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       payload: { type: 'status', status: 'suspended', resuming: activeSessionResuming, resumable: true },
     });
     later(MOCK_SUSPEND_EXIT_MS, () => {
+      pausingTaskIds.delete(MOCK_TASK_ID);
       if (activeSessionId !== pausedSessionId) return;
       emit({ kind: 'activity', sessionId: pausedSessionId, taskId: MOCK_TASK_ID, payload: { type: 'session-ended', intentional: true } });
       activeSessionId = null;
@@ -3343,6 +3357,63 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       }
       setTaskSession(null);
     });
+  }
+
+  /**
+   * `pause-session` on a task running one of the STATIC sessions, the same
+   * shape pauseActiveSession gives the streaming task: the `suspended` status
+   * push, then after the agent's shutdown the unlabelled `session-ended`, and
+   * the row losing its `session_id` and gaining `paused: true`. `resumable`
+   * follows the column, as the desktop's does: Done offers no Resume. The
+   * conversation is kept by task for a later Resume (resumePausedTask).
+   */
+  function pauseStaticSession(task: BoardTaskWire, projectId: string): void {
+    const pausedSessionId = task.session_id;
+    const pausedState = pausedSessionId !== null ? staticSessionStates.get(pausedSessionId) : undefined;
+    if (pausedSessionId === null || pausedState === undefined) return;
+    pausingTaskIds.add(task.id);
+    emit({
+      kind: 'activity',
+      sessionId: pausedSessionId,
+      taskId: task.id,
+      payload: { type: 'status', status: 'suspended', resuming: pausedState.spec.resuming ?? false, resumable: true },
+    });
+    later(MOCK_SUSPEND_EXIT_MS, () => {
+      pausingTaskIds.delete(task.id);
+      if (task.session_id !== pausedSessionId) return;
+      emit({ kind: 'activity', sessionId: pausedSessionId, taskId: task.id, payload: { type: 'session-ended', intentional: true } });
+      // The two live TUIs repaint on the tick while subscribed; a paused one
+      // must stop, as the desktop's PTY does.
+      if (pausedSessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
+      if (pausedSessionId === MOCK_GEMINI_SESSION_ID) geminiStreamSubscribed = false;
+      // The desktop dropped the live row: a subscribe for its id now fails.
+      staticSessionStates.delete(pausedSessionId);
+      userPausedStaticStates.set(task.id, pausedState);
+      const columns = projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
+      const inDone = columns.find((column) => column.id === task.swimlane_id)?.role === 'done';
+      task.session_id = null;
+      task.paused = true;
+      task.resumable = !inDone;
+      announceTaskUpdated(task, projectId);
+    });
+  }
+
+  /**
+   * The 0.18.0 row's `pausable`, computed whenever a row is served so it can
+   * never drift from the session state it describes. True for a LIVE session
+   * (running or queued) on a task that is not in To Do and not paused; Done
+   * and archived do not clear it, matching the desktop. False from the moment
+   * a pause is accepted, because the desktop records the pause first.
+   */
+  function isTaskPausable(task: BoardTaskWire, projectId: string): boolean {
+    if (task.paused === true || task.session_id === null || pausingTaskIds.has(task.id)) return false;
+    const columns = projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
+    if (columns.find((column) => column.id === task.swimlane_id)?.role === 'todo') return false;
+    if (task.id === MOCK_TASK_ID) return task.session_id === activeSessionId;
+    const liveState = staticSessionStates.get(task.session_id);
+    if (liveState === undefined) return false;
+    const status = liveState.spec.sessionStatus ?? 'running';
+    return status === 'running' || status === 'queued';
   }
 
   /**
@@ -3371,25 +3442,33 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       }
       respawnCounter += 1;
       const successorSessionId = `mock-session-${respawnCounter}`;
+      // A row the desktop parked in place still names its session, and the
+      // phone may hold a feed on it; a user's pause cleared the row's
+      // session_id and ended that feed already, so its conversation is found
+      // by task instead (pauseStaticSession).
       const parkedState = task.session_id !== null ? staticSessionStates.get(task.session_id) : undefined;
+      const pausedState = parkedState ?? userPausedStaticStates.get(task.id);
       if (task.id === MOCK_TASK_ID) {
         activeSessionId = successorSessionId;
         activeSessionResuming = true;
         activeSessionUsageReported = false;
         streamSubscribed = false;
-      } else if (parkedState !== undefined) {
-        emit({
-          kind: 'activity',
-          sessionId: parkedState.spec.sessionId,
-          taskId: task.id,
-          payload: { type: 'session-ended', intentional: true, spawnProgressLabel: MOCK_RESUME_LABEL, successorSessionId },
-        });
-        // The desktop drops the paused row: a subscribe for its id now fails.
-        staticSessionStates.delete(parkedState.spec.sessionId);
+      } else if (pausedState !== undefined) {
+        if (parkedState !== undefined) {
+          emit({
+            kind: 'activity',
+            sessionId: parkedState.spec.sessionId,
+            taskId: task.id,
+            payload: { type: 'session-ended', intentional: true, spawnProgressLabel: MOCK_RESUME_LABEL, successorSessionId },
+          });
+          // The desktop drops the paused row: a subscribe for its id now fails.
+          staticSessionStates.delete(parkedState.spec.sessionId);
+        }
+        userPausedStaticStates.delete(task.id);
         // The same conversation, resumed: the transcript carries over.
         const resumedState: MockStaticSessionState = {
           spec: {
-            ...parkedState.spec,
+            ...pausedState.spec,
             sessionId: successorSessionId,
             sessionStatus: 'running',
             resuming: true,
@@ -3397,8 +3476,8 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
             alreadyWaitingForMs: 0,
             replyText: 'Picking the migration back up at the token schema.',
           },
-          transcript: parkedState.transcript,
-          revision: parkedState.revision,
+          transcript: pausedState.transcript,
+          revision: pausedState.revision,
           usageReported: false,
         };
         staticSessionStates.set(successorSessionId, resumedState);
@@ -3473,6 +3552,8 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       // The desktop removed the row: a subscribe for its id now fails.
       staticSessionStates.delete(sessionId);
     }
+    // A user-paused conversation goes with the rest of the session rows.
+    userPausedStaticStates.delete(task.id);
     task.session_id = null;
     task.spawn_progress = null;
     task.resumable = false;
@@ -3794,13 +3875,17 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       if (task.archived_at !== null) continue;
       taskCountsByColumnId[task.swimlane_id] = (taskCountsByColumnId[task.swimlane_id] ?? 0) + 1;
     }
+    const servedProjectId = isSecondProject ? MOCK_PROJECT_2.id : MOCK_PROJECT.id;
+    // A 0.18.0 desktop sends `pausable` on every row, computed from the live
+    // session state at serve time (isTaskPausable).
+    const servedTasks = allTasks.map((task) => ({ ...task, pausable: isTaskPausable(task, servedProjectId) }));
     return {
-      projectId: isSecondProject ? MOCK_PROJECT_2.id : MOCK_PROJECT.id,
+      projectId: servedProjectId,
       columns: isSecondProject ? mockColumns2() : mockColumns(),
       tasks:
         view === 'sessions'
-          ? allTasks.filter((task) => task.session_id !== null || hasSpawnLabel(task) || task.resumable === true)
-          : allTasks,
+          ? servedTasks.filter((task) => task.session_id !== null || hasSpawnLabel(task) || task.resumable === true)
+          : servedTasks,
       ...(view === undefined ? { backlog: [] } : {}),
       projectColor: isSecondProject ? MOCK_PROJECT_2.color : MOCK_PROJECT.color,
       // Exercises the desktop's "hide ticket numbers" layout setting - the
@@ -3821,7 +3906,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   function archivedPage(projectId: string, limit: number | undefined, offset: number | undefined): JsonValue {
     // Tasks the reviewer archived just now page ahead of the fixed fixtures,
     // newest first - the same order the desktop serves.
-    const archivedTasks = [...(archivedDuringSession.get(projectId) ?? []), ...archivedTasksFor(projectId)];
+    const archivedTasks = [...(archivedDuringSession.get(projectId) ?? []), ...archivedTasksFor(projectId)].map((task) => ({
+      ...task,
+      pausable: isTaskPausable(task, projectId),
+    }));
     const pageOffset = offset ?? 0;
     const pageLimit = limit ?? ARCHIVED_MOCK_PAGE_SIZE;
     return {
@@ -4314,6 +4402,24 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           request,
           startColumn?.role === 'todo' ? 'Cannot resume a session for a task in the To Do column' : 'This task has no paused session to resume.',
         );
+      }
+      case 'pause-session': {
+        // The phone sends this only for Pause, gated on the board row's
+        // `pausable` (protocol 0.18.0). Answered on ACCEPT, as the desktop
+        // does: the agent shuts down behind the response, and the paused row
+        // reaches the phone as a board event. The refusals are the desktop's
+        // own copy.
+        const payload = parseCapabilityRequestPayload('pause-session', request.payload);
+        if (payload.projectId !== MOCK_PROJECT.id && payload.projectId !== MOCK_PROJECT_2.id) {
+          return failWith(request, `No such project: ${payload.projectId}`);
+        }
+        const located = locateTask(payload.taskId);
+        if (!located || !isTaskPausable(located.task, located.projectId)) {
+          return failWith(request, 'This task has no running session to pause.');
+        }
+        if (located.task.id === MOCK_TASK_ID) pauseActiveSession();
+        else pauseStaticSession(located.task, located.projectId);
+        return ok(request, { ok: true });
       }
       default:
         return failWith(request, `Mock desktop has no handler for ${request.verb}`);

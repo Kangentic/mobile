@@ -118,12 +118,13 @@ decides *what* it may do:
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
 | `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it only for Resume on a paused task, gated on the board row's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it. The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
+| `pause-session` | Ask the desktop to pause a task's LIVE session exactly as its Pause button does (protocol 0.18.0): keyed by task, the conversation kept for a later Resume, and the pause sticks on an auto-spawn column. The desktop answers `{ ok }` when the pause is ACCEPTED (recorded), while the agent shuts down behind it; the paused row then arrives as a board event. The phone sends it only from the long-press hub's Pause, gated on the board row's `pausable` (see Pause below) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
 is being approved, and the desktop enforces that the response binds to a specific outstanding
 prompt id (`${sessionId}:${toolUseId}`, also covering `AskUserQuestion`/`ExitPlanMode` pauses,
-which ride the same permission machinery). The default pairing grant is ALL ELEVEN verbs
+which ride the same permission machinery). The default pairing grant is ALL TWELVE verbs
 (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts`): pairing proves
 possession of both devices, so pairing is the approval, and the desktop's Mobile Devices
 settings narrow a device per-verb after the fact. The `board-tool-*` surface is NOT
@@ -970,6 +971,24 @@ reaches the launch face: its suspend is held until the labelled end, which opens
 as before. On the board, a sessionless
 card the desktop keeps a session story for (resumable, or labelled) opens the session screen rather
 than the edit form, as the desktop's card opens its task detail.
+
+**Pause** is the desktop task header's, from the phone, on one surface: the long-press hub gains
+"Pause session" (the desktop's label and its `CirclePause` glyph) where Resume would sit. The two
+never show together, because the gate is the board row's `pausable` (protocol 0.18.0), which a
+desktop sends true only for a task with a LIVE session (running or queued) outside To Do and never
+beside `paused: true`. It is the desktop's promise that `pause-session` pauses that session exactly
+as its own Pause button does. A null or absent field is a desktop before 0.18.0, so no Pause. The
+desktop answers on ACCEPT while the agent shuts down behind it (about 3 s), so the hub settles on
+the BOARD ROW, never on the response: the row shows "Pausing agent..." (the desktop's own pending
+copy) with every row disabled until the task's row reads `paused: true`, or until the task leaves
+the store, which is what the Agents feed's sessions projection does with a paused task that offers
+no Resume. A refusal stays in the sheet with the desktop's text ("This task has no running session
+to pause." means the view was stale), and every refusal re-reads the board so the stale row loses
+its Pause. A timeout is not a failure: the desktop takes the task lock first and a long move can
+hold it past the phone's 10 s, so the board is re-read and the sheet keeps waiting, and only after
+`PAUSE_WAIT_MS` (20 s from the tap) does it give the row back with "Desktop has not confirmed the
+pause yet". The session view's header has no Pause yet; the desktop's own header carries a
+pause/resume toggle, which is the next surface if one is wanted.
 
 **The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
 you), Active, then the two statuses that are not running: Queued, its own section, and Paused,

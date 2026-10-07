@@ -1,8 +1,8 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
-import { TaskActionsScreen } from '@/screens/TaskActionsScreen';
+import { PAUSE_FAILED_MESSAGE, PAUSE_UNCONFIRMED_MESSAGE, TaskActionsScreen } from '@/screens/TaskActionsScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
@@ -29,10 +29,18 @@ jest.mock('expo-linking', () => ({
 const mockArchiveTask = jest.fn().mockResolvedValue(undefined);
 const mockDeleteTaskFromBoard = jest.fn().mockResolvedValue(undefined);
 const mockResumeTaskSession = jest.fn();
+const mockPauseTaskSession = jest.fn();
+/** Mirrors PAUSE_WAIT_MS; the module is mocked whole, so the real constant is not there to import. */
+const MOCK_PAUSE_WAIT_MS = 20_000;
 jest.mock('@/connection/actions', () => ({
   archiveTask: (input: unknown) => mockArchiveTask(input),
   deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
   resumeTaskSession: (taskId: string, projectId: string) => mockResumeTaskSession(taskId, projectId),
+  pauseTaskSession: (taskId: string, projectId: string) => mockPauseTaskSession(taskId, projectId),
+  // A getter: the factory is hoisted above the constant's initialization.
+  get PAUSE_WAIT_MS() {
+    return MOCK_PAUSE_WAIT_MS;
+  },
 }));
 
 /** `withDoneColumn` decides whether Archive is even possible - it is a move into a done-role column. */
@@ -87,6 +95,175 @@ describe('TaskActionsScreen', () => {
     mockParams = { taskId: 'task-1', projectId: 'project-1' };
     useBoardStore.getState().reset();
     seedBoard({ withDoneColumn: true });
+  });
+
+  /**
+   * Pause in the hub (protocol 0.18.0), gated on the board row's `pausable`,
+   * the desktop's promise that `pause-session` takes its own Pause path. The
+   * desktop answers on ACCEPT while the agent shuts down behind it, so the
+   * sheet holds "Pausing agent..." until the row itself reads paused.
+   */
+  describe('Pause session', () => {
+    function seedLiveSession(task: Partial<BoardTaskWire> = {}): void {
+      seedBoard({ withDoneColumn: true, task: { session_id: 'sess-1', swimlane_id: 'lane-done', pausable: true, ...task } });
+    }
+
+    function pauseRow(): ReturnType<typeof screen.getByTestId> {
+      return screen.getByTestId('task-action-pause');
+    }
+
+    async function tapPause(): Promise<void> {
+      await act(async () => {
+        await fireEvent.press(pauseRow());
+      });
+    }
+
+    /** The desktop's paused row: no session, paused, nothing left to pause. */
+    async function landPausedRow(): Promise<void> {
+      await act(() => {
+        useBoardStore.setState((state) => {
+          const board = state.boardsByProjectId['project-1'];
+          if (!board) return state;
+          const task = board.tasksById['task-1'];
+          if (!task) return state;
+          return {
+            boardsByProjectId: {
+              ...state.boardsByProjectId,
+              'project-1': { ...board, tasksById: { 'task-1': { ...task, session_id: null, paused: true, pausable: false } } },
+            },
+          };
+        });
+      });
+    }
+
+    it('is offered when the row says pausable', async () => {
+      seedLiveSession();
+      await renderTaskActions();
+
+      expect(pauseRow()).toBeTruthy();
+      expect(within(pauseRow()).getByText('Pause session')).toBeTruthy();
+    });
+
+    it.each([
+      ['false (no live session)', false],
+      ['null (a desktop older than 0.18.0)', null],
+    ])('is not offered when pausable is %s', async (_description, pausable) => {
+      seedLiveSession({ pausable });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-pause')).toBeNull();
+    });
+
+    it('is not offered when the row has no pausable key at all (an older desktop)', async () => {
+      const olderRow = boardTaskFixture({ id: 'task-1', session_id: 'sess-1' });
+      delete olderRow.pausable;
+      seedBoard({ withDoneColumn: true, taskOverride: olderRow });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-pause')).toBeNull();
+    });
+
+    /**
+     * Mutation seen failing: closing on the accept instead of on the row
+     * (calling closeIfStillOpen in onPause's then): mockBack was called
+     * before the paused row landed.
+     */
+    it('holds "Pausing agent..." with every row disabled, and closes only when the row reads paused', async () => {
+      seedLiveSession();
+      mockPauseTaskSession.mockResolvedValue({ kind: 'accepted' });
+      await renderTaskActions();
+
+      await tapPause();
+
+      expect(mockPauseTaskSession).toHaveBeenCalledWith('task-1', 'project-1');
+      expect(within(pauseRow()).getByText('Pausing agent...')).toBeTruthy();
+      for (const testID of ['task-action-pause', 'task-action-move', 'task-action-edit', 'task-action-archive', 'task-action-delete']) {
+        expect(screen.getByTestId(testID).props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
+      }
+      expect(mockBack).not.toHaveBeenCalled();
+
+      await landPausedRow();
+
+      expect(mockBack).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The Agents feed loads the sessions projection, which drops a paused
+     * task that offers no Resume (one in Done). There the paused row never
+     * arrives; the task leaves the store instead, and that settles it too.
+     *
+     * Mutation seen failing: settling on `taskPaused` alone (the sheet stayed
+     * open on "Pausing agent..." after the row left).
+     */
+    it('closes when the task leaves the store, as the sessions projection drops a paused Done task', async () => {
+      seedLiveSession();
+      mockPauseTaskSession.mockResolvedValue({ kind: 'accepted' });
+      await renderTaskActions();
+      await tapPause();
+      expect(mockBack).not.toHaveBeenCalled();
+
+      await act(() => {
+        useBoardStore.setState((state) => {
+          const board = state.boardsByProjectId['project-1'];
+          if (!board) return state;
+          return { boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...board, tasksById: {} } } };
+        });
+      });
+
+      expect(mockBack).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays open with the desktop\'s refusal text and gives the row back', async () => {
+      seedLiveSession();
+      mockPauseTaskSession.mockResolvedValue({ kind: 'refused', message: 'This task has no running session to pause.' });
+      await renderTaskActions();
+
+      await tapPause();
+
+      expect(mockBack).not.toHaveBeenCalled();
+      expect(screen.getByTestId('task-action-error').props.children).toBe('This task has no running session to pause.');
+      expect(within(pauseRow()).getByText('Pause session')).toBeTruthy();
+      expect(pauseRow().props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+    });
+
+    it('uses its generic line for a refusal with no text', async () => {
+      seedLiveSession();
+      mockPauseTaskSession.mockResolvedValue({ kind: 'refused', message: null });
+      await renderTaskActions();
+
+      await tapPause();
+
+      expect(screen.getByTestId('task-action-error').props.children).toBe(PAUSE_FAILED_MESSAGE);
+    });
+
+    /**
+     * A timed-out pause may still apply (the desktop waits for the task lock),
+     * so the sheet keeps waiting on the row. Only once the bound from the tap
+     * passes with no paused row does it give the row back, saying so without
+     * calling it a failure.
+     */
+    it('keeps waiting through a timed-out pause, and says so when the bound passes with no paused row', async () => {
+      jest.useFakeTimers();
+      try {
+        seedLiveSession();
+        mockPauseTaskSession.mockResolvedValue({ kind: 'unconfirmed' });
+        await renderTaskActions();
+        await tapPause();
+
+        expect(within(pauseRow()).getByText('Pausing agent...')).toBeTruthy();
+        expect(screen.queryByTestId('task-action-error')).toBeNull();
+
+        await act(() => {
+          jest.advanceTimersByTime(MOCK_PAUSE_WAIT_MS);
+        });
+
+        expect(mockBack).not.toHaveBeenCalled();
+        expect(screen.getByTestId('task-action-error').props.children).toBe(PAUSE_UNCONFIRMED_MESSAGE);
+        expect(pauseRow().props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   /**

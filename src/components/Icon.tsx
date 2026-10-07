@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   CircleDot,
+  CirclePause,
   CirclePlay,
   GitPullRequest,
   ListFilter,
@@ -49,7 +50,8 @@ export type IconName =
   | 'agent'
   | 'git-pull-request'
   | 'filter'
-  | 'resume';
+  | 'resume'
+  | 'pause';
 
 const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   'chevron-forward': ChevronRight,
@@ -75,6 +77,8 @@ const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   'git-pull-request': GitPullRequest,
   filter: ListFilter,
   resume: CirclePlay,
+  // The desktop task header's own pair: CirclePause beside CirclePlay.
+  pause: CirclePause,
 };
 
 export interface IconProps {

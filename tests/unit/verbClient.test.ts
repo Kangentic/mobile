@@ -274,4 +274,37 @@ describe('VerbClient', () => {
     await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrowError(CapabilityError);
     await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrow(expectedMessage);
   });
+
+  /**
+   * pause-session (protocol 0.18.0): keyed by task, never by session id, and
+   * answered on ACCEPT with `{ ok }`. The paused row itself arrives later as a
+   * board event, so the response carries nothing else.
+   */
+  it('pauseSession sends the task-keyed payload and parses the accept', async () => {
+    const { verbs, requests } = await establishedHarness((request) => okResponse(request, { ok: true }));
+
+    await expect(verbs.pauseSession({ taskId: 'task-1', projectId: 'project-1' })).resolves.toEqual({ ok: true });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].verb).toBe('pause-session');
+    expect(requests[0].payload).toEqual({ taskId: 'task-1', projectId: 'project-1' });
+  });
+
+  it('pauseSession throws CapabilityError carrying the desktop\'s own refusal on ok:false', async () => {
+    const { verbs } = await establishedHarness((request) => ({
+      type: 'capability-response',
+      requestId: request.requestId,
+      ok: false,
+      error: 'This task has no running session to pause.',
+    }));
+
+    await expect(verbs.pauseSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrow(/^This task has no running session to pause\.$/);
+    await expect(verbs.pauseSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toMatchObject({ verb: 'pause-session' });
+  });
+
+  it('pauseSession throws CapabilityError for a response with no ok flag', async () => {
+    const { verbs } = await establishedHarness((request) => okResponse(request, {}));
+
+    await expect(verbs.pauseSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrowError(CapabilityError);
+  });
 });
