@@ -95,6 +95,29 @@ describe('SectionHeader', () => {
     });
   });
 
+  describe('held-open variant (alwaysOpen)', () => {
+    it('keeps the title and count but drops the chevron and the press, whatever collapsed says', async () => {
+      const onToggle = jest.fn();
+      await render(
+        <ThemeProvider>
+          <SectionHeader title="Active" count={4} collapsed alwaysOpen onToggle={onToggle} testID="section-active" />
+        </ThemeProvider>,
+      );
+
+      const header = screen.getByTestId('section-active');
+      expect(within(header).getByText('Active')).toBeTruthy();
+      expect(within(header).getByText('4')).toBeTruthy();
+      expect(header.props.accessibilityRole).toBe('header');
+      expect(header.props.accessibilityLabel).toBe('Active, 4');
+      expect(header.props.accessibilityState).toBeUndefined();
+      expect(header.props.onPress).toBeUndefined();
+      expect(countPillAlignSelf('section-active', '4')).toBe('center');
+
+      await fireEvent.press(header);
+      expect(onToggle).not.toHaveBeenCalled();
+    });
+  });
+
   describe('plain variant (no onToggle)', () => {
     it('renders only the title, with no count badge and no press handling', async () => {
       await render(

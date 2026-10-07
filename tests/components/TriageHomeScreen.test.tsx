@@ -138,6 +138,19 @@ async function renderHome(): Promise<void> {
  * then asserts the action call's `projectId` catches a crossed-project bug
  * (e.g. a screen-level default sneaking back in).
  */
+/**
+ * A second section on screen, for tests that need Active to STAY collapsed:
+ * the only section on screen is always open, whatever its stored collapse.
+ * Paused, because a paused card shows the task's description, so it neither
+ * peeks a snippet nor is pre-warmed, and adds no call to count.
+ */
+function registerPausedCompanion(): void {
+  useActivityStore.getState().registerSession('paused-companion', 'task-paused-companion', 'project-1');
+  useActivityStore
+    .getState()
+    .applySnapshot('paused-companion', 'task-paused-companion', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
+}
+
 function seedTwoProjectBoards(): void {
   useSettingsStore.setState({ collapsedTriageSections: [] });
   useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true });
@@ -572,8 +585,13 @@ describe('TriageHomeScreen', () => {
   });
 
   it('tapping the section header collapses its rows (but keeps the header and its count visible), and tapping again re-expands', async () => {
+    // A second section, so Idle is not the only one on screen (a lone section
+    // is always open; see the block below).
+    useActivityStore.getState().registerSession('sess-working', 'task-working', 'project-1');
+    useActivityStore.getState().applySnapshot('sess-working', 'task-working', 'project-1', streamSnapshotFixture({ activity: { state: 'thinking', reason: { kind: 'turn-active' } } }));
     await renderHome();
-    // needs-you and idle share the "Idle" title; our lone permission-pending
+    await act(async () => {});
+    // needs-you and idle share the "Idle" title; our permission-pending
     // session lands in needs-you, so that is the section kind whose header
     // actually gets emitted.
     expect(screen.getByTestId('section-header-idle').props.accessibilityState).toEqual({ expanded: true });
@@ -617,6 +635,89 @@ describe('TriageHomeScreen', () => {
     await fireEvent.press(screen.getByTestId('section-header-idle'));
     expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
     expect(screen.queryByTestId('activity-row-sess-working')).toBeNull();
+  });
+
+  /**
+   * Reported on the Pixel (task #107): the filter showed Idle and Active, the
+   * user had collapsed Active, and once no agent was idle the whole feed was
+   * one collapsed "Active 4" header over an empty page. The only section on
+   * screen is now always open, with no chevron to collapse it, and the stored
+   * preference survives, so it applies again once a second section has rows.
+   *
+   * Mutation seen failing: dropping `!alwaysOpen &&` from the collapse skip in
+   * TriageHomeScreen (the lone section's rows stay hidden).
+   */
+  describe('the only section on screen', () => {
+    function seedOnlyWorkingSessions(): void {
+      useActivityStore.getState().reset();
+      for (const sessionId of ['sess-working-1', 'sess-working-2']) {
+        useActivityStore.getState().registerSession(sessionId, `task-${sessionId}`, 'project-1');
+        useActivityStore.getState().applySnapshot(sessionId, `task-${sessionId}`, 'project-1', streamSnapshotFixture({ activity: { state: 'thinking', reason: { kind: 'turn-active' } } }));
+      }
+    }
+
+    afterEach(async () => {
+      await act(async () => {
+        useSettingsStore.setState({ hiddenTriageSections: [], collapsedTriageSections: [] });
+      });
+    });
+
+    it('draws open even when stored collapsed, with a header that cannot collapse it', async () => {
+      seedOnlyWorkingSessions();
+      useSettingsStore.setState({ collapsedTriageSections: ['Active'], hiddenTriageSections: ['Paused'] });
+
+      await renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-working-1')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-working-2')).toBeTruthy();
+      const header = screen.getByTestId('section-header-active');
+      expect(header.props.accessibilityRole).toBe('header');
+      expect(header.props.onPress).toBeUndefined();
+      expect(within(header).getByText('2')).toBeTruthy();
+      // A display rule only: the stored collapse is untouched.
+      expect(useSettingsStore.getState().collapsedTriageSections).toEqual(['Active']);
+    });
+
+    it('applies the stored collapse again once a second section has rows', async () => {
+      seedOnlyWorkingSessions();
+      useSettingsStore.setState({ collapsedTriageSections: ['Active'] });
+      await renderHome();
+      await act(async () => {});
+      expect(screen.getByTestId('activity-row-sess-working-1')).toBeTruthy();
+
+      // An agent goes idle: Idle has a row, so Active is no longer alone.
+      await act(() => {
+        useActivityStore.getState().applyActivityEvent({
+          kind: 'activity',
+          sessionId: 'sess-working-2',
+          taskId: 'task-sess-working-2',
+          payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
+        });
+      });
+
+      expect(screen.getByTestId('activity-row-sess-working-2')).toBeTruthy();
+      expect(screen.queryByTestId('activity-row-sess-working-1')).toBeNull();
+      expect(screen.getByTestId('section-header-active').props.accessibilityState).toEqual({ expanded: false });
+    });
+
+    it('counts a section the filter hides as not on screen', async () => {
+      // Idle has a row but is hidden, so Active is the only section drawn.
+      seedOnlyWorkingSessions();
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-working-2',
+        taskId: 'task-sess-working-2',
+        payload: { type: 'activity', state: 'idle', reason: { kind: 'idle' } },
+      });
+      useSettingsStore.setState({ collapsedTriageSections: ['Active'], hiddenTriageSections: ['Idle'] });
+
+      await renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-working-1')).toBeTruthy();
+      expect(screen.queryByTestId('section-header-idle')).toBeNull();
+    });
   });
 
   it('shows the all-quiet state when connected with no sessions', async () => {
@@ -1113,6 +1214,7 @@ describe('TriageHomeScreen', () => {
     function seedManyWorkingSessions(): void {
       useSettingsStore.setState({ collapsedTriageSections: ['Active'] });
       useActivityStore.getState().reset();
+      registerPausedCompanion();
       for (const sessionId of workingSessionIds) {
         useActivityStore.getState().registerSession(sessionId, `task-${sessionId}`, 'project-1');
         useActivityStore.getState().applyActivityEvent({
@@ -1236,6 +1338,7 @@ describe('TriageHomeScreen', () => {
   describe('snippet pre-warm skips what nothing draws', () => {
     function registerWorkingControl(): void {
       useSettingsStore.setState({ collapsedTriageSections: ['Active'] });
+      registerPausedCompanion();
       useActivityStore.getState().registerSession('warm-control', 'task-warm-control', 'project-1');
       useActivityStore.getState().applyActivityEvent({
         kind: 'activity',

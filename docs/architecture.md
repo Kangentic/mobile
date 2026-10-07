@@ -1014,7 +1014,12 @@ header hides its rows and keeps the header and its count, and each section colla
 independently: `collapsedTriageSections` in the settings store is a list keyed by title. It was
 one title at a time until the feed grew to four sections, when collapsing a second section
 re-expanded the first above it and read as a tap that did nothing; an install still holding the
-old single value (`settings.collapsedTriageSection`) carries it over on hydrate.
+old single value (`settings.collapsedTriageSection`) carries it over on hydrate. **The only section
+on screen is always open**, whatever its stored collapse: its header keeps the title and count but
+loses the chevron and the press (`SectionHeader`'s `alwaysOpen`). "On screen" means a section with
+rows that the filter shows. Collapsed, it was the whole feed reduced to one header over an empty
+page, which a user hit with Idle and Active shown, Active collapsed and no agent idle (task #107).
+The stored preference is untouched, so it applies again the moment a second section has rows.
 
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`
