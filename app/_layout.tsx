@@ -5,7 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { ThemeProvider, ToastHost, useTheme } from '@/components';
+import { ThemeProvider, useTheme } from '@/components';
 import { startConnectionLifecycle } from '@/connection/connectionManager';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { initializeNotifications } from '@/notifications';
@@ -159,9 +159,6 @@ function RootStack(): React.JSX.Element {
           moved inside one - <Stack> children are route declarations.
           See src/navigation/pendingNavigation.ts. */}
       <PendingNavigationRunner />
-      {/* App-wide toasts (useToastStore), drawn over every screen: a sibling
-          after the navigator, so it stacks above the routes it covers. */}
-      <ToastHost />
     </>
   );
 }

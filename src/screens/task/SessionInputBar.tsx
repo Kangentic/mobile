@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Stack, useTheme } from '@/components';
+import { Stack, Text, useTheme } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
 import { QuickKeyBar } from '@/components/terminal/QuickKeyBar';
 import { SessionModeToggle, type SessionMode } from './SessionModeToggle';
@@ -34,6 +34,14 @@ export interface SessionInputBarProps {
    * composer and the switcher are unaffected.
    */
   quickKeysHidden?: boolean;
+  /**
+   * A one-line notice above everything else in the footer: a failed Resume's
+   * line ("Session could not be resumed."), which the terminal lens shows in
+   * its Resume panel and every other lens would otherwise not show at all.
+   * Muted caption, as the desktop draws that line (TaskDetailBody.tsx's
+   * `text-xs text-fg-muted`), and as the Resume panel does. Null draws nothing.
+   */
+  notice?: string | null;
 }
 
 /**
@@ -60,6 +68,7 @@ export function SessionInputBar({
   suspended = false,
   switcherOnly = false,
   quickKeysHidden = false,
+  notice = null,
 }: SessionInputBarProps): React.JSX.Element {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -81,6 +90,11 @@ export function SessionInputBar({
         paddingBottom: Math.max(theme.spacing.xs, insets.bottom - theme.spacing.sm),
       }}
     >
+      {notice !== null ? (
+        <Text variant="caption" color="muted" style={{ paddingHorizontal: theme.spacing.xs }} testID="session-footer-notice">
+          {notice}
+        </Text>
+      ) : null}
       {/* Rendered only when a mode row exists: an empty wrapper would add a
           `gap` slot above the pill in changes mode, and past the end of the
           session the pill is the whole footer. */}
