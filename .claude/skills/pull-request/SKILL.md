@@ -1,16 +1,16 @@
 ---
-description: Create a PR and drive its CI checks to all-green (auto-fixing code along the way), then stop. Never merges. This is the Tests column skill. Use /merge-pull-request to merge a green PR.
+description: Create a PR and drive its CI checks to all-green (auto-fixing code along the way), then stop. Never merges. This is the Testing column skill. Use /merge-pull-request to merge a green PR.
 allowed-tools: Read, Glob, Grep, Edit, Write, Bash(git:*), Bash(npm:*), Bash(npx:*), Bash(gh:*), Agent
 argument-hint: [commit message]
 ---
 
 # Pull Request
 
-Commit, rebase, create a pull request, and drive its CI checks to all-green. This is the **Tests
+Commit, rebase, create a pull request, and drive its CI checks to all-green. This is the **Testing
 column** skill: it offloads CI checks to GitHub Actions instead of running them on the local
 machine, then auto-fixes any failures until the PR is green.
 
-It **never merges**. When the PR is green, the user manually moves the task Tests -> Ship It,
+It **never merges**. When the PR is green, the user manually moves the task Testing -> Merge,
 where `/merge-pull-request` merges it and pulls the result back into the local `main` checkout.
 
 **Usage:** `/pull-request [commit message]`
@@ -87,31 +87,37 @@ If there are uncommitted changes (non-empty `git status --porcelain`):
 5. Write the message via the **Write tool** to `.kangentic/COMMIT_MSG.tmp`, then
    `git commit -F .kangentic/COMMIT_MSG.tmp`.
 
-If the working tree is clean, skip to Step 1.5.
+If the working tree is clean, there is nothing to stage - but **do not skip item 3.** A clean tree
+usually means the Code Review pass already committed its own work (see below), and that commit can
+touch doc anchors nothing has audited yet. So run item 3 against the **branch diff** instead of the
+uncommitted set (`git diff --name-only origin/<sourceBranch>...HEAD`), commit any doc fixes it
+produces with a `docs:` message, and then go to Step 1.5.
 
-**Expect changes this session did not write, and do NOT ask the user whether to include them.**
-A task reaching this column has usually just left **Code Review**, which runs `/code-review` as a
-separate agent in the SAME worktree - `isolated` isolates the conversation, not the filesystem.
-Moving between active columns performs no git writes at all (the app suspends or respawns a PTY
-and reuses the existing worktree untouched), so whatever that pass left behind is still sitting
-there.
+**Expect a commit you did not author.** A task reaching this column has usually just left **Code
+Review**, which runs `/code-review` as a separate agent in the SAME worktree (`isolated` isolates
+the conversation, not the filesystem). That pass fixes what it verifies, adds tests, and commits
+its own work, so a `fix(review):` / `refactor(review):` / `test(review):` commit on the branch is
+expected, not a mistake. So is an EMPTY `chore(review): record refuted findings and decisions`
+commit: its body is the review ledger the next review pass reads back, and it lands empty when
+every fix went into a file that was already dirty. Leave them alone: do not squash, reword, or
+fold them into your own message - their separate authorship is the point.
 
-**In this repo a finished review pass leaves the tree DIRTY, not clean.** `/code-review` here does
-not commit its own work: `.claude/skills/code-review/SKILL.md` says so explicitly and notes the
-desktop repo's "commit the pass" step has no counterpart here. So the dirty tree at Step 1
-routinely holds a review pass's edits, including files this session never touched and renames of
-symbols it introduced minutes earlier. Do not port the desktop skill's "a finished pass leaves a
-clean tree" reasoning over; it is false here.
+**And if the tree is dirty with changes you did not write**, that means one of exactly two things,
+because a finished review pass normally leaves the tree clean:
 
-That reads exactly like a concurrent writer. It is not, and treating it as one costs a round trip
-on every single review-then-test handoff. It also blocks Step 3: `git rebase` refuses to start
-against unstaged changes, so the rebase fails until Step 1 commits them.
+- The review pass is **still running**. Its commit has not landed yet.
+- A review fix touched a file that was already dirty, so it was deliberately left uncommitted and
+  mixed with someone else's work. The review's own footer lists those paths by name.
 
-Everything in this worktree belongs to this task, so a review pass's fixes belong in this PR by
-definition. Sanity-check that the diff is coherent follow-up on the same task (it builds on the
-commits already there, references to any renamed symbol are all updated, `npm run typecheck` is
-clean), commit it, and carry on. Escalate to the user only when the diff is unrelated to the task
-or genuinely half-written.
+**Stage it and keep going. Do NOT ask the user whether to include it** - the answer is always yes,
+so the question only costs a round trip. Moving between active columns performs no git writes (the
+app suspends or respawns a PTY and reuses the worktree untouched), so everything in this worktree
+belongs to this task, and a review pass's uncommitted fixes belong in this PR by definition. They
+also block Step 3 until committed: `git rebase` refuses to start against unstaged changes. Report
+the dirty paths and which carry changes you did not write, sanity-check that the diff is coherent
+follow-up on the same task (`npm run typecheck` is clean, every reference to a renamed symbol is
+updated), and commit. Escalate to the user only when the diff is unrelated to the task or
+genuinely half-written.
 
 ## Step 1.5 - Compute the clean public branch name (never rename the local branch)
 
@@ -119,7 +125,10 @@ The local branch, the worktree folder, and the task's stored branch name togethe
 Kangentic board's session identity, the same way they do in the desktop repo. Never rename the
 local branch.
 
-1. `<type>` = the conventional prefix of the Step 1 commit message.
+1. `<type>` = the conventional prefix of the Step 1 commit message. If Step 1 created NO commit (a
+   clean tree whose doc-anchor check found no gap, the common case now that the Code Review pass
+   commits its own work), take the prefix of the most recent commit that is NOT a `*(review)`
+   commit, and if there is none, default to `chore`.
 2. `<desc>` = a kebab slug of the work: resolve the task with `kangentic_get_current_task`
    (pass the worktree cwd + the local branch) and slugify its title (lowercase, hyphen-joined,
    drop filler words, cap to ~4-5 meaningful words, `[a-z0-9-]` only, no
@@ -145,13 +154,31 @@ If the diff (`git diff origin/<sourceBranch>...HEAD`) touches source files, spaw
 implement any genuinely missing tests, following the tier rules and anti-flake patterns. A
 clean no-op is fine if coverage is already adequate."
 
+**Re-run any tests the Code Review pass added.** Those files went green when `/code-review` wrote
+them, but against the tree as it stood then, and Step 3 has since rebased onto a source branch
+that may have moved. Find them in the review commits (the pass committed itself, so they are not
+sitting in the tree untracked). Two Bash calls:
+
+1. `git log --format=%H --grep="(review)" origin/<sourceBranch>..HEAD` for the review commit(s).
+   Keep the quotes; unquoted parentheses are a shell syntax error.
+2. `git show --name-only --format= <sha>` for each, and take the `tests/` paths.
+
+Then re-run each, scoped to the file itself: `npx vitest run tests/unit/<file>.test.ts` or
+`npx jest tests/components/<file>.test.tsx`. The pass never writes Maestro flows (it files those
+holes as a follow-up task instead), and an empty `chore(review):` ledger commit lists no files,
+so neither adds anything here. **Keep it scoped**: a scoped run of an added test file is allowed,
+but `npm run test:unit` or a bare `npx vitest run` is a full-tier run this skill must not do. Fix
+a failure here rather than spending a CI round on it.
+
 ## Step 4 - Push
 
 `git push origin HEAD:<branch> --force-with-lease`. Never bare `--force`.
 
 ## Step 5 - Create the PR
 
-1. PR title = the first line of the most recent commit.
+1. PR title = the first line of the most recent commit. **Skip any `*(review)` commit** when
+   choosing it: it describes the audit pass, not the change the PR is for, and it is routinely the
+   newest commit on the branch.
 2. PR body: write to `.kangentic/PR_BODY.tmp` with the Write tool, mirroring
    `.github/pull_request_template.md` (`## What` / `## Why` / `## How` / `## Breaking changes` /
    `## Tests`, footer `Generated with [Claude Code](https://claude.com/claude-code)`).
@@ -328,7 +355,7 @@ Report the PR URL, branch name, commit count, and "All required checks green." I
   Never fold it into "all green": it is advisory, so a green required gate proves smoke coverage
   only. A reader who wants the paired suite's verdict has to be told it separately.
 
-Next step: the user moves the task Tests -> Ship It, where `/merge-pull-request` merges it. Do
+Next step: the user moves the task Testing -> Merge, where `/merge-pull-request` merges it. Do
 NOT merge.
 
 ## Rules

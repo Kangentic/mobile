@@ -178,7 +178,7 @@ loss on the simulator, which is why the terminal page carries retry logic
 
 Then run `npm run typecheck`, `npm run lint`, and any test you touched.
 
-Do not open a PR unless asked; the board's Tests column owns that.
+Do not open a PR unless asked; the board's Testing column owns that.
 
 ## Traps worth knowing before they cost you a run
 
