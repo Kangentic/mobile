@@ -869,7 +869,8 @@ a resume that goes nowhere after the desktop accepted it sends the phone nothing
 is not bounded by the clock: the label clearing settles it either way. The terminal lens shows the
 failure line in its Resume panel and the other two lenses in the footer, above the switcher, and a
 screen with no session keeps that switcher (the footer is the switcher alone), so a paused task
-opened on a remembered Chat lens can still reach its Resume panel. While the task reads as preparing and no quiet window
+opened on a remembered Chat lens, which has no session to read and says so, can still reach its
+Resume panel and its diff. While the task reads as preparing and no quiet window
 covers the pane, the session screen draws the same `SessionSwapVeil` in its waiting face (the
 desktop's launch overlay, the screen's "launch face", with no deadline and the footer down to the
 switcher): on a screen that never bound a session (opened from a sessionless Paused card, or onto a
