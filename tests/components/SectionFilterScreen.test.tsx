@@ -6,8 +6,9 @@ import { ThemeProvider } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { SectionFilterScreen } from '@/screens/SectionFilterScreen';
 import { useActivityStore } from '@/state/activityStore';
+import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -43,6 +44,7 @@ async function renderSheet(): Promise<void> {
 describe('SectionFilterScreen', () => {
   beforeEach(() => {
     seedSessions();
+    useBoardStore.getState().reset();
     useSettingsStore.setState({ hiddenTriageSections: [] });
   });
 
@@ -52,6 +54,31 @@ describe('SectionFilterScreen', () => {
     expect(screen.getByTestId('section-filter-row-active').props.accessibilityLabel).toBe('Active, 1 session');
     expect(screen.getByTestId('section-filter-row-queued').props.accessibilityLabel).toBe('Queued, 0 sessions');
     expect(screen.getByTestId('section-filter-row-paused').props.accessibilityLabel).toBe('Paused, 1 session');
+  });
+
+  /**
+   * The sheet counts the rows the feed draws, and the feed draws a sessionless
+   * board task (a desktop-paused one: `resumable`, no `session_id`, so no
+   * activity entry) as a Paused row of its own. A count taken from the activity
+   * entries alone would read Paused as 1 here while the feed's header says 2.
+   * The task id is none of the seeded entries' tasks, which a board row would
+   * otherwise be folded into.
+   */
+  it('counts a sessionless board task under Paused, with the paused session already there', async () => {
+    useBoardStore.getState().applyBoardSnapshot(
+      boardSnapshotFixture({
+        projectId: 'project-1',
+        view: 'sessions',
+        tasks: [boardTaskFixture({ id: 'task-sessionless', session_id: null, resumable: true })],
+      }),
+    );
+
+    await renderSheet();
+
+    expect(screen.getByTestId('section-filter-row-paused').props.accessibilityLabel).toBe('Paused, 2 sessions');
+    // Nothing else moved: the sessionless row is Paused only.
+    expect(screen.getByTestId('section-filter-row-idle').props.accessibilityLabel).toBe('Idle, 2 sessions');
+    expect(screen.getByTestId('section-filter-row-active').props.accessibilityLabel).toBe('Active, 1 session');
   });
 
   /**

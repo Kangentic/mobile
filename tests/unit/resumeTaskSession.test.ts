@@ -327,6 +327,77 @@ describe('resumeTaskSession - following the board row', () => {
     vi.advanceTimersByTime(RESUME_WAIT_MS);
     expect(attemptFor()).toEqual({ phase: 'failed', message: null });
   });
+
+  /**
+   * The desktop answers `start-session` on ACCEPT, and the resumed session can
+   * reach the board before that answer reaches the phone. The watcher only
+   * starts after the answer, so its subscription never sees that snapshot: it
+   * has to read the row once on starting, or the attempt stays "resuming" until
+   * the wait bound rather than clearing at once.
+   */
+  it('clears the attempt at once when the row already binds the new session by the time the desktop accepts', async () => {
+    publishRow(PAUSED_ROW);
+    startSession.mockImplementation(async () => {
+      publishRow({ session_id: 'sess-new', resumable: false, spawn_progress: null });
+      return { ok: true, outcome: 'starting' };
+    });
+
+    await resumeTaskSession('task-1', 'project-1');
+
+    // Nothing advanced: no timer and no later board event has had a chance to settle it.
+    expect(attemptFor()).toBeUndefined();
+  });
+
+  /**
+   * An attempt superseded by a newer one (a retry after the first was cleared)
+   * must not be touched by the OLDER watcher when a board event lands. The
+   * timer half of this is pinned above; the subscription is a separate path,
+   * and it stays subscribed until its own attempt settles or it notices it was
+   * replaced. The newer attempt is started directly rather than through a second
+   * resumeTaskSession, whose own watcher would read the same board and mask
+   * what the older one did.
+   */
+  it('never lets a superseded attempt\'s watcher fail the newer attempt on a board event', async () => {
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+    publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+    vi.advanceTimersByTime(1_000);
+    useResumeStore.getState().markResuming('task-1', Date.now());
+    const newerAttempt = attemptFor();
+
+    // The label clearing onto a paused row is exactly what the older watcher
+    // reads as a failed spawn, having seen the label itself.
+    publishRow(PAUSED_ROW);
+
+    expect(attemptFor()).toEqual(newerAttempt);
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+  });
+
+  /**
+   * The wait bound is spent only on a resume the desktop is NOT labelling. While
+   * the label stays up the bound re-arms instead of lapsing, so the label
+   * clearing later onto a row that is neither bound nor resumable (the task left
+   * a Resume column mid-resume, so `resumeProgress` reads it as plain "waiting")
+   * still ends the attempt, at the next bound, rather than leaving it, and its
+   * board subscription, waiting for good.
+   */
+  it('fails a labelled resume at the next bound once the label clears onto a row that is neither bound nor resumable', async () => {
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+    publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+
+    // Two whole bounds with the label up: neither may fail it.
+    vi.advanceTimersByTime(RESUME_WAIT_MS * 2 + 1);
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+
+    // Moved off the Resume column: no label, no session, not resumable. The
+    // subscription reads this as "waiting", so nothing settles it yet.
+    publishRow({ session_id: null, resumable: false, spawn_progress: null });
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+
+    vi.advanceTimersByTime(RESUME_WAIT_MS);
+    expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+  });
 });
 
 describe('resumeProgress', () => {

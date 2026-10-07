@@ -41,6 +41,9 @@ export function selectResumeAttempt(state: { byTaskId: Record<string, ResumeAtte
   return state.byTaskId[taskId] ?? null;
 }
 
+/** Where an accepted resume stands; see `resumeProgress`. */
+export type ResumeProgress = 'labelled' | 'bound' | 'spawn-failed' | 'waiting';
+
 /**
  * Where an accepted resume stands, read off the task's BOARD ROW, the
  * desktop's own record of it (protocol 0.16.0). A 0.16.0 desktop labels the
@@ -61,8 +64,6 @@ export function selectResumeAttempt(state: { byTaskId: Record<string, ResumeAtte
  * after a user's pause, the paused session's own id for a row the desktop
  * suspended in place (idle timeout), so that id staying put is not a bind.
  */
-export type ResumeProgress = 'labelled' | 'bound' | 'spawn-failed' | 'waiting';
-
 export function resumeProgress(
   row: Pick<BoardTaskWire, 'session_id' | 'spawn_progress' | 'resumable'> | null,
   pausedSessionId: string | null,

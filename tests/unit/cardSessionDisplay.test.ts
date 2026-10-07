@@ -133,6 +133,38 @@ describe('cardSessionDisplay - the 0.16.0 board row', () => {
     expect(cardSessionDisplay({ session: ghost, respawn: null, task: rowWith({ session_id: null }) })).toEqual({ kind: 'none' });
   });
 
+  /**
+   * An end in flight (a respawn) over a session the phone still holds as LIVE:
+   * the board row's label is the desktop's current step and the end's own is
+   * older, or absent. The board label has to win here too, not only over a
+   * missing, ended or suspended session, or the card reads the stale step (or,
+   * for an unlabelled end, "ended") while the desktop is visibly working.
+   */
+  it.each([
+    ['a different label of its own', respawnWith('Switching model...')],
+    ['no label (an unlabelled end)', respawnWith(null)],
+  ])('lets the board\'s label win over a live running session whose end is in flight with %s', (_description, respawn) => {
+    const labelled = rowWith({ session_id: 'session-live', spawn_progress: 'Starting agent...' });
+
+    expect(cardSessionDisplay({ session: sessionWith('running'), respawn, task: labelled })).toEqual({
+      kind: 'preparing',
+      label: 'Starting agent...',
+    });
+  });
+
+  /**
+   * No cached board holds the task, so only the session's own status can say
+   * whether an unlabelled end is a park: a suspended one is (the desktop pushes
+   * `suspended` just ahead of the end), anything else simply ended.
+   */
+  it.each([
+    ['a suspended session', 'suspended', sessionWith('suspended', { ended: true })],
+    ['a running session', 'exited', sessionWith('running', { ended: true })],
+    ['no session held at all', 'exited', null],
+  ] as const)('reads an unlabelled end and no board row, over %s, as %s', (_description, expectedKind, session) => {
+    expect(cardSessionDisplay({ session, respawn: respawnWith(null), task: null })).toEqual({ kind: expectedKind });
+  });
+
   describe('an unlabelled end (a park, on a desktop that labels every respawn)', () => {
     it('reads Paused from the session\'s pushed status before the board refreshes past the ended id', () => {
       // The board still names the ended session: it has not caught up yet.

@@ -72,7 +72,7 @@ export function SessionInputBar({
 }: SessionInputBarProps): React.JSX.Element {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const modeRowShown = sessionId !== null && mode !== 'changes' && !switcherOnly && !(mode === 'terminal' && quickKeysHidden);
+  const modeRowShown = mode !== 'changes' && !switcherOnly && !(mode === 'terminal' && quickKeysHidden);
   return (
     <Stack
       gap="sm"
@@ -98,7 +98,7 @@ export function SessionInputBar({
       {/* Rendered only when a mode row exists: an empty wrapper would add a
           `gap` slot above the pill in changes mode, and past the end of the
           session the pill is the whole footer. */}
-      {modeRowShown && sessionId !== null ? (
+      {sessionId !== null && modeRowShown ? (
         <View
           testID="session-input-row"
           pointerEvents={suspended ? 'none' : 'auto'}

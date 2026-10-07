@@ -452,6 +452,126 @@ describe('SessionScreen Resume (a paused session)', () => {
   });
 
   /**
+   * The launch face remembers which bound session it cleared the pane over, so
+   * that session's end opens the quiet window already cleared (the hand-over
+   * above). That memory has to go when the resume FAILS: the label clears, the
+   * row still names the parked session and it still reads suspended, so its
+   * frame is back on screen. A LATER end of that same session (a Stop, say) is
+   * an ordinary end, and its window opens on the dimmed last frame like any
+   * other, never on the cleared waiting face a flag left over from the failed
+   * resume would give it.
+   */
+  it('opens a later end of the session on the dimmed frame, not cleared, once a resume of it has failed', async () => {
+    seedPausedSession({ resumable: true });
+    await renderSessionScreen();
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true, spawnProgress: 'Resuming session...' });
+    });
+    // The control: the launch face really did clear the pane over this session.
+    expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true });
+    });
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+
+    // A Stop: an unlabelled end, and the desktop clears the session and offers no Resume.
+    await act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'session-ended', intentional: true },
+      });
+      seedBoard({ sessionId: null, resumable: false });
+    });
+
+    // The veil first: the quiet window really is open.
+    expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+    expect(screen.queryByTestId('session-swap-veil-empty')).toBeNull();
+  });
+
+  /**
+   * The other order of the hand-over. The board binds the successor (and clears
+   * the label in the same write) BEFORE the paused session's own end arrives.
+   * The screen follows the board to the successor at once, so the old session is
+   * no longer the one it is bound to: its late end opens no quiet window here at
+   * all, cleared or otherwise, and the old frame is never drawn again.
+   * What this pins is that nothing veils or offers Resume over the successor's
+   * pane; the window that keeps the old frame off screen is the one the
+   * hand-over test above covers.
+   */
+  it('draws no veil and no Resume when the board binds the successor before the old session\'s end arrives', async () => {
+    seedPausedSession({ resumable: true });
+    await renderSessionScreen();
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true, spawnProgress: 'Resuming session...' });
+    });
+    expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+
+    await act(() => {
+      seedBoard({ sessionId: 'sess-2' });
+    });
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+
+    await act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Resuming session...', successorSessionId: 'sess-2' },
+      });
+    });
+
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    expect(screen.queryByTestId('session-swap-veil-empty')).toBeNull();
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+  });
+
+  /**
+   * The ordering the launch face's memory is kept for. The label goes because
+   * the board has moved PAST the paused session without naming a successor the
+   * screen can bind (here the task drops out of the `'sessions'` projection),
+   * and the session's own end arrives a moment later. The screen is still bound
+   * to it, so that end opens the window, and it must open cleared: the label's
+   * going is not a resume failing, and the old frame must not come back between
+   * the label and the successor's paint. The memory is therefore dropped only
+   * while the row still names the session and it still reads suspended (the
+   * failed-resume test above), never merely because the launch face went away.
+   */
+  it('keeps the window cleared when the board moves past the session before its end arrives', async () => {
+    seedPausedSession({ resumable: true });
+    await renderSessionScreen();
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true, spawnProgress: 'Resuming session...' });
+    });
+    expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+
+    await act(() => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': { ...state.boardsByProjectId['project-1'], tasksById: {} },
+        },
+      }));
+    });
+    // Between the label going and the end arriving the pane is the paused frame again.
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+
+    await act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Resuming session...', successorSessionId: 'sess-2' },
+      });
+    });
+
+    expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+  });
+
+  /**
    * The terminal mirror's fit-to-height button and its reference cell read the
    * pane's height as "the height the lens is read at". The Resume panel drops
    * the quick-key row, so the pane is TALLER than that: a fit taken there would

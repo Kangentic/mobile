@@ -1941,6 +1941,25 @@ describe('TriageHomeScreen', () => {
       expect(screen.getByTestId('task-row-task-1-status-bar-label')).toHaveTextContent('Creating worktree...');
     });
 
+    /**
+     * "The filter is hiding everything" is true whenever the feed HAS rows, and
+     * a sessionless task row is one with no activity entry behind it. Counting
+     * sessions alone read this feed as empty and said "All quiet" over a paused
+     * task the user had only hidden.
+     */
+    it('says the filter is hiding everything, not "All quiet", when the only rows are sessionless task rows in a hidden section', async () => {
+      makeTaskOneSessionless({ resumable: true });
+      useSettingsStore.setState({ hiddenTriageSections: ['Paused'] });
+
+      await renderHome();
+      await act(async () => {});
+
+      expect(Object.keys(useActivityStore.getState().bySessionId)).toEqual([]);
+      expect(screen.queryByTestId('all-quiet-empty-state')).toBeNull();
+      expect(screen.getByTestId('filtered-empty-state')).toBeTruthy();
+      expect(screen.queryByTestId('task-row-task-1')).toBeNull();
+    });
+
     it('draws nothing for a sessionless task the desktop keeps no label or Resume for', async () => {
       makeTaskOneSessionless({ resumable: false, spawn_progress: null });
       await renderHome();

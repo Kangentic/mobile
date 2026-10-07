@@ -76,10 +76,9 @@ function sessionIdsIn(section: FeedSection): string[] {
  * Three running sessions, one per activity bucket, then four queued and four
  * suspended ones spread across the same buckets.
  *
- * The spread is what makes the order and partition assertions able to fail. The
- * feed builds Queued and Paused by walking selectTriageRows, which has already
- * sorted each bucket on its own, so a Queued list taken straight from that walk
- * comes out in BUCKET order (needs-you, working, idle). Each queued and paused
+ * The spread is what makes the order and partition assertions able to fail. A
+ * Queued or Paused list built by walking the activity buckets in turn would
+ * come out in BUCKET order (needs-you, working, idle). Each queued and paused
  * set below is arranged so that bucket order, insertion order and the correct
  * order all differ: dropping the feed's own sort, or its tiebreak, changes the
  * result. The two tied entries sit in different buckets for the same reason, and

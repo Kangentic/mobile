@@ -1,5 +1,5 @@
 import { useActivityStore } from '@/state/activityStore';
-import { useBoardStore } from '@/state/boardStore';
+import { hasSpawnLabel, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useDiffStore } from '@/state/diffStore';
 import { usePairingStore } from '@/state/pairingStore';
@@ -113,7 +113,7 @@ export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' |
           // null sessionId.
           inFlightTasks: Object.values(boards.boardsByProjectId).flatMap((board) =>
             Object.values(board.tasksById)
-              .filter((task) => typeof task.spawn_progress === 'string' || task.resumable === true)
+              .filter((task) => hasSpawnLabel(task) || task.resumable === true)
               .map((task) => ({
                 taskId: task.id,
                 sessionId: task.session_id,
