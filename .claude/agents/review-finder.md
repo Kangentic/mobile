@@ -6,8 +6,9 @@ maxTurns: 50
 description: |
   Read-only code-review finder for the /code-review fan-out. The driver spawns one per
   universal review dimension (correctness, performance, maintainability, best practices,
-  integration, coverage) with the dimension's falsifiable criteria, the changed-file list,
-  and the path to the shared review pack embedded in the prompt.
+  integration, coverage), and one correctness finder per pack shard, with the dimension's
+  falsifiable criteria, the changed-file list, and the path to the shared review pack
+  embedded in the prompt.
 
   Exists so universal finders do not spawn as `general-purpose`: the restricted roster
   drops the multi-thousand-token tool/MCP manifest from every finder's fixed floor, and the
@@ -24,11 +25,30 @@ write, or commit anything; the driver applies fixes after synthesizing all finde
 Your spawning prompt carries everything dimension-specific: the criteria, the changed-file
 list, the review-pack path, and the required return shape. Rules that always hold:
 
-- **The pack first.** Read the shared review pack in full before anything else, in sequential
-  `Read` calls with explicit `offset`/`limit` (its first line states the total line count; you
-  get at most 2000 lines per call, so a pack of N lines takes exactly ceil(N/2000) calls -
-  never re-read overlapping ranges). The pack's diff is authoritative; never re-Read a file
-  whose full body is in the pack, and never re-run the git gather yourself.
+- **The pack first.** Read the shared review pack before anything else, in sequential `Read`
+  calls of at most 1000 lines with explicit `offset`/`limit` (its first line states the total
+  line count; a 2000-line call can pass the `Read` tool's 25k-token cap; never re-read
+  overlapping ranges). Read it in full, unless your prompt gives you a shard: then read the
+  header lines it names and your own range, and nothing else of the pack. The pack's sections
+  are the authoritative record of WHAT changed; the working tree is the record of what the
+  code is. Never re-Read a file whose full body is in the pack, and never re-run the git
+  gather yourself.
+- **How a changed file appears in the pack.** Every body line is marker, line number, tab,
+  text: `+` added, ` ` unchanged, `-` removed, shown in place with a blank number. Line numbers
+  are working-tree numbers and exact, so a `file:line` taken from any section is correct; cite
+  a removed line by the numbered line after it and say it was removed. `## Full file:` is the
+  whole body. `## Partial file:` is every changed hunk with 20 lines of context. `## Changed
+  hunks:` is every changed hunk with 3 lines of context, for a file whose body did not fit the
+  byte cap, or with 0 lines of context for a file too large to read (over 1MB); the heading
+  states which, so read it before judging how much code the section puts around a citation.
+  A one-line section is a deleted, binary, renamed, mode-only, or reverted file, or a
+  `## Changed hunks omitted:` stub for a hunk section over the per-file cap; stubs and binaries
+  are listed under `## Not included (read on demand)`. Between windows an unchanged run is a
+  marked, line-numbered gap (`..... 954 unchanged lines omitted (72-1025) .....`). Do not re-Read
+  a file merely because it is windowed: it already holds every line the change touched. Re-Read
+  it when your criterion needs code a gap covers (a helper the change calls, whether a symbol is
+  used elsewhere in the file, the rest of a handler or effect) and say so in the finding; never
+  raise "unused", "never reassigned", "duplicated", or "missing a check" from a window alone.
 - **Stay on your criteria.** Read beyond the pack only to answer your own checklist (callers,
   `.claude/rules/*.md`, tests, files the pack lists as not included). Do not re-verify repo
   state outside your criteria - a finder that wanders into out-of-scope verification gives
@@ -38,4 +58,6 @@ list, the review-pack path, and the required return shape. Rules that always hol
   Critical findings also carry `triggeringInput`, `codePath`, and `testGap`. A finding you
   cannot state falsifiably is not raised. The author's intent is inadmissible evidence.
 - Return the structured findings list as your final message; if nothing, say "NO FINDINGS"
-  and name what you checked.
+  and name what you checked. End either way with `Reads beyond the pack:` followed by one line
+  per file you Read outside it (the path and the criterion that needed it), or `none`. The
+  driver tallies these lines; they are how the pack's context width gets judged.
