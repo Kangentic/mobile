@@ -178,6 +178,86 @@ describe('foreground-service-guard native source', () => {
     expect(guardKotlin).toMatch(/Intent\(context, ForegroundServiceGuardReceiver::class\.java\)/);
   });
 
+  /**
+   * The trigger time is computed on the SAME clock the alarm type counts, and
+   * the whole call is pinned as one expression so type, clock, delay and intent
+   * cannot drift apart. The test above pins the type alone, and a bare mention of
+   * the clock elsewhere in the file would satisfy a looser check. Each wrong
+   * clock fails silently on a device:
+   * - `System.currentTimeMillis()` is epoch milliseconds, decades past any
+   *   elapsed-realtime value, so the alarm never fires and the net vanishes with
+   *   no error anywhere.
+   * - `SystemClock.uptimeMillis()` stops during deep sleep, so after a night of
+   *   it the trigger is already in the past and the alarm fires at once, stopping
+   *   a keepalive the user is still inside.
+   *
+   * Mutation seen failing: changing `SystemClock.elapsedRealtime() + delayMs` in
+   * ForegroundServiceGuard.arm to `System.currentTimeMillis() + delayMs` fails
+   * with "expected 'package expo.modules.foregroundservic…' to match
+   * /setAndAllowWhileIdle\(\s*AlarmManager\.ELAPSED_REALTIME_WAKEUP,…/".
+   */
+  it('computes the trigger time on elapsed realtime from the delay it was handed', () => {
+    expect(guardKotlin).toMatch(
+      /fun arm\(context: Context, delayMs: Long\)[\s\S]*?setAndAllowWhileIdle\(\s*AlarmManager\.ELAPSED_REALTIME_WAKEUP,\s*SystemClock\.elapsedRealtime\(\) \+ delayMs,\s*alarmIntent\(context\),?\s*\)/,
+    );
+  });
+
+  /**
+   * The title above promises "cancel matches", but nothing asserted a cancel at
+   * all: a disarm whose body did nothing passed every other check here, and on a
+   * device it leaves the alarm armed after every ordinary stop. Each such alarm
+   * then fires into a service that is already gone, which starts the process
+   * for nothing. Cancelling through `alarmIntent(context)`, the one builder arm
+   * also uses, is what makes the PendingIntent equal.
+   *
+   * Mutation seen failing: replacing `alarmManager.cancel(alarmIntent(context))`
+   * in ForegroundServiceGuard.disarm with `alarmManager.hashCode()` fails with
+   * "expected 'package expo.modules.foregroundservic…' to match
+   * /fun disarm\(context: Context\)\s*\{[^}]*alarmManager\.cancel\(alarmIntent\(context\)\)/".
+   */
+  it('cancels through the same PendingIntent builder the arm uses', () => {
+    expect(guardKotlin).toMatch(/fun disarm\(context: Context\)\s*\{[^}]*alarmManager\.cancel\(alarmIntent\(context\)\)/);
+  });
+
+  /**
+   * The wrapper's delay literal is pinned in foregroundService.test.ts, and the
+   * Kotlin module is the next hop it has to survive. A module that dropped or
+   * hard-coded the argument keeps that test green and the field behaviour wrong:
+   * a zero would fire the alarm the moment it is armed. The module also has to
+   * route disarm to the guard, or JS cancels nothing.
+   *
+   * Mutation seen failing: changing `delayMs.toLong()` in the module's
+   * armStopAlarm to `0L` fails with "expected 'package
+   * expo.modules.foregroundservic…' to match
+   * /Function\("armStopAlarm"\)\s*\{\s*delayMs: Double\s*->\s*ForegroundServiceGuard\.arm\(context, delayMs\.toLong\(\)\)/".
+   * Replacing `ForegroundServiceGuard.disarm(context)` in disarmStopAlarm with
+   * `context.hashCode()` fails the second expectation the same way, naming
+   * /Function\("disarmStopAlarm"\)\s*\{\s*ForegroundServiceGuard\.disarm\(context\)/.
+   */
+  it('forwards the JS delay and the disarm from the module to the guard', () => {
+    expect(moduleKotlin).toMatch(
+      /Function\("armStopAlarm"\)\s*\{\s*delayMs: Double\s*->\s*ForegroundServiceGuard\.arm\(context, delayMs\.toLong\(\)\)/,
+    );
+    expect(moduleKotlin).toMatch(/Function\("disarmStopAlarm"\)\s*\{\s*ForegroundServiceGuard\.disarm\(context\)/);
+  });
+
+  /**
+   * The STOP-action test above pins the two strings, but a string constant that
+   * nothing uses proves nothing. This pins that the intent
+   * is addressed to notifee's service inside the app's own package. An intent
+   * with an unresolvable component does not throw: startService just returns
+   * null, the stop is never delivered, and the log still says it was sent.
+   *
+   * Mutation seen failing: changing `ComponentName(context.packageName,
+   * NOTIFEE_FOREGROUND_SERVICE)` in stopNotifeeService to
+   * `ComponentName(context.packageName, "app.notifee.core.Other")` fails with
+   * "expected 'package expo.modules.foregroundservic…' to match
+   * /\.setComponent\(ComponentName\(context\.packageName, NOTIFEE_FOREGROUND_SERVICE\)\)/".
+   */
+  it('addresses the stop to notifee\'s service in the app\'s own package', () => {
+    expect(guardKotlin).toMatch(/\.setComponent\(ComponentName\(context\.packageName, NOTIFEE_FOREGROUND_SERVICE\)\)/);
+  });
+
   it('declares the receiver unexported, under the class name the Kotlin defines', () => {
     expect(manifest).toMatch(
       /<receiver\s+android:name="\.ForegroundServiceGuardReceiver"\s+android:exported="false"\s*\/>/,
