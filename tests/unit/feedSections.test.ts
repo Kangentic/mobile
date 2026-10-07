@@ -145,6 +145,21 @@ describe('selectFeedSections', () => {
 
     expect(sessionIdsIn('paused')).toEqual(['sess-paused-new', 'sess-paused-tie-a', 'sess-paused-tie-b', 'sess-paused-old']);
   });
+
+  /**
+   * Within Idle, finished work the user has not seen outranks a quiet idle, even
+   * a newer one. The unread session is the OLDER arrival and its id sorts last,
+   * so neither the recency sort nor the id tiebreak can hand over the answer.
+   */
+  it('puts an unread idle session above a newer quiet one', () => {
+    seedSession('sess-idle-quiet-new', { state: 'idle', sessionStatus: 'running', enteredSectionAt: 2000 });
+    seedSession('sess-idle-unread-old', { state: 'idle', sessionStatus: 'running', enteredSectionAt: 1000 });
+    useActivityStore.setState((current) => ({
+      bySessionId: { ...current.bySessionId, 'sess-idle-unread-old': { ...current.bySessionId['sess-idle-unread-old'], unreadCount: 3 } },
+    }));
+
+    expect(sessionIdsIn('idle')).toEqual(['sess-idle-unread-old', 'sess-idle-quiet-new']);
+  });
 });
 
 describe('countFeedSectionsByTitle', () => {
@@ -296,6 +311,56 @@ describe('selectFeedSections - the 0.16.0 board row', () => {
 
     const placed = selectFeedSections(feedSources()).flatMap((section) => section.rows.map(feedRowKey));
     expect(placed).toEqual(['sess-live']);
+  });
+
+  /**
+   * A paused task whose resume is under way carries a label AND `resumable` on
+   * its board row, and the row it belongs to may be a ghost that never learned it
+   * was suspended: the phone missed the live status push, so the entry still
+   * reads running, and its end carried no label. The board's own `resumable` is
+   * then the only thing that says where the preparing card came from.
+   */
+  it('keeps a labelled, resumable task in Paused for an ended row whose status never said suspended', () => {
+    seedTaskSession('sess-missed', 'task-missed', 'idle', 'running');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-missed',
+      taskId: 'task-missed',
+      payload: { type: 'session-ended', intentional: true },
+    });
+    seedBoard([
+      boardTaskFixture({ id: 'task-missed', swimlane_id: 'lane-doing', session_id: null, spawn_progress: 'Resuming session...', resumable: true }),
+    ]);
+
+    expect(sectionOf('sess-missed')).toBe('paused');
+  });
+
+  /**
+   * Two LIVE entries for one task are two sessions the desktop reported, and
+   * hiding either would be guessing: only an ENDED entry is ever folded into a
+   * live one.
+   */
+  it('keeps two live sessions that share a task, rather than guessing which one to hide', () => {
+    seedTaskSession('sess-live-a', 'task-shared', 'idle', 'running');
+    seedTaskSession('sess-live-b', 'task-shared', 'thinking', 'running');
+
+    const placed = selectFeedSections(feedSources()).flatMap((section) => section.rows.map(feedRowKey));
+    expect([...placed].sort()).toEqual(['sess-live-a', 'sess-live-b']);
+  });
+
+  /** An entry with no known task (an empty `taskId`) is never folded into another one that also has none. */
+  it('never folds an ended entry with no known task into a live one with none', () => {
+    useActivityStore.getState().registerSession('sess-unowned-ended', '', 'project-1');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-unowned-ended',
+      taskId: '',
+      payload: { type: 'session-ended', intentional: true },
+    });
+    useActivityStore.getState().registerSession('sess-unowned-live', '', 'project-1');
+
+    const placed = selectFeedSections(feedSources()).flatMap((section) => section.rows.map(feedRowKey));
+    expect([...placed].sort()).toEqual(['sess-unowned-ended', 'sess-unowned-live']);
   });
 
   it('orders task rows among the section\'s session rows, newest first', () => {

@@ -386,6 +386,31 @@ describe('SessionScreen Resume (a paused session)', () => {
   });
 
   /**
+   * The launch face is the TERMINAL lens's waiting face: the veil stands in for
+   * a pane that has nothing to show yet. Chat has its own empty state and Changes
+   * its own list, so neither is covered, though all three share the footer, which
+   * drops to the switcher alone because there is no live PTY to send keys or
+   * messages to.
+   */
+  it('leaves the Chat lens uncovered while the resume is labelled, with the footer down to the switcher', async () => {
+    seedBoard({ sessionId: null, resumable: true });
+    await renderSessionScreen();
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+
+    await act(() => {
+      seedBoard({ sessionId: null, resumable: true, spawnProgress: 'Resuming session...' });
+    });
+
+    // The veil first: a veil over the pane also hides the pane from the
+    // accessibility tree, so asserting the pane first would fail with "not found"
+    // rather than naming the veil.
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    expect(screen.queryByTestId('session-swap-veil-empty')).toBeNull();
+    expect(screen.getByTestId('stub-chat-pane')).toBeTruthy();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-hidden' });
+  });
+
+  /**
    * The same launch face for a screen BOUND to the paused session: the
    * idle-timeout suspend keeps `session_id` on the paused row, so the phone
    * holds a stream on it. When the resume's label lands the panel goes, and

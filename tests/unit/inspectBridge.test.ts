@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { SubscriptionManager } from '../../src/channel/subscriptionManager';
 import { buildInspectPayload } from '../../src/devsupport/inspectBridge';
 import type { InspectRequestKind } from '../../src/devsupport/inspectProtocol';
-import { streamSnapshotFixture } from '../../src/devsupport/desktopFixtures';
+import { boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '../../src/devsupport/desktopFixtures';
 import { setInspectRoute, setInspectSubscriptions, setInspectTerminal } from '../../src/devsupport/inspectState';
 import { useActivityStore } from '../../src/state/activityStore';
 import { useBoardStore } from '../../src/state/boardStore';
@@ -79,6 +79,57 @@ describe('buildInspectPayload', () => {
       activity: { sessionId: string; sessionStatus: string | null }[];
     };
     expect(payload.activity).toEqual([expect.objectContaining({ sessionId: 'sess-1', sessionStatus: 'suspended' })]);
+  });
+
+  /**
+   * Protocol 0.16.0's lifecycle fields, as the inspect loop reports them. Every
+   * value is chosen to differ from what a hardcoded mapper would write: a fresh
+   * entry's `resuming` and `resumable` are both false by construction, so a
+   * false-valued assertion would pass against a mapper that never read them
+   * (the same trap the sessionStatus test above spells out).
+   */
+  it('reports the 0.16.0 lifecycle: the entry\'s resuming and resumable, the in-flight board rows, the pending successors', async () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended', resuming: true, resumable: true }));
+    // A session the phone holds no entry for still names its successor.
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-ended',
+      taskId: 'task-2',
+      payload: { type: 'session-ended', intentional: true, successorSessionId: 'sess-next' },
+    });
+    useBoardStore.getState().applyBoardSnapshot(
+      boardSnapshotFixture({
+        projectId: 'project-1',
+        view: 'sessions',
+        tasks: [
+          // Both 0.16.0 fields can be absent (an older desktop's row): reported as null, never undefined.
+          boardTaskFixture({ id: 'task-labelled', session_id: null, spawn_progress: 'Creating worktree...', resumable: undefined }),
+          boardTaskFixture({ id: 'task-paused', session_id: null, resumable: true }),
+          // A task that still names its session reports that session.
+          boardTaskFixture({ id: 'task-parked', session_id: 'sess-parked', resumable: true }),
+          // Nothing in flight and nothing to resume: not listed, and neither is a blank label.
+          boardTaskFixture({ id: 'task-blank-label', session_id: null, spawn_progress: '   ' }),
+          boardTaskFixture({ id: 'task-plain', session_id: null }),
+        ],
+      }),
+    );
+
+    const payload = (await payloadFor('stores')) as {
+      activity: { sessionId: string; resuming: boolean; resumable: boolean }[];
+      board: { inFlightTasks: { taskId: string }[] };
+      pendingSuccessors: unknown[];
+    };
+
+    expect(payload.activity).toEqual([expect.objectContaining({ sessionId: 'sess-1', resuming: true, resumable: true })]);
+    expect([...payload.board.inFlightTasks].sort((first, second) => first.taskId.localeCompare(second.taskId))).toEqual([
+      { taskId: 'task-labelled', sessionId: null, spawnProgress: 'Creating worktree...', resumable: null },
+      { taskId: 'task-parked', sessionId: 'sess-parked', spawnProgress: null, resumable: true },
+      { taskId: 'task-paused', sessionId: null, spawnProgress: null, resumable: true },
+    ]);
+    expect(payload.pendingSuccessors).toEqual([{ taskId: 'task-2', sessionId: 'sess-next', endedSessionId: 'sess-ended' }]);
   });
 
   it('reports terminal feed ring stats, and listeners with no ring behind them', async () => {
