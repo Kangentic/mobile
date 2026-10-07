@@ -576,10 +576,11 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
                   #   pack in the session scratchpad that every finder reads instead of
                   #   re-gathering, and prints the correctness shards; kept in step with
-                  #   the desktop repo's copy, and its header owns the divergence list),
+                  #   the desktop repo's copy, and its header carries the divergence list
+                  #   that the code-review skill owns),
                   #   review-verdict.mjs (computes the pass's Ready or Blocked verdict and
                   #   the commit ledger from its findings JSON), lib/is-entrypoint.mjs
-                  #   (the real-path "run as a CLI?" guard those two import)
+                  #   (the real-path "run as a CLI?" guard review-verdict.mjs imports)
                   #   + repo scripts
 ```
 
@@ -1931,7 +1932,7 @@ the real gap and below a user's patience. The gap is a phone-side number, not th
 `task:move` timing, so it is measured here: the same flagged release build as above on the
 emulator (`kangentic_pixel`), paired to the real desktop over the hosted relay, the session screen
 open in terminal mode, and a scratch task in an active column driven back and forth with
-`kangentic_move_task` (never into the Tests or Merge columns, which run `/pull-request` and
+`kangentic_move_task` (never into the Testing or Merge columns, which run `/pull-request` and
 `/merge-pull-request`). After each move:
 
 ```

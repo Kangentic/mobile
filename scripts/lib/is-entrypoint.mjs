@@ -8,7 +8,8 @@
  * from a test never throws.
  *
  * Synced from the desktop repo's copy; this comment is the only divergence. The divergence list
- * for the review tooling as a whole lives in scripts/build-review-pack.mjs's header.
+ * for the review tooling as a whole is owned by .claude/skills/code-review/SKILL.md
+ * ("Mobile differences").
  */
 import fs from 'node:fs';
 import path from 'node:path';

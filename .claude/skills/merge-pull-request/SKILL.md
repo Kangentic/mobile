@@ -70,8 +70,9 @@ only.
 
 ## Step 1 - Doc review at merge time
 
-Re-audit the anchor files across the whole branch diff in case `/pull-request` had nothing to
-commit and skipped its check:
+Re-audit the anchor files across the whole branch diff. `/pull-request` audits at commit time,
+on a clean tree too, but a commit can land after that audit (a Step 7 CI fix, a rebase that pulled
+in an anchor change), so this is the last check before the merge, not a repeat of a skipped one:
 
 1. Determine the anchor source files in the branch diff (`git diff` against
    `origin/<sourceBranch>`), narrowed to the canonical anchor list in

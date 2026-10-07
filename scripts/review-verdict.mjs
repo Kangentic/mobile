@@ -11,8 +11,8 @@
  * Synced from the desktop repo's copy. Two divergences, both deliberate: this header comment, and
  * the check set. This repo has no HMR vitest, so `checks` carries only `typecheck` and
  * `scopedTests`; desktop's also carries `hmrVitest`. Everything else is the desktop logic
- * verbatim. The divergence list for the review tooling as a whole lives in
- * scripts/build-review-pack.mjs's header.
+ * verbatim. The divergence list for the review tooling as a whole is owned by
+ * .claude/skills/code-review/SKILL.md ("Mobile differences").
  *
  * Usage: node scripts/review-verdict.mjs <findings.json> [--ledger]
  *   default   prints the Summary block, the Decisions made list, and the closing verdict block.
