@@ -55,8 +55,9 @@ export interface SessionInputBarProps {
  * With no session (a paused task the desktop cleared `session_id` from, or a
  * first start before its agent exists) the footer is the switcher alone, as
  * in the swap window's waiting phase: there is nothing to type into, but the
- * task's diff, its Resume panel and the last transcript are all a lens away,
- * and a screen that opened on a remembered Chat lens has no other way back.
+ * task's diff and its Resume panel are a lens away, and a screen that opened
+ * on a remembered Chat lens (which reads "No active session" there) has no
+ * other way back to them.
  */
 export function SessionInputBar({
   sessionId,
