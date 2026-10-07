@@ -1,6 +1,8 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { SessionInputBar } from '@/screens/task/SessionInputBar';
 import type { SessionMode } from '@/screens/task/SessionModeToggle';
 
@@ -74,6 +76,22 @@ describe('SessionInputBar', () => {
     expect(screen.queryByTestId('session-input-row')).toBeNull();
     expect(screen.queryByTestId('composer-input')).toBeNull();
     expect(screen.queryByTestId('quick-key-esc')).toBeNull();
+  });
+
+  /** A failed Resume's line above the rest of the footer, muted as the desktop draws it (not an error red). */
+  it('shows a muted notice above the footer when given one, and none otherwise', async () => {
+    const { unmount } = await render(
+      <ThemeProvider>
+        <SessionInputBar sessionId="sess-1" mode="chat" onModeChange={jest.fn()} chatAttention={false} notice="Session could not be resumed." />
+      </ThemeProvider>,
+    );
+    const notice = screen.getByTestId('session-footer-notice');
+    expect(notice).toHaveTextContent('Session could not be resumed.');
+    expect(StyleSheet.flatten(notice.props.style).color).toBe(darkTerminalTheme.colors.textMuted);
+    await unmount();
+
+    await renderBar('chat');
+    expect(screen.queryByTestId('session-footer-notice')).toBeNull();
   });
 
   /**

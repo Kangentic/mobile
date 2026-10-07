@@ -8,7 +8,6 @@ import { isDoneColumn, selectTaskRow, useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { resumeProgress, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
-import { useToastStore } from '@/state/toastStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
@@ -90,27 +89,11 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
     // its generic line rather than an empty one.
     const refusalText = error instanceof CapabilityError ? error.message.trim().slice(0, RESUME_FAILURE_MESSAGE_MAX_LENGTH) : '';
     const failed: ResumeAttempt = { phase: 'failed', message: refusalText.length > 0 ? refusalText : null };
-    failResumeAttempt(taskId, failed.message);
+    useResumeStore.getState().markFailed(taskId, failed.message);
     return failed;
   }
   watchResumeAttempt(taskId, startedAt, pausedSessionId);
   return { phase: 'resuming', startedAt };
-}
-
-/**
- * Ends an attempt as failed, the two ways the desktop reports it
- * (useTaskActions.ts's handleToggle): the attempt's own line, which every
- * Resume surface draws while the task is paused, and a warning toast,
- * "Failed to resume session" with the reason after a colon when there is one.
- * The toast is what reaches a user who is no longer on the task's screen,
- * since a failed spawn can settle long after the long-press sheet closed.
- */
-function failResumeAttempt(taskId: string, message: string | null): void {
-  useResumeStore.getState().markFailed(taskId, message);
-  useToastStore.getState().addToast({
-    message: message === null ? 'Failed to resume session' : `Failed to resume session: ${message}`,
-    variant: 'warning',
-  });
 }
 
 /**
@@ -148,7 +131,7 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
       useResumeStore.getState().clear(taskId);
     } else if (progress === 'spawn-failed') {
       stopWatching();
-      failResumeAttempt(taskId, null);
+      useResumeStore.getState().markFailed(taskId, null);
     }
   };
   unsubscribe = useBoardStore.subscribe(readProgress);
@@ -159,7 +142,7 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
     const row = selectTaskRow(useBoardStore.getState(), taskId);
     if (row !== null && resumeProgress(row, pausedSessionId, sawLabel) === 'labelled') return;
     stopWatching();
-    failResumeAttempt(taskId, null);
+    useResumeStore.getState().markFailed(taskId, null);
   }, RESUME_WAIT_MS);
 }
 
