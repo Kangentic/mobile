@@ -5,7 +5,6 @@ import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore } from '@/state/resumeStore';
-import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { resumeTaskSession } from '@/connection/actions';
 
@@ -57,26 +56,16 @@ jest.mock('@/screens/task/TerminalTab', () => {
 });
 // Records whether the quick keys show, so the footer's half of the paused layout is visible here:
 // hidden by `quickKeysHidden` (the Resume panel) or by `switcherOnly` (a wait with no live PTY).
-// Also records the footer's `notice` (as the hint), and carries a Chat button standing in for the
-// switcher, since the route pins the terminal lens.
 jest.mock('@/screens/task/SessionInputBar', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  const { Pressable, View } = require('react-native');
+  const { View } = require('react-native');
   return {
     __esModule: true,
-    SessionInputBar: (props: {
-      quickKeysHidden?: boolean;
-      switcherOnly?: boolean;
-      notice?: string | null;
-      onModeChange: (mode: 'terminal' | 'chat' | 'changes') => void;
-    }) => (
+    SessionInputBar: (props: { quickKeysHidden?: boolean; switcherOnly?: boolean }) => (
       <View
         testID="stub-session-input-bar"
         accessibilityValue={{ text: props.quickKeysHidden === true || props.switcherOnly === true ? 'keys-hidden' : 'keys-shown' }}
-        accessibilityHint={props.notice ?? undefined}
-      >
-        <Pressable testID="stub-mode-chat" onPress={() => props.onModeChange('chat')} />
-      </View>
+      />
     ),
   };
 });
@@ -150,9 +139,6 @@ describe('SessionScreen Resume (a paused session)', () => {
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useResumeStore.setState({ byTaskId: {} });
-    // A lens switch is remembered per task; without this, one test's switch
-    // would mount every later test on that lens.
-    useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
     seedBoard();
   });
 
@@ -250,22 +236,6 @@ describe('SessionScreen Resume (a paused session)', () => {
     });
 
     expect(useResumeStore.getState().byTaskId['task-1']).toBeUndefined();
-  });
-
-  /**
-   * The terminal lens shows a failed Resume's line in its panel; the other
-   * lenses carry it in the footer. A Resume pressed from the header while on
-   * Chat used to fail with nothing on screen but the play button coming back.
-   */
-  it('carries a failed Resume\'s line in the footer off the terminal lens, and only there', async () => {
-    seedPausedSession({ resumable: true });
-    useResumeStore.getState().markFailed('task-1', null);
-    await renderSessionScreen();
-    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityHint).toBeUndefined();
-
-    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
-
-    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityHint).toBe('Session could not be resumed.');
   });
 
   /**

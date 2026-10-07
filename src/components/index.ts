@@ -18,6 +18,7 @@ export { SheetScrollerSlot, type SheetScrollerSlotProps } from './SheetScrollerS
 export { SegmentedTabBar, type SegmentedTabBarProps, type SegmentedTabBarItem } from './SegmentedTabBar';
 export { SegmentedSwitcher, type SegmentedSwitcherProps, type SegmentOption } from './SegmentedSwitcher';
 export { ConnectionBanner } from './ConnectionBanner';
+export { ToastHost } from './ToastHost';
 export { NowTickProvider, useNowTick, NOW_TICK_MS, type NowTickProviderProps } from './NowTick';
 export { ContextUsageBar, isContextWindowKnown, type ContextUsageBarProps } from './ContextUsageBar';
 export { MarkdownBlock, type MarkdownBlockProps } from './MarkdownBlock';

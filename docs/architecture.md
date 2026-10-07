@@ -866,11 +866,15 @@ bound and the task paused again, which is the only sign of a failed spawn the de
 (`resumeProgress`, read off the board row by a store subscription, so no surface has to be mounted
 when it happens); or with the same line after `RESUME_WAIT_MS` (20 s) when no label ever came, since
 a resume that goes nowhere after the desktop accepted it sends the phone nothing. A labelled resume
-is not bounded by the clock: the label clearing settles it either way. The terminal lens shows the
-failure line in its Resume panel and the other two lenses in the footer, above the switcher, and a
-screen with no session keeps that switcher (the footer is the switcher alone), so a paused task
-opened on a remembered Chat lens, which has no session to read and says so, can still reach its
-Resume panel and its diff. While the task reads as preparing and no quiet window
+is not bounded by the clock: the label clearing settles it either way. A failure is reported the
+two ways the desktop reports it (`useTaskActions.ts`): the muted line under the Resume panel's
+button, and a warning toast, "Failed to resume session" (with ": <reason>" when the desktop gave
+one), from the app-wide `ToastHost` (`state/toastStore.ts`, the desktop's toast store and
+`ToastItem` ported: 4 s, at most 5, an inert card with a dismiss X). The toast is what reaches a
+user who is on another lens, or has left the screen, when a failed spawn settles. A screen with no
+session keeps the lens switcher (the footer is the switcher alone), so a paused task opened on a
+remembered Chat lens, which has no session to read and says so, can still reach its Resume panel
+and its diff. While the task reads as preparing and no quiet window
 covers the pane, the session screen draws the same `SessionSwapVeil` in its waiting face (the
 desktop's launch overlay, the screen's "launch face", with no deadline and the footer down to the
 switcher): on a screen that never bound a session (opened from a sessionless Paused card, or onto a
