@@ -180,6 +180,50 @@ export function subscribeForegroundKick(listener: () => void): () => void {
 }
 
 /**
+ * The two MOBILE-3 probe switches. Without them, "JS cannot stop the keepalive" on a device is
+ * something to hope for rather than set up.
+ *
+ * The keepalive ceiling switch, when off, disarms connectionManager's JS bound (both the timer
+ * and the wall-clock check). That stands in for a JS thread that never runs its stop, which is
+ * the field shape. The native stop alarm switch, when off, skips arming the alarm in
+ * foregroundService.ts. That is the control arm, which should reproduce the crash under a
+ * shortened OS budget, as the developer guide's recipe describes. Both act on the next keepalive,
+ * so flip them before backgrounding. Both collapse to `true` outside a trace build, exactly like
+ * foregroundKickEnabled, so a store build can never ship with either bound turned off.
+ */
+let keepaliveCeilingOn = true;
+let nativeStopAlarmOn = true;
+const keepaliveProbeListeners = new Set<() => void>();
+
+export function keepaliveCeilingEnabled(): boolean {
+  return traceEnabled ? keepaliveCeilingOn : true;
+}
+
+export function setKeepaliveCeilingEnabled(enabled: boolean): void {
+  if (!traceEnabled || keepaliveCeilingOn === enabled) return;
+  keepaliveCeilingOn = enabled;
+  for (const listener of keepaliveProbeListeners) listener();
+}
+
+export function nativeStopAlarmEnabled(): boolean {
+  return traceEnabled ? nativeStopAlarmOn : true;
+}
+
+export function setNativeStopAlarmEnabled(enabled: boolean): void {
+  if (!traceEnabled || nativeStopAlarmOn === enabled) return;
+  nativeStopAlarmOn = enabled;
+  for (const listener of keepaliveProbeListeners) listener();
+}
+
+/** For a useSyncExternalStore subscription in the two Settings switches. */
+export function subscribeKeepaliveProbe(listener: () => void): () => void {
+  keepaliveProbeListeners.add(listener);
+  return () => {
+    keepaliveProbeListeners.delete(listener);
+  };
+}
+
+/**
  * Marks the reference point every later `+<ms>` is measured from. Called on
  * the AppState 'active' transition, which is the moment the user is waiting
  * from. A cold launch already has an origin (startupOriginMs above); this

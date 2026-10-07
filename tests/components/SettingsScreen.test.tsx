@@ -85,11 +85,31 @@ const mockConnectionTraceEnabled = jest.fn().mockReturnValue(false);
 const mockForegroundKickEnabled = jest.fn().mockReturnValue(true);
 const mockSetForegroundKickEnabled = jest.fn();
 const mockSubscribeForegroundKick = jest.fn((_listener: () => void) => () => undefined);
+const mockKeepaliveCeilingEnabled = jest.fn().mockReturnValue(true);
+const mockSetKeepaliveCeilingEnabled = jest.fn();
+const mockNativeStopAlarmEnabled = jest.fn().mockReturnValue(true);
+const mockSetNativeStopAlarmEnabled = jest.fn();
+// Captures what useSyncExternalStore hands the keepalive probe subscription, so
+// a test can fire the store's change notification by hand. Without it the
+// subscribe stub swallowed the listener, and a switch that never re-rendered on
+// a change was indistinguishable from one that did.
+const mockKeepaliveProbeListeners = new Set<() => void>();
+const mockSubscribeKeepaliveProbe = jest.fn((listener: () => void) => {
+  mockKeepaliveProbeListeners.add(listener);
+  return () => {
+    mockKeepaliveProbeListeners.delete(listener);
+  };
+});
 jest.mock('@/devsupport/connectionTrace', () => ({
   connectionTraceEnabled: () => mockConnectionTraceEnabled(),
   foregroundKickEnabled: () => mockForegroundKickEnabled(),
   setForegroundKickEnabled: (enabled: boolean) => mockSetForegroundKickEnabled(enabled),
   subscribeForegroundKick: (listener: () => void) => mockSubscribeForegroundKick(listener),
+  keepaliveCeilingEnabled: () => mockKeepaliveCeilingEnabled(),
+  setKeepaliveCeilingEnabled: (enabled: boolean) => mockSetKeepaliveCeilingEnabled(enabled),
+  nativeStopAlarmEnabled: () => mockNativeStopAlarmEnabled(),
+  setNativeStopAlarmEnabled: (enabled: boolean) => mockSetNativeStopAlarmEnabled(enabled),
+  subscribeKeepaliveProbe: (listener: () => void) => mockSubscribeKeepaliveProbe(listener),
 }));
 
 const mockThrowTestError = jest.fn();
@@ -156,6 +176,12 @@ describe('SettingsScreen', () => {
     mockForegroundKickEnabled.mockReturnValue(true);
     mockSetForegroundKickEnabled.mockClear();
     mockSubscribeForegroundKick.mockClear();
+    mockKeepaliveCeilingEnabled.mockReturnValue(true);
+    mockSetKeepaliveCeilingEnabled.mockClear();
+    mockNativeStopAlarmEnabled.mockReturnValue(true);
+    mockSetNativeStopAlarmEnabled.mockClear();
+    mockSubscribeKeepaliveProbe.mockClear();
+    mockKeepaliveProbeListeners.clear();
     mockThrowTestError.mockClear();
     mockCrashNatively.mockClear();
     mockOpenSystemNotificationSettings.mockClear();
@@ -550,6 +576,86 @@ describe('SettingsScreen', () => {
     await renderSettings();
     expect(screen.queryByTestId('settings-section-connection-trace')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-foreground-kick')).toBeNull();
+    expect(screen.queryByTestId('settings-connection-trace-keepalive-ceiling')).toBeNull();
+    expect(screen.queryByTestId('settings-connection-trace-native-stop-alarm')).toBeNull();
+  });
+
+  /**
+   * The MOBILE-3 probe switches, which set up the device A/B for the native
+   * stop alarm: the JS ceiling off so only the alarm can stop the service, and
+   * the alarm off for the control arm. Both are only useful if they reach their
+   * setters. A switch wired to nothing still renders and animates, so only the
+   * setter calls can catch that break.
+   *
+   * Mutation seen failing: replacing `onValueChange={setNativeStopAlarmEnabled}`
+   * with `onValueChange={() => {}}` - "Expected: false / Number of calls: 0".
+   */
+  it('reveals the keepalive probe switches when the trace flag is on, and wires each to its setter', () => {
+    mockConnectionTraceEnabled.mockReturnValue(true);
+    renderSettings();
+
+    const ceilingRow = screen.getByTestId('settings-connection-trace-keepalive-ceiling');
+    const alarmRow = screen.getByTestId('settings-connection-trace-native-stop-alarm');
+    expect(ceilingRow.props.accessibilityState.checked).toBe(true);
+    expect(alarmRow.props.accessibilityState.checked).toBe(true);
+
+    fireEvent.press(ceilingRow);
+    fireEvent.press(alarmRow);
+
+    expect(mockSetKeepaliveCeilingEnabled).toHaveBeenCalledWith(false);
+    expect(mockSetNativeStopAlarmEnabled).toHaveBeenCalledWith(false);
+  });
+
+  /**
+   * The wiring the setter test above cannot see: that each switch RE-RENDERS
+   * when the store changes. The getters are mocks held constant everywhere
+   * else, so a row whose useSyncExternalStore was handed a subscribe that never
+   * registers its listener still reads the right value on first paint and
+   * passes every other test here. In a trace build that is a switch that flips
+   * the underlying flag and stays visually where it was, which on a device
+   * reads as "the switch did nothing" in the middle of an A/B.
+   *
+   * One getter changes at a time, and EVERY captured listener is fired inside
+   * act. React runs a listener's re-render only when ITS OWN hook's snapshot
+   * changed, so this pins each row to its own subscription: with the ceiling
+   * row's subscribe dead, the alarm's live listener sees an unchanged snapshot
+   * and schedules nothing, and the ceiling row stays stale. It also pins each
+   * row to its own getter, since the other row must not move.
+   *
+   * Mutations seen failing, in SettingsScreen.tsx: handing both
+   * useSyncExternalStore calls `() => () => undefined` in place of
+   * subscribeKeepaliveProbe left the ceiling row on its first paint -
+   * "expect(received).toBe(expected) // Object.is equality", Expected: false,
+   * Received: true, at the first `keepalive-ceiling` assertion after the first
+   * notify. Doing it to the alarm call alone passed that step and failed the
+   * last assertion the same way (Expected: false, Received: true on
+   * `native-stop-alarm`); doing it to the ceiling call alone failed at the
+   * first step again. Both platform projects failed identically wherever both
+   * were run.
+   */
+  it('re-renders each keepalive probe switch when the probe store notifies, reading its own getter', () => {
+    mockConnectionTraceEnabled.mockReturnValue(true);
+    renderSettings();
+    const readChecked = (testID: string): boolean => screen.getByTestId(testID).props.accessibilityState.checked;
+    const notifyProbeListeners = (): void => {
+      act(() => {
+        for (const listener of [...mockKeepaliveProbeListeners]) listener();
+      });
+    };
+    expect(readChecked('settings-connection-trace-keepalive-ceiling')).toBe(true);
+    expect(readChecked('settings-connection-trace-native-stop-alarm')).toBe(true);
+
+    mockKeepaliveCeilingEnabled.mockReturnValue(false);
+    notifyProbeListeners();
+
+    expect(readChecked('settings-connection-trace-keepalive-ceiling')).toBe(false);
+    expect(readChecked('settings-connection-trace-native-stop-alarm')).toBe(true);
+
+    mockNativeStopAlarmEnabled.mockReturnValue(false);
+    notifyProbeListeners();
+
+    expect(readChecked('settings-connection-trace-keepalive-ceiling')).toBe(false);
+    expect(readChecked('settings-connection-trace-native-stop-alarm')).toBe(false);
   });
 
   /**

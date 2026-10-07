@@ -2310,7 +2310,11 @@ them are not bugs**. Getting this wrong invalidates every conclusion below, so s
   five-minute `BACKGROUND_KEEPALIVE_MAX_MS` ceiling. **Wait it out with the screen ON.** The
   ceiling's timer half rides a Choreographer frame callback, and the wall-clock half only fires
   on a wake source that reaches JS - the desktop's ~2 minute rekey, or a transport state change.
-  On a dark, idle phone the teardown can take the ceiling plus a rekey interval.
+  On a dark, idle phone the teardown can take the ceiling plus a rekey interval. Partly
+  measured since: on an API 36 emulator with the display verifiably off
+  (`mWakefulness=Asleep`), the timer half still fired on time (300022 ms against 300007 ms with
+  the display on). A plugged-in emulator never deep-sleeps, though, so on a real phone left
+  dark and unplugged the advice stands until someone measures it.
 
 **Checking the foreground service directly**, which is the one reading that does not depend on
 what JS believes: `adb shell dumpsys activity services com.kangentic.mobile`. It reports the
@@ -2319,6 +2323,80 @@ service survived it" - the distinction MOBILE-3 turned on. Pair it with `adb she
 com.kangentic.mobile`: a process still alive well past the ceiling is the symptom. Note a phone on
 USB never enters Doze, so use wireless adb (`adb tcpip 5555`, `adb connect`) for anything that has
 to reproduce a genuinely idle device.
+
+**The native stop alarm, and how to prove it on a device.** Every service start arms an
+AlarmManager alarm 7 minutes out (`modules/foreground-service-guard`; the why is in
+`docs/architecture.md`). If it fires, it stops the service from native code whatever the JS thread
+is doing. Two more readings go with the `dumpsys activity services` one:
+
+- `adb shell dumpsys alarm` lists it under the package as an `ELAPSED_WAKEUP` alarm whose
+  operation targets `ForegroundServiceGuardReceiver`, with its window. A stop cancels it, so it is
+  present only while a keepalive is up.
+- When it fires, logcat carries one line under the tag `KangenticFgsGuard`:
+  `adb logcat -s KangenticFgsGuard`.
+
+To prove the alarm, JS must not be able to stop the service, and that has to be a condition you
+set rather than a hope. A trace build (`EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1`) has two
+switches in Settings, under Connection trace. **Keepalive ceiling** off disarms both JS halves of
+the ceiling. **Native stop alarm** off skips the arm, which is the control arm. Both act on the
+next keepalive, so flip them before pressing HOME. Then shorten Android's budget so the control
+arm reproduces MOBILE-3 within the session:
+
+```
+adb shell am compat enable FGS_INTRODUCE_TIME_LIMITS com.kangentic.mobile
+adb shell device_config put activity_manager data_sync_fgs_timeout_duration 1200000
+```
+
+Restore it afterwards with `adb shell device_config delete activity_manager
+data_sync_fgs_timeout_duration`. With the ceiling off and the alarm on, press HOME. The service
+should still be listed at about 6 minutes. It should be gone somewhere between 7 and about 12.25
+minutes (the alarm is inexact; `dumpsys alarm` shows the window), with the receiver line in
+logcat, and the 20-minute budget should pass with no crash. Then foreground and background once
+more and confirm a fresh `ForegroundService` appears with no crash. That is the static-state trap
+the receiver's STOP action exists for (see the Kotlin header). Know the limit of that check: the
+`'active'` transition also resolves JS's parked notifee runner, whose completion callback clears
+the same static. So a pass shows the realistic path is safe, but it cannot tell you which of the
+two cleared it. With the alarm off as well, the process should die at about 20 minutes with the
+FGS timeout exception, which is MOBILE-3 on demand.
+
+**Measured** on 2026-10-06 (task #104), with a trace release build on the `kangentic_tablet_36`
+AVD (API 36, demo-paired, screen kept on so uptime tracked the wall clock). One run per arm, so
+every figure below is a single sample of an inexact alarm, not a range. This run was at the
+ORIGINAL 10-minute alarm setting:
+
+| Arm | Started | Native stop | Outcome at the 20-minute budget |
+| --- | --- | --- | --- |
+| Ceiling off, alarm on | 18:46:59 | 19:04:28, `stop alarm fired; notifee stop action sent`; ActivityManager logged `Stop FGS timeout` 2 ms later | No crash; process alive at 19:08:32 |
+| Ceiling off, alarm off (control) | 19:10:19 | none | `FGS (dataSync) timed out` at 19:30:19, then `ForegroundServiceDidNotStopInTimeException` and `Process ... has died` 10 s later |
+
+The alarm fired at the very end of its window (+7m30s, 75% of the delay), 17m29s after the start,
+not at 10 minutes. That is why the delay was then cut to 7 minutes. A reading after the change
+(`dumpsys alarm` right after HOME) showed due +6m55s, window +5m15s, latest +12m11s: the same 75%
+ratio. Budget for the worst case when choosing a shortened OS budget. The foreground stop between the arms showed up in `dumpsys
+alarm`'s removed-alarms history as `Reason=alarm_cancelled`, the normal stop cancelling the
+alarm. `dumpsys activity services` also reports `stopIfKilled=true` on notifee's service record,
+the system's own view of `START_NOT_STICKY`. Two traps from the run: `am compat enable` kills the
+app on purpose ("Killing package ... PlatformCompat overrides"), so relaunch before flipping the
+switches. And never install over an emulator another board task is measuring on: check `dumpsys
+package com.kangentic.mobile`'s `lastUpdateTime` first.
+
+A follow-up run the same evening, with both switches at their defaults (ceiling and alarm on),
+asked whether the JS ceiling timer stalls without a display. It does not, on this emulator:
+
+| Display | Keepalive start | `ceiling-timer` | Alarm |
+| --- | --- | --- | --- |
+| On | 20:19:31 | 20:24:31, `elapsedMs=300007` | `Reason=alarm_cancelled` 5 ms later |
+| Off (`mWakefulness=Asleep`, `Display State=OFF`) | 20:25:18 | 20:30:18, `elapsedMs=300022` | `Reason=alarm_cancelled` 8 ms later |
+
+So "no display, so no frames" does not stall the ceiling, and on the healthy path the JS stop
+cancels the alarm long before it would fire. The emulator was plugged in and never deep-slept,
+so a real phone left dark and unplugged is still unmeasured. Do not expect that run to explain
+the field crashes, though. This is inferred, not measured: deep sleep pauses the uptime clock the
+dataSync budget accrues on AND the clock JS timers run on, so it cannot starve one without the
+other. A phone that reached 6h of budget was awake roughly 72 times longer than the 5 minutes the
+ceiling needed. The likelier cause is that the JS thread never ran the stop at all (hung, or a
+React instance gone while the service lived on), which neither an emulator nor a dark-phone run
+reproduces.
 
 The state you want is: launched at least once since any force-stop, then backgrounded or killed
 with `am kill`, with no established channel.
@@ -2639,6 +2717,13 @@ no error, no test failure, and no visible symptom, which is precisely how the An
 managed to be inert on every modern device while looking verified. The MOBILE-8 diagnostic rests
 entirely on this one signal, so treat "the breadcrumb stopped appearing" as a platform question
 before an app question.
+
+`modules/foreground-service-guard` is a second local Expo module, built like `modules/memory-pressure`
+below: autolinked, Android-only, with no `android/` edit. It holds the native stop alarm on the keepalive foreground
+service. Its receiver is declared in the module's own `AndroidManifest.xml`, which the Gradle
+manifest merger folds in at build time. So `expo prebuild` output will not show it, and the merged
+manifest under `android/app/build/intermediates/` is where to confirm it shipped. Its device
+procedure is under "Checking the foreground service directly".
 
 **Android memory pressure is observable now, and `am send-trim-memory` is the way to drive it.**
 `modules/memory-pressure` is a local Expo module (autolinked, no `android/` edit) that forwards

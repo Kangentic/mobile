@@ -17,11 +17,15 @@ import { AndroidConfig, withAndroidManifest, type ConfigPlugin } from '@expo/con
  * - FOREGROUND_SERVICE + FOREGROUND_SERVICE_DATA_SYNC (the background
  *   "stay connected" service that keeps the secure channel alive). That service
  *   is bounded to five minutes per background stretch, but nothing here
- *   enforces it, and the bound has two halves in two files:
+ *   enforces it, and the bound lives in three places:
  *   BACKGROUND_KEEPALIVE_MAX_MS in connectionManager.ts decides WHEN to stop
  *   (a timer plus a wall-clock check, since a JS timer alone did not hold -
- *   see MOBILE-3), and foregroundService.ts owns whether the stop actually
- *   LANDS. Declaring the permission grants no time budget of its own.
+ *   see MOBILE-3), foregroundService.ts owns whether the stop actually LANDS,
+ *   and modules/foreground-service-guard is a native AlarmManager stop armed at
+ *   every start. That last one is the bound that holds when JS is not running,
+ *   which is what MOBILE-3's recurrence on 0.8.0+13 showed. Its receiver is
+ *   declared in that module's own manifest, not here. Declaring the permission
+ *   grants no time budget of its own.
  * - foregroundServiceType="dataSync" on notifee's foreground service
  *   (mandatory on Android 14+: an FGS must declare its type or crash at
  *   startForeground time)

@@ -22,8 +22,16 @@
  * and the warmForegroundSeen latch isColdLaunch() reads. The
  * `vi.resetModules()` pattern below turned out to work fine for that; see
  * that file for why it was worth doing there and not everywhere.
+ *
+ * A third ON-path surface IS covered here, in the second describe at the
+ * bottom: the two MOBILE-3 probe switches' setters, getters and shared
+ * listener set. Unlike the two behaviors above it has a correctness
+ * consequence, because the Settings switches and connectionManager read it, so
+ * the hard-true OFF-path tests alone left every ON-path half unpinned. That
+ * describe sets the trace flag in its own beforeEach and clears it in its own
+ * afterEach, so the flag never reaches the OFF-path tests above it.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('connectionTrace (non-trace build)', () => {
   /**
@@ -64,6 +72,43 @@ describe('connectionTrace (non-trace build)', () => {
     setForegroundKickEnabled(false);
 
     expect(foregroundKickEnabled()).toBe(true);
+  });
+
+  /**
+   * The two MOBILE-3 probe switches, under the same bar as the kick above. If
+   * either could read false in a store build, it would ship with a keepalive
+   * bound turned off: the JS ceiling, or the native stop alarm that is the
+   * only bound left when JS is not running.
+   *
+   * Two gates guard each switch, as for the kick, so only removing both turns
+   * a test red. That is defense in depth, not a hole in the test.
+   *
+   * Mutation seen failing: collapsing each getter to return its bare flag and
+   * dropping `!traceEnabled ||` from each setter made both tests read "expected
+   * false to be true".
+   */
+  it('keepaliveCeilingEnabled is a hard true when the trace flag is unset', async () => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+    vi.resetModules();
+    const { keepaliveCeilingEnabled, setKeepaliveCeilingEnabled } = await import('@/devsupport/connectionTrace');
+
+    expect(keepaliveCeilingEnabled()).toBe(true);
+
+    setKeepaliveCeilingEnabled(false);
+
+    expect(keepaliveCeilingEnabled()).toBe(true);
+  });
+
+  it('nativeStopAlarmEnabled is a hard true when the trace flag is unset', async () => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+    vi.resetModules();
+    const { nativeStopAlarmEnabled, setNativeStopAlarmEnabled } = await import('@/devsupport/connectionTrace');
+
+    expect(nativeStopAlarmEnabled()).toBe(true);
+
+    setNativeStopAlarmEnabled(false);
+
+    expect(nativeStopAlarmEnabled()).toBe(true);
   });
 
   /**
@@ -148,5 +193,175 @@ describe('connectionTrace (non-trace build)', () => {
     const { isColdLaunch } = await import('@/devsupport/connectionTrace');
 
     expect(isColdLaunch()).toBe(false);
+  });
+});
+
+/**
+ * The two MOBILE-3 probe switches in a real trace build
+ * (EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1), where they are live. The describe
+ * above only ever sees the hard-true floor, which holds whether or not the
+ * switches work at all: a setter that assigned nothing, or a subscribe that
+ * never registered, passes every one of those. These pin the other half.
+ *
+ * `traceEnabled` is read once at module evaluation, so each test sets the flag,
+ * resets the module registry, and imports fresh. The flag is cleared in
+ * afterEach so it cannot leak into a test that expects the OFF path.
+ */
+describe('connectionTrace (trace build, MOBILE-3 probe switches)', () => {
+  beforeEach(() => {
+    process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE = '1';
+  });
+
+  afterEach(() => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+    vi.resetModules();
+  });
+
+  async function importTraceBuild(): Promise<typeof import('@/devsupport/connectionTrace')> {
+    vi.resetModules();
+    return import('@/devsupport/connectionTrace');
+  }
+
+  /**
+   * Both switches default to on, so the first assertion pairs are the
+   * "nothing moved yet" baseline that makes the flip below mean something.
+   *
+   * Mutation seen failing: changing `keepaliveCeilingOn = enabled;` in
+   * setKeepaliveCeilingEnabled to `keepaliveCeilingOn = keepaliveCeilingOn;`
+   * left the getter reading `true` after `setKeepaliveCeilingEnabled(false)` -
+   * "expected true to be false". The "only its own" half is separate: changing
+   * that line to `keepaliveCeilingOn = nativeStopAlarmOn = enabled;` moves the
+   * ceiling correctly and then fails on the other switch - "expected false to
+   * be true" at `expect(nativeStopAlarmEnabled()).toBe(true)`.
+   */
+  it('setKeepaliveCeilingEnabled moves keepaliveCeilingEnabled and leaves nativeStopAlarmEnabled alone', async () => {
+    const { keepaliveCeilingEnabled, nativeStopAlarmEnabled, setKeepaliveCeilingEnabled } = await importTraceBuild();
+
+    expect(keepaliveCeilingEnabled()).toBe(true);
+    expect(nativeStopAlarmEnabled()).toBe(true);
+
+    setKeepaliveCeilingEnabled(false);
+
+    expect(keepaliveCeilingEnabled()).toBe(false);
+    expect(nativeStopAlarmEnabled()).toBe(true);
+
+    setKeepaliveCeilingEnabled(true);
+
+    expect(keepaliveCeilingEnabled()).toBe(true);
+  });
+
+  /**
+   * The mirror of the test above, because each setter is its own copy of the
+   * same four lines and a mistake in one says nothing about the other.
+   *
+   * Mutation seen failing: changing `nativeStopAlarmOn = enabled;` in
+   * setNativeStopAlarmEnabled to `nativeStopAlarmOn = nativeStopAlarmOn;` left
+   * the getter reading `true` after `setNativeStopAlarmEnabled(false)` -
+   * "expected true to be false".
+   */
+  it('setNativeStopAlarmEnabled moves nativeStopAlarmEnabled and leaves keepaliveCeilingEnabled alone', async () => {
+    const { keepaliveCeilingEnabled, nativeStopAlarmEnabled, setNativeStopAlarmEnabled } = await importTraceBuild();
+
+    expect(keepaliveCeilingEnabled()).toBe(true);
+    expect(nativeStopAlarmEnabled()).toBe(true);
+
+    setNativeStopAlarmEnabled(false);
+
+    expect(nativeStopAlarmEnabled()).toBe(false);
+    expect(keepaliveCeilingEnabled()).toBe(true);
+
+    setNativeStopAlarmEnabled(true);
+
+    expect(nativeStopAlarmEnabled()).toBe(true);
+  });
+
+  /**
+   * One listener set serves both switches, because the Settings screen
+   * subscribes both rows through subscribeKeepaliveProbe. So a single listener
+   * has to hear a real change from EACH setter, and each setter has its own
+   * notify loop that can be dropped independently.
+   *
+   * Mutation seen failing: dropping the `for (const listener of
+   * keepaliveProbeListeners) listener();` line from setNativeStopAlarmEnabled
+   * alone left the ceiling's notification intact and failed the second
+   * assertion - "expected "vi.fn()" to be called 2 times, but got 1 times".
+   * Dropping `keepaliveProbeListeners.add(listener);` from the subscribe fails
+   * the first one - "expected "vi.fn()" to be called 1 times, but got 0 times".
+   */
+  it('notifies a subscribed listener on a real change from either setter', async () => {
+    const { setKeepaliveCeilingEnabled, setNativeStopAlarmEnabled, subscribeKeepaliveProbe } = await importTraceBuild();
+    const listener = vi.fn();
+    subscribeKeepaliveProbe(listener);
+
+    setKeepaliveCeilingEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    setNativeStopAlarmEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * A listener is a React re-render, so a set to the value already held must
+   * stay silent. Each setter is driven twice with the SAME value after a real
+   * change, and once up front at the default, so both the "already the default"
+   * and "already flipped" shapes of the guard are covered.
+   *
+   * Mutation seen failing: changing setKeepaliveCeilingEnabled's guard from
+   * `if (!traceEnabled || keepaliveCeilingOn === enabled) return;` to
+   * `if (!traceEnabled) return;` notified on the default-valued set -
+   * "expected "vi.fn()" to not be called at all, but actually been called 1
+   * times". Making setNativeStopAlarmEnabled drop its assignment instead (so
+   * its guard never sees a held value) fails the repeat set - "expected
+   * "vi.fn()" to be called 2 times, but got 3 times".
+   */
+  it('does not notify on a same-value set', async () => {
+    const { setKeepaliveCeilingEnabled, setNativeStopAlarmEnabled, subscribeKeepaliveProbe } = await importTraceBuild();
+    const listener = vi.fn();
+    subscribeKeepaliveProbe(listener);
+
+    setKeepaliveCeilingEnabled(true);
+    setNativeStopAlarmEnabled(true);
+    expect(listener).not.toHaveBeenCalled();
+
+    setKeepaliveCeilingEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+    setKeepaliveCeilingEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    setNativeStopAlarmEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+    setNativeStopAlarmEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The unsubscribe is asserted AFTER a notification was proven to arrive. A
+   * test that only checked silence after unsubscribing would also pass for a
+   * listener that was never registered, which is a different bug. A second
+   * listener stays subscribed throughout, so an unsubscribe that removed more
+   * than its own listener is caught too.
+   *
+   * Mutation seen failing: replacing `keepaliveProbeListeners.delete(listener);`
+   * in the returned unsubscribe with `void listener;` kept notifying the
+   * removed listener - "expected "vi.fn()" to be called 1 times, but got 3
+   * times" on `unsubscribedListener`.
+   */
+  it('stops notifying a listener once it unsubscribes, and only that listener', async () => {
+    const { setKeepaliveCeilingEnabled, setNativeStopAlarmEnabled, subscribeKeepaliveProbe } = await importTraceBuild();
+    const unsubscribedListener = vi.fn();
+    const remainingListener = vi.fn();
+    const unsubscribe = subscribeKeepaliveProbe(unsubscribedListener);
+    subscribeKeepaliveProbe(remainingListener);
+
+    setKeepaliveCeilingEnabled(false);
+    expect(unsubscribedListener).toHaveBeenCalledTimes(1);
+    expect(remainingListener).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    setKeepaliveCeilingEnabled(true);
+    setNativeStopAlarmEnabled(false);
+
+    expect(unsubscribedListener).toHaveBeenCalledTimes(1);
+    expect(remainingListener).toHaveBeenCalledTimes(3);
   });
 });

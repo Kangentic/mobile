@@ -73,9 +73,13 @@ export function initializeNotifications(): void {
   if (Platform.OS !== 'android') return;
   registerForegroundServiceRunner();
   // Process start, so nothing can have declared a keepalive yet: any dataSync
-  // service alive right now was restarted by Android after a process death and
-  // has nothing bounding it. That is one of the ways MOBILE-3 reaches its 6h
-  // budget, and no in-process flag could ever see it.
+  // service alive right now was recreated by Android with nothing bounding it,
+  // and no in-process flag could ever see it. That is narrower than this comment
+  // used to claim: notifee returns START_NOT_STICKY, so it happens only when a
+  // start intent was still pending at process death. The long MOBILE-3 orphans
+  // lived in processes that never died, and the native stop alarm (see
+  // foregroundService.ts) is what bounds those. The sweep also cancels any stop
+  // alarm a previous process left armed.
   stopOrphanedForegroundServiceAtBoot();
   registerBackgroundPushTask();
   void createNotificationChannels().catch(() => {
