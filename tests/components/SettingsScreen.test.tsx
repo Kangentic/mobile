@@ -590,17 +590,17 @@ describe('SettingsScreen', () => {
    * Mutation seen failing: replacing `onValueChange={setNativeStopAlarmEnabled}`
    * with `onValueChange={() => {}}` - "Expected: false / Number of calls: 0".
    */
-  it('reveals the keepalive probe switches when the trace flag is on, and wires each to its setter', () => {
+  it('reveals the keepalive probe switches when the trace flag is on, and wires each to its setter', async () => {
     mockConnectionTraceEnabled.mockReturnValue(true);
-    renderSettings();
+    await renderSettings();
 
     const ceilingRow = screen.getByTestId('settings-connection-trace-keepalive-ceiling');
     const alarmRow = screen.getByTestId('settings-connection-trace-native-stop-alarm');
     expect(ceilingRow.props.accessibilityState.checked).toBe(true);
     expect(alarmRow.props.accessibilityState.checked).toBe(true);
 
-    fireEvent.press(ceilingRow);
-    fireEvent.press(alarmRow);
+    await fireEvent.press(ceilingRow);
+    await fireEvent.press(alarmRow);
 
     expect(mockSetKeepaliveCeilingEnabled).toHaveBeenCalledWith(false);
     expect(mockSetNativeStopAlarmEnabled).toHaveBeenCalledWith(false);
@@ -633,12 +633,12 @@ describe('SettingsScreen', () => {
    * first step again. Both platform projects failed identically wherever both
    * were run.
    */
-  it('re-renders each keepalive probe switch when the probe store notifies, reading its own getter', () => {
+  it('re-renders each keepalive probe switch when the probe store notifies, reading its own getter', async () => {
     mockConnectionTraceEnabled.mockReturnValue(true);
-    renderSettings();
+    await renderSettings();
     const readChecked = (testID: string): boolean => screen.getByTestId(testID).props.accessibilityState.checked;
-    const notifyProbeListeners = (): void => {
-      act(() => {
+    const notifyProbeListeners = async (): Promise<void> => {
+      await act(() => {
         for (const listener of [...mockKeepaliveProbeListeners]) listener();
       });
     };
@@ -646,13 +646,13 @@ describe('SettingsScreen', () => {
     expect(readChecked('settings-connection-trace-native-stop-alarm')).toBe(true);
 
     mockKeepaliveCeilingEnabled.mockReturnValue(false);
-    notifyProbeListeners();
+    await notifyProbeListeners();
 
     expect(readChecked('settings-connection-trace-keepalive-ceiling')).toBe(false);
     expect(readChecked('settings-connection-trace-native-stop-alarm')).toBe(true);
 
     mockNativeStopAlarmEnabled.mockReturnValue(false);
-    notifyProbeListeners();
+    await notifyProbeListeners();
 
     expect(readChecked('settings-connection-trace-keepalive-ceiling')).toBe(false);
     expect(readChecked('settings-connection-trace-native-stop-alarm')).toBe(false);
