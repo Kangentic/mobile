@@ -13,6 +13,7 @@ import {
   selectProjectAccentColor,
   selectTaskColumn,
   selectTasksForColumn,
+  sessionlessTaskStatus,
   useBoardStore,
 } from '@/state/boardStore';
 import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
@@ -340,6 +341,36 @@ describe('boardStore', () => {
       const state = { projects: [nonStringColorProject, emptyColorProject] };
       expect(selectProjectAccentColor(state, 'project-nonstring')).toBeNull();
       expect(selectProjectAccentColor(state, 'project-empty')).toBeNull();
+    });
+  });
+
+  /**
+   * What a SESSIONLESS board row says the task is waiting on (protocol 0.16.0).
+   * This one function decides which tasks the phone draws with no session at all
+   * (the feed's task rows, a retained ghost entry's hold, the board card's
+   * routing), so it has to keep to exactly the tasks the desktop's own
+   * `'sessions'` projection keeps for the same reason.
+   */
+  describe('sessionlessTaskStatus', () => {
+    const ARCHIVED_AT = '2026-10-01T00:00:00.000Z';
+
+    it.each([
+      ['a session on the row, even with Resume offered', null, { session_id: 'sess-1', resumable: true }],
+      ['a session on the row, even with a label in flight', null, { session_id: 'sess-1', spawn_progress: 'Creating worktree...' }],
+      ['an archived task, even with Resume offered', null, { archived_at: ARCHIVED_AT, resumable: true }],
+      ['an archived task, even with a label in flight', null, { archived_at: ARCHIVED_AT, spawn_progress: 'Creating worktree...' }],
+      ['a whitespace-only label', null, { spawn_progress: '  \n\t ' }],
+      ['an empty label', null, { spawn_progress: '' }],
+      ['nothing in flight and nothing to resume', null, { spawn_progress: null, resumable: false }],
+      ['a pre-0.16.0 row (both fields null)', null, { spawn_progress: null, resumable: null }],
+      ['a pre-0.16.0 row (both fields absent)', null, { spawn_progress: undefined, resumable: undefined }],
+      ['Resume offered and no label', 'paused', { resumable: true }],
+      ['a label in flight and no Resume', 'preparing', { spawn_progress: 'Creating worktree...' }],
+      ['a label in flight AND Resume offered (a paused task being resumed)', 'paused', { spawn_progress: 'Resuming session...', resumable: true }],
+    ] as const)('reads %s as %s', (_description, expected, overrides) => {
+      const task = boardTaskFixture({ session_id: null, ...overrides });
+
+      expect(sessionlessTaskStatus(task)).toBe(expected);
     });
   });
 });

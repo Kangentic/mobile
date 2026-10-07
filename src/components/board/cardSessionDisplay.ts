@@ -48,6 +48,17 @@ export interface CardSessionDisplayInput {
   task: CardTaskRow | null;
 }
 
+/**
+ * A board row narrowed to the card's three fields, for a `useShallow` store
+ * selector. Every board snapshot replaces every row object, so a component
+ * that selects the row itself re-renders on each snapshot of its project
+ * whether or not anything it reads changed.
+ */
+export function toCardTaskRow(task: CardTaskRow | null): CardTaskRow | null {
+  if (task === null) return null;
+  return { session_id: task.session_id, spawn_progress: task.spawn_progress, resumable: task.resumable };
+}
+
 /** An activity entry as the card reads it. Shared so no call site narrows it differently. */
 export function toCardSession(entry: SessionActivityEntry | null): CardSession | null {
   if (entry === null) return null;

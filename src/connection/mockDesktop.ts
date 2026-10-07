@@ -21,7 +21,7 @@ import {
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
-import { isDoneRole } from '@/state/boardStore';
+import { hasSpawnLabel, isDoneRole } from '@/state/boardStore';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
 import {
   playRecordedTerminal,
@@ -3757,7 +3757,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       columns: isSecondProject ? mockColumns2() : mockColumns(),
       tasks:
         view === 'sessions'
-          ? allTasks.filter((task) => task.session_id !== null || typeof task.spawn_progress === 'string' || task.resumable === true)
+          ? allTasks.filter((task) => task.session_id !== null || hasSpawnLabel(task) || task.resumable === true)
           : allTasks,
       ...(view === undefined ? { backlog: [] } : {}),
       projectColor: isSecondProject ? MOCK_PROJECT_2.color : MOCK_PROJECT.color,
@@ -4236,7 +4236,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         const payload = parseCapabilityRequestPayload('start-session', request.payload);
         const located = locateTask(payload.taskId);
         if (!located) return failWith(request, `No such task: ${payload.taskId}`);
-        const startInFlight = typeof located.task.spawn_progress === 'string';
+        const startInFlight = hasSpawnLabel(located.task);
         if (located.task.resumable === true && !startInFlight) {
           if (stallNextResume) {
             // Accepted, then nothing: see stallNextResume.

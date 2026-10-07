@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useShallow } from 'zustand/react/shallow';
 import { Screen } from '@/components';
-import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
+import { cardSessionDisplay, toCardSession, toCardTaskRow } from '@/components/board/cardSessionDisplay';
 import { useScreenFocusActive } from '@/components/motion/ScreenMotion';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
@@ -512,15 +513,15 @@ export function SessionScreen(): React.JSX.Element {
    * held back until the labelled end (storeFeed), which opens the quiet window
    * instead, so a model switch keeps the dimmed last frame it always had.
    */
-  const taskRow = useBoardStore((state) => selectTaskRow(state, taskId));
+  const taskRow = useBoardStore(useShallow((state) => toCardTaskRow(selectTaskRow(state, taskId))));
   const taskRespawn = useActivityStore((state) => selectTaskRespawn(state, taskId));
   const boundEntry = useActivityStore((state) => (displaySessionId !== null ? (state.bySessionId[displaySessionId] ?? null) : null));
   // An end in flight speaks for the session that ENDED: once a different
   // session is bound here (the successor), it says nothing about this pane.
   const launchRespawn =
     taskRespawn !== null && (displaySessionId === null || taskRespawn.endedSessionId === displaySessionId) ? taskRespawn : null;
-  const launchFace =
-    !quietWindowOpen && cardSessionDisplay({ session: toCardSession(boundEntry), respawn: launchRespawn, task: taskRow }).kind === 'preparing';
+  const launchDisplayKind = cardSessionDisplay({ session: toCardSession(boundEntry), respawn: launchRespawn, task: taskRow }).kind;
+  const launchFace = !quietWindowOpen && launchDisplayKind === 'preparing';
   // The bound session the launch face has cleared the pane over. When that
   // session's end opens the quiet window, the window opens CLEARED as well:
   // opening it on the dead frame would put the old frame back between the
@@ -529,6 +530,22 @@ export function SessionScreen(): React.JSX.Element {
   const [launchVeiledSessionId, setLaunchVeiledSessionId] = useState<string | null>(null);
   if (launchFace && displaySessionId !== null && launchVeiledSessionId !== displaySessionId) {
     setLaunchVeiledSessionId(displaySessionId);
+  } else if (
+    // The label went with no resume (a failed spawn): the row still names the
+    // same parked session, which reads as Paused again with its frame back on
+    // screen, so a later end of it (a Stop) opens the window on that dimmed
+    // frame like any other end. Keyed on the ROW still naming the session,
+    // never on the face merely going away: when the board moves past this
+    // session before its end arrives without rebinding the screen (the task
+    // drops out of the board), the label goes too, and this flag is exactly
+    // what keeps that end's window cleared.
+    !quietWindowOpen &&
+    launchVeiledSessionId !== null &&
+    launchVeiledSessionId === displaySessionId &&
+    taskRow?.session_id === displaySessionId &&
+    launchDisplayKind === 'suspended'
+  ) {
+    setLaunchVeiledSessionId(null);
   }
   const successorBound = quietWindowOpen && sessionId !== null && sessionId !== quietWindowSessionId;
   const successorPainted = useTerminalUiStore((state) =>

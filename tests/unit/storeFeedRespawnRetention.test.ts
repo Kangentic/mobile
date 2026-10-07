@@ -21,7 +21,8 @@ import type { SubscriptionManager } from '@/channel/subscriptionManager';
 import { bindFeedToStores, createSnapshotSinks } from '@/connection/storeFeed';
 import { FeedRouter } from '@/channel/feedRouter';
 import type { SessionManager } from '@/channel/sessionManager';
-import { ENDED_ROW_GRACE_MS, RESPAWN_ROW_GRACE_MS, selectTriageRows, useActivityStore } from '@/state/activityStore';
+import { feedRowKey, selectFeedSections } from '@/screens/home/feedSections';
+import { ENDED_ROW_GRACE_MS, RESPAWN_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 
@@ -69,6 +70,24 @@ describe('reconcileSessionsFromBoards keeps a respawning task on screen', () => 
   };
 
   const hasRow = (sessionId: string): boolean => useActivityStore.getState().bySessionId[sessionId] !== undefined;
+
+  /**
+   * The feed's Active section as the screen would draw it right now: every row's
+   * key (a session id, or `task-<id>` for a sessionless task row, so a stray task
+   * row would show up here rather than hide behind a session-only filter), in the
+   * feed's own order.
+   */
+  const activeRowKeys = (): string[] => {
+    const activityState = useActivityStore.getState();
+    const working = selectFeedSections({
+      bySessionId: activityState.bySessionId,
+      respawnByTaskId: activityState.respawnByTaskId,
+      spawnProgressLabelBySessionId: activityState.spawnProgressLabelBySessionId,
+      boardsByProjectId: useBoardStore.getState().boardsByProjectId,
+    }).find((candidate) => candidate.section === 'working');
+    if (working === undefined) throw new Error('selectFeedSections returned no "working" section');
+    return working.rows.map(feedRowKey);
+  };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -242,16 +261,14 @@ describe('reconcileSessionsFromBoards keeps a respawning task on screen', () => 
     pushThinking(OLD_SESSION_ID, TASK_ID);
     vi.setSystemTime(2_000);
     pushThinking(OTHER_SESSION_ID, OTHER_TASK_ID);
-    const workingBefore = selectTriageRows(useActivityStore.getState()).find((rows) => rows.section === 'working');
-    expect(workingBefore?.entries.map((entry) => entry.sessionId)).toEqual([OTHER_SESSION_ID, OLD_SESSION_ID]);
+    expect(activeRowKeys()).toEqual([OTHER_SESSION_ID, OLD_SESSION_ID]);
 
     vi.setSystemTime(9_000);
     pushRespawnEnded(null);
     publishBothTasks(null);
     publishBothTasks(NEW_SESSION_ID);
 
-    const workingAfter = selectTriageRows(useActivityStore.getState()).find((rows) => rows.section === 'working');
-    expect(workingAfter?.entries.map((entry) => entry.sessionId)).toEqual([OTHER_SESSION_ID, NEW_SESSION_ID]);
+    expect(activeRowKeys()).toEqual([OTHER_SESSION_ID, NEW_SESSION_ID]);
     expect(hasRow(OLD_SESSION_ID)).toBe(false);
   });
 });

@@ -12,11 +12,31 @@ import {
   selectSessionEnded,
   selectSessionSpawnProgressLabel,
   selectTaskRespawn,
-  selectTriageRows,
   selectWaitingSince,
   useActivityStore,
 } from '@/state/activityStore';
+import { useBoardStore } from '@/state/boardStore';
+import { feedRowKey, selectFeedSections, type FeedSection } from '@/screens/home/feedSections';
 import { streamSnapshotFixture, usageFixture } from '@/devsupport/desktopFixtures';
+
+/**
+ * The Agents feed's rows in one section, as the feed orders them: the key of
+ * each row (a session row's session id, a task row's `task-<id>`), read from the
+ * stores' current state exactly the way the screen assembles its sources.
+ * Looked up by section NAME, never by index, because `selectFeedSections`
+ * always returns every section, empty ones included.
+ */
+function feedRowKeysIn(section: FeedSection): string[] {
+  const activityState = useActivityStore.getState();
+  const found = selectFeedSections({
+    bySessionId: activityState.bySessionId,
+    respawnByTaskId: activityState.respawnByTaskId,
+    spawnProgressLabelBySessionId: activityState.spawnProgressLabelBySessionId,
+    boardsByProjectId: useBoardStore.getState().boardsByProjectId,
+  }).find((candidate) => candidate.section === section);
+  if (found === undefined) throw new Error(`selectFeedSections returned no "${section}" section`);
+  return found.rows.map(feedRowKey);
+}
 
 /**
  * `taskId` defaults to the 'task-1' every other test in this file registers
@@ -84,6 +104,8 @@ function activityPayloadWithStraySpawnLabel(spawnProgressLabel: string): Activit
 describe('activityStore', () => {
   beforeEach(() => {
     useActivityStore.getState().reset();
+    // The feed ordering tests below read the boards too (sessionless task rows).
+    useBoardStore.getState().reset();
   });
 
   it('registerSession creates a pending entry; applySnapshot makes it live', () => {
@@ -1164,31 +1186,38 @@ describe('activityStore', () => {
     });
   });
 
-  it('selectTriageRows buckets by state and sorts each section by recency', () => {
+  /**
+   * The ids are chosen so the feed's ascending-id TIEBREAK would hand back the
+   * OLDER session first ('-early' sorts before '-late'). Only the recency sort
+   * puts the newest arrival on top, so a feed that stopped ranking by arrival
+   * (leaving the tiebreak to decide) cannot pass this by accident.
+   */
+  it('selectFeedSections buckets by state and sorts each section newest arrival first', () => {
     const { registerSession, applyActivityEvent } = useActivityStore.getState();
     registerSession('sess-idle', 'task-a', 'project-1');
-    registerSession('sess-working-old', 'task-b', 'project-1');
-    registerSession('sess-working-new', 'task-c', 'project-1');
+    registerSession('sess-working-early', 'task-b', 'project-1');
+    registerSession('sess-working-late', 'task-c', 'project-1');
     registerSession('sess-permission', 'task-d', 'project-1');
 
-    applyActivityEvent(activityEvent('sess-working-old', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
-    applyActivityEvent(activityEvent('sess-working-new', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+    applyActivityEvent(activityEvent('sess-working-early', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+    applyActivityEvent(activityEvent('sess-working-late', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
     applyActivityEvent(activityEvent('sess-permission', { type: 'permission', promptId: 'sess-permission:tool-1', pending: true }));
 
     // Force distinct arrival ordering (newest into the section on top).
     useActivityStore.setState((state) => ({
       bySessionId: {
         ...state.bySessionId,
-        'sess-working-old': { ...state.bySessionId['sess-working-old'], enteredSectionAt: 1000 },
-        'sess-working-new': { ...state.bySessionId['sess-working-new'], enteredSectionAt: 2000 },
+        'sess-working-early': { ...state.bySessionId['sess-working-early'], enteredSectionAt: 1000 },
+        'sess-working-late': { ...state.bySessionId['sess-working-late'], enteredSectionAt: 2000 },
       },
     }));
 
-    const sections = selectTriageRows(useActivityStore.getState());
-    expect(sections.map((section) => section.section)).toEqual(['needs-you', 'working', 'idle']);
-    expect(sections[0].entries.map((entry) => entry.sessionId)).toEqual(['sess-permission']);
-    expect(sections[1].entries.map((entry) => entry.sessionId)).toEqual(['sess-working-new', 'sess-working-old']);
-    expect(sections[2].entries.map((entry) => entry.sessionId)).toEqual(['sess-idle']);
+    expect(feedRowKeysIn('needs-you')).toEqual(['sess-permission']);
+    expect(feedRowKeysIn('working')).toEqual(['sess-working-late', 'sess-working-early']);
+    expect(feedRowKeysIn('idle')).toEqual(['sess-idle']);
+    // No session here is queued or suspended, so neither non-running section holds a row.
+    expect(feedRowKeysIn('queued')).toEqual([]);
+    expect(feedRowKeysIn('paused')).toEqual([]);
   });
 
   /**
@@ -1203,14 +1232,18 @@ describe('activityStore', () => {
     registerSession('sess-b', 'task-b', 'project-1');
     applyActivityEvent(activityEvent('sess-a', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
     applyActivityEvent(activityEvent('sess-b', { type: 'activity', state: 'thinking', reason: { kind: 'turn-active' } }));
+    // `lastEventAt` is pinned alongside `enteredSectionAt`, in the same order
+    // (b newer than a), so the starting order is the same whichever key the feed
+    // ranks by. Left to the wall clock the two setup events can land in one
+    // millisecond, and the ascending-id tiebreak would then decide the start.
     useActivityStore.setState((state) => ({
       bySessionId: {
         ...state.bySessionId,
-        'sess-a': { ...state.bySessionId['sess-a'], enteredSectionAt: 1000 },
-        'sess-b': { ...state.bySessionId['sess-b'], enteredSectionAt: 2000 },
+        'sess-a': { ...state.bySessionId['sess-a'], enteredSectionAt: 1000, lastEventAt: 1000 },
+        'sess-b': { ...state.bySessionId['sess-b'], enteredSectionAt: 2000, lastEventAt: 2000 },
       },
     }));
-    const initialOrder = selectTriageRows(useActivityStore.getState())[1].entries.map((entry) => entry.sessionId);
+    const initialOrder = feedRowKeysIn('working');
     expect(initialOrder).toEqual(['sess-b', 'sess-a']);
 
     // The OLDER session now emits a flurry of events (tokens, usage ticks).
@@ -1220,8 +1253,10 @@ describe('activityStore', () => {
       applyActivityEvent(activityEvent('sess-a', { type: 'event', event: { ts: index, type: 'tool_start', tool: 'Bash' } }));
     }
 
-    const afterOrder = selectTriageRows(useActivityStore.getState())[1].entries.map((entry) => entry.sessionId);
-    expect(afterOrder).toEqual(initialOrder);
+    // The flurry stamped sess-a's `lastEventAt` with the real clock, far past
+    // sess-b's pinned 2000: a feed ranked by it would put sess-a on top now.
+    expect(useActivityStore.getState().bySessionId['sess-a'].lastEventAt).toBeGreaterThan(2000);
+    expect(feedRowKeysIn('working')).toEqual(initialOrder);
   });
 
   it('re-ranks a session only when it changes section', () => {
@@ -1315,14 +1350,43 @@ describe('activityStore - protocol 0.16.0', () => {
     });
   });
 
-  it('records no successor for an end that names none, or names the ended session itself', () => {
+  /**
+   * Three different non-successors, each on its own task so one cannot overwrite
+   * another's record: no field at all, the ended id itself (a resume never reuses
+   * an id), and an empty string (a blank field from a desktop that has none to
+   * name, which would otherwise subscribe a stream called '').
+   */
+  it('records no successor for an end that names none, names the ended session itself, or names an empty id', () => {
     const { registerSession, applyActivityEvent } = useActivityStore.getState();
     registerSession('sess-a', 'task-1', 'project-1');
     applyActivityEvent(activityEvent('sess-a', { type: 'session-ended', intentional: true }));
     registerSession('sess-b', 'task-2', 'project-1');
     applyActivityEvent(activityEvent('sess-b', { type: 'session-ended', intentional: true, successorSessionId: 'sess-b' }, 'task-2'));
+    registerSession('sess-c', 'task-3', 'project-1');
+    applyActivityEvent(activityEvent('sess-c', { type: 'session-ended', intentional: true, successorSessionId: '' }, 'task-3'));
 
     expect(useActivityStore.getState().pendingSuccessorByTaskId).toEqual({});
+  });
+
+  /**
+   * Recorded BEFORE the no-entry bail, like the end itself: the desktop can name
+   * a successor for a session this phone never held a feed on (a paused row's
+   * stream is dropped at the pause), and the reconciler still has to subscribe
+   * it. With no entry there is no project to copy, so the record carries none
+   * and the successor's own snapshot finds its owner from the board.
+   */
+  it('records the successor of a session the phone holds no entry for, with no project', () => {
+    useActivityStore
+      .getState()
+      .applyActivityEvent(activityEvent('sess-unheld', { type: 'session-ended', intentional: true, successorSessionId: 'sess-next' }));
+
+    expect(entry('sess-unheld')).toBeUndefined();
+    expect(selectPendingSuccessor(useActivityStore.getState(), 'task-1')).toEqual({
+      sessionId: 'sess-next',
+      endedSessionId: 'sess-unheld',
+      projectId: null,
+      reportedAt: expect.any(Number),
+    });
   });
 
   it('stops reporting a pending successor once its window passes', () => {

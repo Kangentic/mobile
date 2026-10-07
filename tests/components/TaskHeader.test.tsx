@@ -389,3 +389,77 @@ describe('TaskHeader status glyph', () => {
     expect(screen.getByTestId('task-header-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
   });
 });
+
+/**
+ * Every board snapshot replaces every row object of its project, so a header
+ * that selected the task row itself would re-render on each snapshot while the
+ * session screen is open, whether or not anything it draws changed. It reads
+ * three of the row's fields, narrows the row to them (`toCardTaskRow` under
+ * `useShallow`), and re-renders only when one changes.
+ *
+ * Invisible in what is drawn (the header looks the same either way), so this
+ * counts commits through a Profiler, which reports only when something in the
+ * header's subtree rendered. The replacement is a `setState` that keeps the
+ * board's `columns` array: a real snapshot also hands over new column objects,
+ * which re-render the header through the column chip whatever the row's
+ * narrowing does, and that is a different subscription.
+ */
+describe('TaskHeader task-row subscription', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    useResumeStore.setState({ byTaskId: {} });
+    seedLocatedTask('lane-todo', { session_id: null, resumable: true });
+  });
+
+  /** Replaces the task's row with a NEW object carrying these changes, leaving the board's `columns` array alone. */
+  function replaceTaskRow(overrides: Partial<BoardTaskWire>): void {
+    useBoardStore.setState((state) => {
+      const board = state.boardsByProjectId['project-1'];
+      return {
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': { ...board, tasksById: { ...board.tasksById, 'task-1': { ...board.tasksById['task-1'], ...overrides } } },
+        },
+      };
+    });
+  }
+
+  it('does not re-render when the row is replaced but none of the fields it reads changed, and does when one does', async () => {
+    const commits = { count: 0 };
+    await render(
+      <ThemeProvider>
+        <React.Profiler
+          id="task-header"
+          onRender={() => {
+            commits.count += 1;
+          }}
+        >
+          <TaskHeader taskTitle="Fix the login bug" sessionId={null} taskId="task-1" />
+        </React.Profiler>
+      </ThemeProvider>,
+    );
+    await act(async () => {});
+    const rowBefore = useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-1'];
+    const commitsAfterMount = commits.count;
+    expect(commitsAfterMount).toBeGreaterThan(0);
+
+    await act(async () => {
+      replaceTaskRow({ title: 'Renamed task', updated_at: '2026-10-07T00:00:00.000Z' });
+    });
+
+    // The control: a different row object really was stored.
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-1']).not.toBe(rowBefore);
+    expect(commits.count - commitsAfterMount).toBe(0);
+
+    // The other half: a field the header does read still re-renders it, and the
+    // label takes the Resume offer off the header (a label in flight is no Resume).
+    expect(screen.getByTestId('task-header-resume')).toBeTruthy();
+    await act(async () => {
+      replaceTaskRow({ spawn_progress: 'Resuming session...' });
+    });
+    expect(commits.count).toBeGreaterThan(commitsAfterMount);
+    expect(screen.queryByTestId('task-header-resume')).toBeNull();
+  });
+});

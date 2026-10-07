@@ -92,7 +92,9 @@ function boardRowForEntry(entry: SessionActivityEntry, sources: FeedSectionSourc
  *   `spawnProgressLabelBySessionId` keeps for good): the row was running, so it
  *   stays in its activity bucket. A model switch never hops sections.
  * - Otherwise the label landed on a PAUSED session (a Resume under way): it
- *   stays in Paused until its successor binds, so a Resume moves the row once.
+ *   stays in Paused and leaves it once, when its successor binds. A feed still
+ *   held on the paused row (the idle-timeout suspend) leaves a round trip
+ *   earlier, at its own labelled end, which lands in the first case above.
  */
 export function feedSectionForEntry(entry: SessionActivityEntry, sources: FeedSectionSources): FeedSection {
   const task = boardRowForEntry(entry, sources);
@@ -140,10 +142,14 @@ function orderKey(row: FeedRow): number {
 }
 
 /**
- * Newest arrival on top, then HOLD that position (see `selectTriageRows`): a
- * row only moves when its section does. Within Idle, unread sessions surface
- * first. Ties fall back to a stable value-based order so nothing depends on
- * object-iteration order.
+ * Newest arrival on top, then HOLD that position: a row only moves when its
+ * section does. Ordering by `lastEventAt` made two concurrently working agents
+ * swap places on every streamed token, so a feed the user was reading
+ * rearranged itself continuously; `enteredSectionAt` only moves when the row
+ * moves sections, which is a change worth re-ranking for. Within Idle, unread
+ * sessions surface first (finished work the user has not seen outranks quiet
+ * idles). Ties (a batch of snapshots on reconnect) fall back to a stable
+ * value-based order so nothing depends on object-iteration order.
  */
 function compareRows(section: FeedSection): (first: FeedRow, second: FeedRow) => number {
   return (first, second) => {

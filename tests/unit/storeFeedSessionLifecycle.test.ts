@@ -255,6 +255,58 @@ describe('storeFeed and the 0.16.0 session lifecycle', () => {
       expect(entryOf('sess-unlisted')?.taskId).toBe(TASK_ID);
       expect(entryOf('sess-unlisted')?.projectId).toBe(PROJECT_ID);
     });
+
+    /**
+     * A named successor holds its stream for the SUCCESSOR window whatever the
+     * end's label (selectPendingSuccessor), so its sweep waits that long too. An
+     * unlabelled end earns only the short ended window on its own, and a sweep
+     * armed at that deadline stops running before the pending successor expires:
+     * the record then sits in the store, and the successor stays wanted, until
+     * some unrelated board snapshot happens to reconcile.
+     *
+     * The board is left alone after the end (still naming the paused session),
+     * so no snapshot can release the record in the sweep's place.
+     */
+    it('sweeps an UNLABELLED end that names a successor at the successor window, not the short ended one', () => {
+      pushEnded(OLD_SESSION_ID, { successorSessionId: NEW_SESSION_ID });
+      expect(lastDesiredStreams()).toEqual([NEW_SESSION_ID]);
+
+      // Past the short window an unlabelled end would earn on its own: the
+      // successor is still inside its own, so it is still pending and wanted.
+      vi.advanceTimersByTime(ENDED_ROW_GRACE_MS + 1);
+      expect(useActivityStore.getState().pendingSuccessorByTaskId[TASK_ID]).toBeDefined();
+      expect(lastDesiredStreams()).toEqual([NEW_SESSION_ID]);
+
+      // Past the successor window, the sweep itself must have released it.
+      vi.advanceTimersByTime(RESPAWN_ROW_GRACE_MS - ENDED_ROW_GRACE_MS);
+      expect(useActivityStore.getState().pendingSuccessorByTaskId[TASK_ID]).toBeUndefined();
+      expect(lastDesiredStreams()).not.toContain(NEW_SESSION_ID);
+    });
+  });
+
+  /**
+   * The desktop can name a successor for a session this phone never held a feed
+   * on (a task paused before the app launched, whose board row carries
+   * `resumable: true` and no `session_id`). There is no entry to read the
+   * project from, so the pending successor carries none, and the successor's own
+   * snapshot has to find its owner from the board instead.
+   */
+  describe('a named successor of a session the phone holds no feed on', () => {
+    beforeEach(() => {
+      publishBoard({ session_id: null, resumable: true });
+    });
+
+    it('resolves the successor\'s owner from the board, so its snapshot lands on the task rather than blanking it', () => {
+      pushEnded(OLD_SESSION_ID, { successorSessionId: NEW_SESSION_ID });
+      expect(hasRow(OLD_SESSION_ID)).toBe(false);
+      expect(useActivityStore.getState().pendingSuccessorByTaskId[TASK_ID]?.projectId).toBeNull();
+      expect(lastDesiredStreams()).toEqual([NEW_SESSION_ID]);
+
+      sinks.onStreamSnapshot(NEW_SESSION_ID, streamSnapshotFixture({ sessionStatus: 'running', resuming: true, usage: null }));
+
+      expect(entryOf(NEW_SESSION_ID).taskId).toBe(TASK_ID);
+      expect(entryOf(NEW_SESSION_ID).projectId).toBe(PROJECT_ID);
+    });
   });
 
   describe('a paused task\'s row, held by the board', () => {

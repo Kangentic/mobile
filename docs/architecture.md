@@ -866,11 +866,12 @@ bound and the task paused again, which is the only sign of a failed spawn the de
 (`resumeProgress`, read off the board row by a store subscription, so no surface has to be mounted
 when it happens); or with the same line after `RESUME_WAIT_MS` (20 s) when no label ever came, since
 a resume that goes nowhere after the desktop accepted it sends the phone nothing. A labelled resume
-is not bounded by the clock: the label clearing settles it either way. The terminal lens shows the
+is not bounded by the clock: the label clearing settles it either way, and the bound, re-armed
+while the label shows, only fails a label that clears onto neither a bind nor a pause (the task
+left a Resume column). The terminal lens shows the
 failure line in its Resume panel and the other two lenses in the footer, above the switcher, both
-in the muted caption the desktop uses for that line (no toast: the desktop also raises one, and the
-phone deliberately does not), and a
-screen with no session keeps that switcher (the footer is the switcher alone), so a paused task
+in the muted caption the desktop uses for that line. There is no toast: the desktop also raises
+one, and the phone deliberately does not. A screen with no session keeps that switcher (the footer is the switcher alone), so a paused task
 opened on a remembered Chat lens, which has no session to read and says so, can still reach its
 Resume panel and its diff. While the task reads as preparing and no quiet window
 covers the pane, the session screen draws the same `SessionSwapVeil` in its waiting face (the
@@ -898,8 +899,9 @@ judgement for a preparing card, since a board row can carry a label and `resumab
 (the desktop counts the suspended row as paused through every respawn gap and every resume's git
 phase): a session that ended INTO a spawn (its end carried a label) stays in its activity bucket,
 so a model switch never hops; a label landing on a paused session (a Resume under way) stays in
-Paused until the successor binds, so a Resume moves the row once. A queued session that ended keeps
-Queued for its window.
+Paused and leaves it once, when the successor binds (a feed still held on the paused row leaves a
+round trip earlier, at its own labelled end). A queued session that ended keeps Queued for its
+window.
 
 **Sessionless task rows** (protocol 0.16.0) are the one kind of feed row with no activity entry: a
 board task the desktop keeps in its `'sessions'` projection with no session on it, that no entry

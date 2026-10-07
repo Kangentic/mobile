@@ -636,7 +636,9 @@ export function hasSpawnLabel(task: Pick<BoardTaskWire, 'spawn_progress'>): bool
  * The task's board row, or null when no cached board holds it. Safe as a
  * Zustand selector, unlike `findTaskById`: the row is the object the store
  * already holds, so its identity only changes when a snapshot (or an
- * optimistic overlay) replaces it.
+ * optimistic overlay) replaces it. A snapshot replaces EVERY row of its
+ * project, though, so a reader of a few fields narrows the row under
+ * `useShallow` (`toCardTaskRow`) rather than re-rendering on each one.
  */
 export function selectTaskRow(state: { boardsByProjectId: Record<string, ProjectBoard> }, taskId: string | null): BoardTaskWire | null {
   if (taskId === null) return null;

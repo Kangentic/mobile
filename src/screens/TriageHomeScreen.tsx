@@ -101,8 +101,8 @@ export function TriageHomeScreen(): React.JSX.Element {
   // flight and the labelled ends say whether a preparing card was running or
   // paused, and the boards carry the 0.16.0 `spawn_progress` / `resumable`
   // fields plus the sessionless task rows. The boards change on every
-  // snapshot, which re-runs the memo below - the same cost the rows already
-  // pay per activity event.
+  // snapshot, so the memo below re-runs on each one as well as on each
+  // activity event (read from the code; its cost is not measured).
   const respawnByTaskId = useActivityStore((state) => state.respawnByTaskId);
   const spawnProgressLabelBySessionId = useActivityStore((state) => state.spawnProgressLabelBySessionId);
   const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
+import { useShallow } from 'zustand/react/shallow';
+import { cardSessionDisplay, toCardSession, toCardTaskRow } from '@/components/board/cardSessionDisplay';
 import { selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { selectTaskRow, useBoardStore } from '@/state/boardStore';
 import { selectResumeAttempt, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
@@ -52,7 +53,7 @@ export interface ResumeOffer {
 export function useResumeOffer(taskId: string | null, sessionId: string | null): ResumeOffer {
   const entry = useActivityStore((state) => (sessionId ? (state.bySessionId[sessionId] ?? null) : null));
   const respawn = useActivityStore((state) => (taskId ? selectTaskRespawn(state, taskId) : null));
-  const task = useBoardStore((state) => selectTaskRow(state, taskId));
+  const task = useBoardStore(useShallow((state) => toCardTaskRow(selectTaskRow(state, taskId))));
   const attempt = useResumeStore((state) => selectResumeAttempt(state, taskId));
   const displayKind = cardSessionDisplay({ session: toCardSession(entry), respawn, task }).kind;
   const paused = displayKind === 'suspended';

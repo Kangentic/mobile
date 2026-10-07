@@ -39,10 +39,10 @@ export const RESPAWN_ROW_GRACE_MS = 20_000;
  * there an unlabelled end IS a park, and a paused task's row is then kept by
  * the board's `resumable` rather than by this window.) Retaining both for a
  * short span is what keeps the row from vanishing and reappearing on every
- * column move; the bound is what keeps a park from lingering. Equal to `SESSION_SWAP_QUIET_MS` (the session screen's
- * silent phase), pinned by `tests/unit/sessionRespawnGapTiming.test.ts`, so a
- * swap that goes quiet on the session screen goes quiet on the list surfaces
- * for the same span.
+ * column move; the bound is what keeps a park from lingering. Equal to
+ * `SESSION_SWAP_QUIET_MS` (the session screen's silent phase), pinned by
+ * `tests/unit/sessionRespawnGapTiming.test.ts`, so a swap that goes quiet on
+ * the session screen goes quiet on the list surfaces for the same span.
  */
 export const ENDED_ROW_GRACE_MS = 8_000;
 
@@ -196,9 +196,12 @@ export interface SessionActivityEntry {
    * thinking -> idle edge, so that is exactly the reach of the gap and nothing
    * wider.
    *
-   * Nothing on the session screen may read it. `SessionScreen`'s `sessionEnded`
-   * is balanced against the quiet swap window, and a fourth input re-opens
-   * the mid-respawn flash that window exists to prevent. The same applies to
+   * Nothing on the session screen may read it as an END. `SessionScreen`'s
+   * `sessionEnded` is balanced against the quiet swap window, and a fourth
+   * input re-opens the mid-respawn flash that window exists to prevent.
+   * Display-only reads through `cardSessionDisplay` (the Resume gate in
+   * `useResumeOffer`, the header, the session screen's launch face) are fine:
+   * none of them feeds `sessionEnded` or the quiet window. The same applies to
    * 'exited': the protocol calls it a snapshot racing teardown, so routing it
    * into `endedSessionIds` would end the session on the phone in exactly the
    * gap the window covers. The `session-ended` PUSH stays the sole authority,
@@ -927,59 +930,4 @@ export function selectWaitingSince(entry: SessionActivityEntry): number | null {
     return reason.since;
   }
   return entry.enteredSectionAt;
-}
-
-export interface TriageRows {
-  section: TriageSection;
-  entries: SessionActivityEntry[];
-}
-
-/**
- * The order `selectTriageRows` RETURNS its sections in - which is not the order
- * the Home feed displays them in, and the difference is a trap worth naming.
- *
- * The feed's order lives in `FEED_SECTION_ORDER` (`src/screens/home/feedSections.ts`:
- * `['needs-you', 'idle', 'working', 'queued', 'paused']`, Idle above Active),
- * and every consumer re-finds each section by name, so this array's order
- * reaches no screen. That makes it look like drift somebody should "tidy" by
- * matching the two. It is not inert: `activityStore.test.ts` indexes the
- * result POSITIONALLY (`selectTriageRows(...)[1]` means the working section),
- * so reordering this silently changes what those assertions are about rather
- * than failing.
- *
- * Adding a member to `TriageSection` means adding it to BOTH arrays - the feed
- * carries the same warning, since a section missing from FEED_SECTION_ORDER
- * renders no rows and warms no snippets.
- */
-const TRIAGE_SECTION_ORDER: readonly TriageSection[] = ['needs-you', 'working', 'idle'];
-
-/** Pure selector for `useActivityStore((state) => selectTriageRows(state))`-style reactive reads. */
-export function selectTriageRows(state: { bySessionId: Record<string, SessionActivityEntry> }): TriageRows[] {
-  const entries = Object.values(state.bySessionId);
-  return TRIAGE_SECTION_ORDER.map((section) => ({
-    section,
-    entries: entries
-      .filter((entry) => sectionForEntry(entry) === section)
-      .sort((first, second) => {
-        // Within Idle, unread sessions surface first (finished work the user
-        // has not seen outranks quiet idles).
-        if (section === 'idle') {
-          const firstHasUnread = first.unreadCount > 0 ? 1 : 0;
-          const secondHasUnread = second.unreadCount > 0 ? 1 : 0;
-          if (firstHasUnread !== secondHasUnread) return secondHasUnread - firstHasUnread;
-        }
-        // Newest arrival on top, then HOLD that position. Ordering by
-        // lastEventAt made two concurrently-working agents swap places on
-        // every streamed token, so a feed the user was reading rearranged
-        // itself continuously. enteredSectionAt only moves when the row
-        // moves sections, which is a change worth re-ranking for.
-        if (second.enteredSectionAt !== first.enteredSectionAt) {
-          return second.enteredSectionAt - first.enteredSectionAt;
-        }
-        // Same millisecond (a batch of snapshots on reconnect): fall back to
-        // a stable, value-based tiebreak so the order never depends on
-        // object-iteration order.
-        return first.sessionId < second.sessionId ? -1 : first.sessionId > second.sessionId ? 1 : 0;
-      }),
-  }));
 }

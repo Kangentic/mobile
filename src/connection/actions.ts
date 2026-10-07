@@ -46,7 +46,8 @@ export async function writeTerminal(sessionId: string, data: string): Promise<vo
  * goes nowhere after that sends the phone nothing, so without a bound it would
  * say "Resuming agent..." forever. The same 20 s the feed already gives a
  * labelled respawn to produce its successor (RESPAWN_ROW_GRACE_MS). A labelled
- * resume is not bounded by it: the label clearing settles that one.
+ * resume is not bounded by it: the label clearing settles that one, and the
+ * bound only catches a label that clears onto neither a bind nor a pause.
  */
 export const RESUME_WAIT_MS = 20_000;
 
@@ -103,9 +104,13 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
  * surface is mounted then: the long-press sheet closes on accept, and the user
  * may be anywhere by the time the git phase ends.
  *
- * The wait bound applies only to a resume the desktop never labelled. Once
- * the label has been seen, the desktop is visibly working on it, and the label
- * clearing is what settles it either way, however long the git phase runs.
+ * The wait bound is never spent on a resume while the desktop labels it: the
+ * desktop is visibly working on it, so the bound re-arms instead, and the
+ * label clearing is what settles it either way, however long the git phase
+ * runs. A label that clears onto neither a bind nor a pause (the task left a
+ * Resume column, or no cached board holds it any more) settles nothing on its
+ * own, so the next bound fails it rather than leave the attempt and this
+ * subscription waiting forever.
  */
 function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: string | null): void {
   let sawLabel = false;
@@ -134,16 +139,20 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
       useResumeStore.getState().markFailed(taskId, null);
     }
   };
-  unsubscribe = useBoardStore.subscribe(readProgress);
-  readProgress();
-  setTimeout(() => {
+  const checkWaitBound = (): void => {
     readProgress();
     if (!isCurrentAttempt()) return;
     const row = selectTaskRow(useBoardStore.getState(), taskId);
-    if (row !== null && resumeProgress(row, pausedSessionId, sawLabel) === 'labelled') return;
+    if (row !== null && resumeProgress(row, pausedSessionId, sawLabel) === 'labelled') {
+      setTimeout(checkWaitBound, RESUME_WAIT_MS);
+      return;
+    }
     stopWatching();
     useResumeStore.getState().markFailed(taskId, null);
-  }, RESUME_WAIT_MS);
+  };
+  unsubscribe = useBoardStore.subscribe(readProgress);
+  readProgress();
+  setTimeout(checkWaitBound, RESUME_WAIT_MS);
 }
 
 export async function moveTaskOptimistic(input: {
