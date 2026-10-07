@@ -9,9 +9,10 @@ import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixt
 /**
  * Every board snapshot replaces EVERY row object of its project, so a reader
  * that selects the task row itself re-renders on each snapshot whether or not
- * anything it draws changed. `useResumeOffer` reads three of the row's fields
- * (`session_id`, `spawn_progress`, `resumable`) and narrows the row to those
- * under `useShallow`, so only a change to one of them is a render.
+ * anything it draws changed. `useResumeOffer` reads five of the row's fields
+ * (`session_id`, `spawn_progress`, `resumable`, `paused`, `archived_at`) and
+ * narrows the row to those under `useShallow`, so only a change to one of
+ * them is a render.
  *
  * That is invisible in what the hook RETURNS (the result is the same either
  * way), so the tests count renders: a hook that selected the row itself still
@@ -19,7 +20,7 @@ import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixt
  */
 
 /** A task the desktop paused: no session, Resume offered, nothing in flight. */
-const PAUSED_ROW: Partial<BoardTaskWire> = { session_id: null, resumable: true, spawn_progress: null };
+const PAUSED_ROW: Partial<BoardTaskWire> = { session_id: null, resumable: true, paused: true, spawn_progress: null };
 
 /** Publishes one board snapshot holding the paused task with these fields changed; every call builds fresh row objects. */
 function publishRow(overrides: Partial<BoardTaskWire>): void {
@@ -80,5 +81,27 @@ describe('useResumeOffer board-row subscription', () => {
 
     expect(renders.count).toBeGreaterThan(rendersBefore);
     expect(result.current.offered).toBe(expectedOffered);
+  });
+});
+
+/**
+ * Protocol 0.17.0 sends the paused fact apart from the Resume gate. A paused
+ * task in Done now READS as Paused (its card says so, as the desktop's does),
+ * so the only thing standing between it and a Resume control is this hook
+ * still gating on `resumable`.
+ */
+describe('useResumeOffer and the 0.17.0 paused fact', () => {
+  beforeEach(() => {
+    useActivityStore.getState().reset();
+    useBoardStore.getState().reset();
+    useResumeStore.setState({ byTaskId: {} });
+  });
+
+  it('offers no Resume for a task that is paused but not resumable', async () => {
+    publishRow({ resumable: false, paused: true });
+
+    const { result } = await renderCountedOffer();
+
+    expect(result.current.offered).toBe(false);
   });
 });

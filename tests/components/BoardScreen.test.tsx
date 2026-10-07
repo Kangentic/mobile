@@ -398,6 +398,68 @@ describe('BoardScreen', () => {
       await fireEvent.press(screen.getByTestId('board-card-task-1'));
       expect(mockPush).toHaveBeenCalledWith({ pathname: '/edit-task', params: { taskId: 'task-1', projectId: 'project-1' } });
     });
+
+    /**
+     * Protocol 0.17.0 sends the paused fact apart from the Resume gate. A task
+     * paused in a Done column it was never archived from reads `paused: true,
+     * resumable: false`, and the desktop draws its full card with "Paused".
+     * A move into Done archives, so this is the rare Done task (one created
+     * straight into the column). Routing is unchanged: the edit form, since
+     * the session screen would have no Resume to offer.
+     */
+    function seedDoneColumn(): void {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': {
+            ...state.boardsByProjectId['project-1'],
+            columns: [...state.boardsByProjectId['project-1'].columns, { ...column('lane-done', 'Done', 2), role: 'done' }],
+          },
+        },
+      }));
+    }
+
+    it('draws a task paused in Done but not archived as Paused, and still opens it in the edit form', async () => {
+      seedSessionlessTask({ swimlane_id: 'lane-done', resumable: false, paused: true, spawn_progress: null });
+      seedDoneColumn();
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Paused');
+      expect(screen.getByTestId('board-card-task-1-status-bar-paused')).toBeTruthy();
+      await fireEvent.press(screen.getByTestId('board-card-task-1'));
+      expect(mockPush).toHaveBeenCalledWith({ pathname: '/edit-task', params: { taskId: 'task-1', projectId: 'project-1' } });
+    });
+
+    /**
+     * The desktop draws an archived task as a compact card with no footer, and
+     * a 0.17.0 desktop still sends it `paused: true` (its move into Done
+     * suspended the agent). Every completed task that ran an agent looks like
+     * this, so a footer here would put "Paused" on nearly the whole column.
+     */
+    it('draws no footer on an archived card whose row says paused', async () => {
+      seedDoneColumn();
+      useBoardStore.getState().applyArchivedPage(
+        {
+          projectId: 'project-1',
+          archivedTasks: [
+            {
+              ...baseTask('task-archived', 'Cache the product grid', 'lane-done', 0, null),
+              archived_at: '2026-10-07T12:00:00.000Z',
+              spawn_progress: null,
+              resumable: false,
+              paused: true,
+            },
+          ],
+          archivedTotalCount: 1,
+          summariesByTaskId: {},
+        },
+        { append: false },
+      );
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-archived')).toBeTruthy();
+      expect(screen.queryByTestId('board-card-task-archived-status-bar')).toBeNull();
+    });
   });
 
   /**

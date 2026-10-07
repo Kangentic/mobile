@@ -617,6 +617,11 @@ export function selectProjectAccentColor(
  * what keeps the phone's sessionless rows - the Agents feed's task rows, a
  * retained ghost entry, the board card's routing - to exactly the tasks the
  * desktop's own `read-board.ts` keeps for the same reason.
+ *
+ * Protocol 0.17.0's `paused` deliberately does not count. read-board's
+ * `'sessions'` projection still leaves out a paused task that offers no
+ * Resume, because an agent feed has nothing to act on for it, so this stays
+ * on `resumable` (the card reads `paused`, see `boardRowPaused`).
  */
 export function sessionlessTaskStatus(
   task: Pick<BoardTaskWire, 'session_id' | 'archived_at' | 'spawn_progress' | 'resumable'>,

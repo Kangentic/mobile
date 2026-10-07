@@ -378,6 +378,24 @@ describe('TaskHeader status glyph', () => {
     expect(renderedStatusTone()).toBeNull();
   });
 
+  /**
+   * Protocol 0.17.0: the row says `paused: true, resumable: false` for a task
+   * paused in Done, with no session. The task now READS as Paused, which is
+   * the state this header turns into a Resume control, so this pins that the
+   * control still waits for `resumable`.
+   */
+  it('draws nothing for a sessionless task the row says is paused but not resumable', async () => {
+    useResumeStore.setState({ byTaskId: {} });
+    seedLocatedTask('lane-todo', { session_id: null, resumable: false, paused: true });
+
+    await renderTaskHeader({ sessionId: null });
+
+    expect(screen.queryByTestId('task-header-resume')).toBeNull();
+    expect(screen.queryByTestId('task-header-status-preparing')).toBeNull();
+    expect(screen.queryByTestId('task-header-status-queued')).toBeNull();
+    expect(renderedStatusTone()).toBeNull();
+  });
+
   it('spins the muted spinner, and takes no second tap, while the resume runs', async () => {
     useResumeStore.setState({ byTaskId: {} });
     useResumeStore.getState().markResuming('task-1', Date.now());

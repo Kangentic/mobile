@@ -811,20 +811,30 @@ desktop suspends before every respawn) and never over a running or queued one, t
 status decides (`queued`, `suspended`, `exited`, else running). The phone has two label sources
 where the desktop has one: the board row's `spawn_progress` (protocol 0.16.0, the fresher) and the
 `session-ended` push's label. An unlabelled end reads Paused when the board row (once it has moved
-past the ended id) says `resumable`, or before that refresh when the session's own pushed status is
-`suspended`; otherwise it is simply ended. With no live session at all, the board row's `resumable`
-is the only sign of a paused task, since a desktop pause clears `session_id`. Only a RUNNING card
+past the ended id) says the task is paused, or before that refresh when the session's own pushed
+status is `suspended`; otherwise it is simply ended. With no live session at all, the board row is
+the only sign of a paused task, since a desktop pause clears `session_id`. From protocol 0.17.0 the
+row carries the fact itself, `paused` (a paused session and no live one, whatever the column), apart
+from the Resume gate `resumable`; a 0.16.0 row has only `resumable` to say it with, and is read
+that way (`boardRowPaused`). Only a RUNNING card
 draws a status icon, the agent's message as its body, and a wait time. Every other state draws no
 icon, shows the task's description, and names itself in the footer (`CardStatusFooter`, a port of
 the desktop card's bottom-bar switch, strings verbatim): a spinner and "Queued...", a spinner and
 the desktop's own step ("Switching model...", "Creating worktree..."), a still pause circle and
 "Paused", or, for a running session that has not reported its model yet, a spinner and "Starting
 agent..." ("Resuming agent..." for a session the desktop spawned as a resume, the snapshot's
-`resuming`). An ended session has no footer. Against an older desktop both board fields are null
-and no status push says `suspended`, which reduces this to the earlier precedence exactly. One
-forced deviation: a paused task the desktop offers no Resume for (To Do, Done, archived) reads
-`resumable: false` with no session, so the phone draws no footer where the desktop card draws
-"Paused" - the phone has no other sign the suspended row exists.
+`resuming`). An ended session has no footer. Against a pre-0.16.0 desktop every board field is
+null and no status push says `suspended`, which reduces this to the earlier precedence exactly.
+A paused task the desktop offers no Resume for reads `paused: true, resumable: false`, so its card
+reads "Paused" with no Resume control, as the desktop card does. In practice that is a task sitting
+in Done UNARCHIVED (created straight into the column, say), because the desktop archives a task in
+the same step as its move into Done. An ARCHIVED row never reads Paused, though its `paused` is
+true: the desktop draws an archived task as a compact card with no footer (the Done column's
+Completed list and the Completed dialog), and a footer there would put "Paused" on nearly every
+completed card. To Do needs nothing: a move into To Do removes the task's session rows on the
+desktop, so its row says `paused: false`. One difference stays: tapping that unarchived paused
+Done card opens the edit form, where the desktop opens its task detail, which shows nothing
+session-shaped there because Resume is hidden in Done.
 Every footer keeps the usage bar's box, so a card holds one height from queued through running, and
 the usage bar itself draws at 0% while the window size is unknown rather than mounting late. The
 footer spinner (`StatusSpinner`) turns as the desktop's does, with two departures forced by
@@ -858,7 +868,9 @@ board row still names that very session, which keeps a screen open through the s
 current until the board catches up; after that it can be stale (a move to Done is no edge of the
 session) and never outvotes the row. A null or absent row field is a desktop before 0.16.0, which
 answers `start-session` by STARTING the column, re-running its automations, so Resume stays hidden
-there rather than meaning something different from the desktop's. A tap sends `start-session`
+there rather than meaning something different from the desktop's. The row's `paused` (protocol
+0.17.0) is never a gate: it makes a task paused in Done read as Paused, and `resumable` is false
+there, so no surface offers Resume for it. A tap sends `start-session`
 (`resumeTaskSession`); the attempt lives in `resumeStore`, shared by the three surfaces, and runs
 THROUGH the desktop's "Resuming session..." label until a new session holds the task. It fails with
 the desktop's refusal text; with "Session could not be resumed." when the label clears with nothing

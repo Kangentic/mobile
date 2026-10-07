@@ -107,18 +107,20 @@ export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' |
               { columns: board.columns.length, tasks: Object.keys(board.tasksById).length },
             ]),
           ),
-          // Protocol 0.16.0's two board-row fields, for every task that
-          // carries either: the preparing label and the Resume gate. A task
-          // the desktop keeps sessionless for one of them shows here with a
-          // null sessionId.
+          // The board row's in-between fields, for every task that carries
+          // any: the preparing label and the Resume gate (protocol 0.16.0),
+          // and the paused fact (0.17.0), which a paused task in Done carries
+          // without the gate. A task the desktop keeps sessionless for one of
+          // them shows here with a null sessionId.
           inFlightTasks: Object.values(boards.boardsByProjectId).flatMap((board) =>
             Object.values(board.tasksById)
-              .filter((task) => hasSpawnLabel(task) || task.resumable === true)
+              .filter((task) => hasSpawnLabel(task) || task.resumable === true || task.paused === true)
               .map((task) => ({
                 taskId: task.id,
                 sessionId: task.session_id,
                 spawnProgress: task.spawn_progress ?? null,
                 resumable: task.resumable ?? null,
+                paused: task.paused ?? null,
               })),
           ),
         },
