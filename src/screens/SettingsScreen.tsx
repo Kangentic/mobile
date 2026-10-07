@@ -32,8 +32,13 @@ import { nseProbeEnabled, readNseProbeResult, seedNseProbe } from '@/devsupport/
 import {
   connectionTraceEnabled,
   foregroundKickEnabled,
+  keepaliveCeilingEnabled,
+  nativeStopAlarmEnabled,
   setForegroundKickEnabled,
+  setKeepaliveCeilingEnabled,
+  setNativeStopAlarmEnabled,
   subscribeForegroundKick,
+  subscribeKeepaliveProbe,
 } from '@/devsupport/connectionTrace';
 import { crashNatively, crashTestEnabled, reportHandledTestError, throwTestError } from '@/observability/crashReporting';
 import { useChannelStore } from '@/state/channelStore';
@@ -244,6 +249,8 @@ export function SettingsScreen(): React.JSX.Element {
   };
 
   const foregroundKickOn = useSyncExternalStore(subscribeForegroundKick, foregroundKickEnabled, foregroundKickEnabled);
+  const keepaliveCeilingOn = useSyncExternalStore(subscribeKeepaliveProbe, keepaliveCeilingEnabled, keepaliveCeilingEnabled);
+  const nativeStopAlarmOn = useSyncExternalStore(subscribeKeepaliveProbe, nativeStopAlarmEnabled, nativeStopAlarmEnabled);
 
   const connectionLabel =
     pairedState === 'unpaired'
@@ -485,13 +492,31 @@ export function SettingsScreen(): React.JSX.Element {
           <Stack gap="xs">
             <SectionHeader title="Connection trace" testID="settings-section-connection-trace" />
             <Card>
-              <SwitchRow
-                label="Foreground recovery"
-                description="Off measures the pre-fix reconnect"
-                checked={foregroundKickOn}
-                testID="settings-connection-trace-foreground-kick"
-                onValueChange={setForegroundKickEnabled}
-              />
+              <Stack gap="xs">
+                <SwitchRow
+                  label="Foreground recovery"
+                  description="Off measures the pre-fix reconnect"
+                  checked={foregroundKickOn}
+                  testID="settings-connection-trace-foreground-kick"
+                  onValueChange={setForegroundKickEnabled}
+                />
+                <RowDivider />
+                <SwitchRow
+                  label="Keepalive ceiling"
+                  description="Off leaves the stop to the native alarm"
+                  checked={keepaliveCeilingOn}
+                  testID="settings-connection-trace-keepalive-ceiling"
+                  onValueChange={setKeepaliveCeilingEnabled}
+                />
+                <RowDivider />
+                <SwitchRow
+                  label="Native stop alarm"
+                  description="Off reproduces MOBILE-3"
+                  checked={nativeStopAlarmOn}
+                  testID="settings-connection-trace-native-stop-alarm"
+                  onValueChange={setNativeStopAlarmEnabled}
+                />
+              </Stack>
             </Card>
           </Stack>
         ) : null}

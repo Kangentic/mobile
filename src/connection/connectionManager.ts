@@ -1,7 +1,13 @@
 import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { bytesToHex } from '@kangentic/protocol';
 import { ChannelController, SubscriptionManager, isRedialableTransport, type VerbClient } from '@/channel';
-import { foregroundKickEnabled, isColdLaunch, markConnectionTraceForeground, traceConnection } from '@/devsupport/connectionTrace';
+import {
+  foregroundKickEnabled,
+  isColdLaunch,
+  keepaliveCeilingEnabled,
+  markConnectionTraceForeground,
+  traceConnection,
+} from '@/devsupport/connectionTrace';
 import { DeviceIdentityManager } from '@/pairing/deviceIdentity';
 import { TrustAnchorStore } from '@/pairing/trustAnchor';
 // Static, unlike the dev-only branches below, because this one ships: it is a
@@ -694,7 +700,15 @@ function maybeRequestNotificationPermission(): void {
  * Android 15+ gives a dataSync foreground service a 6h/24h budget
  * and kills the process with ForegroundServiceDidNotStopInTimeException when it
  * overruns; notifee 9.1.8 exposes no Service.onTimeout hook, so there is no
- * signal to react to and this timer is the only bound in the stack.
+ * signal to react to.
+ *
+ * CORRECTION: this comment used to end "and this timer is the only bound in the
+ * stack". It is not the only bound any more. Since MOBILE-3 recurred on 0.8.0+13,
+ * foregroundService.ts also arms a native AlarmManager alarm at every service
+ * start (modules/foreground-service-guard). If it fires, it stops the service
+ * from native code at NATIVE_STOP_ALARM_DELAY_MS, whether or not JS is running.
+ * This ceiling is still the PRIMARY bound: it fires first, and it is the only
+ * one that also closes the channel. The alarm only stops the service.
  *
  * It also bounds process LIFETIME, which is how it bears on the REACT-NATIVE-5
  * OOM. Do not read that as "the background path leaks": four measured probes
@@ -725,9 +739,18 @@ function maybeRequestNotificationPermission(): void {
  * events are exactly that - backgrounded with no foreground afterwards, and the
  * process still alive 7h10m and 14h14m later. So what matters is not how many
  * windows are armed, it is that a single window's teardown always lands. Which
- * is why the ceiling is now enforced two ways: this timer, and a wall-clock
+ * is why the ceiling is now enforced two ways in JS: this timer, and a wall-clock
  * check on wake sources that are not Choreographer-driven (see
- * enforceKeepaliveCeiling).
+ * enforceKeepaliveCeiling). Both need the JS thread to run, so there is a third,
+ * native, bound under them: the stop alarm above.
+ *
+ * Why a crash can arrive 14 hours after backgrounding with a 6 hour budget. This
+ * is read out of AOSP's ActiveServices.java, not measured. The dataSync runtime
+ * accrues on SystemClock.uptimeMillis(), which stops during deep sleep, while
+ * the 24h window runs on elapsedRealtime. So a phone that sleeps through the
+ * night reaches 6h of service runtime after 7 to 14 hours of wall clock. The
+ * long gaps in the crash events therefore need no late start. They fit a
+ * service started at the background transition whose stop was never sent.
  */
 const BACKGROUND_KEEPALIVE_MAX_MS = 5 * 60_000;
 
@@ -744,12 +767,16 @@ function startBackgroundKeepalive(): void {
   keepaliveGeneration += 1;
   keepaliveStartedAtMs = Date.now();
   const generation = keepaliveGeneration;
-  keepaliveCeilingTimer = setTimeout(() => {
-    keepaliveCeilingTimer = null;
-    if (generation !== keepaliveGeneration) return;
-    traceConnection('ceiling-timer', { elapsedMs: Date.now() - keepaliveStartedAtMs });
-    enforceKeepaliveCeiling();
-  }, BACKGROUND_KEEPALIVE_MAX_MS);
+  // Off only in a trace build's MOBILE-3 probe, where it stands in for a JS
+  // thread that never runs this timer (see connectionTrace.ts).
+  if (keepaliveCeilingEnabled()) {
+    keepaliveCeilingTimer = setTimeout(() => {
+      keepaliveCeilingTimer = null;
+      if (generation !== keepaliveGeneration) return;
+      traceConnection('ceiling-timer', { elapsedMs: Date.now() - keepaliveStartedAtMs });
+      enforceKeepaliveCeiling();
+    }, BACKGROUND_KEEPALIVE_MAX_MS);
+  }
   void import('@/notifications/foregroundService')
     .then(({ setConnectedForegroundServiceDesired }) => {
       // A foreground bounce can beat the import; never start a stale service.
@@ -805,6 +832,16 @@ function stopBackgroundKeepalive(): void {
  * two minutes) and a transport state change. Worst case the service lives for
  * the ceiling plus one rekey interval instead of forever.
  *
+ * Partly settled since, and not in the direction the inference pointed. On an
+ * API 36 emulator with the display verifiably off, the ceiling timer fired on
+ * time (300022 ms; see the developer guide). That emulator never deep-slept,
+ * so a dark, unplugged phone is still unmeasured. Deep sleep is an unlikely
+ * culprit anyway (inferred): it pauses the uptime clock the dataSync budget
+ * accrues on along with these timers, so a phone that reached 6h of budget had
+ * hours of awake time for a 5-minute timer. Whatever kept JS from stopping the
+ * service in MOBILE-3's field events is unknown, most likely JS not running the
+ * stop at all. The native stop alarm in foregroundService.ts holds either way.
+ *
  * Deliberately NOT an AppState transition, though onAppStateChange does drive
  * the other half of the recovery (reassertForegroundServiceState). A ceiling
  * check there would be dead code: the only transition that can arrive with the
@@ -819,6 +856,7 @@ function stopBackgroundKeepalive(): void {
  */
 function enforceKeepaliveCeiling(): void {
   if (!backgroundKeepaliveActive) return;
+  if (!keepaliveCeilingEnabled()) return;
   if (Date.now() - keepaliveStartedAtMs < BACKGROUND_KEEPALIVE_MAX_MS) return;
   stopBackgroundKeepalive();
   closeConnection();

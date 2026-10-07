@@ -5,9 +5,15 @@
  * relay socket and Noise session alive under a notifee dataSync foreground
  * service. Android 15+ gives that service a 6h/24h budget and kills the process
  * when it overruns, and notifee 9.1.8 exposes no Service.onTimeout hook to catch
- * the signal - so an app-side ceiling is the only bound that exists in this
- * stack. Unbounded, the service also kept the Java heap growing until it hit its
- * 256MB limit and the app froze in GC thrash on resume.
+ * the signal. Unbounded, the service also kept the Java heap growing until it
+ * hit its 256MB limit and the app froze in GC thrash on resume.
+ *
+ * This header used to say the app-side ceiling was "the only bound that exists
+ * in this stack". Since MOBILE-3 recurred on 0.8.0+13 it is not: every service
+ * start also arms a native AlarmManager stop (modules/foreground-service-guard),
+ * which holds when the JS thread does not run. The JS ceiling is still the
+ * primary bound and the only one that closes the channel. This file pins that
+ * the keepalive arms the alarm, and that the ordinary stop cancels it.
  *
  * That counter resets whenever the app is foregrounded, and every keepalive
  * window is preceded by a foreground visit, so overrunning needs ONE unbroken
@@ -90,6 +96,33 @@ vi.mock('@notifee/react-native', () => ({
   AndroidForegroundServiceType: { FOREGROUND_SERVICE_TYPE_DATA_SYNC: 1 },
   AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
+}));
+
+/**
+ * The native stop alarm under the keepalive, which is the bound that holds when
+ * JS does not run. foregroundService.ts reaches it through the JS wrapper,
+ * whose real module needs expo-modules-core, so it is mocked here. That is the
+ * same specifier the source uses, since this file and
+ * src/notifications/foregroundService.ts both sit two directories below the
+ * repo root.
+ */
+const stopAlarmMocks = vi.hoisted(() => ({
+  armForegroundServiceStopAlarm: vi.fn<(delayMs: number) => void>(),
+  disarmForegroundServiceStopAlarm: vi.fn<() => void>(),
+}));
+vi.mock('../../modules/foreground-service-guard', () => stopAlarmMocks);
+
+/**
+ * The trace-build probe switch that turns the JS ceiling off, stubbed so one
+ * test can flip it without a trace build. Everything else in the module stays
+ * real, and the default stays true, which is what every store build reads.
+ */
+const keepaliveProbeMocks = vi.hoisted(() => ({
+  keepaliveCeilingEnabled: vi.fn<() => boolean>(() => true),
+}));
+vi.mock('@/devsupport/connectionTrace', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/devsupport/connectionTrace')>()),
+  keepaliveCeilingEnabled: keepaliveProbeMocks.keepaliveCeilingEnabled,
 }));
 
 const mockDesktopSeam = vi.hoisted(() => ({ stub: null as unknown, phoneTransport: null as unknown }));
@@ -215,6 +248,9 @@ describe('connectionManager background keepalive ceiling', () => {
     notifeeMocks.stopForegroundService.mockResolvedValue(undefined);
     notifeeMocks.getNotificationSettings.mockReset();
     notifeeMocks.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
+    stopAlarmMocks.armForegroundServiceStopAlarm.mockClear();
+    stopAlarmMocks.disarmForegroundServiceStopAlarm.mockClear();
+    keepaliveProbeMocks.keepaliveCeilingEnabled.mockReturnValue(true);
   });
 
   afterEach(async () => {
@@ -230,6 +266,87 @@ describe('connectionManager background keepalive ceiling', () => {
       hydrated: false,
     });
     useChannelStore.getState().reset();
+  });
+
+  /**
+   * MOBILE-3 on 0.8.0+13, at the keepalive level: starting the keepalive arms
+   * the native stop alarm before the service can exist, and the ordinary
+   * foreground stop cancels it. Every JS bound in this file needs the JS thread
+   * to run, and the field failure is that thread not running the stop. So the
+   * alarm is the only bound that holds there, and its arming has to ride the
+   * one path every keepalive takes.
+   *
+   * Mutations seen failing: deleting the arm from
+   * startConnectedForegroundService fails the first expectation, "expected
+   * "vi.fn()" to be called with arguments: [ 600000 ]" (written when the
+   * deadline was ten minutes; it is seven now). Deleting the disarm
+   * from stopConnectedForegroundService fails with "waitUntil timed out after
+   * 2000ms: stop alarm cancelled".
+   */
+  it('arms the native stop alarm when the keepalive starts, and cancels it on the foreground stop', async () => {
+    const onAppStateChange = await establishAndWarm();
+
+    onAppStateChange('background');
+    await waitUntil(() => notifeeMocks.displayNotification.mock.calls.length === 1, { label: 'service posted' });
+
+    expect(stopAlarmMocks.armForegroundServiceStopAlarm).toHaveBeenCalledWith(7 * 60_000);
+    expect(stopAlarmMocks.armForegroundServiceStopAlarm.mock.invocationCallOrder[0]).toBeLessThan(
+      notifeeMocks.displayNotification.mock.invocationCallOrder[0],
+    );
+    expect(stopAlarmMocks.disarmForegroundServiceStopAlarm).not.toHaveBeenCalled();
+
+    onAppStateChange('active');
+    await waitUntil(() => stopAlarmMocks.disarmForegroundServiceStopAlarm.mock.calls.length === 1, {
+      label: 'stop alarm cancelled',
+    });
+    expect(notifeeMocks.stopForegroundService).toHaveBeenCalled();
+  });
+
+  /**
+   * The trace-build probe that stands in for a JS thread that never runs its
+   * stop: with the ceiling switch off, neither the timer nor the wall-clock
+   * check retires the keepalive, so only the native alarm (still armed) can.
+   * That is the condition the device run in the developer guide sets up, so it
+   * has to actually hold.
+   *
+   * Mutation seen failing: removing the keepaliveCeilingEnabled() gate from
+   * enforceKeepaliveCeiling fails this with "expected null not to be null". The
+   * transport blip then retires the keepalive. Removing only the timer's gate
+   * keeps it green (verified), because the timer reaches the stop only through
+   * that same gated check. The timer gate exists so a probe build arms no timer
+   * at all, not to make this test pass.
+   */
+  it('leaves the keepalive to the native alarm when the trace-build ceiling switch is off', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    keepaliveProbeMocks.keepaliveCeilingEnabled.mockReturnValue(false);
+    const armedAtMs = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(armedAtMs);
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifeeMocks.displayNotification).toHaveBeenCalledTimes(1);
+      expect(stopAlarmMocks.armForegroundServiceStopAlarm).toHaveBeenCalledTimes(1);
+
+      // Both JS halves get their chance: the clock well past the ceiling, the
+      // timer advanced past it, and a wake source for the wall-clock check.
+      nowSpy.mockReturnValue(armedAtMs + 2 * EXPECTED_KEEPALIVE_CEILING_MS);
+      await vi.advanceTimersByTimeAsync(2 * EXPECTED_KEEPALIVE_CEILING_MS);
+      phoneTransport.simulateReconnect();
+      for (let round = 0; round < 20; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(getActiveConnection()).not.toBeNull();
+      expect(notifeeMocks.stopForegroundService).not.toHaveBeenCalled();
+      expect(stopAlarmMocks.disarmForegroundServiceStopAlarm).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      nowSpy.mockRestore();
+    }
   });
 
   it('tears the channel down once the keepalive hits its ceiling', async () => {

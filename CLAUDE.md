@@ -82,7 +82,15 @@ modules/                      # LOCAL Expo modules, autolinked by CNG (no ios/ o
                               #   'backgrounded': they drive the store shedders but never the
                               #   app.memory breadcrumb, since a count that rose on every app
                               #   switch would say nothing about memory. Legacy levels still map
-                              #   to 'moderate'/'serious' on pre-14 devices and do breadcrumb
+                              #   to 'moderate'/'serious' on pre-14 devices and do breadcrumb.
+                              #   foreground-service-guard: the native stop alarm on notifee's
+                              #   dataSync keepalive service (Sentry MOBILE-3). Armed before every
+                              #   service start, cancelled once a stop is sent; if it fires, a
+                              #   receiver stops the service with no JS involved. It sends
+                              #   notifee's own STOP action, NEVER a bare stopService, which
+                              #   leaves notifee's static id set until JS next stops, so a start
+                              #   landing first would skip startForeground and crash.
+                              #   Android-only; the receiver lives in the module's own manifest
 patches/                      # patch-package patches, applied by the `postinstall` script.
                               #   (react-native-enriched-markdown+0.7.4.patch is GONE: it removed
                               #   an accessibility OnGlobalLayoutListener left on the WINDOW's

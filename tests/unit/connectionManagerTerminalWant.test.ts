@@ -62,6 +62,15 @@ vi.mock('@notifee/react-native', () => ({
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
 }));
 
+// foregroundService.ts arms the native stop alarm through this wrapper, whose
+// real module needs expo-modules-core. Unmocked, the keepalive's dynamic import
+// of foregroundService would fail, and that failure is swallowed on purpose,
+// so the service would silently never start in this run.
+vi.mock('../../modules/foreground-service-guard', () => ({
+  armForegroundServiceStopAlarm: vi.fn(),
+  disarmForegroundServiceStopAlarm: vi.fn(),
+}));
+
 const mockDesktopSeam = vi.hoisted(() => ({ stub: null as unknown }));
 
 vi.mock('@/connection/mockDesktop', async () => {

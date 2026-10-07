@@ -32,6 +32,22 @@ vi.mock('@notifee/react-native', () => ({
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
 }));
 
+/**
+ * The native stop alarm (MOBILE-3 on 0.8.0+13). Mocked at the JS wrapper, which
+ * resolves to the same module the source imports: this file and
+ * src/notifications/foregroundService.ts both sit two directories below the repo
+ * root. What the alarm does once armed is Kotlin, which no JS tier can load. The
+ * device run in the developer guide covers that half.
+ */
+const stopAlarmMocks = vi.hoisted(() => ({
+  armForegroundServiceStopAlarm: vi.fn<(delayMs: number) => void>(),
+  disarmForegroundServiceStopAlarm: vi.fn<() => void>(),
+}));
+vi.mock('../../modules/foreground-service-guard', () => stopAlarmMocks);
+
+/** Must match NATIVE_STOP_ALARM_DELAY_MS. A literal on purpose, so raising it towards hours fails here. */
+const EXPECTED_STOP_ALARM_DELAY_MS = 7 * 60_000;
+
 type ForegroundServiceRunner = Parameters<typeof notifee.registerForegroundService>[0];
 type ForegroundServiceNotification = Parameters<ForegroundServiceRunner>[0];
 
@@ -47,7 +63,16 @@ async function loadForegroundService() {
   stopForegroundService.mockReset();
   stopForegroundService.mockResolvedValue(undefined);
   registerForegroundService.mockReset();
-  return { ...moduleUnderTest, displayNotification, stopForegroundService, registerForegroundService };
+  stopAlarmMocks.armForegroundServiceStopAlarm.mockReset();
+  stopAlarmMocks.disarmForegroundServiceStopAlarm.mockReset();
+  return {
+    ...moduleUnderTest,
+    displayNotification,
+    stopForegroundService,
+    registerForegroundService,
+    armStopAlarm: stopAlarmMocks.armForegroundServiceStopAlarm,
+    disarmStopAlarm: stopAlarmMocks.disarmForegroundServiceStopAlarm,
+  };
 }
 
 describe('foregroundService', () => {
@@ -284,5 +309,147 @@ describe('foregroundService', () => {
     await flushMicrotasks();
 
     expect(runnerSettled).toBe(true);
+  });
+
+  describe('the native stop alarm', () => {
+    /**
+     * THE MOBILE-3 assertion. The field failure is a service that outlived a JS
+     * thread which never ran its stop, so the bound that does not need JS has to
+     * be in place before the service can exist. That means armed with the real
+     * delay, and armed BEFORE displayNotification is issued.
+     *
+     * Mutations seen failing: deleting the arm from startConnectedForegroundService
+     * fails the first expectation with "expected "vi.fn()" to be called with
+     * arguments: [ 600000 ]" (written when the deadline was ten minutes). Moving
+     * it below the awaited displayNotification fails the call-order expectation
+     * instead ("expected 39 to be less than 38"). Putting the constant back to
+     * ten minutes fails it too, which is what the literal is for.
+     */
+    it('arms the alarm with the seven-minute deadline before the service is started', async () => {
+      const service = await loadForegroundService();
+
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+
+      expect(service.armStopAlarm).toHaveBeenCalledWith(EXPECTED_STOP_ALARM_DELAY_MS);
+      expect(service.armStopAlarm.mock.invocationCallOrder[0]).toBeLessThan(
+        service.displayNotification.mock.invocationCallOrder[0],
+      );
+    });
+
+    /**
+     * Cancelled only once the stop has been SENT. A cancel ahead of the await
+     * would leave a window, and on a stop that never resolves a permanent gap,
+     * in which the service is still up with nothing native behind it.
+     *
+     * Mutation seen failing: moving disarmForegroundServiceStopAlarm() above
+     * `await notifee.stopForegroundService()` fails the not-yet expectation with
+     * "expected "vi.fn()" to not be called at all, but actually been called 1
+     * times".
+     */
+    it('cancels the alarm only after a normal stop has resolved', async () => {
+      const service = await loadForegroundService();
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+
+      let resolveStop: () => void = () => undefined;
+      service.stopForegroundService.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveStop = resolve;
+          }),
+      );
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+      await flushMicrotasks();
+
+      expect(service.disarmStopAlarm).not.toHaveBeenCalled();
+
+      resolveStop();
+      await vi.waitFor(() => expect(service.disarmStopAlarm).toHaveBeenCalledTimes(1));
+    });
+
+    /**
+     * An owed stop is the case the alarm exists for, so a stop that never lands
+     * must not take the alarm down with it.
+     *
+     * Mutation seen failing: the same disarm-above-the-await move fails this one
+     * with "expected "vi.fn()" to not be called at all, but actually been called
+     * 3 times", once per attempt.
+     */
+    it('leaves the alarm armed when every stop attempt rejects', async () => {
+      const service = await loadForegroundService();
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+
+      service.stopForegroundService.mockRejectedValue(new Error('native stop failed'));
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(3));
+      await flushMicrotasks();
+
+      expect(service.disarmStopAlarm).not.toHaveBeenCalled();
+    });
+
+    /**
+     * An alarm armed by a previous process survives that process. Cancelling it
+     * at boot keeps it from cold-starting a later process for nothing.
+     *
+     * Mutation seen failing: pointing the boot sweep at a bare
+     * notifee.stopForegroundService() instead of stopConnectedForegroundService()
+     * times out with "expected "vi.fn()" to be called 1 times, but got 0 times".
+     */
+    it('cancels a stale alarm from the boot sweep', async () => {
+      const service = await loadForegroundService();
+
+      service.stopOrphanedForegroundServiceAtBoot();
+
+      await vi.waitFor(() => expect(service.disarmStopAlarm).toHaveBeenCalledTimes(1));
+      expect(service.armStopAlarm).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Every start re-arms, so a keepalive that follows an earlier one gets its
+     * own full deadline rather than the remainder of the old one. The native
+     * side keeps one alarm slot, so re-arming replaces it.
+     */
+    it('re-arms on every start', async () => {
+      const service = await loadForegroundService();
+
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.disarmStopAlarm).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(2));
+
+      expect(service.armStopAlarm).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * The trace-build control arm for the device A/B (connectionTrace.ts). With
+     * the switch off the service still starts, and nothing native bounds it,
+     * which is exactly the shape that should reproduce MOBILE-3 under a
+     * shortened OS budget.
+     *
+     * Mutation seen failing: dropping the nativeStopAlarmEnabled() gate (arming
+     * unconditionally) fails with "expected "vi.fn()" to not be called at all,
+     * but actually been called 1 times".
+     */
+    it('skips the arm, but still starts the service, when the trace-build switch is off', async () => {
+      process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE = '1';
+      try {
+        const service = await loadForegroundService();
+        const { setNativeStopAlarmEnabled } = await import('@/devsupport/connectionTrace');
+        setNativeStopAlarmEnabled(false);
+
+        service.setConnectedForegroundServiceDesired(true);
+        await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+
+        expect(service.armStopAlarm).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+        vi.resetModules();
+      }
+    });
   });
 });

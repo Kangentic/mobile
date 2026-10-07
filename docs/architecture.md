@@ -212,21 +212,32 @@ the local notifier instead of disposing.
 stops the service and disposes the channel, handing alerting to remote push. Three reasons, and
 the bound is not tunable upward without revisiting all three. Android 15+ gives a `dataSync`
 foreground service a 6h/24h budget and kills the process on overrun; notifee 9.1.8
-exposes no `Service.onTimeout` hook, so there is no signal to react to and a JS timer is the only
-bound available; and an unbounded service held the process resident for hours at a time, which is
+exposes no `Service.onTimeout` hook, so there is no signal to react to (this sentence used to go on
+"and a JS timer is the only bound available", which stopped being true when the native stop alarm
+below was built); and an unbounded service held the process resident for hours at a time, which is
 how it bears on the REACT-NATIVE-5 OOM. Note what that third reason is NOT: the background path
 does not leak, and four measured probes in the developer guide say so. The leak is in the
 FOREGROUND path (a session screen retains its native view subtree per open), and an
 always-resident process is simply what stopped an OS kill from ever resetting that accumulation.
 The ceiling makes the process reapable again.
 
-**The bound is enforced twice, because once was not enough.** MOBILE-3 recurred on a build that
+**The bound is enforced twice in JS, because once was not enough** (and, since 0.8.0+13 showed
+twice was not enough either, once natively; see the stop alarm below). MOBILE-3 recurred on a build that
 already had the timer above (it has shipped since versionCode 5), and the two crash events say
 plainly what happened: the app went to background, never returned, and the process was still alive
 7h10m and 14h14m later with the service running. RN services every `setTimeout` from a
 Choreographer frame callback (**inferred** from RN's timer internals, not measured on a device), so
 the ceiling timer is only ever as reliable as frame delivery to a
-backgrounded app. The ceiling is therefore also checked against the **wall clock**
+backgrounded app. **Measured since, and it did not hold up the way the inference suggested.**
+On an API 36 emulator (2026-10-06, trace release build) the ceiling timer fired on time, at 300022
+ms, with the display verifiably off (`mWakefulness=Asleep`, `Display State=OFF`), just as it did
+with the display on (300007 ms). So "no display, so no frames" does not stall it. That emulator
+was plugged in and never deep-slept, so deep sleep on a real phone is still unmeasured. It is
+also an unlikely culprit (inferred): deep sleep pauses the uptime clock the dataSync budget
+accrues on along with the JS timers, so a phone that reached 6h of budget had hours of awake time
+for a 5-minute timer. What actually kept JS from stopping the service in the field is still
+unknown. The likelier shape is a JS thread that never ran the stop at all, which is part of why
+the native stop alarm below exists. The ceiling is also checked against the **wall clock**
 (`enforceKeepaliveCeiling`) from the two wake sources that reach JS by another route: the desktop's
 ~2 minute rekey, which arrives as an inbound relay frame, and a transport state change (the shape a
 closed laptop takes, where the socket drops and retries on its own backoff and no rekey ever
@@ -272,15 +283,79 @@ and the notifee runner releases a previously parked resolver before parking a ne
 services timers only while a headless task is active and a stranded one changes timer behaviour
 app-wide.
 
-**What that repair does NOT close, stated here because the doc previously read as if it did.** A
-stop that fails every attempt stays owed rather than being swallowed, but "owed" is only worth what
-the next wake source is worth - and in the MOBILE-3 shape they vanish together. Hitting the ceiling
-closes the channel, so there is no rekey; the phone never returns to the foreground, so there is no
-AppState transition; the process never dies, so the boot sweep never runs. The residual exposure is
-then the rest of the 6h window, and for all of it a "Connected to your desktop" notification keeps
-asserting a live secure channel that `closeConnection` has already torn down. Closing this properly
-needs a native alarm (an AlarmManager-backed notifee trigger). It is deliberately not built: no
-stop has been observed failing in the field, and the device probe that would show one has not run.
+**What that repair could not close, and the native stop alarm that now does.** A stop that fails
+every attempt stays owed rather than being swallowed, but "owed" is only worth what the next wake
+source is worth - and in the MOBILE-3 shape they vanish together. Hitting the ceiling closes the
+channel, so there is no rekey; the phone never returns to the foreground, so there is no AppState
+transition; the process never dies, so the boot sweep never runs. This paragraph used to end by
+calling the fix "deliberately not built" until the field showed it was needed. It did:
+MOBILE-3 recurred on 0.8.0+13 (2026-10-06, a Samsung on Android 16, backgrounded with no foreground
+afterwards for 14h12m), a build carrying every JS-side repair above.
+
+So every service start now arms a native **stop alarm** first (`modules/foreground-service-guard`,
+a local Expo module):
+
+- `startConnectedForegroundService` arms it synchronously, before `displayNotification` can create
+  the service. It is an inexact `setAndAllowWhileIdle` `ELAPSED_REALTIME_WAKEUP` alarm 7 minutes
+  out: the 5-minute ceiling plus one ~2-minute rekey interval, the latest the JS wall-clock check
+  can land, so the orderly JS teardown gets first chance. It needs no exact-alarm permission
+  (denied by default from Android 14), fires in Doze, and can land late but never early.
+  **Measured** in `dumpsys alarm` on an API 36 emulator, 2026-10-06, at the original 10-minute
+  setting: a +7m30s batching window, 75% of the delay, and it fired at the very end of it, 17m29s
+  in. That is why the delay was cut to 7 minutes. With JS frozen, the "Connected to your desktop"
+  notification stays up until the alarm, and 75% of 7 minutes puts the latest at about 12m15s.
+  A 7-minute reading confirmed it: window +5m15s, latest +12m11s from the arm.
+- A stop cancels it only once `notifee.stopForegroundService()` has resolved. The boot sweep goes
+  through the same stop, so it also clears an alarm a previous process left armed.
+- If it fires, a non-exported `BroadcastReceiver` stops the service on the main thread with no JS
+  involvement. It sends notifee's own `app.notifee.core.ForegroundService.STOP` action through
+  `startService`, falling back to `stopService` when a background start is refused. **Not a bare
+  `stopService`.** Read from the 9.1.8 bytecode, `onStartCommand` keeps the current notification
+  id in a static and skips `startForeground` while it is set. Only the STOP branch, or notifee's
+  completion callback when the JS runner resolves, clears that static. A bare `stopService` would
+  leave it set until JS next ran a stop, and a start arriving first would never call
+  `startForeground`, which is a crash of its own. The app's flow puts a JS stop before every
+  start, so this is a path avoided rather than one observed. The STOP intent makes the receiver
+  correct without relying on that.
+
+That is a single start path to guard, and it is the only one: `asForegroundService` appears in
+`foregroundService.ts` and nowhere else (`tests/unit/foregroundServiceStartConfinement.test.ts`
+fails if a second appears). The headless push task posts without it, and a sticky restart is not a
+start path either, because notifee returns `START_NOT_STICKY` after a start. Three more findings
+from the same investigation change how the earlier paragraphs should be read:
+
+- **notifee's stop always resolves.** `Notifee.stopForegroundService` completes with no error even
+  after logging "Unable to stop", so the reconcile loop's "every attempt failed" branch defends
+  against a bridge failure, not a native one. The field failure is a stop that was never SENT,
+  because JS did not run it. Read from the bytecode, not observed failing on a device.
+- **Why the crashes land 7 to 14 hours after backgrounding when the budget is 6.** This is **read**
+  from AOSP's `ActiveServices.java` through a summarizing fetch, **not measured**. dataSync
+  runtime accrues on `SystemClock.uptimeMillis()`, which stops during deep sleep, while the 24h
+  window runs on `elapsedRealtime`. A phone asleep for much of the night therefore reaches 6h of
+  runtime long after 6h of wall clock. The gaps need no late start: they fit a service started at
+  the background transition and never stopped.
+- **No newer notifee changes this.** npm `latest` is still 9.1.8, and upstream `main`'s
+  `ForegroundService` has no `onTimeout` either. `tests/unit/foregroundServiceGuard.test.ts` pins
+  the version and lists what to re-verify on a bump.
+
+The JS ceiling stays the primary bound. It fires first, and it is the only one that also closes
+the channel. The alarm only stops the service, so a channel JS never got to close lingers until
+the next wake source or until the OS reclaims the process. **Measured** on an API 36 emulator with
+the JS ceiling switched off and Android's budget shortened to 20 minutes, at the original
+10-minute alarm setting: the alarm stopped the service at 17m29s and the budget passed with no
+crash, while the control arm (alarm off too) died at 20m10s with the exact MOBILE-3 exception. The
+procedure and the readings are in the developer guide's "Checking the foreground service directly".
+
+**That lingering channel does not hold remote push back for long.** This is read from the desktop
+and relay source, not measured. The desktop suppresses a push only while the phone's bridge
+session reports `connected`, and that requires the phone to answer a Noise KK handshake, which is
+JS work. The desktop re-handshakes every 2 minutes and marks the phone absent after two unanswered
+5-second probes (`PEER_PRESENCE_FAILURES_BEFORE_ABSENT`, `bridge-session.ts`), at which point
+pushes resume. Separately, the relay pings every 30 s and reaps a socket that missed the previous
+pong. Once the service is gone and Android freezes the process, the WebSocket should stop
+answering those pings too, though that half is inferred, not read or observed. The desktop's
+presence probe does not depend on it: a phone whose JS cannot run fails the handshake either way,
+so it is treated as gone within about two minutes even if its socket stays up.
 
 **Not "fixing the unmount": React unmounts correctly.** This sentence used to end "fixing the
 unmount is the real repair", which named the wrong cause. Measured on 2026-08-29, six pops produce
@@ -476,7 +551,9 @@ before sealing, so the iOS Notification Service Extension never needs to know ab
 categories (`categoryCopy.ts` - `input-required` / `turn-complete` / `session-failed` /
 `plan-complete` / `spawn-stalled`, named for cross-vendor task-lifecycle vocabulary rather than
 any one agent's terms) onto four notifee channels (needs-attention / completions / failures /
-stalls); any failure degrades to the generic placeholder.
+stalls); any failure degrades to the generic placeholder. `channels.ts` creates a fifth,
+`connection` (LOW importance), which no category maps to: it carries only the background
+keepalive's ongoing "Connected to your desktop" foreground-service notification.
 
 **What "degrades to the placeholder" does and does not promise.** It is a statement about what is
 RENDERED: a decrypt that fails for any reason (missing key, wrong key, wrong recipient AAD, tamper,

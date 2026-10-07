@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!--
+      Fired only by this app's own AlarmManager PendingIntent, which is sent with
+      the app's identity, so nothing outside the app ever needs to reach it.
+    -->
+    <receiver
+      android:name=".ForegroundServiceGuardReceiver"
+      android:exported="false" />
+  </application>
+</manifest>
