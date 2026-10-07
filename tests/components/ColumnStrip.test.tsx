@@ -196,6 +196,23 @@ describe('ColumnStrip', () => {
       ]);
     });
 
+    /**
+     * A route that leaves a column out (the first thing buildJourneyTrack can
+     * produce a skipped step from) draws no mark for it, so the step the screen
+     * reader announces counts the drawn marks only: the third of five, not the
+     * fourth of six.
+     */
+    it('announces the step among the marks drawn, not counting a skipped step', async () => {
+      await renderStrip({
+        track: [
+          ...EXECUTING_TRACK.slice(0, 2),
+          { columnId: 'lane-skipped', name: 'Skipped', color: '#ffffff', state: 'skipped' },
+          ...EXECUTING_TRACK.slice(2),
+        ],
+      });
+      expect(screen.getByTestId(STRIP_TEST_ID).props.accessibilityLabel).toBe('storefront-web, Executing, step 3 of 5');
+    });
+
     it('matches the desktop bar sizes and opacities', async () => {
       await renderStrip();
       const done = flattenedStyle(`${STRIP_TEST_ID}-step-lane-planning-done`);
