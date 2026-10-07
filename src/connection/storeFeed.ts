@@ -1,8 +1,16 @@
 import type { ActivityEvent, TranscriptEvent, Unsubscribe } from '@kangentic/protocol';
 import type { FeedRouter, SubscriptionManager, SubscriptionSnapshotSinks } from '@/channel';
 import { traceConnection } from '@/devsupport/connectionTrace';
-import { extractSpawnProgressLabel, respawnGraceMs, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
-import { useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
+import {
+  RESPAWN_ROW_GRACE_MS,
+  extractSpawnProgressLabel,
+  extractSuccessorSessionId,
+  respawnGraceMs,
+  selectPendingSuccessor,
+  selectTaskRespawn,
+  useActivityStore,
+} from '@/state/activityStore';
+import { findTaskById, sessionlessTaskStatus, useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import {
@@ -20,12 +28,37 @@ import {
  * logic below; screens read stores and call actions.ts.
  */
 
+/**
+ * Which task owns a session: the board's answer first; then a successor the
+ * desktop named (`session-ended.successorSessionId`) that no board lists yet;
+ * then the owner the session was registered under. The last two matter
+ * because `applySnapshot` OVERWRITES the entry's owner with what this returns,
+ * so a snapshot that beats the board used to blank a correctly registered
+ * entry's `taskId` to ''.
+ */
 function sessionOwnerFor(sessionId: string): { taskId: string; projectId: string } | null {
   const boardState = useBoardStore.getState();
   for (const [projectId, board] of Object.entries(boardState.boardsByProjectId)) {
     for (const task of Object.values(board.tasksById)) {
       if (task.session_id === sessionId) return { taskId: task.id, projectId };
     }
+  }
+  const pendingTaskId = pendingSuccessorTaskFor(sessionId);
+  if (pendingTaskId !== null) {
+    const pending = useActivityStore.getState().pendingSuccessorByTaskId[pendingTaskId];
+    const projectId = pending?.projectId ?? findTaskById(boardState, pendingTaskId)?.projectId ?? null;
+    if (projectId !== null) return { taskId: pendingTaskId, projectId };
+  }
+  const entry = useActivityStore.getState().bySessionId[sessionId];
+  if (entry !== undefined && entry.taskId !== '' && entry.projectId !== '') return { taskId: entry.taskId, projectId: entry.projectId };
+  return null;
+}
+
+/** The task this session is the (still unconfirmed, in-window) named successor for, or null. */
+function pendingSuccessorTaskFor(sessionId: string): string | null {
+  const activityState = useActivityStore.getState();
+  for (const [taskId, pending] of Object.entries(activityState.pendingSuccessorByTaskId)) {
+    if (pending.sessionId === sessionId && selectPendingSuccessor(activityState, taskId) !== null) return taskId;
   }
   return null;
 }
@@ -35,15 +68,43 @@ function sessionOwnerFor(sessionId: string): { taskId: string; projectId: string
  * task (the triage card needs taskId/projectId), drop activity entries for
  * sessions no board claims anymore, and re-declare the desired stream set.
  *
- * The prune has ONE exception, and it is the whole fix for the vanishing
- * swap row: a task whose session just ended keeps its entry, labelled or not,
- * so the Home feed can go on drawing the row exactly as it was (its last body,
- * the starting glyph) instead of dropping it for the several seconds the task
- * is sessionless. The desktop's column-move swap arrives with no label and is
- * indistinguishable from a park when it lands, so both are kept; the window
- * (`respawnGraceMs`, short for an unlabelled end) is what bounds a park.
+ * THE SUCCESSOR HOP. A successor the desktop named on a `session-ended`
+ * (protocol 0.16.0: a resume of a paused row ends that row's feed, it never
+ * turns it back into running) counts as the task's session until a board
+ * names one itself: the ended id leaves the desired set and the successor
+ * joins it, so it is subscribed now rather than a debounced board round trip
+ * later. It is deliberately NOT registered here. The ghost keeps the row
+ * (reading the desktop's "Resuming session..." step) until the successor's own
+ * snapshot lands, which registers it from the ghost and re-runs this pass
+ * (`onStreamSnapshot`), so the card goes straight from the step to the
+ * successor's own state instead of borrowing the ghost's usage bar for a
+ * round trip.
  *
- * Ordering makes that safe without any extra bookkeeping. The register loop
+ * The prune has two exceptions, both holding a row in place:
+ *
+ * 1. An end in flight (`selectTaskRespawn`): a task whose session just ended
+ *    keeps its entry, labelled or not, so the Home feed can go on drawing the
+ *    row exactly as it was instead of dropping it for the several seconds the
+ *    task is sessionless. An older desktop's column-move swap arrives with no
+ *    label and is indistinguishable from a park when it lands, so both are
+ *    kept; the window (`respawnGraceMs`, short for an unlabelled end) is what
+ *    bounds a park.
+ * 2. A board that VOUCHES for the sessionless task (protocol 0.16.0,
+ *    `sessionlessTaskStatus`): paused with a Resume, or a spawn label in
+ *    flight. The desktop keeps that task in its `'sessions'` projection with a
+ *    null `session_id`, so the session it ended is the task's Paused card, or
+ *    its long respawn's card, for as long as the board says so - the SAME row,
+ *    key, slot and ordering, never remounted as a task row. Only for an entry
+ *    the desktop has ended: a live-looking entry whose end the phone missed
+ *    would draw a running card for a paused task, so it is pruned and the
+ *    feed's task row draws the truth instead. Past its window, the task's
+ *    respawn record is dropped (`expireTaskRespawn`), a store write that
+ *    re-renders the row whose display just changed with the clock.
+ *
+ * ONE ROW PER TASK: either exception yields the moment another entry claims
+ * the task (a session the board, or a pending successor, makes live).
+ *
+ * Ordering makes the common case need no extra bookkeeping. The register loop
  * runs FIRST and `registerSession` clears the task's end fact, so by the time
  * the prune loop asks `selectTaskRespawn`, the snapshot that installs the
  * successor has already answered "nothing in flight" and the ghost is
@@ -60,11 +121,36 @@ function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
       }
     }
   }
+  for (const [taskId, pending] of Object.entries(useActivityStore.getState().pendingSuccessorByTaskId)) {
+    const boardSessionId = findTaskById(boardState, taskId)?.task.session_id ?? null;
+    const boardCaughtUp = boardSessionId !== null && boardSessionId !== pending.endedSessionId;
+    if (boardCaughtUp || selectPendingSuccessor(useActivityStore.getState(), taskId) === null) {
+      useActivityStore.getState().releasePendingSuccessor(taskId);
+      continue;
+    }
+    liveSessionIds.delete(pending.endedSessionId);
+    liveSessionIds.add(pending.sessionId);
+  }
+  const claimedTaskIds = new Set<string>();
+  for (const entry of Object.values(useActivityStore.getState().bySessionId)) {
+    if (liveSessionIds.has(entry.sessionId)) claimedTaskIds.add(entry.taskId);
+  }
   for (const sessionId of Object.keys(useActivityStore.getState().bySessionId)) {
     if (liveSessionIds.has(sessionId)) continue;
-    const entry = useActivityStore.getState().bySessionId[sessionId];
-    if (entry !== undefined && selectTaskRespawn(useActivityStore.getState(), entry.taskId) !== null) {
-      continue;
+    const activityState = useActivityStore.getState();
+    const entry = activityState.bySessionId[sessionId];
+    if (entry !== undefined && !claimedTaskIds.has(entry.taskId)) {
+      if (selectTaskRespawn(activityState, entry.taskId) !== null) {
+        claimedTaskIds.add(entry.taskId);
+        continue;
+      }
+      const boardTask = findTaskById(boardState, entry.taskId)?.task ?? null;
+      const ended = entry.feedStatus === 'ended' || activityState.endedSessionIds[sessionId] === true;
+      if (ended && boardTask !== null && sessionlessTaskStatus(boardTask) !== null) {
+        claimedTaskIds.add(entry.taskId);
+        activityState.expireTaskRespawn(entry.taskId);
+        continue;
+      }
     }
     useActivityStore.getState().removeSession(sessionId);
   }
@@ -76,7 +162,16 @@ export function createSnapshotSinks(getSubscriptions: () => SubscriptionManager)
   return {
     onStreamSnapshot: (sessionId, snapshot) => {
       const owner = sessionOwnerFor(sessionId);
+      // The successor hop's second half (see reconcileSessionsFromBoards): a
+      // named successor no board lists yet is registered HERE, from the ghost
+      // it replaces, so the snapshot below lands on the ghost's row and slot,
+      // and the pass after it releases the ghost. Registered once: a later
+      // re-subscribe finds the entry already there.
+      const hopTaskId = pendingSuccessorTaskFor(sessionId);
+      const hopRegisters = hopTaskId !== null && owner !== null && useActivityStore.getState().bySessionId[sessionId] === undefined;
+      if (hopRegisters) useActivityStore.getState().registerSession(sessionId, owner.taskId, owner.projectId);
       useActivityStore.getState().applySnapshot(sessionId, owner?.taskId ?? '', owner?.projectId ?? '', snapshot);
+      if (hopRegisters) reconcileSessionsFromBoards(getSubscriptions());
       if (isTerminalRetained(sessionId)) {
         // Dims land BEFORE the seed so the pane's re-init reads the grid the
         // fresh scrollback was laid out for.
@@ -126,6 +221,31 @@ const TRANSCRIPT_COALESCE_MS = 100;
  */
 const USAGE_COALESCE_MS = 500;
 
+/**
+ * How long a live `status: 'suspended'` push (protocol 0.16.0) waits for the
+ * `session-ended` that explains it before it is applied on its own.
+ *
+ * The desktop's `suspend()` announces 'suspended' BEFORE it shuts the PTY down
+ * (session-manager.ts: "Mark suspended BEFORE killing", then up to 1500 ms for a
+ * natural exit plus 1500 ms for the kill), and it suspends ahead of every
+ * model, agent, effort or column-move respawn. On the desktop that never reads
+ * as "Paused", because the respawn's label is set first and wins (the card's
+ * precedence). On the phone the label arrives later than the status, through a
+ * board event, the 300 ms refresh debounce and a round trip, so applying the
+ * push at once read "Paused" - and moved the Agents feed row into Paused - for
+ * the gap of every respawn.
+ *
+ * So the edge INTO 'suspended' is held until the end arrives (the PTY exit
+ * sends it, and a respawn's carries its label), which is applied right behind
+ * it, so a respawn reads as its step and a genuine pause as Paused. A board
+ * snapshot carrying the label deliberately does NOT release it: applied on a
+ * session still live, the status would read Paused under that label until the
+ * end. The cap only covers an end that never comes, a little past the
+ * desktop's own 3 s shutdown bound; read out of the desktop source, not
+ * measured.
+ */
+export const SUSPEND_PUSH_HOLD_MS = 3_500;
+
 export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionManager): Unsubscribe {
   // A desktop-side PTY resize reflows the desktop terminal, so the phone's
   // ring holds scrollback laid out for the OLD grid - mixing it with
@@ -138,6 +258,20 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
   // handler. Keyed by task so a second respawn restarts that task's window
   // rather than stacking a second sweep.
   const respawnSweepTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // One held 'suspended' push per session, at most (see SUSPEND_PUSH_HOLD_MS).
+  const heldSuspendBySessionId = new Map<string, { event: ActivityEvent; timer: ReturnType<typeof setTimeout> }>();
+  const dropHeldSuspend = (sessionId: string): void => {
+    const held = heldSuspendBySessionId.get(sessionId);
+    if (held === undefined) return;
+    clearTimeout(held.timer);
+    heldSuspendBySessionId.delete(sessionId);
+  };
+  const releaseHeldSuspend = (sessionId: string): void => {
+    const held = heldSuspendBySessionId.get(sessionId);
+    if (held === undefined) return;
+    dropHeldSuspend(sessionId);
+    useActivityStore.getState().applyActivityEvent(held.event);
+  };
 
   let pendingTranscriptEvents: TranscriptEvent[] = [];
   let transcriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -216,6 +350,27 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
         }
         return;
       }
+      if (event.payload.type === 'status') {
+        // A newer status supersedes a held one, whatever it says.
+        dropHeldSuspend(event.sessionId);
+        const entry = useActivityStore.getState().bySessionId[event.sessionId];
+        // Only the EDGE into 'suspended' is held. A push for a session already
+        // suspended changes `resumable` alone (a move to Done, an archive) and
+        // applies at once, as does every other status.
+        if (event.payload.status === 'suspended' && entry !== undefined && entry.sessionStatus !== 'suspended') {
+          const heldSessionId = event.sessionId;
+          heldSuspendBySessionId.set(heldSessionId, {
+            event,
+            timer: setTimeout(() => releaseHeldSuspend(heldSessionId), SUSPEND_PUSH_HOLD_MS),
+          });
+          return;
+        }
+        useActivityStore.getState().applyActivityEvent(event);
+        return;
+      }
+      // The end a held 'suspended' was waiting for: the status lands first,
+      // then the end, back to back in one synchronous turn (one render).
+      if (event.payload.type === 'session-ended') releaseHeldSuspend(event.sessionId);
       useActivityStore.getState().applyActivityEvent(event);
       // An end with no successor (a park, or a respawn that dies) must not
       // leave its row on screen forever. The retention above releases the
@@ -238,13 +393,22 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       const respawnedTaskId = event.taskId;
       const pendingSweep = respawnSweepTimers.get(respawnedTaskId);
       if (pendingSweep !== undefined) clearTimeout(pendingSweep);
+      // A named successor holds its stream for RESPAWN_ROW_GRACE_MS whatever
+      // the end's label (selectPendingSuccessor), so its sweep waits as long.
+      const successorNamed = extractSuccessorSessionId(event) !== null;
       respawnSweepTimers.set(
         respawnedTaskId,
-        setTimeout(() => {
-          respawnSweepTimers.delete(respawnedTaskId);
-          reconcileSessionsFromBoards(subscriptions);
-        }, respawnGraceMs({ label: extractSpawnProgressLabel(event.payload) })),
+        setTimeout(
+          () => {
+            respawnSweepTimers.delete(respawnedTaskId);
+            reconcileSessionsFromBoards(subscriptions);
+          },
+          successorNamed ? RESPAWN_ROW_GRACE_MS : respawnGraceMs({ label: extractSpawnProgressLabel(event.payload) }),
+        ),
       );
+      // The hop: subscribe the named successor now, not when a board snapshot
+      // gets round to naming it (see reconcileSessionsFromBoards).
+      if (successorNamed) reconcileSessionsFromBoards(subscriptions);
     }),
     feed.on('board', (event) => {
       // BoardEvents carry ids only; reconciliation is a debounced re-snapshot.
@@ -263,6 +427,9 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
     // stream set nothing is listening for.
     for (const sweepTimer of respawnSweepTimers.values()) clearTimeout(sweepTimer);
     respawnSweepTimers.clear();
+    // Dropped, not applied, for the same reason: the feed is going away.
+    for (const held of heldSuspendBySessionId.values()) clearTimeout(held.timer);
+    heldSuspendBySessionId.clear();
     if (transcriptFlushTimer !== null) {
       clearTimeout(transcriptFlushTimer);
       transcriptFlushTimer = null;

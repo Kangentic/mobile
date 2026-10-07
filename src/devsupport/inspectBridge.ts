@@ -107,18 +107,40 @@ export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' |
               { columns: board.columns.length, tasks: Object.keys(board.tasksById).length },
             ]),
           ),
+          // Protocol 0.16.0's two board-row fields, for every task that
+          // carries either: the preparing label and the Resume gate. A task
+          // the desktop keeps sessionless for one of them shows here with a
+          // null sessionId.
+          inFlightTasks: Object.values(boards.boardsByProjectId).flatMap((board) =>
+            Object.values(board.tasksById)
+              .filter((task) => typeof task.spawn_progress === 'string' || task.resumable === true)
+              .map((task) => ({
+                taskId: task.id,
+                sessionId: task.session_id,
+                spawnProgress: task.spawn_progress ?? null,
+                resumable: task.resumable ?? null,
+              })),
+          ),
         },
         activity: Object.values(activity.bySessionId).map((entry) => ({
           sessionId: entry.sessionId,
           taskId: entry.taskId,
           state: entry.state,
           feedStatus: entry.feedStatus,
-          // The desktop's snapshot-time lifecycle status. Distinct from
-          // feedStatus, and worth seeing next to it: a parked session reads
-          // 'suspended' here while feedStatus is still 'live'.
+          // The desktop's lifecycle status (live from protocol 0.16.0's
+          // `status` pushes). Distinct from feedStatus, and worth seeing next
+          // to it: a parked session reads 'suspended' here while feedStatus
+          // is still 'live'.
           sessionStatus: entry.sessionStatus,
+          resuming: entry.resuming,
+          resumable: entry.resumable,
           awaitedPromptId: entry.awaitedPromptId,
           unreadCount: entry.unreadCount,
+        })),
+        pendingSuccessors: Object.entries(activity.pendingSuccessorByTaskId).map(([taskId, pending]) => ({
+          taskId,
+          sessionId: pending.sessionId,
+          endedSessionId: pending.endedSessionId,
         })),
         transcript: Object.entries(transcripts.bySessionId).map(([sessionId, window]) => ({
           sessionId,

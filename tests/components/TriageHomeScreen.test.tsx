@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import type { BoardTaskWire } from '@kangentic/protocol';
 import { NOW_TICK_MS, ThemeProvider, darkTerminalTheme } from '@/components';
 import { SNIPPET_WARM_CONCURRENCY, TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -1889,6 +1890,77 @@ describe('TriageHomeScreen', () => {
 
       expect(screen.queryByTestId('activity-row-sess-1-status-bar')).toBeNull();
       expect(screen.queryByTestId('activity-row-sess-1-status')).toBeNull();
+    });
+  });
+
+  /**
+   * Protocol 0.16.0's sessionless rows. A desktop pause clears the task's
+   * `session_id` and the phone keeps no stream on it, yet the desktop keeps the
+   * task in the `'sessions'` board with `resumable: true` so the feed can draw a
+   * lasting Paused card; a first start is kept the same way while its label is
+   * in flight. With no activity entry to build a row from, the board row is it.
+   */
+  describe('sessionless task rows (protocol 0.16.0)', () => {
+    function makeTaskOneSessionless(overrides: Partial<BoardTaskWire>): void {
+      useActivityStore.getState().reset();
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-1': {
+              ...board,
+              tasksById: { 'task-1': { ...board.tasksById['task-1'], session_id: null, description: 'Rotate the signing keys.', ...overrides } },
+            },
+          },
+        };
+      });
+    }
+
+    it('draws a desktop-paused task as a Paused card that opens the session screen and the hub', async () => {
+      makeTaskOneSessionless({ resumable: true });
+      await renderHome();
+
+      expect(screen.getByTestId('section-header-paused')).toBeTruthy();
+      expect(screen.getByTestId('task-row-task-1-status-bar-label')).toHaveTextContent('Paused');
+      expect(screen.getByTestId('task-row-task-1-snippet')).toHaveTextContent('Rotate the signing keys.');
+      expect(screen.queryByTestId('task-row-task-1-status')).toBeNull();
+
+      await fireEvent.press(screen.getByTestId('task-row-task-1'));
+      expect(mockPush).toHaveBeenCalledWith({ pathname: '/task/[taskId]', params: { taskId: 'task-1', projectId: 'project-1' } });
+
+      await fireEvent(screen.getByTestId('task-row-task-1'), 'longPress');
+      expect(mockPush).toHaveBeenCalledWith({ pathname: '/task-actions', params: { taskId: 'task-1', projectId: 'project-1' } });
+    });
+
+    it('draws a first start under Active with the desktop\'s own step', async () => {
+      makeTaskOneSessionless({ spawn_progress: 'Creating worktree...' });
+      await renderHome();
+
+      expect(screen.getByTestId('section-header-active')).toBeTruthy();
+      expect(screen.getByTestId('task-row-task-1-status-bar-label')).toHaveTextContent('Creating worktree...');
+    });
+
+    it('draws nothing for a sessionless task the desktop keeps no label or Resume for', async () => {
+      makeTaskOneSessionless({ resumable: false, spawn_progress: null });
+      await renderHome();
+
+      expect(screen.queryByTestId('task-row-task-1')).toBeNull();
+    });
+
+    it('reads "Resuming agent..." on a resumed session that has not reported its model', async () => {
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running', resuming: true, usage: null }),
+        );
+      await renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Resuming agent...');
     });
   });
 });

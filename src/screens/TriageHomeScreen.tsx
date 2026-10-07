@@ -11,9 +11,17 @@ import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, NowTickProvider, SectionHeader, useTheme } from '@/components';
 import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
-import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
+import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { buildPositionalTrack } from '@/components/board/columnTrack';
-import { FEED_SECTION_ORDER, FEED_SECTION_TITLES, selectFeedSections, type FeedSection } from '@/screens/home/feedSections';
+import {
+  FEED_SECTION_ORDER,
+  FEED_SECTION_TITLES,
+  feedRowKey,
+  selectFeedSections,
+  type FeedRow,
+  type FeedSection,
+  type FeedSectionSources,
+} from '@/screens/home/feedSections';
 import {
   selectTaskRespawn,
   selectWaitingSince,
@@ -72,14 +80,32 @@ function fallbackTask(entry: SessionActivityEntry): BoardTaskWire {
   };
 }
 
-type TriageListRow =
-  | { kind: 'section-header'; section: FeedSection; title: string; count: number }
-  | { kind: 'activity'; entry: SessionActivityEntry };
+type TriageListRow = { kind: 'section-header'; section: FeedSection; title: string; count: number } | FeedRow;
+
+/** The four store slices `selectFeedSections` reads, from outside React (the snippet warm-up's effect). */
+function currentFeedSources(): FeedSectionSources {
+  const activityState = useActivityStore.getState();
+  return {
+    bySessionId: activityState.bySessionId,
+    respawnByTaskId: activityState.respawnByTaskId,
+    spawnProgressLabelBySessionId: activityState.spawnProgressLabelBySessionId,
+    boardsByProjectId: useBoardStore.getState().boardsByProjectId,
+  };
+}
 
 export function TriageHomeScreen(): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const bySessionId = useActivityStore((state) => state.bySessionId);
+  // The rest of what decides a row's SECTION (feedSections): the respawn in
+  // flight and the labelled ends say whether a preparing card was running or
+  // paused, and the boards carry the 0.16.0 `spawn_progress` / `resumable`
+  // fields plus the sessionless task rows. The boards change on every
+  // snapshot, which re-runs the memo below - the same cost the rows already
+  // pay per activity event.
+  const respawnByTaskId = useActivityStore((state) => state.respawnByTaskId);
+  const spawnProgressLabelBySessionId = useActivityStore((state) => state.spawnProgressLabelBySessionId);
+  const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);
   const pairedState = useChannelStore((state) => state.pairedState);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -88,17 +114,19 @@ export function TriageHomeScreen(): React.JSX.Element {
   // its header nor its rows, where a collapsed one keeps its header.
   const hiddenTriageSections = useSettingsStore((state) => state.hiddenTriageSections);
 
-  const rows = useMemo<TriageListRow[]>(() => {
-    const sections = selectFeedSections(bySessionId);
+  const { rows, feedRowCount } = useMemo(() => {
+    const sections = selectFeedSections({ bySessionId, respawnByTaskId, spawnProgressLabelBySessionId, boardsByProjectId });
     // Total per TITLE first (needs-you + idle share the "Idle" title), so
     // the header shows the right count even when only one of the two
     // sections underneath it has entries.
     const countByTitle = new Map<string, number>();
+    let totalRows = 0;
     for (const sectionKind of FEED_SECTION_ORDER) {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       if (!section) continue;
       const title = FEED_SECTION_TITLES[sectionKind];
-      countByTitle.set(title, (countByTitle.get(title) ?? 0) + section.entries.length);
+      countByTitle.set(title, (countByTitle.get(title) ?? 0) + section.rows.length);
+      totalRows += section.rows.length;
     }
     const listRows: TriageListRow[] = [];
     const emittedTitles = new Set<string>();
@@ -107,7 +135,7 @@ export function TriageHomeScreen(): React.JSX.Element {
       // Empty sections render nothing: the feed leads with what matters
       // instead of headers over blank space. needs-you + idle share the
       // Idle header (one title, prompt cards first).
-      if (!section || section.entries.length === 0) continue;
+      if (!section || section.rows.length === 0) continue;
       const title = FEED_SECTION_TITLES[section.section];
       if (hiddenTriageSections.includes(title)) continue;
       if (!emittedTitles.has(title)) {
@@ -119,10 +147,10 @@ export function TriageHomeScreen(): React.JSX.Element {
       // for needs-you - a user may want to defer even a pending prompt
       // until they're back at their desk.
       if (collapsedTriageSections.includes(title)) continue;
-      for (const entry of section.entries) listRows.push({ kind: 'activity', entry });
+      for (const row of section.rows) listRows.push(row);
     }
-    return listRows;
-  }, [bySessionId, collapsedTriageSections, hiddenTriageSections]);
+    return { rows: listRows, feedRowCount: totalRows };
+  }, [bySessionId, respawnByTaskId, spawnProgressLabelBySessionId, boardsByProjectId, collapsedTriageSections, hiddenTriageSections]);
 
   // Whether anything on screen actually needs a clock. Correct for an empty or
   // all-working feed and nothing more: one idle session makes it true, and a
@@ -255,7 +283,7 @@ export function TriageHomeScreen(): React.JSX.Element {
     // `Object.values(bySessionId)` loop reached is still reached exactly once.
     // A future section added to the union without being added to
     // FEED_SECTION_ORDER would silently stop warming its sessions.
-    const sections = selectFeedSections(useActivityStore.getState().bySessionId);
+    const sections = selectFeedSections(currentFeedSources());
     // A section the filter hides mounts no rows, so its snippets would be
     // fetched for nothing; unhiding it mounts the rows, which peek for
     // themselves.
@@ -264,7 +292,10 @@ export function TriageHomeScreen(): React.JSX.Element {
       const section = sections.find((candidate) => candidate.section === sectionKind);
       if (!section) continue;
       if (hiddenTitles.includes(FEED_SECTION_TITLES[sectionKind])) continue;
-      for (const entry of section.entries) {
+      for (const row of section.rows) {
+        // A task row has no session, so there is nothing to peek.
+        if (row.kind !== 'session') continue;
+        const entry = row.entry;
         if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
         // A queued or paused card shows the task's description, never the
         // agent's message (ActivityRow), so a warm would fetch a line nothing
@@ -368,7 +399,7 @@ export function TriageHomeScreen(): React.JSX.Element {
         {header}
         <ConnectionBanner />
         {/* Nothing drawn because the filter hides it is not "All quiet". */}
-        {Object.keys(bySessionId).length > 0 && hiddenTriageSections.length > 0 ? <FilteredEmptyState /> : <AllQuietEmptyState />}
+        {feedRowCount > 0 && hiddenTriageSections.length > 0 ? <FilteredEmptyState /> : <AllQuietEmptyState />}
       </Screen>
     );
   }
@@ -413,8 +444,8 @@ export function TriageHomeScreen(): React.JSX.Element {
               progressBackgroundColor={theme.colors.surfaceOverlay}
             />
           }
-          keyExtractor={(row) => (row.kind === 'section-header' ? `section-${row.section}` : row.entry.sessionId)}
-          getItemType={(row) => (row.kind === 'section-header' ? 'section-header' : 'activity')}
+          keyExtractor={(row) => (row.kind === 'section-header' ? `section-${row.section}` : feedRowKey(row))}
+          getItemType={(row) => row.kind}
           renderItem={({ item }) =>
             item.kind === 'section-header' ? (
               <SectionHeader
@@ -430,9 +461,13 @@ export function TriageHomeScreen(): React.JSX.Element {
                 collapsed={collapsedTriageSections.includes(item.title)}
                 onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}
               />
-            ) : (
+            ) : item.kind === 'session' ? (
               <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
                 <ActivityRow entry={item.entry} onLongPressTask={onLongPressTask} />
+              </View>
+            ) : (
+              <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
+                <SessionlessTaskRow task={item.task} projectId={item.projectId} onLongPressTask={onLongPressTask} />
               </View>
             )
           }
@@ -623,7 +658,7 @@ const ActivityRow = React.memo(function ActivityRow({
    * says what it is in the footer ("Queued...", "Paused", the desktop's step).
    */
   const respawn = useActivityStore((state) => selectTaskRespawn(state, entry.taskId));
-  const sessionDisplay = cardSessionDisplay({ hasSession: true, sessionStatus: entry.sessionStatus, respawn });
+  const sessionDisplay = cardSessionDisplay({ session: toCardSession(entry), respawn, task: locatedTask });
   const isRunning = sessionDisplay.kind === 'running';
   // The band also carries the wait time (it moved up from the end of the body
   // line), so a waiting row's band changes when `waitingSinceMs` does. It is
@@ -838,5 +873,67 @@ const ActivityRow = React.memo(function ActivityRow({
           mapper-count experiment only. See src/devsupport/MapperLoad.tsx. */}
       <MapperLoad />
     </>
+  );
+});
+
+/**
+ * A card for a board task the desktop keeps in its `'sessions'` projection
+ * with NO session on it (protocol 0.16.0): a paused task the desktop offers
+ * Resume for, or a first start whose agent does not exist yet ("Creating
+ * worktree..."). The feed only draws one when no activity entry claims the
+ * task: a pause the phone watched keeps the session's own row in place (see
+ * reconcileSessionsFromBoards), so this is the cold-start face of the same
+ * card.
+ *
+ * Deliberately the session row minus everything a session supplies: no status
+ * icon, no wait time, no snippet (the body is the description, as on every
+ * card that is not running), no usage, no landing pulse. The footer says what
+ * it is ("Paused", the desktop's step) through the same cardSessionDisplay.
+ * Tapping opens the session screen with no session id, where the board row
+ * offers Resume (useResumeOffer) or the launch veil waits for the agent.
+ */
+const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
+  task,
+  projectId,
+  onLongPressTask,
+}: {
+  task: BoardTaskWire;
+  projectId: string;
+  onLongPressTask: (task: BoardTaskWire, projectId: string) => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  const router = useRouter();
+  const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[projectId]?.showTicketNumbers ?? false);
+  const projectName = useBoardStore((state) => state.projects.find((project) => project.id === projectId)?.name ?? null);
+  // Same reference-stable selectors as ActivityRow's band (see its note).
+  const column = useBoardStore((state) => selectTaskColumn(state, task.id));
+  const boardColumns = useBoardStore((state) => state.boardsByProjectId[projectId]?.columns ?? null);
+  const columnStrip = useMemo(
+    () => ({ column, track: buildPositionalTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs: null }),
+    [column, boardColumns, projectName],
+  );
+  const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
+  const sessionDisplay = cardSessionDisplay({ session: null, respawn, task });
+
+  const openTask = useCallback(() => {
+    router.push({ pathname: '/task/[taskId]', params: { taskId: task.id, projectId } });
+  }, [router, task.id, projectId]);
+  const onLongPress = useCallback(() => onLongPressTask(task, projectId), [onLongPressTask, task, projectId]);
+
+  return (
+    <TaskCard
+      testID={`task-row-${task.id}`}
+      task={task}
+      statusKind={null}
+      showTicketNumbers={showTicketNumbers}
+      sessionDisplay={sessionDisplay}
+      usage={null}
+      columnStrip={columnStrip}
+      bodyText={collapseToSnippetText(task.description)}
+      bodyNumberOfLines={SNIPPET_LINES}
+      bodyMinHeight={theme.typography.caption.lineHeight * SNIPPET_LINES}
+      onPress={openTask}
+      onLongPress={onLongPress}
+    />
   );
 });

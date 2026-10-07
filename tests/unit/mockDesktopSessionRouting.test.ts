@@ -459,14 +459,13 @@ describe('register-push', () => {
 /**
  * The `/respawn` rig fix (mockDesktop.ts's `respawnActiveSession`,
  * kangentic board #639): the outgoing session's `session-ended` push MUST
- * carry a non-empty `spawnProgressLabel`, because this mock's OWN
- * `boardSnapshot()` applies the same `view: 'sessions'` filter a real
- * desktop's board does - so during the respawn gap the sessionless task
- * leaves the board entirely and the session screen's COLUMN-keyed swap
- * window (SessionScreen.tsx) can never fire off it. Without the label,
- * dev:mock would render "Session ended" for the whole multi-second gap: the
- * exact regression the screen's session-keyed swap window exists to
- * prevent, reintroduced into the rig meant to demonstrate the fix.
+ * carry a non-empty `spawnProgressLabel`. Before protocol 0.16.0 this mock's
+ * own `boardSnapshot()` dropped the sessionless task from the `'sessions'`
+ * view for the whole gap, so the end's label was the phone's only sign a
+ * successor was coming; without it, dev:mock rendered "Session ended" for the
+ * whole multi-second gap. From 0.16.0 the board row carries the same label
+ * (`spawn_progress`) and keeps the task in that view, and `/respawn-quiet`
+ * keeps the unlabelled, older shape reachable.
  */
 describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
   it(
@@ -490,6 +489,14 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
       const spawnProgressLabel = extractSpawnProgressLabel(endedEvent.payload);
       expect(typeof spawnProgressLabel).toBe('string');
       expect(spawnProgressLabel?.length ?? 0).toBeGreaterThan(0);
+      // A 0.16.0 desktop's order: the live suspended status goes out BEFORE
+      // the PTY exit's end, which is the window storeFeed's hold covers.
+      const outgoingEvents = eventsFor('activity', MOCK_STREAMING_SESSION_ID);
+      const suspendedIndex = outgoingEvents.findIndex(
+        (event) => event.kind === 'activity' && event.payload.type === 'status' && event.payload.status === 'suspended',
+      );
+      expect(suspendedIndex).toBeGreaterThanOrEqual(0);
+      expect(suspendedIndex).toBeLessThan(outgoingEvents.indexOf(endedEvent));
 
       // Sessionless BEFORE the successor lands: read the board well inside
       // the gap (the mock's MOCK_RESPAWN_GAP_MS is several seconds), while
@@ -497,6 +504,8 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
       const midGapSnapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
       const midGapTask = midGapSnapshot.tasks.find((task) => task.id === 'mock-task-1');
       expect(midGapTask?.session_id ?? null).toBeNull();
+      // The 0.16.0 board row carries the step through the gap, as the desktop's does.
+      expect(midGapTask?.spawn_progress).toBe(spawnProgressLabel);
 
       // The successor eventually lands with a DIFFERENT session id, proving
       // the sessionless read above genuinely preceded it rather than merely
@@ -540,6 +549,10 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
         throw new Error('expected a session-ended activity event for the outgoing session');
       }
       expect(extractSpawnProgressLabel(endedEvent.payload)).toBeNull();
+      // An older desktop end to end: no live status push at all.
+      expect(
+        eventsFor('activity', MOCK_STREAMING_SESSION_ID).some((event) => event.kind === 'activity' && event.payload.type === 'status'),
+      ).toBe(false);
 
       const deadline = Date.now() + 8000;
       let successorSessionId: string | null = null;
@@ -553,5 +566,171 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
       expect(successorSessionId).not.toBe(MOCK_STREAMING_SESSION_ID);
     },
     12_000,
+  );
+});
+
+/**
+ * Resume, the way a 0.16.0 desktop runs it. A resume never turns the paused
+ * id back into running: it labels the task "Resuming session...", then binds a
+ * NEW session id. A paused row the phone holds a feed on ends that feed naming
+ * the successor (the hop); a task paused by a user's Pause has no feed left,
+ * and the board row alone carries the story.
+ */
+describe('Resume (protocol 0.16.0)', () => {
+  const PAUSED_TASK_ID = MOCK_PAUSED_STATIC_SESSION.taskId;
+
+  async function waitForBoardTask(predicate: (task: { session_id: string | null; spawn_progress?: string | null; resumable?: boolean | null }) => boolean, taskId: string) {
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+      const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
+      if (task && predicate(task)) return task;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`board never showed the expected state for ${taskId}`);
+  }
+
+  function sessionEndedFor(sessionId: string) {
+    const ended = eventsFor('activity', sessionId).find((event) => event.kind === 'activity' && event.payload.type === 'session-ended');
+    return ended?.kind === 'activity' && ended.payload.type === 'session-ended' ? ended.payload : null;
+  }
+
+  it('offers the paused task on the board row and the stream, and keeps it in the sessions view', async () => {
+    const sessionsBoard = await controller.verbs.readBoardSubscribe('mock-project', { view: 'sessions' });
+    const pausedTask = sessionsBoard.tasks.find((task) => task.id === PAUSED_TASK_ID);
+    expect(pausedTask?.resumable).toBe(true);
+    expect(pausedTask?.spawn_progress ?? null).toBeNull();
+
+    const snapshot = await controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false });
+    expect(snapshot.resumable).toBe(true);
+    expect(snapshot.resuming).toBe(false);
+  });
+
+  it(
+    'resumes the paused row into a NEW session: labelled, then its feed ends naming the successor, which reports resuming',
+    async () => {
+      const response = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+      expect(response.outcome).toBe('starting');
+
+      // The desktop's git phase, under its own label.
+      await waitForBoardTask((task) => task.spawn_progress === 'Resuming session...', PAUSED_TASK_ID);
+
+      await waitUntil(() => sessionEndedFor(MOCK_PAUSED_STATIC_SESSION.sessionId) !== null, {
+        label: 'the paused row\'s feed ends',
+        timeoutMs: 6000,
+      });
+      const ended = sessionEndedFor(MOCK_PAUSED_STATIC_SESSION.sessionId);
+      expect(ended?.intentional).toBe(true);
+      expect(ended?.spawnProgressLabel).toBe('Resuming session...');
+      const successorSessionId = ended?.successorSessionId ?? null;
+      expect(successorSessionId).not.toBeNull();
+      expect(successorSessionId).not.toBe(MOCK_PAUSED_STATIC_SESSION.sessionId);
+
+      const boundTask = await waitForBoardTask((task) => task.session_id === successorSessionId, PAUSED_TASK_ID);
+      expect(boundTask.spawn_progress ?? null).toBeNull();
+      expect(boundTask.resumable).toBe(false);
+
+      const successorSnapshot = await controller.verbs.readStreamSubscribe(successorSessionId ?? '', { terminal: false });
+      expect(successorSnapshot.sessionStatus).toBe('running');
+      expect(successorSnapshot.resuming).toBe(true);
+      // No model yet: the card's "Resuming agent..." face.
+      expect(successorSnapshot.usage).toBeNull();
+
+      // The paused row is gone, exactly as the desktop drops it.
+      await expect(controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false })).rejects.toThrow(/No such session/);
+    },
+    15_000,
+  );
+
+  it(
+    '/pause clears the streaming task\'s session and offers Resume from the board row, which then binds a resumed session',
+    async () => {
+      await controller.verbs.sendUserMessage(MOCK_STREAMING_SESSION_ID, '/pause');
+
+      await waitUntil(() => sessionEndedFor(MOCK_STREAMING_SESSION_ID) !== null, { label: 'the paused session ends', timeoutMs: 4000 });
+      // The live status went first, as the desktop's suspend() sends it.
+      const statusEvent = eventsFor('activity', MOCK_STREAMING_SESSION_ID).find(
+        (event) => event.kind === 'activity' && event.payload.type === 'status',
+      );
+      expect(statusEvent?.kind === 'activity' && statusEvent.payload.type === 'status' && statusEvent.payload.status).toBe('suspended');
+      expect(sessionEndedFor(MOCK_STREAMING_SESSION_ID)?.spawnProgressLabel).toBeUndefined();
+
+      const pausedTask = await waitForBoardTask((task) => task.session_id === null && task.resumable === true, 'mock-task-1');
+      expect(pausedTask.spawn_progress ?? null).toBeNull();
+      const sessionsBoard = await controller.verbs.readBoardSubscribe('mock-project', { view: 'sessions' });
+      expect(sessionsBoard.tasks.some((task) => task.id === 'mock-task-1')).toBe(true);
+
+      const response = await controller.verbs.startSession({ taskId: 'mock-task-1', projectId: 'mock-project' });
+      expect(response.outcome).toBe('starting');
+      const resumedTask = await waitForBoardTask((task) => task.session_id !== null, 'mock-task-1');
+      expect(resumedTask.session_id).not.toBe(MOCK_STREAMING_SESSION_ID);
+
+      const resumedSnapshot = await controller.verbs.readStreamSubscribe(resumedTask.session_id ?? '', { terminal: false });
+      expect(resumedSnapshot.resuming).toBe(true);
+      expect(resumedSnapshot.usage).toBeNull();
+    },
+    15_000,
+  );
+
+  it('answers live for a task whose session is already running', async () => {
+    const response = await controller.verbs.startSession({ taskId: 'mock-task-1', projectId: 'mock-project' });
+    expect(response.outcome).toBe('live');
+  });
+
+  /**
+   * The dev:mock route to the phone's own failure bound: a resume the desktop
+   * accepts and then never follows through (it reports the failure on the
+   * desktop only), which leaves the phone waiting out RESUME_WAIT_MS.
+   */
+  it(
+    'accepts a resume armed by /stall-resume and then sends nothing at all',
+    async () => {
+      await controller.verbs.sendUserMessage(MOCK_PAUSED_STATIC_SESSION.sessionId, '/stall-resume');
+      const response = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+      expect(response.outcome).toBe('starting');
+
+      // Longer than the mock's own resume gap, so a resume WOULD have landed.
+      await new Promise((resolve) => setTimeout(resolve, 3500));
+
+      const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+      const pausedTask = snapshot.tasks.find((task) => task.id === PAUSED_TASK_ID);
+      expect(pausedTask?.session_id).toBe(MOCK_PAUSED_STATIC_SESSION.sessionId);
+      expect(pausedTask?.spawn_progress ?? null).toBeNull();
+      expect(pausedTask?.resumable).toBe(true);
+      expect(sessionEndedFor(MOCK_PAUSED_STATIC_SESSION.sessionId)).toBeNull();
+
+      // Armed for ONE resume: the next tap resumes as normal.
+      const retry = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+      expect(retry.outcome).toBe('starting');
+      await waitForBoardTask((task) => task.spawn_progress === 'Resuming session...', PAUSED_TASK_ID);
+    },
+    15_000,
+  );
+
+  /**
+   * The dev:mock route to a failed SPAWN: the desktop labels the row as usual,
+   * then the label clears with nothing bound and the row stays paused. The
+   * only sign of the failure a 0.16.0 desktop gives the phone, and the shape
+   * `resumeProgress` reads as `'spawn-failed'`.
+   */
+  it(
+    'labels a resume armed by /fail-resume, then clears the label and leaves the row paused',
+    async () => {
+      await controller.verbs.sendUserMessage(MOCK_PAUSED_STATIC_SESSION.sessionId, '/fail-resume');
+      const response = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+      expect(response.outcome).toBe('starting');
+
+      await waitForBoardTask((task) => task.spawn_progress === 'Resuming session...', PAUSED_TASK_ID);
+      const failedTask = await waitForBoardTask((task) => (task.spawn_progress ?? null) === null, PAUSED_TASK_ID);
+      expect(failedTask.session_id).toBe(MOCK_PAUSED_STATIC_SESSION.sessionId);
+      expect(failedTask.resumable).toBe(true);
+      expect(sessionEndedFor(MOCK_PAUSED_STATIC_SESSION.sessionId)).toBeNull();
+
+      // Armed for ONE resume: the next tap resumes into a new session.
+      const retry = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+      expect(retry.outcome).toBe('starting');
+      await waitForBoardTask((task) => task.session_id !== MOCK_PAUSED_STATIC_SESSION.sessionId, PAUSED_TASK_ID);
+    },
+    15_000,
   );
 });

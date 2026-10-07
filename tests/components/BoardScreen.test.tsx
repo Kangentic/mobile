@@ -346,6 +346,61 @@ describe('BoardScreen', () => {
   });
 
   /**
+   * Protocol 0.16.0. A desktop pause clears `session_id` while the desktop's
+   * registry keeps the suspended row, and the desktop card opens that task's
+   * detail (its Resume button), not the edit form. The board row's
+   * `resumable` and `spawn_progress` are how the phone knows such a task is
+   * not simply sessionless.
+   */
+  describe('a sessionless card the desktop keeps a session story for', () => {
+    function seedSessionlessTask(overrides: Record<string, unknown>): void {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': {
+            ...state.boardsByProjectId['project-1'],
+            tasksById: { 'task-1': { ...baseTask('task-1', 'Fix the login bug', 'lane-doing', 0, null), ...overrides } },
+          },
+        },
+      }));
+    }
+
+    async function renderBoard(): Promise<void> {
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+    }
+
+    it('draws a desktop-paused task as Paused and opens it on the session screen, not the edit form', async () => {
+      seedSessionlessTask({ resumable: true, spawn_progress: null });
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Paused');
+      await fireEvent.press(screen.getByTestId('board-card-task-1'));
+      expect(mockPush).toHaveBeenCalledWith({ pathname: '/task/[taskId]', params: { taskId: 'task-1', projectId: 'project-1' } });
+    });
+
+    it('draws a first start\'s step and opens it on the session screen', async () => {
+      seedSessionlessTask({ resumable: false, spawn_progress: 'Creating worktree...' });
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Creating worktree...');
+      await fireEvent.press(screen.getByTestId('board-card-task-1'));
+      expect(mockPush).toHaveBeenCalledWith({ pathname: '/task/[taskId]', params: { taskId: 'task-1', projectId: 'project-1' } });
+    });
+
+    it('still opens a plainly sessionless task in the edit form', async () => {
+      seedSessionlessTask({ resumable: false, spawn_progress: null });
+      await renderBoard();
+
+      await fireEvent.press(screen.getByTestId('board-card-task-1'));
+      expect(mockPush).toHaveBeenCalledWith({ pathname: '/edit-task', params: { taskId: 'task-1', projectId: 'project-1' } });
+    });
+  });
+
+  /**
    * The OTHER transitional state, and the one the respawn tests above cannot
    * exercise: a queued session keeps its `session_id` (`seedBoard`'s task-1
    * already has `sess-1`), so `activityEntry` is non-null here, unlike the

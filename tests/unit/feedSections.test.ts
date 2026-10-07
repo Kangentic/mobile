@@ -9,15 +9,34 @@
  * fields such as `resumable` that a hand-written literal would have to track).
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ActivityReasonWire, ActivityStateWire, ReadStreamSessionStatusWire } from '@kangentic/protocol';
+import type { ActivityReasonWire, ActivityStateWire, BoardTaskWire, ReadStreamSessionStatusWire } from '@kangentic/protocol';
 import {
   FEED_SECTION_DISPLAY_TITLES,
   countFeedSectionsByTitle,
+  feedRowKey,
   selectFeedSections,
   type FeedSection,
+  type FeedSectionSources,
 } from '@/screens/home/feedSections';
 import { useActivityStore } from '@/state/activityStore';
-import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { useBoardStore } from '@/state/boardStore';
+import { boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+
+/** The store slices the feed reads, as the screen hands them over. */
+function feedSources(): FeedSectionSources {
+  const activityState = useActivityStore.getState();
+  return {
+    bySessionId: activityState.bySessionId,
+    respawnByTaskId: activityState.respawnByTaskId,
+    spawnProgressLabelBySessionId: activityState.spawnProgressLabelBySessionId,
+    boardsByProjectId: useBoardStore.getState().boardsByProjectId,
+  };
+}
+
+/** Installs one project's `'sessions'` board holding exactly these tasks. */
+function seedBoard(tasks: BoardTaskWire[]): void {
+  useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', tasks, view: 'sessions' }));
+}
 
 const REASON_FOR_STATE: Record<ActivityStateWire, ActivityReasonWire> = {
   thinking: { kind: 'turn-active' },
@@ -46,10 +65,11 @@ function seedSession(sessionId: string, { state, sessionStatus, enteredSectionAt
   }));
 }
 
+/** Every row's key in one section: a session row's session id, a task row's `task-<id>`. */
 function sessionIdsIn(section: FeedSection): string[] {
-  const found = selectFeedSections(useActivityStore.getState().bySessionId).find((candidate) => candidate.section === section);
+  const found = selectFeedSections(feedSources()).find((candidate) => candidate.section === section);
   if (found === undefined) throw new Error(`selectFeedSections returned no "${section}" section`);
-  return found.entries.map((entry) => entry.sessionId);
+  return found.rows.map(feedRowKey);
 }
 
 /**
@@ -84,6 +104,7 @@ function seedMixedFeed(): void {
 
 beforeEach(() => {
   useActivityStore.getState().reset();
+  useBoardStore.getState().reset();
 });
 
 describe('FEED_SECTION_DISPLAY_TITLES', () => {
@@ -108,9 +129,7 @@ describe('selectFeedSections', () => {
   it('puts every session in exactly one section', () => {
     seedMixedFeed();
 
-    const placedSessionIds = selectFeedSections(useActivityStore.getState().bySessionId).flatMap((section) =>
-      section.entries.map((entry) => entry.sessionId),
-    );
+    const placedSessionIds = selectFeedSections(feedSources()).flatMap((section) => section.rows.map(feedRowKey));
 
     expect([...placedSessionIds].sort()).toEqual(Object.keys(useActivityStore.getState().bySessionId).sort());
     expect(placedSessionIds).toHaveLength(11);
@@ -140,15 +159,156 @@ describe('countFeedSectionsByTitle', () => {
     seedSession('sess-run-working', { state: 'thinking', sessionStatus: 'running', enteredSectionAt: 500 });
     seedSession('sess-queued-permission', { state: 'permission', sessionStatus: 'queued', enteredSectionAt: 500 });
 
-    const counts = countFeedSectionsByTitle(useActivityStore.getState().bySessionId);
+    const counts = countFeedSectionsByTitle(feedSources());
 
     expect(Object.fromEntries(counts)).toEqual({ Idle: 3, Active: 1, Queued: 1, Paused: 0 });
     expect([...counts.keys()]).toEqual(['Idle', 'Active', 'Queued', 'Paused']);
   });
 
   it('reports 0 for every displayed section when no session exists', () => {
-    const counts = countFeedSectionsByTitle(useActivityStore.getState().bySessionId);
+    const counts = countFeedSectionsByTitle(feedSources());
 
     expect(Object.fromEntries(counts)).toEqual({ Idle: 0, Active: 0, Queued: 0, Paused: 0 });
+  });
+
+  it('counts a sessionless task row under its section', () => {
+    seedBoard([boardTaskFixture({ id: 'task-paused', swimlane_id: 'lane-doing', session_id: null, resumable: true })]);
+
+    expect(Object.fromEntries(countFeedSectionsByTitle(feedSources()))).toEqual({ Idle: 0, Active: 0, Queued: 0, Paused: 1 });
+  });
+});
+
+/** A session for an explicit task, built through the store's own actions like seedSession. */
+function seedTaskSession(sessionId: string, taskId: string, state: ActivityStateWire, sessionStatus: ReadStreamSessionStatusWire): void {
+  useActivityStore.getState().registerSession(sessionId, taskId, 'project-1');
+  useActivityStore
+    .getState()
+    .applySnapshot(sessionId, taskId, 'project-1', streamSnapshotFixture({ activity: { state, reason: REASON_FOR_STATE[state] }, sessionStatus }));
+}
+
+function sectionOf(rowKey: string): FeedSection | null {
+  return selectFeedSections(feedSources()).find((section) => section.rows.some((row) => feedRowKey(row) === rowKey))?.section ?? null;
+}
+
+/**
+ * Protocol 0.16.0: the desktop keeps a sessionless task in its `'sessions'`
+ * projection when it carries a spawn label or a Resume, and a board row can
+ * carry both at once (the suspended row counts as paused through every respawn
+ * gap and every resume's git phase). The section has to come from what the row
+ * WAS, or a model switch hops it into Paused and a Resume moves it twice.
+ */
+describe('selectFeedSections - the 0.16.0 board row', () => {
+  it('draws a sessionless resumable task as a Paused task row', () => {
+    seedBoard([boardTaskFixture({ id: 'task-paused', swimlane_id: 'lane-doing', session_id: null, resumable: true })]);
+
+    expect(sessionIdsIn('paused')).toEqual(['task-task-paused']);
+  });
+
+  it('draws a sessionless first start (labelled, not resumable) in Active', () => {
+    seedBoard([boardTaskFixture({ id: 'task-starting', swimlane_id: 'lane-doing', session_id: null, spawn_progress: 'Creating worktree...' })]);
+
+    expect(sessionIdsIn('working')).toEqual(['task-task-starting']);
+  });
+
+  it('keeps a paused task whose resume is labelled in Paused', () => {
+    seedBoard([
+      boardTaskFixture({ id: 'task-resuming', swimlane_id: 'lane-doing', session_id: null, spawn_progress: 'Resuming session...', resumable: true }),
+    ]);
+
+    expect(sessionIdsIn('paused')).toEqual(['task-task-resuming']);
+  });
+
+  it('draws no task row for an archived task, a task with nothing in flight, or a pre-0.16.0 row', () => {
+    seedBoard([
+      boardTaskFixture({ id: 'task-archived', session_id: null, resumable: true, archived_at: '2026-10-01T00:00:00.000Z' }),
+      boardTaskFixture({ id: 'task-quiet', session_id: null }),
+      boardTaskFixture({ id: 'task-legacy', session_id: null, spawn_progress: undefined, resumable: undefined }),
+    ]);
+
+    expect(selectFeedSections(feedSources()).flatMap((section) => section.rows)).toEqual([]);
+  });
+
+  it('draws the session row, never a second task row, for a task an entry already claims', () => {
+    seedBoard([boardTaskFixture({ id: 'task-paused', swimlane_id: 'lane-doing', session_id: null, resumable: true })]);
+    seedTaskSession('sess-ghost', 'task-paused', 'idle', 'running');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-ghost',
+      taskId: 'task-paused',
+      payload: { type: 'status', status: 'suspended', resuming: false, resumable: true },
+    });
+    useActivityStore.getState().applyActivityEvent({ kind: 'activity', sessionId: 'sess-ghost', taskId: 'task-paused', payload: { type: 'session-ended', intentional: true } });
+
+    expect(sessionIdsIn('paused')).toEqual(['sess-ghost']);
+  });
+
+  it('keeps a respawning row in its activity bucket: suspended, ended with a label, the board labelled and resumable', () => {
+    seedTaskSession('sess-switching', 'task-switching', 'thinking', 'running');
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-switching',
+      taskId: 'task-switching',
+      payload: { type: 'status', status: 'suspended', resuming: false, resumable: true },
+    });
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-switching',
+      taskId: 'task-switching',
+      payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Switching model...' },
+    });
+    seedBoard([
+      boardTaskFixture({ id: 'task-switching', swimlane_id: 'lane-doing', session_id: null, spawn_progress: 'Switching model...', resumable: true }),
+    ]);
+
+    expect(sectionOf('sess-switching')).toBe('working');
+  });
+
+  it('moves a paused row once on a Resume: Paused through the label, its bucket at the labelled end', () => {
+    // A paused row the phone holds a feed on (the idle-timeout suspend keeps session_id on it).
+    seedTaskSession('sess-parked', 'task-parked', 'idle', 'suspended');
+    seedBoard([boardTaskFixture({ id: 'task-parked', swimlane_id: 'lane-doing', session_id: 'sess-parked', resumable: true })]);
+    expect(sectionOf('sess-parked')).toBe('paused');
+
+    seedBoard([
+      boardTaskFixture({ id: 'task-parked', swimlane_id: 'lane-doing', session_id: 'sess-parked', spawn_progress: 'Resuming session...', resumable: true }),
+    ]);
+    expect(sectionOf('sess-parked')).toBe('paused');
+
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-parked',
+      taskId: 'task-parked',
+      payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Resuming session...', successorSessionId: 'sess-resumed' },
+    });
+    expect(sectionOf('sess-parked')).toBe('idle');
+  });
+
+  it('keeps a queued session that ended in Queued for its window, rather than hopping it into Idle', () => {
+    seedTaskSession('sess-cancelled', 'task-cancelled', 'idle', 'queued');
+    useActivityStore.getState().applyActivityEvent({ kind: 'activity', sessionId: 'sess-cancelled', taskId: 'task-cancelled', payload: { type: 'session-ended', intentional: true } });
+
+    expect(sectionOf('sess-cancelled')).toBe('queued');
+  });
+
+  it('draws one row per task when a ghost and a live session share it, preferring the live one', () => {
+    seedTaskSession('sess-ghost', 'task-shared', 'idle', 'running');
+    useActivityStore.getState().applyActivityEvent({ kind: 'activity', sessionId: 'sess-ghost', taskId: 'task-shared', payload: { type: 'session-ended', intentional: true } });
+    seedTaskSession('sess-live', 'task-shared', 'idle', 'running');
+
+    const placed = selectFeedSections(feedSources()).flatMap((section) => section.rows.map(feedRowKey));
+    expect(placed).toEqual(['sess-live']);
+  });
+
+  it('orders task rows among the section\'s session rows, newest first', () => {
+    seedTaskSession('sess-paused', 'task-session-paused', 'idle', 'suspended');
+    useActivityStore.setState((current) => ({
+      bySessionId: { ...current.bySessionId, 'sess-paused': { ...current.bySessionId['sess-paused'], enteredSectionAt: Date.parse('2026-10-02T00:00:00.000Z') } },
+    }));
+    seedBoard([
+      boardTaskFixture({ id: 'task-older', session_id: null, resumable: true, updated_at: '2026-10-01T00:00:00.000Z' }),
+      boardTaskFixture({ id: 'task-newer', session_id: null, resumable: true, updated_at: '2026-10-03T00:00:00.000Z' }),
+    ]);
+
+    expect(sessionIdsIn('paused')).toEqual(['task-task-newer', 'sess-paused', 'task-task-older']);
   });
 });

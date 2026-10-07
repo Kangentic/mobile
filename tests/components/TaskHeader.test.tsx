@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { CirclePlay, Clock, LoaderCircle } from 'lucide-react-native';
+import type { BoardTaskWire } from '@kangentic/protocol';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { TaskHeader } from '@/screens/task/TaskHeader';
 import { useActivityStore } from '@/state/activityStore';
@@ -31,14 +32,14 @@ jest.mock('@/connection/actions', () => ({
  * MoveTaskScreen renders a dead sheet against a board it cannot find - the
  * guard lives HERE, once, rather than in each screen that hosts the header.
  */
-function seedLocatedTask(swimlaneId: string = 'lane-todo'): void {
+function seedLocatedTask(swimlaneId: string = 'lane-todo', taskOverrides: Partial<BoardTaskWire> = {}): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
     boardsByProjectId: {
       'project-1': {
         columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-doing', name: 'Doing', position: 1 })],
         tasksById: {
-          'task-1': boardTaskFixture({ id: 'task-1', swimlane_id: swimlaneId }),
+          'task-1': boardTaskFixture({ id: 'task-1', swimlane_id: swimlaneId, ...taskOverrides }),
         },
         snapshotAt: 0,
         showTicketNumbers: true,
@@ -263,21 +264,88 @@ describe('TaskHeader status glyph', () => {
   });
 
   /**
-   * A paused session the desktop marks resumable. No wire on protocol 0.15.0
-   * carries the flag (desktop #762 adds it in 0.16.0), so it is set on the
-   * entry directly; the snapshot alone leaves it false.
+   * A paused session as a 0.16.0 desktop reports it: the board row names it
+   * and carries the authoritative `resumable` (the idle-timeout suspend's
+   * shape, which keeps `session_id`), and the snapshot carries the stream's
+   * copy of the same flag.
    */
   function seedPausedSession({ resumable }: { resumable: boolean }): void {
+    seedLocatedTask('lane-todo', { session_id: 'sess-1', resumable });
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
-      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
-    if (resumable) {
-      useActivityStore.setState((state) => ({
-        bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: true } },
-      }));
-    }
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended', resumable }),
+      );
   }
+
+  /**
+   * A desktop pause clears `session_id`, so the phone holds no stream on the
+   * paused session: the board row is the only thing that says "paused" or
+   * offers Resume.
+   */
+  it('offers Resume for a desktop-paused task with no session at all, from the board row alone', async () => {
+    useResumeStore.setState({ byTaskId: {} });
+    seedLocatedTask('lane-todo', { session_id: null, resumable: true });
+
+    await renderTaskHeader({ sessionId: null });
+
+    expect(screen.getByTestId('task-header-resume')).toBeTruthy();
+  });
+
+  /**
+   * The stream's copy only covers a screen open through the suspend itself,
+   * while the board row still names the session. Once the board has moved past
+   * it, the row decides - a move to Done is no edge of the session, so the
+   * copy can stay true after the row's has turned false.
+   */
+  it('counts the stream\'s resumable only while the board row still names that session', async () => {
+    useResumeStore.setState({ byTaskId: {} });
+    seedPausedSession({ resumable: false });
+    useActivityStore.setState((state) => ({
+      bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: true } },
+    }));
+
+    const { unmount } = await render(
+      <ThemeProvider>
+        <TaskHeader taskTitle="Fix the login bug" sessionId="sess-1" taskId="task-1" />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('task-header-resume')).toBeTruthy();
+    await unmount();
+
+    // The board catches up: the task left the session (moved to Done), not resumable.
+    seedLocatedTask('lane-todo', { session_id: null, resumable: false });
+    await renderTaskHeader({ sessionId: 'sess-1' });
+    expect(screen.queryByTestId('task-header-resume')).toBeNull();
+  });
+
+  /**
+   * A paused task whose resume (or a respawn) is already under way carries a
+   * label and `resumable: true` at once. The desktop shows the label there,
+   * never a Resume control, and so does the phone.
+   */
+  it('shows the spinner, not Resume, while the board labels a paused task', async () => {
+    seedLocatedTask('lane-todo', { session_id: null, spawn_progress: 'Resuming session...', resumable: true });
+
+    await renderTaskHeader({ sessionId: null });
+
+    expect(screen.queryByTestId('task-header-resume')).toBeNull();
+    expect(screen.getByTestId('task-header-status-preparing')).toBeTruthy();
+  });
+
+  it('offers no Resume against a pre-0.16.0 desktop, whatever the entry says', async () => {
+    seedPausedSession({ resumable: true });
+    // The same row from an older desktop: both 0.16.0 fields parse as null.
+    seedLocatedTask('lane-todo', { session_id: 'sess-1', resumable: null, spawn_progress: null });
+
+    await renderTaskHeader({ sessionId: 'sess-1' });
+
+    expect(screen.queryByTestId('task-header-resume')).toBeNull();
+  });
 
   it('offers the desktop\'s play circle for a paused session the desktop marks resumable, and resumes on tap', async () => {
     useResumeStore.setState({ byTaskId: {} });

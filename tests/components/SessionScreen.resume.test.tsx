@@ -5,6 +5,7 @@ import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore } from '@/state/resumeStore';
+import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { resumeTaskSession } from '@/connection/actions';
 
@@ -54,28 +55,58 @@ jest.mock('@/screens/task/TerminalTab', () => {
     ),
   };
 });
-// Records `quickKeysHidden` so the footer's half of the paused layout is visible here.
+// Records whether the quick keys show, so the footer's half of the paused layout is visible here:
+// hidden by `quickKeysHidden` (the Resume panel) or by `switcherOnly` (a wait with no live PTY).
+// Also records the footer's `notice` (as the hint), and carries a Chat button standing in for the
+// switcher, since the route pins the terminal lens.
 jest.mock('@/screens/task/SessionInputBar', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  const { View } = require('react-native');
+  const { Pressable, View } = require('react-native');
   return {
     __esModule: true,
-    SessionInputBar: (props: { quickKeysHidden?: boolean }) => (
-      <View testID="stub-session-input-bar" accessibilityValue={{ text: props.quickKeysHidden === true ? 'keys-hidden' : 'keys-shown' }} />
+    SessionInputBar: (props: {
+      quickKeysHidden?: boolean;
+      switcherOnly?: boolean;
+      notice?: string | null;
+      onModeChange: (mode: 'terminal' | 'chat' | 'changes') => void;
+    }) => (
+      <View
+        testID="stub-session-input-bar"
+        accessibilityValue={{ text: props.quickKeysHidden === true || props.switcherOnly === true ? 'keys-hidden' : 'keys-shown' }}
+        accessibilityHint={props.notice ?? undefined}
+      >
+        <Pressable testID="stub-mode-chat" onPress={() => props.onModeChange('chat')} />
+      </View>
     ),
   };
 });
 
 const resumeTaskSessionMock = resumeTaskSession as jest.Mock;
 
-/** `sessionId: null` is the board's report once the desktop has paused the task: it clears the task's `session_id`. */
-function seedBoard({ sessionId = 'sess-1' }: { sessionId?: string | null } = {}): void {
+/**
+ * `sessionId: null` is the board's report once the desktop has paused the
+ * task: it clears the task's `session_id`. `resumable` is the board row's
+ * Resume gate (protocol 0.16.0), `spawnProgress` its preparing label.
+ */
+function seedBoard({
+  sessionId = 'sess-1',
+  resumable = false,
+  spawnProgress = null,
+}: { sessionId?: string | null; resumable?: boolean; spawnProgress?: string | null } = {}): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
     boardsByProjectId: {
       'project-1': {
         columns: [boardColumnFixture(), boardColumnFixture({ id: 'lane-review', name: 'Code Review', role: null, position: 1 })],
-        tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', session_id: sessionId, swimlane_id: 'lane-review' }) },
+        tasksById: {
+          'task-1': boardTaskFixture({
+            id: 'task-1',
+            session_id: sessionId,
+            swimlane_id: 'lane-review',
+            resumable,
+            spawn_progress: spawnProgress,
+          }),
+        },
         snapshotAt: 0,
         showTicketNumbers: true,
         view: 'full',
@@ -87,21 +118,22 @@ function seedBoard({ sessionId = 'sess-1' }: { sessionId?: string | null } = {})
 }
 
 /**
- * A paused session, as the desktop's subscribe snapshot reports it. No wire
- * on protocol 0.15.0 carries `resumable` (desktop #762 adds it in 0.16.0), so
- * a desktop that offers Resume is seeded by flipping the entry directly; the
- * default, false, is what every desktop the phone can reach today produces.
+ * A paused session the screen holds a stream on, as a 0.16.0 desktop reports
+ * it: the board row still names it and carries the authoritative `resumable`
+ * (the idle-timeout suspend's shape), and the subscribe snapshot carries the
+ * stream's copy.
  */
 function seedPausedSession({ resumable }: { resumable: boolean }): void {
+  seedBoard({ resumable });
   useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
   useActivityStore
     .getState()
-    .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
-  if (resumable) {
-    useActivityStore.setState((state) => ({
-      bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: true } },
-    }));
-  }
+    .applySnapshot(
+      'sess-1',
+      'task-1',
+      'project-1',
+      streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended', resumable }),
+    );
 }
 
 async function renderSessionScreen(): Promise<void> {
@@ -118,6 +150,9 @@ describe('SessionScreen Resume (a paused session)', () => {
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useResumeStore.setState({ byTaskId: {} });
+    // A lens switch is remembered per task; without this, one test's switch
+    // would mount every later test on that lens.
+    useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
     seedBoard();
   });
 
@@ -175,9 +210,12 @@ describe('SessionScreen Resume (a paused session)', () => {
   /**
    * A desktop resume never revives the paused session: it ends it, with the
    * desktop's resume label, and binds a successor. The label reads as
-   * preparing, never as paused, so the panel gives way and the attempt ends.
+   * preparing, never as paused, so the panel gives way - but the attempt runs
+   * ON through the label. The desktop reports a failed spawn only by clearing
+   * that label with nothing bound, and an attempt dropped at the label could
+   * not be failed then: it handed back a fresh Resume button and no error.
    */
-  it('gives way and ends the attempt when the paused session ends into its resume', async () => {
+  it('gives way, and keeps the attempt running, when the paused session ends into its resume', async () => {
     seedPausedSession({ resumable: true });
     useResumeStore.getState().markResuming('task-1', Date.now());
     await renderSessionScreen();
@@ -193,7 +231,41 @@ describe('SessionScreen Resume (a paused session)', () => {
     });
 
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+  });
+
+  /** Once a session holds the task the attempt is over, whichever lens is showing. */
+  it('ends a running attempt once the task reads as running', async () => {
+    seedPausedSession({ resumable: true });
+    useResumeStore.getState().markResuming('task-1', Date.now());
+    await renderSessionScreen();
+
+    await act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'status', status: 'running', resuming: true, resumable: false },
+      });
+    });
+
     expect(useResumeStore.getState().byTaskId['task-1']).toBeUndefined();
+  });
+
+  /**
+   * The terminal lens shows a failed Resume's line in its panel; the other
+   * lenses carry it in the footer. A Resume pressed from the header while on
+   * Chat used to fail with nothing on screen but the play button coming back.
+   */
+  it('carries a failed Resume\'s line in the footer off the terminal lens, and only there', async () => {
+    seedPausedSession({ resumable: true });
+    useResumeStore.getState().markFailed('task-1', null);
+    await renderSessionScreen();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityHint).toBeUndefined();
+
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityHint).toBe('Session could not be resumed.');
   });
 
   /**
@@ -242,11 +314,10 @@ describe('SessionScreen Resume (a paused session)', () => {
   /**
    * The Resume panel takes the terminal lens's place for a paused session, so
    * the swap veil yields to it: a veil over the panel would swallow the Resume
-   * tap. The desktop's pause clears the task's session_id, which this screen
-   * reads as the session going away and opens its quiet window; the session
-   * it keeps bound is still paused, so the panel stays. The window opens on
-   * the board's word alone here (not a `session-ended`, which would end the
-   * session's paused display and take the panel with it).
+   * tap. The desktop's pause clears the task's session_id (keeping the task
+   * on the board with `resumable: true`), which this screen reads as the
+   * session going away and opens its quiet window; the board row still offers
+   * Resume, so the panel stays. The window opens on the board's word alone here.
    */
   it('yields the swap veil to the Resume panel while the quiet window is open on a paused session', async () => {
     seedPausedSession({ resumable: true });
@@ -254,7 +325,7 @@ describe('SessionScreen Resume (a paused session)', () => {
     expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
 
     await act(() => {
-      seedBoard({ sessionId: null });
+      seedBoard({ sessionId: null, resumable: true });
     });
 
     // The veil first: a veil that covers the panel also hides it from the
@@ -263,15 +334,121 @@ describe('SessionScreen Resume (a paused session)', () => {
     expect(screen.queryByTestId('session-swap-veil')).toBeNull();
     expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
 
-    // Control: the quiet window really is open. Once the desktop no longer
-    // offers Resume, the same open window shows its veil.
+    // Control: the quiet window really is open. Once the board no longer
+    // offers Resume (the task moved to Done, say), the same open window shows
+    // its veil - and the stream's stale copy of the flag does not outvote it.
     await act(() => {
-      useActivityStore.setState((state) => ({
-        bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: false } },
-      }));
+      seedBoard({ sessionId: null, resumable: false });
     });
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
     expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+  });
+
+  /**
+   * A desktop pause leaves the phone NO stream on the paused session, so a
+   * screen opened onto the task afterwards (from the feed's Paused card, say)
+   * has no session at all: the board row alone draws the panel.
+   */
+  it('shows the Resume panel for a desktop-paused task the screen holds no session for', async () => {
+    seedBoard({ sessionId: null, resumable: true });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    await act(async () => {
+      await fireEvent.press(screen.getByTestId('session-resume-button'));
+    });
+    expect(resumeTaskSessionMock).toHaveBeenCalledWith('task-1', 'project-1');
+  });
+
+  /**
+   * The desktop task view's launch overlay. Tapped from a screen that never
+   * bound a session, Resume's panel goes the moment the desktop labels the
+   * task "Resuming session..." - and with no ended session to key on, the
+   * quiet window cannot cover the pane. The waiting veil does, until the
+   * resumed session binds.
+   */
+  it('covers the pane with the waiting veil from the resume\'s label until a session binds', async () => {
+    seedBoard({ sessionId: null, resumable: true });
+    await renderSessionScreen();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+
+    await act(() => {
+      seedBoard({ sessionId: null, resumable: true, spawnProgress: 'Resuming session...' });
+    });
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+    expect(screen.getByTestId('session-swap-veil')).toBeTruthy();
+
+    await act(() => {
+      seedBoard({ sessionId: 'sess-2' });
+    });
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+  });
+
+  /**
+   * The same launch face for a screen BOUND to the paused session: the
+   * idle-timeout suspend keeps `session_id` on the paused row, so the phone
+   * holds a stream on it. When the resume's label lands the panel goes, and
+   * nothing has ended yet for the quiet window to open on, so without this the
+   * user watched the raw paused frame, quick keys live against a session with
+   * no PTY, for the whole of the desktop's git phase.
+   */
+  it('covers a bound paused session with the cleared waiting veil while its resume is labelled', async () => {
+    seedPausedSession({ resumable: true });
+    await renderSessionScreen();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true, spawnProgress: 'Resuming session...' });
+    });
+
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+    expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-hidden' });
+  });
+
+  /**
+   * The hand-over: the paused row's feed ends (naming its successor) under a
+   * pane the launch face has already cleared. The quiet window that opens on
+   * that end must open cleared too, never putting the dead frame back between
+   * the label and the successor's paint.
+   */
+  it('keeps the pane cleared when the labelled paused session ends into its successor', async () => {
+    seedPausedSession({ resumable: true });
+    await renderSessionScreen();
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true, spawnProgress: 'Resuming session...' });
+    });
+
+    await act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'session-ended', intentional: true, spawnProgressLabel: 'Resuming session...', successorSessionId: 'sess-2' },
+      });
+    });
+    expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+
+    await act(() => {
+      seedBoard({ sessionId: 'sess-2' });
+    });
+    expect(screen.getByTestId('session-swap-veil-empty')).toBeTruthy();
+  });
+
+  it('gives the paused frame and its Resume back when the label goes with no resume', async () => {
+    seedPausedSession({ resumable: true });
+    await renderSessionScreen();
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true, spawnProgress: 'Resuming session...' });
+    });
+
+    await act(() => {
+      seedBoard({ sessionId: 'sess-1', resumable: true });
+    });
+
+    expect(screen.queryByTestId('session-swap-veil')).toBeNull();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
   });
 
   /**

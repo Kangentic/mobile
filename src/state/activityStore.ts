@@ -33,11 +33,13 @@ export const RESPAWN_ROW_GRACE_MS = 20_000;
 /**
  * How long a task whose session ended WITHOUT a label keeps the same row and
  * glyph. Shorter than the labelled window, because at arrival the phone
- * cannot tell this end apart from a genuine park: the desktop's own
+ * cannot always tell this end apart from a genuine park: an older desktop's
  * column-move swap arrives unlabelled (the suspend-then-resume shape), and so
- * does a Stop. Retaining both for a short span is what keeps the row from
- * vanishing and reappearing on every column move; the bound is what keeps a
- * park from lingering. Equal to `SESSION_SWAP_QUIET_MS` (the session screen's
+ * does a Stop. (A 0.16.0 desktop labels every respawn before it suspends, so
+ * there an unlabelled end IS a park, and a paused task's row is then kept by
+ * the board's `resumable` rather than by this window.) Retaining both for a
+ * short span is what keeps the row from vanishing and reappearing on every
+ * column move; the bound is what keeps a park from lingering. Equal to `SESSION_SWAP_QUIET_MS` (the session screen's
  * silent phase), pinned by `tests/unit/sessionRespawnGapTiming.test.ts`, so a
  * swap that goes quiet on the session screen goes quiet on the list surfaces
  * for the same span.
@@ -60,6 +62,32 @@ export interface RespawnInFlight {
 /** The retention window a given end earns: a labelled one is explicit desktop intent, an unlabelled one is a bet. */
 export function respawnGraceMs(respawn: Pick<RespawnInFlight, 'label'>): number {
   return respawn.label !== null ? RESPAWN_ROW_GRACE_MS : ENDED_ROW_GRACE_MS;
+}
+
+/**
+ * The session the desktop named as an ended session's successor
+ * (`session-ended.successorSessionId`, protocol 0.16.0), before any board
+ * snapshot has caught up with it.
+ *
+ * A desktop resume never reuses the paused session's id: a feed held on a
+ * paused row (the idle-timeout suspend and the startup placeholder leave
+ * `task.session_id` on one) can only END, naming the new session. The
+ * reconciler treats this as the task's session until the board names one
+ * itself, so the successor is subscribed at once rather than a debounced board
+ * round trip later. Read through `selectPendingSuccessor`, which applies the
+ * window.
+ *
+ * Kept apart from `respawnByTaskId` on purpose: `registerSession` clears that
+ * record the moment the successor registers, and the successor still needs
+ * this fact after that, until the board lists it, or the next snapshot that
+ * still says null would prune the successor and drop its stream.
+ */
+export interface PendingSuccessor {
+  sessionId: string;
+  endedSessionId: string;
+  /** The ended session's project, when the phone held an entry for it; null otherwise (the reconciler looks the task up). */
+  projectId: string | null;
+  reportedAt: number;
 }
 
 export interface SessionActivityEntry {
@@ -146,18 +174,27 @@ export interface SessionActivityEntry {
    * stale 'suspended' - correct, not a bug to fix by writing 'exited' here,
    * which would give two fields authority over one fact.
    *
-   * THE ONE EXCEPTION IS A RESUME, and it is a liveness correction rather than
-   * an endedness one. `applyActivityEvent` clears a stale 'suspended' when an
-   * `activity` event reports 'thinking', because a thinking session is by
-   * definition not parked. Without that, staleness is unbounded in the one
-   * direction that costs a notification: `sessionStatus` is written only by
-   * `applySnapshot`, a snapshot lands only on a fresh `read-stream` subscribe,
-   * and `setDesiredStreams` skips ids already in `activeStreamIds` - so a
-   * session observed suspended and then resumed on the same established
-   * channel would keep suppressing `localNotifier`'s "Agent went idle" for the
-   * rest of that connection. Only 'thinking' clears, and only from 'suspended':
-   * the settle arms on a thinking -> idle edge, so that is exactly the reach of
-   * the gap and nothing wider.
+   * LIVE UPDATES. From protocol 0.16.0 the desktop pushes every later change
+   * for the same session id as the `status` activity payload (queued ->
+   * running, -> suspended, -> exited), so on such a desktop this field is
+   * current rather than a snapshot-time observation. `storeFeed` holds a push
+   * INTO 'suspended' back until the end or the respawn label that explains it
+   * arrives (see `SUSPEND_PUSH_HOLD_MS`), because the desktop suspends before
+   * every respawn and a bare 'suspended' would read "Paused" for the gap.
+   *
+   * THE PRE-0.16 FALLBACK IS A RESUME, and it is a liveness correction rather
+   * than an endedness one. `applyActivityEvent` clears a stale 'suspended' when
+   * an `activity` event reports 'thinking', because a thinking session is by
+   * definition not parked. Without that, staleness on an older desktop is
+   * unbounded in the one direction that costs a notification: there,
+   * `sessionStatus` is written only by `applySnapshot`, a snapshot lands only
+   * on a fresh `read-stream` subscribe, and `setDesiredStreams` skips ids
+   * already in `activeStreamIds` - so a session observed suspended and then
+   * resumed on the same established channel would keep suppressing
+   * `localNotifier`'s "Agent went idle" for the rest of that connection. Only
+   * 'thinking' clears, and only from 'suspended': the settle arms on a
+   * thinking -> idle edge, so that is exactly the reach of the gap and nothing
+   * wider.
    *
    * Nothing on the session screen may read it. `SessionScreen`'s `sessionEnded`
    * is balanced against the quiet swap window, and a fourth input re-opens
@@ -169,23 +206,34 @@ export interface SessionActivityEntry {
    */
   sessionStatus: ReadStreamSessionStatusWire | null;
   /**
-   * The stream's copy of whether the desktop offers Resume for this paused
-   * session, one of the inputs to `useResumeOffer`, which gates every Resume
-   * surface on the phone. Desktop task #762 adds the flag in protocol 0.16.0,
-   * on the read-stream snapshot and the `status` payload, and AUTHORITATIVELY
-   * on the board row (`BoardTaskWire.resumable`): a desktop pause clears the
-   * task's `session_id`, so once the board refreshes the phone holds no stream
-   * on a paused session, and this copy only keeps an already-open session
-   * screen current through the suspend. True only when `start-session` will
-   * resume the session exactly as the desktop's own Resume button does, with
-   * no on-enter automations and no column message.
+   * True when the desktop spawned this session as a resume of an earlier
+   * conversation (protocol 0.16.0, the snapshot and the `status` payload). The
+   * card's footer then reads "Resuming agent..." where it would read "Starting
+   * agent...", for as long as the running session has reported no model. Fixed
+   * for the life of a session id on the desktop; false against an older desktop,
+   * which sends no such field.
+   */
+  resuming: boolean;
+  /**
+   * The STREAM's copy of whether the desktop offers Resume for this paused
+   * session (protocol 0.16.0, the read-stream snapshot and the `status`
+   * payload). True only when `start-session` will resume the session exactly
+   * as the desktop's own Resume button does, with no on-enter automations and
+   * no column message.
    *
-   * Always false until the phone adopts 0.16.0 (mobile task #101, which also
-   * adds the board-row source to `useResumeOffer`). That is the point, not a
-   * gap: every desktop before it answers `start-session` on a paused task the
-   * way a move into the column does, re-running the column's automations, so
-   * on those desktops Resume stays hidden rather than meaning something
-   * different from the desktop's.
+   * NOT the gate. `useResumeOffer` gates every Resume surface on the BOARD
+   * ROW's `BoardTaskWire.resumable`: a desktop pause clears the task's
+   * `session_id`, so once the board refreshes the phone holds no stream on a
+   * paused session, and a move to Done or an archive is no lifecycle edge of
+   * the session, so this copy can stay true after the board row's has turned
+   * false. It counts only while the board row still names this session, which
+   * is what keeps a session screen open through the suspend itself current
+   * until the board catches up.
+   *
+   * False against every older desktop, and that is the point: those answer
+   * `start-session` on a paused task the way a move into the column does,
+   * re-running the column's automations, so Resume stays hidden there rather
+   * than meaning something different from the desktop's.
    */
   resumable: boolean;
 }
@@ -197,11 +245,12 @@ interface ActivityStoreState {
    * SEPARATELY from bySessionId because that map is pruned and this fact must
    * outlive the pruning.
    *
-   * A session that ends leaves the board's `view: 'sessions'` projection in
-   * the very next snapshot (its task has no session_id, so the projection
-   * drops the task), and reconcileSessionsFromBoards then deletes the activity
-   * entry for any session no board claims - taking `feedStatus: 'ended'` with
-   * it a few hundred milliseconds after it was set. A screen bound to that
+   * A session that ends leaves every board in the very next snapshot (its
+   * task's session_id goes null, and before protocol 0.16.0 the `'sessions'`
+   * projection dropped the task outright; from 0.16.0 it keeps a paused or
+   * labelled task, still with no session_id), and reconcileSessionsFromBoards
+   * then deletes the activity entry for any session no board claims - taking
+   * `feedStatus: 'ended'` with it, at the latest once its retention ends. A screen bound to that
    * session would see the ended state appear and vanish, which is what the
    * session-ended-state E2E flow caught. Pruning the entry is right (the feed
    * must not keep listing a dead session); losing the fact is not.
@@ -226,10 +275,10 @@ interface ActivityStoreState {
    * without a label. Per that field's own contract, this is INTENT, not a
    * guarantee: a consumer must keep whatever timeout already bounds its own
    * wait for a successor and use presence only to skip a redundant one, never
-   * as proof one is coming. Nothing renders it any more (the session screen
-   * reads it for the connection trace alone, and the list surfaces show no
-   * caption for a swap); it lengthens the row's retention window, and
-   * nothing reads absence as "no successor".
+   * as proof one is coming. Nothing renders THIS map (the session screen
+   * reads it for the connection trace alone; the cards draw the same label
+   * from the task-keyed `respawnByTaskId` below), and nothing reads absence as
+   * "no successor".
    *
    * Grows by one short string per respawn in an app run, in memory only -
    * same bound as `endedSessionIds`.
@@ -247,7 +296,7 @@ interface ActivityStoreState {
    *   `state.bySessionId[task.session_id]`, which is null), so they have no
    *   session id to look anything up with. Without this map the row simply
    *   vanishes for the whole swap, which is the bug this exists to fix - and
-   *   the desktop's column-move swap arrives UNLABELLED, indistinguishable
+   *   an older desktop's column-move swap arrives UNLABELLED, indistinguishable
    *   from a park at arrival, so both are retained and the window
    *   (`respawnGraceMs`) is what tells them apart.
    *
@@ -259,11 +308,28 @@ interface ActivityStoreState {
    * through that selector and never directly.
    */
   respawnByTaskId: Record<string, RespawnInFlight>;
+  /**
+   * The successor the desktop named for a task's ended session, keyed by
+   * task, until a board names a session for that task itself. Read through
+   * `selectPendingSuccessor`. Cleared by `releasePendingSuccessor` when the
+   * board catches up; an entry the board never confirms is ignored once its
+   * window passes and dropped by the next release.
+   */
+  pendingSuccessorByTaskId: Record<string, PendingSuccessor>;
   registerSession: (sessionId: string, taskId: string, projectId: string) => void;
   applySnapshot: (sessionId: string, taskId: string, projectId: string, snapshot: ReadStreamResponsePayload) => void;
   applyActivityEvent: (event: ActivityEvent) => void;
   markRejected: (sessionId: string) => void;
   removeSession: (sessionId: string) => void;
+  /**
+   * Drops a task's respawn record once its window has passed. The record is
+   * otherwise only ever cleared by a successor registering; the reconciler
+   * calls this for a ghost the board still vouches for past the window, so the
+   * store write re-renders a row whose display just changed with the clock.
+   */
+  expireTaskRespawn: (taskId: string) => void;
+  /** Drops a task's pending successor (the board named a session for the task, or the window passed). */
+  releasePendingSuccessor: (taskId: string) => void;
   markRead: (sessionId: string) => void;
   reset: () => void;
 }
@@ -295,6 +361,7 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
     // Null, never 'running': no snapshot has landed for a freshly registered
     // session, and the two must stay distinguishable - see the field's docs.
     sessionStatus: null,
+    resuming: false,
     resumable: false,
   };
 }
@@ -319,8 +386,11 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string): Sessi
  * `'idle'`, `awaitedPromptId` stays null) belongs to the agent that died and
  * can never be answered - and `localNotifier` treats a NEW entry in
  * 'permission' as a fresh prompt, so inheriting it verbatim would push
- * "Agent needs your input" for a dead question. `reason`, `feedStatus` and
- * `sessionStatus` are the successor's own liveness and stay fresh. One
+ * "Agent needs your input" for a dead question. `reason`, `feedStatus`,
+ * `sessionStatus`, `resuming` and `resumable` are the successor's own
+ * liveness and stay fresh: a ghost that was paused and resumable must never
+ * lend the successor a Resume offer, and whether the successor is a resume is
+ * its own snapshot's to say. One
  * consequence to know: a successor inherited as 'thinking' whose snapshot
  * then reports 'idle' is a thinking-to-idle edge, which arms the notifier's
  * 45s idle settle where a fresh entry armed nothing. That is the agent going
@@ -379,6 +449,22 @@ export function extractSpawnProgressLabel(payload: ActivityEventPayload): string
 }
 
 /**
+ * Reads a `session-ended` payload's optional `successorSessionId` (protocol
+ * 0.16.0), normalising "absent" to null. Absent from an older desktop, and
+ * from an end with no successor (a removed paused row, or a successor whose own
+ * spawn failed). An empty string, or the ended id itself, names no successor:
+ * the desktop never reuses an id across a resume, so honouring either would
+ * only re-subscribe the session that just ended.
+ */
+export function extractSuccessorSessionId(event: Pick<ActivityEvent, 'sessionId' | 'payload'>): string | null {
+  const payload = event.payload;
+  if (payload.type !== 'session-ended') return null;
+  const successorSessionId = payload.successorSessionId;
+  if (typeof successorSessionId !== 'string' || successorSessionId.length === 0) return null;
+  return successorSessionId === event.sessionId ? null : successorSessionId;
+}
+
+/**
  * Drops a task's respawn-in-flight fact, preserving referential identity when
  * there was nothing to drop. That matters: `registerSession` runs once per live
  * task on EVERY board snapshot, so returning a fresh map each time would churn
@@ -399,6 +485,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
   endedSessionIds: {},
   spawnProgressLabelBySessionId: {},
   respawnByTaskId: {},
+  pendingSuccessorByTaskId: {},
 
   registerSession: (sessionId, taskId, projectId) =>
     set((state) => {
@@ -409,8 +496,17 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // registers every live session before it prunes, so by the time the
       // prune loop asks "is a respawn in flight for this task?" the answer is
       // already no. One snapshot, no double row, no flicker.
+      //
+      // The ENDED session registering again is not a successor landing, and
+      // leaves the fact alone: a board snapshot that still names it (one
+      // already in flight when the end arrived, or a paused row's task before
+      // the board catches up with a resume) would otherwise spend the
+      // retention a moment after it was recorded.
       const respawnInFlight = state.respawnByTaskId[taskId];
-      const respawnByTaskId = clearTaskRespawn(state.respawnByTaskId, taskId);
+      const respawnByTaskId =
+        respawnInFlight !== undefined && respawnInFlight.endedSessionId === sessionId
+          ? state.respawnByTaskId
+          : clearTaskRespawn(state.respawnByTaskId, taskId);
       const respawnChanged = respawnByTaskId !== state.respawnByTaskId;
       const existing = state.bySessionId[sessionId];
       if (existing) {
@@ -443,6 +539,10 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         // 'running' is the protocol's own stated fallback for a desktop that
         // predates the field (pre-0.5.0), not a guess.
         sessionStatus: snapshot.sessionStatus ?? 'running',
+        // Both absent from a pre-0.16.0 desktop, which the protocol says to
+        // read as false: no "Resuming agent...", and no Resume.
+        resuming: snapshot.resuming ?? false,
+        resumable: snapshot.resumable ?? false,
         lastEventAt: Date.now(),
         // The successor's own snapshot is where a borrowed preview is handed
         // back: null re-arms the Home row's peek of THIS session's transcript.
@@ -496,15 +596,32 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
               [event.taskId]: { label: spawnProgressLabel, reportedAt: Date.now(), endedSessionId: event.sessionId },
             }
           : state.respawnByTaskId;
+      // The successor the desktop named, kept for the reconciler until a board
+      // names a session for the task (see PendingSuccessor). Recorded without
+      // an entry too, for the same reason as the facts above.
+      const successorSessionId = extractSuccessorSessionId(event);
+      const pendingSuccessorByTaskId: Record<string, PendingSuccessor> =
+        successorSessionId !== null
+          ? {
+              ...state.pendingSuccessorByTaskId,
+              [event.taskId]: {
+                sessionId: successorSessionId,
+                endedSessionId: event.sessionId,
+                projectId: existing?.projectId || null,
+                reportedAt: Date.now(),
+              },
+            }
+          : state.pendingSuccessorByTaskId;
       if (!existing) {
         if (
           endedSessionIds === state.endedSessionIds &&
           spawnProgressLabelBySessionId === state.spawnProgressLabelBySessionId &&
-          respawnByTaskId === state.respawnByTaskId
+          respawnByTaskId === state.respawnByTaskId &&
+          pendingSuccessorByTaskId === state.pendingSuccessorByTaskId
         ) {
           return state;
         }
-        return { endedSessionIds, spawnProgressLabelBySessionId, respawnByTaskId };
+        return { endedSessionIds, spawnProgressLabelBySessionId, respawnByTaskId, pendingSuccessorByTaskId };
       }
       const updated: SessionActivityEntry = { ...existing, lastEventAt: Date.now() };
       // The 'queued' retirement, hoisted ABOVE the switch on purpose, because
@@ -517,9 +634,11 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // free slot" with its prompt hidden behind that caption, since `starting`
       // outranks every other body source on the feed row.
       //
-      // 'session-ended' is the one exclusion: a session cancelled OUT of the
+      // 'session-ended' is one exclusion: a session cancelled OUT of the
       // queue ends without ever running, and calling that 'running' would be a
-      // lie the ended-state handling below then has to work around.
+      // lie the ended-state handling below then has to work around. 'status'
+      // is the other: it is the desktop SAYING what the status is (protocol
+      // 0.16.0), so it is the authority here, not evidence for an inference.
       //
       // This matters because no later snapshot would correct a stale status:
       // `setDesiredStreams` skips a session that already has a stream, so a
@@ -528,7 +647,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // ID was set on the input when the placeholder was created"), which is
       // exactly why the stale status would otherwise outlive the queue and
       // leave a running agent badged as waiting for the life of the connection.
-      if (existing.sessionStatus === 'queued' && payload.type !== 'session-ended') {
+      if (existing.sessionStatus === 'queued' && payload.type !== 'session-ended' && payload.type !== 'status') {
         updated.sessionStatus = 'running';
       }
       switch (payload.type) {
@@ -584,6 +703,20 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           updated.feedStatus = 'ended';
           updated.endedIntentionally = payload.intentional;
           break;
+        // The session's lifecycle status changed after its snapshot (protocol
+        // 0.16.0): queued -> running, -> suspended, -> exited, for this same
+        // session id. The payload repeats `resuming` and `resumable` so it is
+        // complete on its own. 'exited' is recorded as the status and nothing
+        // more: the `session-ended` push stays the one authority on whether a
+        // session is over, because it carries `intentional` (see the
+        // `sessionStatus` field). storeFeed delays the edge INTO 'suspended'
+        // until its end or its respawn label arrives; this case applies
+        // whatever it is handed.
+        case 'status':
+          updated.sessionStatus = payload.status;
+          updated.resuming = payload.resuming;
+          updated.resumable = payload.resumable;
+          break;
         default: {
           // Exhaustiveness guard. `session-ended` survived two protocol bumps
           // precisely because a silent fall-through was possible here; a new
@@ -602,6 +735,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         endedSessionIds,
         spawnProgressLabelBySessionId,
         respawnByTaskId,
+        pendingSuccessorByTaskId,
       };
     }),
 
@@ -626,6 +760,21 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       return { bySessionId };
     }),
 
+  expireTaskRespawn: (taskId) =>
+    set((state) => {
+      const respawn = state.respawnByTaskId[taskId];
+      if (respawn === undefined || Date.now() - respawn.reportedAt < respawnGraceMs(respawn)) return state;
+      return { respawnByTaskId: clearTaskRespawn(state.respawnByTaskId, taskId) };
+    }),
+
+  releasePendingSuccessor: (taskId) =>
+    set((state) => {
+      if (state.pendingSuccessorByTaskId[taskId] === undefined) return state;
+      const pendingSuccessorByTaskId = { ...state.pendingSuccessorByTaskId };
+      delete pendingSuccessorByTaskId[taskId];
+      return { pendingSuccessorByTaskId };
+    }),
+
   markRead: (sessionId) =>
     set((state) => {
       const existing = state.bySessionId[sessionId];
@@ -633,7 +782,8 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, unreadCount: 0 } } };
     }),
 
-  reset: () => set({ bySessionId: {}, endedSessionIds: {}, spawnProgressLabelBySessionId: {}, respawnByTaskId: {} }),
+  reset: () =>
+    set({ bySessionId: {}, endedSessionIds: {}, spawnProgressLabelBySessionId: {}, respawnByTaskId: {}, pendingSuccessorByTaskId: {} }),
 }));
 
 /**
@@ -674,10 +824,10 @@ export function selectSessionSpawnProgressLabel(
  * (`respawnGraceMs`): 20s when the desktop said a successor is coming, the
  * short `ENDED_ROW_GRACE_MS` when it said nothing.
  *
- * Returns the record rather than a boolean so the one caller that still needs
- * the label (the Home row derives its queued caption as "starting for a
- * reason that is not a swap"; no surface renders the label itself) gets it
- * through the same windowed read, never a second selector.
+ * Returns the record rather than a boolean because `cardSessionDisplay` needs
+ * the label (a labelled end draws it as the card's preparing footer, the
+ * desktop's own step text) and the ended id, and both must come through the
+ * same windowed read, never a second selector.
  *
  * Reads the clock, so this is not a pure function of the state: the same state
  * answers differently once the window passes. That is intended and is what
@@ -705,6 +855,24 @@ export function selectTaskRespawn(
   if (respawn === undefined) return null;
   if (Date.now() - respawn.reportedAt >= respawnGraceMs(respawn)) return null;
   return respawn;
+}
+
+/**
+ * The successor the desktop named for this task's ended session, or null when
+ * none is pending or the one there was has outlived `RESPAWN_ROW_GRACE_MS`
+ * (the same bound a labelled end earns: the desktop said who is coming, which
+ * is at least as strong as saying that someone is). Reads the clock, like
+ * `selectTaskRespawn`; the storeFeed sweep re-runs the reconcile at the same
+ * deadline.
+ */
+export function selectPendingSuccessor(
+  state: { pendingSuccessorByTaskId: Record<string, PendingSuccessor> },
+  taskId: string,
+): PendingSuccessor | null {
+  const pending = state.pendingSuccessorByTaskId[taskId];
+  if (pending === undefined) return null;
+  if (Date.now() - pending.reportedAt >= RESPAWN_ROW_GRACE_MS) return null;
+  return pending;
 }
 
 

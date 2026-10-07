@@ -61,9 +61,33 @@ describe('SessionInputBar', () => {
     expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
   });
 
-  it('renders nothing without a session', async () => {
-    await renderBar('terminal', null);
-    expect(screen.queryByTestId('session-input-bar')).toBeNull();
+  /**
+   * A sessionless task (paused, or a first start) is a steady state since
+   * protocol 0.16.0, not a passing moment. A footer that vanished with the
+   * session stranded a screen that opened on a remembered Chat lens: no way
+   * back to the Resume panel or the diff. The switcher stays; the mode row,
+   * with nothing to type into, does not.
+   */
+  it.each(['terminal', 'chat', 'changes'] as const)('renders the switcher alone without a session (%s)', async (mode) => {
+    await renderBar(mode, null);
+    expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
+    expect(screen.queryByTestId('session-input-row')).toBeNull();
+    expect(screen.queryByTestId('composer-input')).toBeNull();
+    expect(screen.queryByTestId('quick-key-esc')).toBeNull();
+  });
+
+  /** A failed Resume's line, in the composer's error style, above the rest of the footer. */
+  it('shows a notice above the footer when given one, and none otherwise', async () => {
+    const { unmount } = await render(
+      <ThemeProvider>
+        <SessionInputBar sessionId="sess-1" mode="chat" onModeChange={jest.fn()} chatAttention={false} notice="Session could not be resumed." />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('session-footer-notice')).toHaveTextContent('Session could not be resumed.');
+    await unmount();
+
+    await renderBar('chat');
+    expect(screen.queryByTestId('session-footer-notice')).toBeNull();
   });
 
   /**

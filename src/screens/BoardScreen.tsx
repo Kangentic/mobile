@@ -8,12 +8,13 @@ import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCa
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { TaskCard } from '@/components/board/TaskCard';
-import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
+import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import {
   isDoneColumn,
   selectArchived,
   selectColumnsOrdered,
   selectTasksForColumn,
+  sessionlessTaskStatus,
   useBoardStore,
   type ProjectBoard,
 } from '@/state/boardStore';
@@ -408,6 +409,14 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
   // is as sessionless as one in To Do, and a column check would send it to an
   // empty session shell. Moving to To Do hard-resets a task (the desktop kills
   // the session, worktree and branch), so that column can never have one.
+  //
+  // "No session" means what the DESKTOP means by it, which is not quite a null
+  // `session_id`: a paused task keeps its suspended session in the desktop's
+  // registry after a pause clears the pointer, and a first start has a spawn in
+  // flight before it has an id. Both open the desktop's task detail (its Resume
+  // button, its launch overlay), so both open the session screen here, told
+  // apart by the board row's own protocol 0.16.0 fields (sessionlessTaskStatus).
+  const sessionlessStatus = sessionlessTaskStatus(task);
   const openTask = useCallback(() => {
     // Checked before the session test, not after: an archived task ALWAYS has
     // a null session_id (the move to Done suspends the agent and clears it),
@@ -418,6 +427,10 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
       return;
     }
     if (task.session_id === null) {
+      if (sessionlessStatus !== null) {
+        router.push({ pathname: '/task/[taskId]', params: { taskId: task.id, projectId } });
+        return;
+      }
       router.push({ pathname: '/edit-task', params: { taskId: task.id, projectId } });
       return;
     }
@@ -425,7 +438,7 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
       pathname: '/task/[taskId]',
       params: { taskId: task.id, sessionId: task.session_id, projectId },
     });
-  }, [router, task.id, task.session_id, task.archived_at, projectId]);
+  }, [router, task.id, task.session_id, task.archived_at, sessionlessStatus, projectId]);
 
   // Task-keyed, not session-keyed, and that is the entire point: during a
   // swap the task's session_id is null, so `activityEntry` above is null and
@@ -433,11 +446,7 @@ const BoardTaskCard = React.memo(function BoardTaskCard({
   // was handing the work to a new agent. Now it shows the desktop's step in
   // the footer, as the desktop card does (cardSessionDisplay).
   const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
-  const sessionDisplay = cardSessionDisplay({
-    hasSession: activityEntry !== null,
-    sessionStatus: activityEntry?.sessionStatus,
-    respawn,
-  });
+  const sessionDisplay = cardSessionDisplay({ session: toCardSession(activityEntry), respawn, task });
 
   // Desktop TaskCard parity: spinner while thinking, mail while the
   // session waits on the user (permission or idle), and no icon for a
