@@ -9,6 +9,7 @@ import type { CardSessionDisplay } from './cardSessionDisplay';
 const STATUS_GLYPH_SIZE = 12;
 /** The desktop's wording, verbatim (TaskCard.tsx's bottom-bar switch). */
 const STARTING_AGENT_LABEL = 'Starting agent...';
+const RESUMING_AGENT_LABEL = 'Resuming agent...';
 const QUEUED_LABEL = 'Queued...';
 const PAUSED_LABEL = 'Paused';
 
@@ -25,7 +26,8 @@ export interface CardStatusFooterProps {
  * session can be in between "nothing" and "working" shows here, as faint text
  * beside a 12 dp glyph over an empty track, and nowhere else on the card.
  *
- *   - running, model not reported yet: spinner, "Starting agent..."
+ *   - running, model not reported yet: spinner, "Starting agent...", or
+ *     "Resuming agent..." for a session the desktop spawned as a resume
  *   - running: the usage bar (model, %, fill), at 0% until the window is known
  *   - preparing (a respawn's step): spinner, the desktop's own step text
  *   - queued: spinner, "Queued..."
@@ -46,7 +48,8 @@ export function cardStatusFooter({ display, usage, testID }: CardStatusFooterPro
       // The desktop shows the human model name or nothing: never a raw id.
       const modelName = usage?.model.displayName ?? '';
       if (usage === null || modelName.length === 0) {
-        return <StatusBar glyph="spinner" label={STARTING_AGENT_LABEL} testID={`${testID}-status-bar`} />;
+        const label = display.resuming ? RESUMING_AGENT_LABEL : STARTING_AGENT_LABEL;
+        return <StatusBar glyph="spinner" label={label} testID={`${testID}-status-bar`} />;
       }
       return <ContextUsageBar usage={usage} testID={`${testID}-usage`} />;
     }

@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Stack, useTheme } from '@/components';
+import { Stack, Text, useTheme } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
 import { QuickKeyBar } from '@/components/terminal/QuickKeyBar';
 import { SessionModeToggle, type SessionMode } from './SessionModeToggle';
@@ -34,6 +34,13 @@ export interface SessionInputBarProps {
    * composer and the switcher are unaffected.
    */
   quickKeysHidden?: boolean;
+  /**
+   * A one-line notice above everything else in the footer, in the composer's
+   * error style: a failed Resume's line ("Session could not be resumed."),
+   * which the terminal lens shows in its Resume panel and every other lens
+   * would otherwise not show at all. Null draws nothing.
+   */
+  notice?: string | null;
 }
 
 /**
@@ -44,6 +51,12 @@ export interface SessionInputBarProps {
  * terminal-chat switch swaps equal-height rows and the whole panel keeps its
  * geometry. Typing in terminal happens directly in the terminal (tap it to
  * raise the keyboard).
+ *
+ * With no session (a paused task the desktop cleared `session_id` from, or a
+ * first start before its agent exists) the footer is the switcher alone, as
+ * in the swap window's waiting phase: there is nothing to type into, but the
+ * task's diff, its Resume panel and the last transcript are all a lens away,
+ * and a screen that opened on a remembered Chat lens has no other way back.
  */
 export function SessionInputBar({
   sessionId,
@@ -53,10 +66,11 @@ export function SessionInputBar({
   suspended = false,
   switcherOnly = false,
   quickKeysHidden = false,
-}: SessionInputBarProps): React.JSX.Element | null {
+  notice = null,
+}: SessionInputBarProps): React.JSX.Element {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  if (sessionId === null) return null;
+  const modeRowShown = sessionId !== null && mode !== 'changes' && !switcherOnly && !(mode === 'terminal' && quickKeysHidden);
   return (
     <Stack
       gap="sm"
@@ -74,10 +88,15 @@ export function SessionInputBar({
         paddingBottom: Math.max(theme.spacing.xs, insets.bottom - theme.spacing.sm),
       }}
     >
+      {notice !== null ? (
+        <Text variant="caption" color="danger" style={{ paddingHorizontal: theme.spacing.xs }} testID="session-footer-notice">
+          {notice}
+        </Text>
+      ) : null}
       {/* Rendered only when a mode row exists: an empty wrapper would add a
           `gap` slot above the pill in changes mode, and past the end of the
           session the pill is the whole footer. */}
-      {mode !== 'changes' && !switcherOnly && !(mode === 'terminal' && quickKeysHidden) ? (
+      {modeRowShown && sessionId !== null ? (
         <View
           testID="session-input-row"
           pointerEvents={suspended ? 'none' : 'auto'}

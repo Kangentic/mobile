@@ -8,6 +8,7 @@ import {
   ENDED_ROW_GRACE_MS,
   RESPAWN_ROW_GRACE_MS,
   sectionForEntry,
+  selectPendingSuccessor,
   selectSessionEnded,
   selectSessionSpawnProgressLabel,
   selectTaskRespawn,
@@ -1237,5 +1238,122 @@ describe('activityStore', () => {
     applyActivityEvent(activityEvent('sess-a', { type: 'permission', promptId: 'sess-a:tool-1', pending: true }));
     expect(useActivityStore.getState().bySessionId['sess-a'].enteredSectionAt).toBeGreaterThanOrEqual(whileWorking);
     expect(sectionForEntry(useActivityStore.getState().bySessionId['sess-a'])).toBe('needs-you');
+  });
+});
+
+/**
+ * Protocol 0.16.0: the snapshot's `resuming` / `resumable`, the live `status`
+ * payload, and the successor a resume's `session-ended` names.
+ */
+describe('activityStore - protocol 0.16.0', () => {
+  beforeEach(() => {
+    useActivityStore.getState().reset();
+  });
+
+  const entry = (sessionId: string) => useActivityStore.getState().bySessionId[sessionId];
+
+  it('reads an absent resuming and resumable (a pre-0.16.0 snapshot) as false', () => {
+    useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture());
+
+    expect(entry('sess-1').resuming).toBe(false);
+    expect(entry('sess-1').resumable).toBe(false);
+  });
+
+  it('copies the snapshot\'s resuming and resumable', () => {
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended', resuming: true, resumable: true }));
+
+    expect(entry('sess-1').resuming).toBe(true);
+    expect(entry('sess-1').resumable).toBe(true);
+  });
+
+  it('applies a status push: the status, resuming and resumable together', () => {
+    const { applySnapshot, applyActivityEvent } = useActivityStore.getState();
+    applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued' }));
+
+    applyActivityEvent(activityEvent('sess-1', { type: 'status', status: 'running', resuming: true, resumable: false }));
+    expect(entry('sess-1')).toMatchObject({ sessionStatus: 'running', resuming: true, resumable: false });
+
+    applyActivityEvent(activityEvent('sess-1', { type: 'status', status: 'suspended', resuming: true, resumable: true }));
+    expect(entry('sess-1')).toMatchObject({ sessionStatus: 'suspended', resumable: true });
+  });
+
+  it('records a pushed exited as the status only, never as the session ending', () => {
+    const { applySnapshot, applyActivityEvent } = useActivityStore.getState();
+    applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'running' }));
+
+    applyActivityEvent(activityEvent('sess-1', { type: 'status', status: 'exited', resuming: false, resumable: false }));
+
+    expect(entry('sess-1').sessionStatus).toBe('exited');
+    expect(entry('sess-1').feedStatus).toBe('live');
+    expect(selectSessionEnded(useActivityStore.getState(), 'sess-1')).toBe(false);
+  });
+
+  it('never lends a successor the ghost\'s resuming or resumable', () => {
+    const { registerSession, applySnapshot, applyActivityEvent } = useActivityStore.getState();
+    registerSession('sess-ghost', 'task-1', 'project-1');
+    applySnapshot('sess-ghost', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'suspended', resuming: true, resumable: true }));
+    applyActivityEvent(activityEvent('sess-ghost', sessionEndedWithLabel(true, 'Resuming session...')));
+
+    useActivityStore.getState().registerSession('sess-successor', 'task-1', 'project-1');
+
+    expect(entry('sess-successor').resuming).toBe(false);
+    expect(entry('sess-successor').resumable).toBe(false);
+  });
+
+  it('records the successor a session-ended names, with the ended session\'s project', () => {
+    const { registerSession, applyActivityEvent } = useActivityStore.getState();
+    registerSession('sess-paused', 'task-1', 'project-1');
+
+    applyActivityEvent(activityEvent('sess-paused', { type: 'session-ended', intentional: true, successorSessionId: 'sess-next' }));
+
+    expect(selectPendingSuccessor(useActivityStore.getState(), 'task-1')).toMatchObject({
+      sessionId: 'sess-next',
+      endedSessionId: 'sess-paused',
+      projectId: 'project-1',
+    });
+  });
+
+  it('records no successor for an end that names none, or names the ended session itself', () => {
+    const { registerSession, applyActivityEvent } = useActivityStore.getState();
+    registerSession('sess-a', 'task-1', 'project-1');
+    applyActivityEvent(activityEvent('sess-a', { type: 'session-ended', intentional: true }));
+    registerSession('sess-b', 'task-2', 'project-1');
+    applyActivityEvent(activityEvent('sess-b', { type: 'session-ended', intentional: true, successorSessionId: 'sess-b' }, 'task-2'));
+
+    expect(useActivityStore.getState().pendingSuccessorByTaskId).toEqual({});
+  });
+
+  it('stops reporting a pending successor once its window passes', () => {
+    vi.useFakeTimers();
+    try {
+      useActivityStore
+        .getState()
+        .applyActivityEvent(activityEvent('sess-paused', { type: 'session-ended', intentional: true, successorSessionId: 'sess-next' }));
+      vi.advanceTimersByTime(RESPAWN_ROW_GRACE_MS - 1);
+      expect(selectPendingSuccessor(useActivityStore.getState(), 'task-1')).not.toBeNull();
+
+      vi.advanceTimersByTime(2);
+      expect(selectPendingSuccessor(useActivityStore.getState(), 'task-1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * A board snapshot that still names the ENDED session (already in flight when
+   * the end arrived, or a paused row's task before the board catches up with a
+   * resume) re-registers it. That is not a successor landing, and spending the
+   * end's retention on it pruned the row a moment after it was recorded.
+   */
+  it('keeps a task\'s end in flight when the ended session itself registers again', () => {
+    const { registerSession, applyActivityEvent } = useActivityStore.getState();
+    registerSession('sess-ended', 'task-1', 'project-1');
+    applyActivityEvent(activityEvent('sess-ended', { type: 'session-ended', intentional: true }));
+
+    useActivityStore.getState().registerSession('sess-ended', 'task-1', 'project-1');
+
+    expect(selectTaskRespawn(useActivityStore.getState(), 'task-1')).not.toBeNull();
   });
 });

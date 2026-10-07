@@ -117,7 +117,7 @@ decides *what* it may do:
 | `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...) |
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
-| `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it only for Resume on a paused session, gated on the desktop's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it. The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
+| `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it only for Resume on a paused task, gated on the board row's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it. The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
@@ -608,14 +608,26 @@ the alert:
   rather than pushing `session-ended`, so `feedStatus` stays `live` and only this clause stops the
   alert.
 
-A park is not a one-way door, and the exit is in the store rather than the predicate.
-`sessionStatus` is written only by `applySnapshot`, a snapshot lands only on a fresh `read-stream`
-subscribe, and `setDesiredStreams` skips a session that already has one - so on a live channel a
-resumed session would never be re-snapshotted, and the clause above would go on suppressing its
-alerts indefinitely. `applyActivityEvent` therefore retires a stale `'suspended'` the moment an
-`activity` event reports `'thinking'`, which is proof the session is not parked. That is a liveness
-correction, not an endedness one: only `'suspended'` is overwritten, so `session-ended` keeps sole
-authority over whether a session is over.
+From protocol 0.16.0 the desktop pushes every later change of a session's status itself, as the
+`status` activity payload (queued -> running, -> suspended, -> exited, for the same session id, with
+the session's `resuming` and `resumable` alongside), so on such a desktop `sessionStatus` is current
+rather than a snapshot-time observation. `storeFeed` holds a push INTO `'suspended'` back until the
+`session-ended` that explains it (or `SUSPEND_PUSH_HOLD_MS`, 3.5 s, just past the desktop's own
+shutdown bound): the desktop's `suspend()` announces the status before it shuts the PTY down, and
+suspends ahead of every model, agent, effort and column-move respawn, while the respawn's label
+reaches the phone only through a board event and the refresh debounce. Applied at once, every
+respawn read "Paused" for its gap. A pushed `'exited'` is recorded as the status and nothing more;
+`session-ended` stays the authority on endedness.
+
+A park is not a one-way door, and against an OLDER desktop the exit is in the store rather than
+the predicate. There `sessionStatus` is written only by `applySnapshot`, a snapshot lands only on a
+fresh `read-stream` subscribe, and `setDesiredStreams` skips a session that already has one - so on
+a live channel a resumed session would never be re-snapshotted, and the clause above would go on
+suppressing its alerts indefinitely. `applyActivityEvent` therefore retires a stale `'suspended'`
+the moment an `activity` event reports `'thinking'`, which is proof the session is not parked. That
+is a liveness correction, not an endedness one: only `'suspended'` is overwritten, so
+`session-ended` keeps sole authority over whether a session is over. (A 0.16.0 desktop never
+resumes a session under the same id at all; see the successor hop below.)
 
 Only `'suspended'` is excluded, and the other two statuses are deliberate keeps rather than
 oversights. `'queued'` is not excluded because a queued session cannot reach this predicate in the
@@ -649,12 +661,29 @@ entry can legitimately carry a stale `'idle'`, so only positive proof of work re
 On most column moves the desktop suspends the task's session and spawns or resumes a successor: a
 fresh isolated spawn (Executing to Code Review), a `--resume` of the main session (Code Review to
 Tests), or the same session restarted in place. On the wire every one is a **session swap**: a
-`session-ended` push for the old session (carrying a spawn-progress label for a same-column
-respawn, and NO label for the desktop's own column-move suspend-then-resume), the task
-sessionless for one to four seconds, then a board snapshot with the successor's id, and a round
-trip later its first frame. The phone presents every swap kind the same way. The session screen
-shows nothing new to read while it is in flight; the task cards show the desktop's own step in their
-footer, as the desktop's card does (below).
+`session-ended` push for the old session (carrying a spawn-progress label; an older desktop sent
+NO label for its own column-move suspend-then-resume, while a 0.16.0 desktop labels every respawn
+before it suspends, so there an unlabelled end is a park), the task sessionless for one to four
+seconds, then a board snapshot with the successor's id, and a round trip later its first frame.
+From protocol 0.16.0 the board row carries the same label through the gap
+(`BoardTaskWire.spawn_progress`, one `task-updated` board event per change, at most about one a
+second), and the `'sessions'` projection keeps the sessionless task while it does. The phone
+presents every swap kind the same way. The session screen shows nothing new to read while it is in
+flight; the task cards show the desktop's own step in their footer, as the desktop's card does
+(below).
+
+**The successor hop** (protocol 0.16.0). A desktop resume never turns a paused session back into
+running: it spawns a NEW session id and drops the paused row. A feed the phone holds on a paused
+row (the idle-timeout suspend and the startup placeholder leave `session_id` on one) therefore
+ends with `session-ended { intentional: true, spawnProgressLabel, successorSessionId }`.
+`reconcileSessionsFromBoards` treats the named successor (`pendingSuccessorByTaskId`, windowed by
+`RESPAWN_ROW_GRACE_MS`) as the task's session until a board names one itself: the ended id leaves
+the desired stream set and the successor joins it at once, without waiting for the debounced board
+refresh. It is registered only when its own snapshot lands (`onStreamSnapshot`), from the ghost,
+so the card goes straight from "Resuming session..." to the successor's own "Resuming agent..."
+instead of borrowing the ghost's usage bar for a round trip, and that same pass releases the ghost.
+A session re-registering under its OWN ended id (a board snapshot still naming it) is not a
+successor landing, so `registerSession` leaves the task's end in flight alone for it.
 
 **The session screen** shows one silent surface, `SessionSwapVeil`: the last terminal frame under a
 scrim that breathes slowly, with no title, caption or button. It opens on the column move itself,
@@ -760,19 +789,42 @@ connection trace, and is the step a task card's footer shows through the gap (be
 elapsed-wait label goes at the end, since only a running session carries one. `tests/unit/sessionRespawnGapTiming.test.ts` pins the two list
 windows to the two session-screen windows and both rigs' respawn gap inside the quiet one.
 
+From protocol 0.16.0 the board can hold a row in place for longer than either window. A desktop
+pause clears `session_id` but keeps the task in the `'sessions'` projection with `resumable: true`,
+and a long respawn keeps it there with its label, so the reconciler also retains an ENDED entry
+whose task's board row still vouches for it (`sessionlessTaskStatus`): the Paused card after a pause
+is the session's own row, same key, slot and ordering, for as long as the board says so. Only an
+entry the desktop actually ended is held this way; a live-looking entry whose end the phone missed
+is pruned, and the feed's task row (below) draws the truth instead. Past its window the task's
+respawn record is dropped at the sweep (`expireTaskRespawn`), a store write that re-renders the
+held row. Either retention yields the moment another entry claims the task, so a task never draws
+two rows.
+
 A **queued** session is the durable transitional state. The desktop's placeholder has no PTY, so
 it never reports thinking and its entry sits at `state: 'idle'` - indistinguishable from an agent
 that finished its work, which is exactly why it was invisible.
 
 **The task cards** (the Home feed row and the board card, one shared `TaskCard`) draw every
 in-between state exactly as the desktop's card does. `cardSessionDisplay` ports the desktop's
-`getTaskProgress` precedence: a respawn's step wins while the session is gone, then the session's
-status decides (`queued`, `suspended`, `exited`, else running). Only a RUNNING card draws a status
-icon, the agent's message as its body, and a wait time. Every other state draws no icon, shows the
-task's description, and names itself in the footer (`CardStatusFooter`, a port of the desktop
-card's bottom-bar switch, strings verbatim): a spinner and "Queued...", a spinner and the desktop's
-own step ("Switching model..."), a still pause circle and "Paused", or, for a running session that
-has not reported its model yet, a spinner and "Starting agent...". An ended session has no footer.
+`getTaskProgress` precedence: a step label wins over a session that is gone or SUSPENDED (the
+desktop suspends before every respawn) and never over a running or queued one, then the session's
+status decides (`queued`, `suspended`, `exited`, else running). The phone has two label sources
+where the desktop has one: the board row's `spawn_progress` (protocol 0.16.0, the fresher) and the
+`session-ended` push's label. An unlabelled end reads Paused when the board row (once it has moved
+past the ended id) says `resumable`, or before that refresh when the session's own pushed status is
+`suspended`; otherwise it is simply ended. With no live session at all, the board row's `resumable`
+is the only sign of a paused task, since a desktop pause clears `session_id`. Only a RUNNING card
+draws a status icon, the agent's message as its body, and a wait time. Every other state draws no
+icon, shows the task's description, and names itself in the footer (`CardStatusFooter`, a port of
+the desktop card's bottom-bar switch, strings verbatim): a spinner and "Queued...", a spinner and
+the desktop's own step ("Switching model...", "Creating worktree..."), a still pause circle and
+"Paused", or, for a running session that has not reported its model yet, a spinner and "Starting
+agent..." ("Resuming agent..." for a session the desktop spawned as a resume, the snapshot's
+`resuming`). An ended session has no footer. Against an older desktop both board fields are null
+and no status push says `suspended`, which reduces this to the earlier precedence exactly. One
+forced deviation: a paused task the desktop offers no Resume for (To Do, Done, archived) reads
+`resumable: false` with no session, so the phone draws no footer where the desktop card draws
+"Paused" - the phone has no other sign the suspended row exists.
 Every footer keeps the usage bar's box, so a card holds one height from queued through running, and
 the usage bar itself draws at 0% while the window size is unknown rather than mounting late. The
 footer spinner (`StatusSpinner`) turns as the desktop's does, with two departures forced by
@@ -786,27 +838,49 @@ gets a fresh window. Its one Reanimated mapper is mounted only on a spinning row
 
 **`TaskHeader`** reads the same `cardSessionDisplay` and draws the desktop task view header's glyph
 for each state (`TaskDetailHeader.tsx`): the agent icon while running, a still clock while queued,
-the spinner while a respawn is in flight, the Resume control for a paused session the desktop
-offers Resume for, nothing once the session has ended. No surface draws an agent icon for a session
-that is not running.
+the spinner while a step label is in flight, the Resume control for a paused task the desktop
+offers Resume for (with or without a session the phone holds), nothing once the session has ended.
+No surface draws an agent icon for a session that is not running.
 
 **Resume** is the desktop task view's, from the phone, on three surfaces: the session screen's
 terminal lens shows the desktop's "Resume session" button in place of the terminal (`ResumePanel`,
 quick keys hidden), the header shows a play circle, and the long-press hub gains "Resume session".
-All three read one gate, `useResumeOffer`: a session the card reads as Paused that the desktop
-marks `resumable`. That flag arrives with protocol 0.16.0 (desktop task #762), sent only by a
-desktop whose `start-session` resumes a paused task exactly as its own Resume button does, with
-no on-enter automations and no column message. Its authoritative home is the board row
-(`BoardTaskWire.resumable`), since a desktop pause clears the task's `session_id` and with it the
-phone's stream; the stream's copy (`SessionActivityEntry.resumable` today) only keeps an open
-session screen current through the suspend. Every earlier
-desktop answers `start-session` the way a move into the column does, re-running the column's
-automations, so until the phone adopts 0.16.0 (mobile task #101) the flag is always false and
-Resume stays hidden rather than meaning something different from the desktop's. A tap sends
-`start-session` (`resumeTaskSession`); the attempt lives in `resumeStore`, shared by the three
-surfaces, and reads "Resuming agent..." until the paused session ends into its successor, or fails
-with the desktop's refusal text, or with "Session could not be resumed." after `RESUME_WAIT_MS`
-(20 s), since a resume that fails after the desktop accepted it sends the phone nothing.
+All three read one gate, `useResumeOffer`: a task the card reads as Paused (so a label in flight -
+a respawn's step, or the desktop's own "Resuming session..." - is never offered Resume) that the
+desktop marks `resumable` (protocol 0.16.0, desktop task #762). The flag is the desktop's promise
+that `start-session` resumes the paused task exactly as its own Resume button does: the same
+conversation, a "Resuming session..." label, no on-enter automations and no column message. Its
+authoritative home is the BOARD ROW (`BoardTaskWire.resumable`): a desktop pause clears the task's
+`session_id`, so once the board refreshes the phone holds no stream on the paused session, and a
+pause, resume, move or archive each refreshes the row by a board event. The stream's copy
+(`SessionActivityEntry.resumable`, from the snapshot and the `status` push) counts only while the
+board row still names that very session, which keeps a screen open through the suspend itself
+current until the board catches up; after that it can be stale (a move to Done is no edge of the
+session) and never outvotes the row. A null or absent row field is a desktop before 0.16.0, which
+answers `start-session` by STARTING the column, re-running its automations, so Resume stays hidden
+there rather than meaning something different from the desktop's. A tap sends `start-session`
+(`resumeTaskSession`); the attempt lives in `resumeStore`, shared by the three surfaces, and runs
+THROUGH the desktop's "Resuming session..." label until a new session holds the task. It fails with
+the desktop's refusal text; with "Session could not be resumed." when the label clears with nothing
+bound and the task paused again, which is the only sign of a failed spawn the desktop sends
+(`resumeProgress`, read off the board row by a store subscription, so no surface has to be mounted
+when it happens); or with the same line after `RESUME_WAIT_MS` (20 s) when no label ever came, since
+a resume that goes nowhere after the desktop accepted it sends the phone nothing. A labelled resume
+is not bounded by the clock: the label clearing settles it either way. The terminal lens shows the
+failure line in its Resume panel and the other two lenses in the footer, above the switcher, and a
+screen with no session keeps that switcher (the footer is the switcher alone), so a paused task
+opened on a remembered Chat lens can still reach its Resume panel. While the task reads as preparing and no quiet window
+covers the pane, the session screen draws the same `SessionSwapVeil` in its waiting face (the
+desktop's launch overlay, the screen's "launch face", with no deadline and the footer down to the
+switcher): on a screen that never bound a session (opened from a sessionless Paused card, or onto a
+first start), and on one bound to a paused row whose resume has been labelled but whose feed has
+not ended yet, which would otherwise show the raw paused frame with live quick keys for the whole
+git phase. When that paused row's end then opens the quiet window, the window opens already cleared,
+so the dead frame never comes back between the label and the successor's paint. A respawn never
+reaches the launch face: its suspend is held until the labelled end, which opens the quiet window
+as before. On the board, a sessionless
+card the desktop keeps a session story for (resumable, or labelled) opens the session screen rather
+than the edit form, as the desktop's card opens its task detail.
 
 **The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
 you), Active, then the two statuses that are not running: Queued, its own section, and Paused,
@@ -815,7 +889,22 @@ feed-level (`selectFeedSections` in `screens/home/feedSections.ts`), deliberatel
 `sectionForEntry` stays a pure function of `entry.state`, which the wait time, the notifier and
 section re-stamping read, which keeps both states structurally unable to reach `endedSessionIds`
 or `SessionScreen`'s `sessionEnded`, and which keeps a swapping row in its existing section rather
-than bouncing it through a new one twice in five seconds. An empty section is never drawn.
+than bouncing it through a new one twice in five seconds. An empty section is never drawn. A row's
+section follows what its CARD says (`feedSectionForEntry`), not its raw `sessionStatus`, with one
+judgement for a preparing card, since a board row can carry a label and `resumable: true` at once
+(the desktop counts the suspended row as paused through every respawn gap and every resume's git
+phase): a session that ended INTO a spawn (its end carried a label) stays in its activity bucket,
+so a model switch never hops; a label landing on a paused session (a Resume under way) stays in
+Paused until the successor binds, so a Resume moves the row once. A queued session that ended keeps
+Queued for its window.
+
+**Sessionless task rows** (protocol 0.16.0) are the one kind of feed row with no activity entry: a
+board task the desktop keeps in its `'sessions'` projection with no session on it, that no entry
+claims - a paused task after a cold start, whose pause the phone never watched, or a first start
+before its agent exists. A resumable one goes in Paused; a labelled one (a first start, which the
+desktop classes as an active phase) in Active. The card is the session row minus everything a
+session supplies (no status icon, no wait time, no snippet, no usage), ordered by the row's
+`updated_at`, keyed `task-<id>`, and opens the session screen with no session id.
 
 **The section filter** is the phone's own addition (the desktop Monitor has no equivalent): a
 filter button beside Settings in the Agents header opens the "Show sections" form sheet

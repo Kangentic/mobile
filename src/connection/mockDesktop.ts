@@ -121,6 +121,14 @@ const MOCK_IDLE_TASK_ID = 'mock-task-idle';
  * read-stream answers a subscribe for it. That makes this session the rig's
  * one exercise of the parked path - notably localNotifier's suppression of a
  * "went idle" alert for an agent the desktop has put down.
+ *
+ * Its task KEEPS `session_id` pointing at the parked row, which on a 0.16.0
+ * desktop is the shape of the idle-timeout suspend and the startup placeholder
+ * (a user's Pause clears the pointer instead - `/pause` below models that one).
+ * So Resume here exercises the successor hop: `start-session` labels the task
+ * "Resuming session...", then this session's feed ends naming a NEW session id
+ * (`successorSessionId`), which the board then binds - never this id turned
+ * back into running, which is what a real desktop never does.
  */
 const MOCK_PAUSED_SESSION_ID = 'mock-session-paused';
 const MOCK_PAUSED_TASK_ID = 'mock-task-paused';
@@ -170,6 +178,24 @@ const MOCK_MAX_TICK_ENTRIES = 20;
  * rigs share no code), so the two gaps read the same across dev:mock and E2E.
  */
 const MOCK_RESPAWN_GAP_MS = 6000;
+
+/**
+ * The desktop Resume's label, verbatim (the 'resuming' phase in kangentic's
+ * src/main/transition-engine/spawn-progress.ts), and
+ * how long the mock holds it on the board before the successor binds - the
+ * desktop's git phase. A rig choice, comfortably inside RESUME_WAIT_MS.
+ */
+const MOCK_RESUME_LABEL = 'Resuming session...';
+const MOCK_RESUME_GAP_MS = 2500;
+/** How long a resumed successor runs before its agent reports a model, so the card's "Resuming agent..." face is visible. */
+const MOCK_RESUME_MODEL_DELAY_MS = 3000;
+/**
+ * The gap between the live `suspended` status push and the PTY exit's
+ * `session-ended`, for `/pause` and a labelled `/respawn` alike: the desktop's
+ * `suspend()` announces the status before its graceful shutdown (up to 1.5 s
+ * natural exit plus 1.5 s kill).
+ */
+const MOCK_SUSPEND_EXIT_MS = 1200;
 
 /**
  * Where the streaming session's context bar starts, and how fast it climbs.
@@ -315,6 +341,14 @@ export interface MockStaticSessionSpec {
    * the phone's pre-0.5.0 fallback.
    */
   sessionStatus?: ReadStreamSessionStatusWire;
+  /** The snapshot's `resuming` (protocol 0.16.0): the session was spawned as a resume. Omitted means false. */
+  resuming?: boolean;
+  /**
+   * The snapshot's `resumable` (protocol 0.16.0): the stream's copy of the
+   * board row's flag, true only for a paused session the desktop would offer
+   * Resume for. Omitted means false.
+   */
+  resumable?: boolean;
 }
 
 export interface MockExtraThinkingSessionSpec extends MockStaticSessionSpec {
@@ -975,6 +1009,8 @@ export const MOCK_PAUSED_STATIC_SESSION: MockStaticSessionSpec = {
   activityState: 'idle',
   alreadyWaitingForMs: 26 * 60_000,
   sessionStatus: 'suspended',
+  // In Executing, not To Do or Done, so a 0.16.0 desktop offers Resume for it.
+  resumable: true,
   toolCells: [
     { name: 'Read', input: { file_path: 'src/billing/chargeStored.ts' }, result: '41 lines' },
     {
@@ -1755,7 +1791,13 @@ function waitingSinceFor(sessionId: string, waiting: boolean): number | undefine
   return since;
 }
 
-function staticSessionSnapshot(spec: MockStaticSessionSpec, wantsTerminal: boolean): ReadStreamResponsePayload {
+/**
+ * A static session's subscribe snapshot. `usageReported` false sends no usage,
+ * which is what a desktop serves for a session whose agent has not reported a
+ * model yet - the card's "Starting agent..." (or, for a resume, "Resuming
+ * agent...") face. Every seeded session has reported long ago.
+ */
+export function staticSessionSnapshot(spec: MockStaticSessionSpec, wantsTerminal: boolean, usageReported = true): ReadStreamResponsePayload {
   const since = staticWaitingSince(spec);
   return {
     scrollback: wantsTerminal ? spec.scrollback : '',
@@ -1763,10 +1805,13 @@ function staticSessionSnapshot(spec: MockStaticSessionSpec, wantsTerminal: boole
       spec.activityState === 'idle'
         ? { state: 'idle', reason: { kind: 'idle', since } }
         : { state: 'thinking', reason: { kind: 'turn-active' } },
-    usage: mockUsage(spec.usedTokens, spec.model),
+    usage: usageReported ? mockUsage(spec.usedTokens, spec.model) : null,
     awaitedPromptId: null,
     ptyDimensions: activeGrid(),
     sessionStatus: spec.sessionStatus ?? 'running',
+    // A 0.16.0 desktop sends both on every snapshot.
+    resuming: spec.resuming ?? false,
+    resumable: spec.resumable ?? false,
   };
 }
 
@@ -1774,6 +1819,8 @@ interface MockStaticSessionState {
   spec: MockStaticSessionSpec;
   transcript: TranscriptEntryWire[];
   revision: number;
+  /** False only for a just-resumed successor whose agent has not reported its model yet (see staticSessionSnapshot). */
+  usageReported: boolean;
 }
 
 /** The seed a static session's MUTABLE transcript starts from; sent messages append after it. */
@@ -2053,6 +2100,10 @@ export function initialTasks(): BoardTaskWire[] {
       // model, rounding out Sonnet/Opus/Codex already in use.
       agent: 'claude',
       session_id: MOCK_PAUSED_SESSION_ID,
+      // The authoritative Resume gate (protocol 0.16.0): paused, in a column
+      // the desktop offers Resume in. See MOCK_PAUSED_SESSION_ID for why the
+      // session id stays on the row.
+      resumable: true,
       branch_name: 'feature/vault-token-migration',
       labels: ['backend', 'payments', 'migration', 'breaking-change', 'p0'],
       pr_number: 103,
@@ -3020,7 +3071,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * with the rest of the scenario.
    */
   const staticSessionStates = new Map<string, MockStaticSessionState>(
-    MOCK_STATIC_SESSIONS.map((spec) => [spec.sessionId, { spec, transcript: staticSessionSeedTranscript(spec), revision: 1 }]),
+    MOCK_STATIC_SESSIONS.map((spec) => [spec.sessionId, { spec, transcript: staticSessionSeedTranscript(spec), revision: 1, usageReported: true }]),
   );
   /**
    * Tasks archived DURING this connection (a move into the done-role column),
@@ -3084,6 +3135,31 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   // the desktop respawning a task's agent under a fresh id.
   let activeSessionId: string | null = MOCK_SESSION_ID;
   let respawnCounter = 1;
+  /**
+   * The streaming session as a 0.16.0 desktop reports it: whether it was
+   * spawned as a resume (the snapshot's `resuming`), and whether its agent has
+   * reported a model yet (a resumed successor's snapshot carries no usage until
+   * the next usage push, which is what draws "Resuming agent...").
+   */
+  let activeSessionResuming = false;
+  let activeSessionUsageReported = true;
+  /**
+   * Armed by the `/stall-resume` command: the next `start-session` is
+   * accepted and then nothing follows, which is how a desktop's resume that
+   * fails after accepting looks from the phone (it reports the failure on the
+   * desktop only). The one way to reach the phone's own "Session could not be
+   * resumed." bound (RESUME_WAIT_MS) under dev:mock.
+   */
+  let stallNextResume = false;
+  /**
+   * Armed by the `/fail-resume` command: the next resume labels the row
+   * "Resuming session..." as usual, then its spawn fails - the label clears
+   * and nothing binds, leaving the task paused (no session, still
+   * `resumable`). That is the only sign of a failed spawn a 0.16.0 desktop
+   * gives the phone, and the path the phone fails its attempt on
+   * (`resumeProgress`'s `'spawn-failed'`).
+   */
+  let failNextResume = false;
   let codexStreamSubscribed = false;
   let geminiStreamSubscribed = false;
 
@@ -3163,6 +3239,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   /** Grows with feedTick so the board card's context bar visibly advances during a mock session, like a real one. */
   function emitUsage(): void {
     if (activeSessionId === null) return;
+    activeSessionUsageReported = true;
     emit({
       kind: 'activity',
       sessionId: activeSessionId,
@@ -3209,6 +3286,121 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     }
     later(50, () => {
       emit({ kind: 'board', projectId: MOCK_PROJECT.id, taskId: MOCK_TASK_ID, payload: { change: 'task-updated', ids: [MOCK_TASK_ID] } });
+    });
+  }
+
+  /** Stamps a task as changed and pushes the board event a real desktop sends for it. */
+  function announceTaskUpdated(task: BoardTaskWire, projectId: string): void {
+    task.updated_at = new Date().toISOString();
+    later(50, () => {
+      emit({ kind: 'board', projectId, taskId: task.id, payload: { change: 'task-updated', ids: [task.id] } });
+    });
+  }
+
+  /**
+   * The /pause magic command: a user's Pause on a 0.16.0 desktop. The live
+   * `status: 'suspended'` push goes first (the desktop's `suspend()` announces
+   * the status before its graceful shutdown), then the PTY exit's unlabelled
+   * `session-ended`, then the board row loses its `session_id` and gains
+   * `resumable: true`. That last part is the shape the phone has to get right:
+   * after a real pause it holds NO stream on the paused session, so the Paused
+   * card and every Resume surface run off the board row alone. Resume then
+   * flows through `start-session` with no feed to hop (resumePausedTask).
+   */
+  function pauseActiveSession(): void {
+    const pausedSessionId = activeSessionId;
+    if (pausedSessionId === null) return;
+    pendingPromptId = null;
+    pendingTickResult = null;
+    emit({
+      kind: 'activity',
+      sessionId: pausedSessionId,
+      taskId: MOCK_TASK_ID,
+      payload: { type: 'status', status: 'suspended', resuming: activeSessionResuming, resumable: true },
+    });
+    later(MOCK_SUSPEND_EXIT_MS, () => {
+      if (activeSessionId !== pausedSessionId) return;
+      emit({ kind: 'activity', sessionId: pausedSessionId, taskId: MOCK_TASK_ID, payload: { type: 'session-ended', intentional: true } });
+      activeSessionId = null;
+      streamSubscribed = false;
+      stopTerminalPlayback();
+      const streamingTask = tasks.find((candidate) => candidate.id === MOCK_TASK_ID);
+      if (streamingTask) streamingTask.resumable = true;
+      setTaskSession(null);
+    });
+  }
+
+  /**
+   * `start-session` on a resumable task, the way a 0.16.0 desktop's Resume
+   * runs it: the board row is labelled "Resuming session..." through the git
+   * phase, then the task resumes into a NEW session id - never the paused id
+   * turned back into running. A paused row the phone holds a feed on (the
+   * static paused session) ends that feed naming the successor
+   * (`successorSessionId`, the hop); the streaming task, paused by `/pause`,
+   * has no feed left to end. Either way the board then binds the successor and
+   * clears the label, and the successor's snapshot says `resuming: true` with
+   * no model until its agent reports one.
+   */
+  function resumePausedTask(task: BoardTaskWire, projectId: string): void {
+    task.spawn_progress = MOCK_RESUME_LABEL;
+    announceTaskUpdated(task, projectId);
+    const spawnFails = failNextResume;
+    failNextResume = false;
+    later(MOCK_RESUME_GAP_MS, () => {
+      if (spawnFails) {
+        // The failed spawn (see failNextResume): the label clears, the paused
+        // row stays exactly as it was.
+        task.spawn_progress = null;
+        announceTaskUpdated(task, projectId);
+        return;
+      }
+      respawnCounter += 1;
+      const successorSessionId = `mock-session-${respawnCounter}`;
+      const parkedState = task.session_id !== null ? staticSessionStates.get(task.session_id) : undefined;
+      if (task.id === MOCK_TASK_ID) {
+        activeSessionId = successorSessionId;
+        activeSessionResuming = true;
+        activeSessionUsageReported = false;
+        streamSubscribed = false;
+      } else if (parkedState !== undefined) {
+        emit({
+          kind: 'activity',
+          sessionId: parkedState.spec.sessionId,
+          taskId: task.id,
+          payload: { type: 'session-ended', intentional: true, spawnProgressLabel: MOCK_RESUME_LABEL, successorSessionId },
+        });
+        // The desktop drops the paused row: a subscribe for its id now fails.
+        staticSessionStates.delete(parkedState.spec.sessionId);
+        // The same conversation, resumed: the transcript carries over.
+        const resumedState: MockStaticSessionState = {
+          spec: {
+            ...parkedState.spec,
+            sessionId: successorSessionId,
+            sessionStatus: 'running',
+            resuming: true,
+            resumable: false,
+            alreadyWaitingForMs: 0,
+            replyText: 'Picking the migration back up at the token schema.',
+          },
+          transcript: parkedState.transcript,
+          revision: parkedState.revision,
+          usageReported: false,
+        };
+        staticSessionStates.set(successorSessionId, resumedState);
+        later(MOCK_RESUME_MODEL_DELAY_MS, () => {
+          resumedState.usageReported = true;
+          emit({
+            kind: 'activity',
+            sessionId: successorSessionId,
+            taskId: task.id,
+            payload: { type: 'usage', usage: mockUsage(resumedState.spec.usedTokens, resumedState.spec.model) },
+          });
+        });
+      }
+      task.session_id = successorSessionId;
+      task.spawn_progress = null;
+      task.resumable = false;
+      announceTaskUpdated(task, projectId);
     });
   }
 
@@ -3264,19 +3456,51 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * forever, since that id can then never "end" again.
    *
    * The ended push carries the spawn-progress label by default (`/respawn`,
-   * the same-column model switch a real desktop labels), or none at all
-   * (`/respawn-quiet`, the shape of the desktop's column-move swap, which
-   * suspends and resumes without one). The phone goes quiet on BOTH: the
+   * the model switch a real desktop labels), or none at all (`/respawn-quiet`,
+   * the shape of an older desktop's column-move swap, which suspended and
+   * resumed without one; a 0.16.0 desktop labels every respawn before it
+   * suspends). The phone goes quiet on BOTH: the
    * label only decides what the session screen's long-gap reveal says, past
    * SESSION_SWAP_QUIET_MS, and this mock's gap sits inside that window. Both
    * commands exist so dev:mock can show each swap kind, and so the unlabelled
    * one (the column move, the swap most moves actually produce) is
    * exercisable on device without a real desktop.
+   *
+   * A labelled respawn runs in a 0.16.0 desktop's order: the board row takes
+   * the label, the live `status: 'suspended'` push goes out at once, and the
+   * PTY exit's `session-ended` follows MOCK_SUSPEND_EXIT_MS later. The status
+   * reaches the phone before the label does (the board refresh is debounced),
+   * which is the window that read "Paused" mid-model-switch until storeFeed
+   * held the push (SUSPEND_PUSH_HOLD_MS). `/respawn-quiet` stays an older
+   * desktop end to end: no status push, an immediate end.
    */
   function respawnActiveSession(spawnProgressLabel: string | null = 'Switching model...'): void {
     const endedSessionId = activeSessionId;
     pendingPromptId = null;
     pendingTickResult = null;
+    if (endedSessionId !== null && spawnProgressLabel !== null) {
+      const respawningTask = tasks.find((candidate) => candidate.id === MOCK_TASK_ID);
+      if (respawningTask) {
+        respawningTask.spawn_progress = spawnProgressLabel;
+        announceTaskUpdated(respawningTask, MOCK_PROJECT.id);
+      }
+      emit({
+        kind: 'activity',
+        sessionId: endedSessionId,
+        taskId: MOCK_TASK_ID,
+        payload: { type: 'status', status: 'suspended', resuming: activeSessionResuming, resumable: false },
+      });
+      later(MOCK_SUSPEND_EXIT_MS, () => {
+        if (activeSessionId !== endedSessionId) return;
+        endForRespawn(endedSessionId, spawnProgressLabel);
+      });
+      return;
+    }
+    endForRespawn(endedSessionId, spawnProgressLabel);
+  }
+
+  /** respawnActiveSession's PTY exit: the ended push, the sessionless gap, then the successor. */
+  function endForRespawn(endedSessionId: string | null, spawnProgressLabel: string | null): void {
     if (endedSessionId !== null) {
       emit({
         kind: 'activity',
@@ -3295,11 +3519,19 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     // running would otherwise write the dead session's bytes into whatever
     // subscribes next.
     stopTerminalPlayback();
+    // A 0.16.0 desktop also carries the label on the board row for the gap
+    // (`spawn_progress`), which keeps the sessionless task in the 'sessions'
+    // view; `/respawn-quiet` stays unlabelled, an older desktop's shape.
+    const respawningTask = tasks.find((candidate) => candidate.id === MOCK_TASK_ID);
+    if (respawningTask) respawningTask.spawn_progress = spawnProgressLabel;
     setTaskSession(null);
     later(MOCK_RESPAWN_GAP_MS, () => {
       respawnCounter += 1;
       const successorSessionId = `mock-session-${respawnCounter}`;
       activeSessionId = successorSessionId;
+      // A model switch's successor is a fresh start, not a resume.
+      activeSessionResuming = false;
+      activeSessionUsageReported = true;
       streamSubscribed = false;
       transcript = [
         {
@@ -3315,6 +3547,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         },
       ];
       transcriptRevision = 1;
+      if (respawningTask) respawningTask.spawn_progress = null;
       setTaskSession(successorSessionId);
     });
   }
@@ -3504,8 +3737,12 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
 
   /**
    * Mirrors the desktop handler: a request that names a `view` gets no
-   * backlog, 'sessions' gets only the session-bearing tasks plus whole-column
-   * counts, and a request that names none gets the pre-0.9.0 payload.
+   * backlog, 'sessions' gets the session-bearing tasks plus whole-column
+   * counts, and a request that names none gets the pre-0.9.0 payload. From
+   * protocol 0.16.0 'sessions' also keeps a sessionless task with a spawn
+   * label in flight or a Resume on offer (the desktop's read-board.ts keeps
+   * exactly those two), so the feed can draw "Resuming session..." and a
+   * lasting Paused card.
    */
   function boardSnapshot(projectId: string, view: ReadBoardView | undefined): JsonValue {
     const isSecondProject = projectId === MOCK_PROJECT_2.id;
@@ -3518,7 +3755,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     return {
       projectId: isSecondProject ? MOCK_PROJECT_2.id : MOCK_PROJECT.id,
       columns: isSecondProject ? mockColumns2() : mockColumns(),
-      tasks: view === 'sessions' ? allTasks.filter((task) => task.session_id !== null) : allTasks,
+      tasks:
+        view === 'sessions'
+          ? allTasks.filter((task) => task.session_id !== null || typeof task.spawn_progress === 'string' || task.resumable === true)
+          : allTasks,
       ...(view === undefined ? { backlog: [] } : {}),
       projectColor: isSecondProject ? MOCK_PROJECT_2.color : MOCK_PROJECT.color,
       // Exercises the desktop's "hide ticket numbers" layout setting - the
@@ -3664,7 +3904,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
             };
             return ok(request, geminiSnapshot as unknown as JsonValue);
           }
-          return ok(request, staticSessionSnapshot(staticState.spec, wantsTerminal) as unknown as JsonValue);
+          return ok(request, staticSessionSnapshot(staticState.spec, wantsTerminal, staticState.usageReported) as unknown as JsonValue);
         }
         if (activeSessionId === null || payload.sessionId !== activeSessionId) {
           return failWith(request, `No such session: ${payload.sessionId}`);
@@ -3688,11 +3928,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           activity: pendingPromptId
             ? { state: 'permission', reason: { kind: 'permission', since: waitingSinceFor(activeSessionId, true) } }
             : { state: 'thinking', reason: { kind: 'turn-active' } },
-          usage: mockUsage(streamingUsedTokens(feedTick), MOCK_MODEL_SONNET),
+          usage: activeSessionUsageReported ? mockUsage(streamingUsedTokens(feedTick), MOCK_MODEL_SONNET) : null,
           awaitedPromptId: pendingPromptId,
           awaitedPromptOptions: pendingPromptId === PERMISSION_PROMPT_ID ? MOCK_PERMISSION_OPTIONS : null,
           ptyDimensions: { ...ptyDimensions },
           sessionStatus: 'running',
+          resuming: activeSessionResuming,
+          resumable: false,
         };
         return ok(request, snapshot as unknown as JsonValue);
       }
@@ -3727,6 +3969,17 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       }
       case 'send-user-message': {
         const payload = parseCapabilityRequestPayload('send-user-message', request.payload);
+        // The two Resume-failure arms are accepted from any session's
+        // composer, since the paused task's own chat is the natural place to
+        // arm one before tapping Resume.
+        if (payload.text.trim() === '/stall-resume') {
+          stallNextResume = true;
+          return ok(request, { delivered: true });
+        }
+        if (payload.text.trim() === '/fail-resume') {
+          failNextResume = true;
+          return ok(request, { delivered: true });
+        }
         // Route by the session the composer actually sent into. Ignoring
         // payload.sessionId and appending to the active transcript - what this
         // handler did before the demo pairing shipped - made chat a dead end
@@ -3768,6 +4021,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         }
         if (payload.text.trim() === '/end-session') {
           endActiveSession();
+          return ok(request, { delivered: true });
+        }
+        if (payload.text.trim() === '/pause') {
+          pauseActiveSession();
           return ok(request, { delivered: true });
         }
         entryCounter += 1;
@@ -3970,6 +4227,38 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         // answer means "registration recorded", not "a push was proven".
         const payload = parseCapabilityRequestPayload('register-push', request.payload);
         return ok(request, { registered: payload.action === 'register' });
+      }
+      case 'start-session': {
+        // The phone sends this only for Resume, gated on the board row's
+        // `resumable` (protocol 0.16.0), so the resume is the path that
+        // matters. Answered on ACCEPT, as the desktop does: the successor's
+        // arrival reaches the phone as board and stream events.
+        const payload = parseCapabilityRequestPayload('start-session', request.payload);
+        const located = locateTask(payload.taskId);
+        if (!located) return failWith(request, `No such task: ${payload.taskId}`);
+        const startInFlight = typeof located.task.spawn_progress === 'string';
+        if (located.task.resumable === true && !startInFlight) {
+          if (stallNextResume) {
+            // Accepted, then nothing: see stallNextResume.
+            stallNextResume = false;
+            return ok(request, { ok: true, outcome: 'starting' });
+          }
+          resumePausedTask(located.task, located.projectId);
+          return ok(request, { ok: true, outcome: 'starting' });
+        }
+        // A session already running (or a start already under way): nothing
+        // is spawned and no event is coming, which is what `live` says.
+        if (located.task.session_id !== null || startInFlight) {
+          return ok(request, { ok: true, outcome: 'live' });
+        }
+        const startColumns = located.projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
+        const startColumn = startColumns.find((candidate) => candidate.id === located.task.swimlane_id);
+        // The desktop's own refusal copy (resumeBlockMessage) for To Do; the
+        // mock starts no fresh agents, so anything else is refused plainly.
+        return failWith(
+          request,
+          startColumn?.role === 'todo' ? 'Cannot resume a session for a task in the To Do column' : 'This task has no paused session to resume.',
+        );
       }
       default:
         return failWith(request, `Mock desktop has no handler for ${request.verb}`);

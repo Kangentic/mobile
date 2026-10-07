@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Check, CirclePause, Clock } from 'lucide-react-native';
 import { AgentStatusIcon, Stack, Text, useTheme } from '@/components';
 import { useActivityStore } from '@/state/activityStore';
+import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { FEED_SECTION_DISPLAY_TITLES, countFeedSectionsByTitle } from './home/feedSections';
 
@@ -37,8 +38,16 @@ export function SectionFilterScreen(): React.JSX.Element {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const bySessionId = useActivityStore((state) => state.bySessionId);
+  const respawnByTaskId = useActivityStore((state) => state.respawnByTaskId);
+  const spawnProgressLabelBySessionId = useActivityStore((state) => state.spawnProgressLabelBySessionId);
+  const boardsByProjectId = useBoardStore((state) => state.boardsByProjectId);
   const hiddenTriageSections = useSettingsStore((state) => state.hiddenTriageSections);
-  const countsByTitle = useMemo(() => countFeedSectionsByTitle(bySessionId), [bySessionId]);
+  // The same rows the feed draws, sessionless task rows included, so a count
+  // here always matches the header count on the feed.
+  const countsByTitle = useMemo(
+    () => countFeedSectionsByTitle({ bySessionId, respawnByTaskId, spawnProgressLabelBySessionId, boardsByProjectId }),
+    [bySessionId, respawnByTaskId, spawnProgressLabelBySessionId, boardsByProjectId],
+  );
   const anyHidden = hiddenTriageSections.length > 0;
 
   return (

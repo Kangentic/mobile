@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AccessibilityInfo, KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Screen } from '@/components';
+import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { useScreenFocusActive } from '@/components/motion/ScreenMotion';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
-import { findArchivedTaskById, findTaskById, isDoneRole, isTodoRole, useBoardStore } from '@/state/boardStore';
-import { selectSessionEnded, selectSessionSpawnProgressLabel, useActivityStore } from '@/state/activityStore';
+import { findArchivedTaskById, findTaskById, isDoneRole, isTodoRole, selectTaskRow, useBoardStore } from '@/state/boardStore';
+import { selectSessionEnded, selectSessionSpawnProgressLabel, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
 import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
@@ -24,7 +25,7 @@ import {
 import { SessionInputBar } from './SessionInputBar';
 import { ModeToggleHint } from './ModeToggleHint';
 import { ResumePanel } from './ResumePanel';
-import { useResumeOffer } from './useResumeOffer';
+import { RESUME_FAILED_MESSAGE, useResumeOffer } from './useResumeOffer';
 import { resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
 
@@ -131,8 +132,10 @@ export function SessionScreen(): React.JSX.Element {
     return board?.columns.find((column) => column.id === located.task.swimlane_id)?.role ?? null;
   });
   // The header must not change what it says during a swap. Under the board's
-  // 'sessions' projection the task leaves the snapshot for the whole gap, so
-  // the located title and number go null; without this hold the title read
+  // 'sessions' projection the task can leave the snapshot for the whole gap
+  // (always before protocol 0.16.0; from 0.16.0 only when the desktop has no
+  // label or Resume to keep it for), so the located title and number go
+  // null; without this hold the title read
   // as the literal "Task" and the number vanished for a second or two. Held
   // while located (render-time state adjustment, the pattern this file uses
   // for lastBoundSessionId below), read while not.
@@ -151,8 +154,8 @@ export function SessionScreen(): React.JSX.Element {
   // the task's session_id under a mounted screen); the param only bridges the
   // gap before the FIRST board snapshot. See sessionResolution.ts.
   //
-  // "First" is load-bearing: the sessions projection drops the task for the
-  // whole of every later swap, and re-trusting the param there rebinds the
+  // "First" is load-bearing: the sessions projection can drop the task for the
+  // whole of a later swap, and re-trusting the param there rebinds the
   // session this screen was OPENED with - after a few swaps a long-dead id,
   // which re-subscribed a corpse and re-keyed the quiet window (seen in the
   // release-build trace of 2026-09-18 as a second `ended` line 29 ms after
@@ -204,9 +207,10 @@ export function SessionScreen(): React.JSX.Element {
 
   // SESSION-DEATH DETECTION. Three signals, all scoped to the CURRENT binding:
   // 1. The board located the task but reports no session, after this screen
-  //    had one: the session ended with no successor (authoritative). Only
-  //    fires for a board fetched as `view: 'full'` - the 'sessions' projection
-  //    drops such a task rather than reporting it with a null session_id.
+  //    had one: the session ended with no successor yet (authoritative).
+  //    Fires for a board fetched as `view: 'full'`, and from protocol 0.16.0
+  //    for a 'sessions' board too, which keeps a paused or labelled task with
+  //    a null session_id (an older desktop's projection drops the task).
   // 2. The desktop pushed `session-ended` for the bound session (see below).
   // 3. The stream feed for the bound session sits 'rejected' past a grace
   //    window: the desktop refused the subscribe (dead session on a desktop
@@ -487,6 +491,45 @@ export function SessionScreen(): React.JSX.Element {
   // frame), and let go only when the window closes.
   const [quietWindowWaitingFor, setQuietWindowWaitingFor] = useState<string | null>(null);
   const quietWindowOpen = quietWindowSessionId !== null;
+  /**
+   * THE LAUNCH FACE: the task reads as preparing (protocol 0.16.0's board
+   * label) while no quiet window covers the pane. That is the desktop task
+   * view's launch overlay ('launch-overlay' in task-progress.ts), and the
+   * phone draws it as the veil's waiting face. Two ways in, neither of which
+   * the quiet window can cover, because nothing has ended for it to key on:
+   *
+   * - A screen that never bound a session: a first start opened from its
+   *   card, or a paused task resumed from a sessionless card, whose Resume
+   *   panel goes the moment the desktop labels the task "Resuming session...".
+   * - A screen BOUND to a paused session (the idle-timeout suspend keeps
+   *   `session_id` on the parked row): the label lands while the session is
+   *   still suspended, and its feed only ends later, naming the successor.
+   *   Without this the raw paused frame sat there, quick keys live against a
+   *   session with no PTY, for the whole of the desktop's git phase.
+   *
+   * It holds for as long as the label does, with no deadline, the way the
+   * desktop's own overlay waits. A respawn never reaches it: its suspend is
+   * held back until the labelled end (storeFeed), which opens the quiet window
+   * instead, so a model switch keeps the dimmed last frame it always had.
+   */
+  const taskRow = useBoardStore((state) => selectTaskRow(state, taskId));
+  const taskRespawn = useActivityStore((state) => selectTaskRespawn(state, taskId));
+  const boundEntry = useActivityStore((state) => (displaySessionId !== null ? (state.bySessionId[displaySessionId] ?? null) : null));
+  // An end in flight speaks for the session that ENDED: once a different
+  // session is bound here (the successor), it says nothing about this pane.
+  const launchRespawn =
+    taskRespawn !== null && (displaySessionId === null || taskRespawn.endedSessionId === displaySessionId) ? taskRespawn : null;
+  const launchFace =
+    !quietWindowOpen && cardSessionDisplay({ session: toCardSession(boundEntry), respawn: launchRespawn, task: taskRow }).kind === 'preparing';
+  // The bound session the launch face has cleared the pane over. When that
+  // session's end opens the quiet window, the window opens CLEARED as well:
+  // opening it on the dead frame would put the old frame back between the
+  // label and the successor's paint. Render-time state, the pattern this file
+  // uses.
+  const [launchVeiledSessionId, setLaunchVeiledSessionId] = useState<string | null>(null);
+  if (launchFace && displaySessionId !== null && launchVeiledSessionId !== displaySessionId) {
+    setLaunchVeiledSessionId(displaySessionId);
+  }
   const successorBound = quietWindowOpen && sessionId !== null && sessionId !== quietWindowSessionId;
   const successorPainted = useTerminalUiStore((state) =>
     selectTerminalPainted(state, successorBound ? sessionId : null),
@@ -524,6 +567,8 @@ export function SessionScreen(): React.JSX.Element {
       setSpentQuietSessionId(lastBoundSessionId);
     } else {
       setQuietWindowSessionId(lastBoundSessionId);
+      // The launch face already cleared this session's pane (see above).
+      if (launchVeiledSessionId === lastBoundSessionId) setQuietWindowWaitingFor(lastBoundSessionId);
     }
   } else if (
     !sessionEnded &&
@@ -779,14 +824,24 @@ export function SessionScreen(): React.JSX.Element {
   // which reads as preparing, never as paused), so the veil yields to it.
   const resumeOffer = useResumeOffer(taskId, displaySessionId);
   const resumePanelShown = resumeOffer.offered && projectId !== null;
+  // A failed Resume's line, wherever the user is looking: the terminal lens
+  // has it in the Resume panel, so the footer carries it in the other two (a
+  // Resume pressed from the header while on Chat otherwise failed in silence).
+  const resumeFailureNotice =
+    resumeOffer.offered && resumeOffer.attempt?.phase === 'failed' && mode !== 'terminal'
+      ? (resumeOffer.attempt.message ?? RESUME_FAILED_MESSAGE)
+      : null;
   const showQuietVeil =
     quietWindowOpen &&
     !leaveScreen &&
     !probeBaresSwap &&
     !resumePanelShown &&
     (quietWindowCleared ? mode === 'terminal' : !overlaysYieldToChanges);
+  // The launch face's veil (see launchFace above): its waiting face, in
+  // terminal mode, as the cleared window is drawn.
+  const showLaunchVeil = launchFace && !leaveScreen && !probeBaresSwap && mode === 'terminal';
   // The veil occludes the panes, visually and for assistive technology.
-  const overlayCoversPanes = showQuietVeil;
+  const overlayCoversPanes = showQuietVeil || showLaunchVeil;
   // The footer never leaves. A footer that blinked out the instant the
   // session ended and back on the bind was one of the flashes the veil
   // exists to remove, and in the waiting phase the switcher is how the
@@ -797,7 +852,8 @@ export function SessionScreen(): React.JSX.Element {
   // binds, veil or not; in the waiting phase it is the switcher alone, in
   // every mode, since keys and messages have nowhere to go.
   const footerSuspended = quietWindowOpen && !quietWindowWaiting && displaySessionId === quietWindowSessionId;
-  const footerSwitcherOnly = quietWindowWaiting;
+  // The launch face has no live PTY to send keys or messages to either.
+  const footerSwitcherOnly = quietWindowWaiting || launchFace;
   // The terminal pane stays DRAWN under the veil for the whole window. For a
   // few hours on 2026-09-18 it was hidden through the waiting phase, on a
   // measurement that said a dead session's page kept the WebView painting at
@@ -900,7 +956,7 @@ export function SessionScreen(): React.JSX.Element {
               deadline it clears the pane under itself rather than revealing
               anything. It covers the PANE box only: the footer below is a
               sibling, so the switcher stays beneath it. */}
-          {showQuietVeil ? <SessionSwapVeil waiting={quietWindowCleared} /> : null}
+          {showQuietVeil ? <SessionSwapVeil waiting={quietWindowCleared} /> : showLaunchVeil ? <SessionSwapVeil waiting /> : null}
         </View>
 
         {showModeHint ? <ModeToggleHint onDismiss={dismissModeHint} /> : null}
@@ -912,6 +968,7 @@ export function SessionScreen(): React.JSX.Element {
           suspended={footerSuspended}
           switcherOnly={footerSwitcherOnly}
           quickKeysHidden={resumePanelShown}
+          notice={resumeFailureNotice}
         />
       </KeyboardAvoidingView>
     </Screen>

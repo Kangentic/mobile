@@ -5,10 +5,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CirclePlay, Clock, GitCompareArrows } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, StatusSpinner, Text, useTheme } from '@/components';
-import { cardSessionDisplay } from '@/components/board/cardSessionDisplay';
+import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { getColumnIcon } from '@/components/board/columnIcons';
 import { sectionForEntry, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
-import { findTaskById, selectTaskColumn, useBoardStore } from '@/state/boardStore';
+import { findTaskById, selectTaskColumn, selectTaskRow, useBoardStore } from '@/state/boardStore';
 import { resumeTaskSession } from '@/connection/actions';
 import { useResumeOffer } from './useResumeOffer';
 
@@ -52,7 +52,8 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
    * is also used by CompletedTaskScreen, which passes none.
    */
   const respawn = useActivityStore((state) => (taskId ? selectTaskRespawn(state, taskId) : null));
-  const sessionDisplay = cardSessionDisplay({ hasSession: activityEntry !== null, sessionStatus: activityEntry?.sessionStatus, respawn });
+  const taskRow = useBoardStore((state) => selectTaskRow(state, taskId));
+  const sessionDisplay = cardSessionDisplay({ session: toCardSession(activityEntry), respawn, task: taskRow });
   const column = useBoardStore((state) => (taskId ? selectTaskColumn(state, taskId) : null));
   // locatedProjectId deliberately, never a route-param fallback: MoveTaskScreen
   // needs the board that actually HOLDS the task, which is findTaskById's

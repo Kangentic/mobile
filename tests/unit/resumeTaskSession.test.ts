@@ -5,9 +5,12 @@
  * failed resume and "Resuming agent..." forever.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BoardTaskWire } from '@kangentic/protocol';
 import { CapabilityError } from '@/channel/verbClient';
 import { RESUME_WAIT_MS, resumeTaskSession } from '@/connection/actions';
-import { useResumeStore } from '@/state/resumeStore';
+import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { useBoardStore } from '@/state/boardStore';
+import { resumeProgress, useResumeStore } from '@/state/resumeStore';
 
 const { startSession, getActiveConnection, requireSubscriptions, runBootstrap } = vi.hoisted(() => ({
   startSession: vi.fn(),
@@ -36,6 +39,7 @@ vi.mock('expo-secure-store', () => ({
 beforeEach(() => {
   vi.useFakeTimers();
   useResumeStore.setState({ byTaskId: {} });
+  useBoardStore.getState().reset();
 });
 
 afterEach(() => {
@@ -243,5 +247,106 @@ describe('resumeTaskSession - refreshing on a live outcome', () => {
     } finally {
       process.off('unhandledRejection', recordUnhandled);
     }
+  });
+});
+
+/**
+ * A 0.16.0 desktop runs a resume THROUGH a board-row label ("Resuming
+ * session...") and reports a failed spawn only by clearing that label with
+ * nothing bound. The phone used to drop its attempt the moment the label
+ * appeared, so a failed spawn handed back a fresh Resume button and no error.
+ */
+describe('resumeTaskSession - following the board row', () => {
+  const RESUME_LABEL = 'Resuming session...';
+  /** The board row after a user's pause: no session, Resume offered. */
+  const PAUSED_ROW: Partial<BoardTaskWire> = { session_id: null, resumable: true, spawn_progress: null };
+
+  const publishRow = (row: Partial<BoardTaskWire>): void => {
+    useBoardStore
+      .getState()
+      .applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', view: 'sessions', tasks: [boardTaskFixture({ id: 'task-1', ...row })] }));
+  };
+  const attemptFor = (): unknown => useResumeStore.getState().byTaskId['task-1'];
+
+  beforeEach(() => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+  });
+
+  it('fails a resume whose spawn fails: the label comes, then clears with nothing bound', async () => {
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+
+    publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+
+    publishRow(PAUSED_ROW);
+    expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+  });
+
+  /** The git phase can run long: once the desktop shows it is working on it, the label clearing settles the attempt, not the clock. */
+  it('keeps a labelled resume resuming past the wait bound', async () => {
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+    publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+
+    vi.advanceTimersByTime(RESUME_WAIT_MS + 1);
+
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+  });
+
+  it('clears the attempt once the row binds the new session', async () => {
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+    publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+
+    publishRow({ session_id: 'sess-new', resumable: false, spawn_progress: null });
+
+    expect(attemptFor()).toBeUndefined();
+  });
+
+  /** A row the desktop suspended in place (idle timeout) keeps its session id: that id staying put is not a bind. */
+  it('reads a row paused in place as bound only by a different session', async () => {
+    const pausedInPlace: Partial<BoardTaskWire> = { session_id: 'sess-paused', resumable: true, spawn_progress: null };
+    publishRow(pausedInPlace);
+    await resumeTaskSession('task-1', 'project-1');
+    publishRow({ ...pausedInPlace, spawn_progress: RESUME_LABEL });
+
+    publishRow(pausedInPlace);
+
+    expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+  });
+
+  /** An unrelated board event before the label lands must not read as a failed spawn: the row has always looked like this. */
+  it('does not read the paused row as a failed spawn before any label, and still fails it at the wait bound', async () => {
+    publishRow(PAUSED_ROW);
+    await resumeTaskSession('task-1', 'project-1');
+
+    publishRow(PAUSED_ROW);
+    expect(useResumeStore.getState().byTaskId['task-1']?.phase).toBe('resuming');
+
+    vi.advanceTimersByTime(RESUME_WAIT_MS);
+    expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+  });
+});
+
+describe('resumeProgress', () => {
+  const row = (fields: Partial<Pick<BoardTaskWire, 'session_id' | 'spawn_progress' | 'resumable'>>) => ({
+    session_id: null,
+    spawn_progress: null,
+    resumable: true,
+    ...fields,
+  });
+
+  it.each([
+    ['no row cached', null, null, false, 'waiting'],
+    ['a label', row({ spawn_progress: 'Resuming session...' }), null, false, 'labelled'],
+    ['a blank label', row({ spawn_progress: '   ' }), null, false, 'waiting'],
+    ['a new session', row({ session_id: 'sess-new', resumable: false }), null, true, 'bound'],
+    ['the paused session still in place', row({ session_id: 'sess-paused' }), 'sess-paused', true, 'spawn-failed'],
+    ['paused again after the label', row({}), null, true, 'spawn-failed'],
+    ['paused, label never seen', row({}), null, false, 'waiting'],
+    ['moved off a Resume column after the label', row({ resumable: false }), null, true, 'waiting'],
+  ] as const)('reads %s', (_description, boardRow, pausedSessionId, sawLabel, expected) => {
+    expect(resumeProgress(boardRow, pausedSessionId, sawLabel)).toBe(expected);
   });
 });

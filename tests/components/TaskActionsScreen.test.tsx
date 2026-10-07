@@ -91,23 +91,42 @@ describe('TaskActionsScreen', () => {
 
   /**
    * Design review round 2, decision B: Resume in the hub for a paused card,
-   * gated exactly as the session view's Resume is. No wire on protocol 0.15.0
-   * carries `resumable` (desktop #762 adds it in 0.16.0), so a desktop that
-   * offers Resume is seeded by flipping the entry; the snapshot leaves it false.
+   * gated exactly as the session view's Resume is - on the board row's
+   * `resumable` (protocol 0.16.0). The paused session here keeps its
+   * `session_id` on the row (the idle-timeout suspend's shape), and the
+   * snapshot carries the stream's copy of the flag.
    */
   describe('Resume session', () => {
     function seedPausedSession({ resumable }: { resumable: boolean }): void {
-      seedBoard({ withDoneColumn: true, task: { session_id: 'sess-1' } });
+      seedBoard({ withDoneColumn: true, task: { session_id: 'sess-1', resumable } });
       useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
       useActivityStore
         .getState()
-        .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
-      if (resumable) {
-        useActivityStore.setState((state) => ({
-          bySessionId: { ...state.bySessionId, 'sess-1': { ...state.bySessionId['sess-1'], resumable: true } },
-        }));
-      }
+        .applySnapshot(
+          'sess-1',
+          'task-1',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended', resumable }),
+        );
     }
+
+    /**
+     * The long-press hub on the Agents feed's sessionless Paused card: a
+     * desktop pause cleared `session_id`, so the board row is all there is.
+     */
+    it('is offered for a desktop-paused task with no session, from the board row alone', async () => {
+      seedBoard({ withDoneColumn: true, task: { session_id: null, resumable: true } });
+      await renderTaskActions();
+
+      expect(screen.getByTestId('task-action-resume')).toBeTruthy();
+    });
+
+    it('is not offered while the desktop labels the paused task (its resume is already under way)', async () => {
+      seedBoard({ withDoneColumn: true, task: { session_id: null, resumable: true, spawn_progress: 'Resuming session...' } });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-resume')).toBeNull();
+    });
 
     beforeEach(() => {
       useActivityStore.getState().reset();

@@ -603,6 +603,46 @@ export function selectProjectAccentColor(
   return null;
 }
 
+/**
+ * What a sessionless board row says the task is waiting on (protocol 0.16.0),
+ * or null when it says nothing: `'paused'` for a paused task the desktop
+ * offers Resume for (`resumable`), `'preparing'` for a spawn in flight (a
+ * non-blank `spawn_progress` label: a first start, or a respawn's gap). A row
+ * that carries both is a paused task whose resume or respawn is under way, and
+ * reads as `'paused'` here; the CARD reads the label (see cardSessionDisplay),
+ * this only says why the desktop kept the task in its `'sessions'` projection.
+ *
+ * Null for any row with a session, any archived row, and every row from a
+ * desktop that predates the two fields (both parse as null there). That is
+ * what keeps the phone's sessionless rows - the Agents feed's task rows, a
+ * retained ghost entry, the board card's routing - to exactly the tasks the
+ * desktop's own `read-board.ts` keeps for the same reason.
+ */
+export function sessionlessTaskStatus(
+  task: Pick<BoardTaskWire, 'session_id' | 'archived_at' | 'spawn_progress' | 'resumable'>,
+): 'paused' | 'preparing' | null {
+  if (task.session_id !== null || task.archived_at !== null) return null;
+  if (task.resumable === true) return 'paused';
+  if (hasSpawnLabel(task)) return 'preparing';
+  return null;
+}
+
+/** Whether the board row carries the desktop's spawn-progress step (protocol 0.16.0): a non-blank label, so a spawn is under way. */
+export function hasSpawnLabel(task: Pick<BoardTaskWire, 'spawn_progress'>): boolean {
+  return typeof task.spawn_progress === 'string' && task.spawn_progress.trim().length > 0;
+}
+
+/**
+ * The task's board row, or null when no cached board holds it. Safe as a
+ * Zustand selector, unlike `findTaskById`: the row is the object the store
+ * already holds, so its identity only changes when a snapshot (or an
+ * optimistic overlay) replaces it.
+ */
+export function selectTaskRow(state: { boardsByProjectId: Record<string, ProjectBoard> }, taskId: string | null): BoardTaskWire | null {
+  if (taskId === null) return null;
+  return findTaskById(state, taskId)?.task ?? null;
+}
+
 /** Locates a task (and its project) by id across cached boards - the task screen's param fallback. */
 export function findTaskById(
   state: { boardsByProjectId: Record<string, ProjectBoard> },

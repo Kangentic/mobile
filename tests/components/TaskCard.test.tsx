@@ -63,7 +63,7 @@ describe('TaskCard', () => {
       task: boardTaskFixture({ pr_number: 42 }),
       statusKind: 'working',
       showTicketNumbers: true,
-      sessionDisplay: { kind: 'running' },
+      sessionDisplay: { kind: 'running', resuming: false },
       usage: usageFixture(),
       columnStrip: {
         column: boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, icon: 'code' }),
@@ -89,7 +89,7 @@ describe('TaskCard', () => {
     // that mutation stays green against every other fixture in this file,
     // which all report usedTokens comfortably under contextWindowSize.
     await renderTaskCard({
-      sessionDisplay: { kind: 'running' },
+      sessionDisplay: { kind: 'running', resuming: false },
       usage: usageFixture({
         contextWindow: {
           usedPercentage: 92,
@@ -133,10 +133,27 @@ describe('TaskCard', () => {
     });
 
     it('shows "Starting agent..." with a spinner while a running session has not reported its model', async () => {
-      await renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: null });
+      await renderTaskCard({ sessionDisplay: { kind: 'running', resuming: false }, usage: null });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
       expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-spinner`), LoaderCircle)).toBeTruthy();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
+    });
+
+    /**
+     * Protocol 0.16.0's `resuming`: the desktop card reads "Resuming agent..."
+     * where it would read "Starting agent..." for a session spawned as a resume
+     * (desktop TaskCard.tsx's spinnerLabel), until the agent reports a model.
+     */
+    it('shows "Resuming agent..." for a resumed session that has not reported its model', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'running', resuming: true }, usage: null });
+      expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Resuming agent...');
+      expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-spinner`), LoaderCircle)).toBeTruthy();
+    });
+
+    it('shows the usage bar, not "Resuming agent...", once a resumed session reports its model', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'running', resuming: true }, usage: usageFixture() });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-usage`)).toBeTruthy();
+      expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
     });
 
     /**
@@ -146,7 +163,7 @@ describe('TaskCard', () => {
      */
     it('shows "Starting agent..." for a usage report whose model has no display name, never the raw id', async () => {
       const unnamedModelUsage = usageFixture({ model: { id: 'claude-opus-4-8', displayName: '' } });
-      await renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unnamedModelUsage });
+      await renderTaskCard({ sessionDisplay: { kind: 'running', resuming: false }, usage: unnamedModelUsage });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
       expect(screen.queryByText(/claude-opus-4-8/)).toBeNull();
@@ -158,7 +175,7 @@ describe('TaskCard', () => {
      * does. The phone used to draw nothing until then.
      */
     it('shows the model at 0% over an empty bar once the model is known but the window size is not', async () => {
-      await renderTaskCard({ sessionDisplay: { kind: 'running' }, usage: unknownWindowUsage });
+      await renderTaskCard({ sessionDisplay: { kind: 'running', resuming: false }, usage: unknownWindowUsage });
       const usageBar = screen.getByTestId(`${BASE_TEST_ID}-usage`);
       expect(usageBar).toHaveTextContent(new RegExp(unknownWindowUsage.model.displayName));
       expect(usageBar).toHaveTextContent(/0%/);
@@ -383,7 +400,7 @@ describe('TaskCard', () => {
         // a window that was simply never used up.
         expect(screen.getByTestId(spinnerTestID).props.style).toBeUndefined();
 
-        await rerender(footerCard({ kind: 'running' }));
+        await rerender(footerCard({ kind: 'running', resuming: false }));
         expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
         expect(screen.getByTestId(spinnerTestID).props.style).toBeDefined();
 

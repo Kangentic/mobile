@@ -4,10 +4,10 @@ import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type Awai
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { useActivityStore } from '@/state/activityStore';
 import { useChannelStore } from '@/state/channelStore';
-import { isDoneColumn, useBoardStore } from '@/state/boardStore';
+import { isDoneColumn, selectTaskRow, useBoardStore } from '@/state/boardStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
-import { useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
+import { resumeProgress, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
@@ -40,11 +40,13 @@ export async function writeTerminal(sessionId: string, data: string): Promise<vo
 }
 
 /**
- * How long Resume waits for the resumed session once the desktop has accepted
- * the start. The desktop answers on accept, and a failure after that sends the
- * phone nothing, so without a bound a failed resume would say "Resuming
- * agent..." forever. The same 20 s the feed already gives a labelled respawn
- * to produce its successor (RESPAWN_ROW_GRACE_MS).
+ * How long Resume waits, once the desktop has accepted the start, for the
+ * desktop to show it is working on it (its "Resuming session..." label) or for
+ * the resumed session itself. The desktop answers on accept, and a resume that
+ * goes nowhere after that sends the phone nothing, so without a bound it would
+ * say "Resuming agent..." forever. The same 20 s the feed already gives a
+ * labelled respawn to produce its successor (RESPAWN_ROW_GRACE_MS). A labelled
+ * resume is not bounded by it: the label clearing settles that one.
  */
 export const RESUME_WAIT_MS = 20_000;
 
@@ -63,15 +65,19 @@ const RESUME_FAILURE_MESSAGE_MAX_LENGTH = 160;
  * does, re-running the column's automations, which is why the gate exists.
  *
  * Every surface reads the attempt from `useResumeStore`. It stays "resuming"
- * until the paused session ends into its successor (the surfaces clear it) or
- * RESUME_WAIT_MS passes; a refusal or a lost connection fails it at once.
- * Resolves with the attempt as the request left it, so a caller that closes
- * on success (the long-press sheet) can stay open to show a refusal.
+ * through the desktop's "Resuming session..." label until a new session holds
+ * the task (cleared here, or by a surface once the task reads as running), and
+ * fails when the label clears with nothing bound (a failed spawn, see
+ * `resumeProgress`) or when RESUME_WAIT_MS passes with no label at all. A
+ * refusal or a lost connection fails it at once. Resolves with the attempt as
+ * the request left it, so a caller that closes on success (the long-press
+ * sheet) can stay open to show a refusal.
  */
 export async function resumeTaskSession(taskId: string, projectId: string): Promise<ResumeAttempt> {
   const inFlight = useResumeStore.getState().byTaskId[taskId];
   if (inFlight?.phase === 'resuming') return inFlight;
   const startedAt = Date.now();
+  const pausedSessionId = selectTaskRow(useBoardStore.getState(), taskId)?.session_id ?? null;
   useResumeStore.getState().markResuming(taskId, startedAt);
   try {
     const response = await requireVerbClient().startSession({ taskId, projectId });
@@ -86,11 +92,58 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
     useResumeStore.getState().markFailed(taskId, failed.message);
     return failed;
   }
-  setTimeout(() => {
-    const attempt = useResumeStore.getState().byTaskId[taskId];
-    if (attempt?.phase === 'resuming' && attempt.startedAt === startedAt) useResumeStore.getState().markFailed(taskId, null);
-  }, RESUME_WAIT_MS);
+  watchResumeAttempt(taskId, startedAt, pausedSessionId);
   return { phase: 'resuming', startedAt };
+}
+
+/**
+ * Follows one accepted resume on the task's board row until it settles. A
+ * board-store subscription rather than a surface's effect, because the desktop
+ * reports a failed spawn only by clearing its label, and nothing says a
+ * surface is mounted then: the long-press sheet closes on accept, and the user
+ * may be anywhere by the time the git phase ends.
+ *
+ * The wait bound applies only to a resume the desktop never labelled. Once
+ * the label has been seen, the desktop is visibly working on it, and the label
+ * clearing is what settles it either way, however long the git phase runs.
+ */
+function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: string | null): void {
+  let sawLabel = false;
+  let unsubscribe: (() => void) | null = null;
+  const stopWatching = (): void => {
+    unsubscribe?.();
+    unsubscribe = null;
+  };
+  const isCurrentAttempt = (): boolean => {
+    const attempt = useResumeStore.getState().byTaskId[taskId];
+    return attempt?.phase === 'resuming' && attempt.startedAt === startedAt;
+  };
+  const readProgress = (): void => {
+    if (!isCurrentAttempt()) {
+      stopWatching();
+      return;
+    }
+    const progress = resumeProgress(selectTaskRow(useBoardStore.getState(), taskId), pausedSessionId, sawLabel);
+    if (progress === 'labelled') {
+      sawLabel = true;
+    } else if (progress === 'bound') {
+      stopWatching();
+      useResumeStore.getState().clear(taskId);
+    } else if (progress === 'spawn-failed') {
+      stopWatching();
+      useResumeStore.getState().markFailed(taskId, null);
+    }
+  };
+  unsubscribe = useBoardStore.subscribe(readProgress);
+  readProgress();
+  setTimeout(() => {
+    readProgress();
+    if (!isCurrentAttempt()) return;
+    const row = selectTaskRow(useBoardStore.getState(), taskId);
+    if (row !== null && resumeProgress(row, pausedSessionId, sawLabel) === 'labelled') return;
+    stopWatching();
+    useResumeStore.getState().markFailed(taskId, null);
+  }, RESUME_WAIT_MS);
 }
 
 export async function moveTaskOptimistic(input: {
