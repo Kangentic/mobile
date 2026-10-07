@@ -64,6 +64,7 @@ const PAGE_MODULE_ORDER = [
   'cleanFeed.js',
   'lifecycle.js',
   'heightFit.js',
+  'cellFit.js',
   'panClamp.js',
   'refit.js',
   'dispatch.js',
@@ -162,6 +163,12 @@ html, body { margin: 0; padding: 0; background: #000000; height: 100%; overflow:
    promotion, Android WebView sometimes skips recompositing a fully repainted
    canvas (a black terminal until a 1px scroll invalidates the layer). */
 #terminal { width: max-content; margin: 0; transform: translateZ(0); }
+/* xterm parks its hidden textarea on the cursor cell (for IME placement), so a
+   long-press there placed Chromium's caret and insertion handle in it, one tap
+   from Android's Paste / Autofill menu. Focus is always programmatic
+   (terminal.focus()), so the textarea needs no hit testing at all. The class is
+   the long-press guard's (lifecycle.js), off only for the retention probe arm. */
+body.long-press-guard .xterm .xterm-helper-textarea { pointer-events: none; }
 </style>
 </head>
 <body>

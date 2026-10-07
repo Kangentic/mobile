@@ -22,6 +22,8 @@ describe('host -> terminal round-trip', () => {
       cleanFeed: false,
       holdFrame: false,
       preservePinch: false,
+      fitStrategy: 'computed',
+      longPressMenuGuard: true,
     };
     expect(decodeHostMessage(encodeHostMessage(knownDims))).toEqual(knownDims);
 
@@ -37,8 +39,67 @@ describe('host -> terminal round-trip', () => {
       cleanFeed: true,
       holdFrame: true,
       preservePinch: true,
+      fitStrategy: 'measured',
+      longPressMenuGuard: false,
     };
     expect(decodeHostMessage(encodeHostMessage(legacy))).toEqual(legacy);
+  });
+
+  /**
+   * The long-press guard is on unless the host explicitly turns it off (the
+   * retention probe's control arm), read exactly as the page reads it, so a
+   * host that predates the field still gets the guarded page.
+   */
+  it('keeps the long-press menu guard on unless the init says false', () => {
+    const base = {
+      type: 'init',
+      seq: 9,
+      scrollback: '',
+      cols: 80,
+      rows: 24,
+      fitHeightPx: null,
+      theme: {},
+      cleanFeed: false,
+      holdFrame: false,
+      preservePinch: false,
+    };
+    const decodeGuard = (overrides: Record<string, unknown>): boolean | undefined => {
+      const decoded = decodeHostMessage(JSON.stringify({ ...base, ...overrides }));
+      return decoded?.type === 'init' ? decoded.longPressMenuGuard : undefined;
+    };
+    expect(decodeGuard({})).toBe(true);
+    expect(decodeGuard({ longPressMenuGuard: false })).toBe(false);
+    expect(decodeGuard({ longPressMenuGuard: 0 })).toBe(true);
+    expect(decodeGuard({ longPressMenuGuard: 'false' })).toBe(true);
+  });
+
+  /**
+   * The fit strategy picks the computed fit unless the host explicitly asks for
+   * the measured chain (the retention probe's control arm). A host that sends
+   * nothing, or anything else, gets the computed fit, exactly as the page reads
+   * it, so the page and this decoder can never disagree about the default.
+   */
+  it('defaults the init fit strategy to computed unless measured is named', () => {
+    const base = {
+      type: 'init',
+      seq: 9,
+      scrollback: '',
+      cols: 80,
+      rows: 24,
+      fitHeightPx: null,
+      theme: {},
+      cleanFeed: false,
+      holdFrame: false,
+      preservePinch: false,
+    };
+    const decodeStrategy = (overrides: Record<string, unknown>): string | undefined => {
+      const decoded = decodeHostMessage(JSON.stringify({ ...base, ...overrides }));
+      return decoded?.type === 'init' ? decoded.fitStrategy : undefined;
+    };
+    expect(decodeStrategy({})).toBe('computed');
+    expect(decodeStrategy({ fitStrategy: 'measured' })).toBe('measured');
+    expect(decodeStrategy({ fitStrategy: 'Measured' })).toBe('computed');
+    expect(decodeStrategy({ fitStrategy: 7 })).toBe('computed');
   });
 
   /**
@@ -149,8 +210,33 @@ describe('terminal -> host round-trip', () => {
       gridHeightPx: 396,
       devicePixelRatio: 2.625,
       maxTextureSize: 4096,
+      fitStrategy: 'computed',
+      chainMs: 41,
+      cellWrites: 1,
+      cellWriteMs: 9,
+      maxCellWriteMs: 8,
     };
     expect(decodeTerminalMessage(encodeTerminalMessage(fitReport))).toEqual(fitReport);
+  });
+
+  /**
+   * The chain strategy lands in the release-build trace like the trigger, so
+   * it decodes through a closed set: the three values the page sends survive,
+   * and anything else becomes null rather than reaching the trace.
+   *
+   * Mutation that reddens this: let decodeFitChainStrategy pass any string through.
+   */
+  it('decodes the fit report chain strategy through a closed set', () => {
+    const decodeStrategy = (fitStrategy: unknown): string | null | undefined => {
+      const decoded = decodeTerminalMessage(JSON.stringify({ type: 'font-size', fontSizePx: 11, fitStrategy }));
+      return decoded?.type === 'font-size' ? decoded.fitStrategy : undefined;
+    };
+    expect(decodeStrategy('computed')).toBe('computed');
+    expect(decodeStrategy('measured')).toBe('measured');
+    expect(decodeStrategy('computed-miss')).toBe('computed-miss');
+    expect(decodeStrategy('user typed this')).toBeNull();
+    expect(decodeStrategy('Computed')).toBeNull();
+    expect(decodeStrategy(3)).toBeNull();
   });
 
   /**
@@ -173,6 +259,11 @@ describe('terminal -> host round-trip', () => {
       gridHeightPx: null,
       devicePixelRatio: null,
       maxTextureSize: null,
+      fitStrategy: null,
+      chainMs: null,
+      cellWrites: null,
+      cellWriteMs: null,
+      maxCellWriteMs: null,
     });
   });
 
@@ -257,6 +348,10 @@ describe('terminal -> host round-trip', () => {
         gridHeightPx: Infinity,
         devicePixelRatio: 'high',
         maxTextureSize: 4096,
+        chainMs: '41',
+        cellWrites: 2,
+        cellWriteMs: { slow: true },
+        maxCellWriteMs: false,
       }),
     );
 
@@ -274,6 +369,11 @@ describe('terminal -> host round-trip', () => {
       gridHeightPx: null,
       devicePixelRatio: null,
       maxTextureSize: 4096,
+      fitStrategy: null,
+      chainMs: null,
+      cellWrites: 2,
+      cellWriteMs: null,
+      maxCellWriteMs: null,
     });
   });
 

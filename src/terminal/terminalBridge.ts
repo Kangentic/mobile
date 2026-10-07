@@ -23,6 +23,20 @@
 export type TerminalFitSource = 'settled' | 'texture-cap' | 'unknown';
 
 /**
+ * How the page finds the cell (scripts/xterm-page/cellFit.js): 'computed'
+ * works the final cell out from the font's metrics and writes it once, which
+ * resizes (and so clears) the renderer's canvas at most twice; 'measured' is
+ * the older chain that stretches the line height a frame at a time, resizing
+ * the canvas on every pass. 'measured' is the retention probe's control arm.
+ */
+export type TerminalFitStrategy = 'computed' | 'measured';
+
+/** What a settled chain actually ran: a strategy, or a computed fit that missed and handed over to the measured chain. */
+export type TerminalFitChainStrategy = TerminalFitStrategy | 'computed-miss';
+
+const TERMINAL_FIT_CHAIN_STRATEGIES: readonly TerminalFitChainStrategy[] = ['computed', 'measured', 'computed-miss'];
+
+/**
  * What started the fit chain a report describes (the page's activeFitTrigger).
  * A closed set rather than any string because it lands in the release-build
  * connection trace, which must never carry free text from the page.
@@ -81,6 +95,15 @@ export type HostToTerminalMessage =
        * the pinch when the grid changed.
        */
       preservePinch: boolean;
+      /** How the page fits the cell for this init and its refits (see TerminalFitStrategy). */
+      fitStrategy: TerminalFitStrategy;
+      /**
+       * True cancels the WebView's long-press menu. Without it a long-press
+       * raises Android's text menu over xterm's hidden textarea, which offers
+       * only "Autofill" where an autofill service is set (seen on a Pixel with
+       * 1Password). False only under the retention probe's control arm.
+       */
+      longPressMenuGuard: boolean;
     }
   | { type: 'write'; data: string }
   | { type: 'set-font-size'; fontSizePx: number }
@@ -164,6 +187,18 @@ export type TerminalToHostMessage =
       gridHeightPx: number | null;
       devicePixelRatio: number | null;
       maxTextureSize: number | null;
+      /**
+       * The settled chain's cost, null on a texture-cap report or from an
+       * older page: which strategy ran, the chain's wall time, and how many
+       * font or line-height writes it made and how long they blocked. Each
+       * such write resizes and clears the renderer's canvas, so these are what
+       * the black-pane fix is measured by.
+       */
+      fitStrategy: TerminalFitChainStrategy | null;
+      chainMs: number | null;
+      cellWrites: number | null;
+      cellWriteMs: number | null;
+      maxCellWriteMs: number | null;
     }
   /** Which renderer backs the terminal: WebGL (GPU) or the DOM fallback. Observability for a degraded terminal. */
   | { type: 'renderer'; renderer: 'webgl' | 'dom' }
@@ -236,6 +271,11 @@ function decodeFitTrigger(value: unknown): TerminalFitTrigger {
   return knownTrigger ?? 'unknown';
 }
 
+/** A closed set, like the trigger: it lands in the release-build trace, which never carries free text from the page. */
+function decodeFitChainStrategy(value: unknown): TerminalFitChainStrategy | null {
+  return TERMINAL_FIT_CHAIN_STRATEGIES.find((strategy) => strategy === value) ?? null;
+}
+
 /** Decode a message received FROM the WebView terminal; null on anything malformed. */
 export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null {
   const parsedObject = parseJsonObject(raw);
@@ -282,6 +322,11 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
       gridHeightPx: finiteNumberOrNull(parsedObject.gridHeightPx),
       devicePixelRatio: finiteNumberOrNull(parsedObject.devicePixelRatio),
       maxTextureSize: finiteNumberOrNull(parsedObject.maxTextureSize),
+      fitStrategy: decodeFitChainStrategy(parsedObject.fitStrategy),
+      chainMs: finiteNumberOrNull(parsedObject.chainMs),
+      cellWrites: finiteNumberOrNull(parsedObject.cellWrites),
+      cellWriteMs: finiteNumberOrNull(parsedObject.cellWriteMs),
+      maxCellWriteMs: finiteNumberOrNull(parsedObject.maxCellWriteMs),
     };
   }
   if (parsedObject.type === 'renderer' && (parsedObject.renderer === 'webgl' || parsedObject.renderer === 'dom')) {
@@ -364,6 +409,11 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
       cleanFeed: parsedObject.cleanFeed,
       holdFrame: parsedObject.holdFrame,
       preservePinch: parsedObject.preservePinch,
+      // Defaults rather than rejects, as the page does: only an explicit
+      // 'measured' selects the older chain.
+      fitStrategy: parsedObject.fitStrategy === 'measured' ? 'measured' : 'computed',
+      // Likewise: only an explicit false turns the guard off.
+      longPressMenuGuard: parsedObject.longPressMenuGuard !== false,
     };
   }
   return null;

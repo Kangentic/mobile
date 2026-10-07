@@ -84,6 +84,17 @@
     if (initMessage.preservePinch !== true || previousCols !== knownCols || previousRows !== knownRows) {
       pinchOverrideFontPx = null;
     }
+    // The host picks the fit strategy per init (cellFit.js). Before the font
+    // below, which the computed fit already shapes.
+    fitStrategy = initMessage.fitStrategy === 'measured' ? 'measured' : 'computed';
+    // Only an explicit false (the retention probe's control arm) lets the
+    // WebView's long-press menu through (bootstrap.js). The body class takes
+    // xterm's hidden textarea out of hit testing (the page CSS): it sits on the
+    // cursor cell, and a long-press landing there placed Chromium's caret and
+    // insertion handle in it, one tap from the same "Autofill" menu. Nothing
+    // touches it directly; focus is always terminal.focus().
+    longPressMenuGuard = initMessage.longPressMenuGuard !== false;
+    document.body.classList.toggle('long-press-guard', longPressMenuGuard);
     // The page owns the font: the reference cell for this grid (or the cell
     // it already converged on), or the pinch. Capped either way, which on the
     // legacy no-dims path is the only guard between a wide grid and the GPU
@@ -173,7 +184,7 @@
       // fresh page (a remount after a killed renderer, a clean-feed rebuild)
       // comes up at the final cell instead of re-converging from 1.
       lineHeight: pinchOverrideFontPx !== null ? 1 : fittedLineHeightForGrid(),
-      fontFamily: 'Menlo, Consolas, monospace',
+      fontFamily: TERMINAL_FONT_FAMILY,
       theme: initMessage.theme,
       scrollback: 2000,
       convertEol: false,
@@ -222,9 +233,11 @@
     terminal.options.theme = initMessage.theme;
     // The font resetSessionViewState chose (the reference cell, the cell
     // already converged for this grid, or the pinch), and the line height
-    // that goes with it. A pinch keeps the stretch it was made over.
-    terminal.options.fontSize = currentFontSizePx;
-    if (pinchOverrideFontPx === null) terminal.options.lineHeight = fittedLineHeightForGrid();
+    // that goes with it. A pinch keeps the stretch it was made over. Unchanged
+    // values write nothing, so a re-seed of a fitted frame never resizes the
+    // canvas.
+    setCellOption('fontSize', currentFontSizePx);
+    if (pinchOverrideFontPx === null) setCellOption('lineHeight', fittedLineHeightForGrid());
     applyGeometry();
     seedAndSettle(initMessage);
   }
@@ -241,7 +254,7 @@
     // another grid (see refit.js and resetSessionViewState).
     pinchOverrideFontPx = capped;
     currentFontSizePx = capped;
-    terminal.options.fontSize = capped;
+    setCellOption('fontSize', capped);
     // Keep the host's pinch baseline honest when the cap engaged.
     if (capped !== fontSizePx) {
       var screen = document.querySelector('.xterm-screen');
@@ -252,8 +265,10 @@
     // Zoom deliberately does NOT re-fit (the user owns the size now), so it
     // also CANCELS a fit still converging - otherwise that fit keeps stepping
     // the font under the pinching finger. The grid stays pinned to the top,
-    // so there is no padding to follow the new cell height.
+    // so there is no padding to follow the new cell height. A cancelled
+    // chain's stats go with it.
     heightFitGeneration += 1;
+    fitChainStats = null;
     requestAnimationFrame(function () {
       // Forced: the pinch just changed the geometry deliberately, and the
       // manual-pan pause would otherwise leave the zoomed frame top-anchored

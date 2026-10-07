@@ -443,6 +443,29 @@ converged). One keyboard open used to run three complete fit
 chains (measured on a release build), and the shipped build reset the line height to 1 at the
 start of each, collapsing and re-stretching the grid three times per keyboard open. The page memoises the converged
 cell per fit key, so a repeat fit applies it directly instead of snapping short and re-stretching.
+
+**The fit is computed, not converged (`scripts/xterm-page/cellFit.js`).** Every write of the
+font size or line height makes xterm's WebGL renderer resize its canvas, and resizing a canvas
+CLEARS it. The older chain (`heightFit.js`, kept as the fallback and as the probe's control arm)
+stretched the line height a frame at a time and re-measured, so one fit was five or six canvas
+resizes with the pane cleared in between: the "terminal goes black after a tap" report. The
+computed fit reproduces the renderer's own cell arithmetic (`ceil(char height x dpr)` times the
+line height, floored to device pixels) from the font's `measureText` metrics in the same font
+family the terminal uses, picks the tallest device cell whose 48-row grid fits the pane, and
+writes it ONCE, from a timer task rather than inside a frame callback (a write inside a frame is
+presented cleared for a frame first). A fit whose cell is already showing writes nothing at all.
+The next frame confirms it: the drawn grid must be the height that cell produces at the grid's
+OWN rows (comparing a rounded height scaled to 48 rows amplified half a pixel of rounding past the
+tolerance on a short grid), and the cell recovered from the drawn grid must still fit. Either
+check failing labels the chain `computed-miss` and hands over to the measured chain, so a renderer
+that measures the font differently costs the old chain, never a wrong fit. Measured 2026-10-07 on
+a release build, Pixel 11 Pro, one process, the same 210x48 session, five fit-button presses per
+arm (retention probe `measured-fit` as the control): the old chain made 6 canvas writes per press,
+blocked 337-385 ms in them and took 562-590 ms, and a screen recording showed the pane blank for
+425-442 ms on every press; the computed fit made 0 writes, took 1-9 ms, and the pane was never
+blank. (An open still shows an empty pane until the desktop's stream seed arrives, about a second
+in both arms; that is the seed, not the fit.) The `terminal-fit` trace line carries `fitStrategy`,
+`chainMs`, `cellWrites`, `cellWriteMs` and `maxCellWriteMs`, which is how it is checked.
 A pinch is a page-local override: it survives a lens switch back, a foreground and a same-session
 re-seed (`preservePinch` on the bridge's `init`) and is cleared by the fit button, another session
 or another grid. The fit button always returns to the reference view. It
@@ -460,6 +483,29 @@ phone streams keeps whatever grid the last desktop surface left.) A pre-0.4.0 de
 no grid falls back to inferring the column count from the scrollback. Arrow keys track the
 terminal's DECCKM mode (CSI vs SS3); the quick-key bar (Esc / Tab / arrows / Enter / Ctrl-C /
 slash) plus a text input row write through `interactive-terminal`.
+
+**A long-press on the terminal raises no menu and no keyboard.** A long-press is a
+`contextmenu` event, and xterm's own listener for it (its desktop right-click paste,
+`CoreBrowserTerminal`) moves the hidden textarea under the finger, raises it to z-index 1000 and
+focuses it, which raises the WebView's keyboard on the field `DirectKeyInput` exists to keep typing
+away from. Left uncancelled, Android's WebView then draws its floating text menu over that
+textarea, and with an autofill service set and nothing to paste the menu is a lone "Autofill"
+pill. The page cancels the event in the CAPTURE phase on `window` and stops it there
+(`scripts/xterm-page/bootstrap.js`), so xterm's listener never runs. A bubble-phase cancel at the
+document was tried first and is not enough: it hid the pill but xterm had already focused its
+textarea, so a long-press raised the keyboard on it. One path does not go through `contextmenu`:
+xterm parks the textarea on the cursor cell (for IME placement), and a long-press landing exactly
+there placed Chromium's caret and insertion handle in it, one tap from the same menu. So under the
+same guard the page takes the textarea out of hit testing (`pointer-events: none` on a body class
+the init sets); focus is always `terminal.focus()`, never a touch. Checked 2026-10-07 on a
+release build, Pixel 11 Pro with 1Password as the autofill service: with the guard, long-presses on
+the cursor cell and mid-text raised nothing and a tap still raised the keyboard on the native
+field; under the retention probe's `autofillable-terminal-input` arm the same mid-text long-press
+raised the pill and the WebView keyboard. The pill is not on every unguarded long-press (one of
+two showed it), which matches "sometimes" in the report. The native typing
+field (`DirectKeyInput`) is not the source: focusing it started no autofill session
+(`dumpsys autofill`, both with and without a two-line minimum that AOSP's heuristic reads), so
+that field is unchanged.
 
 ## Composer and voice dictation
 

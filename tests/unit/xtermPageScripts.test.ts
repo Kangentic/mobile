@@ -29,13 +29,19 @@ describe('generated xterm.html', () => {
    * hand-copied values here would let a page retune (the fling decay, the fit
    * clearance - both retuned live this task) leave these tests green against
    * the OLD numbers, which is exactly the drift this file exists to prevent.
+   * Memoised: each lookup scans every module file, and the cellFit sweep
+   * builds hundreds of harnesses that each read a dozen constants.
    */
+  const pageVarCache = new Map<string, number>();
   const pageVar = (name: string): number => {
+    const cached = pageVarCache.get(name);
+    if (cached !== undefined) return cached;
     for (const fileName of readdirSync(pageModulesDir)) {
       const match = new RegExp(`var ${name} = ([^;]+);`).exec(pageModule(fileName));
       if (match) {
         const value = Number(match[1]);
         if (!Number.isFinite(value)) throw new Error(`var ${name} in ${fileName} is not a number literal`);
+        pageVarCache.set(name, value);
         return value;
       }
     }
@@ -249,6 +255,7 @@ describe('generated xterm.html', () => {
       'reportFit',
       'settledFit',
       'requestAnimationFrame',
+      'setCellOption',
     ]);
     const build = new Function(
       'terminal',
@@ -269,6 +276,7 @@ describe('generated xterm.html', () => {
        var followedAfterSettle = 0;
        function followCursorVertically(force) { followedAfterSettle += 1; }
        function traceHeightFit() {}
+       function setCellOption(name, value) { if (terminal.options[name] !== value) terminal.options[name] = value; }
        function referenceRowsForFit() { return referenceRows; }
        function currentFitKey() { return 'fit-key'; }
        function reportFit(source, gridHeightPx) {
@@ -556,6 +564,8 @@ describe('generated xterm.html', () => {
     applyFontSize: (fontSizePx: number) => void;
     runFrames: () => void;
     state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; heightFitGeneration: number };
+    /** The fit chain's stats, which start out live (a chain in flight) and which a pinch must drop. */
+    fitChainStats: () => unknown;
     terminalFontSizePx: () => number;
     fitReports: () => { source: string; fontSizePx: number; gridHeightPx: number }[];
     geometryCalls: () => number;
@@ -577,6 +587,8 @@ describe('generated xterm.html', () => {
       'heightFitGeneration',
       'requestAnimationFrame',
       'followCursorVertically',
+      'setCellOption',
+      'fitChainStats',
     ]);
     const terminal = { rows: 40, options: { fontSize: 0 } };
     const capRequests: { fontPx: number; cols: number; rows: number | null }[] = [];
@@ -604,12 +616,15 @@ describe('generated xterm.html', () => {
        var pinchOverrideFontPx = null;
        var currentFontSizePx = 11;
        var heightFitGeneration = 4;
+       var fitChainStats = { strategy: 'computed', startedAt: 0, cellWrites: 0, cellWriteMs: 0, maxCellWriteMs: 0 };
+       function setCellOption(name, value) { if (terminal.options[name] !== value) terminal.options[name] = value; }
        function reportFit(source, gridHeightPx) {
          onFitReport({ source: source, fontSizePx: currentFontSizePx, gridHeightPx: gridHeightPx });
        }
        ${applyFontSizeSource}
        return {
          applyFontSize: applyFontSize,
+         fitChainStats: function () { return fitChainStats; },
          state: function () {
            return { pinchOverrideFontPx: pinchOverrideFontPx, currentFontSizePx: currentFontSizePx,
                     heightFitGeneration: heightFitGeneration };
@@ -617,6 +632,7 @@ describe('generated xterm.html', () => {
        };`,
     ) as (...dependencies: unknown[]) => {
       applyFontSize: (fontSizePx: number) => void;
+      fitChainStats: () => unknown;
       state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; heightFitGeneration: number };
     };
     const built = build(
@@ -646,6 +662,7 @@ describe('generated xterm.html', () => {
         for (const frame of frames.splice(0)) frame();
       },
       state: built.state,
+      fitChainStats: built.fitChainStats,
       terminalFontSizePx: () => terminal.options.fontSize,
       fitReports: () => fitReports,
       geometryCalls: () => geometryCalls,
@@ -657,15 +674,20 @@ describe('generated xterm.html', () => {
   describe('lifecycle.js applyFontSize', () => {
     /**
      * Mutations that redden this, each on its own: drop `pinchOverrideFontPx =
-     * capped;` (the next refit would re-fit under the user's finger), or drop
+     * capped;` (the next refit would re-fit under the user's finger), drop
      * `heightFitGeneration += 1;` (a fit still converging keeps stepping the
-     * font after the pinch).
+     * font after the pinch), or drop `fitChainStats = null;` (a later settle
+     * would report the chain the pinch cancelled).
      */
     it('takes the size for the user: records the pinch, applies it, cancels an in-flight fit and follows the cursor', () => {
       const harness = buildApplyFontSizeHarness({ knownRows: 30, capFontPx: (fontPx) => fontPx, screenHeightPx: 700 });
+      expect(harness.fitChainStats(), 'precondition: a fit chain is in flight').not.toBeNull();
 
       harness.applyFontSize(20);
 
+      // The cancelled chain's stats go with it: a later settle must not report
+      // a chain the pinch abandoned (reportFit reads them).
+      expect(harness.fitChainStats()).toBeNull();
       expect(harness.state()).toEqual({ pinchOverrideFontPx: 20, currentFontSizePx: 20, heightFitGeneration: 5 });
       expect(harness.terminalFontSizePx()).toBe(20);
       expect(harness.geometryCalls()).toBe(1);
@@ -745,7 +767,25 @@ describe('generated xterm.html', () => {
    * Mutation that reddens this: rename one key in reportFit's payload (e.g.
    * `innerWidthPx` to `innerWidth`), or swap two of its values.
    */
-  it('posts a fit report the host decodes with every diagnostic field intact', () => {
+  interface FitChainStatsSeed {
+    strategy: string;
+    startedAt: number;
+    cellWrites: number;
+    cellWriteMs: number;
+    maxCellWriteMs: number;
+  }
+
+  /**
+   * reportFit, sliced from fontGeometry.js and run with a chain in flight. The
+   * clock is injected: `performance.now()` answers `nowMs`, so the chain's
+   * duration is deterministic (a real clock would make chainMs a flaky field).
+   */
+  function buildReportFitHarness(initialChain: FitChainStatsSeed | null, nowMs: number): {
+    reportFit: (reportSource: string, gridHeightPx: number) => void;
+    posted: () => unknown[];
+    fitChainStats: () => FitChainStatsSeed | null;
+    lastFitChainStats: () => unknown;
+  } {
     const fullSource = pageModule('fontGeometry.js');
     const reportFitSource = fullSource.slice(fullSource.indexOf('function reportFit('), fullSource.indexOf('function applyGeometry('));
     expect(reportFitSource).toContain('function reportFit(');
@@ -758,42 +798,149 @@ describe('generated xterm.html', () => {
       'terminal',
       'fitViewportHeight',
       'maxGlTextureSize',
+      'fitChainStats',
+      'lastFitChainStats',
+      'performance',
     ]);
     const posted: unknown[] = [];
     const build = new Function(
       'window',
       'postToHost',
+      'performance',
+      'initialChain',
       `var currentFontSizePx = 11;
        var activeFitTrigger = 'fit-height';
        var knownCols = 120;
        var knownRows = 30;
        var terminal = { options: { lineHeight: 1.194 } };
        var maxGlTextureSize = 4096;
+       var fitChainStats = initialChain;
+       var lastFitChainStats = null;
        function fitViewportHeight() { return 635.4; }
        ${reportFitSource}
-       return { reportFit: reportFit };`,
-    ) as (...dependencies: unknown[]) => { reportFit: (reportSource: string, gridHeightPx: number) => void };
-    const built = build({ innerHeight: 640, innerWidth: 411, devicePixelRatio: 2.625 }, (message: unknown) => {
-      posted.push(message);
-    });
+       return {
+         reportFit: reportFit,
+         fitChainStats: function () { return fitChainStats; },
+         lastFitChainStats: function () { return lastFitChainStats; },
+       };`,
+    ) as (...dependencies: unknown[]) => {
+      reportFit: (reportSource: string, gridHeightPx: number) => void;
+      fitChainStats: () => FitChainStatsSeed | null;
+      lastFitChainStats: () => unknown;
+    };
+    const built = build(
+      { innerHeight: 640, innerWidth: 411, devicePixelRatio: 2.625 },
+      (message: unknown) => {
+        posted.push(message);
+      },
+      { now: () => nowMs },
+      initialChain,
+    );
+    return { ...built, posted: () => posted };
+  }
 
-    built.reportFit('settled', 396.6);
+  /** Every field of a fit report that does not describe the chain. */
+  const fitReportScalars = {
+    type: 'font-size',
+    fontSizePx: 11,
+    trigger: 'fit-height',
+    cols: 120,
+    rows: 30,
+    lineHeight: 1.194,
+    fitHeightPx: 635,
+    innerHeightPx: 640,
+    innerWidthPx: 411,
+    gridHeightPx: 397,
+    devicePixelRatio: 2.625,
+    maxTextureSize: 4096,
+  } as const;
 
-    expect(posted).toHaveLength(1);
-    expect(decodeTerminalMessage(JSON.stringify(posted[0]))).toEqual({
-      type: 'font-size',
-      fontSizePx: 11,
+  /**
+   * The chain-cost fields cross the bridge the same way. Each of the five gets
+   * a value whose ROUNDED form differs from every other field's (a swap or a
+   * rename cannot decode to the right number by accident): 1137.2 - 1000 is
+   * 137 ms of chain, 18.6 ms of blocked writes rounds to 19, the worst single
+   * write 12.4 rounds to 12. The settle also CONSUMES the chain's stats, so
+   * the next settle cannot report a chain that already ended.
+   *
+   * Mutation that reddens this: rename one of the five keys in reportFit's
+   * payload, swap cellWriteMs with maxCellWriteMs, or drop `fitChainStats =
+   * null` after the snapshot.
+   */
+  it('posts a fit report the host decodes with every diagnostic field intact', () => {
+    const harness = buildReportFitHarness(
+      { strategy: 'computed-miss', startedAt: 1000, cellWrites: 2, cellWriteMs: 18.6, maxCellWriteMs: 12.4 },
+      1137.2,
+    );
+
+    harness.reportFit('settled', 396.6);
+
+    expect(harness.posted()).toHaveLength(1);
+    expect(decodeTerminalMessage(JSON.stringify(harness.posted()[0]))).toEqual({
+      ...fitReportScalars,
       source: 'settled',
-      trigger: 'fit-height',
-      cols: 120,
-      rows: 30,
-      lineHeight: 1.194,
-      fitHeightPx: 635,
-      innerHeightPx: 640,
-      innerWidthPx: 411,
-      gridHeightPx: 397,
-      devicePixelRatio: 2.625,
-      maxTextureSize: 4096,
+      fitStrategy: 'computed-miss',
+      chainMs: 137,
+      cellWrites: 2,
+      cellWriteMs: 19,
+      maxCellWriteMs: 12,
+    });
+    expect(harness.fitChainStats(), 'the settle consumes the chain it reports').toBeNull();
+    expect(harness.lastFitChainStats()).toEqual({
+      strategy: 'computed-miss',
+      chainMs: 137,
+      cellWrites: 2,
+      cellWriteMs: 19,
+      maxCellWriteMs: 12,
+    });
+  });
+
+  /**
+   * A texture-cap report is no chain: the five fields are null, and a chain
+   * that is still converging is NOT consumed by it (its own settle reports it).
+   */
+  it('posts a texture-cap report with null chain fields and leaves a live chain alone', () => {
+    const liveChain = { strategy: 'measured', startedAt: 1000, cellWrites: 3, cellWriteMs: 40, maxCellWriteMs: 20 };
+    const harness = buildReportFitHarness(liveChain, 1137.2);
+
+    harness.reportFit('texture-cap', 396.6);
+
+    expect(decodeTerminalMessage(JSON.stringify(harness.posted()[0]))).toEqual({
+      ...fitReportScalars,
+      source: 'texture-cap',
+      fitStrategy: null,
+      chainMs: null,
+      cellWrites: null,
+      cellWriteMs: null,
+      maxCellWriteMs: null,
+    });
+    expect(harness.fitChainStats()).toBe(liveChain);
+    expect(harness.lastFitChainStats()).toBeNull();
+  });
+
+  /**
+   * A settle with no chain in flight (a pinch cancelled it) reports nulls, not
+   * the PREVIOUS chain's snapshot: lastFitChainStats stays readable for the dev
+   * probe, and must not leak into a report it does not describe.
+   */
+  it('reports null chain fields for a settle that has no chain, rather than the last one', () => {
+    const harness = buildReportFitHarness(
+      { strategy: 'computed', startedAt: 1000, cellWrites: 1, cellWriteMs: 7, maxCellWriteMs: 7 },
+      1050,
+    );
+    harness.reportFit('settled', 396.6);
+    expect(harness.lastFitChainStats(), 'precondition: a snapshot is retained').not.toBeNull();
+
+    harness.reportFit('settled', 396.6);
+
+    expect(harness.posted()).toHaveLength(2);
+    expect(decodeTerminalMessage(JSON.stringify(harness.posted()[1]))).toMatchObject({
+      source: 'settled',
+      fitStrategy: null,
+      chainMs: null,
+      cellWrites: null,
+      cellWriteMs: null,
+      maxCellWriteMs: null,
     });
   });
 
@@ -831,7 +978,35 @@ describe('generated xterm.html', () => {
     // the freshly-reset font, gets handed back as if it were this chain's own
     // overshoot, and LOCKS stretching - the fit then settles short ("~80% of
     // the TUI" on a fresh open, caught live by the fit trace).
-    expect(refitBody).toContain('terminal.options.lineHeight = 1');
+    // (Written through setCellOption since the computed fit: the write is
+    // skipped when the value is already showing, and counted when it is not.)
+    expect(refitBody).toContain("setCellOption('lineHeight', 1)");
+  });
+
+  /**
+   * Every font-size or line-height write goes through setCellOption (cellFit.js),
+   * which skips an unchanged value and counts and times a changed one. A direct
+   * `terminal.options.fontSize = ...` would resize (and clear) the canvas with
+   * nothing counting it, so the fit report would under-count exactly the cost
+   * it exists to show. And the font family is ONE string (state.js), because
+   * the computed fit measures the font it names: a second literal would let the
+   * renderer draw a font the fit never measured.
+   *
+   * Mutation that reddens this: write `terminal.options.lineHeight = 1` in any
+   * page module, or hand the Terminal constructor a font-family literal.
+   */
+  it('writes the cell options only through setCellOption, and names the font family once', () => {
+    const directWrites: string[] = [];
+    const familyLiterals: string[] = [];
+    for (const fileName of readdirSync(pageModulesDir)) {
+      const lines = pageModule(fileName).split('\n');
+      lines.forEach((line, lineIndex) => {
+        if (/options\.(fontSize|lineHeight)\s*=[^=]/.test(line)) directWrites.push(`${fileName}:${lineIndex + 1}`);
+        if (/Menlo|Consolas/.test(line) && !line.trim().startsWith('//')) familyLiterals.push(`${fileName}:${lineIndex + 1}`);
+      });
+    }
+    expect(directWrites).toEqual([]);
+    expect(familyLiterals).toEqual([expect.stringMatching(/^state\.js:/)]);
   });
 
   /**
@@ -1034,6 +1209,9 @@ describe('generated xterm.html', () => {
         'settledFit',
         'terminal',
         'fitViewportHeight',
+        'fitStrategy',
+        'computeFittedCell',
+        'setCellOption',
       ]);
       const terminal = { options: { fontSize: options.initialFontSizePx } };
       const build = new Function(
@@ -1054,6 +1232,15 @@ describe('generated xterm.html', () => {
          var settledFit = null;
          var activeFitTrigger = 'init';
          var maxGlTextureSize = 4096;
+         // These cases are about the REFERENCE font arithmetic, which is the
+         // measured chain's opening guess: pin that strategy. The computed
+         // fit's cell is a sentinel no reference-font answer can equal, so a
+         // case that wrongly consulted it would go red instead of agreeing.
+         var fitStrategy = 'measured';
+         var fitChainStats = null;
+         var lastFitChainStats = null;
+         function computeFittedCell() { return { fontSizePx: 99, lineHeight: 1.29 }; }
+         function setCellOption(name, value) { if (terminal.options[name] !== value) terminal.options[name] = value; }
          ${geometrySource}
          return { fit: autoFitFontToScreen, fontSizePx: function () { return currentFontSizePx; },
                   fitKey: currentFitKey };`,
@@ -1240,11 +1427,17 @@ describe('generated xterm.html', () => {
     settledFitForCurrentGrid: () => { key: string; fontSizePx: number; lineHeight: number } | null;
     fittedFontPxForGrid: () => number;
     fittedLineHeightForGrid: () => number;
+    initialCellForGrid: () => { fontSizePx: number; lineHeight: number };
     setSettledFit: (settledFit: { key: string; fontSizePx: number; lineHeight: number } | null) => void;
     setFitHeight: (fitHeightPx: number) => void;
     setKnownRows: (knownRows: number | null) => void;
     setKnownCols: (knownCols: number) => void;
     setDevicePixelRatio: (devicePixelRatio: number) => void;
+    /** Which strategy the page is on: 'measured' (the default here) or 'computed'. */
+    setFitStrategy: (fitStrategy: 'measured' | 'computed') => void;
+    /** What the page's computeFittedCell answers; null is "cannot measure the font". */
+    setComputedCell: (computedCell: { fontSizePx: number; lineHeight: number } | null) => void;
+    computeCalls: () => number;
   } {
     const fullSource = pageModule('fontGeometry.js');
     const geometrySource = fullSource.slice(0, fullSource.indexOf('function applyGeometry('));
@@ -1260,6 +1453,8 @@ describe('generated xterm.html', () => {
       'textureCappedFontPx',
       'fitViewportHeight',
       'settledFit',
+      'fitStrategy',
+      'computeFittedCell',
     ]);
     const windowStub = { devicePixelRatio: 2.625 };
     const build = new Function(
@@ -1275,6 +1470,14 @@ describe('generated xterm.html', () => {
        var knownCols = initialState.knownCols;
        var fitHeightPx = initialState.fitHeightPx;
        var settledFit = null;
+       // The measured strategy by default: the reference cell the cases below
+       // were written against. The computed fit's cell is a SENTINEL no
+       // reference-font answer can equal, so a measured case that wrongly
+       // consulted it goes red instead of agreeing.
+       var fitStrategy = 'measured';
+       var computedCell = { fontSizePx: 99, lineHeight: 1.29 };
+       var computeCalls = 0;
+       function computeFittedCell() { computeCalls += 1; return computedCell; }
        function fitViewportHeight() { return fitHeightPx; }
        ${geometrySource}
        return {
@@ -1283,10 +1486,14 @@ describe('generated xterm.html', () => {
          settledFitForCurrentGrid: settledFitForCurrentGrid,
          fittedFontPxForGrid: fittedFontPxForGrid,
          fittedLineHeightForGrid: fittedLineHeightForGrid,
+         initialCellForGrid: initialCellForGrid,
          setSettledFit: function (next) { settledFit = next; },
          setFitHeight: function (next) { fitHeightPx = next; },
          setKnownRows: function (next) { knownRows = next; },
          setKnownCols: function (next) { knownCols = next; },
+         setFitStrategy: function (next) { fitStrategy = next; },
+         setComputedCell: function (next) { computedCell = next; },
+         computeCalls: function () { return computeCalls; },
        };`,
     ) as (...dependencies: unknown[]) => ReturnType<typeof buildSettledFitMemoHarness>;
     const built = build(
@@ -1366,6 +1573,1044 @@ describe('generated xterm.html', () => {
         expect(harness.settledFitForCurrentGrid()).toBeNull();
       },
     );
+
+    /**
+     * The cell an init starts from, by strategy (cellFit.js). Under the computed
+     * fit a fresh terminal is CONSTRUCTED at its final cell, so the init's own
+     * refit finds nothing to write; the measured strategy starts from the
+     * reference font at the clean slate and converges from there. The computed
+     * cell is a sentinel (font 99, line height 1.29) that no reference-font
+     * answer can equal.
+     *
+     * Mutations that redden these: ignore fitStrategy in initialCellForGrid
+     * (the computed cases would get the reference font), or consult
+     * computeFittedCell ahead of the settled memo (the memo case would get 99).
+     */
+    describe('initialCellForGrid by fit strategy', () => {
+      const computedCell = { fontSizePx: 99, lineHeight: 1.29 };
+
+      it('starts a computed init from the computed cell when nothing has converged', () => {
+        const harness = buildSettledFitMemoHarness({ knownRows: 48, knownCols: 210, fitHeightPx: 635 });
+        harness.setFitStrategy('computed');
+
+        expect(harness.initialCellForGrid()).toEqual(computedCell);
+        expect(harness.fittedFontPxForGrid()).toBe(99);
+        expect(harness.fittedLineHeightForGrid()).toBe(1.29);
+      });
+
+      it('prefers the converged cell over a recomputed one, and never recomputes it', () => {
+        const { harness } = memoizedHarness();
+        harness.setFitStrategy('computed');
+        const callsBefore = harness.computeCalls();
+
+        expect(harness.initialCellForGrid()).toEqual({ fontSizePx: memoFontPx, lineHeight: memoLineHeight });
+        expect(harness.computeCalls()).toBe(callsBefore);
+      });
+
+      it('computes afresh once the memo belongs to another pane, rather than reusing it', () => {
+        const { harness } = memoizedHarness();
+        harness.setFitStrategy('computed');
+        harness.setFitHeight(700);
+
+        expect(harness.initialCellForGrid()).toEqual(computedCell);
+      });
+
+      it('falls back to the reference font at line height 1 when the font cannot be measured', () => {
+        const harness = buildSettledFitMemoHarness({ knownRows: 48, knownCols: 210, fitHeightPx: 635 });
+        harness.setFitStrategy('computed');
+        harness.setComputedCell(null);
+
+        expect(harness.computeCalls(), 'precondition: nothing consulted it yet').toBe(0);
+        expect(harness.initialCellForGrid()).toEqual({ fontSizePx: harness.referenceFontPx(), lineHeight: 1 });
+        expect(harness.computeCalls(), 'it WAS asked, and could not answer').toBe(1);
+      });
+
+      it('starts a measured init from the reference font and never consults the computed fit', () => {
+        const harness = buildSettledFitMemoHarness({ knownRows: 48, knownCols: 210, fitHeightPx: 635 });
+
+        expect(harness.initialCellForGrid()).toEqual({ fontSizePx: harness.referenceFontPx(), lineHeight: 1 });
+        expect(harness.computeCalls()).toBe(0);
+      });
+    });
+  });
+
+  type CellOptionName = 'fontSize' | 'lineHeight';
+  /** Where a terminal option write came from: straight from the caller, a timer task, or an animation frame. */
+  type CellWriteContext = 'sync' | 'task' | 'frame';
+
+  interface CellFitModule {
+    measureCharHeightPx: (fontSizePx: number) => number | null;
+    computeFittedCell: () => { fontSizePx: number; lineHeight: number } | null;
+    setCellOption: (name: CellOptionName, value: number) => void;
+    beginFitChainStats: () => void;
+    runComputedFit: (generation: number) => boolean;
+    confirmComputedFit: (generation: number) => void;
+    fitChainStats: () => FitChainStatsSeed | null;
+    setGeneration: (generation: number) => void;
+    currentFontSizePx: () => number;
+    manualPanUntil: () => number;
+  }
+
+  interface CellFitHarnessOptions {
+    devicePixelRatio: number;
+    /** The fit height (state.js's fitViewportHeight). */
+    fitHeight: number;
+    /** The terminal's own rows; defaults to the reference rows. */
+    rows?: number;
+    referenceRows?: number;
+    /** The reference font guess; defaults to what fontGeometry.js derives from the fit height. */
+    referenceFontPx?: number;
+    /** Start this many px below the derived guess: a loose guess leaves slack for the stretch. */
+    referenceFontOffsetPx?: number;
+    /** What measureText reports as the font box height, per font px. */
+    reportedCharHeightRatio?: number;
+    /** What the renderer actually measures, per font px; defaults to the reported ratio. */
+    rendererCharHeightRatio?: number;
+    initialFontSizePx?: number;
+    initialLineHeight?: number;
+    /** The converged cell the page already holds for this grid and pane. */
+    initialSettledFit?: { fontSizePx: number; lineHeight: number } | null;
+    /** Make settleFit remember its cell, as the real one does, so the next fit finds it. */
+    rememberSettledFit?: boolean;
+    /** 'no-font-box' omits the font box keys outright, as an engine without them does. */
+    measureTextShape?: 'full' | 'no-font-box' | 'empty-font-box';
+    canvasConstructorThrows?: boolean;
+    screenElement?: 'present' | 'missing' | 'zero-height';
+    /** How long a write of each option blocks the thread, on the fake clock. */
+    fontWriteBlockMs?: number;
+    lineHeightWriteBlockMs?: number;
+    /** Rewrites the cellFit.js source before it runs: the in-memory mutation of the red-green checks. */
+    mutate?: (source: string) => string;
+  }
+
+  interface CellFitHarness extends CellFitModule {
+    options: () => { fontSize: number; lineHeight: number };
+    /** The device-pixel cell height the fake renderer lays the current options out at. */
+    renderedCell: () => number;
+    /** The css height of the grid the fake renderer would paint for the terminal's rows. */
+    renderedGridHeight: () => number;
+    setFitHeight: (fitHeight: number) => void;
+    flushTimeouts: () => number;
+    flushFrames: () => number;
+    pendingTimeouts: () => number;
+    pendingFrames: () => number;
+    timeoutDelays: () => number[];
+    /** Every option write the terminal received, with where it came from. */
+    writes: () => { name: CellOptionName; value: number; context: CellWriteContext }[];
+    /** Writes, geometry, trace, settle, clamp and follow calls, in the order they happened. */
+    events: () => string[];
+    settleHeights: () => number[];
+    followCalls: () => boolean[];
+    missCalls: () => { passes: number; stretchLocked: boolean; generation: number }[];
+    measuredFontSizes: () => number[];
+    canvasConstructions: () => number;
+  }
+
+  /** Chrome's font box height for a font: ascent plus descent, the two numbers xterm adds. */
+  const fontBoxHeight = (fontSizePx: number, ratio: number): number => fontSizePx * ratio * 0.82 + fontSizePx * ratio * 0.18;
+
+  /**
+   * The tallest whole device-pixel cell whose `rows` rows paint no taller than
+   * `limitPx`, found by brute force from the renderer's own rounding (the css
+   * grid height is round(rows x cell / dpr)). Deliberately NOT the page's
+   * estimate-then-walk, so the two can disagree.
+   */
+  const bruteForceTallestCell = (rows: number, devicePixelRatio: number, limitPx: number): number => {
+    let tallest = 0;
+    for (let cell = 1; Math.round((rows * cell) / devicePixelRatio) <= limitPx; cell += 1) tallest = cell;
+    return tallest;
+  };
+
+  /**
+   * cellFit.js, run against a fake world whose renderer applies xterm's real
+   * arithmetic to whatever font size and line height the page writes:
+   *   device char = ceil(char height x dpr)
+   *   device cell = floor(device char x lineHeight)
+   *   css grid    = round(rows x device cell / dpr)
+   * so the confirm step measures what xterm would draw. Timers and frames are
+   * queues the test flushes by hand, which is what lets it assert ORDER: the
+   * whole point of the module is that its writes land in a task, never a frame.
+   */
+  function buildCellFit(options: CellFitHarnessOptions): CellFitHarness {
+    const source = pageModule('cellFit.js');
+    const injectedNames = [
+      'terminal',
+      'window',
+      'document',
+      'OffscreenCanvas',
+      'performance',
+      'setTimeout',
+      'requestAnimationFrame',
+      'referenceRowsForFit',
+      'referenceFontPx',
+      'fitViewportHeight',
+      'settledFitForCurrentGrid',
+      'applyGeometry',
+      'traceHeightFit',
+      'settleFit',
+      'clampHorizontalPan',
+      'followCursorVertically',
+      'fitGridHeightToViewport',
+      'MAX_LINE_HEIGHT',
+      'MIN_AUTO_FONT_PX',
+      'HEIGHT_FIT_TOLERANCE_PX',
+      'HEIGHT_FIT_BOTTOM_CLEARANCE_PX',
+      'HEIGHT_FIT_PASSES',
+      'TERMINAL_FONT_FAMILY',
+      'heightFitGeneration',
+      'currentFontSizePx',
+      'manualPanUntil',
+      'fitChainStats',
+      'fitStrategy',
+    ];
+    assertInjectionsAreAlive('cellFit.js', source, injectedNames);
+    const runnableSource = options.mutate ? options.mutate(source) : source;
+    if (options.mutate) expect(runnableSource, 'the mutation changed nothing').not.toBe(source);
+
+    // The family the page constructs the terminal with, read from state.js
+    // rather than copied here: cellFit must measure THIS string.
+    const fontFamilyMatch = /var TERMINAL_FONT_FAMILY = '([^']+)';/.exec(pageModule('state.js'));
+    expect(fontFamilyMatch, 'state.js: the TERMINAL_FONT_FAMILY line was not found (reworded? update this read)').not.toBeNull();
+    const fontFamily = fontFamilyMatch?.[1] ?? '';
+
+    const referenceRows = options.referenceRows ?? 48;
+    const rows = options.rows ?? referenceRows;
+    const devicePixelRatio = options.devicePixelRatio;
+    const reportedRatio = options.reportedCharHeightRatio ?? 1.17;
+    const rendererRatio = options.rendererCharHeightRatio ?? reportedRatio;
+    let fitHeight = options.fitHeight;
+    let settledFit = options.initialSettledFit ?? null;
+    let context: CellWriteContext = 'sync';
+    let canvasConstructions = 0;
+    const clock = { nowMs: 5000 };
+    const timeouts: { callback: () => void; delayMs: number }[] = [];
+    const timeoutDelays: number[] = [];
+    const frames: (() => void)[] = [];
+    const writes: { name: CellOptionName; value: number; context: CellWriteContext }[] = [];
+    const events: string[] = [];
+    const settleHeights: number[] = [];
+    const followCalls: boolean[] = [];
+    const missCalls: { passes: number; stretchLocked: boolean; generation: number }[] = [];
+    const measuredFontSizes: number[] = [];
+    const measurementProblems: string[] = [];
+
+    const optionValues: Record<CellOptionName, number> = {
+      fontSize: options.initialFontSizePx ?? 12,
+      lineHeight: options.initialLineHeight ?? 1,
+    };
+    const writeBlockMs: Record<CellOptionName, number> = {
+      fontSize: options.fontWriteBlockMs ?? 0,
+      lineHeight: options.lineHeightWriteBlockMs ?? 0,
+    };
+    const recordWrite = (name: CellOptionName, value: number): void => {
+      optionValues[name] = value;
+      writes.push({ name, value, context });
+      events.push(`write:${name}`);
+      clock.nowMs += writeBlockMs[name];
+    };
+    const terminal = {
+      rows,
+      options: {
+        get fontSize(): number {
+          return optionValues.fontSize;
+        },
+        set fontSize(value: number) {
+          recordWrite('fontSize', value);
+        },
+        get lineHeight(): number {
+          return optionValues.lineHeight;
+        },
+        set lineHeight(value: number) {
+          recordWrite('lineHeight', value);
+        },
+      },
+    };
+
+    const renderedCell = (): number =>
+      Math.floor(Math.ceil(fontBoxHeight(optionValues.fontSize, rendererRatio) * devicePixelRatio) * optionValues.lineHeight);
+    const renderedGridHeight = (): number => Math.round((rows * renderedCell()) / devicePixelRatio);
+
+    const measureContext = {
+      font: '',
+      measureText(text: string): Record<string, number> {
+        const fontMatch = /^(\d+(?:\.\d+)?)px (.+)$/.exec(this.font);
+        // Recorded, not thrown: the page swallows a throw from here as "cannot
+        // measure", which would turn a harness mistake into a quiet null.
+        if (fontMatch === null || fontMatch[2] !== fontFamily || text !== 'W') {
+          measurementProblems.push(`unexpected measure: font '${this.font}', text '${text}'`);
+        }
+        const sizePx = Number(fontMatch?.[1] ?? 0);
+        measuredFontSizes.push(sizePx);
+        if (options.measureTextShape === 'no-font-box') return { width: sizePx * 0.6 };
+        if (options.measureTextShape === 'empty-font-box') {
+          return { width: sizePx * 0.6, fontBoundingBoxAscent: 0, fontBoundingBoxDescent: 0 };
+        }
+        return {
+          width: sizePx * 0.6,
+          fontBoundingBoxAscent: sizePx * reportedRatio * 0.82,
+          fontBoundingBoxDescent: sizePx * reportedRatio * 0.18,
+        };
+      },
+    };
+    class FakeOffscreenCanvas {
+      constructor() {
+        if (options.canvasConstructorThrows) throw new Error('OffscreenCanvas is not available');
+        canvasConstructions += 1;
+      }
+      getContext(): typeof measureContext {
+        return measureContext;
+      }
+    }
+
+    const derivedReferenceFontPx = (): number =>
+      Math.max(
+        pageVar('MIN_AUTO_FONT_PX'),
+        Math.min(
+          pageVar('MAX_AUTO_FIT_FONT_PX'),
+          Math.floor(fitHeight / (referenceRows * pageVar('CELL_HEIGHT_RATIO'))) - (options.referenceFontOffsetPx ?? 0),
+        ),
+      );
+    const screenElement = options.screenElement ?? 'present';
+    const world = {
+      terminal,
+      window: { devicePixelRatio },
+      document: {
+        querySelector: (selector: string) =>
+          selector === '.xterm-screen' && screenElement !== 'missing'
+            ? { getBoundingClientRect: () => ({ height: screenElement === 'zero-height' ? 0 : renderedGridHeight() }) }
+            : null,
+      },
+      OffscreenCanvas: FakeOffscreenCanvas,
+      performance: { now: () => clock.nowMs },
+      setTimeout: (callback: () => void, delayMs: number): number => {
+        timeouts.push({ callback, delayMs });
+        timeoutDelays.push(delayMs);
+        return timeouts.length;
+      },
+      requestAnimationFrame: (callback: () => void): number => {
+        frames.push(callback);
+        return frames.length;
+      },
+      referenceRowsForFit: () => referenceRows,
+      referenceFontPx: () => options.referenceFontPx ?? derivedReferenceFontPx(),
+      fitViewportHeight: () => fitHeight,
+      settledFitForCurrentGrid: () => settledFit,
+      applyGeometry: () => {
+        events.push('applyGeometry');
+      },
+      traceHeightFit: (event: string) => {
+        events.push(`trace:${event}`);
+      },
+      settleFit: (measuredHeight: number) => {
+        events.push('settleFit');
+        settleHeights.push(measuredHeight);
+        if (options.rememberSettledFit) {
+          settledFit = { fontSizePx: built.currentFontSizePx(), lineHeight: optionValues.lineHeight };
+        }
+      },
+      clampHorizontalPan: () => {
+        events.push('clampHorizontalPan');
+      },
+      followCursorVertically: (force: boolean) => {
+        events.push(`follow:${force}`);
+        followCalls.push(force);
+      },
+      fitGridHeightToViewport: (passes: number, stretchLocked: boolean, generation: number) => {
+        events.push('fitGridHeightToViewport');
+        missCalls.push({ passes, stretchLocked, generation });
+      },
+      MAX_LINE_HEIGHT: pageVar('MAX_LINE_HEIGHT'),
+      MIN_AUTO_FONT_PX: pageVar('MIN_AUTO_FONT_PX'),
+      HEIGHT_FIT_TOLERANCE_PX: pageVar('HEIGHT_FIT_TOLERANCE_PX'),
+      HEIGHT_FIT_BOTTOM_CLEARANCE_PX: pageVar('HEIGHT_FIT_BOTTOM_CLEARANCE_PX'),
+      HEIGHT_FIT_PASSES: pageVar('HEIGHT_FIT_PASSES'),
+      TERMINAL_FONT_FAMILY: fontFamily,
+      // The page's own vars, which cellFit.js reads or assigns.
+      heightFitGeneration: 1,
+      currentFontSizePx: options.initialFontSizePx ?? 12,
+      manualPanUntil: 999,
+      fitChainStats: null,
+      fitStrategy: 'computed',
+    };
+
+    // 'use strict' as the production IIFE is: an assignment to an undeclared
+    // name must throw here, not leak a global.
+    const build = new Function(
+      'world',
+      `'use strict';
+       ${injectedNames.map((name) => `var ${name} = world.${name};`).join('\n')}
+       ${runnableSource}
+       return {
+         measureCharHeightPx: measureCharHeightPx,
+         computeFittedCell: computeFittedCell,
+         setCellOption: setCellOption,
+         beginFitChainStats: beginFitChainStats,
+         runComputedFit: runComputedFit,
+         confirmComputedFit: confirmComputedFit,
+         fitChainStats: function () { return fitChainStats; },
+         setGeneration: function (next) { heightFitGeneration = next; },
+         currentFontSizePx: function () { return currentFontSizePx; },
+         manualPanUntil: function () { return manualPanUntil; },
+       };`,
+    ) as (worldArgument: typeof world) => CellFitModule;
+    // Annotated, because settleFit above reads it: without the annotation its
+    // type would depend on `world`, whose type depends on settleFit.
+    const built: CellFitModule = build(world);
+
+    function guarded<Result>(call: () => Result): Result {
+      const result = call();
+      if (measurementProblems.length > 0) throw new Error(`the fake measureText saw: ${measurementProblems.join('; ')}`);
+      return result;
+    }
+    const flush = <Entry>(queue: Entry[], flushContext: CellWriteContext, run: (entry: Entry) => void): number => {
+      const batch = queue.splice(0);
+      context = flushContext;
+      try {
+        for (const entry of batch) run(entry);
+      } finally {
+        context = 'sync';
+      }
+      return batch.length;
+    };
+
+    return {
+      ...built,
+      measureCharHeightPx: (fontSizePx: number) => guarded(() => built.measureCharHeightPx(fontSizePx)),
+      computeFittedCell: () => guarded(() => built.computeFittedCell()),
+      runComputedFit: (generation: number) => guarded(() => built.runComputedFit(generation)),
+      options: () => ({ fontSize: optionValues.fontSize, lineHeight: optionValues.lineHeight }),
+      renderedCell,
+      renderedGridHeight,
+      setFitHeight: (nextFitHeight: number) => {
+        fitHeight = nextFitHeight;
+      },
+      flushTimeouts: () => flush(timeouts, 'task', (entry) => entry.callback()),
+      flushFrames: () => flush(frames, 'frame', (callback) => callback()),
+      pendingTimeouts: () => timeouts.length,
+      pendingFrames: () => frames.length,
+      timeoutDelays: () => timeoutDelays,
+      writes: () => writes,
+      events: () => events,
+      settleHeights: () => settleHeights,
+      followCalls: () => followCalls,
+      missCalls: () => missCalls,
+      measuredFontSizes: () => measuredFontSizes,
+      canvasConstructions: () => canvasConstructions,
+    };
+  }
+
+  /** The numbers every case below starts from: a Pixel-class pane (dpr 2.625, 621 css px) and the 48-row reference grid. */
+  const realisticCellFit = { devicePixelRatio: 2.625, fitHeight: 621, referenceFontPx: 10 } as const;
+
+  /** The height the fit aims under: the fit height less the bottom clearance, plus the tolerance it accepts. */
+  const cellFitLimitPx = (fitHeight: number): number =>
+    fitHeight - pageVar('HEIGHT_FIT_BOTTOM_CLEARANCE_PX') + pageVar('HEIGHT_FIT_TOLERANCE_PX');
+
+  /** One full computed fit, as refit() runs it: begin the stats, take the fit, let its write task run. */
+  const applyComputedFit = (harness: CellFitHarness, generation = 1): void => {
+    // refit() bumps the page's generation and hands it to the fit it starts.
+    harness.setGeneration(generation);
+    harness.beginFitChainStats();
+    expect(harness.runComputedFit(generation), 'a computable cell takes the fit').toBe(true);
+    harness.flushTimeouts();
+  };
+
+  describe('cellFit.js computed fit', () => {
+    /**
+     * The cell is the TALLEST that fits, not merely one that fits. The numbers
+     * are a Pixel-class pane: dpr 2.625, a 621 px fit height (limit 619.5 after
+     * the 2 px clearance and 0.5 px tolerance), 48 reference rows, a font box
+     * 1.17 times the font size, and a reference guess of 10. The font's device
+     * char is ceil(11.7 x 2.625) = 31, the tallest cell that fits 48 rows is 33
+     * (round(48 x 33 / 2.625) = 603; one more pixel is 622, over), so the line
+     * height is 33.5 / 31 and the renderer's floor lands on 33.
+     *
+     * Mutation that reddens this: stop searching at the estimate (a cell one
+     * pixel short or tall), or pick the line height from the font alone.
+     */
+    it('lands on the tallest cell that fits: one more device pixel per cell would overflow the pane', () => {
+      const harness = buildCellFit(realisticCellFit);
+      const limitPx = cellFitLimitPx(621);
+
+      applyComputedFit(harness);
+
+      expect(harness.options().fontSize).toBe(10);
+      expect(harness.renderedCell()).toBe(33);
+      expect(harness.renderedGridHeight()).toBe(603);
+      expect(harness.renderedGridHeight()).toBeLessThanOrEqual(limitPx);
+      // The independent derivation of "tallest": by brute force, and by the
+      // very next pixel being over the limit.
+      expect(bruteForceTallestCell(48, 2.625, limitPx)).toBe(33);
+      expect(Math.round((48 * 34) / 2.625), 'one more device pixel per cell would overflow').toBeGreaterThan(limitPx);
+      // Half a device pixel above the target, so the floor lands ON it.
+      expect(harness.options().lineHeight).toBeCloseTo(33.5 / 31, 12);
+    });
+
+    /**
+     * When the reference font overflows even at line height 1, the font steps
+     * down one px at a time, to the largest that fits, and never past the auto
+     * floor. A guess of 14 needs a device char of ceil(16.38 x 2.625) = 43 and
+     * the pane holds 33: 13, 12 and 11 (34) are all still too tall, 10 fits.
+     */
+    it('steps the font down until the rows fit at line height 1, one px at a time', () => {
+      const harness = buildCellFit({ ...realisticCellFit, referenceFontPx: 14 });
+
+      const cell = harness.computeFittedCell();
+
+      expect(cell?.fontSizePx).toBe(10);
+      expect(harness.measuredFontSizes(), 'it measured each font once, largest first, and stopped at the first that fits').toEqual([
+        14, 13, 12, 11, 10,
+      ]);
+      // And the next font up really does not fit (so 10 is the largest, not merely a fit).
+      expect(Math.round((48 * Math.ceil(fontBoxHeight(11, 1.17) * 2.625)) / 2.625)).toBeGreaterThan(cellFitLimitPx(621));
+    });
+
+    it('never goes below the auto floor, and returns the floor font at line height 1 when nothing fits', () => {
+      // A pane so short that no font at or above the floor fits 48 rows.
+      const harness = buildCellFit({ ...realisticCellFit, fitHeight: 80, referenceFontPx: 14 });
+
+      const cell = harness.computeFittedCell();
+
+      expect(cell).toEqual({ fontSizePx: pageVar('MIN_AUTO_FONT_PX'), lineHeight: 1 });
+      expect(Math.min(...harness.measuredFontSizes()), 'nothing below the floor is measured').toBe(pageVar('MIN_AUTO_FONT_PX'));
+      expect(harness.measuredFontSizes()[0]).toBe(14);
+    });
+
+    /**
+     * THE FLOAT GUARD. The renderer floors device char x lineHeight, and a line
+     * height computed as cell / char can land a float's width BELOW the cell
+     * (33 / 31 x 31 = 32.99999...), so the page aims half a device pixel above
+     * the target. This sweeps pane heights 500..900 (step 7) at five pixel
+     * ratios, two guesses each (the one the page derives, and one three px
+     * loose that leaves room for the stretch), and requires the renderer's
+     * cell to be exactly the tallest one that fits under the line-height
+     * ceiling, and the confirm step to accept the result. It must exercise
+     * BOTH what binds the cell (the pane, and the ceiling) or it proves less
+     * than it looks like.
+     *
+     * Mutation that reddens this: drop the + 0.5 from the line height.
+     */
+    const sweepTallestFittingCell = (mutate?: (source: string) => string): { pane: number; ceiling: number; cases: number } => {
+      const bound = { pane: 0, ceiling: 0, cases: 0 };
+      for (const devicePixelRatio of [1, 2, 2.625, 3, 3.5]) {
+        for (const referenceFontOffsetPx of [0, 3]) {
+          for (let fitHeight = 500; fitHeight <= 900; fitHeight += 7) {
+            const label = `dpr ${devicePixelRatio}, fit ${fitHeight}, guess offset ${referenceFontOffsetPx}`;
+            const harness = buildCellFit({ devicePixelRatio, fitHeight, referenceFontOffsetPx, mutate });
+            const limitPx = cellFitLimitPx(fitHeight);
+
+            applyComputedFit(harness);
+            harness.flushFrames();
+
+            const { fontSize, lineHeight } = harness.options();
+            const deviceChar = Math.ceil(fontBoxHeight(fontSize, 1.17) * devicePixelRatio);
+            const ceilingCell = Math.floor(deviceChar * pageVar('MAX_LINE_HEIGHT'));
+            const paneCell = bruteForceTallestCell(48, devicePixelRatio, limitPx);
+            expect(harness.renderedCell(), label).toBe(Math.min(paneCell, ceilingCell));
+            expect(harness.renderedGridHeight(), label).toBeLessThanOrEqual(limitPx);
+            expect(lineHeight, label).toBeGreaterThanOrEqual(1);
+            expect(lineHeight, label).toBeLessThanOrEqual(pageVar('MAX_LINE_HEIGHT'));
+            expect(harness.settleHeights(), `${label}: the confirm settles on the grid it measured`).toEqual([
+              harness.renderedGridHeight(),
+            ]);
+            expect(harness.missCalls(), `${label}: no miss`).toEqual([]);
+            if (paneCell <= ceilingCell) bound.pane += 1;
+            else bound.ceiling += 1;
+            bound.cases += 1;
+          }
+        }
+      }
+      return bound;
+    };
+
+    it('renders exactly the tallest fitting cell for every pixel ratio and pane height, and the confirm accepts it', () => {
+      const bound = sweepTallestFittingCell();
+
+      expect(bound.cases).toBe(5 * 2 * 58);
+      expect(bound.pane, 'the sweep reached cells the pane binds').toBeGreaterThan(20);
+      expect(bound.ceiling, 'the sweep reached cells the line-height ceiling binds').toBeGreaterThan(20);
+    });
+
+    it('is caught if the line height aims at the cell itself instead of half a device pixel above it', () => {
+      const aimAtTheCell = (source: string): string => source.replace('(deviceCell + 0.5) / deviceCharHeight', 'deviceCell / deviceCharHeight');
+      expect(() => sweepTallestFittingCell(aimAtTheCell)).toThrow(/dpr [\d.]+, fit \d+, guess offset \d/);
+    });
+
+    it('is caught if the cell search stops at its estimate instead of walking down to a cell that fits', () => {
+      const trustTheEstimate = (source: string): string =>
+        source.replace('while (cell > 0 && Math.round((rows * cell) / devicePixelRatio) > limitPx) cell -= 1;', '');
+      expect(() => sweepTallestFittingCell(trustTheEstimate)).toThrow(/dpr [\d.]+, fit \d+, guess offset \d/);
+    });
+
+    /**
+     * No metrics, no computed cell: xterm then measures a DOM span, which this
+     * cannot reproduce, so the caller must take the measured chain. Three ways
+     * to be unable: the font box keys are absent (an engine without them),
+     * they read zero, and OffscreenCanvas itself is missing or throws. In each,
+     * runComputedFit says no and schedules nothing.
+     */
+    const unmeasurableCases: [string, Partial<CellFitHarnessOptions>][] = [
+      ['the font box keys are absent', { measureTextShape: 'no-font-box' }],
+      ['the font box reads zero', { measureTextShape: 'empty-font-box' }],
+      ['OffscreenCanvas throws', { canvasConstructorThrows: true }],
+    ];
+    it.each(unmeasurableCases)('cannot compute a cell when %s, and runComputedFit hands the fit back', (_description, shape) => {
+      const harness = buildCellFit({ ...realisticCellFit, ...shape });
+
+      expect(harness.computeFittedCell()).toBeNull();
+      expect(harness.runComputedFit(1)).toBe(false);
+
+      expect(harness.pendingTimeouts(), 'no write task is queued for a fit nobody took').toBe(0);
+      expect(harness.pendingFrames()).toBe(0);
+      expect(harness.writes()).toEqual([]);
+    });
+
+    /**
+     * A converged cell needs no search, so it is taken even where the font
+     * cannot be measured. The confirm then has no expected cell to compare
+     * against, and recovers the cell from the drawn grid instead: the one
+     * attempted measure (for that expected cell) is all it costs.
+     */
+    it('still takes the fit from a converged cell when the font cannot be measured, and confirms it from the drawn grid', () => {
+      const harness = buildCellFit({
+        ...realisticCellFit,
+        measureTextShape: 'no-font-box',
+        initialSettledFit: { fontSizePx: 10, lineHeight: 1.08 },
+      });
+
+      expect(harness.runComputedFit(1)).toBe(true);
+      harness.flushTimeouts();
+
+      expect(harness.options()).toEqual({ fontSize: 10, lineHeight: 1.08 });
+      expect(harness.measuredFontSizes(), 'one attempt, for the confirm, never the search').toEqual([10]);
+
+      harness.flushFrames();
+
+      expect(harness.missCalls()).toEqual([]);
+      expect(harness.settleHeights()).toEqual([harness.renderedGridHeight()]);
+    });
+
+    it('measures through one OffscreenCanvas context, created once', () => {
+      const harness = buildCellFit({ ...realisticCellFit, referenceFontPx: 14 });
+
+      harness.computeFittedCell();
+      harness.computeFittedCell();
+
+      expect(harness.canvasConstructions()).toBe(1);
+    });
+
+    /**
+     * THE POINT OF THE MODULE: runComputedFit writes nothing when it is called
+     * (a refit runs inside a ResizeObserver or a frame callback, and a write
+     * there is presented cleared for a frame) and nothing inside a frame. The
+     * writes land in a timer TASK, where xterm's repaint beats the next paint,
+     * and exactly one frame is then queued, for the confirm.
+     *
+     * Mutations that redden this, each on its own: call the write function
+     * directly instead of from setTimeout (the synchronous check), or schedule
+     * it with requestAnimationFrame instead (the no-frame-yet check).
+     */
+    const checkWritesLandInATaskNotAFrame = (harness: CellFitHarness): void => {
+      const before = harness.options();
+      harness.beginFitChainStats();
+
+      expect(harness.runComputedFit(1)).toBe(true);
+
+      expect(harness.writes(), 'nothing is written synchronously').toEqual([]);
+      expect(harness.options(), 'the options are untouched until the task runs').toEqual(before);
+      expect(harness.pendingFrames(), 'the write is a task, not a frame: no frame is queued yet').toBe(0);
+      expect(harness.pendingTimeouts(), 'exactly one write task is queued').toBe(1);
+      expect(harness.timeoutDelays(), 'a task, as soon as the current one ends').toEqual([0]);
+
+      harness.flushTimeouts();
+
+      expect(harness.writes().map((write) => write.name)).toEqual(['fontSize', 'lineHeight']);
+      expect(
+        harness.writes().map((write) => write.context),
+        'every write came from the task',
+      ).toEqual(['task', 'task']);
+      expect(harness.options()).not.toEqual(before);
+      expect(harness.events()).toEqual(['write:fontSize', 'write:lineHeight', 'applyGeometry']);
+      expect(harness.settleHeights(), 'nothing settles before the frame that confirms it').toEqual([]);
+      expect(harness.pendingFrames(), 'exactly one frame is queued, for the confirm').toBe(1);
+
+      harness.flushFrames();
+
+      expect(harness.writes(), 'the confirming frame writes nothing').toHaveLength(2);
+      expect(harness.settleHeights()).toEqual([harness.renderedGridHeight()]);
+      expect(harness.followCalls()).toEqual([true]);
+      expect(harness.manualPanUntil(), 'the settle re-arms the follow').toBe(0);
+      expect(harness.currentFontSizePx(), 'the page remembers the font it wrote').toBe(harness.options().fontSize);
+      expect(harness.events()).toEqual([
+        'write:fontSize',
+        'write:lineHeight',
+        'applyGeometry',
+        'trace:computed',
+        'settleFit',
+        'clampHorizontalPan',
+        'follow:true',
+      ]);
+    };
+
+    it('writes the cell from a task, never synchronously and never inside a frame, then confirms in one frame', () => {
+      checkWritesLandInATaskNotAFrame(buildCellFit(realisticCellFit));
+    });
+
+    it('is caught if the write happens synchronously in runComputedFit', () => {
+      const inlineTheTask = (source: string): string =>
+        source.replace('setTimeout(function () {', '(function () {').replace(/\}, 0\);(\s*)return true;/, '})();$1return true;');
+      expect(() => checkWritesLandInATaskNotAFrame(buildCellFit({ ...realisticCellFit, mutate: inlineTheTask }))).toThrow(
+        'nothing is written synchronously',
+      );
+    });
+
+    it('is caught if the write is moved into an animation frame', () => {
+      const moveTheTaskIntoAFrame = (source: string): string =>
+        source.replace('setTimeout(function () {', 'requestAnimationFrame(function () {').replace('}, 0);', '});');
+      expect(() => checkWritesLandInATaskNotAFrame(buildCellFit({ ...realisticCellFit, mutate: moveTheTaskIntoAFrame }))).toThrow(
+        'the write is a task, not a frame',
+      );
+    });
+
+    /**
+     * The fit button over a frame that is already fitted must not touch the
+     * canvas: the computed cell equals the one showing, so setCellOption skips
+     * both writes, and the chain's stats say so (cellWrites 0). Checked twice,
+     * since both ways to find the cell must agree: recomputed from the font
+     * (nothing remembered) and reused from the converged cell (settleFit
+     * remembered it). A CHANGED cell writes at most the two options.
+     *
+     * Mutation that reddens this: drop the equality skip from setCellOption.
+     */
+    const checkAFittedFrameIsNotWrittenAgain = (harness: CellFitHarness, expectReuse: boolean): void => {
+      applyComputedFit(harness);
+      harness.flushFrames();
+      const writesAfterFirstFit = harness.writes().length;
+      expect(writesAfterFirstFit, 'precondition: the first fit wrote the cell').toBe(2);
+      const measuredAfterFirstFit = harness.measuredFontSizes().length;
+
+      // The fit button: a new chain, a new generation, over the frame already
+      // showing its fit.
+      harness.setGeneration(2);
+      harness.beginFitChainStats();
+      expect(harness.runComputedFit(2)).toBe(true);
+      harness.flushTimeouts();
+
+      expect(
+        harness.events().filter((event) => event === 'applyGeometry'),
+        'precondition: the second fit ran its task (a superseded one would write nothing for the wrong reason)',
+      ).toHaveLength(2);
+      expect(harness.writes().length, 'a fitted frame is not written again').toBe(writesAfterFirstFit);
+      expect(harness.fitChainStats()?.cellWrites, 'and the chain counts none').toBe(0);
+      expect(harness.fitChainStats()?.cellWriteMs).toBe(0);
+      if (expectReuse) {
+        // The memo's font is measured once, for the confirm's expected cell;
+        // the search (one measure per candidate font) never runs again.
+        expect(harness.measuredFontSizes().slice(measuredAfterFirstFit), 'the converged cell is reused, not searched for').toEqual([
+          harness.options().fontSize,
+        ]);
+      }
+    };
+
+    it('writes nothing when the computed cell is the one already showing (the fit button over a fitted frame)', () => {
+      checkAFittedFrameIsNotWrittenAgain(buildCellFit(realisticCellFit), false);
+    });
+
+    it('writes nothing over a fitted frame when the cell comes from the converged memo, and does not search again', () => {
+      checkAFittedFrameIsNotWrittenAgain(buildCellFit({ ...realisticCellFit, rememberSettledFit: true }), true);
+    });
+
+    it('is caught if setCellOption writes an unchanged value', () => {
+      const dropTheEqualitySkip = (source: string): string =>
+        source.replace('if (!terminal || terminal.options[name] === value) return;', 'if (!terminal) return;');
+      expect(() =>
+        checkAFittedFrameIsNotWrittenAgain(buildCellFit({ ...realisticCellFit, mutate: dropTheEqualitySkip }), false),
+      ).toThrow('a fitted frame is not written again');
+    });
+
+    const changedCellCases: [string, CellFitHarnessOptions, number][] = [
+      ['only the line height changes (the same font still fits)', { ...realisticCellFit }, 1],
+      ['both the font and the line height change', { devicePixelRatio: 2.625, fitHeight: 621 }, 2],
+    ];
+    it.each(changedCellCases)('writes at most the two options for a changed cell, and counts them: %s', (_description, harnessOptions, expectedWrites) => {
+      const harness = buildCellFit(harnessOptions);
+      applyComputedFit(harness);
+      harness.flushFrames();
+      const writesAfterFirstFit = harness.writes().length;
+
+      // A taller pane (a rotation, the first-run hint going away): a new cell.
+      harness.setFitHeight(660);
+      applyComputedFit(harness, 2);
+
+      const newWrites = harness.writes().length - writesAfterFirstFit;
+      expect(newWrites).toBe(expectedWrites);
+      expect(newWrites).toBeLessThanOrEqual(2);
+      expect(harness.fitChainStats()?.cellWrites).toBe(newWrites);
+    });
+
+    /**
+     * A refit bumps the generation, and a write task already queued by the
+     * fit it replaced must not run its writes under the new one (nor its
+     * confirm, a frame later, settle a cell nobody is waiting on).
+     *
+     * Mutation that reddens the first: drop the generation check from the task.
+     */
+    const checkASupersededTaskWritesNothing = (harness: CellFitHarness): void => {
+      harness.beginFitChainStats();
+      expect(harness.runComputedFit(1)).toBe(true);
+
+      harness.setGeneration(2);
+      harness.flushTimeouts();
+
+      expect(harness.writes(), 'a superseded task writes nothing').toEqual([]);
+      expect(harness.events(), 'and lays nothing out').toEqual([]);
+      expect(harness.pendingFrames(), 'and queues no confirm').toBe(0);
+    };
+
+    it('writes nothing from a task whose generation was superseded', () => {
+      checkASupersededTaskWritesNothing(buildCellFit(realisticCellFit));
+    });
+
+    it('is caught if the write task ignores the generation', () => {
+      const dropTheTaskGenerationCheck = (source: string): string =>
+        source.replace('if (!terminal || generation !== heightFitGeneration) return;', 'if (!terminal) return;');
+      expect(() =>
+        checkASupersededTaskWritesNothing(buildCellFit({ ...realisticCellFit, mutate: dropTheTaskGenerationCheck })),
+      ).toThrow('a superseded task writes nothing');
+    });
+
+    it('settles nothing when the generation moves between the write and its confirming frame', () => {
+      const harness = buildCellFit(realisticCellFit);
+      harness.beginFitChainStats();
+      harness.runComputedFit(1);
+      harness.flushTimeouts();
+      const eventsAfterWrite = [...harness.events()];
+
+      harness.setGeneration(2);
+      harness.flushFrames();
+
+      expect(harness.events()).toEqual(eventsAfterWrite);
+      expect(harness.settleHeights()).toEqual([]);
+    });
+
+    /**
+     * The confirm falls back on a MISS. The fake renderer measures the font
+     * taller than measureText reported (1.30 per px against 1.17), as a
+     * renderer that sized a different font would, so the grid the computed
+     * cell paints overflows the pane. The confirm must not settle that: it
+     * labels the chain 'computed-miss' and hands over to the measured chain,
+     * with its full pass budget, unlocked, for this generation.
+     *
+     * Mutation that reddens this: drop the miss branch.
+     */
+    const checkAMissFallsBackToTheMeasuredChain = (harness: CellFitHarness, direction: 'taller' | 'shorter' = 'taller'): void => {
+      harness.beginFitChainStats();
+      harness.runComputedFit(1);
+      harness.flushTimeouts();
+      if (direction === 'taller') {
+        expect(harness.renderedGridHeight(), 'precondition: the painted grid overflows the pane').toBeGreaterThan(cellFitLimitPx(621));
+      }
+
+      harness.flushFrames();
+
+      expect(harness.missCalls(), 'the measured chain takes over with its whole budget').toEqual([
+        { passes: pageVar('HEIGHT_FIT_PASSES'), stretchLocked: false, generation: 1 },
+      ]);
+      expect(harness.fitChainStats()?.strategy).toBe('computed-miss');
+      expect(harness.settleHeights(), 'an overflowing cell is never settled').toEqual([]);
+      expect(harness.followCalls()).toEqual([]);
+      expect(harness.manualPanUntil(), 'the pan state is left to the chain that settles').toBe(999);
+      expect(harness.events()).toContain('trace:computed-miss');
+    };
+
+    it('hands a computed cell that paints too tall to the measured chain, labelled computed-miss', () => {
+      checkAMissFallsBackToTheMeasuredChain(buildCellFit({ ...realisticCellFit, rendererCharHeightRatio: 1.3 }));
+    });
+
+    /**
+     * The other direction: a renderer that draws the font SHORTER than this
+     * page measured (1.05 per px against 1.17) paints a grid that fits but is
+     * not the cell the page computed, so the fit is no longer the tallest one.
+     * That too is a model that disagrees with the renderer, and the measured
+     * chain, which stretches into slack, is what corrects it.
+     */
+    it('hands a computed cell that paints shorter than expected to the measured chain too', () => {
+      const harness = buildCellFit({ ...realisticCellFit, rendererCharHeightRatio: 1.05 });
+      checkAMissFallsBackToTheMeasuredChain(harness, 'shorter');
+      expect(harness.renderedGridHeight(), 'precondition: the painted grid fits').toBeLessThanOrEqual(cellFitLimitPx(621));
+    });
+
+    /**
+     * Where the font cannot be measured there is no expected cell, so the
+     * overflow check is the only one left, and it must test the cell the
+     * renderer DREW (recovered from the grid). A converged cell that no longer
+     * fits (an oversized one here) must still fall back.
+     *
+     * Mutation that reddens this: compute the overflow from the expected cell
+     * instead of the drawn one, or drop the overflow half of the miss branch.
+     */
+    it('falls back on an overflowing converged cell even where the font cannot be measured', () => {
+      checkAMissFallsBackToTheMeasuredChain(
+        buildCellFit({
+          ...realisticCellFit,
+          measureTextShape: 'no-font-box',
+          initialSettledFit: { fontSizePx: 20, lineHeight: 1.5 },
+        }),
+      );
+    });
+
+    it('is caught if the confirm never falls back', () => {
+      const dropTheMissBranch = (source: string): string =>
+        source.replace('if (!drawnAsExpected || screenHeight > limitPx) {', 'if (false) {');
+      expect(() =>
+        checkAMissFallsBackToTheMeasuredChain(
+          buildCellFit({ ...realisticCellFit, rendererCharHeightRatio: 1.3, mutate: dropTheMissBranch }),
+        ),
+      ).toThrow('the measured chain takes over');
+    });
+
+    it('settles, and labels the chain computed, when the renderer agrees with the measurement (the control for the miss)', () => {
+      const harness = buildCellFit(realisticCellFit);
+
+      applyComputedFit(harness);
+      harness.flushFrames();
+
+      expect(harness.missCalls()).toEqual([]);
+      expect(harness.fitChainStats()?.strategy).toBe('computed');
+      expect(harness.settleHeights()).toHaveLength(1);
+    });
+
+    /**
+     * A grid SHORTER than the reference (30 rows against 48) is confirmed at
+     * its own rows (the drawn height against the height its cell produces),
+     * and it settles on (and reports) the grid it actually measured.
+     */
+    it('confirms a 30-row grid against the reference rows, and settles on the grid it measured', () => {
+      const harness = buildCellFit({ ...realisticCellFit, rows: 30 });
+
+      applyComputedFit(harness);
+      harness.flushFrames();
+
+      expect(harness.missCalls()).toEqual([]);
+      expect(harness.settleHeights()).toEqual([harness.renderedGridHeight()]);
+      expect(harness.renderedGridHeight(), 'the 30-row grid paints 30/48 of the reference height').toBe(Math.round((30 * 33) / 2.625));
+    });
+
+    /**
+     * REGRESSION PIN (found while writing these tests, fixed in cellFit.js):
+     * the confirm used to scale a ROUNDED css height by referenceRows / rows,
+     * which amplifies the renderer's half-pixel rounding to about 0.8 px at 30
+     * rows, past the 0.5 px tolerance. At dpr 2.625 (a Pixel) and a 587 px pane
+     * the computed cell 32 is exactly right: 48 rows paint 585 px against a
+     * 585.5 limit. But 30 rows paint round(30 x 32 / 2.625) = 366, and
+     * 366 x 48 / 30 = 585.6 read as an overflow, so the confirm reported a
+     * 'computed-miss' and ran the measured chain (the very canvas-resizing
+     * chain this fit exists to avoid) for a cell that fits. A sweep found it
+     * at 14, 20, 30, 40 and 47 rows, never at 48. The confirm now compares the
+     * drawn height against the height its cell produces at the grid's own rows.
+     * Seen failing against the scaling confirm before the fix.
+     */
+    const shortGridFalseMissScenario = { devicePixelRatio: 2.625, fitHeight: 587, referenceFontPx: 10, rows: 30 } as const;
+
+    // The preconditions live in their own `it`, so a precondition that stopped
+    // holding (a retuned clearance, a changed search) fails on its own name
+    // rather than leaving the pin below testing nothing.
+    it('computes cell 32 for the short-grid scenario below, which is the tallest that fits 48 rows', () => {
+      const harness = buildCellFit(shortGridFalseMissScenario);
+
+      applyComputedFit(harness);
+
+      expect(bruteForceTallestCell(48, 2.625, cellFitLimitPx(587))).toBe(32);
+      expect(harness.renderedCell()).toBe(32);
+      expect(Math.round((48 * 32) / 2.625), 'the 48-row equivalent fits').toBeLessThanOrEqual(cellFitLimitPx(587));
+      expect(Math.round((30 * 32) / 2.625) * (48 / 30), 'but the scaled short grid reads over the limit').toBeGreaterThan(
+        cellFitLimitPx(587),
+      );
+    });
+
+    it('does not report a miss for a 30-row grid whose 48-row equivalent fits (rounding amplified by the row scaling)', () => {
+      const harness = buildCellFit(shortGridFalseMissScenario);
+
+      applyComputedFit(harness);
+      harness.flushFrames();
+
+      expect(harness.missCalls()).toEqual([]);
+      expect(harness.settleHeights()).toHaveLength(1);
+    });
+
+    it('bails without settling or falling back when there is no painted grid to measure', () => {
+      for (const screenElement of ['missing', 'zero-height'] as const) {
+        const harness = buildCellFit({ ...realisticCellFit, screenElement });
+
+        applyComputedFit(harness);
+        harness.flushFrames();
+
+        expect(harness.events(), screenElement).toContain('trace:bail-zero-measure');
+        expect(harness.settleHeights(), screenElement).toEqual([]);
+        expect(harness.missCalls(), screenElement).toEqual([]);
+      }
+    });
+
+    /**
+     * setCellOption: skips an equal value, and for a changed one counts the
+     * write and times how long it blocked (xterm resizes, and so clears, the
+     * canvas inside it). The clock is fake: the font write blocks 120 ms and
+     * the line-height write 30, so the total (150) and the worst (120, not the
+     * last) are exact.
+     */
+    describe('setCellOption and the chain stats', () => {
+      it('counts writes and the time they blocked, and keeps the worst single write', () => {
+        const harness = buildCellFit({ ...realisticCellFit, fontWriteBlockMs: 120, lineHeightWriteBlockMs: 30 });
+        harness.beginFitChainStats();
+
+        harness.setCellOption('fontSize', 11);
+        harness.setCellOption('lineHeight', 1.1);
+
+        expect(harness.fitChainStats()).toEqual({
+          strategy: 'computed',
+          startedAt: 5000,
+          cellWrites: 2,
+          cellWriteMs: 150,
+          maxCellWriteMs: 120,
+        });
+      });
+
+      it('skips a value that is already set: no write, no count, no time', () => {
+        const harness = buildCellFit({ ...realisticCellFit, fontWriteBlockMs: 120 });
+        harness.beginFitChainStats();
+
+        harness.setCellOption('fontSize', harness.options().fontSize);
+        harness.setCellOption('lineHeight', harness.options().lineHeight);
+
+        expect(harness.writes()).toEqual([]);
+        expect(harness.fitChainStats()).toMatchObject({ cellWrites: 0, cellWriteMs: 0, maxCellWriteMs: 0 });
+      });
+
+      it('writes without a chain in flight, and counts nothing', () => {
+        const harness = buildCellFit(realisticCellFit);
+
+        harness.setCellOption('fontSize', 11);
+
+        expect(harness.options().fontSize).toBe(11);
+        expect(harness.fitChainStats()).toBeNull();
+      });
+
+      it('starts each chain from zero, labelled with the page strategy and stamped with the clock', () => {
+        const harness = buildCellFit({ ...realisticCellFit, fontWriteBlockMs: 7 });
+        harness.beginFitChainStats();
+        harness.setCellOption('fontSize', 11);
+
+        harness.beginFitChainStats();
+
+        expect(harness.fitChainStats()).toEqual({
+          strategy: 'computed',
+          startedAt: 5007,
+          cellWrites: 0,
+          cellWriteMs: 0,
+          maxCellWriteMs: 0,
+        });
+      });
+    });
   });
 
   /**
@@ -1419,6 +2664,7 @@ describe('generated xterm.html', () => {
       'cleanFeed.js',
       'lifecycle.js',
       'heightFit.js',
+      'cellFit.js',
       'panClamp.js',
       'refit.js',
       'dispatch.js',
@@ -2480,11 +3726,18 @@ describe('generated xterm.html', () => {
    * that already converged applies its cell directly (re-running the chain
    * from line height 1 is what made every re-init snap short and re-stretch);
    * anything else fits the reference font from a clean line height of 1.
+   *
+   * The strategy defaults to 'measured', which is what the cases written
+   * before the computed fit (cellFit.js) were about; the computed branch has
+   * its own cases below, with runComputedFit a spy that answers as configured.
    */
   function buildRefitHarness(options: {
     initialLineHeight: number;
     settledFit?: { fontSizePx: number; lineHeight: number } | null;
     pinchOverrideFontPx?: number | null;
+    fitStrategy?: 'computed' | 'measured';
+    /** What runComputedFit answers: true when it took the fit, false when it cannot compute a cell. */
+    runComputedFitResult?: boolean;
   }): {
     refit: (trigger?: unknown) => void;
     onViewportChange: (trigger: string) => void;
@@ -2496,6 +3749,14 @@ describe('generated xterm.html', () => {
     /** Calls made to the forced vertical follow and the pan clamp, in order. */
     reorientCalls: () => string[];
     pinnedToStart: () => boolean;
+    /** The generation of every runComputedFit call. */
+    computedFitGenerations: () => number[];
+    geometryCalls: () => number;
+    /** The strategy label on the chain's stats, or null once the stats are dropped. */
+    chainStrategy: () => string | null;
+    generation: () => number;
+    /** The option names actually written (an unchanged value writes nothing). */
+    cellWriteNames: () => string[];
   } {
     const source = pageModule('refit.js');
     assertInjectionsAreAlive('refit.js', source, [
@@ -2514,9 +3775,16 @@ describe('generated xterm.html', () => {
       'manualPanUntil',
       'clampHorizontalPan',
       'followCursorVertically',
+      'fitStrategy',
+      'fitChainStats',
+      'beginFitChainStats',
+      'runComputedFit',
+      'setCellOption',
     ]);
     const terminal = { options: { lineHeight: options.initialLineHeight, fontSize: 9 } };
     let autoFitCalls = 0;
+    let geometryCalls = 0;
+    const computedFitGenerations: number[] = [];
     const heightFitCalls: { passes: number; stretchLocked: boolean; generation: number }[] = [];
     const reorientCalls: string[] = [];
     const build = new Function(
@@ -2528,7 +3796,9 @@ describe('generated xterm.html', () => {
       'followCursorVertically',
       'requestAnimationFrame',
       'settledFitForCurrentGrid',
+      'runComputedFit',
       'initialPinchOverrideFontPx',
+      'initialFitStrategy',
       `var pinnedToStart = false;
        var heightFitGeneration = 0;
        var HEIGHT_FIT_PASSES = 4;
@@ -2536,22 +3806,45 @@ describe('generated xterm.html', () => {
        var currentFontSizePx = 9;
        var activeFitTrigger = 'none';
        var pinchOverrideFontPx = initialPinchOverrideFontPx;
+       var fitStrategy = initialFitStrategy;
+       // A chain from a previous refit, still in flight: the pinch branch must
+       // drop it, and every other branch replaces it.
+       var fitChainStats = { strategy: 'stale' };
+       var cellWriteNames = [];
+       // The real begin (cellFit.js) assigns the page's own var, which an
+       // injected function cannot do, so it is restated here.
+       function beginFitChainStats() {
+         fitChainStats = { strategy: fitStrategy, startedAt: 0, cellWrites: 0, cellWriteMs: 0, maxCellWriteMs: 0 };
+       }
+       function setCellOption(name, value) {
+         if (terminal.options[name] === value) return;
+         terminal.options[name] = value;
+         cellWriteNames.push(name);
+       }
        ${source}
        return { refit: refit, onViewportChange: onViewportChange,
                 trigger: function () { return activeFitTrigger; },
-                pinnedToStart: function () { return pinnedToStart; } };`,
+                pinnedToStart: function () { return pinnedToStart; },
+                chainStrategy: function () { return fitChainStats === null ? null : fitChainStats.strategy; },
+                generation: function () { return heightFitGeneration; },
+                cellWriteNames: function () { return cellWriteNames; } };`,
     ) as (...dependencies: unknown[]) => {
       refit: (trigger?: unknown) => void;
       onViewportChange: (trigger: string) => void;
       trigger: () => string;
       pinnedToStart: () => boolean;
+      chainStrategy: () => string | null;
+      generation: () => number;
+      cellWriteNames: () => string[];
     };
     const built = build(
       terminal,
       () => {
         autoFitCalls += 1;
       },
-      () => undefined,
+      () => {
+        geometryCalls += 1;
+      },
       (passes: number, stretchLocked: boolean, generation: number) => {
         heightFitCalls.push({ passes, stretchLocked, generation });
       },
@@ -2563,7 +3856,12 @@ describe('generated xterm.html', () => {
       },
       (callback: () => void) => callback(),
       () => options.settledFit ?? null,
+      (generation: number) => {
+        computedFitGenerations.push(generation);
+        return options.runComputedFitResult ?? false;
+      },
       options.pinchOverrideFontPx ?? null,
+      options.fitStrategy ?? 'measured',
     );
     return {
       refit: built.refit,
@@ -2575,6 +3873,11 @@ describe('generated xterm.html', () => {
       heightFitCalls: () => heightFitCalls,
       reorientCalls: () => reorientCalls,
       pinnedToStart: built.pinnedToStart,
+      computedFitGenerations: () => computedFitGenerations,
+      geometryCalls: () => geometryCalls,
+      chainStrategy: built.chainStrategy,
+      generation: built.generation,
+      cellWriteNames: built.cellWriteNames,
     };
   }
 
@@ -2692,6 +3995,103 @@ describe('generated xterm.html', () => {
       expect(harness.trigger()).toBe('window-resize');
       expect(harness.autoFitCalls()).toBe(1);
     });
+
+    /**
+     * THE FIT STRATEGY. The computed fit (cellFit.js) takes the refit when the
+     * page is on it and can compute a cell, and the measured chain above runs
+     * otherwise: when the host asked for it, or when the computed fit could not
+     * measure the font and the stats say so ('computed-miss').
+     *
+     * Mutations that redden these: drop the `fitStrategy === 'computed'` test
+     * (a measured page would call runComputedFit), or return from refit
+     * whatever runComputedFit answered (a miss would run no fit at all).
+     */
+    describe('fit strategy', () => {
+      it('hands a computed refit to the computed fit and runs nothing else', () => {
+        const harness = buildRefitHarness({ initialLineHeight: 1.1, fitStrategy: 'computed', runComputedFitResult: true });
+
+        harness.refit('fit-button');
+
+        expect(harness.computedFitGenerations(), 'the computed fit owns the generation this refit took').toEqual([1]);
+        expect(harness.generation()).toBe(1);
+        expect(harness.chainStrategy()).toBe('computed');
+        // None of the measured chain's moves: no font fit, no clean slate, no
+        // geometry pass, no frame-driven height fit.
+        expect(harness.autoFitCalls()).toBe(0);
+        expect(harness.lineHeight()).toBe(1.1);
+        expect(harness.geometryCalls()).toBe(0);
+        expect(harness.cellWriteNames()).toEqual([]);
+        expect(harness.heightFitCalls()).toEqual([]);
+        expect(harness.reorientCalls()).toEqual([]);
+        expect(harness.pinnedToStart()).toBe(true);
+      });
+
+      it('falls back to the measured chain, labelled computed-miss, when no cell can be computed', () => {
+        const harness = buildRefitHarness({ initialLineHeight: 1.19, fitStrategy: 'computed', runComputedFitResult: false });
+
+        harness.refit('init');
+
+        expect(harness.computedFitGenerations()).toEqual([1]);
+        expect(harness.chainStrategy()).toBe('computed-miss');
+        expect(harness.autoFitCalls()).toBe(1);
+        expect(harness.lineHeight()).toBe(1);
+        expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: false, generation: 1 }]);
+      });
+
+      it('keeps a converged cell and its locked stretch through a computed miss', () => {
+        const harness = buildRefitHarness({
+          initialLineHeight: 1,
+          fitStrategy: 'computed',
+          runComputedFitResult: false,
+          settledFit: { fontSizePx: 11, lineHeight: 1.194 },
+        });
+
+        harness.refit('ro-settle');
+
+        expect(harness.chainStrategy()).toBe('computed-miss');
+        expect(harness.fontSize()).toBe(11);
+        expect(harness.lineHeight()).toBe(1.194);
+        expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: true, generation: 1 }]);
+      });
+
+      it('never asks the computed fit on a measured page, and labels the chain measured', () => {
+        const harness = buildRefitHarness({ initialLineHeight: 1.19, fitStrategy: 'measured', runComputedFitResult: true });
+
+        harness.refit('init');
+
+        expect(harness.computedFitGenerations()).toEqual([]);
+        expect(harness.chainStrategy()).toBe('measured');
+        expect(harness.autoFitCalls()).toBe(1);
+        expect(harness.heightFitCalls()).toEqual([{ passes: 4, stretchLocked: false, generation: 1 }]);
+      });
+
+      it('gives each refit its own generation, and the computed fit the one it took', () => {
+        const harness = buildRefitHarness({ initialLineHeight: 1, fitStrategy: 'computed', runComputedFitResult: true });
+
+        harness.refit('fit-height');
+        harness.refit('fit-height');
+
+        expect(harness.computedFitGenerations()).toEqual([1, 2]);
+      });
+
+      it('keeps a pinch out of both fits and drops the chain it cancelled', () => {
+        const harness = buildRefitHarness({
+          initialLineHeight: 1.1,
+          pinchOverrideFontPx: 20,
+          fitStrategy: 'computed',
+          runComputedFitResult: true,
+        });
+
+        harness.refit('window-resize');
+
+        expect(harness.computedFitGenerations()).toEqual([]);
+        expect(harness.heightFitCalls()).toEqual([]);
+        // The cancelled chain's stats go with it, and a queued write sees a new generation.
+        expect(harness.chainStrategy()).toBeNull();
+        expect(harness.generation()).toBe(1);
+        expect(harness.geometryCalls()).toBe(1);
+      });
+    });
   });
 
   /**
@@ -2706,7 +4106,17 @@ describe('generated xterm.html', () => {
     pinchOverrideFontPx: number | null;
   }): {
     reset: (initMessage: Record<string, unknown>) => void;
-    state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; hostFitHeightPx: number | null };
+    state: () => {
+      pinchOverrideFontPx: number | null;
+      currentFontSizePx: number;
+      hostFitHeightPx: number | null;
+      fitStrategy: string;
+      longPressMenuGuard: boolean | string;
+    };
+    /** The fit strategy the font was chosen under, one entry per fittedFontPxForGrid call. */
+    strategyWhenFontWasFitted: () => string[];
+    /** Every document.body.classList.toggle call, in order. */
+    bodyClassToggles: () => { name: string; force: unknown }[];
   } {
     const source = pageModule('lifecycle.js');
     const resetSource = source.slice(source.indexOf('function resetSessionViewState('), source.indexOf('function seedAndSettle('));
@@ -2720,7 +4130,11 @@ describe('generated xterm.html', () => {
       'fittedFontPxForGrid',
       'currentFontSizePx',
       'setupCleanFeed',
+      'fitStrategy',
+      'longPressMenuGuard',
     ]);
+    const strategyWhenFontWasFitted: string[] = [];
+    let readFitStrategy: () => string = () => '';
     const build = new Function(
       'textureCappedFontPx',
       'fittedFontPxForGrid',
@@ -2735,6 +4149,8 @@ describe('generated xterm.html', () => {
        var hostFitHeightPx = null;
        var pinchOverrideFontPx = initialState.pinchOverrideFontPx;
        var currentFontSizePx = 0;
+       var fitStrategy = 'unset';
+       var longPressMenuGuard = 'unset';
        var lastAppCursorMode = false;
        var lastReportedModes = null;
        var activeInitSeq = null;
@@ -2749,18 +4165,37 @@ describe('generated xterm.html', () => {
          reset: resetSessionViewState,
          state: function () {
            return { pinchOverrideFontPx: pinchOverrideFontPx, currentFontSizePx: currentFontSizePx,
-                    hostFitHeightPx: hostFitHeightPx };
+                    hostFitHeightPx: hostFitHeightPx, fitStrategy: fitStrategy,
+                    longPressMenuGuard: longPressMenuGuard };
          },
        };`,
     ) as (...dependencies: unknown[]) => {
       reset: (initMessage: Record<string, unknown>) => void;
-      state: () => { pinchOverrideFontPx: number | null; currentFontSizePx: number; hostFitHeightPx: number | null };
+      state: () => {
+        pinchOverrideFontPx: number | null;
+        currentFontSizePx: number;
+        hostFitHeightPx: number | null;
+        fitStrategy: string;
+        longPressMenuGuard: boolean | string;
+      };
     };
-    const fakeElement = { style: {} as Record<string, string> };
-    return build(
+    const bodyClassToggles: { name: string; force: unknown }[] = [];
+    const fakeElement = {
+      style: {} as Record<string, string>,
+      classList: {
+        toggle: (name: string, force: unknown) => {
+          bodyClassToggles.push({ name, force });
+        },
+      },
+    };
+    const built = build(
       (fontPx: number) => fontPx,
-      // The reference cell, whatever the grid.
-      () => 11,
+      // The reference cell, whatever the grid. It records the strategy in force
+      // when the page asks for it, which is what the ordering case reads.
+      () => {
+        strategyWhenFontWasFitted.push(readFitStrategy());
+        return 11;
+      },
       () => undefined,
       () => undefined,
       () => undefined,
@@ -2768,6 +4203,12 @@ describe('generated xterm.html', () => {
       { documentElement: fakeElement, body: fakeElement, getElementById: () => fakeElement },
       options,
     );
+    readFitStrategy = () => built.state().fitStrategy;
+    return {
+      ...built,
+      strategyWhenFontWasFitted: () => strategyWhenFontWasFitted,
+      bodyClassToggles: () => bodyClassToggles,
+    };
   }
 
   describe('lifecycle.js resetSessionViewState', () => {
@@ -2810,6 +4251,175 @@ describe('generated xterm.html', () => {
       harness.reset({ cols: 210, rows: 48, fitHeightPx: null });
       expect(harness.state().hostFitHeightPx).toBe(635);
     });
+
+    /**
+     * The host picks the fit strategy per init (the retention probe's
+     * 'measured-fit' arm): only the word 'measured' selects the older chain, and
+     * an init that says nothing, or something unknown, gets the computed fit.
+     * A re-init carries its own choice, so flipping the probe takes effect on
+     * the next open.
+     *
+     * Mutation that reddens this: read the strategy as `initMessage.fitStrategy
+     * || 'computed'` (an unknown word would then be adopted as a strategy).
+     */
+    it.each([
+      ['measured', 'measured'],
+      ['computed', 'computed'],
+      [undefined, 'computed'],
+      ['computed-miss', 'computed'],
+      ['MEASURED', 'computed'],
+    ])('adopts fitStrategy %s from an init as %s', (sent, adopted) => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, fitStrategy: sent });
+
+      expect(harness.state().fitStrategy).toBe(adopted);
+    });
+
+    it('lets a later init change the strategy', () => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, fitStrategy: 'measured' });
+      harness.reset({ cols: 210, rows: 48 });
+
+      expect(harness.state().fitStrategy).toBe('computed');
+    });
+
+    /**
+     * The strategy is adopted BEFORE the font is chosen, because the font is
+     * the computed fit's cell under 'computed' and the reference guess under
+     * 'measured'. Adopting it after would size the first terminal under the
+     * PREVIOUS init's strategy.
+     *
+     * Mutation that reddens this: move the fitStrategy assignment below the
+     * currentFontSizePx assignment.
+     */
+    it('adopts the strategy before it fits the font', () => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, fitStrategy: 'measured' });
+
+      expect(harness.strategyWhenFontWasFitted()).toEqual(['measured']);
+    });
+
+    /**
+     * The long-press guard is on for every init unless the host sends an
+     * explicit false (the retention probe's control arm), and each init
+     * carries its own choice, so flipping the probe takes effect on the next
+     * open.
+     *
+     * Mutation that reddens this: read it as `initMessage.longPressMenuGuard
+     * === true` (a host that predates the field would lose the guard).
+     */
+    it.each([
+      [undefined, true],
+      [true, true],
+      [false, false],
+      ['false', true],
+      [0, true],
+    ])('adopts longPressMenuGuard %s from an init as %s', (sent, adopted) => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, longPressMenuGuard: sent });
+
+      expect(harness.state().longPressMenuGuard).toBe(adopted);
+      // The body class that takes xterm's textarea out of hit testing (page CSS)
+      // follows the guard on every init.
+      expect(harness.bodyClassToggles()).toEqual([{ name: 'long-press-guard', force: adopted }]);
+    });
+
+    /**
+     * Mutation that reddens this: toggle the class only when the guard is on
+     * (`if (longPressMenuGuard) classList.add(...)`), which leaves a page that
+     * flipped to the control arm still guarded.
+     */
+    it('lets a later init turn the long-press guard back on, and the body class with it', () => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, longPressMenuGuard: false });
+      harness.reset({ cols: 210, rows: 48 });
+
+      expect(harness.state().longPressMenuGuard).toBe(true);
+      expect(harness.bodyClassToggles()).toEqual([
+        { name: 'long-press-guard', force: false },
+        { name: 'long-press-guard', force: true },
+      ]);
+    });
+
+    it('ships the CSS that takes the textarea out of hit testing under the guard class', () => {
+      expect(generatedHtml).toContain('body.long-press-guard .xterm .xterm-helper-textarea { pointer-events: none; }');
+    });
+  });
+
+  /**
+   * The long-press menu guard, the real listener sliced from bootstrap.js. A
+   * long-press on the terminal is a contextmenu event. xterm's own listener
+   * for it, on its element, moves the hidden textarea under the finger and
+   * FOCUSES it (raising the WebView keyboard), and the uncancelled event then
+   * draws Android's text menu over it, which offers only "Autofill" where an
+   * autofill service is set (reproduced on a Pixel with 1Password). Cancelling
+   * at the document in the bubble phase hid the menu but still let xterm focus
+   * the textarea, which raised the keyboard on a long-press (seen on the same
+   * Pixel). Neither is visible to a JS tier, so this asserts the mechanism: a
+   * CAPTURE listener on window that cancels the event and stops it.
+   *
+   * Mutations that redden this: drop the preventDefault or the
+   * stopPropagation, register it in the bubble phase, or invert the guard.
+   */
+  function runContextMenuListener(guard: boolean): {
+    prevented: number;
+    stopped: number;
+    registrations: { name: string; capture: unknown }[];
+  } {
+    const source = pageModule('bootstrap.js');
+    const start = source.indexOf("window.addEventListener('contextmenu'");
+    expect(start, 'bootstrap.js registers a window contextmenu listener').toBeGreaterThan(-1);
+    // To the close of the addEventListener call, whatever its third argument.
+    const callEnd = /\}(?:,\s*\w+)?\);/.exec(source.slice(start));
+    expect(callEnd, 'the contextmenu listener call closes').not.toBeNull();
+    const listenerSource = source.slice(start, start + (callEnd?.index ?? 0) + (callEnd?.[0].length ?? 0));
+    assertInjectionsAreAlive('bootstrap.js (contextmenu listener)', listenerSource, ['longPressMenuGuard']);
+    type MenuEvent = { preventDefault: () => void; stopPropagation: () => void };
+    const registrations: { name: string; capture: unknown }[] = [];
+    const handlers: ((event: MenuEvent) => void)[] = [];
+    const fakeWindow = {
+      addEventListener: (name: string, handler: (event: MenuEvent) => void, capture: unknown) => {
+        registrations.push({ name, capture });
+        handlers.push(handler);
+      },
+    };
+    new Function('window', 'longPressMenuGuard', listenerSource)(fakeWindow, guard);
+    let prevented = 0;
+    let stopped = 0;
+    for (const handler of handlers) {
+      handler({
+        preventDefault: () => {
+          prevented += 1;
+        },
+        stopPropagation: () => {
+          stopped += 1;
+        },
+      });
+    }
+    return { prevented, stopped, registrations };
+  }
+
+  describe('bootstrap.js long-press menu guard', () => {
+    it('cancels the long-press contextmenu in the capture phase, before xterm can focus its textarea', () => {
+      expect(runContextMenuListener(true)).toEqual({
+        prevented: 1,
+        stopped: 1,
+        registrations: [{ name: 'contextmenu', capture: true }],
+      });
+    });
+
+    it('leaves the event to xterm and the WebView under the probe control arm', () => {
+      expect(runContextMenuListener(false)).toEqual({
+        prevented: 0,
+        stopped: 0,
+        registrations: [{ name: 'contextmenu', capture: true }],
+      });
+    });
   });
 
   /**
@@ -2823,12 +4433,16 @@ describe('generated xterm.html', () => {
     initialLineHeight: number;
     fittedLineHeight: number;
     pinchOverrideFontPx?: number | null;
+    /** The font size already on the terminal; the page's own font is 9. Defaults to 0 (unfitted). */
+    initialFontSize?: number;
   }): {
     softReinit: (initMessage: Record<string, unknown>) => void;
     options: () => { lineHeight: number; fontSize: number; theme: unknown };
     seedCalls: () => unknown[];
     /** The order of the calls that matter for the frame hold: 'hold', 'clear' and 'reset'. */
     holdLog: () => string[];
+    /** The option names actually written (an unchanged value writes nothing). */
+    cellWriteNames: () => string[];
   } {
     const source = pageModule('lifecycle.js');
     const softReinitSource = source.slice(source.indexOf('function softReinit('), source.indexOf('function applyFontSize('));
@@ -2844,10 +4458,12 @@ describe('generated xterm.html', () => {
       'seedAndSettle',
       'holdFrameSnapshot',
       'clearFrameHold',
+      'setCellOption',
     ]);
     const holdLog: string[] = [];
+    const cellWriteNames: string[] = [];
     const terminal = {
-      options: { lineHeight: options.initialLineHeight, fontSize: 0, theme: null as unknown },
+      options: { lineHeight: options.initialLineHeight, fontSize: options.initialFontSize ?? 0, theme: null as unknown },
       reset: () => {
         holdLog.push('reset');
       },
@@ -2862,9 +4478,16 @@ describe('generated xterm.html', () => {
       'holdFrameSnapshot',
       'clearFrameHold',
       'initialPinchOverrideFontPx',
+      'onCellWrite',
       `var initCounts = { hard: 0, soft: 0 };
        var currentFontSizePx = 9;
        var pinchOverrideFontPx = initialPinchOverrideFontPx;
+       // Skip-equal, as cellFit.js's setCellOption is; a write is also logged.
+       function setCellOption(name, value) {
+         if (terminal.options[name] === value) return;
+         terminal.options[name] = value;
+         onCellWrite(name);
+       }
        ${softReinitSource}
        return { softReinit: softReinit };`,
     ) as (...dependencies: unknown[]) => { softReinit: (initMessage: Record<string, unknown>) => void };
@@ -2883,12 +4506,16 @@ describe('generated xterm.html', () => {
         holdLog.push('clear');
       },
       options.pinchOverrideFontPx ?? null,
+      (name: string) => {
+        cellWriteNames.push(name);
+      },
     );
     return {
       softReinit: built.softReinit,
       options: () => terminal.options,
       seedCalls: () => seedCalls,
       holdLog: () => holdLog,
+      cellWriteNames: () => cellWriteNames,
     };
   }
 
@@ -2905,6 +4532,24 @@ describe('generated xterm.html', () => {
 
       expect(harness.options().fontSize).toBe(9);
       expect(harness.options().lineHeight).toBe(1.194);
+      expect(harness.seedCalls()).toHaveLength(1);
+      expect(harness.cellWriteNames()).toEqual(['fontSize', 'lineHeight']);
+    });
+
+    /**
+     * A re-seed of a frame already showing its fitted cell must not touch the
+     * options at all: each write resizes, and so clears, the renderer's canvas
+     * (cellFit.js), which is the black pane this fit exists to stop.
+     *
+     * Mutation that reddens this: assign terminal.options.fontSize directly
+     * instead of through setCellOption.
+     */
+    it('writes nothing when the frame already shows the fitted cell', () => {
+      const harness = buildSoftReinitHarness({ initialLineHeight: 1.194, fittedLineHeight: 1.194, initialFontSize: 9 });
+
+      harness.softReinit({ holdFrame: false, theme: {}, scrollback: 'x' });
+
+      expect(harness.cellWriteNames()).toEqual([]);
       expect(harness.seedCalls()).toHaveLength(1);
     });
 
@@ -2962,6 +4607,7 @@ describe('generated xterm.html', () => {
       'seedAndSettle',
       'knownCols',
       'knownRows',
+      'TERMINAL_FONT_FAMILY',
     ]);
     const terminalOptions: Record<string, unknown>[] = [];
     class FakeTerminal {
@@ -2992,6 +4638,9 @@ describe('generated xterm.html', () => {
       `var terminal = null;
        var cleanFeedEnabled = false;
        var manualPanUntil = 0;
+       // A value no literal in the page could equal, so the constructor's
+       // fontFamily can only have come from this var.
+       var TERMINAL_FONT_FAMILY = 'Harness Mono, monospace';
        var knownCols = 0;
        var knownRows = null;
        var currentFontSizePx = 0;
@@ -3071,6 +4720,20 @@ describe('generated xterm.html', () => {
      * Mutation that reddens this: call autoFitFontToScreen() between the
      * reset and the construction.
      */
+    /**
+     * The computed fit measures TERMINAL_FONT_FAMILY (cellFit.js), so the
+     * terminal must be constructed in exactly that family.
+     *
+     * Mutation that reddens this: hand the constructor a font-family literal.
+     */
+    it('constructs the terminal in the one font family the computed fit measures', () => {
+      const harness = buildCreateTerminalHarness({ pinchOverrideFontPx: null, currentFontSizePx: 11, fittedLineHeight: 1 });
+
+      harness.createTerminal(initMessage);
+
+      expect(harness.terminalOptions()[0]).toMatchObject({ fontFamily: 'Harness Mono, monospace' });
+    });
+
     it('leaves the font to resetSessionViewState instead of fitting it again', () => {
       const harness = buildCreateTerminalHarness({ pinchOverrideFontPx: null, currentFontSizePx: 11, fittedLineHeight: 1 });
 
