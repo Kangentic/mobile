@@ -520,6 +520,13 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
       }
       expect(successorSessionId).not.toBeNull();
       expect(successorSessionId).not.toBe(MOCK_STREAMING_SESSION_ID);
+
+      // The label goes in the same write that binds the successor. Left up, the
+      // card would read "Switching model..." over the running successor for good.
+      const landedSnapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+      const landedTask = landedSnapshot.tasks.find((candidate) => candidate.id === 'mock-task-1');
+      expect(landedTask?.session_id).toBe(successorSessionId);
+      expect(landedTask?.spawn_progress ?? null).toBeNull();
     },
     12_000,
   );
@@ -638,9 +645,34 @@ describe('Resume (protocol 0.16.0)', () => {
 
       // The paused row is gone, exactly as the desktop drops it.
       await expect(controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false })).rejects.toThrow(/No such session/);
+
+      // The agent reports its model a few seconds later, which is what turns the
+      // card's "Resuming agent..." into the usage bar; a re-subscribe after it
+      // then carries the usage the first snapshot lacked.
+      await waitUntil(
+        () =>
+          eventsFor('activity', successorSessionId ?? '').some((event) => event.kind === 'activity' && event.payload.type === 'usage'),
+        { label: 'the resumed successor reports its model', timeoutMs: 6000 },
+      );
+      const reportedSnapshot = await controller.verbs.readStreamSubscribe(successorSessionId ?? '', { terminal: false });
+      expect(reportedSnapshot.usage).not.toBeNull();
+      expect(reportedSnapshot.resuming).toBe(true);
     },
     15_000,
   );
+
+  /**
+   * The phone's own attempt guard holds a second tap back, but a desktop
+   * answers a start for a task already being started with `live`: nothing is
+   * spawned and no event is coming. The mock must not run a second resume.
+   */
+  it('answers live to a second start while the first resume is under way', async () => {
+    const first = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+    const second = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+
+    expect(first.outcome).toBe('starting');
+    expect(second.outcome).toBe('live');
+  });
 
   it(
     '/pause clears the streaming task\'s session and offers Resume from the board row, which then binds a resumed session',

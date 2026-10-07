@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReadStreamSessionStatusWire } from '@kangentic/protocol';
-import { SPAWN_LABEL_MAX_LENGTH, cardSessionDisplay, type CardSession, type CardTaskRow } from '@/components/board/cardSessionDisplay';
-import type { RespawnInFlight } from '@/state/activityStore';
+import {
+  SPAWN_LABEL_MAX_LENGTH,
+  cardSessionDisplay,
+  toCardSession,
+  type CardSession,
+  type CardTaskRow,
+} from '@/components/board/cardSessionDisplay';
+import { useActivityStore, type RespawnInFlight } from '@/state/activityStore';
+import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
 function respawnWith(label: string | null): RespawnInFlight {
   return { label, reportedAt: 0, endedSessionId: 'session-ended' };
@@ -122,6 +129,18 @@ describe('cardSessionDisplay - the 0.16.0 board row', () => {
     ).toEqual({ kind: 'preparing', label: 'Starting agent... (base 3 behind)' });
   });
 
+  /**
+   * A blank label says nothing: the desktop's `spawn_progress` is a step the
+   * card draws, and an empty or whitespace-only one is no step. It must not read
+   * as a preparing card with nothing in it, over a parked session or a bare row.
+   */
+  it('ignores a blank board label, over a suspended session and a bare row alike', () => {
+    expect(cardSessionDisplay({ session: sessionWith('suspended'), respawn: null, task: rowWith({ spawn_progress: '   ', resumable: true }) })).toEqual({
+      kind: 'suspended',
+    });
+    expect(cardSessionDisplay({ session: null, respawn: null, task: rowWith({ session_id: null, spawn_progress: '' }) })).toEqual({ kind: 'none' });
+  });
+
   it('reads a paused task with NO session as Paused when the board row says resumable', () => {
     // A desktop pause clears session_id, so this is the only paused signal there is.
     expect(cardSessionDisplay({ session: null, respawn: null, task: rowWith({ session_id: null, resumable: true }) })).toEqual({ kind: 'suspended' });
@@ -199,5 +218,51 @@ describe('cardSessionDisplay - the 0.16.0 board row', () => {
       expect(cardSessionDisplay({ session: null, respawn: null, task: legacyRowWith(null) })).toEqual({ kind: 'none' });
       expect(cardSessionDisplay({ session: sessionWith('suspended'), respawn: null, task: legacyRowWith('session-live') })).toEqual({ kind: 'suspended' });
     });
+  });
+});
+
+/**
+ * The activity entry as the card reads it. The `ended` flag is the one that
+ * decides whether a ghost's stale status may speak at all: an entry the desktop
+ * ended is a place-holder for its row, and the board row, not the status it
+ * held when it ended, says what the task is now.
+ */
+describe('toCardSession', () => {
+  beforeEach(() => {
+    useActivityStore.getState().reset();
+  });
+
+  it('reads a live entry as its status and resuming flag, not ended', () => {
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued', resuming: true }));
+
+    expect(toCardSession(useActivityStore.getState().bySessionId['sess-1'])).toEqual({ status: 'queued', resuming: true, ended: false });
+  });
+
+  it('reads an entry the desktop ended as ended, keeping the stale status it ended with', () => {
+    useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'running' }));
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'session-ended', intentional: true },
+    });
+
+    expect(toCardSession(useActivityStore.getState().bySessionId['sess-1'])).toEqual({ status: 'running', resuming: false, ended: true });
+  });
+
+  /** The reading that matters end to end: the stale 'running' of an ended ghost must not draw a running card for a task the board says is paused. */
+  it('lets the board row, not an ended ghost\'s stale running status, decide a paused task\'s card', () => {
+    useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'running' }));
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'session-ended', intentional: true },
+    });
+    const ghost = toCardSession(useActivityStore.getState().bySessionId['sess-1']);
+
+    expect(cardSessionDisplay({ session: ghost, respawn: null, task: rowWith({ session_id: null, resumable: true }) })).toEqual({ kind: 'suspended' });
   });
 });
