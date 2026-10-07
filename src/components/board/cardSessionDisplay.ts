@@ -36,8 +36,12 @@ export interface CardSession {
   ended: boolean;
 }
 
-/** The board row's share of the decision (protocol 0.16.0 fields, null or absent on an older desktop). */
-export type CardTaskRow = Pick<BoardTaskWire, 'session_id' | 'spawn_progress' | 'resumable'>;
+/**
+ * The board row's share of the decision. `spawn_progress` and `resumable` are
+ * protocol 0.16.0 fields and `paused` is 0.17.0; each is null or absent on a
+ * desktop older than its version.
+ */
+export type CardTaskRow = Pick<BoardTaskWire, 'session_id' | 'spawn_progress' | 'resumable' | 'paused' | 'archived_at'>;
 
 export interface CardSessionDisplayInput {
   /** The task's session (an activity entry), or null when the phone holds none. */
@@ -49,14 +53,41 @@ export interface CardSessionDisplayInput {
 }
 
 /**
- * A board row narrowed to the card's three fields, for a `useShallow` store
+ * A board row narrowed to the card's fields, for a `useShallow` store
  * selector. Every board snapshot replaces every row object, so a component
  * that selects the row itself re-renders on each snapshot of its project
  * whether or not anything it reads changed.
  */
 export function toCardTaskRow(task: CardTaskRow | null): CardTaskRow | null {
   if (task === null) return null;
-  return { session_id: task.session_id, spawn_progress: task.spawn_progress, resumable: task.resumable };
+  return {
+    session_id: task.session_id,
+    spawn_progress: task.spawn_progress,
+    resumable: task.resumable,
+    paused: task.paused,
+    archived_at: task.archived_at,
+  };
+}
+
+/**
+ * Whether the board row says the task is paused: protocol 0.17.0's `paused`,
+ * the desktop's own fact (a paused session and no live one, whatever the
+ * column). It reads true for a paused task in Done, where `resumable` reads
+ * false. A desktop older than 0.17.0 sends `paused` as null, so this reduces
+ * to `resumable` alone, the only paused signal such a row carries.
+ * `resumable: true` always comes with `paused: true`, so reading either one
+ * changes nothing on a well-formed row.
+ *
+ * An archived row never reads paused, though its `paused` is true. The desktop
+ * draws an archived task as a compact card with no footer (DoneSwimlane's
+ * Completed list, CompletedTasksDialog), and every move into Done archives the
+ * task in the same step. A Paused footer there would put "Paused" on nearly
+ * every completed card. Only a task sitting in Done UNARCHIVED gets the
+ * desktop's full card and its "Paused".
+ */
+export function boardRowPaused(task: CardTaskRow): boolean {
+  if (task.archived_at !== null) return false;
+  return task.paused === true || task.resumable === true;
 }
 
 /** An activity entry as the card reads it. Shared so no call site narrows it differently. */
@@ -84,19 +115,21 @@ function displayLabel(label: string | null | undefined): string | null {
  * 2. An end in flight (`session-ended`). Its own label, when it carried one, is
  *    the step. An unlabelled end is a park on a 0.16.0 desktop (which labels
  *    every respawn before it suspends): once the board row has moved past the
- *    ended id, the row's `resumable` decides; before that, the session's own
- *    `suspended` (pushed live just ahead of the end) does. Otherwise the session
- *    simply ended, which the desktop draws with no footer.
- * 3. No live session: the board row's `resumable` is the only sign of a paused
- *    task, because a desktop pause clears `session_id` and with it the phone's
- *    stream. A paused task the desktop offers no Resume for (To Do, Done,
- *    archived) reads `resumable: false` and draws nothing - the one place the
- *    phone cannot match the desktop card's "Paused".
+ *    ended id, the row decides (`boardRowPaused`); before that, the session's
+ *    own `suspended` (pushed live just ahead of the end) does. Otherwise the
+ *    session simply ended, which the desktop draws with no footer.
+ * 3. No live session: the board row is the only sign of a paused task, because
+ *    a desktop pause clears `session_id` and with it the phone's stream. From
+ *    protocol 0.17.0 the row says so itself (`paused`), so a paused task the
+ *    desktop offers no Resume for (one sitting in Done unarchived) reads Paused
+ *    as the desktop card does; a 0.16.0 row has only `resumable` to say it
+ *    with. See `boardRowPaused` for why an archived row never does.
  * 4. The session's status.
  *
- * Against a pre-0.16.0 desktop both board fields are null and no status push
- * ever says `suspended`, so this reduces exactly to the earlier precedence: a
- * respawn's label, else an ended session, else the session's snapshot status.
+ * Against a pre-0.16.0 desktop every board field here is null and no status
+ * push ever says `suspended`, so this reduces exactly to the earlier
+ * precedence: a respawn's label, else an ended session, else the session's
+ * snapshot status.
  */
 export function cardSessionDisplay({ session, respawn, task }: CardSessionDisplayInput): CardSessionDisplay {
   const liveSession = session !== null && !session.ended ? session : null;
@@ -108,10 +141,10 @@ export function cardSessionDisplay({ session, respawn, task }: CardSessionDispla
     const respawnLabel = displayLabel(respawn.label);
     if (respawnLabel !== null) return { kind: 'preparing', label: respawnLabel };
     const boardMovedPast = task !== null && task.session_id !== respawn.endedSessionId;
-    const paused = boardMovedPast ? task.resumable === true : session?.status === 'suspended';
+    const paused = boardMovedPast ? boardRowPaused(task) : session?.status === 'suspended';
     return paused ? { kind: 'suspended' } : { kind: 'exited' };
   }
-  if (liveSession === null) return task?.resumable === true ? { kind: 'suspended' } : { kind: 'none' };
+  if (liveSession === null) return task !== null && boardRowPaused(task) ? { kind: 'suspended' } : { kind: 'none' };
   switch (liveSession.status) {
     case 'queued':
       return { kind: 'queued' };

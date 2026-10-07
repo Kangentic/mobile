@@ -21,7 +21,7 @@ import {
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
-import { hasSpawnLabel, isDoneRole } from '@/state/boardStore';
+import { hasSpawnLabel, isDoneRole, isTodoRole } from '@/state/boardStore';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
 import {
   playRecordedTerminal,
@@ -2101,9 +2101,11 @@ export function initialTasks(): BoardTaskWire[] {
       agent: 'claude',
       session_id: MOCK_PAUSED_SESSION_ID,
       // The authoritative Resume gate (protocol 0.16.0): paused, in a column
-      // the desktop offers Resume in. See MOCK_PAUSED_SESSION_ID for why the
-      // session id stays on the row.
+      // the desktop offers Resume in, and the paused fact itself (0.17.0),
+      // which every resumable row carries too. See MOCK_PAUSED_SESSION_ID for
+      // why the session id stays on the row.
       resumable: true,
+      paused: true,
       branch_name: 'feature/vault-token-migration',
       labels: ['backend', 'payments', 'migration', 'breaking-change', 'p0'],
       pr_number: 103,
@@ -2995,6 +2997,12 @@ export interface CreateMockDesktopOptions {
  * the demo pairing shipped, and they previously read "Shipped: the completed
  * mock task" and "Closed without an agent" precisely because nothing collected
  * them.
+ *
+ * The first of each pair ran an agent, which its move into Done suspended, so a
+ * 0.17.0 desktop sends it `paused: true` (with `resumable: false`: Done offers
+ * no Resume). The phone still draws no footer on it, because the desktop draws
+ * an archived card compact (see `boardRowPaused`). The second never had a
+ * session.
  */
 export function archivedTasksFor(projectId: string): BoardTaskWire[] {
   // Distinct rows per project: identical Done columns (and a storefront
@@ -3008,6 +3016,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
         title: 'Batch the tax lookup in checkout totals',
         swimlane_id: 'lane2-shipped',
         session_id: `${projectId}-archived-session-1`,
+        paused: true,
         archived_at: '2026-07-22T15:45:00.000Z',
       }),
       boardTaskFixture({
@@ -3028,6 +3037,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       title: 'Cache the product-grid query on the storefront home',
       swimlane_id: 'lane-done',
       session_id: `${projectId}-archived-session-1`,
+      paused: true,
       archived_at: '2026-07-20T18:30:00.000Z',
     }),
     boardTaskFixture({
@@ -3302,7 +3312,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * `status: 'suspended'` push goes first (the desktop's `suspend()` announces
    * the status before its graceful shutdown), then the PTY exit's unlabelled
    * `session-ended`, then the board row loses its `session_id` and gains
-   * `resumable: true`. That last part is the shape the phone has to get right:
+   * `resumable: true` and `paused: true`. That last part is the shape the phone has to get right:
    * after a real pause it holds NO stream on the paused session, so the Paused
    * card and every Resume surface run off the board row alone. Resume then
    * flows through `start-session` with no feed to hop (resumePausedTask).
@@ -3325,7 +3335,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       streamSubscribed = false;
       stopTerminalPlayback();
       const streamingTask = tasks.find((candidate) => candidate.id === MOCK_TASK_ID);
-      if (streamingTask) streamingTask.resumable = true;
+      if (streamingTask) {
+        streamingTask.resumable = true;
+        streamingTask.paused = true;
+      }
       setTaskSession(null);
     });
   }
@@ -3400,6 +3413,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       task.session_id = successorSessionId;
       task.spawn_progress = null;
       task.resumable = false;
+      task.paused = false;
       announceTaskUpdated(task, projectId);
     });
   }
@@ -3436,6 +3450,32 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     // leave a live timer writing the ended session's bytes.
     stopTerminalPlayback();
     setTaskSession(null);
+  }
+
+  /**
+   * A move into To Do, as the desktop runs it: a hard reset (kangentic
+   * task-move.ts kills the task's session, worktree and branch, and removes its
+   * session rows). The row comes back with no session and no label, and with
+   * `paused` and `resumable` both false, because no suspended row is left to
+   * report. That is the whole of the phone's To Do story: it needs no handling
+   * of its own, and this keeps dev:mock from drawing a Paused card in To Do
+   * that a real desktop never sends. The task's feed ends the way a killed
+   * session's does, so the Agents feed drops its row too.
+   */
+  function resetTaskForTodo(task: BoardTaskWire): void {
+    const sessionId = task.session_id;
+    if (task.id === MOCK_TASK_ID) {
+      if (activeSessionId !== null) endActiveSession();
+    } else if (sessionId !== null && staticSessionStates.has(sessionId)) {
+      emit({ kind: 'activity', sessionId, taskId: task.id, payload: { type: 'session-ended', intentional: true } });
+      // The desktop removed the row: a subscribe for its id now fails.
+      staticSessionStates.delete(sessionId);
+    }
+    task.session_id = null;
+    task.spawn_progress = null;
+    task.resumable = false;
+    task.paused = false;
+    task.updated_at = new Date().toISOString();
   }
 
   /**
@@ -4063,9 +4103,19 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           located.task.swimlane_id = payload.targetSwimlaneId;
           located.task.archived_at = new Date().toISOString();
           located.task.updated_at = located.task.archived_at;
+          // Done offers no Resume (protocol 0.16.0), but the paused fact
+          // (0.17.0) stays: the desktop suspends a live agent on its way into
+          // Done and keeps the suspended row, so a task that held a session is
+          // paused from here on.
+          located.task.paused = located.task.paused === true || located.task.session_id !== null;
+          located.task.resumable = false;
           const archivedList = archivedDuringSession.get(located.projectId) ?? [];
           archivedList.unshift(located.task);
           archivedDuringSession.set(located.projectId, archivedList);
+        } else if (isTodoRole(targetColumn?.role ?? null)) {
+          located.task.swimlane_id = payload.targetSwimlaneId;
+          located.task.position = payload.targetPosition;
+          resetTaskForTodo(located.task);
         } else {
           located.task.swimlane_id = payload.targetSwimlaneId;
           located.task.position = payload.targetPosition;

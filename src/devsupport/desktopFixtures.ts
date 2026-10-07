@@ -71,11 +71,13 @@ export function boardTaskFixture(overrides: Partial<BoardTaskWire> = {}): BoardT
     archived_at: null,
     created_at: '2026-07-13T00:00:00.000Z',
     updated_at: '2026-07-13T00:00:00.000Z',
-    // Protocol 0.16.0 sends both on every row (no spawn in flight, nothing to
-    // resume). An older desktop's row parses them as null, which every reader
-    // treats exactly as these values; a test of that fallback overrides them.
+    // Protocol 0.16.0 sends the first two on every row (no spawn in flight,
+    // nothing to resume) and 0.17.0 the third (nothing paused). An older
+    // desktop's row parses them as null, which every reader treats exactly as
+    // these values; a test of that fallback overrides them.
     spawn_progress: null,
     resumable: false,
+    paused: false,
     ...overrides,
   };
 }

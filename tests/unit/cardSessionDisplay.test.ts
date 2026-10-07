@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReadStreamSessionStatusWire } from '@kangentic/protocol';
 import {
   SPAWN_LABEL_MAX_LENGTH,
+  boardRowPaused,
   cardSessionDisplay,
   toCardSession,
+  toCardTaskRow,
   type CardSession,
   type CardTaskRow,
 } from '@/components/board/cardSessionDisplay';
@@ -18,15 +20,26 @@ function sessionWith(status: ReadStreamSessionStatusWire | null | undefined, ove
   return { status, resuming: false, ended: false, ...overrides };
 }
 
-/** A board row as a 0.16.0 desktop sends it: the session it names, its label, its Resume gate. */
+/**
+ * A board row as a 0.16.0 desktop sends it: the session it names, its label,
+ * its Resume gate, and no `paused` (0.17.0 parses as null there), so every
+ * test built on it pins the `resumable`-only fallback.
+ */
 function rowWith(overrides: Partial<CardTaskRow> = {}): CardTaskRow {
-  return { session_id: 'session-live', spawn_progress: null, resumable: false, ...overrides };
+  return { session_id: 'session-live', spawn_progress: null, resumable: false, paused: null, archived_at: null, ...overrides };
 }
 
-/** The same row from a pre-0.16.0 desktop: both fields parse as null. */
-function legacyRowWith(sessionId: string | null): CardTaskRow {
-  return { session_id: sessionId, spawn_progress: null, resumable: null };
+/** The same row from a 0.17.0 desktop, which also sends the paused fact. */
+function rowWithPausedField(overrides: Partial<CardTaskRow> = {}): CardTaskRow {
+  return { session_id: 'session-live', spawn_progress: null, resumable: false, paused: false, archived_at: null, ...overrides };
 }
+
+/** The same row from a pre-0.16.0 desktop: every board field parses as null. */
+function legacyRowWith(sessionId: string | null): CardTaskRow {
+  return { session_id: sessionId, spawn_progress: null, resumable: null, paused: null, archived_at: null };
+}
+
+const ARCHIVED_AT = '2026-10-07T12:00:00.000Z';
 
 /**
  * The desktop's precedence (kangentic `getTaskProgress`, task-progress.ts):
@@ -208,7 +221,7 @@ describe('cardSessionDisplay - the 0.16.0 board row', () => {
     });
   });
 
-  describe('against a pre-0.16.0 desktop (both board fields null, no status push)', () => {
+  describe('against a pre-0.16.0 desktop (every board field null, no status push)', () => {
     it('reduces to the earlier precedence', () => {
       expect(cardSessionDisplay({ session: sessionWith('running'), respawn: respawnWith(null), task: legacyRowWith(null) })).toEqual({ kind: 'exited' });
       expect(cardSessionDisplay({ session: sessionWith('running'), respawn: respawnWith('Switching model...'), task: legacyRowWith(null) })).toEqual({
@@ -218,6 +231,105 @@ describe('cardSessionDisplay - the 0.16.0 board row', () => {
       expect(cardSessionDisplay({ session: null, respawn: null, task: legacyRowWith(null) })).toEqual({ kind: 'none' });
       expect(cardSessionDisplay({ session: sessionWith('suspended'), respawn: null, task: legacyRowWith('session-live') })).toEqual({ kind: 'suspended' });
     });
+  });
+});
+
+/**
+ * Protocol 0.17.0's `paused`: the desktop card's own "Paused" fact, sent apart
+ * from the Resume gate. A paused task in Done reads `paused: true,
+ * resumable: false`, which a 0.16.0 row could not say at all. The precedence
+ * is unchanged around it: a spawn label and a live session both still win.
+ */
+describe('cardSessionDisplay - the 0.17.0 board row', () => {
+  it('reads a paused task the desktop offers no Resume for as Paused (a task sitting in Done unarchived)', () => {
+    expect(
+      cardSessionDisplay({ session: null, respawn: null, task: rowWithPausedField({ session_id: null, paused: true, resumable: false }) }),
+    ).toEqual({ kind: 'suspended' });
+  });
+
+  /**
+   * The desktop draws an archived task as a compact card with no footer, and
+   * every move into Done archives the task, so `paused: true` there must not
+   * put "Paused" on the phone's completed cards.
+   */
+  it('never reads an archived row as Paused, though it says paused', () => {
+    expect(
+      cardSessionDisplay({
+        session: null,
+        respawn: null,
+        task: rowWithPausedField({ session_id: null, paused: true, resumable: false, archived_at: ARCHIVED_AT }),
+      }),
+    ).toEqual({ kind: 'none' });
+  });
+
+  it('reads paused: false with no session as nothing at all (a task moved to To Do loses its session rows)', () => {
+    expect(cardSessionDisplay({ session: null, respawn: null, task: rowWithPausedField({ session_id: null }) })).toEqual({ kind: 'none' });
+  });
+
+  it('lets a spawn label win over the paused fact, as the desktop card does', () => {
+    expect(
+      cardSessionDisplay({
+        session: null,
+        respawn: null,
+        task: rowWithPausedField({ session_id: null, paused: true, resumable: true, spawn_progress: 'Resuming session...' }),
+      }),
+    ).toEqual({ kind: 'preparing', label: 'Resuming session...' });
+  });
+
+  it('lets a live session decide over the paused fact', () => {
+    const pausedRow = rowWithPausedField({ paused: true });
+    expect(cardSessionDisplay({ session: sessionWith('running'), respawn: null, task: pausedRow })).toEqual({ kind: 'running', resuming: false });
+    expect(cardSessionDisplay({ session: sessionWith('queued'), respawn: null, task: pausedRow })).toEqual({ kind: 'queued' });
+  });
+
+  describe('an unlabelled end the board row has moved past', () => {
+    const ghost = sessionWith('suspended', { ended: true });
+
+    it('reads Paused from the paused fact where no Resume is offered', () => {
+      expect(
+        cardSessionDisplay({ session: ghost, respawn: respawnWith(null), task: rowWithPausedField({ session_id: null, paused: true }) }),
+      ).toEqual({ kind: 'suspended' });
+    });
+
+    it('reads the move into Done (archived, paused) as an ended session with no footer', () => {
+      expect(
+        cardSessionDisplay({
+          session: ghost,
+          respawn: respawnWith(null),
+          task: rowWithPausedField({ session_id: null, paused: true, archived_at: ARCHIVED_AT }),
+        }),
+      ).toEqual({ kind: 'exited' });
+    });
+
+    it('reads an end with nothing paused behind it as ended', () => {
+      expect(cardSessionDisplay({ session: ghost, respawn: respawnWith(null), task: rowWithPausedField({ session_id: null }) })).toEqual({
+        kind: 'exited',
+      });
+    });
+  });
+
+  it('falls back to resumable alone when paused is null (a 0.16.0 desktop)', () => {
+    expect(cardSessionDisplay({ session: null, respawn: null, task: rowWith({ session_id: null, resumable: true }) })).toEqual({ kind: 'suspended' });
+    expect(cardSessionDisplay({ session: null, respawn: null, task: rowWith({ session_id: null, resumable: false }) })).toEqual({ kind: 'none' });
+  });
+});
+
+describe('boardRowPaused', () => {
+  it('is the paused fact, else the Resume gate, and never true for an archived row', () => {
+    expect(boardRowPaused(rowWithPausedField({ paused: true }))).toBe(true);
+    expect(boardRowPaused(rowWithPausedField({ paused: false }))).toBe(false);
+    expect(boardRowPaused(rowWith({ resumable: true }))).toBe(true);
+    expect(boardRowPaused(rowWith({ resumable: false }))).toBe(false);
+    expect(boardRowPaused(rowWithPausedField({ paused: true, archived_at: ARCHIVED_AT }))).toBe(false);
+  });
+});
+
+describe('toCardTaskRow', () => {
+  /** Every reader that narrows the row (the session screen, its header, the Resume gate) reads through this, so a dropped field reads as null there. */
+  it('keeps the paused fact and the archive stamp', () => {
+    const row = toCardTaskRow(rowWithPausedField({ paused: true, archived_at: ARCHIVED_AT }));
+
+    expect(row).toEqual(expect.objectContaining({ paused: true, archived_at: ARCHIVED_AT }));
   });
 });
 

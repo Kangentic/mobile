@@ -586,7 +586,10 @@ describe('/respawn spawn-progress label (the dev:mock rig fix)', () => {
 describe('Resume (protocol 0.16.0)', () => {
   const PAUSED_TASK_ID = MOCK_PAUSED_STATIC_SESSION.taskId;
 
-  async function waitForBoardTask(predicate: (task: { session_id: string | null; spawn_progress?: string | null; resumable?: boolean | null }) => boolean, taskId: string) {
+  async function waitForBoardTask(
+    predicate: (task: { session_id: string | null; spawn_progress?: string | null; resumable?: boolean | null; paused?: boolean | null }) => boolean,
+    taskId: string,
+  ) {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
@@ -606,6 +609,8 @@ describe('Resume (protocol 0.16.0)', () => {
     const sessionsBoard = await controller.verbs.readBoardSubscribe('mock-project', { view: 'sessions' });
     const pausedTask = sessionsBoard.tasks.find((task) => task.id === PAUSED_TASK_ID);
     expect(pausedTask?.resumable).toBe(true);
+    // Protocol 0.17.0: every resumable row is paused too.
+    expect(pausedTask?.paused).toBe(true);
     expect(pausedTask?.spawn_progress ?? null).toBeNull();
 
     const snapshot = await controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false });
@@ -636,6 +641,7 @@ describe('Resume (protocol 0.16.0)', () => {
       const boundTask = await waitForBoardTask((task) => task.session_id === successorSessionId, PAUSED_TASK_ID);
       expect(boundTask.spawn_progress ?? null).toBeNull();
       expect(boundTask.resumable).toBe(false);
+      expect(boundTask.paused).toBe(false);
 
       const successorSnapshot = await controller.verbs.readStreamSubscribe(successorSessionId ?? '', { terminal: false });
       expect(successorSnapshot.sessionStatus).toBe('running');
@@ -688,6 +694,7 @@ describe('Resume (protocol 0.16.0)', () => {
       expect(sessionEndedFor(MOCK_STREAMING_SESSION_ID)?.spawnProgressLabel).toBeUndefined();
 
       const pausedTask = await waitForBoardTask((task) => task.session_id === null && task.resumable === true, 'mock-task-1');
+      expect(pausedTask.paused).toBe(true);
       expect(pausedTask.spawn_progress ?? null).toBeNull();
       const sessionsBoard = await controller.verbs.readBoardSubscribe('mock-project', { view: 'sessions' });
       expect(sessionsBoard.tasks.some((task) => task.id === 'mock-task-1')).toBe(true);
@@ -696,6 +703,7 @@ describe('Resume (protocol 0.16.0)', () => {
       expect(response.outcome).toBe('starting');
       const resumedTask = await waitForBoardTask((task) => task.session_id !== null, 'mock-task-1');
       expect(resumedTask.session_id).not.toBe(MOCK_STREAMING_SESSION_ID);
+      expect(resumedTask.paused).toBe(false);
 
       const resumedSnapshot = await controller.verbs.readStreamSubscribe(resumedTask.session_id ?? '', { terminal: false });
       expect(resumedSnapshot.resuming).toBe(true);
@@ -756,6 +764,7 @@ describe('Resume (protocol 0.16.0)', () => {
       const failedTask = await waitForBoardTask((task) => (task.spawn_progress ?? null) === null, PAUSED_TASK_ID);
       expect(failedTask.session_id).toBe(MOCK_PAUSED_STATIC_SESSION.sessionId);
       expect(failedTask.resumable).toBe(true);
+      expect(failedTask.paused).toBe(true);
       expect(sessionEndedFor(MOCK_PAUSED_STATIC_SESSION.sessionId)).toBeNull();
 
       // Armed for ONE resume: the next tap resumes into a new session.
@@ -765,4 +774,74 @@ describe('Resume (protocol 0.16.0)', () => {
     },
     15_000,
   );
+});
+
+/**
+ * Protocol 0.17.0's `paused`, the way a 0.17.0 desktop sends it. It is the
+ * paused fact apart from the Resume gate: a move into Done keeps it and drops
+ * `resumable`, and a move into To Do clears both, because the desktop's hard
+ * reset removes the task's session rows. That last one is the task's "confirm
+ * in the mock" check: a To Do task reads `paused: false`, so the phone needs no
+ * To Do handling of its own.
+ */
+describe('the paused fact (protocol 0.17.0)', () => {
+  const PAUSED_TASK_ID = MOCK_PAUSED_STATIC_SESSION.taskId;
+
+  function sessionEnded(sessionId: string): boolean {
+    return eventsFor('activity', sessionId).some((event) => event.kind === 'activity' && event.payload.type === 'session-ended');
+  }
+
+  it('sends a boolean paused on every row, and never resumable without paused', async () => {
+    const rows = [
+      ...(await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' })).tasks,
+      ...(await controller.verbs.readBoardSubscribe(MOCK_PROJECT_2_ID, { view: 'full' })).tasks,
+      ...(await controller.verbs.readBoardArchived('mock-project', {})).archivedTasks,
+      ...(await controller.verbs.readBoardArchived(MOCK_PROJECT_2_ID, {})).archivedTasks,
+    ];
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(typeof row.paused).toBe('boolean');
+      if (row.resumable === true) expect(row.paused).toBe(true);
+    }
+    // The archived task that ran an agent reads paused, with no Resume.
+    const archivedWithAgent = rows.find((row) => row.id === 'mock-project-archived-1');
+    expect(archivedWithAgent).toEqual(expect.objectContaining({ paused: true, resumable: false }));
+  });
+
+  it('keeps the paused fact and drops the Resume gate when a paused task moves into Done', async () => {
+    const moved = await controller.verbs.moveTask({ projectId: 'mock-project', taskId: PAUSED_TASK_ID, targetSwimlaneId: 'lane-done', targetPosition: 0 });
+    expect(moved.ok).toBe(true);
+
+    const archivedPage = await controller.verbs.readBoardArchived('mock-project', {});
+    const archivedTask = archivedPage.archivedTasks.find((task) => task.id === PAUSED_TASK_ID);
+    expect(archivedTask?.archived_at).not.toBeNull();
+    expect(archivedTask?.paused).toBe(true);
+    expect(archivedTask?.resumable).toBe(false);
+  });
+
+  it('resets a paused task on a move into To Do: no session, nothing paused, its feed ended', async () => {
+    const moved = await controller.verbs.moveTask({ projectId: 'mock-project', taskId: PAUSED_TASK_ID, targetSwimlaneId: 'lane-todo', targetPosition: 0 });
+    expect(moved.ok).toBe(true);
+
+    const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+    const resetTask = snapshot.tasks.find((task) => task.id === PAUSED_TASK_ID);
+    expect(resetTask).toEqual(expect.objectContaining({ swimlane_id: 'lane-todo', session_id: null, spawn_progress: null, paused: false, resumable: false }));
+    await waitUntil(() => sessionEnded(MOCK_PAUSED_STATIC_SESSION.sessionId), { label: 'the paused row\'s feed ends' });
+    // The desktop removed the row: a subscribe for its id fails, and the agent feed no longer carries the task.
+    await expect(controller.verbs.readStreamSubscribe(MOCK_PAUSED_STATIC_SESSION.sessionId, { terminal: false })).rejects.toThrow(/No such session/);
+    const sessionsBoard = await controller.verbs.readBoardSubscribe('mock-project', { view: 'sessions' });
+    expect(sessionsBoard.tasks.some((task) => task.id === PAUSED_TASK_ID)).toBe(false);
+  });
+
+  it('ends a LIVE session on a move into To Do, as the desktop kills it', async () => {
+    const moved = await controller.verbs.moveTask({ projectId: 'mock-project', taskId: 'mock-task-1', targetSwimlaneId: 'lane-todo', targetPosition: 0 });
+    expect(moved.ok).toBe(true);
+
+    await waitUntil(() => sessionEnded(MOCK_STREAMING_SESSION_ID), { label: 'the streaming session ends' });
+    const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' });
+    expect(snapshot.tasks.find((task) => task.id === 'mock-task-1')).toEqual(
+      expect.objectContaining({ session_id: null, paused: false, resumable: false }),
+    );
+  });
 });

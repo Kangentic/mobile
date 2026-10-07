@@ -35,6 +35,8 @@ export interface ResumeOffer {
  * be stale (a move to Done is no edge of the session), so it never outvotes
  * the row. Null or absent on the row is a pre-0.16.0 desktop, whose
  * `start-session` starts the column instead of resuming: no Resume there.
+ * The row's `paused` (protocol 0.17.0) never offers Resume: it makes a task
+ * paused in Done read as Paused, and `resumable` is false there.
  *
  * A resume runs THROUGH the desktop's "Resuming session..." label (the task
  * reads as preparing) and is over once a session holds the task: whichever

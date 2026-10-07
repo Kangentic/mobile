@@ -88,7 +88,7 @@ describe('buildInspectPayload', () => {
    * false-valued assertion would pass against a mapper that never read them
    * (the same trap the sessionStatus test above spells out).
    */
-  it('reports the 0.16.0 lifecycle: the entry\'s resuming and resumable, the in-flight board rows, the pending successors', async () => {
+  it('reports the 0.16.0 and 0.17.0 lifecycle: the entry\'s resuming and resumable, the in-flight board rows, the pending successors', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
@@ -105,11 +105,19 @@ describe('buildInspectPayload', () => {
         projectId: 'project-1',
         view: 'sessions',
         tasks: [
-          // Both 0.16.0 fields can be absent (an older desktop's row): reported as null, never undefined.
-          boardTaskFixture({ id: 'task-labelled', session_id: null, spawn_progress: 'Creating worktree...', resumable: undefined }),
-          boardTaskFixture({ id: 'task-paused', session_id: null, resumable: true }),
+          // The board fields can be absent (an older desktop's row): reported as null, never undefined.
+          boardTaskFixture({
+            id: 'task-labelled',
+            session_id: null,
+            spawn_progress: 'Creating worktree...',
+            resumable: undefined,
+            paused: undefined,
+          }),
+          boardTaskFixture({ id: 'task-paused', session_id: null, resumable: true, paused: true }),
+          // Paused with no Resume on offer (0.17.0, a task sitting in Done): listed on `paused` alone.
+          boardTaskFixture({ id: 'task-done-paused', session_id: null, resumable: false, paused: true }),
           // A task that still names its session reports that session.
-          boardTaskFixture({ id: 'task-parked', session_id: 'sess-parked', resumable: true }),
+          boardTaskFixture({ id: 'task-parked', session_id: 'sess-parked', resumable: true, paused: true }),
           // Nothing in flight and nothing to resume: not listed, and neither is a blank label.
           boardTaskFixture({ id: 'task-blank-label', session_id: null, spawn_progress: '   ' }),
           boardTaskFixture({ id: 'task-plain', session_id: null }),
@@ -125,9 +133,10 @@ describe('buildInspectPayload', () => {
 
     expect(payload.activity).toEqual([expect.objectContaining({ sessionId: 'sess-1', resuming: true, resumable: true })]);
     expect([...payload.board.inFlightTasks].sort((first, second) => first.taskId.localeCompare(second.taskId))).toEqual([
-      { taskId: 'task-labelled', sessionId: null, spawnProgress: 'Creating worktree...', resumable: null },
-      { taskId: 'task-parked', sessionId: 'sess-parked', spawnProgress: null, resumable: true },
-      { taskId: 'task-paused', sessionId: null, spawnProgress: null, resumable: true },
+      { taskId: 'task-done-paused', sessionId: null, spawnProgress: null, resumable: false, paused: true },
+      { taskId: 'task-labelled', sessionId: null, spawnProgress: 'Creating worktree...', resumable: null, paused: null },
+      { taskId: 'task-parked', sessionId: 'sess-parked', spawnProgress: null, resumable: true, paused: true },
+      { taskId: 'task-paused', sessionId: null, spawnProgress: null, resumable: true, paused: true },
     ]);
     expect(payload.pendingSuccessors).toEqual([{ taskId: 'task-2', sessionId: 'sess-next', endedSessionId: 'sess-ended' }]);
   });
