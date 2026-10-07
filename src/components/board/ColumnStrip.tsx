@@ -3,7 +3,6 @@ import { StyleSheet, View } from 'react-native';
 import { Folder } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { Text, useTheme } from '@/components';
-import { isDoneRole, isTodoRole } from '@/state/boardStore';
 import { getColumnIcon } from './columnIcons';
 import type { ColumnTrackStep } from './columnTrack';
 import { WaitLabel } from './WaitLabel';
@@ -15,13 +14,12 @@ import { WaitLabel } from './WaitLabel';
  * deliberately literal rather than spacing tokens: the token scale has no 5 or
  * 10, and rounding to it is exactly the drift this component exists to avoid.
  *
- * Two departures are this app's design (2026-10-05 design review), and #732 was
- * asked to adopt both: the current step's marker is the column's icon in an
- * 18 dp rounded square tinted with the column's color, in place of the
- * desktop's wider bar ("D5"); and done steps are NEUTRAL rather than each in
- * its column's color ("R5"), so the marker is the only color in the track. The
- * card's right edge was carrying up to six colored marks, and the review cut it
- * to the ones that say something.
+ * The track is the one the desktop approved on 2026-10-07 (#732's design
+ * canvas, sign-off row T2): the task's whole journey from To Do to Done, one
+ * mark per stop. The stop the task is at is its column's icon in an 18 dp
+ * rounded square tinted with the column's color, To Do and Done included.
+ * Passed stops are neutral, and stops ahead carry their own column's color,
+ * faded, so a card that has not started already says where it will go.
  */
 export const COLUMN_STRIP_HEIGHT = 29;
 const STRIP_INSET = 10;
@@ -41,11 +39,13 @@ const TRACK_GAP = 2;
 const SEGMENT_WIDTH = 11;
 const SEGMENT_HEIGHT = 4;
 const DONE_SEGMENT_OPACITY = 0.55;
+/** The desktop's ahead bar is `color-mix(<column color> 45%, transparent)`; on a childless View, opacity is the same thing. */
+const AHEAD_SEGMENT_OPACITY = 0.45;
 
 export interface ColumnStripProps {
   /** The task's column, or null when no cached board resolves it - the strip then draws no marker, never a guessed column. */
   column: BoardColumnWire | null;
-  /** The step track (see buildPositionalTrack); empty means the column is not a working column, and its marker stands alone. */
+  /** The journey track (see buildJourneyTrack); empty means the column is not a stop of the journey (an archived or ghost column), and its marker stands alone. */
   track: readonly ColumnTrackStep[];
   /** Where the task lives. Known from the session even before its task reaches a board, so the band is rarely empty. */
   projectName: string | null;
@@ -61,7 +61,7 @@ export interface ColumnStripProps {
    * selects it as `<card>-wait`, so moving the label must not rename it.
    */
   waitTestID: string;
-  /** Root testID; parts key off it as `-project`, `-track`, `-marker` (holding `-icon` or `-dot`), and `-step-<columnId>-<done|ahead>`. */
+  /** Root testID; parts key off it as `-project`, `-track`, `-marker` (holding `-icon` or `-dot`), and `-step-<columnId>-<done|ahead>` (the current step is the `-marker`; a skipped step draws nothing). */
   testID: string;
 }
 
@@ -153,12 +153,13 @@ export const ColumnStrip = React.memo(function ColumnStrip({
                       testID={`${testID}-step-${step.columnId}-${step.state}`}
                       style={[
                         styles.segment,
-                        // Done steps are neutral, the faint text color at the
-                        // desktop's done-step strength: the marker carries the
-                        // column's color, and nothing else in the track does.
+                        // Passed stops are neutral, the faint text color at the
+                        // desktop's done-step strength; stops ahead are their
+                        // own column's color, faded, so the planned route reads
+                        // before the task gets there.
                         step.state === 'done'
                           ? { backgroundColor: theme.colors.textMuted, opacity: DONE_SEGMENT_OPACITY }
-                          : { backgroundColor: theme.colors.border },
+                          : { backgroundColor: colorOrFaint(step.color, theme.colors.textMuted), opacity: AHEAD_SEGMENT_OPACITY },
                       ]}
                     />
                   ),
@@ -174,10 +175,9 @@ export const ColumnStrip = React.memo(function ColumnStrip({
  * The current step: the column's glyph in a rounded square tinted with the
  * column's color. The glyph keeps the priority every other column surface in
  * the app uses (the Board's chip bar, the session header chip): the column's
- * own icon, else its role default, else a dot in the column's color.
- *
- * To Do and Done draw uncolored (the faint text color), as the desktop strip
- * draws them; they are never in the track, so their marker always stands alone.
+ * own icon, else its role default, else a dot in the column's color. To Do
+ * and Done are no exception: each wears its own column's color, so a finished
+ * task ends on the board's Done color, not grey.
  *
  * A plain function, not a component: the glyph is a stable module-level entry
  * of columnIcons' registry, but the React Compiler's static-components rule
@@ -187,8 +187,7 @@ export const ColumnStrip = React.memo(function ColumnStrip({
  */
 function columnMarker(column: BoardColumnWire, faintColor: string, stripTestID: string): React.JSX.Element {
   const ColumnIcon = getColumnIcon(column);
-  const isSystemRole = isTodoRole(column.role) || isDoneRole(column.role);
-  const markerColor = isSystemRole ? faintColor : colorOrFaint(column.color, faintColor);
+  const markerColor = colorOrFaint(column.color, faintColor);
   return (
     <View testID={`${stripTestID}-marker`} style={styles.marker}>
       <View style={[styles.markerTint, { backgroundColor: markerColor }]} />

@@ -343,22 +343,26 @@ describe('TriageHomeScreen', () => {
       return screen.getByTestId(`activity-row-${sessionId}-column`).props.accessibilityLabel;
     }
 
-    it('names the project and marks a To Do column on its own, with no track (the desktop track never draws To Do)', async () => {
+    /** The desktop's approved track (2026-10-07) draws the whole journey: To Do first, Done last, in every state. */
+    it('names the project and marks a To Do column at the start of the whole journey', async () => {
       seedTwoProjectBoards();
       await renderHome();
       await act(async () => {});
       expect(screen.getByTestId('activity-row-sess-2-column-project')).toHaveTextContent('Beta');
-      expect(stripLabel('sess-2')).toBe('Beta, Backlog');
+      expect(stripLabel('sess-2')).toBe('Beta, Backlog, step 1 of 3');
       expect(screen.getByTestId('activity-row-sess-2-column-marker')).toBeTruthy();
-      expect(screen.getByTestId('activity-row-sess-2-column-track').children).toHaveLength(1);
+      expect(screen.getByTestId('activity-row-sess-2-column-track').children).toHaveLength(3);
+      expect(screen.getByTestId('activity-row-sess-2-column-step-p2-doing-ahead')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-2-column-step-p2-done-ahead')).toBeTruthy();
     });
 
-    it('marks a working column inside its track', async () => {
+    it('marks a working column between the two ends', async () => {
       seedTwoProjectBoards();
       moveTask2To('p2-doing');
       await renderHome();
       await act(async () => {});
-      expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 1 of 1');
+      expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 2 of 3');
+      expect(screen.getByTestId('activity-row-sess-2-column-step-p2-todo-done')).toBeTruthy();
       expect(screen.getByTestId('activity-row-sess-2-column-marker')).toBeTruthy();
     });
 
@@ -371,9 +375,9 @@ describe('TriageHomeScreen', () => {
       seedTwoProjectBoards();
       await renderHome();
       await act(async () => {});
-      expect(stripLabel('sess-2')).toBe('Beta, Backlog');
+      expect(stripLabel('sess-2')).toBe('Beta, Backlog, step 1 of 3');
       await act(async () => moveTask2To('p2-doing'));
-      expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 1 of 1');
+      expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 2 of 3');
     });
 
     it('keeps the band and the project on the fallback card, with no marker rather than a guessed column', async () => {
@@ -1931,6 +1935,35 @@ describe('TriageHomeScreen', () => {
 
       await fireEvent(screen.getByTestId('task-row-task-1'), 'longPress');
       expect(mockPush).toHaveBeenCalledWith({ pathname: '/task-actions', params: { taskId: 'task-1', projectId: 'project-1' } });
+    });
+
+    /**
+     * The card's strip draws the same whole journey a session's row does, from
+     * the board row alone: To Do first, Done last, the task's own column between
+     * them. seedStores gives project-1 no columns, so this seeds the board the
+     * strip reads. An empty track would leave the label with no step and draw no
+     * steps, and a working-columns-only one would read "step 1 of 1".
+     */
+    it('draws the whole journey in the strip, with the ends of the board around the task\'s column', async () => {
+      makeTaskOneSessionless({ resumable: true, swimlane_id: 'p1-doing' });
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        if (board === undefined) throw new Error('seedStores did not seed project-1');
+        const columns = [
+          boardColumnFixture({ id: 'p1-todo', name: 'To Do', role: 'todo', position: 0 }),
+          boardColumnFixture({ id: 'p1-doing', name: 'In Progress', role: null, position: 1 }),
+          boardColumnFixture({ id: 'p1-done', name: 'Done', role: 'done', position: 2 }),
+        ];
+        return { boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...board, columns } } };
+      });
+      await renderHome();
+
+      expect(screen.getByTestId('task-row-task-1')).toBeTruthy();
+      expect(screen.getByTestId('task-row-task-1-column').props.accessibilityLabel).toBe('Alpha, In Progress, step 2 of 3');
+      expect(screen.getByTestId('task-row-task-1-column-track').children).toHaveLength(3);
+      expect(screen.getByTestId('task-row-task-1-column-step-p1-todo-done')).toBeTruthy();
+      expect(screen.getByTestId('task-row-task-1-column-marker')).toBeTruthy();
+      expect(screen.getByTestId('task-row-task-1-column-step-p1-done-ahead')).toBeTruthy();
     });
 
     it('draws a first start under Active with the desktop\'s own step', async () => {

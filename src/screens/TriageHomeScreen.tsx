@@ -12,7 +12,7 @@ import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, NowTickProvide
 import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
 import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
-import { buildPositionalTrack } from '@/components/board/columnTrack';
+import { buildJourneyTrack } from '@/components/board/columnTrack';
 import {
   FEED_SECTION_ORDER,
   FEED_SECTION_TITLES,
@@ -666,7 +666,7 @@ const ActivityRow = React.memo(function ActivityRow({
   // shows exactly where that tooltip exists: a running session waiting on you.
   const waitingSinceMs = isRunning ? selectWaitingSince(entry) : null;
   const columnStrip = useMemo(
-    () => ({ column, track: buildPositionalTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs }),
+    () => ({ column, track: buildJourneyTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs }),
     [column, boardColumns, projectName, waitingSinceMs],
   );
 
@@ -909,7 +909,7 @@ const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
   const column = useBoardStore((state) => selectTaskColumn(state, task.id));
   const boardColumns = useBoardStore((state) => state.boardsByProjectId[projectId]?.columns ?? null);
   const columnStrip = useMemo(
-    () => ({ column, track: buildPositionalTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs: null }),
+    () => ({ column, track: buildJourneyTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs: null }),
     [column, boardColumns, projectName],
   );
   const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));

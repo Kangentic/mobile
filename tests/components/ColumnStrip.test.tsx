@@ -23,11 +23,33 @@ const EXECUTING = boardColumnFixture({
   icon: 'square-code',
 });
 
+/** A journey as buildJourneyTrack draws it: To Do, the working columns, Done. */
 const EXECUTING_TRACK: ColumnTrackStep[] = [
+  { columnId: 'lane-todo', name: 'To Do', color: '#8b949e', state: 'done' },
   { columnId: 'lane-planning', name: 'Planning', color: '#8957e5', state: 'done' },
   { columnId: 'lane-executing', name: 'Executing', color: '#58a6ff', state: 'current' },
   { columnId: 'lane-code-review', name: 'Code Review', color: '#d29922', state: 'ahead' },
+  { columnId: 'lane-done', name: 'Done', color: '#3fb950', state: 'ahead' },
 ];
+
+const TODO_COLUMN = boardColumnFixture({ id: 'lane-todo', name: 'To Do', role: 'todo', icon: null, color: '#8b949e' });
+const DONE_COLUMN = boardColumnFixture({ id: 'lane-done', name: 'Done', role: 'done', icon: null, color: '#3fb950' });
+
+/** EXECUTING_TRACK with the task moved to `columnId`: every stop before it done, it current, the rest ahead. */
+function trackAt(columnId: string): ColumnTrackStep[] {
+  const currentIndex = EXECUTING_TRACK.findIndex((step) => step.columnId === columnId);
+  return EXECUTING_TRACK.map((step, index) => ({
+    ...step,
+    state: index < currentIndex ? 'done' : index === currentIndex ? 'current' : 'ahead',
+  }));
+}
+
+function trackOrder(): string[] {
+  return screen
+    .getByTestId(`${STRIP_TEST_ID}-track`)
+    .children.filter((child): child is TestInstance => typeof child !== 'string')
+    .map((child) => child.props.testID as string);
+}
 
 async function renderStrip(overrides: Partial<ColumnStripProps> = {}): Promise<void> {
   const props: ColumnStripProps = {
@@ -82,7 +104,7 @@ describe('ColumnStrip', () => {
 
   it('gives a screen reader the column the band does not draw, with the project and the step', async () => {
     await renderStrip();
-    expect(screen.getByTestId(STRIP_TEST_ID).props.accessibilityLabel).toBe('storefront-web, Executing, step 2 of 3');
+    expect(screen.getByTestId(STRIP_TEST_ID).props.accessibilityLabel).toBe('storefront-web, Executing, step 3 of 5');
   });
 
   describe('the current-step marker (icon, then role default, then a color dot)', () => {
@@ -108,21 +130,31 @@ describe('ColumnStrip', () => {
     });
 
     /**
-     * To Do and Done are never in the track (the desktop's track never draws
-     * them), so their marker stands alone, and the desktop strip draws them
-     * with no column color.
+     * The desktop's approved track (2026-10-07, design sign-off T2) gives To
+     * Do and Done their own columns' colors and icons. The track before it
+     * drew them uncolored, standing alone; that is the regression this pins.
      */
-    it('stands alone, uncolored, for a To Do column', async () => {
-      await renderStrip({ column: boardColumnFixture({ id: 'lane-backlog', name: 'Backlog', role: 'todo', icon: null, color: '#58a6ff' }), track: [] });
+    it('wears To Do\'s own color and role default, at the start of the track', async () => {
+      await renderStrip({ column: TODO_COLUMN, track: trackAt('lane-todo') });
       const glyph = getLucideGlyph(screen.getByTestId(`${STRIP_TEST_ID}-icon`), Layers);
-      expect(glyph.props.stroke).toBe(darkTerminalTheme.colors.textMuted);
-      expect(markerTintStyle().backgroundColor).toBe(darkTerminalTheme.colors.textMuted);
-      expect(screen.getByTestId(`${STRIP_TEST_ID}-track`).children).toHaveLength(1);
+      expect(glyph.props.stroke).toBe('#8b949e');
+      expect(markerTintStyle().backgroundColor).toBe('#8b949e');
+      expect(trackOrder()[0]).toBe(`${STRIP_TEST_ID}-marker`);
     });
 
-    it('stands alone for Done, with its role default', async () => {
-      await renderStrip({ column: boardColumnFixture({ id: 'lane-done', name: 'Done', role: 'done', icon: null }), track: [] });
-      expect(lucideGlyphs(screen.getByTestId(`${STRIP_TEST_ID}-icon`), CircleCheckBig)).toHaveLength(1);
+    it('wears the board\'s Done color, not grey, with its role default, at the end of the track', async () => {
+      await renderStrip({ column: DONE_COLUMN, track: trackAt('lane-done') });
+      const glyph = getLucideGlyph(screen.getByTestId(`${STRIP_TEST_ID}-icon`), CircleCheckBig);
+      expect(glyph.props.stroke).toBe('#3fb950');
+      expect(markerTintStyle().backgroundColor).toBe('#3fb950');
+      expect(trackOrder().at(-1)).toBe(`${STRIP_TEST_ID}-marker`);
+    });
+
+    /** An archived or ghost column is not a stop of the journey (buildJourneyTrack returns none), so the column's marker is all there is. */
+    it('stands alone when the column is outside the journey', async () => {
+      await renderStrip({ track: [] });
+      expect(trackOrder()).toEqual([`${STRIP_TEST_ID}-marker`]);
+      expect(screen.getByTestId(STRIP_TEST_ID).props.accessibilityLabel).toBe('storefront-web, Executing');
     });
 
     /** Column colors are desktop-authored data: a blank one draws the faint text color rather than an invisible, unfilled marker. */
@@ -147,38 +179,55 @@ describe('ColumnStrip', () => {
   });
 
   describe('the step track', () => {
-    it('draws done steps, then the marker in the current step\'s place, then the steps ahead', async () => {
+    it('draws the journey in order, the marker in the current step\'s place, and leaves skipped steps out', async () => {
       await renderStrip({
         track: [
-          ...EXECUTING_TRACK.slice(0, 1),
+          ...EXECUTING_TRACK.slice(0, 2),
           { columnId: 'lane-skipped', name: 'Skipped', color: '#ffffff', state: 'skipped' },
-          ...EXECUTING_TRACK.slice(1),
+          ...EXECUTING_TRACK.slice(2),
         ],
       });
-      const order = screen
-        .getByTestId(`${STRIP_TEST_ID}-track`)
-        .children.filter((child): child is TestInstance => typeof child !== 'string')
-        .map((child) => child.props.testID as string);
-      expect(order).toEqual([`${STRIP_TEST_ID}-step-lane-planning-done`, `${STRIP_TEST_ID}-marker`, `${STRIP_TEST_ID}-step-lane-code-review-ahead`]);
+      expect(trackOrder()).toEqual([
+        `${STRIP_TEST_ID}-step-lane-todo-done`,
+        `${STRIP_TEST_ID}-step-lane-planning-done`,
+        `${STRIP_TEST_ID}-marker`,
+        `${STRIP_TEST_ID}-step-lane-code-review-ahead`,
+        `${STRIP_TEST_ID}-step-lane-done-ahead`,
+      ]);
     });
 
-    it('matches the desktop segment sizes and opacities', async () => {
+    it('matches the desktop bar sizes and opacities', async () => {
       await renderStrip();
       const done = flattenedStyle(`${STRIP_TEST_ID}-step-lane-planning-done`);
-      expect([done.width, done.height, done.opacity]).toEqual([11, 4, 0.55]);
+      expect([done.width, done.height, done.borderRadius, done.opacity]).toEqual([11, 4, 2, 0.55]);
       const ahead = flattenedStyle(`${STRIP_TEST_ID}-step-lane-code-review-ahead`);
-      expect([ahead.width, ahead.height, ahead.backgroundColor]).toEqual([11, 4, darkTerminalTheme.colors.border]);
+      expect([ahead.width, ahead.height, ahead.borderRadius, ahead.opacity]).toEqual([11, 4, 2, 0.45]);
+    });
+
+    /** The card's right edge carries one color per stop at most: passed stops say nothing new, so they stay grey. */
+    it('draws passed steps neutral, To Do included, never in their column\'s color', async () => {
+      await renderStrip();
+      expect(flattenedStyle(`${STRIP_TEST_ID}-step-lane-todo-done`).backgroundColor).toBe(darkTerminalTheme.colors.textMuted);
+      expect(flattenedStyle(`${STRIP_TEST_ID}-step-lane-planning-done`).backgroundColor).toBe(darkTerminalTheme.colors.textMuted);
     });
 
     /**
-     * The card-composition review (2026-10-05, "R5"): the card's right edge
-     * carried up to six colored marks, so done steps went neutral and the
-     * marker is the only color left in the track. A done step back in its
-     * column's color is the regression this pins.
+     * The approved track (2026-10-07, T2) draws each stop ahead in its own
+     * column's color, faded, so a planned card already says where it will go.
+     * The track before it drew them all the border grey.
      */
-    it('draws done steps neutral, never in their column\'s color', async () => {
+    it('draws steps ahead in their own column\'s color, Done included', async () => {
       await renderStrip();
-      expect(flattenedStyle(`${STRIP_TEST_ID}-step-lane-planning-done`).backgroundColor).toBe(darkTerminalTheme.colors.textMuted);
+      expect(flattenedStyle(`${STRIP_TEST_ID}-step-lane-code-review-ahead`).backgroundColor).toBe('#d29922');
+      expect(flattenedStyle(`${STRIP_TEST_ID}-step-lane-done-ahead`).backgroundColor).toBe('#3fb950');
+    });
+
+    it('falls back to the faint text color for a step ahead whose column has no color', async () => {
+      await renderStrip({
+        track: [...EXECUTING_TRACK.slice(0, 3), { columnId: 'lane-bare', name: 'Bare', color: '', state: 'ahead' }],
+      });
+      const bare = flattenedStyle(`${STRIP_TEST_ID}-step-lane-bare-ahead`);
+      expect([bare.backgroundColor, bare.opacity]).toEqual([darkTerminalTheme.colors.textMuted, 0.45]);
     });
   });
 
