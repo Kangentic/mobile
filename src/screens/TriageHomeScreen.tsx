@@ -80,7 +80,9 @@ function fallbackTask(entry: SessionActivityEntry): BoardTaskWire {
   };
 }
 
-type TriageListRow = { kind: 'section-header'; section: FeedSection; title: string; count: number } | FeedRow;
+type TriageListRow =
+  | { kind: 'section-header'; section: FeedSection; title: string; count: number; alwaysOpen: boolean }
+  | FeedRow;
 
 /** The four store slices `selectFeedSections` reads, from outside React (the snippet warm-up's effect). */
 function currentFeedSources(): FeedSectionSources {
@@ -128,6 +130,19 @@ export function TriageHomeScreen(): React.JSX.Element {
       countByTitle.set(title, (countByTitle.get(title) ?? 0) + section.rows.length);
       totalRows += section.rows.length;
     }
+    // The titles that draw at all: a section with rows that the filter shows.
+    const shownTitles = new Set<string>();
+    for (const section of sections) {
+      if (section.rows.length === 0) continue;
+      const title = FEED_SECTION_TITLES[section.section];
+      if (!hiddenTriageSections.includes(title)) shownTitles.add(title);
+    }
+    // The only section on screen is always open, whatever its stored collapse:
+    // collapsed, it was the whole feed reduced to one header over an empty
+    // page (reported on the Pixel: Idle and Active shown, Active collapsed, no
+    // agent idle). The stored preference is untouched, so it applies again
+    // the moment a second section has rows.
+    const loneTitle = shownTitles.size === 1 ? ([...shownTitles][0] ?? null) : null;
     const listRows: TriageListRow[] = [];
     const emittedTitles = new Set<string>();
     for (const sectionKind of FEED_SECTION_ORDER) {
@@ -138,15 +153,16 @@ export function TriageHomeScreen(): React.JSX.Element {
       if (!section || section.rows.length === 0) continue;
       const title = FEED_SECTION_TITLES[section.section];
       if (hiddenTriageSections.includes(title)) continue;
+      const alwaysOpen = title === loneTitle;
       if (!emittedTitles.has(title)) {
         emittedTitles.add(title);
-        listRows.push({ kind: 'section-header', section: section.section, title, count: countByTitle.get(title) ?? 0 });
+        listRows.push({ kind: 'section-header', section: section.section, title, count: countByTitle.get(title) ?? 0, alwaysOpen });
       }
       // The header row always renders (so it stays tappable to re-expand);
       // a collapsed title just skips the rows underneath it. No exception
       // for needs-you - a user may want to defer even a pending prompt
       // until they're back at their desk.
-      if (collapsedTriageSections.includes(title)) continue;
+      if (!alwaysOpen && collapsedTriageSections.includes(title)) continue;
       for (const row of section.rows) listRows.push(row);
     }
     return { rows: listRows, feedRowCount: totalRows };
@@ -458,6 +474,7 @@ export function TriageHomeScreen(): React.JSX.Element {
                 // The collapse state is title-keyed for the same reason.
                 testID={`section-header-${item.title.toLowerCase()}`}
                 count={item.count}
+                alwaysOpen={item.alwaysOpen}
                 collapsed={collapsedTriageSections.includes(item.title)}
                 onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}
               />

@@ -18,21 +18,58 @@ export interface SectionHeaderProps {
   /** Provided together: renders a tappable disclosure row (chevron + count) instead of a plain static label. Omit both for the plain variant. */
   collapsed?: boolean;
   onToggle?: () => void;
+  /**
+   * The collapsible variant's row, held open: title and count, no chevron,
+   * not pressable. The Agents feed passes it for the only section on screen,
+   * which must not be able to collapse into an empty page. Wins over
+   * `collapsed` and `onToggle`.
+   */
+  alwaysOpen?: boolean;
 }
 
 /**
  * A list section label. Plain by default (Settings' groups); pass `count`
  * + `collapsed` + `onToggle` together for the collapsible variant (the
  * Agents feed's section headers) - a tappable disclosure row with
- * its count visible whether expanded or collapsed.
+ * its count visible whether expanded or collapsed - and `alwaysOpen` for that
+ * row held open.
  */
-export function SectionHeader({ title, testID, count, collapsed, onToggle }: SectionHeaderProps): React.JSX.Element {
+export function SectionHeader({ title, testID, count, collapsed, onToggle, alwaysOpen = false }: SectionHeaderProps): React.JSX.Element {
   const theme = useTheme();
   const paddingStyle = {
     paddingHorizontal: theme.spacing.md,
     paddingTop: theme.spacing.lg,
     paddingBottom: theme.spacing.sm,
   };
+  const titleAndCount = (
+    <>
+      <Text variant="title" color="secondary">
+        {title}
+      </Text>
+      {/* pill + compact: rounded and visible enough to read as a real
+          count (secondary color, matching the title's own weight), but
+          tight enough to stay visibly smaller than the title beside it. */}
+      {count !== undefined ? <Badge label={String(count)} shape="pill" compact align="center" /> : null}
+      <View style={styles.flex} />
+    </>
+  );
+
+  if (alwaysOpen) {
+    // Same box as the collapsible row, so the header does not shift when a
+    // second section appears and the chevron comes back.
+    return (
+      <View
+        testID={testID}
+        accessibilityRole="header"
+        accessibilityLabel={`${title}, ${count ?? 0}`}
+        style={[paddingStyle, { minHeight: theme.minTouchSize }]}
+      >
+        <Row gap="xs" style={styles.row}>
+          {titleAndCount}
+        </Row>
+      </View>
+    );
+  }
 
   if (!onToggle) {
     return (
@@ -54,14 +91,7 @@ export function SectionHeader({ title, testID, count, collapsed, onToggle }: Sec
       style={[paddingStyle, { minHeight: theme.minTouchSize }]}
     >
       <Row gap="xs" style={styles.row}>
-        <Text variant="title" color="secondary">
-          {title}
-        </Text>
-        {/* pill + compact: rounded and visible enough to read as a real
-            count (secondary color, matching the title's own weight), but
-            tight enough to stay visibly smaller than the title beside it. */}
-        {count !== undefined ? <Badge label={String(count)} shape="pill" compact align="center" /> : null}
-        <View style={styles.flex} />
+        {titleAndCount}
         <Icon name={collapsed ? 'chevron-forward' : 'chevron-down'} color="muted" size={18} />
       </Row>
     </Pressable>
