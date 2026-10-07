@@ -1066,7 +1066,7 @@ export function TerminalPane({
           onContentProcessDidTerminate={recoverWebView}
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
         />
-        {awaitingFirstFrame ? <TerminalWaitOverlay sessionId={sessionId} active={isActive} /> : null}
+        {awaitingFirstFrame ? <TerminalWaitOverlay key={sessionId} sessionId={sessionId} active={isActive} /> : null}
         <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />
         <View style={styles.scrollLatestButton}>
           <IconButton

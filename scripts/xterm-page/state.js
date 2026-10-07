@@ -67,7 +67,8 @@
   // the renderer does not draw.
   var TERMINAL_FONT_FAMILY = 'Menlo, Consolas, monospace';
   // How a fit finds its cell (see cellFit.js): 'computed' works the final cell
-  // out from the font's own metrics and writes it once; 'measured' is the
+  // out from the font's own metrics and writes it in one task, at most two
+  // option writes (font size, line height); 'measured' is the
   // older chain that stretches the line height a frame at a time and
   // re-measures (heightFit.js). The host picks per init. 'measured' stays as
   // the fallback when a computed cell misses, and as the control arm of the

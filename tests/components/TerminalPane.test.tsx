@@ -7,7 +7,9 @@ import {
   type NativeEventSubscription,
 } from 'react-native';
 import { act, fireEvent, render, screen, waitFor, type RenderResult } from '@testing-library/react-native';
+import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
+import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
 import { TERMINAL_WAIT_CAPTION_AFTER_MS } from '@/components/terminal/TerminalWaitOverlay';
 import { decodeHostMessage } from '@/terminal/terminalBridge';
@@ -1428,6 +1430,123 @@ describe('TerminalPane (faithful mirror)', () => {
           jest.advanceTimersByTime(intervalMs);
         });
         expect(cursorOpacity()).toBe(restingOpacity);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /** Mutation seen failing: dropping `!reducedMotion` from the blink gate (the cursor started lit at full opacity under OS reduced motion). */
+    it('holds the cursor still at its resting opacity under OS reduced motion', async () => {
+      jest.useFakeTimers();
+      jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
+      try {
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        expect(cursorOpacity()).toBe(restingOpacity);
+        await act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(restingOpacity);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /** Mutation seen failing: dropping `screenMotionActive` from the blink gate (the cursor started lit at full opacity under a covered screen). */
+    it('holds the cursor still at its resting opacity while the screen motion gate is inactive', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        await render(
+          <ThemeProvider>
+            <ScreenMotionOverride active={false}>
+              <TerminalPane sessionId="sess-1" isActive />
+            </ScreenMotionOverride>
+          </ThemeProvider>,
+        );
+        await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
+        expect(cursorOpacity()).toBe(restingOpacity);
+        await act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(restingOpacity);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * A page that reports 'ready' AGAIN (a reload the pane did not start) starts
+     * blank, so the wait must come back. Only the renderer-gone path was tested.
+     * Mutation seen failing: removing `setAwaitingFirstFrame(true)` from the
+     * 'ready' branch of onWebViewMessage.
+     */
+    it('comes back when the page reports ready again after it had painted', async () => {
+      retainTerminal('sess-1');
+      appendChunk('sess-1', 'hello');
+      await renderPaneAndReady();
+      await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+      expect(screen.queryByTestId('terminal-wait')).toBeNull();
+
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
+      expect(screen.queryByTestId('terminal-wait')).not.toBeNull();
+    });
+
+    /**
+     * The desktop answered after the caption was already up, with a seed that
+     * paints nothing (an empty scrollback never ends the wait), so the caption
+     * has to come down on the seed itself. Mutation seen failing: removing
+     * `setCaptionVisible(false)` from the seed listener (the caption stayed up
+     * for good).
+     */
+    it('takes the caption down when the seed lands after it showed, while the wait goes on', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        await renderPaneAndReady();
+        await act(() => {
+          jest.advanceTimersByTime(TERMINAL_WAIT_CAPTION_AFTER_MS);
+        });
+        expect(screen.getByTestId('terminal-wait-caption')).toBeTruthy();
+
+        await act(() => seedScrollback('sess-1', ''));
+        expect(screen.queryByTestId('terminal-wait-caption')).toBeNull();
+        expect(screen.queryByTestId('terminal-wait')).not.toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * TerminalPane keys the overlay on the session id, so a swap while the pane
+     * still waits starts the caption delay over for the successor instead of
+     * carrying the predecessor's caption across. Mutation seen failing:
+     * dropping `key={sessionId}` from the overlay (the predecessor's caption
+     * stayed up over the seeded successor).
+     */
+    it('starts the caption over for the successor when the session swaps in place', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        retainTerminal('sess-2');
+        seedScrollback('sess-2', 'hello');
+        const result = await renderPaneAndReady();
+        await act(() => {
+          jest.advanceTimersByTime(TERMINAL_WAIT_CAPTION_AFTER_MS);
+        });
+        expect(screen.getByTestId('terminal-wait-caption')).toBeTruthy();
+
+        await result.rerender(
+          <ThemeProvider>
+            <TerminalPane sessionId="sess-2" isActive />
+          </ThemeProvider>,
+        );
+        expect(screen.queryByTestId('terminal-wait-caption')).toBeNull();
+        await act(() => {
+          jest.advanceTimersByTime(TERMINAL_WAIT_CAPTION_AFTER_MS);
+        });
+        expect(screen.queryByTestId('terminal-wait-caption')).toBeNull();
       } finally {
         jest.useRealTimers();
       }

@@ -3,9 +3,9 @@ import { StyleSheet, View } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import { Text } from '../Text';
 import { useTheme } from '../theme/ThemeProvider';
-import { BlinkingBlock } from '../motion/BlinkingBlock';
 import { useScreenMotionActive } from '../motion/ScreenMotion';
-import { hasSeed } from '@/state/terminalFeed';
+import { WaitCursor } from '../motion/WaitCursor';
+import { hasSeed, subscribeChunks } from '@/state/terminalFeed';
 
 /**
  * How long the pane waits before saying the wait is the desktop's. Most opens
@@ -27,19 +27,23 @@ export interface TerminalWaitOverlayProps {
  * first frame paints, so a slow desktop reads as a wait rather than a dead
  * black screen. TerminalPane mounts this only while it waits.
  *
- * The cursor is the swap veil's wait cursor, drawn the same way
- * (SessionSwapVeil.tsx): one cell at the grid's origin in `textSecondary`,
- * blinking on `waitCursorBlink` through `BlinkingBlock`, a two-state toggle on
- * a JS interval that registers no Reanimated mapper. It holds still under OS
- * reduced motion, while a route covers the screen, while the pane is not the
- * visible lens, and past `terminalWaitCursor.holdAfterMs`.
+ * The cursor is the swap veil's wait cursor (WaitCursor, which both draw):
+ * one cell at the grid's origin, blinking on a JS interval that registers no
+ * Reanimated mapper. It holds still under OS reduced motion, while a route
+ * covers the screen, while the pane is not the visible lens, and past
+ * `terminalWaitCursor.holdAfterMs`.
  *
  * After TERMINAL_WAIT_CAPTION_AFTER_MS, one muted line names who is slow, but
  * only while this session's ring has never been seeded: the seed is the
  * desktop's read-stream answer, so before it the wait really is the desktop's.
- * A seeded ring that still paints nothing keeps the cursor and never the
- * caption: its frame is normally one live write away, and a terminal that
- * really is blank is a cursor on an empty grid anyway.
+ * A seed landing after the caption shows takes it down again. A seeded ring
+ * that still paints nothing keeps the cursor and never the caption: its frame
+ * is normally one live write away, and a terminal that really is blank is a
+ * cursor on an empty grid anyway.
+ *
+ * Per session: TerminalPane keys this on the session id, so a swap that
+ * happens while the pane still waits starts the caption delay and the blink
+ * bound over for the successor.
  *
  * Opaque, in the terminal's own background: the grid under it is blank by
  * definition while TerminalPane waits, so the fill hides only xterm's own
@@ -60,24 +64,26 @@ export function TerminalWaitOverlay({ sessionId, active }: TerminalWaitOverlayPr
     const captionTimer = setTimeout(() => {
       if (!hasSeed(sessionId)) setCaptionVisible(true);
     }, TERMINAL_WAIT_CAPTION_AFTER_MS);
+    // The desktop answered: whatever the pane still waits for is no longer
+    // the desktop's to send, so the caption that says it is comes down.
+    const unsubscribeSeed = subscribeChunks(sessionId, (event) => {
+      if (event.kind === 'seed') setCaptionVisible(false);
+    });
+    return () => {
+      clearTimeout(captionTimer);
+      unsubscribeSeed();
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
     const holdTimer = setTimeout(() => {
       setBlinkExpired(true);
     }, holdAfterMs);
     return () => {
-      clearTimeout(captionTimer);
       clearTimeout(holdTimer);
     };
-  }, [sessionId, holdAfterMs]);
+  }, [holdAfterMs]);
 
-  const cursorBlink = theme.motion.waitCursorBlink;
-  const cursorStyle = {
-    ...styles.cursor,
-    left: theme.spacing.sm,
-    top: theme.spacing.sm,
-    width: theme.spacing.sm,
-    height: theme.spacing.lg,
-    backgroundColor: theme.colors.textSecondary,
-  };
   const blinking = active && screenMotionActive && !reducedMotion && !blinkExpired;
 
   return (
@@ -90,20 +96,7 @@ export function TerminalWaitOverlay({ sessionId, active }: TerminalWaitOverlayPr
       accessibilityLabel="Waiting for the desktop to send the terminal"
       accessibilityState={{ busy: true }}
     >
-      {blinking ? (
-        <BlinkingBlock
-          testID="terminal-wait-cursor"
-          baseStyle={cursorStyle}
-          intervalMs={cursorBlink.intervalMs}
-          opacityMin={cursorBlink.opacityMin}
-          opacityMax={cursorBlink.opacityMax}
-        />
-      ) : (
-        <View
-          testID="terminal-wait-cursor"
-          style={[cursorStyle, { opacity: (cursorBlink.opacityMin + cursorBlink.opacityMax) / 2 }]}
-        />
-      )}
+      <WaitCursor testID="terminal-wait-cursor" blinking={blinking} />
       {captionVisible ? (
         <View style={styles.captionBox}>
           <Text testID="terminal-wait-caption" variant="body" color="muted">
@@ -122,9 +115,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-  },
-  cursor: {
-    position: 'absolute',
   },
   captionBox: {
     position: 'absolute',
