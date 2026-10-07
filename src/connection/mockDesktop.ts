@@ -3002,7 +3002,9 @@ export interface CreateMockDesktopOptions {
  * 0.17.0 desktop sends it `paused: true` (with `resumable: false`: Done offers
  * no Resume). The phone still draws no footer on it, because the desktop draws
  * an archived card compact (see `boardRowPaused`). The second never had a
- * session.
+ * session. Neither row names a session: the move into Done nulls the task's
+ * `session_id` on the desktop, and the completed-task screen anchors on the
+ * archived summary's own `sessionId` instead.
  */
 export function archivedTasksFor(projectId: string): BoardTaskWire[] {
   // Distinct rows per project: identical Done columns (and a storefront
@@ -3015,7 +3017,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
         display_id: 901,
         title: 'Batch the tax lookup in checkout totals',
         swimlane_id: 'lane2-shipped',
-        session_id: `${projectId}-archived-session-1`,
+        session_id: null,
         paused: true,
         archived_at: '2026-07-22T15:45:00.000Z',
       }),
@@ -3036,7 +3038,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       display_id: 901,
       title: 'Cache the product-grid query on the storefront home',
       swimlane_id: 'lane-done',
-      session_id: `${projectId}-archived-session-1`,
+      session_id: null,
       paused: true,
       archived_at: '2026-07-20T18:30:00.000Z',
     }),
@@ -4106,9 +4108,12 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           // Done offers no Resume (protocol 0.16.0), but the paused fact
           // (0.17.0) stays: the desktop suspends a live agent on its way into
           // Done and keeps the suspended row, so a task that held a session is
-          // paused from here on.
+          // paused from here on. The row stops naming that session, as the
+          // desktop nulls `session_id` on the move. The phone drops the feed
+          // itself once the row leaves the board (reconcileSessionsFromBoards).
           located.task.paused = located.task.paused === true || located.task.session_id !== null;
           located.task.resumable = false;
+          located.task.session_id = null;
           const archivedList = archivedDuringSession.get(located.projectId) ?? [];
           archivedList.unshift(located.task);
           archivedDuringSession.set(located.projectId, archivedList);
