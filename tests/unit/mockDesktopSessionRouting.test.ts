@@ -875,3 +875,124 @@ describe('the paused fact (protocol 0.17.0)', () => {
     );
   });
 });
+
+/**
+ * Pause from the phone (protocol 0.18.0): `pause-session` keyed by task,
+ * answered on ACCEPT, and the row's `pausable` computed from the live session
+ * state. The phone settles its Pause on the paused ROW, so what matters here
+ * is the row's shape before and after, and that a later Resume still finds the
+ * conversation.
+ */
+describe('Pause (protocol 0.18.0)', () => {
+  const PROJECT_IDS = ['mock-project', MOCK_PROJECT_2_ID] as const;
+
+  async function readRow(taskId: string) {
+    for (const projectId of PROJECT_IDS) {
+      const snapshot = await controller.verbs.readBoardSubscribe(projectId, { view: 'full' });
+      const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
+      if (task) return { task, projectId };
+    }
+    throw new Error(`no board holds ${taskId}`);
+  }
+
+  async function waitForRow(taskId: string, predicate: (task: Awaited<ReturnType<typeof readRow>>['task']) => boolean) {
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const { task } = await readRow(taskId);
+      if (predicate(task)) return task;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`board never showed the expected state for ${taskId}`);
+  }
+
+  function sessionEnded(sessionId: string): boolean {
+    return eventsFor('activity', sessionId).some((event) => event.kind === 'activity' && event.payload.type === 'session-ended');
+  }
+
+  it('sends a boolean pausable on every row, never true beside paused, and true for live sessions only', async () => {
+    const rows = [
+      ...(await controller.verbs.readBoardSubscribe('mock-project', { view: 'full' })).tasks,
+      ...(await controller.verbs.readBoardSubscribe(MOCK_PROJECT_2_ID, { view: 'full' })).tasks,
+      ...(await controller.verbs.readBoardArchived('mock-project', {})).archivedTasks,
+      ...(await controller.verbs.readBoardArchived(MOCK_PROJECT_2_ID, {})).archivedTasks,
+    ];
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(typeof row.pausable).toBe('boolean');
+      if (row.paused === true) expect(row.pausable).toBe(false);
+      if (row.session_id === null) expect(row.pausable).toBe(false);
+    }
+    expect((await readRow('mock-task-1')).task.pausable).toBe(true);
+    expect((await readRow(MOCK_CODEX_STATIC_SESSION.taskId)).task.pausable).toBe(true);
+    // The paused static session still names its session (an in-place park), and is not pausable.
+    expect((await readRow(MOCK_PAUSED_STATIC_SESSION.taskId)).task.pausable).toBe(false);
+  });
+
+  it(
+    'pauses the streaming task: the accept comes first, then the row reads paused with Resume and no Pause',
+    async () => {
+      await expect(controller.verbs.pauseSession({ taskId: 'mock-task-1', projectId: 'mock-project' })).resolves.toEqual({ ok: true });
+
+      // Recorded at once, as the desktop records it before the shutdown: no second Pause.
+      expect((await readRow('mock-task-1')).task.pausable).toBe(false);
+
+      await waitUntil(() => sessionEnded(MOCK_STREAMING_SESSION_ID), { label: 'the paused session ends', timeoutMs: 4000 });
+      const pausedTask = await waitForRow('mock-task-1', (task) => task.paused === true);
+      expect(pausedTask).toEqual(expect.objectContaining({ session_id: null, paused: true, resumable: true, pausable: false }));
+    },
+    15_000,
+  );
+
+  /**
+   * A static session (every live card but the streaming one) pauses the same
+   * way, and a later Resume must find its conversation by TASK, because the
+   * pause cleared the row's session_id. Without that the resumed successor
+   * would have no stream behind it.
+   *
+   * Mutation seen failing: dropping `?? userPausedStaticStates.get(task.id)`
+   * from resumePausedTask (the successor's subscribe failed with "No such
+   * session").
+   */
+  it(
+    'pauses a static session and resumes the same conversation into a new session',
+    async () => {
+      const { projectId } = await readRow(MOCK_IDLE_STATIC_SESSION.taskId);
+      const seedWindow = await controller.verbs.readTranscriptWindow(MOCK_IDLE_STATIC_SESSION.sessionId);
+
+      await controller.verbs.pauseSession({ taskId: MOCK_IDLE_STATIC_SESSION.taskId, projectId });
+      await waitUntil(() => sessionEnded(MOCK_IDLE_STATIC_SESSION.sessionId), { label: 'the static session ends', timeoutMs: 4000 });
+      const pausedTask = await waitForRow(MOCK_IDLE_STATIC_SESSION.taskId, (task) => task.paused === true);
+      expect(pausedTask).toEqual(expect.objectContaining({ session_id: null, resumable: true, pausable: false }));
+      await expect(controller.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false })).rejects.toThrow(/No such session/);
+
+      await expect(controller.verbs.startSession({ taskId: MOCK_IDLE_STATIC_SESSION.taskId, projectId })).resolves.toEqual({
+        ok: true,
+        outcome: 'starting',
+      });
+      const resumedTask = await waitForRow(MOCK_IDLE_STATIC_SESSION.taskId, (task) => task.session_id !== null);
+      expect(resumedTask.session_id).not.toBe(MOCK_IDLE_STATIC_SESSION.sessionId);
+      expect(resumedTask.paused).toBe(false);
+      const resumedWindow = await controller.verbs.readTranscriptWindow(resumedTask.session_id ?? '');
+      expect(resumedWindow.entries).toEqual(seedWindow.entries);
+    },
+    15_000,
+  );
+
+  it('refuses a task with no live session, and an unknown project, with the desktop\'s own copy', async () => {
+    await expect(
+      controller.verbs.pauseSession({ taskId: MOCK_PAUSED_STATIC_SESSION.taskId, projectId: 'mock-project' }),
+    ).rejects.toThrow(/^This task has no running session to pause\.$/);
+    await expect(controller.verbs.pauseSession({ taskId: 'mock-task-1', projectId: 'no-such-project' })).rejects.toThrow(
+      /^No such project: no-such-project$/,
+    );
+  });
+
+  it('refuses a second pause while the first agent is still shutting down', async () => {
+    await controller.verbs.pauseSession({ taskId: 'mock-task-1', projectId: 'mock-project' });
+
+    await expect(controller.verbs.pauseSession({ taskId: 'mock-task-1', projectId: 'mock-project' })).rejects.toThrow(
+      /no running session to pause/,
+    );
+  });
+});

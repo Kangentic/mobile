@@ -1,4 +1,5 @@
 import {
+  parsePauseSessionResponsePayload,
   parseReadBoardResponsePayload,
   parseReadDiffResponsePayload,
   parseReadStreamResponsePayload,
@@ -16,6 +17,8 @@ import {
   type JsonValue,
   type MoveTaskRequestPayload,
   type MoveTaskResponsePayload,
+  type PauseSessionRequestPayload,
+  type PauseSessionResponsePayload,
   type ReadBoardArchivedResponsePayload,
   type ReadBoardProjectListResponsePayload,
   type ReadBoardSnapshotResponsePayload,
@@ -252,6 +255,18 @@ export class VerbClient {
   async startSession(input: StartSessionRequestPayload): Promise<StartSessionResponsePayload> {
     const response = await this.requireOk('start-session', asRequestJson(input));
     return this.parsePayload('start-session', response, parseStartSessionResponsePayload);
+  }
+
+  /**
+   * Pauses a task's live session the way the desktop's Pause button does
+   * (protocol 0.18.0). Keyed by task: the desktop resolves the live session
+   * itself. It answers when the pause is ACCEPTED (recorded), while the agent's
+   * shutdown runs on behind it; the paused row then arrives as the usual board
+   * event. A refusal (no live session, an unknown project) is a CapabilityError.
+   */
+  async pauseSession(input: PauseSessionRequestPayload): Promise<PauseSessionResponsePayload> {
+    const response = await this.requireOk('pause-session', asRequestJson(input));
+    return this.parsePayload('pause-session', response, parsePauseSessionResponsePayload);
   }
 
   async answerPermissionPrompt(input: AnswerPermissionPromptRequestPayload): Promise<AnswerPermissionPromptResponsePayload> {

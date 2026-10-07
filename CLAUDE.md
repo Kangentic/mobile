@@ -406,12 +406,13 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   initiates the KK handshake and owns the ~2 minute rekey timer; the phone is the responder.
   Version negotiation is bound into the prologue to close downgrade attacks.
 - **Capability allowlist:** the channel proves which device is connected; a desktop-enforced
-  allowlist decides what it may do. Eleven verbs (`read-stream`, `read-board`, `read-diff`,
+  allowlist decides what it may do. Twelve verbs (`read-stream`, `read-board`, `read-diff`,
   `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
-  `board-tool-read`, `board-tool-write`, `register-push`, and since protocol 0.15.0
+  `board-tool-read`, `board-tool-write`, `register-push`, since protocol 0.15.0
   `start-session`, which the phone sends only for Resume, gated on a desktop flag that arrives
-  with protocol 0.16.0); **the default pairing grant is all
-  eleven** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts` - pairing proves
+  with protocol 0.16.0, and since 0.18.0 `pause-session`, which the phone sends only for Pause,
+  gated on the board row's `pausable`); **the default pairing grant is all
+  twelve** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts` - pairing proves
   possession of both devices, so pairing is the approval). The per-verb allowlist exists to
   NARROW a device from the desktop's devices panel, not as a default-deny gate.
   **There is no shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**

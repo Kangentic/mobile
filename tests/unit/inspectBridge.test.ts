@@ -112,7 +112,10 @@ describe('buildInspectPayload', () => {
             spawn_progress: 'Creating worktree...',
             resumable: undefined,
             paused: undefined,
+            pausable: undefined,
           }),
+          // A live session the desktop would pause (0.18.0): listed on `pausable` alone.
+          boardTaskFixture({ id: 'task-live', session_id: 'sess-live', pausable: true }),
           boardTaskFixture({ id: 'task-paused', session_id: null, resumable: true, paused: true }),
           // Paused with no Resume on offer (0.17.0, a task sitting in Done): listed on `paused` alone.
           boardTaskFixture({ id: 'task-done-paused', session_id: null, resumable: false, paused: true }),
@@ -133,10 +136,11 @@ describe('buildInspectPayload', () => {
 
     expect(payload.activity).toEqual([expect.objectContaining({ sessionId: 'sess-1', resuming: true, resumable: true })]);
     expect([...payload.board.inFlightTasks].sort((first, second) => first.taskId.localeCompare(second.taskId))).toEqual([
-      { taskId: 'task-done-paused', sessionId: null, spawnProgress: null, resumable: false, paused: true },
-      { taskId: 'task-labelled', sessionId: null, spawnProgress: 'Creating worktree...', resumable: null, paused: null },
-      { taskId: 'task-parked', sessionId: 'sess-parked', spawnProgress: null, resumable: true, paused: true },
-      { taskId: 'task-paused', sessionId: null, spawnProgress: null, resumable: true, paused: true },
+      { taskId: 'task-done-paused', sessionId: null, spawnProgress: null, resumable: false, paused: true, pausable: false },
+      { taskId: 'task-labelled', sessionId: null, spawnProgress: 'Creating worktree...', resumable: null, paused: null, pausable: null },
+      { taskId: 'task-live', sessionId: 'sess-live', spawnProgress: null, resumable: false, paused: false, pausable: true },
+      { taskId: 'task-parked', sessionId: 'sess-parked', spawnProgress: null, resumable: true, paused: true, pausable: false },
+      { taskId: 'task-paused', sessionId: null, spawnProgress: null, resumable: true, paused: true, pausable: false },
     ]);
     expect(payload.pendingSuccessors).toEqual([{ taskId: 'task-2', sessionId: 'sess-next', endedSessionId: 'sess-ended' }]);
   });
