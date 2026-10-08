@@ -14,7 +14,7 @@
  * resolution and density independently, which is easy to "tidy" into something
  * that no longer complies.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -298,6 +298,75 @@ describe('the shot list matches the capture flow', () => {
     );
     expect(fadeWait, 'an optional bounded wait, gated to Android, sits between the settle and the shot').not.toBeNull();
     expect(Number(fadeWait?.[1])).toBeGreaterThanOrEqual(1500);
+  });
+});
+
+/**
+ * The committed listing images themselves. Both capture paths assert a frame's
+ * size when it is taken (scripts/storeScreenshots.mjs on Android,
+ * .github/scripts/capture-ios-screenshots.sh on iOS), but that happens before
+ * the frames are copied into store/screenshots/, and nothing re-checks them
+ * there. A shelf recaptured piecemeal, a frame swapped in by hand, or a renamed
+ * shot leaving its old file behind all ship as a PNG that looks fine in review
+ * and is rejected by the store at upload, long after the emulator is gone. This
+ * reads the committed bytes: every shelf holds exactly the shots the flow
+ * captures, each at the shelf's exact size.
+ *
+ * The expected sizes come from the capture scripts' own constants (SHELVES for
+ * Android, REQUIRED_WIDTH and REQUIRED_HEIGHT for iOS), never from the files.
+ */
+describe('the committed listing images', () => {
+  interface CommittedShelf {
+    readonly directory: string;
+    readonly width: number;
+    readonly height: number;
+  }
+
+  const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const iosCaptureScript = readFileSync(`${repositoryRoot}.github/scripts/capture-ios-screenshots.sh`, 'utf8');
+
+  /** A `NAME=<digits>` declaration in the iOS capture script. No end anchor, so a CRLF checkout still reads. */
+  function iosRequiredDimension(name: 'REQUIRED_WIDTH' | 'REQUIRED_HEIGHT'): number {
+    const declaration = new RegExp(`^${name}=(\\d+)`, 'm').exec(iosCaptureScript);
+    expect(declaration, `capture-ios-screenshots.sh still declares ${name}`).not.toBeNull();
+    return Number(declaration?.[1]);
+  }
+
+  const committedShelves: readonly CommittedShelf[] = [
+    ...Object.values(SHELVES).map((shelf) => ({
+      directory: shelf.outputDirectory,
+      width: shelf.width,
+      height: shelf.height,
+    })),
+    {
+      directory: 'store/screenshots/ios/iphone-6.9',
+      width: iosRequiredDimension('REQUIRED_WIDTH'),
+      height: iosRequiredDimension('REQUIRED_HEIGHT'),
+    },
+  ];
+
+  const shotCases: [string, CommittedShelf, string][] = committedShelves.flatMap((shelf) =>
+    SHOT_NAMES.map((shotName): [string, CommittedShelf, string] => [`${shelf.directory}/${shotName}.png`, shelf, shotName]),
+  );
+
+  it('covers the three Android shelves and the iOS one, with six shots each', () => {
+    // Non-vacuity guard: every case below is generated from these two lists.
+    expect(committedShelves.length).toBe(4);
+    expect(SHOT_NAMES.length).toBe(6);
+    expect(shotCases.length).toBe(24);
+  });
+
+  it.each(committedShelves.map((shelf): [string, CommittedShelf] => [shelf.directory, shelf]))(
+    '%s holds exactly the shots the flow captures, and nothing else',
+    (_directory, shelf) => {
+      const files = readdirSync(`${repositoryRoot}${shelf.directory}`).sort();
+      expect(files).toEqual(SHOT_NAMES.map((shotName) => `${shotName}.png`).sort());
+    },
+  );
+
+  it.each(shotCases)('%s is exactly the shelf size', (_path, shelf, shotName) => {
+    const size = readPngSize(readFileSync(`${repositoryRoot}${shelf.directory}/${shotName}.png`));
+    expect(describeDimensionMismatch(shotName, size, shelf)).toBeNull();
   });
 });
 
