@@ -156,4 +156,54 @@ describe('ReceiveStreams', () => {
 
     expect(streams.open(sealFrom(first, 2))).toBeNull();
   });
+
+  /**
+   * The same invariant through the other path that drops a generation: the
+   * lazy age expiry. gen1 opens a frame (lastOpened), expires on a later open,
+   * and a rekey then makes the trial order matter again. A stale lastOpened
+   * would put the expired stream back in front of the trial.
+   *
+   * Mutation seen failing: replacing the `this.keep(kept)` call in
+   * expireRetired with a direct `this.generations = kept` - the gen1 frame
+   * opened under the expired stream (generationsBack -1), "expected
+   * { opened: ..., generationsBack: -1 } to be null".
+   */
+  it('does not reopen an expired stream through a stale lastOpened', () => {
+    const clock = { nowMs: 0 };
+    const streams = new ReceiveStreams(() => clock.nowMs);
+    const first = generation(1);
+    streams.install(first.phone.receive, { keepRetired: true });
+    streams.install(generation(2).phone.receive, { keepRetired: true });
+    clock.nowMs = 100_000;
+    streams.install(generation(3).phone.receive, { keepRetired: true });
+    expect(streams.open(sealFrom(first, 1))?.generationsBack).toBe(2);
+
+    // gen1 was superseded at 0 and gen2 at 100 s: past 180 s only gen1 is
+    // gone, two streams remain, and the trial order is still consulted.
+    clock.nowMs = RETIRED_RECEIVE_STREAM_MAX_AGE_MS + 1;
+    expect(streams.open(sealFrom(first, 2))).toBeNull();
+    expect(streams.size).toBe(2);
+  });
+
+  /**
+   * The documented cost model: no clock read per frame in the steady state of
+   * one stream, and none to install the first one.
+   *
+   * Mutation seen failing: dropping the `this.generations.length > 1` guard in
+   * open() - 'expected "vi.fn()" to not be called at all, but actually been called 3 times'.
+   */
+  it('reads the clock only when a rekey or a retired stream makes it matter', () => {
+    const clock = vi.fn(() => 0);
+    const streams = new ReceiveStreams(clock);
+    const only = generation(1);
+    streams.install(only.phone.receive, { keepRetired: true });
+    for (const byte of [1, 2, 3]) expect(streams.open(sealFrom(only, byte))?.generationsBack).toBe(0);
+    expect(clock).not.toHaveBeenCalled();
+
+    // A rekey stamps the superseded stream once; an open with two kept reads it again.
+    streams.install(generation(2).phone.receive, { keepRetired: true });
+    expect(clock).toHaveBeenCalledTimes(1);
+    streams.open(sealFrom(only, 4));
+    expect(clock).toHaveBeenCalledTimes(2);
+  });
 });
