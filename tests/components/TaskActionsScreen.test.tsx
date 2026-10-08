@@ -295,10 +295,13 @@ describe('TaskActionsScreen', () => {
      * The bound can give up on a pause the desktop still applies (it waits for
      * the task lock). When the paused row then lands, the "has not confirmed"
      * line is stale and goes, and the sheet stays open where the user is. Any
-     * other line is not this effect's to clear.
+     * other line is not the paused row's to clear. The line is cleared, not
+     * hidden, so a resume from the desktop afterwards cannot bring it back.
      *
-     * Mutation seen failing: removing the effect that clears the line on a
-     * paused row (the error line was still shown after the row landed).
+     * Mutations seen failing: removing the clear on a paused row (the error
+     * line was still shown after the row landed); hiding the line while the
+     * row reads paused instead of clearing it (the line came back on the
+     * resumed row).
      */
     it('retracts the "not confirmed" line, and stays open, when the paused row lands late', async () => {
       jest.useFakeTimers();
@@ -316,6 +319,25 @@ describe('TaskActionsScreen', () => {
 
         expect(screen.queryByTestId('task-action-error')).toBeNull();
         expect(mockBack).not.toHaveBeenCalled();
+
+        // Resumed from the desktop: live again, pausable again.
+        await act(() => {
+          useBoardStore.setState((state) => {
+            const board = state.boardsByProjectId['project-1'];
+            if (!board) return state;
+            const task = board.tasksById['task-1'];
+            if (!task) return state;
+            return {
+              boardsByProjectId: {
+                ...state.boardsByProjectId,
+                'project-1': { ...board, tasksById: { 'task-1': { ...task, session_id: 'sess-2', paused: false, pausable: true } } },
+              },
+            };
+          });
+        });
+
+        expect(within(pauseRow()).getByText('Pause session')).toBeTruthy();
+        expect(screen.queryByTestId('task-action-error')).toBeNull();
       } finally {
         jest.useRealTimers();
       }
