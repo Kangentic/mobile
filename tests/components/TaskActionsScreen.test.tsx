@@ -266,6 +266,50 @@ describe('TaskActionsScreen', () => {
     });
 
     /**
+     * The row is given back with "has not confirmed" so the user can try
+     * again. The retry clears that line at once, holds "Pausing agent..."
+     * again, and gets a FULL bound of its own: the effect's timer restarts
+     * from the new tap, it does not resume the spent one.
+     *
+     * Mutation seen failing: dropping `setErrorMessage(null)` from onPause
+     * (the "not confirmed" line stayed up beside "Pausing agent...").
+     */
+    it('clears the "not confirmed" line on a retry and waits a full bound again', async () => {
+      jest.useFakeTimers();
+      try {
+        seedLiveSession();
+        mockPauseTaskSession.mockResolvedValue({ kind: 'unconfirmed' });
+        await renderTaskActions();
+        await tapPause();
+        await act(() => {
+          jest.advanceTimersByTime(MOCK_PAUSE_WAIT_MS);
+        });
+        expect(screen.getByTestId('task-action-error').props.children).toBe(PAUSE_UNCONFIRMED_MESSAGE);
+
+        await tapPause();
+
+        expect(mockPauseTaskSession).toHaveBeenCalledTimes(2);
+        expect(screen.queryByTestId('task-action-error')).toBeNull();
+        expect(within(pauseRow()).getByText('Pausing agent...')).toBeTruthy();
+
+        // Not yet a full bound from the retry: still waiting, no line.
+        await act(() => {
+          jest.advanceTimersByTime(MOCK_PAUSE_WAIT_MS - 1);
+        });
+        expect(screen.queryByTestId('task-action-error')).toBeNull();
+        expect(within(pauseRow()).getByText('Pausing agent...')).toBeTruthy();
+
+        await act(() => {
+          jest.advanceTimersByTime(1);
+        });
+        expect(screen.getByTestId('task-action-error').props.children).toBe(PAUSE_UNCONFIRMED_MESSAGE);
+        expect(mockBack).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
      * Pause needs the project to address the right desktop board, and the row
      * is offered from the task alone, so a route with a taskId and no
      * projectId must say so rather than send `undefined` as a project. The

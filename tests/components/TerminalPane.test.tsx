@@ -1551,6 +1551,50 @@ describe('TerminalPane (faithful mirror)', () => {
         jest.useRealTimers();
       }
     });
+
+    /**
+     * The same per-session keying covers the blink bound: a successor that
+     * arrives while the pane still waits owes a full `holdAfterMs` of blinking
+     * of its own, not what is left of its predecessor's. The predecessor is
+     * swapped out one second short of the bound, then the clock passes the
+     * bound the predecessor would have hit.
+     *
+     * Mutation seen failing: dropping `key={sessionId}` from the overlay in
+     * TerminalPane (the hold timer carried across the swap, so the cursor sat
+     * at its resting opacity, 0.575, instead of blinking).
+     */
+    it('gives the successor a full blink bound when the session swaps in place near the predecessor\'s', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        retainTerminal('sess-2');
+        const result = await renderPaneAndReady();
+        await act(() => {
+          jest.advanceTimersByTime(darkTerminalTheme.motion.terminalWaitCursor.holdAfterMs - 1000);
+        });
+
+        await result.rerender(
+          <ThemeProvider>
+            <TerminalPane sessionId="sess-2" isActive />
+          </ThemeProvider>,
+        );
+        expect(screen.queryByTestId('terminal-wait')).not.toBeNull();
+
+        // Past the point where the predecessor's bound would have expired.
+        await act(() => {
+          jest.advanceTimersByTime(2000);
+        });
+        // 2000 ms is three whole 600 ms intervals plus 200: an odd number of
+        // toggles from the lit start, so a blinking cursor reads dim here.
+        expect(cursorOpacity()).toBe(opacityMin);
+        await act(() => {
+          jest.advanceTimersByTime(intervalMs);
+        });
+        expect(cursorOpacity()).toBe(opacityMax);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   /**
