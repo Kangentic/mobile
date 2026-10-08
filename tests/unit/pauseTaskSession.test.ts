@@ -122,6 +122,43 @@ describe('pauseTaskSession', () => {
     expect(runBootstrap).toHaveBeenCalled();
   });
 
+  /**
+   * The re-read is best-effort and fire-and-forget (the same contract as
+   * resumeTaskSession's). If its rejection were left unhandled it would surface
+   * as an unhandled promise rejection, and if it were awaited inside the
+   * request's catch, its failure would replace the outcome the desktop gave.
+   *
+   * Mutation seen failing, on each branch in turn: dropping
+   * `.catch(() => undefined)` from the refresh (an unhandled rejection was
+   * recorded with 'bootstrap failed').
+   */
+  it.each([
+    ['a timeout', () => new CapabilityTimeoutError('pause-session'), { kind: 'unconfirmed' }],
+    ['a refusal', () => new CapabilityError('pause-session', 'No.'), { kind: 'refused', message: 'No.' }],
+  ])('keeps the outcome of %s, with no unhandled rejection, when the board re-read itself rejects', async (_description, makeError, expectedOutcome) => {
+    establishedConnection();
+    runBootstrap.mockRejectedValue(new Error('bootstrap failed'));
+    pauseSession.mockRejectedValue(makeError());
+    const unhandledReasons: unknown[] = [];
+    const recordUnhandled = (reason: unknown): void => {
+      unhandledReasons.push(reason);
+    };
+    process.on('unhandledRejection', recordUnhandled);
+
+    try {
+      const outcome = await pauseTaskSession('task-1', 'project-1');
+      // Lets the rejected re-read settle, and Node's end-of-turn unhandled
+      // rejection check run, before anything is asserted.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runBootstrap).toHaveBeenCalledTimes(1);
+      expect(outcome).toEqual(expectedOutcome);
+      expect(unhandledReasons).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
+  });
+
   it('fails outright, with no text of its own, when the request never reached the desktop', async () => {
     pauseSession.mockRejectedValue(new Error('Not connected to the desktop'));
 
