@@ -2383,6 +2383,16 @@ function mockColumns2() {
   ];
 }
 
+/** The columns of the mock project `projectId` names. */
+function mockColumnsFor(projectId: string): ReturnType<typeof mockColumns> {
+  return projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
+}
+
+/** The role of the column `task` sits in, or null for a column with none. */
+function mockColumnRoleOf(task: BoardTaskWire, projectId: string): ReturnType<typeof mockColumns>[number]['role'] | null {
+  return mockColumnsFor(projectId).find((column) => column.id === task.swimlane_id)?.role ?? null;
+}
+
 export function initialTasks2(): BoardTaskWire[] {
   const nowIso = new Date().toISOString();
   return [
@@ -3389,8 +3399,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       // The desktop dropped the live row: a subscribe for its id now fails.
       staticSessionStates.delete(pausedSessionId);
       userPausedStaticStates.set(task.id, pausedState);
-      const columns = projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
-      const inDone = columns.find((column) => column.id === task.swimlane_id)?.role === 'done';
+      const inDone = mockColumnRoleOf(task, projectId) === 'done';
       task.session_id = null;
       task.paused = true;
       task.resumable = !inDone;
@@ -3407,8 +3416,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    */
   function isTaskPausable(task: BoardTaskWire, projectId: string): boolean {
     if (task.paused === true || task.session_id === null || pausingTaskIds.has(task.id)) return false;
-    const columns = projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
-    if (columns.find((column) => column.id === task.swimlane_id)?.role === 'todo') return false;
+    if (mockColumnRoleOf(task, projectId) === 'todo') return false;
     if (task.id === MOCK_TASK_ID) return task.session_id === activeSessionId;
     const liveState = staticSessionStates.get(task.session_id);
     if (liveState === undefined) return false;
@@ -4185,7 +4193,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         // this way). Mirror the desktop's semantics: the task leaves the board
         // projection and joins the archived page, so the card lands in the
         // Done column instead of vanishing from every screen at once.
-        const targetColumns = located.projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
+        const targetColumns = mockColumnsFor(located.projectId);
         const targetColumn = targetColumns.find((candidate) => candidate.id === payload.targetSwimlaneId);
         if (isDoneRole(targetColumn?.role ?? null)) {
           const taskIndex = located.taskList.findIndex((candidate) => candidate.id === located.task.id);
@@ -4394,7 +4402,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         if (located.task.session_id !== null || startInFlight) {
           return ok(request, { ok: true, outcome: 'live' });
         }
-        const startColumns = located.projectId === MOCK_PROJECT_2.id ? mockColumns2() : mockColumns();
+        const startColumns = mockColumnsFor(located.projectId);
         const startColumn = startColumns.find((candidate) => candidate.id === located.task.swimlane_id);
         // The desktop's own refusal copy (resumeBlockMessage) for To Do; the
         // mock starts no fresh agents, so anything else is refused plainly.

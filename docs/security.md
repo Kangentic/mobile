@@ -177,7 +177,8 @@ otherwise-general command channel is the wrong shape.
 
 The default pairing grant is **all twelve verbs** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's
 `pairing-service.ts` spreads `CAPABILITY_VERBS` whole; a device paired before `start-session` or
-`pause-session` existed is re-granted on the desktop's next bridge start, with no re-pair). This is deliberate: the pairing ceremony
+`pause-session` existed is re-granted on the desktop's next bridge start, with no re-pair, by
+`migrateDevicesToFullCapabilityGrant` in its `mobile-bridge-service.ts`). This is deliberate: the pairing ceremony
 proves possession of both devices, so pairing is the approval, and the per-verb allowlist in the
 desktop's Mobile Devices settings exists to NARROW a device after the fact rather than as a
 default-deny gate. The load-bearing guarantee is the previous paragraph's - the verbs a grant

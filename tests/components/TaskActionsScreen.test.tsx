@@ -264,6 +264,74 @@ describe('TaskActionsScreen', () => {
         jest.useRealTimers();
       }
     });
+
+    /**
+     * Pause needs the project to address the right desktop board, and the row
+     * is offered from the task alone, so a route with a taskId and no
+     * projectId must say so rather than send `undefined` as a project. The
+     * mock RESOLVES an accepted outcome so a guard that went missing shows as
+     * a call and a "Pausing agent..." row, not as a crash.
+     *
+     * Mutation seen failing: deleting the `!taskId || !projectId` guard in
+     * onPause (the pause action was called with an undefined project).
+     */
+    it('says why and never calls the pause action when the route has no projectId', async () => {
+      seedLiveSession();
+      mockParams = { taskId: 'task-1' };
+      mockPauseTaskSession.mockResolvedValue({ kind: 'accepted' });
+      await renderTaskActions();
+      expect(pauseRow()).toBeTruthy();
+
+      await tapPause();
+
+      expect(mockPauseTaskSession).not.toHaveBeenCalled();
+      expect(screen.getByTestId('task-action-error').props.children).toBe('Cannot act on this task - close and reopen it');
+      expect(within(pauseRow()).queryByText('Pausing agent...')).toBeNull();
+      expect(within(pauseRow()).getByText('Pause session')).toBeTruthy();
+      expect(mockBack).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The bound can give up on a pause the desktop still applies (it waits for
+     * the task lock). When the paused row then lands, the "has not confirmed"
+     * line is stale and goes, and the sheet stays open where the user is. Any
+     * other line is not this effect's to clear.
+     *
+     * Mutation seen failing: removing the effect that clears the line on a
+     * paused row (the error line was still shown after the row landed).
+     */
+    it('retracts the "not confirmed" line, and stays open, when the paused row lands late', async () => {
+      jest.useFakeTimers();
+      try {
+        seedLiveSession();
+        mockPauseTaskSession.mockResolvedValue({ kind: 'unconfirmed' });
+        await renderTaskActions();
+        await tapPause();
+        await act(() => {
+          jest.advanceTimersByTime(MOCK_PAUSE_WAIT_MS);
+        });
+        expect(screen.getByTestId('task-action-error').props.children).toBe(PAUSE_UNCONFIRMED_MESSAGE);
+
+        await landPausedRow();
+
+        expect(screen.queryByTestId('task-action-error')).toBeNull();
+        expect(mockBack).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('leaves a different error line alone when a paused row lands', async () => {
+      seedLiveSession();
+      mockPauseTaskSession.mockResolvedValue({ kind: 'refused', message: 'This task has no running session to pause.' });
+      await renderTaskActions();
+      await tapPause();
+      expect(screen.getByTestId('task-action-error').props.children).toBe('This task has no running session to pause.');
+
+      await landPausedRow();
+
+      expect(screen.getByTestId('task-action-error').props.children).toBe('This task has no running session to pause.');
+    });
   });
 
   /**

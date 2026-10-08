@@ -201,6 +201,11 @@ export function TaskActionsScreen(): React.JSX.Element {
     return () => clearTimeout(waitBound);
   }, [pausing, taskGone, taskPaused, closeIfStillOpen]);
 
+  // A pause the bound gave up on can still land, since the desktop may have
+  // been waiting on the task lock. Its paused row retracts the line that said
+  // it had not been confirmed; the sheet stays open, where the user now is.
+  const shownErrorMessage = taskPaused && errorMessage === PAUSE_UNCONFIRMED_MESSAGE ? null : errorMessage;
+
   const onMove = useCallback(() => {
     if (!taskId || !projectId) {
       setErrorMessage(MISSING_TASK_CONTEXT);
@@ -343,9 +348,9 @@ export function TaskActionsScreen(): React.JSX.Element {
           caption={deleteArmed ? 'Removes the task and stops its session on your desktop' : null}
           testID={deleteArmed ? 'task-action-delete-confirm' : 'task-action-delete'}
         />
-        {errorMessage ? (
+        {shownErrorMessage ? (
           <Text variant="caption" color="danger" testID="task-action-error">
-            {errorMessage}
+            {shownErrorMessage}
           </Text>
         ) : null}
       </Stack>

@@ -978,7 +978,8 @@ never show together, because the gate is the board row's `pausable` (protocol 0.
 desktop sends true only for a task with a LIVE session (running or queued) outside To Do and never
 beside `paused: true`. It is the desktop's promise that `pause-session` pauses that session exactly
 as its own Pause button does. A null or absent field is a desktop before 0.18.0, so no Pause. The
-desktop answers on ACCEPT while the agent shuts down behind it (about 3 s), so the hub settles on
+desktop answers on ACCEPT while the agent shuts down behind it (about 3 s and past 10 s at worst,
+per the desktop's `pause-session` handler; read from its source, not measured), so the hub settles on
 the BOARD ROW, never on the response: the row shows "Pausing agent..." (the desktop's own pending
 copy) with every row disabled until the task's row reads `paused: true`, or until the task leaves
 the store, which is what the Agents feed's sessions projection does with a paused task that offers
@@ -987,7 +988,8 @@ to pause." means the view was stale), and every refusal re-reads the board so th
 its Pause. A timeout is not a failure: the desktop takes the task lock first and a long move can
 hold it past the phone's 10 s, so the board is re-read and the sheet keeps waiting, and only after
 `PAUSE_WAIT_MS` (20 s from the tap) does it give the row back with "Desktop has not confirmed the
-pause yet". The session view's header has no Pause yet; the desktop's own header carries a
+pause yet". A paused row landing after that takes the line down again, with the sheet left open
+where the user is. The session view's header has no Pause yet; the desktop's own header carries a
 pause/resume toggle, which is the next surface if one is wanted.
 
 **The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
