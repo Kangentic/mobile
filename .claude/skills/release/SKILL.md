@@ -21,9 +21,11 @@ Use `AskUserQuestion` for both axes. Do NOT guess.
 Then check the answer against the table below and **stop with an explanation if it is blocked.**
 
 **Every row is a claim about external state, so treat it as evidence with an age, not as fact.**
-The table is accurate **as of 2026-07-28**. This matters because it has already been wrong twice
-in ways that cost real time: it asserted the Play API path was proven when nothing had ever
-exercised it, and it listed data safety as unfilled after it had been submitted. When a row
+The table was last revised **2026-10-07**, and each row carries its own date. This matters
+because it has already been wrong three times in ways that cost real time: it asserted the Play
+API path was proven when nothing had ever exercised it, it listed data safety as unfilled after
+it had been submitted, and it still called both production paths blocked weeks after both apps
+were live in production. When a row
 decides whether you refuse a release, say when it was last verified and against what. If a row
 can be checked in seconds with a script, check it rather than quoting it.
 Refusing precisely is the job here. Half-executing a blocked release and failing at the upload
@@ -33,24 +35,24 @@ wastes a 20 minute build and can leave a dangling Play edit.
 |---|---|---|
 | either + artifact only | **Works** | - |
 | android + internal | **Works** | - |
-| android + closed (alpha) | **Blocked** | Every app-content declaration is **entered** as of 2026-07-29 (store listing with all screenshots, content rating, target audience, ads, privacy policy URL, data safety, health apps, app category) and **none is submitted**: they sit under `Changes not yet submitted for review` in Publishing overview, and `Send app for review` is disabled until the app dashboard reads 11 of 11. Also still missing: the closed track's countries/regions and its tester list, neither of which the Play API can read or write (`edits.testers` is Google Groups only). Verify in the Console, not from this row. The uploaded screenshots are additionally **stale**: they predate the mock-fixture rewrite that stopped the listing images naming Kangentic's own roadmap, so re-upload from `store/screenshots/` before submitting. |
-| android + open (beta) | **Blocked** | Same declarations as closed. |
-| android + production | **Blocked** | Personal Play account created 2026-07-20, so production access needs a closed test with **12+ testers opted in for 14 continuous days** first. Opt-outs reset the clock. See the deployment-track ladder in `docs/developer-guide.md`. |
+| android + closed (alpha) | **Not exercised** (2026-10-07) | Production access means the closed-test gate was passed, but this workflow has never submitted to `alpha`. The `plan` job requires `-f rollout=...` for it. Treat a first dispatch here the way the production row below treats its first one. |
+| android + open (beta) | **Not exercised** (2026-10-07) | Same as closed. |
+| android + production | **Works** (2026-10-07) | The app is live in production and production access is granted (maintainer, 2026-10-07). Dispatch `-f submit_track=production -f rollout=0.1`; the `plan` job refuses it without a rollout. **v1.0.0 (vc15) is the first release this workflow submitted to production itself**; earlier ones went to `internal`. Two Console preconditions, both invisible to the Play API: the service account needs **Release to production** under Users and permissions (its July grant was testing tracks only), and Publishing overview must hold **no unsent changes**, or the commit fails with "Changes cannot be sent for review automatically". So upload new listing images AFTER the release commits, not before. Either failure: fix it, then re-run `submit-play` alone. |
 | ios + TestFlight internal | **Works** | Needs `ASC_API_KEY_BASE64` + `ASC_KEY_ID` + `ASC_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, as GitHub secrets. Check with `gh secret list` before promising it. |
-| ios + TestFlight external | **Blocked** | Needs a Beta App Review plus a beta description, feedback email, and test information. None entered. |
-| ios + App Store | **Blocked** | Needs the privacy questionnaire, an age rating, and a resolved export-compliance answer. Screenshots are NO LONGER part of this gap: six 6.9-inch frames at 1320x2868 are tracked in `store/screenshots/ios/iphone-6.9/`, against an Apple minimum of **one** (10 is the cap, and only the first 3 reach install sheets - "minimum three" was this row's earlier error). Upload via Media Manager targeting 6.9", which is the source slot every smaller iPhone size is derived from. They are captured on a free macOS runner (`gh workflow run build-ios.yml -f screenshots=true`) because a booted simulator cannot run from Windows, at roughly 45 minutes per attempt. `ITSAppUsesNonExemptEncryption` is currently `false` as a reasoned default, not a verified conclusion; see the comment in `app.config.ts`. |
+| ios + TestFlight external | **Unverified since 2026-07-28** | Then: needs a Beta App Review plus a beta description, feedback email, and test information. Not revisited since; check App Store Connect. |
+| ios + App Store | **Works** (2026-10-07) | The app is live on the App Store (maintainer, 2026-10-07). The workflow's part is the upload (`-f target=device -f submit=testflight`); **the submission itself is manual in App Store Connect**: create the version, attach the build once processed, fill What's New (the same text as `store/whatsnew/whatsnew-en-US`), upload screenshots, then Add for Review. Screenshots: six 6.9-inch frames at 1320x2868 are tracked in `store/screenshots/ios/iphone-6.9/`, against an Apple minimum of **one** (10 is the cap, and only the first 3 reach install sheets). Upload via Media Manager targeting 6.9", the source slot every smaller iPhone size is derived from. `ITSAppUsesNonExemptEncryption` is `false` as a reasoned default, not a verified legal conclusion; see the comment in `app.config.ts`. |
 
 If the user insists on a blocked path after being told, say plainly that it cannot be done and stop.
 Do not attempt a workaround.
 
-**One thing to say out loud for any iOS release: the iOS app has never run on real hardware.** It
-compiles, it signs, and it now launches and renders correctly on a **simulator** - the store
-capture run drives it through six screens on every dispatch, and the WKWebView terminal paints
-its full grid, so that specific risk is retired. What remains untested is everything a simulator
-cannot exercise: the notification stack, push delivery, and the Notification Service Extension
-that iOS push decryption needs, which is a later phase. No build has ever launched on a physical
-device. A TestFlight build is worth cutting to find that out, but do not describe it to the user
-as a fully proven app.
+**One thing to say out loud for any iOS release: the push extension is still unproven on
+hardware.** The app itself is past that: TestFlight testers have run it on physical iPhones since
+the 0.4.x builds, and it is live on the App Store. What no check here has proven is the
+Notification Service Extension's execution, which decrypts a push before iOS renders it. Its
+crypto is cross-checked against `@kangentic/protocol` by the `NSE crypto (swiftc)` job, but a
+**simulator cannot prove the extension runs at all**: `simctl push` is delivered as a local
+request with no service-extension step. Only a real APNs push to a real device can, so do not
+describe encrypted iOS push as verified until one has.
 
 ## Step 1 - Preflight
 
@@ -162,7 +164,9 @@ under it.
 1. Branch: `release/v<version>-<vc|b><newNumber>`.
 2. Edit only the counter for the platform being released: `android.versionCode` for Android,
    `ios.buildNumber` for iOS. Bumping both when releasing one spends a number for nothing, and the
-   two are independent.
+   two are independent. **The default is to release both platforms together** so the stores never
+   drift a version apart, and then both counters move in this one PR. Name the branch
+   `release/v<version>-vc<n>-b<n>` in that case.
 3. `/pull-request` to open it and drive the checks green. `tests/unit/appConfigBrand.test.ts` guards
    the field's shape, and the full gate including `E2E Tests (Maestro)` still applies.
 4. `/merge-pull-request` to land it.
@@ -186,10 +190,18 @@ gh workflow run build-android.yml --ref main -f profile=production -f artifact=a
   `completed` release cannot be pulled back, only superseded by a higher versionCode.
   Internal testing is small and known enough not to need it; closed, open, and
   production are not. See step 8.
-  **This is now enforced, not advisory:** the `plan` job refuses `alpha` or `beta` with an empty
-  `rollout` and names the reason. `internal` is deliberately exempt. It was moved out of prose
+  **This is now enforced, not advisory:** the `plan` job refuses `alpha`, `beta` or `production`
+  with an empty `rollout` and names the reason. `internal` is deliberately exempt. A production
+  release is therefore
+  `gh workflow run build-android.yml --ref main -f profile=production -f artifact=aab -f submit_track=production -f rollout=0.1`,
+  then raise the fraction in the Play Console once Sentry stays quiet on the new build. It was moved out of prose
   because a rule that only exists in a skill file holds right up until somebody is in a hurry,
   and the action it guards is irreversible.
+- **Rewrite `store/whatsnew/whatsnew-en-US` in the release PR.** Every upload sends it as the
+  release's "What's new", because an API release never passes through the Console where notes
+  would otherwise be typed. Play caps it at 500 characters, which
+  `tests/unit/buildWorkflow.test.ts` checks. It is public text, so confirm it with the user, and
+  paste the same text into App Store Connect's What's New.
 - **Use dispatch, not a `v*` tag.** A tag build produces the AAB but can never submit: the
   `submit-play` job requires `github.event_name == 'workflow_dispatch'`. Tags are for cutting a
   release candidate artifact, not for releasing.

@@ -51,6 +51,7 @@ on:
           - internal
           - alpha
           - beta
+          - production
       rollout:
         description: 'Fraction of users for a staged rollout, e.g. 0.1. Empty means release to everyone.'
         type: string
@@ -128,8 +129,10 @@ jobs:
       #
       # `internal` is deliberately exempt: the track is small, known, and the
       # documented escape hatch for it is simply shipping a higher version code.
+      # `production` is the track this matters most on: both apps are live
+      # there, so an unstaged release reaches every user at once with no halt.
       - name: Refuse an unstaged release to a track with real users
-        if: (inputs.submit_track == 'alpha' || inputs.submit_track == 'beta') && inputs.rollout == ''
+        if: (inputs.submit_track == 'alpha' || inputs.submit_track == 'beta' || inputs.submit_track == 'production') && inputs.rollout == ''
         run: |
           set -euo pipefail
           echo "::error::submit_track '${{ inputs.submit_track }}' needs an explicit staged rollout, e.g. -f rollout=0.1. Play can only HALT a release whose status is inProgress, which is what a userFraction rollout produces; a completed release can never be pulled back, only superseded by a higher versionCode. Re-dispatch with a rollout, or use submit_track=internal."
@@ -648,6 +651,12 @@ jobs:
       # status, and Play rejects it outright alongside `completed`. So the two are
       # separate steps rather than one step with interpolated values, which would
       # be a silent misconfiguration waiting to happen.
+      #
+      # Both carry the release notes from store/whatsnew/. A release committed
+      # through the API never passes through the Console, so without them a
+      # production release ships with a blank "What's new". Files are named
+      # whatsnew-<BCP 47 locale>; Play caps each at 500 characters, which
+      # tests/unit/buildWorkflow.test.ts checks before a build can spend time.
       - name: Upload to Google Play (staged rollout)
         if: inputs.rollout != ''
         uses: r0adkll/upload-google-play@v1
@@ -658,6 +667,7 @@ jobs:
           track: ${{ inputs.submit_track }}
           status: inProgress
           userFraction: ${{ inputs.rollout }}
+          whatsNewDirectory: store/whatsnew
 
       - name: Upload to Google Play (full release)
         if: inputs.rollout == ''
@@ -668,6 +678,7 @@ jobs:
           releaseFiles: artifact/*
           track: ${{ inputs.submit_track }}
           status: completed
+          whatsNewDirectory: store/whatsnew
 
       # The durable record that this version code is now spent.
       #

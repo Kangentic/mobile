@@ -4177,10 +4177,18 @@ testing does not count toward production access.**
 
 | Track | Testers | Review | Status | Unlocks production? |
 |---|---|---|---|---|
-| Internal | up to 100, by email list | none, live in minutes | **v0.3.0 (vc3) released 2026-08-03**, one tester list | **No** |
-| Closed (`alpha`) | 12+ required, opted in 14 continuous days | yes | not created | **Yes**, this is the gate |
-| Open (`beta`) | unlimited, publicly discoverable | yes | not created | optional |
-| Production | everyone | yes | locked until the closed test passes | n/a |
+| Internal | up to 100, by email list | none, live in minutes | every release through v0.8.1 (vc14) went here first, one tester list | **No** |
+| Closed (`alpha`) | 12+ required, opted in 14 continuous days | yes | the gate has been passed; the workflow has never submitted here | **Yes**, this is the gate |
+| Open (`beta`) | unlimited, publicly discoverable | yes | not used | optional |
+| Production | everyone | yes | **live** (maintainer, 2026-10-07); v1.0.0 (vc15) is the first release `build-android.yml` submits here itself, as a staged rollout | n/a |
+
+**Releasing to production from the workflow** is
+`-f submit_track=production -f rollout=0.1`: the `plan` job refuses production without a rollout,
+because only an `inProgress` release can be halted. Two Console preconditions the Play API cannot
+see: the service account needs **Release to production** under Users and permissions, and
+Publishing overview must hold **no unsent changes** (a listing edit waiting there makes the commit
+fail with "Changes cannot be sent for review automatically"). Upload new listing images after the
+release commits, not before. Release notes travel from `store/whatsnew/whatsnew-en-US`.
 
 **"None, live in minutes" is the steady state, not the first time.** The first internal release on
 a new app record is served under a temporary app name (`com.kangentic.mobile (unreviewed)`) while
@@ -4224,9 +4232,9 @@ testing needs no review at all.
 
 | Track | Testers | Review | Status |
 |---|---|---|---|
-| TestFlight internal | up to 100, must be App Store Connect users on the team | none | the target |
-| TestFlight external | up to 10,000, by link or email | yes, a lighter Beta App Review | not started |
-| App Store | everyone | yes, full App Review | not started |
+| TestFlight internal | up to 100, must be App Store Connect users on the team | none | every build uploads here first |
+| TestFlight external | up to 10,000, by link or email | yes, a lighter Beta App Review | not used |
+| App Store | everyone | yes, full App Review | **live** (maintainer, 2026-10-07); the submission is manual in App Store Connect after the workflow's upload |
 
 The ladder:
 
