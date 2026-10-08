@@ -77,6 +77,26 @@ describe('pauseTaskSession', () => {
     expect(runBootstrap).toHaveBeenCalled();
   });
 
+  /**
+   * The refusal text is peer-supplied display text, so it is trimmed and capped
+   * at 160 characters before it reaches the sheet. Whitespace in front pins the
+   * trim running before the cap (a cap-then-trim would lose characters).
+   *
+   * Mutation seen failing: dropping the .slice on the pause path (the message
+   * came back 400 characters long).
+   */
+  it('trims and caps a long desktop refusal at 160 characters', async () => {
+    establishedConnection();
+    pauseSession.mockRejectedValue(new CapabilityError('pause-session', `   ${'x'.repeat(400)}   `));
+
+    const outcome = await pauseTaskSession('task-1', 'project-1');
+
+    expect(outcome.kind).toBe('refused');
+    if (outcome.kind !== 'refused') return;
+    expect(outcome.message).toHaveLength(160);
+    expect(outcome.message).toBe('x'.repeat(160));
+  });
+
   it('refuses with no text of its own when the desktop\'s refusal is blank', async () => {
     establishedConnection();
     pauseSession.mockRejectedValue(new CapabilityError('pause-session', '   '));

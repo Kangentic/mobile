@@ -52,7 +52,7 @@ export async function writeTerminal(sessionId: string, data: string): Promise<vo
 export const RESUME_WAIT_MS = 20_000;
 
 /** The desktop's refusal text (Resume's and Pause's) is shown as the desktop shows it, capped: it is peer-supplied display text. */
-const RESUME_FAILURE_MESSAGE_MAX_LENGTH = 160;
+const DESKTOP_REFUSAL_MESSAGE_MAX_LENGTH = 160;
 
 /**
  * The desktop task view's Resume, from the phone: resumes a PAUSED task's
@@ -88,7 +88,7 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
   } catch (error) {
     // A blank refusal reads as no refusal text: null makes every surface show
     // its generic line rather than an empty one.
-    const refusalText = error instanceof CapabilityError ? error.message.trim().slice(0, RESUME_FAILURE_MESSAGE_MAX_LENGTH) : '';
+    const refusalText = error instanceof CapabilityError ? error.message.trim().slice(0, DESKTOP_REFUSAL_MESSAGE_MAX_LENGTH) : '';
     const failed: ResumeAttempt = { phase: 'failed', message: refusalText.length > 0 ? refusalText : null };
     useResumeStore.getState().markFailed(taskId, failed.message);
     return failed;
@@ -159,7 +159,9 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
  * How long the long-press sheet waits, from the tap, for the task's row to
  * read paused. It covers the verb's own 10 s timeout, after which the desktop
  * may still be waiting on the task lock (a long move can hold it), and the
- * agent shutdown of about 3 s that runs behind an accepted pause. The same
+ * agent shutdown that runs behind an accepted pause: about 3 s and past 10 s
+ * at worst, per the desktop's own pause-session handler (read from its
+ * source, not measured from the phone). The same
  * 20 s Resume gives its own settle (RESUME_WAIT_MS).
  */
 export const PAUSE_WAIT_MS = 20_000;
@@ -202,7 +204,7 @@ export async function pauseTaskSession(taskId: string, projectId: string): Promi
     }
     if (error instanceof CapabilityError) {
       void refreshSnapshots().catch(() => undefined);
-      const refusalText = error.message.trim().slice(0, RESUME_FAILURE_MESSAGE_MAX_LENGTH);
+      const refusalText = error.message.trim().slice(0, DESKTOP_REFUSAL_MESSAGE_MAX_LENGTH);
       return { kind: 'refused', message: refusalText.length > 0 ? refusalText : null };
     }
     // Not connected, or the channel dropped mid-request: nothing reached the
