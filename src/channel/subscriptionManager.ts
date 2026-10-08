@@ -440,11 +440,16 @@ export class SubscriptionManager {
   }
 
   /**
-   * A board subscribe in flight across a rekey is lost the same way the
-   * bootstrap is (see connectionManager's onRekey listener): sealed under keys
-   * the desktop has just retired, it is never answered, and the board it
-   * asked for stays empty until the next reconcile. Re-issuing it costs one
-   * duplicate snapshot in the case where the answer was merely late, which
+   * A board subscribe in flight across a rekey could lose its ANSWER the same
+   * way the bootstrap could (see connectionManager's onRekey listener): the
+   * desktop sealed the snapshot under the old keys after this phone had
+   * switched, so it failed to open and the board it asked for stayed empty
+   * until the next reconcile. (This comment used to say the subscribe itself
+   * was sealed under keys the desktop had retired, which had the direction
+   * backwards; see task #109.) SessionManager now keeps the superseded receive
+   * streams for that window, so this re-issue is the backstop for an answer
+   * sealed under keys the phone no longer holds. It costs one duplicate
+   * snapshot in the case where the answer was merely late, which
    * applyBoardSnapshot absorbs; `force` is what lets it past the in-flight
    * dedupe. Streams and diffs are not re-issued here: a lost stream subscribe
    * is re-declared by the next board snapshot's reconcile, and a diff by its

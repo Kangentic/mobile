@@ -32,11 +32,16 @@ import { nseProbeEnabled, readNseProbeResult, seedNseProbe } from '@/devsupport/
 import {
   connectionTraceEnabled,
   foregroundKickEnabled,
+  frameLivenessEnabled,
   keepaliveCeilingEnabled,
   nativeStopAlarmEnabled,
+  retiredReceiveStreamsEnabled,
   setForegroundKickEnabled,
+  setFrameLivenessEnabled,
   setKeepaliveCeilingEnabled,
   setNativeStopAlarmEnabled,
+  setRetiredReceiveStreamsEnabled,
+  subscribeBridgeLatencyProbe,
   subscribeForegroundKick,
   subscribeKeepaliveProbe,
 } from '@/devsupport/connectionTrace';
@@ -251,6 +256,12 @@ export function SettingsScreen(): React.JSX.Element {
   const foregroundKickOn = useSyncExternalStore(subscribeForegroundKick, foregroundKickEnabled, foregroundKickEnabled);
   const keepaliveCeilingOn = useSyncExternalStore(subscribeKeepaliveProbe, keepaliveCeilingEnabled, keepaliveCeilingEnabled);
   const nativeStopAlarmOn = useSyncExternalStore(subscribeKeepaliveProbe, nativeStopAlarmEnabled, nativeStopAlarmEnabled);
+  const retiredReceiveStreamsOn = useSyncExternalStore(
+    subscribeBridgeLatencyProbe,
+    retiredReceiveStreamsEnabled,
+    retiredReceiveStreamsEnabled,
+  );
+  const frameLivenessOn = useSyncExternalStore(subscribeBridgeLatencyProbe, frameLivenessEnabled, frameLivenessEnabled);
 
   const connectionLabel =
     pairedState === 'unpaired'
@@ -515,6 +526,22 @@ export function SettingsScreen(): React.JSX.Element {
                   checked={nativeStopAlarmOn}
                   testID="settings-connection-trace-native-stop-alarm"
                   onValueChange={setNativeStopAlarmEnabled}
+                />
+                <RowDivider />
+                <SwitchRow
+                  label="Previous keys"
+                  description="Off drops old-key frames after a rekey"
+                  checked={retiredReceiveStreamsOn}
+                  testID="settings-connection-trace-retired-keys"
+                  onValueChange={setRetiredReceiveStreamsEnabled}
+                />
+                <RowDivider />
+                <SwitchRow
+                  label="Frame liveness"
+                  description="Off trusts only the probe's reply"
+                  checked={frameLivenessOn}
+                  testID="settings-connection-trace-frame-liveness"
+                  onValueChange={setFrameLivenessEnabled}
                 />
               </Stack>
             </Card>

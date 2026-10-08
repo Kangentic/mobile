@@ -76,17 +76,29 @@ and to every later peer-initiated rekey.
 - No state-changing command may ride the first Noise message (it is replayable pre-ephemeral).
 - Sessions rekey roughly every 2 minutes (WireGuard's `REKEY_AFTER_TIME`) for bounded
   post-compromise security.
+- The two directions switch keys at different moments across a rekey. The phone SENDS under the
+  new keys from the moment it writes msg2: delivery is in order, so the desktop has always read
+  msg2 before anything sealed after it. But the desktop keeps sealing under the old keys until
+  msg2 reaches it, so the phone also keeps its superseded RECEIVE streams
+  (`src/channel/receiveStreams.ts`): up to 8 generations, each for at most 180 s after it was
+  superseded, all dropped the moment a frame opens under a newer one, and cleared on every
+  reset. Before task #109 the phone dropped every desktop frame sent in that window, which lost
+  responses (a full request timeout) and terminal deltas. This is WireGuard's responder rule: wait
+  for a packet under the new keys before giving up the previous ones.
 - Per-direction 64-bit counter nonces are implicit and strictly sequential: a frame opens only
   under the exact counter the receiver expects next, so a replayed, reordered, or skipped frame
   fails to authenticate and is dropped. A sealed frame that never leaves the phone therefore
   desyncs that direction until the next handshake, which is why `SessionManager.sendBestEffort`
   refuses to seal when the transport cannot carry the frame.
 - The desktop may send a `heartbeat` message on an established session; the phone answers it
-  with a `heartbeat` of its own, sealed best-effort inside the frame handler under the streams
-  the probe arrived on (`SessionManager.handleApplicationFrame`). That is the cheap liveness
-  probe a rekey is not: one frame each way, no verb dispatch, and a request in flight survives
-  it, where a request sealed under keys a rekey just retired is lost. The phone answers and
-  never originates one, which is what rules out an echo loop between the two peers.
+  with a `heartbeat` of its own, sealed best-effort inside the frame handler under the current
+  send stream (`SessionManager.handleApplicationFrame`). That is the cheap liveness probe a
+  rekey is not: one frame each way, no verb dispatch, and no new keys for anything in flight to
+  cross. An inbound heartbeat is also a keepalive wake source on a backgrounded phone, as a
+  rekey is (`connectionManager`), which is what lets the desktop probe presence with one. No
+  desktop sends one yet (0.45.0 still probes with a rekey), so this is the phone half, ready
+  ahead of it. The phone answers and never originates one, which is what rules out an echo loop
+  between the two peers.
 - A **deliberate** teardown (unpairing, on either side) seals an empty `FrameTag.Final` frame
   before the socket closes, and receiving one is acted on as revocation: the desktop drops the
   phone from its roster immediately, and the phone clears its pairing and returns to the
@@ -260,9 +272,12 @@ request nobody answers forces a fresh dial (`redialNow({ force: true })`, which 
 open socket). Read "nobody answers" strictly. A desktop that REFUSES the verb has answered, and
 the probe is deliberately issued through `capabilities` rather than `verbs` so that a narrowed
 device's `ok: false` resolves rather than throws. A rekey landing inside the 3 s window is the
-other one: it loses the in-flight probe exactly as a dead socket would, while proving the socket
-is alive (the phone received the frame), so the probe carries a rekey epoch alongside the
-established epoch and treats that verdict as stale. A slow desktop is the third: any event or
+other one: it could lose the probe's ANSWER, sealed by the desktop under the old keys after the
+phone had switched, exactly as a dead socket would, while proving the socket is alive (the phone
+received the frame). So the probe carries a rekey epoch alongside the established epoch and
+treats that verdict as stale. (This used to say the rekey lost the probe itself, which had the
+direction backwards; since task #109 the phone keeps the superseded receive streams, so the
+answer now opens and the guard is a backstop.) A slow desktop is the third: any event or
 capability-response that arrives while the probe waits answers its question, so the deadline
 leaves the socket alone. Measured on the Pixel (task #107): a board update arrived 2.2 s into a
 probe whose own answer took longer than 3 s, and the forced redial that followed cost about 8 s.

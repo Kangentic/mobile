@@ -9,11 +9,24 @@ import {
   unwrapSessionFrame,
   wrapSessionFrame,
   type BridgeMessage,
-  type SecretstreamDirectionPair,
+  type SecretstreamState,
   type Transport,
   type Unsubscribe,
   type X25519KeyPair,
 } from '@kangentic/protocol';
+import { connectionTraceEnabled, retiredReceiveStreamsEnabled, traceConnection } from '@/devsupport/connectionTrace';
+import { ReceiveStreams } from './receiveStreams';
+
+/**
+ * A decoded inbound message plus, in a trace build only, when its frame reached
+ * JS (Date.now() at the top of onFrame, before unwrap and decrypt). Null in
+ * every other build, so a store build adds no per-frame clock read. It is the
+ * T4 of RFC 5905's round-trip delay, read by CapabilityClient's request
+ * timing. React Native's WebSocket base64-decodes a binary message before
+ * onmessage runs and carries no native timestamp, so the native-to-JS queue
+ * wait falls on the wire side of this stamp, not the phone side.
+ */
+export type MessageListener = (message: BridgeMessage, arrivedAtMs: number | null) => void;
 
 export interface SessionManagerOptions {
   identity: X25519KeyPair;
@@ -34,15 +47,30 @@ export interface SessionManagerOptions {
  *
  * It also answers the desktop's heartbeats (handleApplicationFrame), so the
  * desktop can probe liveness with one sealed frame instead of a rekey.
+ *
+ * The two directions switch keys at different moments. SEND switches the
+ * moment msg2 is written: in-order delivery puts msg2 ahead of anything sealed
+ * after it, so the desktop has always installed the new keys before it reads
+ * one. RECEIVE keeps the superseded streams too (ReceiveStreams), because the
+ * desktop goes on sealing under the old keys until msg2 reaches it.
  */
 export class SessionManager {
   private readonly identity: X25519KeyPair;
   private readonly remoteStaticPublicKey: Uint8Array;
   private readonly transport: Transport;
 
-  private streams: SecretstreamDirectionPair | null = null;
+  private sendStream: SecretstreamState | null = null;
+  private readonly receiveStreams = new ReceiveStreams();
+  /**
+   * Trace-line state, all of it per establishment: zeroed by every fresh
+   * handshake, so a count never carries over from a session that is gone.
+   * `lastRekeyAtMs` stays null until a rekey lands on this establishment.
+   */
+  private lastRekeyAtMs: number | null = null;
+  private retiredOpenCount = 0;
+  private failedOpenCount = 0;
   private unsubscribeFrame: Unsubscribe | null = null;
-  private readonly messageListeners = new Set<(message: BridgeMessage) => void>();
+  private readonly messageListeners = new Set<MessageListener>();
   private readonly establishedListeners = new Set<() => void>();
   private readonly rekeyListeners = new Set<() => void>();
   private readonly remoteClosedListeners = new Set<() => void>();
@@ -54,7 +82,7 @@ export class SessionManager {
   }
 
   get isEstablished(): boolean {
-    return this.streams !== null;
+    return this.sendStream !== null;
   }
 
   start(): void {
@@ -62,7 +90,7 @@ export class SessionManager {
     this.unsubscribeFrame = this.transport.onFrame((frame) => this.onFrame(frame));
   }
 
-  onMessage(listener: (message: BridgeMessage) => void): Unsubscribe {
+  onMessage(listener: MessageListener): Unsubscribe {
     this.messageListeners.add(listener);
     return () => this.messageListeners.delete(listener);
   }
@@ -88,12 +116,12 @@ export class SessionManager {
   }
 
   send(message: BridgeMessage): void {
-    if (!this.streams) throw new Error('SessionManager is not established yet');
+    if (!this.sendStream) throw new Error('SessionManager is not established yet');
     const encoded = encodeMessage(message);
     if (encoded.length > MAX_FRAME_LENGTH) {
       throw new Error(`Message exceeds MAX_FRAME_LENGTH (${encoded.length} > ${MAX_FRAME_LENGTH})`);
     }
-    const frame = this.streams.send.seal(encoded);
+    const frame = this.sendStream.seal(encoded);
     this.transport.send(wrapSessionFrame(SessionFrameKind.Application, frame));
   }
 
@@ -128,13 +156,13 @@ export class SessionManager {
    * not sent.
    */
   private sendBestEffort(plaintext: Uint8Array, tag?: FrameTag): void {
-    if (!this.streams) return;
+    if (!this.sendStream) return;
     // Only seal when the frame can actually leave: seal advances this
     // direction's counter, and burning a counter slot on a frame the
     // transport rejects desyncs us from the desktop's receive counter.
     if (this.transport.state !== 'connected') return;
     try {
-      const frame = this.streams.send.seal(plaintext, tag);
+      const frame = this.sendStream.seal(plaintext, tag);
       this.transport.send(wrapSessionFrame(SessionFrameKind.Application, frame));
     } catch {
       // The socket dropped between the state check and the send. Nothing
@@ -143,18 +171,26 @@ export class SessionManager {
     }
   }
 
-  /** Drops session key material without touching the transport - call this when the transport disconnects, before a reconnect drives a fresh handshake. */
+  /**
+   * Drops session key material without touching the transport - call this when
+   * the transport disconnects, before a reconnect drives a fresh handshake.
+   * The retired receive streams go with it: a frame sealed for a session that
+   * is gone must never open in the next one.
+   */
   reset(): void {
-    this.streams = null;
+    this.sendStream = null;
+    this.receiveStreams.clear();
   }
 
   dispose(): void {
     this.unsubscribeFrame?.();
     this.unsubscribeFrame = null;
-    this.streams = null;
+    this.sendStream = null;
+    this.receiveStreams.clear();
   }
 
   private onFrame(rawFrame: Uint8Array): void {
+    const arrivedAtMs = connectionTraceEnabled() ? Date.now() : null;
     let unwrapped: { kind: SessionFrameKind; payload: Uint8Array };
     try {
       unwrapped = unwrapSessionFrame(rawFrame);
@@ -164,7 +200,7 @@ export class SessionManager {
     if (unwrapped.kind === SessionFrameKind.Handshake) {
       this.handleHandshakeFrame(unwrapped.payload);
     } else {
-      this.handleApplicationFrame(unwrapped.payload);
+      this.handleApplicationFrame(unwrapped.payload, arrivedAtMs);
     }
   }
 
@@ -204,10 +240,16 @@ export class SessionManager {
       return;
     }
 
-    const chainingKey = handshake.getChainingKey();
-    const wasEstablished = this.streams !== null;
-    this.streams = deriveSecretstreamPair(chainingKey, false);
+    const streams = deriveSecretstreamPair(handshake.getChainingKey(), false);
+    const wasEstablished = this.sendStream !== null;
+    this.sendStream = streams.send;
     if (!wasEstablished) {
+      // A fresh session keeps no retired stream: nothing sealed before it may
+      // open in it (reset() has already cleared them; this makes it certain).
+      this.receiveStreams.install(streams.receive, { keepRetired: false });
+      this.lastRekeyAtMs = null;
+      this.retiredOpenCount = 0;
+      this.failedOpenCount = 0;
       for (const listener of this.establishedListeners) listener();
       return;
     }
@@ -215,17 +257,38 @@ export class SessionManager {
     // NOT reported through onEstablished - subscriptions and streams survive
     // a rekey untouched, and re-firing it would reset them (see
     // subscriptionManager). This is the only signal a rekey happened at all.
+    this.receiveStreams.install(streams.receive, { keepRetired: retiredReceiveStreamsEnabled() });
+    this.lastRekeyAtMs = Date.now();
     for (const listener of this.rekeyListeners) listener();
   }
 
-  private handleApplicationFrame(payload: Uint8Array): void {
-    if (!this.streams) return;
-    let opened: ReturnType<SecretstreamDirectionPair['receive']['open']>;
-    try {
-      opened = this.streams.receive.open(payload);
-    } catch {
+  private handleApplicationFrame(payload: Uint8Array, arrivedAtMs: number | null): void {
+    if (this.receiveStreams.isEmpty) return;
+    const result = this.receiveStreams.open(payload, { newestOnly: !retiredReceiveStreamsEnabled() });
+    if (!result) {
+      // Nothing kept could open it. Since the retired streams exist this
+      // should be rare (a frame sealed for keys more than 180 s or 8
+      // generations old, a relay-forged frame, or the A/B switch off), so it
+      // is counted: it is the "before" of task #109's rekey-loss measurement.
+      this.failedOpenCount += 1;
+      traceConnection('frame-open-failed', {
+        msSinceRekey: this.msSinceLastRekey(),
+        generations: this.receiveStreams.size,
+        failedOpens: this.failedOpenCount,
+      });
       return;
     }
+    if (result.generationsBack > 0) {
+      // Each of these is a frame the phone used to drop: the desktop sealed it
+      // before msg2 reached it.
+      this.retiredOpenCount += 1;
+      traceConnection('frame-opened-retired', {
+        msSinceRekey: this.msSinceLastRekey(),
+        generationsBack: result.generationsBack,
+        retiredOpens: this.retiredOpenCount,
+      });
+    }
+    const { opened } = result;
     if (opened.tag === FrameTag.Final) {
       for (const listener of this.remoteClosedListeners) listener();
       return;
@@ -237,18 +300,23 @@ export class SessionManager {
       return;
     }
     // A desktop heartbeat is a liveness probe, answered here rather than by
-    // a subscriber: only this frame handler can seal the reply under the very
-    // streams that just opened the probe (a rekey between open and reply is
-    // impossible inside one synchronous call), and only this layer holds the
-    // two guards the reply needs. It is the cheap probe the rekey is not: one
-    // sealed frame, no verb dispatch, and a request in flight survives it,
-    // where a request sealed under keys a rekey just retired is lost
-    // (connectionManager.ts's onRekey). Sent BEFORE the fan-out so a throwing
-    // listener cannot suppress the liveness answer. The phone ANSWERS
-    // heartbeats and never originates one - that asymmetry is what makes an
-    // echo loop impossible; two peers that both auto-replied would ping-pong
-    // at wire speed.
+    // a subscriber, because only this layer holds the two guards the reply
+    // needs. The reply is sealed under the CURRENT send stream even when the
+    // probe opened under a retired receive stream (the desktop sealed it
+    // before our msg2 reached it): msg2 is ahead of the reply on the wire, so
+    // the desktop has switched by the time it reads the reply. It is the cheap
+    // probe the rekey is not: one sealed frame each way, no verb dispatch, and
+    // no new keys for anything in flight to cross. Sent BEFORE the fan-out so
+    // a throwing listener cannot suppress the liveness answer. The phone
+    // ANSWERS heartbeats and never originates one - that asymmetry is what
+    // makes an echo loop impossible; two peers that both auto-replied would
+    // ping-pong at wire speed.
     if (message.type === 'heartbeat') this.sendBestEffort(encodeMessage({ type: 'heartbeat' }));
-    for (const listener of this.messageListeners) listener(message);
+    for (const listener of this.messageListeners) listener(message, arrivedAtMs);
+  }
+
+  /** For the trace lines: null until a rekey lands on this establishment. */
+  private msSinceLastRekey(): number | null {
+    return this.lastRekeyAtMs === null ? null : Date.now() - this.lastRekeyAtMs;
   }
 }

@@ -239,15 +239,19 @@ describe('connectionManager bootstrap retry', () => {
   });
 
   /**
-   * Board task #70. A request in flight across a rekey is sealed under keys
-   * the desktop has just retired and is never answered. Measured on a release
-   * build: a desktop that had been probing an absent phone sent two rekeys
-   * inside 3.5 s of the fresh handshake, the project-list request sent at
-   * +296 ms vanished, and the board painted at +12.3 s (the 10 s request
-   * timeout plus the 2 s retry). An in-flight bootstrap now restarts the
-   * moment a rekey lands. The stub's beginHandshake on an established session
-   * IS a rekey. Mutation seen failing: dropping the `if (bootstrapInFlight)`
-   * block from the onRekey listener (the second call never comes).
+   * Board task #70. A request in flight across a rekey could lose its answer:
+   * the desktop sealed it under the old keys after the phone had switched
+   * (task #109; this used to say the request was sealed under keys the
+   * desktop had retired, which had the direction backwards). Measured on a
+   * release build: a desktop that had been probing an absent phone sent two
+   * rekeys inside 3.5 s of the fresh handshake, the project-list request sent
+   * at +296 ms was never answered, and the board painted at +12.3 s (the 10 s
+   * request timeout plus the 2 s retry). The phone now keeps superseded
+   * receive streams, and an in-flight bootstrap still restarts the moment a
+   * rekey lands, as the backstop. The stub's beginHandshake on an established
+   * session IS a rekey. Mutation seen failing: dropping the
+   * `if (bootstrapInFlight)` block from the onRekey listener (the second call
+   * never comes).
    */
   it('restarts an in-flight bootstrap the moment a rekey lands', async () => {
     const { startConnectionLifecycle } = await import('@/connection/connectionManager');

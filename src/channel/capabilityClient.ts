@@ -1,7 +1,11 @@
 import { bytesToHex, randomBytes, type CapabilityResponseMessage, type CapabilityVerb, type JsonValue } from '@kangentic/protocol';
+import { connectionTraceEnabled, traceConnection } from '@/devsupport/connectionTrace';
 import type { SessionManager } from './sessionManager';
 
 interface PendingRequest {
+  verb: CapabilityVerb;
+  /** T1: when the sealed request was handed to the transport. Trace builds only, null elsewhere. */
+  sentAtMs: number | null;
   resolve: (response: CapabilityResponseMessage) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -41,6 +45,17 @@ export class CapabilityTimeoutError extends Error {
  * stream. Request ids do not survive a fresh handshake (see
  * SessionManager.reset()) - callers should re-issue a request after a
  * reconnect rather than expect it to resume.
+ *
+ * In a trace build every request is timed (task #109). `request-timing`
+ * carries T1 (`sentAtMs`, sealed and handed to the transport), T4
+ * (`arrivedAtMs`, the response's frame reaching JS, before decrypt) and the
+ * dispatch instant (`dispatchedAtMs`, the response decrypted, decoded and
+ * handed to this client). The desktop's `[mobile-bridge] slow request` line
+ * names the same full requestId with its handler, seed and send spans, which
+ * together are T3-T2, so RFC 5905's delay applies directly:
+ * wire = roundTripMs - (T3-T2), and phone = phoneMs. `request-timeout` names a
+ * request no response ever reached, by verb, which is the complete count the
+ * Sentry door (rate-limited, three sites) cannot give.
  */
 export class CapabilityClient {
   private readonly sessionManager: SessionManager;
@@ -51,8 +66,8 @@ export class CapabilityClient {
   constructor(sessionManager: SessionManager, timeoutMs: number = DEFAULT_TIMEOUT_MS) {
     this.sessionManager = sessionManager;
     this.timeoutMs = timeoutMs;
-    this.unsubscribeMessage = sessionManager.onMessage((message) => {
-      if (message.type === 'capability-response') this.resolvePending(message);
+    this.unsubscribeMessage = sessionManager.onMessage((message, arrivedAtMs) => {
+      if (message.type === 'capability-response') this.resolvePending(message, arrivedAtMs);
     });
   }
 
@@ -71,9 +86,11 @@ export class CapabilityClient {
     return new Promise<CapabilityResponseMessage>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
+        traceConnection('request-timeout', { requestId, verb, timeoutMs });
         reject(new CapabilityTimeoutError(verb));
       }, timeoutMs);
-      this.pending.set(requestId, { resolve, reject, timeout });
+      const entry: PendingRequest = { verb, sentAtMs: null, resolve, reject, timeout };
+      this.pending.set(requestId, entry);
 
       try {
         this.sessionManager.send({ type: 'capability-request', requestId, verb, payload });
@@ -81,7 +98,9 @@ export class CapabilityClient {
         clearTimeout(timeout);
         this.pending.delete(requestId);
         reject(error instanceof Error ? error : new Error(String(error)));
+        return;
       }
+      if (connectionTraceEnabled()) entry.sentAtMs = Date.now();
     });
   }
 
@@ -99,11 +118,24 @@ export class CapabilityClient {
     this.unsubscribeMessage();
   }
 
-  private resolvePending(message: CapabilityResponseMessage): void {
+  private resolvePending(message: CapabilityResponseMessage, arrivedAtMs: number | null): void {
     const entry = this.pending.get(message.requestId);
     if (!entry) return;
     clearTimeout(entry.timeout);
     this.pending.delete(message.requestId);
+    if (entry.sentAtMs !== null && arrivedAtMs !== null) {
+      const dispatchedAtMs = Date.now();
+      traceConnection('request-timing', {
+        requestId: message.requestId,
+        verb: entry.verb,
+        ok: message.ok,
+        sentAtMs: entry.sentAtMs,
+        arrivedAtMs,
+        dispatchedAtMs,
+        roundTripMs: arrivedAtMs - entry.sentAtMs,
+        phoneMs: dispatchedAtMs - arrivedAtMs,
+      });
+    }
     entry.resolve(message);
   }
 }

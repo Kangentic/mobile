@@ -3,6 +3,7 @@ import { bytesToHex } from '@kangentic/protocol';
 import { ChannelController, SubscriptionManager, isRedialableTransport, type VerbClient } from '@/channel';
 import {
   foregroundKickEnabled,
+  frameLivenessEnabled,
   isColdLaunch,
   keepaliveCeilingEnabled,
   markConnectionTraceForeground,
@@ -522,16 +523,26 @@ async function performOpenConnection(): Promise<void> {
   const unsubscribeRekey = controller.session.onRekey(() => {
     useChannelStore.getState().noteRekey();
     rekeyEpoch += 1;
-    // A request in flight across a rekey is lost: it was sealed under the
-    // keys the rekey just retired, so the desktop cannot open it and nothing
-    // ever answers. The bootstrap is the request most exposed to that, and
-    // measured on a release build (task #70) it is exactly what happened on a
-    // fresh open: the desktop, which had been probing an absent phone, sent
-    // two rekeys inside 3.5 s of the handshake, the project-list request sent
-    // at +296 ms vanished, and the board painted at +12.3 s - the 10 s request
-    // timeout plus the 2 s retry. Restarting an in-flight bootstrap the moment
-    // a rekey lands turns that into one more round trip. A bootstrap that has
-    // already settled, or is waiting on its retry timer, is left alone.
+    // A request in flight across a rekey could lose its RESPONSE. This
+    // comment used to blame the request, and the direction was wrong: in-order
+    // delivery puts the phone's msg2 ahead of anything it seals afterwards, so
+    // the desktop always switches keys before reading the phone's next frame.
+    // The loss is the other way. The phone switched the moment it wrote msg2,
+    // while the desktop went on sealing under the old keys until msg2 reached
+    // it, so its answer failed to open here and was dropped (task #109).
+    // SessionManager now keeps the superseded receive streams for exactly that
+    // window (ReceiveStreams), and the desktop from 0.45.0 also holds its
+    // frames until msg2 arrives, so this restart is a backstop: for a frame
+    // sealed under keys this phone no longer holds (past 180 s, or past 8
+    // generations) and for the trace build's switch-off arm.
+    //
+    // Measured on a release build (task #70), the case it was written for: the
+    // desktop, which had been probing an absent phone, sent two rekeys inside
+    // 3.5 s of the handshake, the project list requested at +296 ms was never
+    // answered, and the board painted at +12.3 s - the 10 s request timeout
+    // plus the 2 s retry. Restarting an in-flight bootstrap the moment a rekey
+    // lands turns that into one more round trip. A bootstrap that has already
+    // settled, or is waiting on its retry timer, is left alone.
     if (bootstrapInFlight) {
       traceConnection('bootstrap-restart', { reason: 'rekey' });
       queueMicrotask(restartBootstrap);
@@ -540,6 +551,18 @@ async function performOpenConnection(): Promise<void> {
     // listener fires inside the session's own frame handling, and hitting the
     // ceiling tears that very session down.
     queueMicrotask(onKeepaliveWakeSource);
+  });
+
+  // An inbound heartbeat wakes JS on a backgrounded phone exactly as a rekey
+  // does, so it is the same wake source. This is the phone half of letting the
+  // desktop probe presence with a heartbeat instead of a full rekey: once it
+  // does, a probe no longer forces new keys, an in-flight bootstrap restart,
+  // and a board re-subscribe on the phone. No desktop sends one yet (desktop
+  // 0.45.0 still probes with a rekey). Only the heartbeat, not every frame:
+  // onKeepaliveWakeSource writes a trace line and does a dynamic import per
+  // call. Deferred for the rekey listener's reason.
+  const unsubscribeHeartbeat = controller.session.onMessage((message) => {
+    if (message.type === 'heartbeat') queueMicrotask(onKeepaliveWakeSource);
   });
 
   // The desktop's revoke goodbye (see handleDesktopRevocation). Deferred a
@@ -558,6 +581,7 @@ async function performOpenConnection(): Promise<void> {
     unsubscribeTransportState();
     unsubscribeEstablished();
     unsubscribeRekey();
+    unsubscribeHeartbeat();
     unsubscribeRemoteClosed();
     unbindFeed();
     subscriptions.dispose();
@@ -911,12 +935,13 @@ let foregroundProbeInFlight = false;
 let establishedEpoch = 0;
 /**
  * Bumped on every rekey, for the same reason `establishedEpoch` exists. A
- * rekey retires the keys the in-flight probe was sealed under, so the desktop
- * never opens it and the probe times out exactly as a dead socket would - the
- * loss this file already documents and restarts the bootstrap for. The
- * verdict is the opposite one, though: a rekey ARRIVED, which means the phone
- * received and processed a frame from the desktop, so the socket is provably
- * alive and the one thing the probe must not do is tear it down.
+ * rekey could lose the probe's ANSWER: the desktop sealed it under the old
+ * keys after this phone had switched, so it failed to open here (task #109,
+ * and the onRekey listener above; an earlier revision of this comment said
+ * the desktop could not open the probe, which had the direction backwards).
+ * The probe then times out exactly as a dead socket would, while the verdict
+ * is the opposite: a rekey ARRIVED, so the socket is provably alive and the
+ * one thing the probe must not do is tear it down.
  */
 let rekeyEpoch = 0;
 
@@ -939,11 +964,11 @@ let rekeyEpoch = 0;
  * closes, and the ordinary ladder takes over from the backoff the kick just
  * reset) or vanishes, and the deadline forces a fresh dial. The epoch guards
  * keep a late verdict from tearing down a session that re-established, or
- * rekeyed, in the meantime - a rekey loses the probe exactly as a dead socket
- * does (see the onRekey listener) while proving the opposite, so without that
- * guard a rekey landing inside the 3 s window costs a needless teardown. The
- * window this branch exists to fix is the same one the desktop rekeys hardest
- * in: it had been probing an absent phone.
+ * rekeyed, in the meantime - a rekey could lose the probe's answer while
+ * proving the socket alive (see rekeyEpoch), so without that guard a rekey
+ * landing inside the 3 s window costs a needless teardown. The window this
+ * branch exists to fix is the same one the desktop rekeys hardest in: it had
+ * been probing an absent phone.
  */
 function probeChannelOnForeground(): void {
   const connection = activeConnection;
@@ -991,11 +1016,16 @@ function probeChannelOnForeground(): void {
       // the socket is not carrying traffic - unless the desktop spoke anyway.
       const timedOut = error instanceof Error && /timed out/.test(error.message);
       const rekeyed = rekeyEpochAtStart !== rekeyEpoch;
+      // `desktopSpoke` is recorded in both arms of the trace build's
+      // frame-liveness switch and only acted on with it on, so the switch-off
+      // arm's probe-failed lines with desktopSpoke=true that went on to redial
+      // are exactly the needless teardowns it removes (task #109).
+      const heardFromDesktop = frameLivenessEnabled() && desktopSpoke;
       const stale =
         activeConnection !== connection ||
         epoch !== establishedEpoch ||
         rekeyed ||
-        desktopSpoke ||
+        heardFromDesktop ||
         transport.state !== 'connected';
       traceConnection('probe-failed', { ms: Date.now() - startedAtMs, timedOut, stale, rekeyed, desktopSpoke });
       if (stale) return;

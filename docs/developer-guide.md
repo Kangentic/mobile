@@ -1812,8 +1812,15 @@ relay's close code), `schedule-reconnect` (the delay armed and the next rung), `
 (whether the foreground kick actually dialed, and whether it was forced), `redial-now-skipped`
 and `probe-skipped` (the A/B switch turned off), `probe-start` / `probe-ok` / `probe-failed` (the
 foreground liveness probe and its verdict; `probe-failed` carries `rekeyed` and `desktopSpoke`,
-the two signs of life that leave the socket alone), `established`, `bootstrap-start`,
-`bootstrap-restart` (a bootstrap lost to a rekey, restarted), `project-list`, `board-snapshot`
+the two signs of life that leave the socket alone, and the Frame liveness switch turns
+`desktopSpoke` off as one), `established`, `bootstrap-start`,
+`bootstrap-restart` (a bootstrap in flight when a rekey landed, restarted), `frame-opened-retired`
+(a desktop frame that opened only under a receive stream a rekey had superseded, with
+`msSinceRekey`, `generationsBack` and a running `retiredOpens`), `frame-open-failed` (a frame no
+kept stream could open, with `msSinceRekey`, `generations` and a running `failedOpens`),
+`request-timing` (one per answered capability request: the full `requestId`, `verb`, `ok`,
+`sentAtMs`, `arrivedAtMs`, `dispatchedAtMs`, `roundTripMs` and `phoneMs`), `request-timeout`
+(`requestId`, `verb`, `timeoutMs`), `project-list`, `board-snapshot`
 (one per board, with its projection and task count), `wake-source` and `ceiling-timer` (the
 keepalive's two enforcement routes), and the session swap's own timeline: `session-swap` with
 `phase=move` (the column latch opened the quiet window on the live session, with `hasLabel` and
@@ -1891,9 +1898,10 @@ launch" below for that path specifically.
 
 The same build carries a **Foreground recovery** switch under Settings > Connection trace. Off
 disables both the kick and the probe, which makes the before/after an A/B in one build on one
-install with one pairing, per `performance-claims-are-measured.md`. Everything below was measured
-that way on 2026-09-12 (task #70): the emulator's release build paired to the real desktop
-through the hosted relay, screen held on with `svc power stayon true`.
+install with one pairing, per `performance-claims-are-measured.md`. Two more switches,
+**Previous keys** and **Frame liveness**, belong to task #109 (see "Rekey frame loss" below).
+Everything below was measured that way on 2026-09-12 (task #70): the emulator's release build
+paired to the real desktop through the hosted relay, screen held on with `svc power stayon true`.
 
 **What a foreground actually costs, by scenario.** Numbers are from the trace unless marked.
 
@@ -1903,14 +1911,14 @@ through the hosted relay, screen held on with `svc power stayon true`.
 | Ceiling fired, process frozen | Real phone, Play build, hosted relay, resumed from a cached-app freeze (`am_unfreeze` in the events log) | 4.4 s from activity resume to the desktop seeing the session established (desktop-side recorder; the Play build has no trace, so this is not split further) |
 | Dead socket, ladder ratcheted (the task's mechanism) | `svc wifi disable` + `svc data disable` while backgrounded under the keepalive. The OS closed the socket at once (`close 1006` from `connected`), the ladder climbed 500 / 1000 / 2000 / 4000 / 8000 / 15000 with every dial failing in 2 ms, then one retry every 15 s. Network restored just after a retry, foregrounded 4 s later, so the next retry was 6.6 s out | Recovery OFF: `redial-now-skipped`, nothing dialed, the socket opened when the scheduled retry fired at +6.6 s, `established` +7.8 s (the remainder is 0 to 15 s in general). Recovery ON, same state (`transportState=reconnecting relayCloseCode=1006 keepaliveActive=true`): `redial-now dialed=true` +0 ms, `open` +218 ms, `established` +290 ms |
 | Stalled socket, OS never reports it | Airplane mode for 80 s while backgrounded under the keepalive with the socket on the emulator's cellular network (on Wi-Fi, airplane mode closes the socket instead and you get the row above), network restored, foregrounded within a second | Before: indefinite. The transport read `connected`, the session `established`, one late rekey arrived 1.1 s after the network came back, and then nothing for the 2.5 min it was watched. The desktop had marked the peer absent and dropped its subscriptions, so the phone was silently stale. After: `probe-start` +0 ms, `probe-failed timedOut=true` +3.0 s (the send into the stalled socket surfaced nothing, the deadline did the work), `redial-now forced=true`, `open` +3.19 s, `established` +3.26 s, all 19 boards by +6.6 s behind the rekey burst below |
-| Rekey burst after a fresh establish | Every fresh establish in this session where the desktop had marked the device absent (3 of 3): two or three rekeys (`wake-source` lines) within 60 ms to 3.5 s of `established` | Before: the bootstrap request sent at +296 ms was sealed under retired keys, nothing answered it, `project-list` landed at +12.3 s (10 s request timeout plus the 2 s retry). After: `bootstrap-restart reason=rekey` on each rekey, `project-list` 80 ms after the last one, at +4.2 s, all 19 boards by +4.4 s; what is left is the desktop's burst itself (its own task) |
+| Rekey burst after a fresh establish | Every fresh establish in this session where the desktop had marked the device absent (3 of 3): two or three rekeys (`wake-source` lines) within 60 ms to 3.5 s of `established` | Before: the bootstrap request sent at +296 ms was never answered, and `project-list` landed at +12.3 s (10 s request timeout plus the 2 s retry). This row used to say the request was sealed under retired keys, which had the direction backwards: the desktop opens a phone frame fine across a rekey, because msg2 reaches it first. What was lost was the desktop's ANSWER, sealed under the old keys after the phone had switched (task #109, "Rekey frame loss" below). After: `bootstrap-restart reason=rekey` on each rekey, `project-list` 80 ms after the last one, at +4.2 s, all 19 boards by +4.4 s; what is left is the desktop's burst itself (its own task) |
 
 **The bootstrap fan-out is not the cost.** Against the real desktop with 19 registered projects
 over the hosted relay: `established` to `project-list` 91 ms, and all 19 `board-snapshot` lines
 inside the next 330 ms. The task's "render storm" concern about the all-projects fan-out did not
 survive measurement; the one real inefficiency there (every board subscribed twice on a
 re-establish when the project list answers first) is pinned and fixed in
-`tests/unit/bootstrap.test.ts`. What DID cost 12 s was a request lost across a rekey, above.
+`tests/unit/bootstrap.test.ts`. What DID cost 12 s was a response lost across a rekey, above.
 
 **The relay's part of a re-dial over a zombie.** A fresh dial on a slot the phone's old socket
 still holds is answered with 4409 at once while the relay pings both incumbents for 2 s
@@ -1929,6 +1937,98 @@ renderer and timestamp each device's `connectionState` transition; `connected` t
 Noise session is established, `offline` means the desktop is parked with no peer). And an
 emulator's airplane mode is a black hole, not a disconnect: use it to reproduce a stall, never a
 socket death.
+
+### Rekey frame loss (task #109)
+
+The phone installs new keys the moment it writes msg2, and the desktop seals under the old ones
+until msg2 reaches it. Every desktop frame sent in that one-round-trip window used to fail to
+open on the phone and be dropped. That covered a capability response (the caller waits out its
+whole timeout) and a terminal delta (the grid stays wrong until the next repaint).
+`src/channel/receiveStreams.ts` now keeps the superseded receive streams. Desktops before 0.45.0
+lose these frames on every rekey: that comes from the desktop's own delayed-pipe test
+(`tests/unit/mobile-bridge/bridge-session-rekey-loss.test.ts` in the kangentic repo), not from the
+live run below. From 0.45.0 the desktop holds its frames until msg2 arrives. Even then a frame it
+releases at the hold's 10 s deadline is sealed under keys the phone may already have left.
+
+The same trace build carries two more switches under Settings > Connection trace, each an A/B in
+one process:
+
+- **Previous keys.** Off opens every frame under the newest receive stream only, which is the
+  pre-fix drop. Count `frame-open-failed` (off) against `frame-opened-retired` (on). Each line
+  carries `msSinceRekey`, so a loss can be tied to the rekey that caused it. Divide by the
+  `wake-source` lines (one per rekey) for a rate per rekey.
+- **Frame liveness.** Off makes the foreground probe judge the socket by its own reply and a
+  rekey alone, ignoring task #107's `desktopSpoke` (an event or a response that arrived while it
+  waited; a heartbeat never counts). Count `probe-failed` lines with `desktopSpoke=true` that were
+  followed by `redial-now forced=true`. These are teardowns of a socket that was demonstrably
+  carrying the desktop's traffic. The probe only runs when foregrounding finds the existing
+  connection, so set Background notifications to the keepalive mode and leave Foreground recovery
+  on in both arms. `adb emu network speed edge` gives the probe's answer something large to queue behind.
+
+**Request timing.** Each answered request prints `request-timing` with T1 (`sentAtMs`), T4
+(`arrivedAtMs`, the frame reaching JS, before decrypt) and `dispatchedAtMs`. A desktop at
+`fe2271e6e` or later prints `[mobile-bridge] slow request <verb> <requestId> ...` for anything
+over 750 ms, with its handler, seed and send spans. Join the two on the full requestId:
+
+- wire = `roundTripMs` minus the desktop's spans (RFC 5905's delay);
+- phone = `phoneMs`.
+
+Up and down can only be told apart where the two clocks agree, which means the emulator on the
+desktop's own host, using the desktop line's ISO `ts`. React Native's WebSocket base64-decodes a
+binary message before `onmessage` and carries no native timestamp, so the native-to-JS queue wait
+is counted as wire. `request-timeout` names every request no response reached, by verb. That is
+the complete count; Sentry sees only the three handled sites that report a timeout, rate-limited.
+
+**Measured 2026-10-08 UTC (task #109).** Rig: the `kangentic_pixel` emulator (API 35) running a release
+trace build of the task branch on protocol 0.18.0. It was paired over `wss://relay.kangentic.com`
+to a desktop dev instance of kangentic `main` at `54126e2e1`, which carries the 0.45 hold and the
+request spans.
+
+- **Control, no stall, Previous keys off.** Over 2 rekeys, 0 `frame-open-failed`: at a ~140 ms
+  relay round trip the desktop's hold covered the window on its own in both. Two rekeys is a
+  small sample; it shows the hold can cover the window, not that it always does.
+- **Forcing a stall past the hold took three tries.**
+  - `adb emu network delay` does not shape this emulator's traffic: round trips stayed at 76-132 ms.
+  - Delaying all egress with `tc netem` (as root) also delays TCP ACKs, which throttles inbound
+    traffic. The socket died within a minute, and the redial could not finish inside OkHttp's 10 s
+    connect timeout.
+  - What worked: a `prio` qdisc with an 11 s `netem` on bands 1:2 and 1:3, plus two `u32` filters
+    that route IPv4 packets under 96 bytes (ACKs and pongs) to the undelayed band 1:1. msg2, at
+    roughly 117-129 bytes on the wire, is held past the desktop's 10 s `REKEY_HOLD_MAX_MS`, while
+    desktop frames keep arriving promptly.
+  - The spent presence budget then redials, so each episode is a single rekey. Remove the qdisc so
+    the phone can reconnect, and re-apply it before the next rekey.
+
+| Arm | Episode 1 | Episode 2 | Desktop log, same episodes |
+|---|---|---|---|
+| Previous keys **off** | 60 `frame-open-failed` | 69 `frame-open-failed` | `rekey held 60` / `69 frame(s) for ~10010 ms, released (deadline)` |
+| Previous keys **on** | 0 failed, 50 `frame-opened-retired` | 0 failed, 52 `frame-opened-retired` | `held 50` / `52 ... released (deadline)` |
+
+So 129 of 129 frames released at the deadline were lost before the fix, and 0 of 102 after. Every
+rescued frame opened two generations back (`generationsBack=2`). The desktop had sent the rekey
+msg1 and then its 5 s re-probe msg1, the phone answered both, and the release was sealed under the
+keys from before either. A slot holding only the immediately previous keys would have held the
+intermediate ones and lost all of them. (A "last stream a frame opened under" policy would have
+rescued these, since the terminal streamed under the original keys up to the rekey. The idle case
+that defeats that policy too, a rekey that never carried a frame followed by a re-probe, is pinned by
+`tests/unit/sessionManagerRekeyLoss.test.ts`, not by this run.) The desktop's per-episode counts
+match the phone's exactly. During the same session the maintainer's own phone, on a build
+without this fix, logged `rekey held 8 frame(s) for 10000 ms, released (deadline)` with no rig
+at all.
+
+Request timing on the same rig: 185 requests timed, round trip median 81-86 ms and max 191 ms, with
+the phone's share (`phoneMs`) 0-17 ms. There were 8 `request-timeout` lines, all `read-stream`, and
+all inside the injected full-egress delay. The Sentry baseline for timeouts, recorded for comparison
+once a release ships with this change: over the 30 days to 2026-10-08 UTC there was 1
+`CapabilityTimeoutError`, MOBILE-9 at `board-archived-read`, verb `read-board`, on 0.8.0+13. It
+is a lower bound, because only three handled sites report a timeout and the door rate-limits.
+Nothing crossed the desktop's 750 ms slow-request threshold, so no request in this session can
+be split into wire and desktop time.
+
+Not measured: the Frame liveness A/B. Reproducing it needs the probe's answer to land past the
+probe's 3 s deadline while the desktop's own frames keep arriving; the rig above with a delay
+between 3 s and the 10 s hold in place of the 11 s one is the obvious candidate, but it has not
+been run. Task #107's own Pixel measurement covers the mechanism.
 
 ### Measuring a session swap
 

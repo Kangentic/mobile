@@ -112,6 +112,32 @@ describe('connectionTrace (non-trace build)', () => {
   });
 
   /**
+   * Task #109's two switches, under the same bar. Either reading false in a
+   * store build would ship a fix turned off: the phone dropping every desktop
+   * frame sealed before a rekey reached it, or the foreground probe tearing
+   * down a socket that is visibly carrying traffic.
+   *
+   * Mutation seen failing: collapsing each getter to return its bare flag and
+   * dropping `!traceEnabled ||` from each setter made both read "expected
+   * false to be true".
+   */
+  it('retiredReceiveStreamsEnabled and frameLivenessEnabled are a hard true when the trace flag is unset', async () => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+    vi.resetModules();
+    const { frameLivenessEnabled, retiredReceiveStreamsEnabled, setFrameLivenessEnabled, setRetiredReceiveStreamsEnabled } =
+      await import('@/devsupport/connectionTrace');
+
+    expect(retiredReceiveStreamsEnabled()).toBe(true);
+    expect(frameLivenessEnabled()).toBe(true);
+
+    setRetiredReceiveStreamsEnabled(false);
+    setFrameLivenessEnabled(false);
+
+    expect(retiredReceiveStreamsEnabled()).toBe(true);
+    expect(frameLivenessEnabled()).toBe(true);
+  });
+
+  /**
    * Mutation seen failing: deleting `if (!traceEnabled) return;` from
    * traceConnection made it call console.log even in a non-trace build -
    * "expected "log" to not be called at all, but actually been called 2
@@ -331,6 +357,49 @@ describe('connectionTrace (trace build, MOBILE-3 probe switches)', () => {
     setNativeStopAlarmEnabled(false);
     expect(listener).toHaveBeenCalledTimes(2);
     setNativeStopAlarmEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Task #109's pair, in a trace build: each setter moves only its own
+   * getter, notifies the shared listener on a real change, and stays silent on
+   * a same-value set (a listener is a React re-render).
+   *
+   * Mutation seen failing: changing `frameLivenessOn = enabled;` to
+   * `frameLivenessOn = retiredReceiveStreamsOn = enabled;` moved the wrong
+   * switch, and dropping the notify loop from setRetiredReceiveStreamsEnabled
+   * left the listener uncalled.
+   */
+  it('the bridge-latency setters move only their own getter and notify once per real change', async () => {
+    const {
+      frameLivenessEnabled,
+      retiredReceiveStreamsEnabled,
+      setFrameLivenessEnabled,
+      setRetiredReceiveStreamsEnabled,
+      subscribeBridgeLatencyProbe,
+    } = await importTraceBuild();
+    const listener = vi.fn();
+    const unsubscribe = subscribeBridgeLatencyProbe(listener);
+
+    setRetiredReceiveStreamsEnabled(true);
+    setFrameLivenessEnabled(true);
+    expect(listener).not.toHaveBeenCalled();
+
+    setRetiredReceiveStreamsEnabled(false);
+    expect(retiredReceiveStreamsEnabled()).toBe(false);
+    expect(frameLivenessEnabled()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    setFrameLivenessEnabled(false);
+    expect(frameLivenessEnabled()).toBe(false);
+    expect(retiredReceiveStreamsEnabled()).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    setFrameLivenessEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    setRetiredReceiveStreamsEnabled(true);
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
