@@ -3,17 +3,19 @@
 Draft copy for the Play Console (and later App Store) listing. Placeholder-grade but real text,
 ready to paste.
 
-**The en-US listing was completed on 2026-07-29** and no longer blocks the closed track: title,
-short description, full description, 4 phone screenshots, 4 seven-inch, 4 ten-inch, the icon, and
-the feature graphic are all uploaded (read back from `edits.listings` and `edits.images`). It is
-still unsubmitted, like every other declaration - see the Data safety section below.
+**The en-US listing was completed on 2026-07-29**: title, short description, full description,
+4 phone screenshots, 4 seven-inch, 4 ten-inch, the icon, and the feature graphic were all uploaded
+(read back from `edits.listings` and `edits.images`). Both apps have since been live in production
+(maintainer, 2026-10-07), so the listing and its declarations went through review; the "entered,
+not submitted" notes further down describe the state on 2026-07-29 and are kept for their lessons.
 
-**Those uploaded screenshots are STALE and must be replaced before submitting.** They were
-captured before the mock fixtures were rewritten (`src/connection/mockDesktop.ts`), and the
-earlier fixtures were written about Kangentic's own backlog - so the frames currently sitting in
-the Console advertise our engineering status as if it were a customer's: a relay self-host guide,
-a capability-scoped push token migration, a flaky pairing flow. Re-upload from
-`store/screenshots/`, which is the current set and now carries six per shelf rather than four.
+**The images in both consoles are behind `store/screenshots/`, by decision.** All four shelves
+were re-captured on 2026-10-08 (task #103) for v1.0.0: the Agents feed's Idle/Active/Queued/Paused
+sections and filter, the 210x48 terminal frame, and the regenerated changes story. v1.0.0 shipped
+to both stores with the previous images, and the maintainer chose to upload the new set with the
+next release rather than hold v1.0.0 for it. So upload from `store/screenshots/` at that release:
+the three Play shelves under the store listing, and the iPhone set through App Store Connect's
+Media Manager on the 6.9" slot (see Screenshots below).
 
 The two Play Console image uploads are produced by `@kangentic/branding` and are not bundled
 into the app - upload them by hand from `node_modules/@kangentic/branding/resources/mobile/`
