@@ -346,3 +346,26 @@ env:
 - takeScreenshot:
     path: ${OUTPUT_DIR}/05-board
     label: Kanban board with live agent sessions
+# TEMPORARY (task #103): capture the Agents feed's Show sections sheet on the
+# iOS simulator, where its trailing-checkmark variant has never been seen.
+# Not a listing frame, so 07 is deliberately absent from SHOT_NAMES and never
+# reaches store/screenshots/. Appended after every store frame so a failure
+# here costs nothing, and the flow ENDS inside the sheet because a backdrop
+# tap does not dismiss an iOS form sheet. Reverted before the PR.
+- tapOn:
+    text: "Agents"
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 30000
+- tapOn:
+    id: "header-section-filter-button"
+- extendedWaitUntil:
+    visible:
+      id: "section-filter-sheet"
+    timeout: 30000
+- waitForAnimationToEnd:
+    timeout: 10000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/07-section-filter-sheet
+    label: TEMPORARY Show sections sheet check
