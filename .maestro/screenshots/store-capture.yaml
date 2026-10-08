@@ -54,42 +54,35 @@ env:
 # Opening the session first sidesteps all of it: the permission card is found by
 # id, not position, and the prompt is left UNANSWERED, so by the time we come
 # back the Needs You row exists and a single scroll to the top reaches it.
-# Start from the top, because the row moves. Before the prompt is raised the
-# session sits in Active, below the fold; once raised it jumps to Needs You at
-# the very top. Searching DOWN from wherever the launch happened to leave the
-# viewport therefore scrolls AWAY from it half the time - which is exactly what
-# happened, running to the end of the feed while the row sat above.
 #
-# SEARCH UP, TOWARD THE BEGINNING - the row's resting place, not its starting
-# one. Three swipes plus a DOWN search used to stand here and it raced the mock:
-# it found the row when the search happened to run before tick 20 and failed
-# outright when it did not, having scrolled to the end of the feed with the row
-# sitting above the whole time.
+# WAIT FOR THE PROMPT, THEN TAP THE ROW AT ITS RESTING PLACE. The row has two
+# positions: before the mock's tick-20 prompt the session sits in Active, below
+# the fold; once the prompt is raised it moves to the top of Idle and STAYS
+# there, because this flow deliberately leaves the prompt unanswered. Only the
+# second is stable, so the flow does not tap until the row is in it. The
+# "Approve:" teaser exists only once the prompt is pending, so waiting for it is
+# waiting for the move; this is the same primitive the CI-green paired flow
+# home-needs-you-approve uses, then a tap on the row by id.
 #
-# The two positions are what makes a DOWN search unsafe. Before the prompt the
-# session is in Active, below the fold; the moment it is raised the row moves
-# to the top of Idle and STAYS there, because this flow deliberately leaves the
-# prompt unanswered. So the row's position is only stable in one direction, and
-# it is up.
+# NO SCROLL IN THIS STEP. It used to be a scrollUntilVisible on the row (UP,
+# centred), and on 2026-10-08 it captured nothing on iOS: the search ran its
+# full 90 s with the row fully on screen at the top of Idle (hierarchy dump:
+# y 162-333 of a 956 pt screen). A local Android run then failed the same way
+# with a different target and no centring (the row's `-wait` label, fully on
+# screen, 100% visibility). So scrollUntilVisible has not matched a feed row
+# once the prompt has landed in any configuration tried, on either platform,
+# while extendedWaitUntil has matched the "Approve:" teaser in that same state
+# on every run. WHY scrollUntilVisible misses is not known; an earlier comment
+# here blamed centerElement, and the uncentred Android failure disproves that.
+# Android only ever passed the old step because its tap happened to beat tick 20.
 #
-# Scrolling UP is also safe early: it walks to the top, finds nothing yet, and
-# keeps retrying across its window until the prompt lands and the row appears
-# exactly where it already is. That is why the timeout is 90s rather than 60 -
-# it has to cover the mock's ~20s tick-20 prompt from a cold launch, not just
-# the scrolling.
-#
-# visibilityPercentage is deliberately low: an activity card is tall enough that
-# it is rarely 100% inside the viewport, and the default 100 rejected a row that
-# was plainly on screen. waitToSettleTimeoutMs matters because this feed mutates
-# between scrolls (usage bars tick, sections re-sort), which is exactly the case
-# Maestro's own tip names.
-- scrollUntilVisible:
-    element:
-      id: "activity-row-mock-session-1"
-    direction: UP
-    visibilityPercentage: 20
-    centerElement: true
-    waitToSettleTimeoutMs: 800
+# Every capture of this state on 2026-10-08 showed the row in view at the top
+# of the feed after the move. If FlashList ever keeps its content position and
+# leaves the row above the viewport instead, this wait times out naming the
+# teaser, and the failure screenshot will show it.
+- extendedWaitUntil:
+    visible:
+      text: "Approve:.*"
     timeout: 90000
 - tapOn:
     id: "activity-row-mock-session-1"
@@ -116,28 +109,20 @@ env:
           notVisible:
             id: "session-mode-hint"
           timeout: 10000
-# TERMINAL IS WHERE WE LAND, so page to Chat explicitly.
+# PAGE TO CHAT EXPLICITLY, even though we should already be there.
 #
-# This flow used to assert the permission card straight after the session
-# opened, on the belief that a prompt-pending row lands on the lens that can
-# answer it. That is only true when the route carries `mode=chat`, which the
-# feed attaches to a NEEDS-YOU row. We tap the row much earlier than that: the
-# mock raises the prompt at tick 20, so at tap time the session is still
-# Active and the route carries no mode. SessionScreen's priority is then
-# route param -> the task's remembered lens -> the `terminal` default
-# (src/screens/task/SessionScreen.tsx), so we land on Terminal with the prompt
-# pending and the Chat segment wearing its attention dot.
+# The row is tapped after the prompt landed (see the search above), so it is a
+# prompt-pending row and the feed opens it with `mode=chat`
+# (src/screens/TriageHomeScreen.tsx); SessionScreen's priority is route param
+# -> the task's remembered lens -> the `terminal` default
+# (src/screens/task/SessionScreen.tsx), so the session opens on Chat. The tap
+# stays anyway, as the safety net for an open that lands elsewhere: before
+# 2026-10-08 the flow tapped the row before tick 20, opened on Terminal, and
+# this tap was the only thing that got to Chat. On Chat already, it is a no-op.
 #
-# The app is right to stay put - `chatAttention` exists precisely so a pending
-# prompt never yanks a surface someone may be typing into - so the flow pages
-# over instead.
-#
-# Guarded on the CHAT LENS rather than on the permission card, because the card
-# does not exist until tick 20: guarding on it would re-tap for a reason that
-# has nothing to do with the tap landing. Same dispatched-but-ignored failure
-# mode as the Changes tap below, and the remembered lens makes it likelier
-# still - a later shelf mounts on whatever segment the previous run left
-# behind.
+# Guarded on the CHAT LENS rather than on the permission card: guarding on the
+# card would re-tap for a reason that has nothing to do with the tap landing.
+# Same dispatched-but-ignored failure mode as the Changes tap below.
 - tapOn:
     id: "session-mode-chat"
 - runFlow:

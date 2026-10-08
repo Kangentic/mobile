@@ -201,15 +201,19 @@ Do not open a PR unless asked; the board's Testing column owns that.
 - **A segment tap can dispatch and do nothing.** Maestro reports COMPLETED, the
   pager never turns, and `retryIfNoChange` is false. All three segment taps are
   guarded on their destination and re-tapped.
-- **The session opens on TERMINAL, so the flow pages to Chat itself.** Only a
-  NEEDS-YOU row carries `mode=chat`, and the flow taps the row well before the
-  mock raises the prompt at tick 20, so `SessionScreen` falls through to its
-  `terminal` default. The app is right to stay put, so do not "fix" this by
-  making a pending prompt switch lenses.
-- **Search the feed UP, not down.** That same tick-20 prompt moves the target row
-  from Active to the top of Idle, where it stays. A DOWN search that runs after
-  it lands scrolls away from the row and fails at full timeout, which reads as a
-  broken feed rather than a race.
+- **The flow taps the row only after the tick-20 prompt has moved it, and never
+  scrolls to it.** The prompt moves the target row from Active to the top of
+  Idle, where it stays, so the flow waits for the "Approve:" teaser (it exists
+  only once the prompt is pending) and taps the row by id. Do not put a
+  `scrollUntilVisible` back here: once the prompt had landed it never matched a
+  feed row in any configuration tried on 2026-10-08, on either platform, with
+  the target fully on screen, which cost a whole iOS run with zero frames. The
+  cause is unknown (it is NOT `centerElement`; an uncentred run failed too), so
+  treat it as a property of this feed, not a tuning problem.
+- **The session therefore opens on Chat** (a prompt-pending row carries
+  `mode=chat`), but the flow still pages to Chat itself, guarded, as the safety
+  net for an open that lands elsewhere. Do not "fix" a Terminal landing by
+  making a pending prompt switch lenses: the app is right to stay put.
 - **The Changes page is attempted, not asserted.** One bad navigation used to
   cost every frame after it. A skipped page is reported by name instead.
 - **iOS icon precedence is `sf` > `xcasset` > `src`.** Adding an `sf` back to
