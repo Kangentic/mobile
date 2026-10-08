@@ -265,6 +265,29 @@ describe('the shot list matches the capture flow', () => {
     const settleCommand = /^[ \t]*- waitForAnimationToEnd:/m;
     expect(flowSource.slice(linesWaitAt, shotAt)).toMatch(settleCommand);
   });
+
+  /**
+   * Regression cover for Android's scrollbar flash: the diff is wider than a
+   * phone, so its horizontal ScrollView flashes a scrollbar on first layout
+   * and fades it about a second later. The settle step above calls that 12 px
+   * strip settled, and two phone captures in a row (2026-10-08) shipped it. The
+   * scrollbar is not a hierarchy node, so the flow waits a bounded time on a
+   * selector that never exists; it must be OPTIONAL, or the wait would fail
+   * the flow instead of merely elapsing.
+   */
+  it('waits out the scrollbar flash after the settle and before the file-diff shot', () => {
+    const shotMatch = /path:\s*\$\{OUTPUT_DIR\}\/06-file-diff/.exec(flowSource);
+    const shotAt = shotMatch?.index ?? -1;
+    const settleAt = flowSource.lastIndexOf('- waitForAnimationToEnd:', shotAt);
+    expect(settleAt, 'the settle step still precedes the shot').toBeGreaterThanOrEqual(0);
+
+    const between = flowSource.slice(settleAt, shotAt);
+    const fadeWait = /^[ \t]*- extendedWaitUntil:\n[ \t]+visible:\n[ \t]+id: "store-capture-scrollbar-fade"\n[ \t]+timeout: (\d+)\n[ \t]+optional: true$/m.exec(
+      between.replace(/\r\n/g, '\n'),
+    );
+    expect(fadeWait, 'an optional bounded wait sits between the settle and the shot').not.toBeNull();
+    expect(Number(fadeWait?.[1])).toBeGreaterThanOrEqual(1500);
+  });
 });
 
 /**
