@@ -159,11 +159,22 @@ describe('the shelf geometry satisfies Play', () => {
 });
 
 describe('the shot list matches the capture flow', () => {
+  // LF only, so the multi-line command patterns below hold on a CRLF checkout too.
   const flowSource = readFileSync(
     fileURLToPath(new URL('../../.maestro/screenshots/store-capture.yaml', import.meta.url)),
     'utf8',
-  );
+  ).replace(/\r\n/g, '\n');
   const flowShotNames = [...flowSource.matchAll(/path:\s*\$\{OUTPUT_DIR\}\/(\S+)/g)].map((match) => match[1]);
+
+  /**
+   * Where the flow's takeScreenshot of `shotName` sits. Anchored on the
+   * takeScreenshot path, not the bare shot name: comments mention both.
+   */
+  function shotPathIndex(shotName: string): number {
+    const shotMatch = new RegExp(`path:\\s*\\$\\{OUTPUT_DIR\\}/${shotName}`).exec(flowSource);
+    expect(shotMatch, `the flow still takes ${shotName}`).not.toBeNull();
+    return shotMatch?.index ?? -1;
+  }
 
   it('finds takeScreenshot paths in the flow at all', () => {
     // Non-vacuity guard: the comparison below is trivially satisfiable if the
@@ -198,21 +209,20 @@ describe('the shot list matches the capture flow', () => {
    * exists only after the move, and taps the row by id with no scroll at all.
    */
   it('waits for the prompt teaser before tapping the session row, and never scrolls to it', () => {
-    const rowTapMatch = /^- tapOn:\n\s+id: "activity-row-mock-session-1"$/m.exec(flowSource.replace(/\r\n/g, '\n'));
+    const rowTapMatch = /^- tapOn:\n\s+id: "activity-row-mock-session-1"$/m.exec(flowSource);
     expect(rowTapMatch, 'the flow still taps the session row by id').not.toBeNull();
-    const normalized = flowSource.replace(/\r\n/g, '\n');
     const rowTapAt = rowTapMatch?.index ?? -1;
 
     // The teaser wait is the command immediately before the tap.
-    const before = normalized.slice(0, rowTapAt);
-    const lastCommandAt = before.lastIndexOf('\n- ');
-    const lastCommand = before.slice(lastCommandAt + 1);
+    const flowBeforeRowTap = flowSource.slice(0, rowTapAt);
+    const lastCommandAt = flowBeforeRowTap.lastIndexOf('\n- ');
+    const lastCommand = flowBeforeRowTap.slice(lastCommandAt + 1);
     expect(lastCommand).toMatch(/^- extendedWaitUntil:\n\s+visible:\n\s+text: "Approve:\.\*"\n\s+timeout: (\d+)/);
     const timeoutMatch = /timeout: (\d+)/.exec(lastCommand);
     expect(Number(timeoutMatch?.[1])).toBeGreaterThanOrEqual(90_000);
 
     // Nothing anywhere in the flow scrolls to the row (or to anything of it).
-    expect(normalized).not.toMatch(/scrollUntilVisible:\n\s+element:\n\s+id: "activity-row-mock-session-1/);
+    expect(flowSource).not.toMatch(/scrollUntilVisible:\n\s+element:\n\s+id: "activity-row-mock-session-1/);
   });
 
   /**
@@ -253,10 +263,7 @@ describe('the shot list matches the capture flow', () => {
    * keeps the frame clean.
    */
   it('settles after the file diff opens and before its screenshot, so the push is not captured', () => {
-    // Anchored on the takeScreenshot path, not the bare shot name: comments mention both.
-    const shotMatch = /path:\s*\$\{OUTPUT_DIR\}\/06-file-diff/.exec(flowSource);
-    expect(shotMatch, 'the flow still takes 06-file-diff').not.toBeNull();
-    const shotAt = shotMatch?.index ?? -1;
+    const shotAt = shotPathIndex('06-file-diff');
     const linesWaitAt = flowSource.lastIndexOf('id: "file-diff-lines"', shotAt);
     expect(linesWaitAt, 'the flow still waits for file-diff-lines before the shot').toBeGreaterThanOrEqual(0);
 
@@ -275,19 +282,21 @@ describe('the shot list matches the capture flow', () => {
    * hierarchy node, so the flow waits a bounded time on a selector that never
    * exists; it must be OPTIONAL, or the wait would fail the flow instead of
    * merely elapsing.
+   *
+   * The wait is gated to Android, because iOS flashes nothing on mount and an
+   * ungated wait cost each iOS capture its full timeout for nothing. The gate
+   * is pinned with the wait: a misspelt `platform` condition would skip the
+   * wait on Android too, and nothing else would fail.
    */
-  it.each(['05-board', '06-file-diff'])('waits out the scrollbar flash after the settle and before %s', (shotName) => {
-    const shotMatch = new RegExp(`path:\\s*\\$\\{OUTPUT_DIR\\}/${shotName}`).exec(flowSource);
-    expect(shotMatch, `the flow still takes ${shotName}`).not.toBeNull();
-    const shotAt = shotMatch?.index ?? -1;
+  it.each(['05-board', '06-file-diff'])('waits out the scrollbar flash on Android after the settle and before %s', (shotName) => {
+    const shotAt = shotPathIndex(shotName);
     const settleAt = flowSource.lastIndexOf('- waitForAnimationToEnd:', shotAt);
     expect(settleAt, 'the settle step still precedes the shot').toBeGreaterThanOrEqual(0);
 
-    const between = flowSource.slice(settleAt, shotAt);
-    const fadeWait = /^[ \t]*- extendedWaitUntil:\n[ \t]+visible:\n[ \t]+id: "store-capture-scrollbar-fade"\n[ \t]+timeout: (\d+)\n[ \t]+optional: true$/m.exec(
-      between.replace(/\r\n/g, '\n'),
+    const fadeWait = /^[ \t]*- runFlow:\n[ \t]+when:\n[ \t]+platform: Android\n[ \t]+commands:\n[ \t]+- extendedWaitUntil:\n[ \t]+visible:\n[ \t]+id: "store-capture-scrollbar-fade"\n[ \t]+timeout: (\d+)\n[ \t]+optional: true$/m.exec(
+      flowSource.slice(settleAt, shotAt),
     );
-    expect(fadeWait, 'an optional bounded wait sits between the settle and the shot').not.toBeNull();
+    expect(fadeWait, 'an optional bounded wait, gated to Android, sits between the settle and the shot').not.toBeNull();
     expect(Number(fadeWait?.[1])).toBeGreaterThanOrEqual(1500);
   });
 });

@@ -80,6 +80,15 @@ env:
 # of the feed after the move. If FlashList ever keeps its content position and
 # leaves the row above the viewport instead, this wait times out naming the
 # teaser, and the failure screenshot will show it.
+#
+# A TEXT selector on our own UI, which .claude/rules/e2e-maestro-runs.md
+# otherwise forbids, and deliberately so: the row carries no structural
+# prompt-pending marker by product design (uniform inbox styling), so the
+# teaser copy is the only signal there is. The paired flow
+# home-needs-you-approve makes the same trade, and
+# docs/pre-live-hardening-summary.md records it ("selects on copy text"). A
+# change to the teaser copy in src/conversation/pendingPromptSummary.ts must
+# update both flows.
 - extendedWaitUntil:
     visible:
       text: "Approve:.*"
@@ -241,12 +250,16 @@ env:
       # View, not a node in the hierarchy, so there is no selector to wait on:
       # this waits for one that never exists, OPTIONAL so it always runs its
       # full timeout and never fails the flow. iOS flashes nothing on mount,
-      # so there it only costs the timeout.
-      - extendedWaitUntil:
-          visible:
-            id: "store-capture-scrollbar-fade"
-          timeout: 2500
-          optional: true
+      # so the wait is gated to Android rather than costing iOS the timeout.
+      - runFlow:
+          when:
+            platform: Android
+          commands:
+            - extendedWaitUntil:
+                visible:
+                  id: "store-capture-scrollbar-fade"
+                timeout: 2500
+                optional: true
       - takeScreenshot:
           path: ${OUTPUT_DIR}/06-file-diff
           label: Unified diff for a changed file
@@ -337,12 +350,16 @@ env:
 # The same scrollbar flash as the file diff above, on the board's card list:
 # paging to Executing makes Android flash the list's vertical scrollbar, and
 # the 7-inch capture of 2026-10-08 photographed its thumb down the right
-# edge. Waited out the same way, for the same reason.
-- extendedWaitUntil:
-    visible:
-      id: "store-capture-scrollbar-fade"
-    timeout: 2500
-    optional: true
+# edge. Waited out the same way, for the same reason, on Android only.
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: "store-capture-scrollbar-fade"
+          timeout: 2500
+          optional: true
 - takeScreenshot:
     path: ${OUTPUT_DIR}/05-board
     label: Kanban board with live agent sessions

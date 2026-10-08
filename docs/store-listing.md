@@ -279,6 +279,9 @@ deception.
 
 ## Data safety / App Privacy declarations
 
+*The next two paragraphs record the state on 2026-07-29. Both declarations have since gone
+through review with the apps (see the top of this file); they are kept for the lesson.*
+
 **Play's Data safety form was filled in on 2026-07-28 and had still not been submitted for review
 on 2026-07-29**, and App Store Connect's App Privacy questionnaire is in progress with the same
 two data types.
