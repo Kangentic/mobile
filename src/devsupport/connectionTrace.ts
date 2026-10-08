@@ -24,9 +24,14 @@
  *
  * What it logs, deliberately: event names, transport states, relay close
  * codes, counts, coarse boolean state (`paired`, `cached`, `established`,
- * the keepalive flag) and millisecond deltas. Never content, never an
- * identifier. Sentry's console breadcrumbs are off (crash-reporting-scope.md),
- * so nothing here rides a crash report either way.
+ * the keepalive flag) and millisecond deltas. Never content, and never an
+ * identifier with ONE exception: `request-timing` and `request-timeout` carry
+ * a capability request's full requestId. That id is 16 random bytes the
+ * phone mints per request (capabilityClient.ts), it names nothing outside one
+ * session's request, and it is the only key that joins a phone line to the
+ * desktop's `[mobile-bridge] slow request` line for the same round trip.
+ * Sentry's console breadcrumbs are off (crash-reporting-scope.md), so nothing
+ * here rides a crash report either way.
  *
  * A leaf module by design, and that is now load bearing TWICE over. It
  * imports nothing from the app, so src/channel/ can call it without creating
@@ -220,6 +225,52 @@ export function subscribeKeepaliveProbe(listener: () => void): () => void {
   keepaliveProbeListeners.add(listener);
   return () => {
     keepaliveProbeListeners.delete(listener);
+  };
+}
+
+/**
+ * The two bridge-latency switches (task #109), so each fix's before and after
+ * come from ONE build on ONE install, as performance-claims-are-measured.md
+ * asks. Off restores the pre-fix behaviour exactly; both arms still count, so
+ * the trace lines that measure the fix are written either way.
+ *
+ * The retired-receive-streams switch, when off, makes SessionManager open
+ * every frame under the newest receive stream only, so a desktop frame sealed
+ * before the rekey reached it is dropped, as it always was. The frame-liveness
+ * switch, when off, makes the foreground probe judge the socket by its own
+ * reply (and a rekey) alone, ignoring an event or response the desktop sent
+ * while it waited (task #107's `desktopSpoke`). Both collapse to `true`
+ * outside a trace build, like foregroundKickEnabled.
+ */
+let retiredReceiveStreamsOn = true;
+let frameLivenessOn = true;
+const bridgeLatencyProbeListeners = new Set<() => void>();
+
+export function retiredReceiveStreamsEnabled(): boolean {
+  return traceEnabled ? retiredReceiveStreamsOn : true;
+}
+
+export function setRetiredReceiveStreamsEnabled(enabled: boolean): void {
+  if (!traceEnabled || retiredReceiveStreamsOn === enabled) return;
+  retiredReceiveStreamsOn = enabled;
+  for (const listener of bridgeLatencyProbeListeners) listener();
+}
+
+export function frameLivenessEnabled(): boolean {
+  return traceEnabled ? frameLivenessOn : true;
+}
+
+export function setFrameLivenessEnabled(enabled: boolean): void {
+  if (!traceEnabled || frameLivenessOn === enabled) return;
+  frameLivenessOn = enabled;
+  for (const listener of bridgeLatencyProbeListeners) listener();
+}
+
+/** For a useSyncExternalStore subscription in the Previous keys and Frame liveness Settings switches. */
+export function subscribeBridgeLatencyProbe(listener: () => void): () => void {
+  bridgeLatencyProbeListeners.add(listener);
+  return () => {
+    bridgeLatencyProbeListeners.delete(listener);
   };
 }
 

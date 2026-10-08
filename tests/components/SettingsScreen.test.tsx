@@ -100,6 +100,19 @@ const mockSubscribeKeepaliveProbe = jest.fn((listener: () => void) => {
     mockKeepaliveProbeListeners.delete(listener);
   };
 });
+// The bridge-latency pair (task #109), with its listener captured for the same
+// re-render check the keepalive pair gets.
+const mockRetiredReceiveStreamsEnabled = jest.fn().mockReturnValue(true);
+const mockSetRetiredReceiveStreamsEnabled = jest.fn();
+const mockFrameLivenessEnabled = jest.fn().mockReturnValue(true);
+const mockSetFrameLivenessEnabled = jest.fn();
+const mockBridgeLatencyProbeListeners = new Set<() => void>();
+const mockSubscribeBridgeLatencyProbe = jest.fn((listener: () => void) => {
+  mockBridgeLatencyProbeListeners.add(listener);
+  return () => {
+    mockBridgeLatencyProbeListeners.delete(listener);
+  };
+});
 jest.mock('@/devsupport/connectionTrace', () => ({
   connectionTraceEnabled: () => mockConnectionTraceEnabled(),
   foregroundKickEnabled: () => mockForegroundKickEnabled(),
@@ -110,6 +123,11 @@ jest.mock('@/devsupport/connectionTrace', () => ({
   nativeStopAlarmEnabled: () => mockNativeStopAlarmEnabled(),
   setNativeStopAlarmEnabled: (enabled: boolean) => mockSetNativeStopAlarmEnabled(enabled),
   subscribeKeepaliveProbe: (listener: () => void) => mockSubscribeKeepaliveProbe(listener),
+  retiredReceiveStreamsEnabled: () => mockRetiredReceiveStreamsEnabled(),
+  setRetiredReceiveStreamsEnabled: (enabled: boolean) => mockSetRetiredReceiveStreamsEnabled(enabled),
+  frameLivenessEnabled: () => mockFrameLivenessEnabled(),
+  setFrameLivenessEnabled: (enabled: boolean) => mockSetFrameLivenessEnabled(enabled),
+  subscribeBridgeLatencyProbe: (listener: () => void) => mockSubscribeBridgeLatencyProbe(listener),
 }));
 
 const mockThrowTestError = jest.fn();
@@ -182,6 +200,12 @@ describe('SettingsScreen', () => {
     mockSetNativeStopAlarmEnabled.mockClear();
     mockSubscribeKeepaliveProbe.mockClear();
     mockKeepaliveProbeListeners.clear();
+    mockRetiredReceiveStreamsEnabled.mockReturnValue(true);
+    mockSetRetiredReceiveStreamsEnabled.mockClear();
+    mockFrameLivenessEnabled.mockReturnValue(true);
+    mockSetFrameLivenessEnabled.mockClear();
+    mockSubscribeBridgeLatencyProbe.mockClear();
+    mockBridgeLatencyProbeListeners.clear();
     mockThrowTestError.mockClear();
     mockCrashNatively.mockClear();
     mockOpenSystemNotificationSettings.mockClear();
@@ -578,6 +602,48 @@ describe('SettingsScreen', () => {
     expect(screen.queryByTestId('settings-connection-trace-foreground-kick')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-keepalive-ceiling')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-native-stop-alarm')).toBeNull();
+    expect(screen.queryByTestId('settings-connection-trace-retired-keys')).toBeNull();
+    expect(screen.queryByTestId('settings-connection-trace-frame-liveness')).toBeNull();
+  });
+
+  /**
+   * Task #109's two A/B switches: "Previous keys" (SessionManager keeps the
+   * receive streams a rekey superseded) and "Frame liveness" (the foreground
+   * probe counts any opened frame as proof the socket is alive). Each is the
+   * only control that flips its fix's measured arm, so each must reach its
+   * own setter, and each must re-render from its own getter when the store
+   * notifies (the keepalive pair's re-render test below has the reasoning).
+   *
+   * Mutations seen failing: replacing `onValueChange={setFrameLivenessEnabled}`
+   * with `onValueChange={() => {}}`, and handing the retired-keys
+   * useSyncExternalStore `() => () => undefined` as its subscribe.
+   */
+  it('reveals the bridge-latency switches when the trace flag is on, wires each to its setter, and re-renders each from its own getter', async () => {
+    mockConnectionTraceEnabled.mockReturnValue(true);
+    await renderSettings();
+    const readChecked = (testID: string): boolean => screen.getByTestId(testID).props.accessibilityState.checked;
+    expect(readChecked('settings-connection-trace-retired-keys')).toBe(true);
+    expect(readChecked('settings-connection-trace-frame-liveness')).toBe(true);
+
+    await fireEvent.press(screen.getByTestId('settings-connection-trace-retired-keys'));
+    await fireEvent.press(screen.getByTestId('settings-connection-trace-frame-liveness'));
+    expect(mockSetRetiredReceiveStreamsEnabled).toHaveBeenCalledWith(false);
+    expect(mockSetFrameLivenessEnabled).toHaveBeenCalledWith(false);
+
+    const notifyListeners = async (): Promise<void> => {
+      await act(() => {
+        for (const listener of [...mockBridgeLatencyProbeListeners]) listener();
+      });
+    };
+    mockRetiredReceiveStreamsEnabled.mockReturnValue(false);
+    await notifyListeners();
+    expect(readChecked('settings-connection-trace-retired-keys')).toBe(false);
+    expect(readChecked('settings-connection-trace-frame-liveness')).toBe(true);
+
+    mockFrameLivenessEnabled.mockReturnValue(false);
+    await notifyListeners();
+    expect(readChecked('settings-connection-trace-retired-keys')).toBe(false);
+    expect(readChecked('settings-connection-trace-frame-liveness')).toBe(false);
   });
 
   /**

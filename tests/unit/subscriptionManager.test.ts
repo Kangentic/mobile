@@ -30,6 +30,10 @@ import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from
  */
 const connectionTraceMocks = vi.hoisted(() => ({
   traceConnection: vi.fn<(event: string, fields?: Record<string, unknown>) => void>(),
+  // The real SessionManager and CapabilityClient below read these on every
+  // frame and request; the values are what every store build reads.
+  connectionTraceEnabled: vi.fn<() => boolean>(() => false),
+  retiredReceiveStreamsEnabled: vi.fn<() => boolean>(() => true),
 }));
 vi.mock('@/devsupport/connectionTrace', () => connectionTraceMocks);
 
@@ -160,10 +164,12 @@ describe('SubscriptionManager', () => {
   });
 
   /**
-   * Board task #70. A subscribe in flight across a rekey is sealed under keys
-   * the desktop has just retired, so nothing ever answers it and the board
-   * stays empty until the next reconcile. The manager re-issues every pending
-   * board subscribe when a rekey lands. The responder holds the first
+   * Board task #70. A subscribe in flight across a rekey could lose its
+   * answer: the desktop sealed it under the old keys after the phone switched
+   * (task #109; this used to say the subscribe itself was lost, which had the
+   * direction backwards). The phone now keeps superseded receive streams, so
+   * this re-issue is the backstop, and the manager still re-issues every
+   * pending board subscribe when a rekey lands. The responder holds the first
    * read-board (returns null) and answers the re-issue; the stub's
    * beginHandshake on an established session is a rekey. Mutation seen
    * failing: dropping the onRekey subscription from the constructor (one

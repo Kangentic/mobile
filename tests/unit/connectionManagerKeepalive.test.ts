@@ -119,10 +119,14 @@ vi.mock('../../modules/foreground-service-guard', () => stopAlarmMocks);
  */
 const keepaliveProbeMocks = vi.hoisted(() => ({
   keepaliveCeilingEnabled: vi.fn<() => boolean>(() => true),
+  // Task #109's frame-liveness switch, flipped by the one test that measures
+  // the pre-fix arm.
+  frameLivenessEnabled: vi.fn<() => boolean>(() => true),
 }));
 vi.mock('@/devsupport/connectionTrace', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/devsupport/connectionTrace')>()),
   keepaliveCeilingEnabled: keepaliveProbeMocks.keepaliveCeilingEnabled,
+  frameLivenessEnabled: keepaliveProbeMocks.frameLivenessEnabled,
 }));
 
 const mockDesktopSeam = vi.hoisted(() => ({ stub: null as unknown, phoneTransport: null as unknown }));
@@ -251,6 +255,7 @@ describe('connectionManager background keepalive ceiling', () => {
     stopAlarmMocks.armForegroundServiceStopAlarm.mockClear();
     stopAlarmMocks.disarmForegroundServiceStopAlarm.mockClear();
     keepaliveProbeMocks.keepaliveCeilingEnabled.mockReturnValue(true);
+    keepaliveProbeMocks.frameLivenessEnabled.mockReturnValue(true);
   });
 
   afterEach(async () => {
@@ -446,6 +451,156 @@ describe('connectionManager background keepalive ceiling', () => {
     } finally {
       vi.useRealTimers();
       nowSpy.mockRestore();
+    }
+  });
+
+  /**
+   * Task #109: an inbound heartbeat is the same wake source a rekey is. It is
+   * what lets the desktop probe presence with one sealed frame instead of a full
+   * rekey without losing the keepalive's backstop. Same shape as the rekey test
+   * above: the ceiling timer is armed and never advanced, the wall clock moves
+   * past it, and the heartbeat is the only thing that runs JS.
+   *
+   * The phone's own heartbeat reply landing in stub.messages is the
+   * non-vacuity check: the heartbeat really opened on the phone, so a teardown
+   * that followed it is the wake source's doing.
+   *
+   * Mutation seen failing: deleting the `queueMicrotask(onKeepaliveWakeSource)`
+   * from the heartbeat listener left the connection up.
+   */
+  it('tears the keepalive down on a desktop heartbeat when the ceiling timer never fires', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const armedAtMs = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(armedAtMs);
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifeeMocks.displayNotification).toHaveBeenCalledTimes(1);
+      expect(getActiveConnection()).not.toBeNull();
+      const heartbeatsBefore = stub.messages.filter((message) => message.type === 'heartbeat').length;
+
+      nowSpy.mockReturnValue(armedAtMs + EXPECTED_KEEPALIVE_CEILING_MS);
+      stub.send({ type: 'heartbeat' });
+      for (let round = 0; round < 20 && getActiveConnection() !== null; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(stub.messages.filter((message) => message.type === 'heartbeat').length).toBeGreaterThan(heartbeatsBefore);
+      expect(getActiveConnection()).toBeNull();
+      expect(notifeeMocks.stopForegroundService).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      nowSpy.mockRestore();
+    }
+  });
+
+  /**
+   * The negative twin of the heartbeat test above: only a heartbeat is a wake
+   * source, not every inbound frame. onKeepaliveWakeSource writes a trace line
+   * and does a dynamic import per call, and a backgrounded phone receives a
+   * steady stream of events, so waking on all of them would be a cost with no
+   * benefit. Same setup as the heartbeat test (ceiling timer armed and never
+   * advanced, wall clock past the ceiling), with an event as the only inbound
+   * frame. If the event were a wake source the connection would be torn down
+   * exactly as it is for the heartbeat.
+   *
+   * The phone-side listener counting the event is the non-vacuity check: the
+   * event really reached the phone's session while the wall clock was past the
+   * ceiling, so a connection still up afterwards is the guard's doing and not
+   * an event that never arrived.
+   *
+   * Mutation seen failing: dropping the `message.type === 'heartbeat'`
+   * condition from the heartbeat listener, so every message queues
+   * onKeepaliveWakeSource, tore the connection down on the event.
+   */
+  it('does not tear the keepalive down on a desktop event past the ceiling when the ceiling timer never fires', async () => {
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const connection = getActiveConnection();
+    if (!connection) throw new Error('expected an active connection');
+    let eventsReceivedByPhone = 0;
+    const unsubscribeEvents = connection.controller.session.onMessage((message) => {
+      if (message.type === 'event') eventsReceivedByPhone += 1;
+    });
+    const armedAtMs = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(armedAtMs);
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifeeMocks.displayNotification).toHaveBeenCalledTimes(1);
+      expect(getActiveConnection()).not.toBeNull();
+
+      nowSpy.mockReturnValue(armedAtMs + EXPECTED_KEEPALIVE_CEILING_MS);
+      stub.emitEvent({ kind: 'diff', taskId: 'task-9', payload: null });
+      for (let round = 0; round < 20 && eventsReceivedByPhone === 0; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      // One more drain: the wake source, were the event one, is deferred a
+      // microtask past the listener that counted it.
+      for (let round = 0; round < 20; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(eventsReceivedByPhone).toBe(1);
+      expect(getActiveConnection()).not.toBeNull();
+      expect(notifeeMocks.stopForegroundService).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      nowSpy.mockRestore();
+      unsubscribeEvents();
+    }
+  });
+
+  /**
+   * The heartbeat listener is attached to the session for one connection
+   * attempt and must come off with it, like the probe listener below. It is
+   * counted from the test side by wrapping SessionManager.prototype.onMessage
+   * BEFORE the connection opens (the listener is attached during open, so an
+   * instance spy taken afterwards would miss it): every subscription made over
+   * the attempt's life must have been unsubscribed once it is stopped. The
+   * heartbeat test above cannot see this, because the session is disposed with
+   * the attempt and nothing is delivered to a stale listener afterwards.
+   *
+   * Mutation seen failing: deleting `unsubscribeHeartbeat();` from
+   * teardownThisAttempt left the unsubscribe count one short of the
+   * subscription count.
+   */
+  it('removes the heartbeat listener from the session when the connection is torn down', async () => {
+    const { SessionManager } = await import('@/channel/sessionManager');
+    const { stopConnectionLifecycle } = await import('@/connection/connectionManager');
+    const originalOnMessage = SessionManager.prototype.onMessage;
+    let subscriptionsMade = 0;
+    let subscriptionsRemoved = 0;
+    const onMessageSpy = vi.spyOn(SessionManager.prototype, 'onMessage').mockImplementation(function (
+      this: InstanceType<typeof SessionManager>,
+      listener,
+    ) {
+      subscriptionsMade += 1;
+      const removeListener = originalOnMessage.call(this, listener);
+      return () => {
+        subscriptionsRemoved += 1;
+        return removeListener();
+      };
+    });
+
+    try {
+      await establishAndWarm();
+      // Non-vacuity: the connection attached listeners, and none came off yet.
+      expect(subscriptionsMade).toBeGreaterThan(0);
+      expect(subscriptionsRemoved).toBe(0);
+
+      stopConnectionLifecycle();
+
+      expect(subscriptionsRemoved).toBe(subscriptionsMade);
+    } finally {
+      onMessageSpy.mockRestore();
     }
   });
 
@@ -767,12 +922,12 @@ describe('connectionManager background keepalive ceiling', () => {
    * does not move on a rekey - src/channel/sessionManager.ts documents that a
    * rekey fires onRekey only, never onEstablished, deliberately, because "a
    * rekey must not look like a fresh connection". But a rekey landing inside
-   * the probe's 3 s window loses the probe exactly the way a dead socket
-   * would: connectionManager's own onRekey listener documents that a request
-   * in flight across a rekey is sealed under keys the rekey just retired, so
-   * the desktop can never open it and nothing answers. The phone receiving
-   * and processing that rekey frame is proof the socket is alive, so the
-   * verdict must not tear it down.
+   * the probe's 3 s window could lose the probe's ANSWER, which a desktop
+   * without the 0.45.0 hold sealed under the old keys after the phone had
+   * switched (task #109; this used to say the probe itself was lost, which
+   * had the direction backwards). The phone receiving and processing that
+   * rekey frame is proof the socket is alive, so the verdict must not tear it
+   * down. Here the stub simply never answers, so only the guard is tested.
    *
    * `useChannelStore().rekeyCount` is asserted FIRST, and deliberately before
    * the deadline-crossing advance below: it is the phone's own onRekey
@@ -1041,6 +1196,56 @@ describe('connectionManager background keepalive ceiling', () => {
     } finally {
       vi.useRealTimers();
       onMessageSpy.mockRestore();
+    }
+  });
+
+  /**
+   * Task #109's switch-off arm for the guard above, which is how its "before"
+   * is measured in one trace build: the same event arrives inside the window
+   * and is ignored, so the deadline tears down a socket that was carrying the
+   * desktop's traffic. Without this, a switch wired to nothing would read as
+   * a fix that made no difference.
+   *
+   * Mutation seen failing: computing `heardFromDesktop` as `desktopSpoke`
+   * alone (dropping the frameLivenessEnabled() gate) left redialNow at one
+   * call - the forced redial never came.
+   */
+  it('force-redials despite an event inside the probe window when the frame-liveness switch is off', async () => {
+    keepaliveProbeMocks.frameLivenessEnabled.mockReturnValue(false);
+    const { getActiveConnection } = await import('@/connection/connectionManager');
+    const onAppStateChange = await establishAndWarm();
+    const phoneTransport = mockDesktopSeam.phoneTransport as LoopbackTransport;
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+    const connection = getActiveConnection();
+    if (!connection) throw new Error('expected an active connection');
+    const redialNow = vi.spyOn(phoneTransport, 'redialNow');
+    let eventsReceivedByPhone = 0;
+    const unsubscribeEvents = connection.controller.session.onMessage((message) => {
+      if (message.type === 'event') eventsReceivedByPhone += 1;
+    });
+
+    vi.useFakeTimers();
+    try {
+      onAppStateChange('background');
+      await vi.advanceTimersByTimeAsync(0);
+      onAppStateChange('active');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(redialNow).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2_200);
+      stub.emitEvent({ kind: 'diff', taskId: 'task-9', payload: null });
+      for (let round = 0; round < 20 && eventsReceivedByPhone === 0; round += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(eventsReceivedByPhone).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(EXPECTED_PROBE_TIMEOUT_MS);
+      expect(redialNow).toHaveBeenCalledTimes(2);
+      expect(redialNow).toHaveBeenLastCalledWith({ force: true });
+    } finally {
+      vi.useRealTimers();
+      redialNow.mockRestore();
+      unsubscribeEvents();
     }
   });
 

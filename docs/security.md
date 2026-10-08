@@ -63,6 +63,28 @@ the wire.
   pre-ephemeral, so nothing that changes state may ride it.
 - **Rekeying:** sessions rekey roughly every 2 minutes (WireGuard's `REKEY_AFTER_TIME`), bounding
   the damage of a compromised session key.
+  - **A superseded receive key outlives the rekey, briefly.** The phone keeps the receive streams
+    a rekey replaced (`src/channel/receiveStreams.ts`), because the desktop seals under the old
+    keys until the phone's msg2 reaches it. The bounds are what make that safe:
+    - each retired stream lives for at most 180 s after it was superseded (WireGuard's
+      `REJECT_AFTER_TIME`), checked on every open with no timer to miss;
+    - at most 8 are kept, which is how far behind the desktop's keys can be, since it stops
+      initiating at 8 outstanding handshakes;
+    - all older ones are dropped the moment a frame opens under a newer one;
+    - every one is cleared on `reset()`, so nothing sealed for a previous session opens in the
+      next.
+
+    Each retired stream keeps its own strictly sequential counter, so replay protection is
+    unchanged. The send direction never keeps an old key. A frame no stream opens is dropped
+    exactly as before. The only new cost is CPU: at most nine authentication attempts per
+    unopenable frame, and only inside that window.
+
+    Two limits follow from the window, both bounded by it. A relay can withhold a
+    desktop-to-phone frame sealed under an old key and still have it open up to 180 s after that
+    key was superseded, provided no frame has opened under a newer key in the meantime; before
+    this, such a frame was dropped. That is a delay, not a forgery or a replay, since the counter
+    order is intact. And a phone compromised inside the window yields the retired receive keys
+    too, which open only desktop-to-phone frames not yet consumed under them.
 - **Replay protection:** per-direction 64-bit counter nonces are implicit and strictly
   sequential, so a frame opens only under the exact counter the receiver expects next; a
   replayed, reordered, or skipped frame fails to authenticate and is dropped.

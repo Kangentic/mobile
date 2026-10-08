@@ -46,6 +46,11 @@ const connectionTraceMocks = vi.hoisted(() => ({
   keepaliveCeilingEnabled: vi.fn<() => boolean>(() => true),
   nativeStopAlarmEnabled: vi.fn<() => boolean>(() => true),
   markConnectionTraceForeground: vi.fn<() => void>(),
+  // Read by the real SessionManager and CapabilityClient the second describe
+  // runs, and by the foreground probe; these are the store-build values.
+  connectionTraceEnabled: vi.fn<() => boolean>(() => false),
+  retiredReceiveStreamsEnabled: vi.fn<() => boolean>(() => true),
+  frameLivenessEnabled: vi.fn<() => boolean>(() => true),
 }));
 vi.mock('@/devsupport/connectionTrace', () => connectionTraceMocks);
 
