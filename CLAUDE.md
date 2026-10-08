@@ -259,6 +259,9 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   (the real-path "run as a CLI?" guard review-verdict.mjs imports)
                   #   + repo scripts
 store/screenshots/            # Committed Play + App Store listing images, one set per shelf
+store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) that
+                              #   build-android.yml sends with every Play upload; the same
+                              #   text goes into App Store Connect's What's New by hand
 ```
 
 ## Commands

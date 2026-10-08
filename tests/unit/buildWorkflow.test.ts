@@ -1503,11 +1503,12 @@ describe('build-android staged rollout', () => {
 
   it('refuses an unstaged release to a track with real users', () => {
     // A `completed` Play release can never be pulled back, only superseded by a
-    // higher version code, so releasing to alpha or beta without a staged
-    // rollout is irreversible the moment it lands. That used to be a prose rule
-    // in .claude/skills/release/SKILL.md telling the operator to pass
+    // higher version code, so releasing to alpha, beta or production without a
+    // staged rollout is irreversible the moment it lands. That used to be a
+    // prose rule in .claude/skills/release/SKILL.md telling the operator to pass
     // `-f rollout=0.1`, which is the kind of rule that holds right up until
-    // somebody is in a hurry.
+    // somebody is in a hurry. Production is where it matters most: both apps
+    // are live there, so an unstaged release reaches every user at once.
     //
     // `internal` is deliberately NOT covered: the track is small and known, and
     // the documented recovery there is simply shipping a higher version code.
@@ -1518,8 +1519,51 @@ describe('build-android staged rollout', () => {
       (step) => step.name === 'Refuse an unstaged release to a track with real users'
     );
     expect(refusal?.if).toBe(
-      "(inputs.submit_track == 'alpha' || inputs.submit_track == 'beta') && inputs.rollout == ''"
+      "(inputs.submit_track == 'alpha' || inputs.submit_track == 'beta' || inputs.submit_track == 'production') && inputs.rollout == ''"
     );
+  });
+
+  it('offers production as a submit track, and every non-internal track is refused unstaged', () => {
+    // A track missing from the choice list cannot be dispatched at all, which is
+    // how the first production release found this workflow could only reach
+    // internal, alpha and beta. The second half ties the list to the refusal
+    // above, so a track added later without a staged-rollout guard fails here
+    // rather than in front of real users.
+    const workflow = parseYaml(workflowSource) as {
+      on: { workflow_dispatch: { inputs: { submit_track: { options: string[] } } } };
+      jobs: Record<string, { steps?: { name?: string; if?: string }[] }>;
+    };
+    const tracks = workflow.on.workflow_dispatch.inputs.submit_track.options;
+    expect(tracks).toContain('production');
+    const refusal = workflow.jobs.plan.steps?.find(
+      (step) => step.name === 'Refuse an unstaged release to a track with real users'
+    );
+    for (const track of tracks.filter((name) => name !== 'none' && name !== 'internal')) {
+      expect(refusal?.if).toContain(`inputs.submit_track == '${track}'`);
+    }
+  });
+
+  it('sends the release notes with both uploads, within Play\'s 500-character cap', () => {
+    // A release committed through the API never passes through the Console, so
+    // without whatsNewDirectory a production release ships with a blank "What's
+    // new". Play rejects an over-length note, but only inside submit-play, after
+    // a ~25 minute build and the approval gate; this catches it in seconds.
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<string, { steps?: { name?: string; with?: Record<string, string> }[] }>;
+    };
+    const uploads = (workflow.jobs['submit-play'].steps ?? []).filter((step) =>
+      step.name?.startsWith('Upload to Google Play')
+    );
+    expect(uploads).toHaveLength(2);
+    for (const upload of uploads) {
+      expect(upload.with?.whatsNewDirectory).toBe('store/whatsnew');
+    }
+    const notesPath = `${repositoryRoot}store/whatsnew/whatsnew-en-US`;
+    expect(existsSync(notesPath)).toBe(true);
+    // Measured untrimmed: the action sends the file as it is, newline included.
+    const notes = readFileSync(notesPath, 'utf8');
+    expect(notes.trim().length).toBeGreaterThan(0);
+    expect(notes.length).toBeLessThanOrEqual(500);
   });
 });
 

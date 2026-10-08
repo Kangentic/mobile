@@ -1,0 +1,5 @@
+- Pause a running session from a task's long-press menu, and Resume a paused one.
+- The Agents feed groups sessions into Idle, Active, Queued and Paused, with a filter to show only the sections you want. Each section collapses on its own.
+- Each Agents card shows where its task is on the board, from To Do to Done.
+- The terminal shows a visible wait while your desktop catches up, and no longer flashes black.
+- A smaller download.

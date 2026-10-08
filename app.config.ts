@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '0.8.1',
+  version: '1.0.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -174,7 +174,18 @@ const config: ExpoConfig = {
     // screen instead of stacking a second one; opening the keyboard no longer
     // flashes the terminal black. Native dependencies moved again with the SDK
     // 57 drift (eight expo packages), so this is a new native build.
-    buildNumber: '16',
+    //
+    // 17 is the v1.0.0 release cut 2026-10-07, uploaded to App Store Connect
+    // for an App Store submission. 16 is spent, tagged ios-b16. Nothing in
+    // this release is iOS-only. It carries the Agents feed rework (Idle,
+    // Active, Queued and Paused sections behind a Show sections filter, each
+    // section collapsing on its own, and a step track covering the whole
+    // journey from To Do to Done), Resume (protocol 0.16.0) and Pause (0.18.0)
+    // of a session, a visible wait while a slow desktop catches up, and a
+    // terminal fit in one write with no black flash. Native dependencies moved
+    // with the dependency refresh (Reanimated 4.7.1, Sentry React Native 8.29,
+    // enriched-markdown 1.1.1), so this is a new native build.
+    buildNumber: '17',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -393,13 +404,24 @@ const config: ExpoConfig = {
     // the v0.8.0 Play build, gone on a release build of this code, both
     // screen-recorded on a Pixel 11 Pro).
     //
+    // 15 is the v1.0.0 release cut 2026-10-07, going to the PRODUCTION track
+    // as a staged rollout. It is the first release build-android.yml submits
+    // to production itself; earlier ones went to the internal track. 14 is
+    // spent, tagged android-vc14. The Android-specific items are R8
+    // optimization with optimized resource shrinking
+    // (plugins/withAndroidR8Optimization.ts, the Play 0.8.1 advisory; task
+    // #102 measured the production AAB at 86.81 MB against vc14's 92.18 MB)
+    // and the native stop alarm on notifee's dataSync keepalive service
+    // (modules/foreground-service-guard, Sentry MOBILE-3). The rest is the
+    // cross-platform list on ios.buildNumber's 17 above.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 14,
+    versionCode: 15,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
