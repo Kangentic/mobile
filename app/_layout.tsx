@@ -95,6 +95,14 @@ function RootStack(): React.JSX.Element {
    * 'fitToContents' sizes the sheet to its form, so nothing inside may use
    * flex: 1. Android form sheets render no native header, so each screen puts
    * its own title in content.
+   *
+   * contentStyle paints the sheet's NATIVE container the same surfaceOverlay
+   * every sheet screen paints its content. On iOS the sheet runs past its
+   * content into the bottom safe-area inset, and with the stack-wide
+   * `theme.colors.background` there that strip showed as a darker band under
+   * the form inside the rounded sheet (seen on the iOS 26 simulator in the
+   * Show sections sheet, 2026-10-08). tests/unit/formSheetBackground.test.ts
+   * keeps the two colours tied together.
    */
   const formSheetOptions = {
     presentation: 'formSheet',
@@ -102,6 +110,7 @@ function RootStack(): React.JSX.Element {
     sheetAllowedDetents: 'fitToContents',
     sheetCornerRadius: theme.radii.lg,
     sheetGrabberVisible: true,
+    contentStyle: { backgroundColor: theme.colors.surfaceOverlay },
   } as const;
   // Every sheet shares the options above, the writing ones included.
   // Fractional detents were tried for those two and reverted: a fixed-fraction
