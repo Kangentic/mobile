@@ -247,6 +247,21 @@ env:
       # shot does.
       - waitForAnimationToEnd:
           timeout: 15000
+      # Then wait out Android's scrollbar flash. The diff is wider than a
+      # phone, so the horizontal ScrollView flashes its scrollbar when it
+      # first lays out and fades it on its own about a second later (checked
+      # on the emulator: two screencaps 5 s apart, neither showing it). The
+      # settle above calls that 12 px strip settled, so two phone captures in
+      # a row on 2026-10-08 photographed it. The scrollbar is drawn by the
+      # View, not a node in the hierarchy, so there is no selector to wait on:
+      # this waits for one that never exists, OPTIONAL so it always runs its
+      # full timeout and never fails the flow. iOS flashes nothing on mount,
+      # so there it only costs the timeout.
+      - extendedWaitUntil:
+          visible:
+            id: "store-capture-scrollbar-fade"
+          timeout: 2500
+          optional: true
       - takeScreenshot:
           path: ${OUTPUT_DIR}/06-file-diff
           label: Unified diff for a changed file
