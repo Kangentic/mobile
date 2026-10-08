@@ -267,16 +267,19 @@ describe('the shot list matches the capture flow', () => {
   });
 
   /**
-   * Regression cover for Android's scrollbar flash: the diff is wider than a
-   * phone, so its horizontal ScrollView flashes a scrollbar on first layout
-   * and fades it about a second later. The settle step above calls that 12 px
-   * strip settled, and two phone captures in a row (2026-10-08) shipped it. The
-   * scrollbar is not a hierarchy node, so the flow waits a bounded time on a
-   * selector that never exists; it must be OPTIONAL, or the wait would fail
-   * the flow instead of merely elapsing.
+   * Regression cover for Android's scrollbar flash. A scrollable flashes its
+   * scrollbar on first layout or after a programmatic scroll and fades it about
+   * a second later, and the settle step before each shot calls that thin strip
+   * settled. 2026-10-08 shipped it twice on the phone's file diff (the diff is
+   * wider than a phone, so a horizontal bar) and once on the 7-inch board (the
+   * column-chip tap pages the list, so a vertical thumb). The scrollbar is not a
+   * hierarchy node, so the flow waits a bounded time on a selector that never
+   * exists; it must be OPTIONAL, or the wait would fail the flow instead of
+   * merely elapsing.
    */
-  it('waits out the scrollbar flash after the settle and before the file-diff shot', () => {
-    const shotMatch = /path:\s*\$\{OUTPUT_DIR\}\/06-file-diff/.exec(flowSource);
+  it.each(['05-board', '06-file-diff'])('waits out the scrollbar flash after the settle and before %s', (shotName) => {
+    const shotMatch = new RegExp(`path:\\s*\\$\\{OUTPUT_DIR\\}/${shotName}`).exec(flowSource);
+    expect(shotMatch, `the flow still takes ${shotName}`).not.toBeNull();
     const shotAt = shotMatch?.index ?? -1;
     const settleAt = flowSource.lastIndexOf('- waitForAnimationToEnd:', shotAt);
     expect(settleAt, 'the settle step still precedes the shot').toBeGreaterThanOrEqual(0);

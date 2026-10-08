@@ -153,7 +153,8 @@ right PICTURE, and this is where every real defect has been found:
 - two wifi icons, from a status bar left in demo mode by an earlier run
 - a horizontal scrollbar along the bottom of the phone's file-diff frame, caught
   before Android faded it out (the diff is wider than a phone). Twice in a row on
-  2026-10-08, so the flow now waits out the fade before `06-file-diff`; if the
+  2026-10-08, and the 7-inch board flashed its vertical thumb the same day, so
+  the flow now waits out the fade before `06-file-diff` and `05-board`; if a
   strip ever comes back, raise that wait rather than hiding the app's indicator
 - status badges floating 12pt above the row they label
 - **a completely BLANK terminal**, on one run out of two
