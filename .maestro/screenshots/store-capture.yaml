@@ -349,6 +349,15 @@ env:
     id: "board-column-chip-lane-executing"
 - waitForAnimationToEnd:
     timeout: 10000
+# The same scrollbar flash as the file diff above, on the board's card list:
+# paging to Executing makes Android flash the list's vertical scrollbar, and
+# the 7-inch capture of 2026-10-08 photographed its thumb down the right
+# edge. Waited out the same way, for the same reason.
+- extendedWaitUntil:
+    visible:
+      id: "store-capture-scrollbar-fade"
+    timeout: 2500
+    optional: true
 - takeScreenshot:
     path: ${OUTPUT_DIR}/05-board
     label: Kanban board with live agent sessions
