@@ -184,48 +184,47 @@ describe('the shot list matches the capture flow', () => {
   });
 
   /**
-   * Regression cover for a race that reproduced intermittently: the same
-   * commit was observed passing and failing on consecutive runs.
+   * Regression cover for the iOS capture of 2026-10-08, which got no frames at
+   * all, and for the older race behind it.
    *
-   * The activity row this flow searches for sits in one of two places
-   * depending on whether the mock's tick-20 permission prompt has landed yet
-   * (Active, below the fold, before; the top of Idle, after - and it stays
-   * there, because this flow deliberately leaves the prompt unanswered). A
-   * DOWN search races that transition: it wins when the search happens to run
-   * before tick 20 and loses when it does not, having scrolled to the end of
-   * the feed with the row sitting above the whole time. Searching UP is safe
-   * in both states, so this locks the direction (and the 90s budget the
-   * longer search needs) rather than trusting a comment not to regress.
+   * The session row sits in one of two places depending on whether the mock's
+   * tick-20 prompt has landed (Active, below the fold, before; the top of Idle,
+   * after, where it stays because the flow leaves the prompt unanswered). The
+   * flow once searched DOWN for it, which raced the move, then UP with
+   * scrollUntilVisible, which passed only while the search beat tick 20: once
+   * the prompt had landed, scrollUntilVisible never matched the row on iOS, nor
+   * a fully visible child of it on Android, though both were on screen. Why is
+   * not known. So the flow waits for the prompt's "Approve:" teaser, which
+   * exists only after the move, and taps the row by id with no scroll at all.
    */
-  it('searches UP for the pending session row, not DOWN into the race', () => {
-    const scrollBlocks = [...flowSource.matchAll(/^- scrollUntilVisible:/gm)];
-    // Non-vacuity guard: the slice below assumes exactly one such block.
-    expect(scrollBlocks.length).toBe(1);
+  it('waits for the prompt teaser before tapping the session row, and never scrolls to it', () => {
+    const rowTapMatch = /^- tapOn:\n\s+id: "activity-row-mock-session-1"$/m.exec(flowSource.replace(/\r\n/g, '\n'));
+    expect(rowTapMatch, 'the flow still taps the session row by id').not.toBeNull();
+    const normalized = flowSource.replace(/\r\n/g, '\n');
+    const rowTapAt = rowTapMatch?.index ?? -1;
 
-    const blockStart = flowSource.indexOf('- scrollUntilVisible:');
-    const nextTopLevelCommand = flowSource.indexOf('\n- ', blockStart + 1);
-    const block = flowSource.slice(
-      blockStart,
-      nextTopLevelCommand === -1 ? flowSource.length : nextTopLevelCommand,
-    );
-
-    expect(block).toContain('activity-row-mock-session-1');
-    expect(block).toContain('direction: UP');
-
-    const timeoutMatch = block.match(/timeout:\s*(\d+)/);
-    expect(timeoutMatch).not.toBeNull();
+    // The teaser wait is the command immediately before the tap.
+    const before = normalized.slice(0, rowTapAt);
+    const lastCommandAt = before.lastIndexOf('\n- ');
+    const lastCommand = before.slice(lastCommandAt + 1);
+    expect(lastCommand).toMatch(/^- extendedWaitUntil:\n\s+visible:\n\s+text: "Approve:\.\*"\n\s+timeout: (\d+)/);
+    const timeoutMatch = /timeout: (\d+)/.exec(lastCommand);
     expect(Number(timeoutMatch?.[1])).toBeGreaterThanOrEqual(90_000);
+
+    // Nothing anywhere in the flow scrolls to the row (or to anything of it).
+    expect(normalized).not.toMatch(/scrollUntilVisible:\n\s+element:\n\s+id: "activity-row-mock-session-1/);
   });
 
   /**
    * Regression cover for the companion fix: SessionScreen resolves its lens
    * as route param -> the task's remembered lens -> a `terminal` default
-   * (src/screens/task/SessionScreen.tsx), and this flow taps the activity row
-   * well before the mock's tick-20 prompt attaches a `mode=chat` route param
-   * to it. So the session opens on Terminal, and the flow must page to Chat
-   * itself before the permission card can be on screen at all - asserting the
-   * card straight after open (the old ordering) waits on a screen the app was
-   * never going to show.
+   * (src/screens/task/SessionScreen.tsx). Until 2026-10-08 this flow tapped the
+   * activity row before the mock's tick-20 prompt attached a `mode=chat` route
+   * param to it, so the session opened on Terminal and only the flow's own
+   * Chat tap could put the permission card on screen. The row is now tapped
+   * after the prompt, so it opens on Chat, but the guarded Chat tap stays as
+   * the safety net and must still come after the coach-mark is gone and
+   * before the card is asserted.
    */
   it('dismisses the coach-mark, pages to Chat, then waits for the permission card - in that order', () => {
     // Non-vacuity guard: every anchor below must actually be found, or the
