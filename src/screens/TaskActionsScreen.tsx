@@ -204,7 +204,14 @@ export function TaskActionsScreen(): React.JSX.Element {
   // A pause the bound gave up on can still land, since the desktop may have
   // been waiting on the task lock. Its paused row retracts the line that said
   // it had not been confirmed; the sheet stays open, where the user now is.
-  const shownErrorMessage = taskPaused && errorMessage === PAUSE_UNCONFIRMED_MESSAGE ? null : errorMessage;
+  // Cleared rather than hidden, so a later resume cannot bring it back.
+  // Adjusted during render on the change itself, React's alternative to a
+  // setState in an effect.
+  const [previousTaskPaused, setPreviousTaskPaused] = useState(taskPaused);
+  if (taskPaused !== previousTaskPaused) {
+    setPreviousTaskPaused(taskPaused);
+    if (taskPaused && errorMessage === PAUSE_UNCONFIRMED_MESSAGE) setErrorMessage(null);
+  }
 
   const onMove = useCallback(() => {
     if (!taskId || !projectId) {
@@ -348,9 +355,9 @@ export function TaskActionsScreen(): React.JSX.Element {
           caption={deleteArmed ? 'Removes the task and stops its session on your desktop' : null}
           testID={deleteArmed ? 'task-action-delete-confirm' : 'task-action-delete'}
         />
-        {shownErrorMessage ? (
+        {errorMessage ? (
           <Text variant="caption" color="danger" testID="task-action-error">
-            {shownErrorMessage}
+            {errorMessage}
           </Text>
         ) : null}
       </Stack>
