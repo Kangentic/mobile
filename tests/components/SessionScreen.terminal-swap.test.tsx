@@ -238,6 +238,16 @@ describe('SessionScreen terminal pane across a session swap', () => {
     await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
     await postFromWebView(JSON.stringify({ type: 'ready' }));
 
+    // While the page waits for its first frame, the wait overlay holds a
+    // second listener on the same ring (the seed edge that takes its
+    // caption down): the pane's own, plus the overlay's.
+    expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-a', listeners: 2 })]);
+    // The first paint unmounts the overlay, which must give its listener back,
+    // leaving the pane's alone for the leak checks below. Mutation seen
+    // failing: dropping unsubscribeSeed() from TerminalWaitOverlay's cleanup
+    // (the count stayed at 2 after the paint).
+    await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
+
     // Mount path: the pane attached to the ORIGINAL session's ring.
     expect(getTerminalFeedStats()).toEqual([expect.objectContaining({ sessionId: 'sess-a', listeners: 1 })]);
 
@@ -481,6 +491,10 @@ describe('SessionScreen terminal pane across a session swap', () => {
     const result = await render(<Screens showDuplicate={false} />);
     await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
     await postFromWebView(JSON.stringify({ type: 'ready' }));
+    // The survivor's first paint, posted BEFORE the duplicate mounts (the
+    // WebView mock captures the latest-mounted view's props): it unmounts the
+    // survivor's wait overlay, so the listener count below is the pane's own.
+    await postFromWebView(JSON.stringify({ type: 'painted', seq: 1, blank: false }));
 
     await result.rerender(<Screens showDuplicate />);
     await waitFor(() => expect(screen.getAllByTestId('terminal-webview')).toHaveLength(2));
