@@ -316,11 +316,13 @@ function enterDemoMode() {
   // cold-booted emulator too. A fresh boot is not among the four
   // reconstructions above.
   //
-  // 2026-10-08 is a data point against a fresh boot being necessary: two
-  // glyphs again on the phone shelf, on the first capture of the session but
-  // on a boot nearly two hours old (whether anything entered demo mode earlier
-  // on that boot is unknown). The phone re-run straight after was clean, which
-  // still fits "first demo-mode entry of a session".
+  // 2026-10-08 struck twice more, and both fit "the first demo-mode entry of
+  // a session" better than "a fresh boot". First on the phone shelf, the first
+  // capture of the session on a boot nearly two hours old (whether anything
+  // entered demo mode earlier on that boot is unknown). Then on the 7-inch
+  // shelf, the first capture after a cold boot. The re-run straight after was
+  // clean both times. So expect the first capture after any rig start to need
+  // a re-run, and look at its status bar first.
   //
   // Sleeping on the device rather than in Node keeps this a single synchronous
   // adb call.
