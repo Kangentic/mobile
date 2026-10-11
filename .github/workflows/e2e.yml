@@ -11,7 +11,7 @@ name: Emulator
 # pairing, nothing external. It is the `maestro` job below, and it is what the
 # required `E2E Tests (Maestro)` check actually gates on.
 #
-# The 11 flows under .maestro/paired/ run in the `maestro-paired` job: it
+# The flows under .maestro/paired/ run in the `maestro-paired` job: it
 # checks out the public Kangentic/relay repo, runs it locally on the runner,
 # pairs the app to scripts/stubDesktopPeer.mjs over it (both already used by
 # the local dev rig, see .claude/skills/e2e/SKILL.md), then runs the suite.
@@ -610,7 +610,7 @@ jobs:
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
     runs-on: ubuntu-latest
-    # Local runtime for the 11 flows is 15-20 minutes (.claude/skills/e2e/SKILL.md),
+    # Local runtime was 15-20 minutes, measured with 11 flows (.claude/skills/e2e/SKILL.md),
     # on top of emulator boot, APK install, relay start, and pairing. The app
     # never reports UI-idle, so Maestro falls back to settled-hierarchy aiming
     # and pays 6-8s per tap - tracked separately, but it is why this budget is
@@ -860,7 +860,7 @@ jobs:
             echo "| Suite | Flows | Gates the merge? |"
             echo "|---|---|---|"
             echo "| Smoke | 1 | yes - this check |"
-            echo "| Paired | 11 | no - see the separate \"E2E Tests (Paired)\" check |"
+            echo "| Paired | every flow under .maestro/paired/ | no - see the separate \"E2E Tests (Paired)\" check |"
             echo ""
             echo "The paired suite runs in its own job and reports its own check, but is not"
             echo "read by this gate: it is advisory until it has been green across several PRs,"

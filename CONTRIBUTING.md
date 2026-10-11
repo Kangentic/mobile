@@ -162,7 +162,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - `Release counters (stores)` guards the hand-managed `versionCode` and `buildNumber`
   against reuse. It runs on pull requests only, and it **is** required, so a red run there blocks
   the merge.
-- `E2E Tests (Paired)` runs the 11 paired E2E flows and reports on every PR, but is **not** required
+- `E2E Tests (Paired)` runs the paired E2E flows and reports on every PR, but is **not** required
   and cannot block a merge. GitHub prints a "Required" badge on the checks that are, so the
   absence of one is how the list tells you. Do not silence a red run there: it is real coverage
   of the pairing ceremony and the secure channel.

@@ -31,7 +31,7 @@ where `/merge-pull-request` merges it and pulls the result back into the local `
   far longer for it than the other tiers and do not mistake its pending state for a hang. The
   component tier also surfaces per-shard jobs (`Component Tests (1/2)`, `(2/2)`); those are an
   implementation detail, and the single gate check per tier is what protection requires.
-- **`E2E Tests (Paired)` is advisory and must stay that way.** It runs the 11 paired flows and
+- **`E2E Tests (Paired)` is advisory and must stay that way.** It runs the paired flows and
   reports on every PR, but is not a required check. If it goes red, diagnose it through
   `e2e-flow-doctor`; never drive it green by weakening the job, raising a timeout, or relaxing
   `tests/unit/ciSafeMaestroFlows.test.ts`. A red advisory check does not block the merge.
