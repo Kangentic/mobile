@@ -160,7 +160,6 @@ describe('SettingsScreen', () => {
     mockPush.mockClear();
     useSettingsStore.setState({
       dictationMode: 'auto-send',
-      hasSeenSessionModeHint: false,
       hapticsEnabled: true,
       backgroundNotificationsMode: 'foreground-service',
       // The real defaults, spawn-stalled included: "slow starts" is off unless

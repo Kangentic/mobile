@@ -1,9 +1,10 @@
 import React from 'react';
-import { Dimensions, StyleSheet } from 'react-native';
+import { Dimensions, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { TestInstance } from 'test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { ProjectPickerScreen } from '@/screens/ProjectPickerScreen';
 import { useBoardStore } from '@/state/boardStore';
 import {
@@ -69,6 +70,30 @@ describe('ProjectPickerScreen', () => {
     await renderProjectPicker();
     expect(screen.getByTestId('board-project-project-1').props.accessibilityState.selected).toBe(true);
     expect(screen.getByTestId('board-project-project-2').props.accessibilityState.selected).toBe(false);
+  });
+
+  /**
+   * Regression cover for task #113 change 5: the rows were bare text on the
+   * sheet, with the current project the only one drawn at all (an accent wash
+   * and no outline). Every row is a raised button now, and the selected one
+   * takes the accent wash with the muted accent outline.
+   */
+  it('draws an unselected row raised, with a hairline outline', async () => {
+    await renderProjectPicker();
+
+    const unselectedRow = StyleSheet.flatten(screen.getByTestId('board-project-project-2').props.style as StyleProp<ViewStyle>) as ViewStyle;
+    expect(unselectedRow.backgroundColor).toBe(darkTerminalTheme.colors.surfaceRaised);
+    expect(unselectedRow.borderColor).toBe(darkTerminalTheme.colors.border);
+    expect(unselectedRow.borderWidth).toBe(StyleSheet.hairlineWidth);
+  });
+
+  it('draws the selected row with the accent wash and the muted accent outline', async () => {
+    await renderProjectPicker();
+
+    const selectedRow = StyleSheet.flatten(screen.getByTestId('board-project-project-1').props.style as StyleProp<ViewStyle>) as ViewStyle;
+    expect(selectedRow.backgroundColor).toBe(darkTerminalTheme.colors.accentSubtle);
+    expect(selectedRow.borderColor).toBe(darkTerminalTheme.colors.accentMuted);
+    expect(selectedRow.borderWidth).toBe(StyleSheet.hairlineWidth);
   });
 
   it('writes the choice to the store and dismisses', async () => {

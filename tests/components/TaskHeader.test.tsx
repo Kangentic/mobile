@@ -166,15 +166,15 @@ describe('TaskHeader status glyph', () => {
    * The colour is the one thing that differs, and it is already how
    * AgentStatusIcon.test.tsx distinguishes them.
    *
-   * 'idle' and 'idle-unread' share the warning tone by design, so they collapse
-   * to one answer - which is all this header ever draws for them anyway.
+   * 'idle' and 'idle-unread' share the needs-you tone by design, so they
+   * collapse to one answer - which is all this header ever draws for them anyway.
    */
   const renderedStatusTone = (): string | null => {
     const icon = screen.queryByTestId('task-header-status');
     if (icon === null) return null;
     const { color } = icon.props;
     if (color === darkTerminalTheme.colors.statusWorking) return 'working';
-    if (color === darkTerminalTheme.colors.warning) return 'idle';
+    if (color === darkTerminalTheme.colors.statusNeedsYou) return 'idle';
     return `unknown:${String(color)}`;
   };
 

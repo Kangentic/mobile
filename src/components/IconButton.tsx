@@ -1,6 +1,7 @@
 import React from 'react';
-import { StyleSheet, type GestureResponderEvent } from 'react-native';
+import { StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import { useTheme } from './theme/ThemeProvider';
+import type { Theme } from './theme/tokens';
 import { Icon, type IconProps } from './Icon';
 import { PressScale } from './motion/PressScale';
 
@@ -13,29 +14,45 @@ export interface IconButtonProps {
   accessibilityLabel: string;
   variant?: IconButtonVariant;
   disabled?: boolean;
+  /** The glyph's colour role on a plain or raised button (the fab always uses onAccent). */
+  iconColor?: IconProps['color'];
+  /**
+   * A small status mark drawn over the button's top-right edge (the section
+   * filter's "sections hidden" dot). The caller owns its look and testID; the
+   * button only positions it.
+   */
+  badge?: React.ReactNode;
 }
 
 const FAB_ICON_SIZE = 24;
+const BADGE_INSET = 4;
+
+/** The `fab` variant's diameter, for screens that must keep content clear of it. */
+export function fabDiameter(theme: Theme): number {
+  return theme.minTouchSize + theme.spacing.md;
+}
 
 /**
- * A 44pt-minimum icon-only button. `raised` is the DEFAULT-look for icon
- * actions per ui-conventions.md (visible tap targets): a circular raised
- * surface with a hairline outline. `plain` is a transparent target for
- * dense toolbars where the container already frames the control; `fab` is
- * the accent circular action button meant to be absolutely positioned.
+ * A 44pt-minimum icon-only button. `raised` is the default, per
+ * ui-conventions.md (visible tap targets): a circular raised surface with a
+ * hairline outline. `plain` is a transparent target for dense toolbars where
+ * the container already frames the control; `fab` is the accent circular
+ * action button meant to be absolutely positioned.
  */
 export function IconButton({
   iconName,
   onPress,
   testID,
   accessibilityLabel,
-  variant = 'plain',
+  variant = 'raised',
   disabled = false,
+  iconColor = 'primary',
+  badge,
 }: IconButtonProps): React.JSX.Element {
   const theme = useTheme();
   const isFab = variant === 'fab';
   const isRaised = variant === 'raised';
-  const fabDiameter = theme.minTouchSize + theme.spacing.md;
+  const diameter = fabDiameter(theme);
 
   // Pressed depth comes from PressScale's scale transform; opacity only
   // signals the disabled state.
@@ -63,9 +80,9 @@ export function IconButton({
         isFab && [
           styles.fabShadow,
           {
-            width: fabDiameter,
-            height: fabDiameter,
-            borderRadius: fabDiameter / 2,
+            width: diameter,
+            height: diameter,
+            borderRadius: diameter / 2,
             backgroundColor: theme.colors.accent,
           },
         ],
@@ -76,8 +93,9 @@ export function IconButton({
         // pattern as Button's primary label).
         <Icon name={iconName} size={FAB_ICON_SIZE} colorOverride={theme.colors.onAccent} />
       ) : (
-        <Icon name={iconName} color="primary" />
+        <Icon name={iconName} color={iconColor} />
       )}
+      {badge !== undefined ? <View pointerEvents="none" style={styles.badge}>{badge}</View> : null}
     </PressScale>
   );
 }
@@ -86,6 +104,11 @@ const styles = StyleSheet.create({
   base: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  badge: {
+    position: 'absolute',
+    top: BADGE_INSET,
+    right: BADGE_INSET,
   },
   fabShadow: {
     elevation: 6,

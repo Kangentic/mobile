@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
-import { Icon, Row, Stack, Text, useTheme, type TextColorRole } from '@/components';
+import { Icon, Row, Stack, Text, sheetRowSurface, useTheme, type TextColorRole } from '@/components';
 import { prStateSummary } from '@/components/board/prChipPresentation';
 import { CapabilityError } from '@/channel';
 import { PAUSE_WAIT_MS, archiveTask, deleteTaskFromBoard, pauseTaskSession, resumeTaskSession } from '@/connection/actions';
@@ -392,10 +392,10 @@ function ActionRow({
       testID={testID}
       style={[
         styles.actionRow,
+        sheetRowSurface(theme),
         {
           minHeight: theme.minTouchSize,
           paddingHorizontal: theme.spacing.md,
-          borderRadius: theme.radii.md,
           opacity: disabled ? 0.4 : 1,
         },
       ]}

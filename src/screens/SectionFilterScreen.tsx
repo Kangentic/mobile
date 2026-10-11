@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Check, CirclePause, Clock } from 'lucide-react-native';
-import { AgentStatusIcon, Stack, Text, useTheme } from '@/components';
+import { AgentStatusIcon, Button, Stack, Text, sheetRowSurface, useTheme } from '@/components';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -78,26 +78,14 @@ export function SectionFilterScreen(): React.JSX.Element {
             />
           ))}
         </View>
-        <Pressable
+        <Button
           testID="section-filter-show-all"
-          accessibilityRole="button"
-          accessibilityState={{ disabled: !anyHidden }}
+          label="Show all"
+          variant="ghost"
           disabled={!anyHidden}
           onPress={() => void useSettingsStore.getState().showAllTriageSections()}
-          android_ripple={{ color: theme.colors.border }}
-          style={({ pressed }) => [
-            styles.showAll,
-            {
-              minHeight: ROW_HEIGHT,
-              borderTopColor: theme.colors.border,
-              opacity: pressed && Platform.OS === 'ios' ? 0.6 : 1,
-            },
-          ]}
-        >
-          <Text variant="body" color={anyHidden ? 'accent' : 'muted'}>
-            Show all
-          </Text>
-        </Pressable>
+          style={{ marginHorizontal: theme.spacing.xs, marginTop: theme.spacing.xs }}
+        />
       </Stack>
     </View>
   );
@@ -126,14 +114,16 @@ function SectionRow({
       android_ripple={{ color: theme.colors.border }}
       style={({ pressed }) => [
         styles.row,
+        // Every row on the raised sheet surface. Material marks a selected
+        // list item on the whole row, so Android tints a shown section; iOS
+        // lists do not tint (the trailing tick carries it) and dim on press.
+        sheetRowSurface(theme, !isIos && shown),
         {
           minHeight: ROW_HEIGHT,
           gap: theme.spacing.md,
           paddingHorizontal: theme.spacing.md,
-          borderRadius: theme.radii.md,
-          // Material marks a selected list item on the whole row; iOS lists do
-          // not tint, and show a press highlight instead.
-          backgroundColor: !isIos && shown ? theme.colors.accentSubtle : isIos && pressed ? theme.colors.surfaceRaised : 'transparent',
+          marginBottom: theme.spacing.xs,
+          opacity: isIos && pressed ? 0.6 : 1,
         },
       ]}
     >
@@ -226,10 +216,5 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  showAll: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderTopWidth: StyleSheet.hairlineWidth,
   },
 });

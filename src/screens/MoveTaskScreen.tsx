@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Button, Icon, Row, SheetScrollerSlot, Stack, Text, useTheme } from '@/components';
+import { Badge, Button, Icon, Row, SheetScrollerSlot, Stack, Text, sheetRowSurface, useTheme } from '@/components';
 import { CapabilityError } from '@/channel';
 import { moveTaskOptimistic } from '@/connection/actions';
 import { findTaskById, selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
@@ -12,6 +12,9 @@ import {
   LIST_FLOOR_HEIGHT,
   MOVE_SHEET_RESERVED_HEIGHT,
 } from '@/lib/sheetContentHeights';
+
+/** The current column is not a target, so it recedes behind the choices. */
+const CURRENT_COLUMN_OPACITY = 0.55;
 
 /**
  * Move a task to another column, as a native form sheet route.
@@ -113,41 +116,30 @@ export function MoveTaskScreen(): React.JSX.Element {
                   accessibilityState={{ selected: isSelected, disabled: isCurrent }}
                   disabled={isCurrent}
                   onPress={() => setSelectedColumnId(column.id)}
+                  // One highlight, for the user's pick: the current column is
+                  // not a choice (you cannot move a task to where it is), so it
+                  // fades with a quiet tag rather than wearing the accent too.
                   style={[
                     styles.columnRow,
+                    sheetRowSurface(theme, isSelected),
                     {
                       minHeight: theme.minTouchSize,
                       paddingHorizontal: theme.spacing.md,
-                      borderRadius: theme.radii.md,
-                      backgroundColor: isCurrent
-                        ? theme.colors.accentSubtle
-                        : isSelected
-                          ? theme.colors.surfaceRaised
-                          : 'transparent',
+                      marginBottom: theme.spacing.xs,
+                      opacity: isCurrent ? CURRENT_COLUMN_OPACITY : 1,
                     },
                   ]}
                 >
                   <Row gap="sm" style={styles.columnRowContent}>
                     <Icon
                       name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                      color={isSelected ? 'accent' : 'secondary'}
+                      color={isSelected ? 'accent' : isCurrent ? 'muted' : 'secondary'}
                       size={20}
                     />
-                    <Text variant="body" style={styles.flex}>
+                    <Text variant="body" color={isCurrent ? 'secondary' : 'primary'} style={styles.flex}>
                       {column.name}
                     </Text>
-                    {isCurrent ? (
-                      // Hand-rolled rather than the shared Badge primitive: Badge
-                      // has no accent-tinted fill variant, so it cannot reproduce
-                      // this accentMuted stadium look without extending it.
-                      <View
-                        style={[styles.currentBadge, { backgroundColor: theme.colors.accentMuted, borderRadius: theme.radii.full }]}
-                      >
-                        <Text variant="caption" color="accent" style={styles.currentBadgeText}>
-                          Current
-                        </Text>
-                      </View>
-                    ) : null}
+                    {isCurrent ? <Badge label="Current" shape="pill" align="center" testID={`move-target-${column.id}-current`} /> : null}
                   </Row>
                 </Pressable>
               );
@@ -184,13 +176,6 @@ const styles = StyleSheet.create({
   container: {
     // Deliberately not flex: 1 - 'fitToContents' needs measurable content.
     width: '100%',
-  },
-  currentBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  currentBadgeText: {
-    fontWeight: '600',
   },
   flex: {
     flex: 1,

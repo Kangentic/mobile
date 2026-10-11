@@ -233,24 +233,26 @@ describe('the shot list matches the capture flow', () => {
    * param to it, so the session opened on Terminal and only the flow's own
    * Chat tap could put the permission card on screen. The row is now tapped
    * after the prompt, so it opens on Chat, but the guarded Chat tap stays as
-   * the safety net and must still come after the coach-mark is gone and
-   * before the card is asserted.
+   * the safety net and must still come before the card is asserted.
    */
-  it('dismisses the coach-mark, pages to Chat, then waits for the permission card - in that order', () => {
+  it('pages to Chat, then waits for the permission card - in that order', () => {
     // Non-vacuity guard: every anchor below must actually be found, or the
     // ordering comparison would pass by finding nothing to compare.
-    const hintDismissalCompletesAt = flowSource.lastIndexOf('session-mode-hint');
     const chatTapAt = flowSource.indexOf('session-mode-chat');
     const permissionCardAssertedAt = flowSource.indexOf('permission-approve');
-    expect(hintDismissalCompletesAt).toBeGreaterThanOrEqual(0);
     expect(chatTapAt).toBeGreaterThanOrEqual(0);
     expect(permissionCardAssertedAt).toBeGreaterThanOrEqual(0);
 
-    // lastIndexOf on the hint id: it appears three times (the runFlow guard,
-    // the tap, and the notVisible wait), and what matters is that dismissal
-    // has FINISHED, not merely started, before the Chat tap fires.
-    expect(hintDismissalCompletesAt).toBeLessThan(chatTapAt);
     expect(chatTapAt).toBeLessThan(permissionCardAssertedAt);
+  });
+
+  /**
+   * The first-run coach-mark was removed (task #113), so the flow must not wait
+   * on it: a guarded wait is harmless, but an unguarded one on a testID that no
+   * longer exists would time out the whole capture.
+   */
+  it('no longer references the removed first-run coach-mark', () => {
+    expect(flowSource).not.toContain('session-mode-hint');
   });
 
   /**

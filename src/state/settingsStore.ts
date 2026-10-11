@@ -12,7 +12,10 @@ export type DictationMode = 'auto-send' | 'manual-send' | 'off';
 export type BackgroundNotificationsMode = 'foreground-service' | 'push-only' | 'off';
 
 const DICTATION_MODE_STORAGE_KEY = 'settings.dictationMode';
-const SESSION_MODE_HINT_STORAGE_KEY = 'settings.hasSeenSessionModeHint';
+// 'settings.hasSeenSessionModeHint' recorded that the session screen's
+// first-run "One session, two views" hint had been dismissed. The hint was
+// removed in 2026-10 (the labelled switcher says what each view is), so nothing
+// reads or writes it; a value already stored is left in place as dead data.
 const HAPTICS_ENABLED_STORAGE_KEY = 'settings.hapticsEnabled';
 const BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY = 'settings.backgroundNotificationsMode';
 const PREFERRED_SESSION_LENS_STORAGE_KEY = 'settings.preferredSessionLensByTaskId';
@@ -210,8 +213,6 @@ function isBackgroundNotificationsMode(value: string | null): value is Backgroun
 interface SettingsStoreState {
   /** Default: dictation auto-sends on a final result (the locked UX default). */
   dictationMode: DictationMode;
-  /** True once the one-time session mode-toggle tooltip has been dismissed. */
-  hasSeenSessionModeHint: boolean;
   /** Haptic feedback on meaningful actions (prompt answered, task moved, pairing succeeded). */
   hapticsEnabled: boolean;
   backgroundNotificationsMode: BackgroundNotificationsMode;
@@ -237,7 +238,6 @@ interface SettingsStoreState {
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setDictationMode: (mode: DictationMode) => Promise<void>;
-  markSessionModeHintSeen: () => Promise<void>;
   setHapticsEnabled: (enabled: boolean) => Promise<void>;
   setBackgroundNotificationsMode: (mode: BackgroundNotificationsMode) => Promise<void>;
   setPreferredSessionLens: (taskId: string, lens: PreferredSessionLens) => Promise<void>;
@@ -259,7 +259,6 @@ interface SettingsStoreState {
  */
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   dictationMode: 'auto-send',
-  hasSeenSessionModeHint: false,
   hapticsEnabled: true,
   backgroundNotificationsMode: 'foreground-service',
   preferredSessionLensByTaskId: {},
@@ -288,7 +287,6 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   hydrate: async () => {
     const [
       storedDictationMode,
-      storedModeHintSeen,
       storedHapticsEnabled,
       storedBackgroundMode,
       storedLensMap,
@@ -300,7 +298,6 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       storedNotificationPermissionRequested,
     ] = await Promise.all([
       readSetting(DICTATION_MODE_STORAGE_KEY),
-      readSetting(SESSION_MODE_HINT_STORAGE_KEY),
       readSetting(HAPTICS_ENABLED_STORAGE_KEY),
       readSetting(BACKGROUND_NOTIFICATIONS_MODE_STORAGE_KEY),
       readSetting(PREFERRED_SESSION_LENS_STORAGE_KEY),
@@ -313,7 +310,6 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     ]);
     set({
       dictationMode: isDictationMode(storedDictationMode) ? storedDictationMode : 'auto-send',
-      hasSeenSessionModeHint: storedModeHintSeen === 'true',
       hapticsEnabled: storedHapticsEnabled !== 'false',
       backgroundNotificationsMode: isBackgroundNotificationsMode(storedBackgroundMode)
         ? storedBackgroundMode
@@ -345,11 +341,6 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   setDictationMode: async (mode) => {
     set({ dictationMode: mode });
     await SecureStore.setItemAsync(DICTATION_MODE_STORAGE_KEY, mode);
-  },
-
-  markSessionModeHintSeen: async () => {
-    set({ hasSeenSessionModeHint: true });
-    await SecureStore.setItemAsync(SESSION_MODE_HINT_STORAGE_KEY, 'true');
   },
 
   markNotificationPermissionRequested: async () => {

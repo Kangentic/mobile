@@ -38,14 +38,17 @@ export function AskUserQuestionCard({ sessionId, prompt }: AskUserQuestionCardPr
 
   return (
     <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm }}>
-      <Card testID="ask-user-question-card" style={{ borderColor: theme.colors.warning, borderWidth: 1 }}>
+      {/* The permission card's amber frame and accent ink: both ask for the
+          user's answer, so they wear the one attention hue (task #113, H1).
+          The caution yellow is for warnings only. */}
+      <Card testID="ask-user-question-card" style={{ borderColor: theme.colors.accentMuted, borderWidth: 1 }}>
         <Stack gap="sm">
-          {firstQuestion.header !== null ? <Badge label={firstQuestion.header} color="warning" /> : null}
+          {firstQuestion.header !== null ? <Badge label={firstQuestion.header} color="accent" /> : null}
           <Text variant="bodyStrong" color="primary">
             {firstQuestion.question}
           </Text>
           {firstQuestion.multiSelect ? (
-            <Text variant="caption" color="warning">
+            <Text variant="caption" color="accent">
               Multi-select question - answer in the Terminal tab for full control
             </Text>
           ) : null}

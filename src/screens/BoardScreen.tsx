@@ -4,7 +4,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { FlashList } from '@shopify/flash-list';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCard, Stack, useTheme, type AgentStatusKind } from '@/components';
+import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCard, Stack, fabDiameter, useTheme, type AgentStatusKind } from '@/components';
+import type { Theme } from '@/components/theme/tokens';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
 import { TaskCard } from '@/components/board/TaskCard';
@@ -42,6 +43,11 @@ function reportArchivedFetchFailure(error: unknown): void {
 
 /** Placeholder cards shown for the one round trip that upgrades a board to the full projection. */
 const BOARD_SKELETON_CARDS = ['board-skeleton-1', 'board-skeleton-2', 'board-skeleton-3'];
+
+/** How far the + button sits above the screen's bottom edge. */
+function fabBottomOffset(theme: Theme): number {
+  return theme.spacing.xl;
+}
 
 export function BoardScreen(): React.JSX.Element {
   const theme = useTheme();
@@ -279,7 +285,7 @@ export function BoardScreen(): React.JSX.Element {
         </>
       )}
 
-      <View style={[styles.fabContainer, { right: theme.spacing.lg, bottom: theme.spacing.xl }]}>
+      <View style={[styles.fabContainer, { right: theme.spacing.lg, bottom: fabBottomOffset(theme) }]}>
         <IconButton
           iconName="add"
           variant="fab"
@@ -353,7 +359,7 @@ function ColumnPage({
         <EmptyState
           testID={`board-column-${column.id}-empty`}
           title={isDone ? 'Nothing completed yet' : 'No tasks'}
-          caption={isDone ? 'Finished tasks land here.' : 'Move a task here or add one from the desktop.'}
+          caption={isDone ? 'Finished tasks land here.' : 'Move a task here or tap + to add one.'}
           overseerSize={54}
           overseerAnimate="blink-loop"
         />
@@ -368,7 +374,9 @@ function ColumnPage({
       keyExtractor={(task) => task.id}
       getItemType={() => 'task'}
       refreshControl={refreshControl}
-      contentContainerStyle={{ paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.xxl }}
+      // The list ends clear of the + button, so the last card's footer never
+      // sits under it: the button's bottom offset, its diameter, and a gap.
+      contentContainerStyle={{ paddingTop: theme.spacing.sm, paddingBottom: fabBottomOffset(theme) + fabDiameter(theme) + theme.spacing.lg }}
       renderItem={renderTask}
       // Only the done column pages: every other column's tasks arrive whole
       // with the snapshot, so there is nothing further to fetch.

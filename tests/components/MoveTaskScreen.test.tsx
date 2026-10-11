@@ -1,9 +1,10 @@
 import React from 'react';
-import { Dimensions, StyleSheet } from 'react-native';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { Dimensions, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import type { TestInstance } from 'test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { MoveTaskScreen } from '@/screens/MoveTaskScreen';
 import { CapabilityError } from '@/channel';
 import { useBoardStore } from '@/state/boardStore';
@@ -174,6 +175,64 @@ describe('MoveTaskScreen', () => {
 
     expect(screen.getByTestId('move-target-p2-triage')).toBeTruthy();
     expect(screen.queryByTestId('move-target-lane-doing')).toBeNull();
+  });
+});
+
+/**
+ * Regression cover for task #113 change 4: the current column wore the accent
+ * wash and the picked column a quiet raised fill, so the sheet highlighted two
+ * rows in two ways and the loud one was the one that cannot be chosen. Now only
+ * the user's pick is highlighted (the same accent wash and muted outline the
+ * Board's active chip wears); every other row is a raised button, and the
+ * current column recedes with a "Current" tag.
+ */
+describe('MoveTaskScreen row highlight', () => {
+  const { colors } = darkTerminalTheme;
+
+  beforeEach(() => {
+    mockParams = { taskId: 'task-1', projectId: 'project-1' };
+    useBoardStore.getState().reset();
+    seedBoard();
+  });
+
+  function rowStyle(columnId: string): ViewStyle {
+    return StyleSheet.flatten(screen.getByTestId(`move-target-${columnId}`).props.style as StyleProp<ViewStyle>) as ViewStyle;
+  }
+
+  it('fades the current column and tags it Current, without the accent fill', async () => {
+    await renderMoveTaskScreen();
+
+    const currentRow = rowStyle('lane-todo');
+    // An unset opacity is a full-strength row, so default it for a readable failure.
+    expect(currentRow.opacity ?? 1).toBeLessThan(1);
+    expect(currentRow.backgroundColor).not.toBe(colors.accentSubtle);
+    expect(currentRow.backgroundColor).toBe(colors.surfaceRaised);
+    expect(within(screen.getByTestId('move-target-lane-todo-current')).getByText('Current')).toBeTruthy();
+  });
+
+  it('leaves the other columns full strength, raised and untagged', async () => {
+    await renderMoveTaskScreen();
+
+    const otherRow = rowStyle('lane-doing');
+    expect(otherRow.opacity ?? 1).toBe(1);
+    expect(otherRow.backgroundColor).toBe(colors.surfaceRaised);
+    expect(otherRow.borderColor).toBe(colors.border);
+    expect(otherRow.borderWidth).toBe(StyleSheet.hairlineWidth);
+    expect(screen.queryByTestId('move-target-lane-doing-current')).toBeNull();
+  });
+
+  it('highlights only the picked column, with the accent wash and the muted accent outline', async () => {
+    await renderMoveTaskScreen();
+
+    await fireEvent.press(screen.getByTestId('move-target-lane-doing'));
+
+    const pickedRow = rowStyle('lane-doing');
+    expect(pickedRow.backgroundColor).toBe(colors.accentSubtle);
+    expect(pickedRow.borderColor).toBe(colors.accentMuted);
+    // The current column stays unhighlighted once something else is picked:
+    // exactly one row wears the accent.
+    expect(rowStyle('lane-todo').backgroundColor).toBe(colors.surfaceRaised);
+    expect(rowStyle('lane-todo').borderColor).toBe(colors.border);
   });
 });
 

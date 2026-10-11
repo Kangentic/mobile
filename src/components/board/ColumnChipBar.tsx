@@ -1,8 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
-import { Badge, Row, Text, useTheme } from '@/components';
-import { getColumnIcon } from './columnIcons';
+import { useTheme } from '@/components';
+import { ColumnChip } from './ColumnChip';
 
 export interface ColumnChipBarProps {
   columns: BoardColumnWire[];
@@ -11,9 +11,6 @@ export interface ColumnChipBarProps {
   activeIndex: number;
   onSelect: (columnIndex: number) => void;
 }
-
-const CHIP_DOT_SIZE = 8;
-const CHIP_ICON_SIZE = 14;
 
 /**
  * The board's column navigator: one named chip per column with its task
@@ -44,61 +41,22 @@ export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: Co
       contentContainerStyle={{ paddingHorizontal: theme.spacing.md, gap: theme.spacing.sm }}
       style={styles.bar}
     >
-      {columns.map((column, columnIndex) => {
-        const isActive = columnIndex === activeIndex;
-        const ColumnIcon = getColumnIcon(column);
-        return (
-          <Pressable
-            key={column.id}
-            testID={`board-column-chip-${column.id}`}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: isActive }}
-            accessibilityLabel={`${column.name}, ${taskCounts[columnIndex] ?? 0} tasks`}
-            onPress={() => onSelect(columnIndex)}
-            onLayout={(event) => {
-              chipOffsetsRef.current.set(columnIndex, event.nativeEvent.layout.x);
-            }}
-            style={[
-              styles.chip,
-              {
-                minHeight: theme.minTouchSize,
-                borderRadius: theme.radii.md,
-                paddingHorizontal: theme.spacing.md,
-                backgroundColor: isActive ? theme.colors.surfaceRaised : 'transparent',
-                borderColor: isActive ? theme.colors.accentMuted : theme.colors.border,
-              },
-            ]}
-          >
-            <Row gap="sm" style={styles.chipContent}>
-              <Row gap="xs" style={styles.chipIdentity}>
-                {/* The desktop's column icon (its own icon picker, tinted
-                    with the column's color), falling back to a plain color
-                    dot for a column with neither a custom icon nor a
-                    matching role default - never a fill, always a small
-                    tinted glyph. */}
-                {ColumnIcon !== null ? (
-                  <ColumnIcon size={CHIP_ICON_SIZE} color={column.color} strokeWidth={2} />
-                ) : column.color ? (
-                  <View style={[styles.colorDot, { backgroundColor: column.color }]} />
-                ) : null}
-                <Text variant="caption" color={isActive ? 'accent' : 'secondary'}>
-                  {column.name}
-                </Text>
-              </Row>
-              {/* The count reads as a neutral tally, not a second accented
-                  element - active state is already carried by the chip's
-                  border and the name's color, so the pill stays flat and
-                  unbordered (no double hairline against the chip's own).
-                  An empty column shows no pill at all: a row of "0"s on a
-                  fresh board is noise, and the bare chip already reads as
-                  empty. */}
-              {(taskCounts[columnIndex] ?? 0) > 0 ? (
-                <Badge label={String(taskCounts[columnIndex] ?? 0)} color="muted" shape="pill" outlined={false} />
-              ) : null}
-            </Row>
-          </Pressable>
-        );
-      })}
+      {columns.map((column, columnIndex) => (
+        <ColumnChip
+          key={column.id}
+          label={column.name}
+          column={column}
+          active={columnIndex === activeIndex}
+          count={taskCounts[columnIndex] ?? 0}
+          testID={`board-column-chip-${column.id}`}
+          accessibilityRole="tab"
+          accessibilityLabel={`${column.name}, ${taskCounts[columnIndex] ?? 0} tasks`}
+          onPress={() => onSelect(columnIndex)}
+          onLayout={(event) => {
+            chipOffsetsRef.current.set(columnIndex, event.nativeEvent.layout.x);
+          }}
+        />
+      ))}
     </ScrollView>
   );
 }
@@ -106,20 +64,5 @@ export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: Co
 const styles = StyleSheet.create({
   bar: {
     flexGrow: 0,
-  },
-  chip: {
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  chipContent: {
-    alignItems: 'center',
-  },
-  chipIdentity: {
-    alignItems: 'center',
-  },
-  colorDot: {
-    width: CHIP_DOT_SIZE,
-    height: CHIP_DOT_SIZE,
-    borderRadius: CHIP_DOT_SIZE / 2,
   },
 });

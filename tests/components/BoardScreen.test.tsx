@@ -1,5 +1,6 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { BoardScreen } from '@/screens/BoardScreen';
 import { ENDED_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
@@ -560,7 +561,7 @@ describe('BoardScreen', () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.warning);
+    expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
   });
 
   /**
@@ -620,6 +621,49 @@ describe('BoardScreen', () => {
 
     // The empty Doing column states itself instead of blank space.
     expect(screen.getByTestId('board-column-lane-doing-empty')).toBeTruthy();
+  });
+
+  /**
+   * Regression cover for task #113 change 8. The + button is on this very
+   * screen, so an empty column says to tap it; "add one from the desktop"
+   * sent the user off the phone for something the phone can do.
+   */
+  it('tells an empty column to be filled with the + button, not from the desktop', async () => {
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    const emptyColumn = screen.getByTestId('board-column-lane-doing-empty');
+    expect(within(emptyColumn).getByText('Move a task here or tap + to add one.')).toBeTruthy();
+    expect(within(emptyColumn).queryByText('Move a task here or add one from the desktop.')).toBeNull();
+  });
+
+  /**
+   * The + button floats over the lists, so the last card must be able to scroll
+   * clear of it: the lists' bottom padding has to cover the button's own bottom
+   * offset plus its diameter (read off the rendered button, not restated here),
+   * with a gap to spare. The old padding was the generic page gutter, which put
+   * the last card's footer under the button.
+   */
+  it('pads each column list so its last card scrolls clear of the + button', async () => {
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    const fabButton = screen.getByTestId('board-create-task');
+    const fabDiameterPoints = StyleSheet.flatten(fabButton.props.style as StyleProp<ViewStyle>).height as number;
+    const fabBottomOffset = StyleSheet.flatten(fabButton.parent?.props.style as StyleProp<ViewStyle>).bottom as number;
+    const listPaddingBottom = StyleSheet.flatten(screen.getByTestId('board-column-lane-todo-list').props.contentContainerStyle as StyleProp<ViewStyle>)
+      .paddingBottom as number;
+
+    // Sanity: both reads reached real numbers, so the comparison below is not NaN-vacuous.
+    expect(fabDiameterPoints).toBeGreaterThan(0);
+    expect(fabBottomOffset).toBeGreaterThan(0);
+    expect(listPaddingBottom).toBeGreaterThan(fabBottomOffset + fabDiameterPoints);
   });
 
   it('a pager swipe moves the active chip highlight (swipe -> chip sync)', async () => {

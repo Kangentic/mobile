@@ -1,8 +1,9 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCard';
 import { answerPermissionPrompt } from '@/connection/actions';
 import type { PendingPromptDescriptor } from '@/conversation/transcriptCells';
@@ -99,6 +100,32 @@ describe('AskUserQuestionCard', () => {
   it('keeps the question header badge shrink-wrapped in its Stack', async () => {
     await renderCard();
     expect(headerBadgeAlignSelf('Approach')).toBe('flex-start');
+  });
+
+  /**
+   * Regression cover for task #113 (H1): the card asked for the user's answer
+   * in the caution yellow while the permission card, which asks for the same
+   * thing, wore the amber frame. Both are "needs you" now, so both take
+   * accentMuted for the frame; the yellow is for warnings only.
+   */
+  it('frames the card in the attention amber, as the permission card does', async () => {
+    await renderCard();
+
+    const cardFrame = StyleSheet.flatten(screen.getByTestId('ask-user-question-card').props.style as StyleProp<ViewStyle>) as ViewStyle;
+    expect(cardFrame.borderColor).toBe(darkTerminalTheme.colors.accentMuted);
+    expect(cardFrame.borderColor).not.toBe(darkTerminalTheme.colors.warning);
+  });
+
+  it('sets the multi-select hint in accent ink, not the caution yellow', async () => {
+    await renderCard({
+      ...questionPrompt,
+      input: { questions: [{ question: 'Pick all that apply', multiSelect: true, options: [{ label: 'Option one' }] }] },
+    });
+
+    const hintStyle = StyleSheet.flatten(
+      screen.getByText('Multi-select question - answer in the Terminal tab for full control').props.style as StyleProp<TextStyle>,
+    ) as TextStyle;
+    expect(hintStyle.color).toBe(darkTerminalTheme.colors.accent);
   });
 
   it('sends the digit keystroke for the tapped option', async () => {

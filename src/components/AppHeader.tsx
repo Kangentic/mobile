@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronsUpDown } from 'lucide-react-native';
 import { Brandmark } from './brand/Brandmark';
-import { Icon } from './Icon';
+import { IconButton } from './IconButton';
 import { Row } from './Row';
 import { Text } from './Text';
 import { useTheme } from './theme/ThemeProvider';
@@ -87,20 +87,13 @@ export function AppHeader({ title, subtitle, onTitlePress, divider = true, actio
         </View>
       )}
       {actions}
-      <Pressable
+      <IconButton
+        iconName="settings"
+        iconColor="secondary"
         testID="header-settings-button"
-        accessibilityRole="button"
         accessibilityLabel="Settings"
         onPress={() => router.push('/settings')}
-        style={{
-          minWidth: theme.minTouchSize,
-          minHeight: theme.minTouchSize,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Icon name="settings" color="secondary" />
-      </Pressable>
+      />
     </Row>
   );
 }

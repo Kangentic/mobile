@@ -100,24 +100,10 @@ env:
     visible:
       id: "session-screen"
     timeout: 45000
-# The first-run "One session, two views" coach-mark covers most of a phone
-# screen. It is correct product behaviour and wrong for a listing image, so
-# dismiss it (it is tap-to-dismiss) and only then capture.
+# (A first-run "One session, two views" coach-mark used to sit over the mode
+# switcher here and had to be dismissed first. It was removed in 2026-10, task
+# #113, so the session opens straight onto its panes.)
 #
-# DISMISSED BEFORE THE CHAT TAP, not after: the coach-mark sits over the mode
-# switcher, so a tap aimed at a segment while it is up hits the coach-mark
-# instead and the pager never turns.
-- runFlow:
-    when:
-      visible:
-        id: "session-mode-hint"
-    commands:
-      - tapOn:
-          id: "session-mode-hint"
-      - extendedWaitUntil:
-          notVisible:
-            id: "session-mode-hint"
-          timeout: 10000
 # PAGE TO CHAT EXPLICITLY, even though we should already be there.
 #
 # The row is tapped after the prompt landed (see the search above), so it is a
