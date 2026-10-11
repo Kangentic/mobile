@@ -53,7 +53,7 @@ install_apk "$apk_path"
 disable_animations
 # NB: the logcat clear happens later, just before the suite runs, not here.
 # Relay start, stub start, and the pairing ceremony all sit between the two
-# points, and on an 11-flow suite the buffer is the scarce resource - clearing
+# points, and across the whole paired suite the buffer is the scarce resource - clearing
 # it here would leave the suite's own window competing with the whole setup
 # phase for buffer space.
 
@@ -174,7 +174,7 @@ mkdir -p "$RUNNER_TEMP/maestro-output" "$RUNNER_TEMP/maestro-debug" "$RUNNER_TEM
 # pairing genuinely completed end to end (its final assertion is the stub's
 # session row landing on the Agents feed), and running the paired suite
 # against a phone that never paired would fail every flow for one reason
-# with eleven confusing symptoms.
+# with one confusing symptom per flow.
 echo "Running the pairing bootstrap..."
 if ! maestro test \
   -e "PAIRING_URI=$pairing_uri" \

@@ -23,7 +23,7 @@
  *
  * The allowlists are kept PER JOB, not pooled. The required gate exits on
  * `needs.maestro.result`, so a `flows: .maestro/paired` line added to the
- * `maestro` job's matrix puts all 11 flows behind the required check just as
+ * `maestro` job's matrix puts every paired flow behind the required check just as
  * surely as adding `maestro-paired` to the gate's `needs:` does. A single
  * pooled allowlist accepted that silently, because the entry was on it for
  * the other job's sake. Which job may run an entry is the thing being
@@ -109,7 +109,7 @@ describe('CI runs only the Maestro entries this guard knows about', () => {
 
   it('keeps the paired suite out of the REQUIRED gate job', () => {
     // The gate reads `needs.maestro.result`, so a paired entry added to the
-    // `maestro` job's matrix routes all 11 flows into the required check just
+    // `maestro` job's matrix routes every paired flow into the required check just
     // as surely as adding `maestro-paired` to the gate's `needs:` does. The
     // separate allowlist is what closes that second door; a single combined
     // allowlist accepted this silently.
@@ -161,7 +161,7 @@ describe('CI runs only the Maestro entries this guard knows about', () => {
   it('keeps the advisory paired job OUT of the required gate', () => {
     // The whole safety design of the paired suite. `E2E Tests (Maestro)` is a
     // required check on `main`, so anything in its `needs:` can block every
-    // merge in the repository. The paired suite is 11 flows against a relay, a
+    // merge in the repository. The paired suite is a set of flows against a relay, a
     // stub peer, and an emulator, and it has no CI track record yet, so it
     // reports its own advisory check instead.
     //

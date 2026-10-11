@@ -104,7 +104,7 @@ mints a new one, so a URI from an earlier run is stale and fails identically.
 maestro --device <serial> test .maestro/paired
 ```
 
-Roughly 15-20 minutes for eleven flows. **Never edit `src/` while it runs** -
+Roughly 15-20 minutes, measured when the suite was eleven flows. **Never edit `src/` while it runs** -
 against a dev client Fast Refresh pushes every save into the app mid-flow,
 which presents as most flows failing on unrelated selectors.
 
