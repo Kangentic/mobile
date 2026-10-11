@@ -34,7 +34,7 @@
       "color": "#f59e0b",
       "autoSpawn": true,
       "modelOverride": "opus",
-      "effortOverride": "high",
+      "effortOverride": "xhigh",
       "sessionTarget": "isolated",
       "sessionSpawnStrategy": "always_spawn_new",
       "automations": {
