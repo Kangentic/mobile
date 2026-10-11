@@ -154,6 +154,28 @@ describe('activityStore', () => {
   });
 
   /**
+   * A refused subscribe is not proof the session is gone: the desktop answers
+   * any exception inside a handler with a codeless refusal, and the
+   * subscription manager keeps the session desired and asks again. The session
+   * screen's gate on a refusal relies on the answer to that re-ask putting the
+   * feed back to 'live', so a refusal is a state the feed leaves, not a verdict.
+   *
+   * Mutation seen failing: applySnapshot's feedStatus line changed to also keep
+   * 'rejected' (`existing.feedStatus === 'ended' || existing.feedStatus ===
+   * 'rejected' ? existing.feedStatus : 'live'`) - "expected 'rejected' to be
+   * 'live'".
+   */
+  it('a snapshot that answers a refused subscribe puts the feed back to live', () => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore.getState().markRejected('sess-1');
+    expect(useActivityStore.getState().bySessionId['sess-1'].feedStatus).toBe('rejected');
+
+    useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture());
+
+    expect(useActivityStore.getState().bySessionId['sess-1'].feedStatus).toBe('live');
+  });
+
+  /**
    * Caught by the session-ended-state E2E flow. A session that ends leaves the
    * board's `view: 'sessions'` projection in the very next snapshot (its task
    * no longer has a session_id, so the projection drops the task), and
