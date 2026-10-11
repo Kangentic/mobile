@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Check } from 'lucide-react-native';
 import type { ReadBoardProjectSummary } from '@kangentic/protocol';
-import { AgentStatusIcon, SheetScrollerSlot, Stack, Text, TextField, useTheme } from '@/components';
+import { AgentStatusIcon, SheetScrollerSlot, Stack, Text, TextField, sheetRowSurface, useTheme } from '@/components';
 import { sectionForEntry, useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import {
@@ -231,11 +231,11 @@ function ProjectRow({
       onPress={onSelect}
       style={[
         styles.row,
+        sheetRowSurface(theme, selected),
         {
           minHeight: theme.minTouchSize,
           paddingHorizontal: theme.spacing.md,
-          borderRadius: theme.radii.md,
-          backgroundColor: selected ? theme.colors.accentSubtle : 'transparent',
+          marginBottom: theme.spacing.xs,
         },
       ]}
     >

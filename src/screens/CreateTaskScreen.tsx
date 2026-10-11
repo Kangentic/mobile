@@ -1,8 +1,9 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Button, SheetScrollerSlot, Stack, Text, TextField, useTheme } from '@/components';
+import { ColumnChip } from '@/components/board/ColumnChip';
 import { CapabilityError } from '@/channel';
 import { createTask } from '@/connection/actions';
 import { reportHandledError } from '@/observability/crashReporting';
@@ -92,7 +93,13 @@ export function CreateTaskScreen(): React.JSX.Element {
   // column the pager happened to be showing: a new task is new work.
   const defaultColumnName = columns[0]?.name ?? null;
   const columnName = pickedColumnName ?? defaultColumnName ?? BACKLOG_COLUMN_NAME;
-  const columnChoices = useMemo(() => [...columns.map((column) => column.name), BACKLOG_COLUMN_NAME], [columns]);
+  // Each board column carries itself, so its chip draws the column's own icon
+  // and colour as the Board's chip bar does; Backlog is not a column and draws
+  // its name alone.
+  const columnChoices = useMemo(
+    () => [...columns.map((column) => ({ name: column.name, column })), { name: BACKLOG_COLUMN_NAME, column: null }],
+    [columns],
+  );
 
   const confirm = useCallback(() => {
     const trimmedTitle = title.trim();
@@ -160,33 +167,18 @@ export function CreateTaskScreen(): React.JSX.Element {
             keyboardShouldPersistTaps="handled"
             testID="create-task-column-scroller"
           >
-            <View style={[styles.columnChips, { gap: theme.spacing.xs }]}>
-              {columnChoices.map((choiceName) => {
-                const isSelected = columnName === choiceName;
-                return (
-                  <Pressable
-                    key={choiceName}
-                    testID={`create-task-column-${choiceName}`}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: isSelected }}
-                    onPress={() => setPickedColumnName(choiceName)}
-                    style={[
-                      styles.columnChip,
-                      {
-                        minHeight: theme.minTouchSize,
-                        paddingHorizontal: theme.spacing.md,
-                        borderRadius: theme.radii.md,
-                        borderColor: isSelected ? theme.colors.accent : theme.colors.border,
-                        backgroundColor: isSelected ? theme.colors.surfaceRaised : 'transparent',
-                      },
-                    ]}
-                  >
-                    <Text variant="body" color={isSelected ? 'primary' : 'secondary'}>
-                      {choiceName}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+            <View style={[styles.columnChips, { gap: theme.spacing.sm }]}>
+              {columnChoices.map((choice) => (
+                <ColumnChip
+                  key={choice.name}
+                  label={choice.name}
+                  column={choice.column}
+                  active={columnName === choice.name}
+                  testID={`create-task-column-${choice.name}`}
+                  accessibilityRole="radio"
+                  onPress={() => setPickedColumnName(choice.name)}
+                />
+              ))}
             </View>
           </ScrollView>
         </SheetScrollerSlot>
@@ -209,14 +201,6 @@ export function CreateTaskScreen(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  columnChip: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    // A full 1px border, not hairlineWidth: a sub-pixel border on a rounded
-    // corner anti-aliases into visible jagged pixelation at the selected
-    // chip's full-saturation accent color.
-    borderWidth: 1,
-  },
   columnChips: {
     flexDirection: 'row',
   },

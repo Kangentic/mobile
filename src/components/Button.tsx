@@ -9,6 +9,8 @@ import { PressScale } from './motion/PressScale';
  * `tinted` is the desktop's in-place action button (the task view's Resume
  * session): an accent wash with an accent outline and accent ink, for an
  * action that belongs in the content area rather than a primary call to action.
+ * `ghost` is the secondary choice beside a primary (Deny, Cancel): a raised
+ * fill with a hairline outline, so it reads as a button.
  */
 export type ButtonVariant = 'primary' | 'ghost' | 'danger' | 'tinted';
 
@@ -49,6 +51,7 @@ export function Button({ label, onPress, testID, variant = 'primary', disabled =
           opacity: disabled ? 0.5 : 1,
         },
         variant === 'tinted' ? { borderWidth: 1, borderColor: theme.colors.accentMuted } : null,
+        variant === 'ghost' ? { borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border } : null,
         style,
       ]}
     >
@@ -72,8 +75,10 @@ function backgroundForVariant(variant: ButtonVariant, colors: ReturnType<typeof 
   switch (variant) {
     case 'primary':
       return colors.accent;
+    // Not transparent: a bare label is a naked tap target (ui-conventions.md),
+    // and beside a filled primary it read as text rather than a choice.
     case 'ghost':
-      return 'transparent';
+      return colors.surfaceRaised;
     case 'danger':
       return colors.danger;
     case 'tinted':
@@ -83,7 +88,7 @@ function backgroundForVariant(variant: ButtonVariant, colors: ReturnType<typeof 
 
 /**
  * Solid fills (primary/danger) carry onAccent ink, guaranteed readable on
- * accent and semantic fills; the transparent ghost uses textPrimary, and the
+ * accent and semantic fills; the raised ghost uses textPrimary, and the
  * tinted wash takes the accent itself, as the desktop's accent-fg does.
  */
 function textColorForVariant(variant: ButtonVariant, colors: ReturnType<typeof useTheme>['colors']): string {

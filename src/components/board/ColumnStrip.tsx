@@ -182,8 +182,8 @@ export const ColumnStrip = React.memo(function ColumnStrip({
  * A plain function, not a component: the glyph is a stable module-level entry
  * of columnIcons' registry, but the React Compiler's static-components rule
  * cannot see that through a function call and reads it as a component created
- * during render. (ColumnChipBar and TaskHeader make the same lookup inside a
- * callback, where the rule does not look.)
+ * during render. (ColumnChip's `columnGlyph` does the same; TaskHeader makes the
+ * lookup inside a render callback, where the rule does not look.)
  */
 function columnMarker(column: BoardColumnWire, faintColor: string, stripTestID: string): React.JSX.Element {
   const ColumnIcon = getColumnIcon(column);

@@ -32,7 +32,6 @@ import {
   SessionSwapVeil,
 } from './SessionSwapVeil';
 import { SessionInputBar } from './SessionInputBar';
-import { ModeToggleHint } from './ModeToggleHint';
 import { ResumePanel } from './ResumePanel';
 import { RESUME_FAILED_MESSAGE, useResumeOffer } from './useResumeOffer';
 import { resolveCurrentSessionId } from './sessionResolution';
@@ -796,12 +795,6 @@ export function SessionScreen(): React.JSX.Element {
   );
   const agentLabel = useBoardStore((state) => findTaskById(state, taskId)?.task.agent ?? null);
 
-  const hasSeenSessionModeHint = useSettingsStore((state) => state.hasSeenSessionModeHint);
-  const showModeHint = settingsHydrated && !hasSeenSessionModeHint && !sessionEnded && sessionId !== null;
-  const dismissModeHint = useCallback(() => {
-    void useSettingsStore.getState().markSessionModeHintSeen();
-  }, []);
-
   // Deep chat content (the prompt cards' "Answer in terminal" escape
   // hatch) raises a one-shot mode request through the terminal UI store.
   // Subscription-callback form: the store is the external system, setState
@@ -825,7 +818,6 @@ export function SessionScreen(): React.JSX.Element {
       // A deliberate choice is final: hydration must not overwrite it.
       setLensAwaitingHydration(false);
       setMode(nextMode);
-      dismissModeHint();
       // Remember the task's lens (terminal/chat only: Changes is a
       // destination the user visits, not a preferred way to watch the
       // agent).
@@ -833,7 +825,7 @@ export function SessionScreen(): React.JSX.Element {
         void useSettingsStore.getState().setPreferredSessionLens(taskId, nextMode);
       }
     },
-    [dismissModeHint, taskId],
+    [taskId],
   );
 
   /**
@@ -1002,7 +994,6 @@ export function SessionScreen(): React.JSX.Element {
           {showQuietVeil ? <SessionSwapVeil waiting={quietWindowCleared} /> : showLaunchVeil ? <SessionSwapVeil waiting /> : null}
         </View>
 
-        {showModeHint ? <ModeToggleHint onDismiss={dismissModeHint} /> : null}
         <SessionInputBar
           sessionId={displaySessionId}
           mode={mode}

@@ -87,12 +87,18 @@ describe('Button variants', () => {
     expect(labelInk()).toBe(colors.onAccent);
   });
 
-  it('keeps textPrimary ink on the transparent ghost variant, with no outline', async () => {
+  /**
+   * Regression cover for task #113 change 10: a transparent ghost (Deny beside
+   * Approve, Cancel on the pairing check) read as a label rather than a button,
+   * a naked tap target under ui-conventions.md.
+   */
+  it('draws the ghost variant on a raised fill with a hairline outline and textPrimary ink', async () => {
     await renderButton('ghost');
 
     const surface = buttonSurfaceStyle();
-    expect(surface.backgroundColor).toBe('transparent');
-    expect(surface.borderWidth).toBeUndefined();
+    expect(surface.backgroundColor).toBe(colors.surfaceRaised);
+    expect(surface.borderWidth).toBe(StyleSheet.hairlineWidth);
+    expect(surface.borderColor).toBe(colors.border);
     expect(labelInk()).toBe(colors.textPrimary);
   });
 });

@@ -225,7 +225,7 @@ describe('SessionScreen terminal pane across a session swap', () => {
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useTranscriptStore.getState().reset();
-    useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
+    useSettingsStore.setState({ hydrated: true });
   });
 
   it('keeps the mounted terminal pane fed when the board swaps the task session', async () => {

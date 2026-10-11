@@ -1,6 +1,6 @@
 import React from 'react';
-import { Dimensions, StyleSheet } from 'react-native';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { Dimensions, StyleSheet, type ColorValue, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import type { TestInstance } from 'test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
@@ -138,6 +138,47 @@ describe('CreateTaskScreen', () => {
       title: 'Ship it',
       description: '',
       column: 'Doing',
+    });
+  });
+
+  /**
+   * Regression cover for task #113 change 7: the destination chips were a
+   * one-off look (a full accent outline, primary ink) that matched nothing
+   * else. They are the Board's column chip now, so the selected one wears the
+   * muted accent outline and accent ink, the same as the chip bar.
+   */
+  describe('destination chips', () => {
+    const { colors } = darkTerminalTheme;
+
+    function chipSurface(columnName: string): ViewStyle {
+      return StyleSheet.flatten(screen.getByTestId(`create-task-column-${columnName}`).props.style as StyleProp<ViewStyle>) as ViewStyle;
+    }
+
+    function chipLabelInk(columnName: string): ColorValue | undefined {
+      const labelStyle = StyleSheet.flatten(
+        within(screen.getByTestId(`create-task-column-${columnName}`)).getByText(columnName).props.style as StyleProp<TextStyle>,
+      ) as TextStyle;
+      return labelStyle.color;
+    }
+
+    it("draws the selected chip as the Board's active chip: raised, muted accent outline, accent ink", async () => {
+      await renderCreateTaskScreen();
+      await fireEvent.press(screen.getByTestId('create-task-column-Doing'));
+
+      expect(chipSurface('Doing').borderColor).toBe(colors.accentMuted);
+      expect(chipSurface('Doing').backgroundColor).toBe(colors.surfaceRaised);
+      expect(chipLabelInk('Doing')).toBe(colors.accent);
+    });
+
+    // A control for the test above: it holds under the old look as well, and
+    // exists so the selected look cannot be "fixed" by painting every chip with it.
+    it("draws an unselected chip as the Board's idle chip: hairline outline, no fill, secondary ink", async () => {
+      await renderCreateTaskScreen();
+      await fireEvent.press(screen.getByTestId('create-task-column-Doing'));
+
+      expect(chipSurface('To Do').borderColor).toBe(colors.border);
+      expect(chipSurface('To Do').backgroundColor).toBe('transparent');
+      expect(chipLabelInk('To Do')).toBe(colors.textSecondary);
     });
   });
 

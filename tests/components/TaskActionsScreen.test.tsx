@@ -1,7 +1,9 @@
 import React from 'react';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { PAUSE_FAILED_MESSAGE, PAUSE_UNCONFIRMED_MESSAGE, TaskActionsScreen } from '@/screens/TaskActionsScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
@@ -705,6 +707,24 @@ describe('TaskActionsScreen', () => {
     expect(screen.getByTestId('task-action-archive')).toBeTruthy();
     expect(screen.getByTestId('task-action-delete')).toBeTruthy();
   });
+
+  /**
+   * Regression cover for task #113 change 3: the long-press hub's rows were
+   * bare text on the sheet, a menu rather than a set of buttons
+   * (ui-conventions.md, visible tap targets). Each one sits on the shared
+   * raised sheet-row surface, whatever its role.
+   */
+  it.each(['task-action-move', 'task-action-edit', 'task-action-archive', 'task-action-delete'])(
+    'draws %s on a raised row with a hairline outline',
+    async (testID) => {
+      await renderTaskActions();
+
+      const rowSurface = StyleSheet.flatten(screen.getByTestId(testID).props.style as StyleProp<ViewStyle>) as ViewStyle;
+      expect(rowSurface.backgroundColor).toBe(darkTerminalTheme.colors.surfaceRaised);
+      expect(rowSurface.borderColor).toBe(darkTerminalTheme.colors.border);
+      expect(rowSurface.borderWidth).toBe(StyleSheet.hairlineWidth);
+    },
+  );
 
   /**
    * REPLACE, not push: dismissing the sheet these open should return to the

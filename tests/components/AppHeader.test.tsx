@@ -1,6 +1,8 @@
 import React from 'react';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { AppHeader, ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -38,6 +40,25 @@ describe('AppHeader', () => {
     await fireEvent.press(screen.getByTestId('header-settings-button'));
 
     expect(mockPush).toHaveBeenCalledWith('/settings');
+  });
+
+  /**
+   * Regression cover for task #113 change 2: the Settings glyph was a bare
+   * Pressable, a naked tap target (ui-conventions.md, visible tap targets). It
+   * is the raised IconButton now, on a surfaceRaised fill with a hairline
+   * outline, the same on every tab's header.
+   */
+  it('draws the settings button on a raised surface with a hairline outline', async () => {
+    await render(
+      <ThemeProvider>
+        <AppHeader title="Home" />
+      </ThemeProvider>,
+    );
+
+    const settingsSurface = StyleSheet.flatten(screen.getByTestId('header-settings-button').props.style as StyleProp<ViewStyle>) as ViewStyle;
+    expect(settingsSurface.backgroundColor).toBe(darkTerminalTheme.colors.surfaceRaised);
+    expect(settingsSurface.borderColor).toBe(darkTerminalTheme.colors.border);
+    expect(settingsSurface.borderWidth).toBe(StyleSheet.hairlineWidth);
   });
 
   it('renders a pressable title with a chevron and fires onTitlePress when supplied', async () => {

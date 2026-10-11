@@ -1,8 +1,9 @@
 import React from 'react';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { SectionFilterScreen } from '@/screens/SectionFilterScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -39,6 +40,10 @@ async function renderSheet(): Promise<void> {
       <SectionFilterScreen />
     </ThemeProvider>,
   );
+}
+
+function flattenedStyleOf(testID: string): ViewStyle {
+  return StyleSheet.flatten(screen.getByTestId(testID).props.style as StyleProp<ViewStyle>) as ViewStyle;
 }
 
 describe('SectionFilterScreen', () => {
@@ -93,6 +98,51 @@ describe('SectionFilterScreen', () => {
     expect(idleRow.props.accessibilityState).toEqual(expect.objectContaining({ checked: true }));
     expect(screen.getByTestId('section-filter-row-queued').props.accessibilityState).toEqual(expect.objectContaining({ checked: false }));
     expect(idleRow).toHaveStyle({ minHeight: 48 });
+  });
+
+  /**
+   * Regression cover for task #113 change 6: the rows were bare text and Show
+   * all a hairline-topped label in accent ink, so none of the sheet read as
+   * tappable (ui-conventions.md, visible tap targets). Every row now sits on
+   * the shared raised sheet surface, and Show all is the shared ghost Button.
+   */
+  it('draws a hidden section row raised, with a hairline outline', async () => {
+    useSettingsStore.setState({ hiddenTriageSections: ['Queued'] });
+    await renderSheet();
+
+    const hiddenRow = flattenedStyleOf('section-filter-row-queued');
+    expect(hiddenRow.backgroundColor).toBe(darkTerminalTheme.colors.surfaceRaised);
+    expect(hiddenRow.borderColor).toBe(darkTerminalTheme.colors.border);
+    expect(hiddenRow.borderWidth).toBe(StyleSheet.hairlineWidth);
+  });
+
+  /**
+   * Material marks a selected list item on the whole row, so Android tints a
+   * shown section with the accent wash and the muted accent outline. An iOS
+   * inclusive list does not tint (its trailing checkmark carries it), so a
+   * shown row stays on the plain raised surface there.
+   */
+  it("gives a shown section row its platform's surface: Android's accent wash, iOS's plain raised row", async () => {
+    await renderSheet();
+
+    const shownRow = flattenedStyleOf('section-filter-row-idle');
+    if (Platform.OS === 'ios') {
+      expect(shownRow.backgroundColor).toBe(darkTerminalTheme.colors.surfaceRaised);
+      expect(shownRow.borderColor).toBe(darkTerminalTheme.colors.border);
+    } else {
+      expect(shownRow.backgroundColor).toBe(darkTerminalTheme.colors.accentSubtle);
+      expect(shownRow.borderColor).toBe(darkTerminalTheme.colors.accentMuted);
+    }
+    expect(shownRow.borderWidth).toBe(StyleSheet.hairlineWidth);
+  });
+
+  it('draws Show all as a raised button with a hairline outline, not a bare label', async () => {
+    await renderSheet();
+
+    const showAll = flattenedStyleOf('section-filter-show-all');
+    expect(showAll.backgroundColor).toBe(darkTerminalTheme.colors.surfaceRaised);
+    expect(showAll.borderColor).toBe(darkTerminalTheme.colors.border);
+    expect(showAll.borderWidth).toBe(StyleSheet.hairlineWidth);
   });
 
   it('hides a section on tap and shows it again on a second tap, remembered in settings', async () => {

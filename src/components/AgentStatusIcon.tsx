@@ -267,7 +267,7 @@ function MarchingMark({
 
 /**
  * Desktop-parity session status, drawn from @kangentic/branding's activity
- * marks: a green ring that SPINS while the agent thinks, and the yellow
+ * marks: a green ring that SPINS while the agent thinks, and the amber
  * envelope for an idle session (the turn ended, the user's move). All idle
  * sessions carry the SAME static envelope: they are equal priority, first come
  * first served ('idle-unread' is kept as a semantic kind for testing/telemetry
@@ -313,7 +313,11 @@ export function AgentStatusIcon({ kind, size = 16, testID, still = false }: Agen
   const marching = !still && !reducedMotion && screenMotionActive && !belowFloor && march !== undefined;
   const spinning = !still && !reducedMotion && screenMotionActive && !belowFloor && spin !== undefined;
 
-  const color = kind === 'working' ? theme.colors.statusWorking : theme.colors.warning;
+  // Needs-you is amber, the attention hue, everywhere it appears (task #113,
+  // H1): the envelope used to borrow the caution yellow, which put two
+  // attention colours side by side on one card beside the amber wait time.
+  // statusNeedsYou rather than accent so a project accent cannot re-point it.
+  const color = kind === 'working' ? theme.colors.statusWorking : theme.colors.statusNeedsYou;
   const resolvedTestID = testID ?? FALLBACK_TESTID_BY_KIND[kind];
 
   // Below the mark's legibility floor a 2px stroke on a 24 grid falls under one

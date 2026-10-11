@@ -193,13 +193,13 @@ describe('AgentStatusIcon', () => {
     expect(props.color).toBe(darkTerminalTheme.colors.statusWorking);
   });
 
-  it('tints the idle envelope with the true-yellow warning token, not brand amber', async () => {
-    // activity.json labels agent-idle's tone "attention", whose token here would
-    // be brand amber - but tokens.ts forbids pointing a warning role at amber,
-    // and the package publishes #d9b83f as the mobile value. Advisory, not law.
+  it('tints the idle envelope with the needs-you attention token, not the caution yellow', async () => {
+    // activity.json labels agent-idle's tone "attention", and the app's attention
+    // hue is statusNeedsYou (brand amber). The envelope used to borrow the
+    // caution yellow, which put two attention colours on one card (task #113, H1).
     await renderIcon({ kind: 'idle' });
-    expect(screen.getByTestId('agent-status-idle').props.color).toBe(darkTerminalTheme.colors.warning);
-    expect(screen.getByTestId('agent-status-idle').props.color).not.toBe(darkTerminalTheme.brand.amber);
+    expect(screen.getByTestId('agent-status-idle').props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
+    expect(screen.getByTestId('agent-status-idle').props.color).not.toBe(darkTerminalTheme.colors.warning);
   });
 
   it('honours the caller size, which the project picker sets to 15', async () => {
@@ -302,7 +302,7 @@ describe('the idle envelope', () => {
   it('renders identically for idle-unread, which is a semantic kind only', async () => {
     await renderIcon({ kind: 'idle-unread' });
     expect(screen.getByTestId('svg-rect').props.height).toBe(idleEnvelopeHeight);
-    expect(screen.getByTestId('agent-status-idle-unread').props.color).toBe(darkTerminalTheme.colors.warning);
+    expect(screen.getByTestId('agent-status-idle-unread').props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
   });
 
   it('never animates: a static mark has no march to run', async () => {
@@ -389,7 +389,7 @@ describe('list recycling', () => {
     const root = screen.getByTestId('row-status');
     expect(root.props.animatedProps).toBeUndefined();
     expect(root.props.matrix).toBeUndefined();
-    expect(root.props.color).toBe(darkTerminalTheme.colors.warning);
+    expect(root.props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
   });
 
   it('restarts the spin when a row rebinds idle back to working', async () => {

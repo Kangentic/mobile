@@ -291,7 +291,7 @@ describe('SessionScreen session binding', () => {
     // unmount the way the real pane does, so a flag from an earlier test
     // would settle the next test's successor the instant it bound.
     useTerminalUiStore.setState({ paintedSessionIds: {} });
-    useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
+    useSettingsStore.setState({ hydrated: true });
   });
 
   it('binds to the param session before the board locates the task', async () => {
@@ -971,7 +971,7 @@ describe('SessionScreen across a column move', () => {
     useTranscriptStore.getState().reset();
     // See the session-binding block: the stubbed pane never clears this.
     useTerminalUiStore.setState({ paintedSessionIds: {} });
-    useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
+    useSettingsStore.setState({ hydrated: true });
   });
 
   /**
@@ -2415,7 +2415,7 @@ describe('SessionScreen terminal clean-feed forwarding', () => {
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useTranscriptStore.getState().reset();
-    useSettingsStore.setState({ hasSeenSessionModeHint: true, hydrated: true });
+    useSettingsStore.setState({ hydrated: true });
   });
 
   it('does not enable the clean feed before a transcript window has landed', async () => {
