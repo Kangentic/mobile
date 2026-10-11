@@ -1570,6 +1570,111 @@ describe('SubscriptionManager', () => {
   });
 
   /**
+   * `response-too-large` is the ONE coded refusal that is neither reported nor
+   * retried. The other code in the protocol, `unsupported-verb`, is an ordinary
+   * refusal here: reported, kept desired, retried once. A check written as "has
+   * any code" would silence it along with the size case, and neither test above
+   * (a codeless refusal, and `response-too-large` itself) can tell the two
+   * apart.
+   *
+   * Mutation seen failing: `error.code === RESPONSE_TOO_LARGE_ERROR_CODE` in
+   * subscribeStream's catch changed to `error.code !== undefined` - "expected
+   * [] to have a length of 1 but got +0" on `streamRejections` (the refusal is
+   * never reported). Both response-too-large tests above stay green under it,
+   * which is the hole this closes.
+   */
+  it('reports and retries a coded refusal that is not response-too-large', async () => {
+    vi.useFakeTimers();
+    try {
+      const { stub, manager, sinkCalls, requests } = await harness((request) => {
+        if (request.verb === 'read-stream') {
+          return {
+            type: 'capability-response',
+            requestId: request.requestId,
+            ok: false,
+            error: 'Unsupported verb: read-stream',
+            code: 'unsupported-verb',
+          };
+        }
+        return defaultResponder(request);
+      });
+      stub.beginHandshake();
+      await flushLoopbackFakeTimers();
+
+      manager.setDesiredStreams(new Set(['sess-coded']));
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(1);
+      expect(sinkCalls.streamRejections).toHaveLength(1);
+      expect(sinkCalls.streamRejections[0].error.code).toBe('unsupported-verb');
+      expect(manager.debugSnapshot().desiredStreams).toEqual(['sess-coded']);
+
+      // The one-shot retry goes out, is refused too, and nothing follows.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(2);
+      expect(sinkCalls.streamRejections).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The point of keeping a refused session desired: a refusal that was a
+   * transient throw inside the desktop's handler heals by itself. The one-shot
+   * retry is accepted, its snapshot reaches the sink, and the stream is ACTIVE
+   * (so a later reconcile does not ask again) with no second rejection. The
+   * tests above only ever see a desktop that refuses every time, so they pin the
+   * retry going out and not what it buys.
+   *
+   * Mutation seen failing: restoring `this.desiredStreamIds.delete(sessionId)`
+   * and the early return after the sink in subscribeStream's catch - "expected
+   * [] to deeply equal [ 'sess-flaky' ]" on the snapshots the sink received
+   * (no retry goes out, so nothing is ever applied).
+   */
+  it('applies the snapshot when the one-shot retry of a refused stream is accepted', async () => {
+    vi.useFakeTimers();
+    try {
+      let streamSubscribeCount = 0;
+      const { stub, manager, sinkCalls, requests } = await harness((request) => {
+        const isSubscribe =
+          request.verb === 'read-stream' && (request.payload as { action?: string }).action !== 'unsubscribe';
+        if (isSubscribe) {
+          streamSubscribeCount += 1;
+          if (streamSubscribeCount === 1) {
+            return { type: 'capability-response', requestId: request.requestId, ok: false, error: 'Internal error' };
+          }
+        }
+        return defaultResponder(request);
+      });
+      stub.beginHandshake();
+      await flushLoopbackFakeTimers();
+
+      manager.setDesiredStreams(new Set(['sess-flaky']));
+      await flushLoopbackFakeTimers();
+      expect(sinkCalls.streamRejections).toHaveLength(1);
+      expect(sinkCalls.streamSnapshots).toEqual([]);
+      expect(manager.debugSnapshot().activeStreams).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushLoopbackFakeTimers();
+      expect(sinkCalls.streamSnapshots).toEqual(['sess-flaky']);
+      expect(manager.debugSnapshot().activeStreams).toEqual(['sess-flaky']);
+      expect(sinkCalls.streamRejections).toHaveLength(1);
+
+      // Healed: nothing more goes out on the clock alone.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * A refused diff fetch used to be swallowed whole. The Changes tab's only
    * other state is its loading skeleton, so the pane sat on it forever, and
    * DiffFetchStatus's 'error' member had no writer anywhere in the app.
