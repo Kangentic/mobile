@@ -297,6 +297,14 @@ real desktop only hits on a model switch, a pause or a failure, and live in
 The two Resume arms are one-shot, and the fake desktop's state (including a pause) resets on every
 launch.
 
+The E2E stub (`scripts/stubDesktopPeer.mjs`, `dev:stub`) takes `/respawn`, `/respawn-quiet` and
+`/end-session` too, plus one command of its own: `/refuse-stream on` refuses every `read-stream`
+subscribe for the live session with a codeless `ok: false` while the board keeps listing it, and
+`/refuse-stream off` stops. That is a desktop handler throwing on a LIVE session, which no real
+desktop does on demand. The first subscribe accepted after `off` appends "Stream subscribe accepted
+after N refusals." to the transcript, which `.maestro/paired/session-refused-subscribe.yaml` asserts.
+It is not in the mock on purpose: the mock is the App Review demo in release builds.
+
 ## Store listing screenshots
 
 `scripts/storeScreenshots.mjs` captures the Play listing images. It needs the MOCK rig
@@ -1173,7 +1181,7 @@ image that caused this.
 
 **Two E2E suites, two jobs, one required.** `e2e.yml`'s `maestro` job runs `.maestro/smoke.yaml`
 against a fresh unpaired install (no relay, no pairing) and is what the required
-`E2E Tests (Maestro)` check actually gates on. The separate `maestro-paired` job runs the 11 flows
+`E2E Tests (Maestro)` check actually gates on. The separate `maestro-paired` job runs every flow
 under `.maestro/paired/`: it checks out the public `Kangentic/relay` repo (pinned to a SHA), builds
 and runs it on the runner, pairs the app to `scripts/stubDesktopPeer.mjs` over it - the same relay
 and stub the local `dev:stub --pair` rig uses - and then runs the suite
@@ -1195,7 +1203,7 @@ it until it has earned promotion.
 2. **No re-runs among them.** A flow that passes on the second attempt is a flaky flow, and
    promoting a flaky suite to required is precisely the "cannot go green" hazard. A re-run resets
    the count to zero.
-3. **No open `e2e-flow-doctor` verdict** against any of the 11 flows.
+3. **No open `e2e-flow-doctor` verdict** against any of the paired flows.
 
 Check the streak with `gh run list --workflow=e2e.yml --limit 30 --json conclusion,headBranch,url`
 and read the `E2E Tests (Paired)` job on each, because the run-level conclusion also reflects the
@@ -1506,7 +1514,7 @@ Commands: `npm run typecheck`, `npm run lint`, `npm run test:unit`, `npm run tes
 one.** A bare `.maestro/` root sweeps in `.maestro/setup/pairing-bootstrap.yaml`, which is a rig
 fixture rather than a test: it needs a `PAIRING_URI` handed to it, so it fails for lacking one and,
 per its own header, "reads as a broken pairing screen rather than a misconfigured workflow". It
-would also run the 11 paired flows with no relay and no stub up. `tests/unit/ciSafeMaestroFlows.test.ts`
+would also run the paired flows with no relay and no stub up. `tests/unit/ciSafeMaestroFlows.test.ts`
 fails CI if a workflow ever points at the bare root, for the same reason. Run one suite at a time:
 
 | Suite | Command | Setup needed |
@@ -1529,7 +1537,7 @@ also runs natively on Windows against a local emulator, which is the right loop 
 a change (see the stage-ownership note in `CLAUDE.md` for why local E2E is deliberately *not* a
 pre-PR gate).
 
-**`E2E Tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The 11 paired flows run in
+**`E2E Tests (Maestro)` (the required check) only reflects `smoke.yaml`.** The paired flows run in
 CI too, in the separate `maestro-paired` job, but that job is advisory (see "Two E2E suites, two
 jobs, one required" above) until it has been green across several PRs. A green required check is
 smoke coverage; read the `E2E Tests (Paired)` check separately for the paired suite's result. It

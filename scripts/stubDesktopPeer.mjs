@@ -652,6 +652,21 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
     let activeSessionId = STUB_SESSION_ID;
     let respawnCounter = 1;
     let codexStreamSubscribed = false;
+    // The /refuse-stream magic command: while on, every read-stream SUBSCRIBE
+    // for the active session is refused with a codeless `ok: false`, the shape
+    // the desktop's capability router sends when a handler throws, while the
+    // board keeps listing the session and no session-ended goes out. That is a
+    // LIVE session refused, which no real desktop can be made to do on demand.
+    // The count of refusals actually served is what arms the recovery marker,
+    // so a toggle that never fired cannot let a flow pass on nothing.
+    //
+    // Deliberately NOT mirrored in src/connection/mockDesktop.ts, unlike
+    // /respawn and /end-session: the mock ships in release builds as the App
+    // Review demo, and a command that makes it refuse its own stream does not
+    // belong on a production surface.
+    let refuseStreamSubscribes = false;
+    let refusedStreamSubscribeCount = 0;
+    let recoveryMarkerPending = false;
     // Board statefulness: mutations from board-tool-write / move-task overlay
     // the canned snapshot so Maestro can assert create/edit/move/delete.
     const boardMutations = { patches: new Map(), deleted: new Set(), created: [] };
@@ -679,6 +694,11 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
       activeSessionId = STUB_SESSION_ID;
       respawnCounter = 1;
       codexStreamSubscribed = false;
+      // A flow that ends with refusals still on would otherwise refuse every
+      // subscribe of the next one, which reads as a broken session screen.
+      refuseStreamSubscribes = false;
+      refusedStreamSubscribeCount = 0;
+      recoveryMarkerPending = false;
       // A prompt left pending by a flow that ends without resolving it
       // (launchApp force-stops rather than answering) must not carry into
       // the next flow's fixture - same cross-flow-contamination class as the
@@ -988,9 +1008,15 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
               entries: transcriptEntries.slice(start, end),
             });
           }
+          if (refuseStreamSubscribes) {
+            refusedStreamSubscribeCount += 1;
+            streamSubscribed = false;
+            console.log(`[lifecycle] /refuse-stream: refused read-stream subscribe #${refusedStreamSubscribeCount} for ${payload.sessionId}`);
+            return fail('Simulated read-stream handler failure');
+          }
           streamSubscribed = true;
           startFeed();
-          return ok({
+          ok({
             scrollback: 'kangentic stub desktop\r\n$ claude\r\nWorking on the login redirect bug...\r\n',
             activity: {
               state: permissionPending ? 'permission' : 'thinking',
@@ -1001,6 +1027,21 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
             ptyDimensions: { ...ptyDimensions },
             sessionStatus: 'running',
           });
+          // After the snapshot, so the marker reaches the phone as a delta on
+          // the subscription it proves exists. It is appended only on the
+          // first subscribe the stub ACCEPTS after /refuse-stream off, so its
+          // presence means the phone asked again after being refused.
+          if (recoveryMarkerPending) {
+            recoveryMarkerPending = false;
+            appendTranscriptEntry({
+              kind: 'assistant',
+              uuid: `stub-refuse-stream-recovered-${refusedStreamSubscribeCount}`,
+              ts: Date.now(),
+              blocks: [{ type: 'text', text: `Stream subscribe accepted after ${refusedStreamSubscribeCount} refusals.` }],
+            });
+            console.log(`[lifecycle] /refuse-stream: subscribe accepted after ${refusedStreamSubscribeCount} refusals`);
+          }
+          return undefined;
         }
         case 'read-diff':
           if (payload.action === 'unsubscribe') return ok();
@@ -1018,6 +1059,19 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
           }
           if (payload.text.trim() === '/end-session') {
             endActiveSession();
+            return ok({ delivered: true });
+          }
+          if (payload.text.trim() === '/refuse-stream on') {
+            refuseStreamSubscribes = true;
+            refusedStreamSubscribeCount = 0;
+            recoveryMarkerPending = false;
+            console.log('[lifecycle] /refuse-stream on: refusing read-stream subscribes for the live session');
+            return ok({ delivered: true });
+          }
+          if (payload.text.trim() === '/refuse-stream off') {
+            refuseStreamSubscribes = false;
+            recoveryMarkerPending = refusedStreamSubscribeCount > 0;
+            console.log(`[lifecycle] /refuse-stream off: ${refusedStreamSubscribeCount} subscribe(s) were refused`);
             return ok({ delivered: true });
           }
           return ok({ delivered: true });

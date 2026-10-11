@@ -145,8 +145,11 @@ export interface SessionActivityEntry {
    * `session-ended` for a session that WAS live and subscribed.
    *
    * 'rejected' and 'ended' are different events, not synonyms: 'rejected' is a
-   * subscribe the desktop refused (the session was already gone when we asked),
-   * while 'ended' is a session that died under us. Nothing but a refused
+   * subscribe the desktop refused, while 'ended' is a session that died under
+   * us. 'rejected' is NOT proof the session is gone: the desktop answers any
+   * exception inside a handler with a codeless refusal, so the session screen
+   * reads it as an end only when the board does not list the session, and the
+   * next snapshot a re-ask lands puts it back to 'live'. Nothing but a refused
    * subscribe reaches 'rejected', so a live session that exits only ever
    * arrives here as 'ended'. 'ended' is TERMINAL - see markRejected.
    */

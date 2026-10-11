@@ -8,6 +8,7 @@ import type { ReadBoardProjectSummary } from '@kangentic/protocol';
 import {
   findTaskById,
   selectColumnsOrdered,
+  selectBoardListsLiveSession,
   selectColumnTaskCount,
   selectLiveSessionIds,
   selectProjectAccentColor,
@@ -121,6 +122,30 @@ describe('boardStore', () => {
     useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
     // task-3 has a session but is archived - excluded.
     expect([...selectLiveSessionIds(useBoardStore.getState())]).toEqual(['sess-1']);
+  });
+
+  /**
+   * The session screen's gate on a refused subscribe: only a session the
+   * board lists as THIS task's live one keeps the screen waiting, on the same
+   * definition selectLiveSessionIds uses, so an archived row does not count.
+   *
+   * Mutation seen failing: dropping the archived check from the shared
+   * predicate - "expected true to be false" on task-3, and the
+   * selectLiveSessionIds test above reddens with it.
+   */
+  it('selectBoardListsLiveSession is true only for the task\'s own non-archived session', () => {
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    const state = useBoardStore.getState();
+
+    expect(selectBoardListsLiveSession(state, 'task-1', 'sess-1')).toBe(true);
+    // Another session than the one the board names for the task.
+    expect(selectBoardListsLiveSession(state, 'task-1', 'sess-other')).toBe(false);
+    // Located, but sessionless.
+    expect(selectBoardListsLiveSession(state, 'task-2', 'sess-1')).toBe(false);
+    // The task's own session, on an archived row.
+    expect(selectBoardListsLiveSession(state, 'task-3', 'sess-3')).toBe(false);
+    // Not on any board.
+    expect(selectBoardListsLiveSession(state, 'task-missing', 'sess-1')).toBe(false);
   });
 
   it('optimistic move reorders immediately, commit finalizes, and a racing snapshot re-applies the pending move', () => {

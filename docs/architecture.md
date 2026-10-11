@@ -780,7 +780,9 @@ the moment the column latch opens on the live session, because the board reports
 before the desktop has interrupted the agent and suspended it (eight seconds once, measured, while
 a typecheck finished), and the screen used to show that interruption. It also opens on ANY end of
 the bound session (a labelled or unlabelled `session-ended`, the full-projection board reporting
-the task sessionless, a refused feed past its grace), keyed on the session in the same
+the task sessionless, a refused feed past its grace for a session the board does not list; a
+refusal alone is not proof of death, so while the board lists the session the screen keeps its
+normal wait and re-asks), keyed on the session in the same
 id-not-boolean shape as the two older latches; an end inside a move-opened window keeps that window
 and restarts its deadline from the end, and a move whose end never comes drops the veil at the
 deadline without spending the window. It is NOT reset by the successor's bind. The bind is a board

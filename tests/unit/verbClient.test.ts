@@ -83,6 +83,41 @@ describe('VerbClient', () => {
     await expect(verbs.readStreamSubscribe('sess-ghost')).rejects.toThrow(/No such session/);
   });
 
+  /**
+   * The refusal's stable key rides the error, end to end through the loopback
+   * encode and decode, so a caller can tell a refusal that means "the target
+   * still exists" (`response-too-large`, protocol 0.19.0) from one that may
+   * mean it is gone. Before this, requireOk kept only the message and every
+   * refusal read the same.
+   *
+   * Mutation seen failing: dropping `response.code` from requireOk's
+   * CapabilityError - "expected undefined to be 'response-too-large'".
+   */
+  it('carries the response code on the CapabilityError, and none when the refusal has no code', async () => {
+    const { verbs } = await establishedHarness((request) => {
+      const payload = request.payload as { sessionId?: string };
+      if (payload.sessionId === 'sess-huge') {
+        return {
+          type: 'capability-response',
+          requestId: request.requestId,
+          ok: false,
+          error: 'Response too large to send',
+          code: 'response-too-large',
+        };
+      }
+      return { type: 'capability-response', requestId: request.requestId, ok: false, error: 'No such session: sess-ghost' };
+    });
+
+    const tooLarge = await verbs.readStreamSubscribe('sess-huge').catch((error: unknown) => error);
+    expect(tooLarge).toBeInstanceOf(CapabilityError);
+    expect((tooLarge as CapabilityError).code).toBe('response-too-large');
+    expect((tooLarge as CapabilityError).message).toBe('Response too large to send');
+
+    const codeless = await verbs.readStreamSubscribe('sess-ghost').catch((error: unknown) => error);
+    expect(codeless).toBeInstanceOf(CapabilityError);
+    expect((codeless as CapabilityError).code).toBeUndefined();
+  });
+
   it('throws CapabilityError when a response payload fails its parse guard', async () => {
     const { verbs } = await establishedHarness((request) => okResponse(request, { scrollback: 42 }));
     await expect(verbs.readStreamSubscribe('sess-1')).rejects.toThrow(/scrollback/);

@@ -9,6 +9,7 @@ import {
   type AnswerPermissionPromptResponsePayload,
   type BoardToolReadName,
   type BoardToolWriteName,
+  type CapabilityErrorCode,
   type CapabilityResponseMessage,
   type CapabilityVerb,
   type DiffFileContentWire,
@@ -65,11 +66,19 @@ const MOVE_TASK_TIMEOUT_MS = 45_000;
 /** A capability request the desktop answered with ok:false (or whose response payload failed its parse guard). */
 export class CapabilityError extends Error {
   readonly verb: CapabilityVerb;
+  /**
+   * The refusal's stable key, when the desktop sent one: `unsupported-verb`
+   * (protocol 0.15.0) or `response-too-large` (0.19.0). Branch on this, never
+   * on `message`, which is the desktop's display text. Absent for a refusal
+   * with no key and for a response that failed its parse guard.
+   */
+  readonly code?: CapabilityErrorCode;
 
-  constructor(verb: CapabilityVerb, message: string) {
+  constructor(verb: CapabilityVerb, message: string, code?: CapabilityErrorCode) {
     super(message);
     this.name = 'CapabilityError';
     this.verb = verb;
+    this.code = code;
   }
 }
 
@@ -323,7 +332,7 @@ export class VerbClient {
     options?: { timeoutMs?: number },
   ): Promise<CapabilityResponseMessage> {
     const response = await this.capabilities.request(verb, payload, options);
-    if (!response.ok) throw new CapabilityError(verb, response.error ?? `The desktop rejected the ${verb} request`);
+    if (!response.ok) throw new CapabilityError(verb, response.error ?? `The desktop rejected the ${verb} request`, response.code);
     return response;
   }
 

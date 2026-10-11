@@ -568,15 +568,36 @@ export function selectColumnTaskCount(board: ProjectBoard, swimlaneId: string): 
   return selectTasksForColumn(board, swimlaneId).length;
 }
 
+/** Whether a board row names a live session: one is set and the task is not archived. */
+function rowHasLiveSession(task: BoardTaskWire): task is BoardTaskWire & { session_id: string } {
+  return task.session_id !== null && task.archived_at === null;
+}
+
 /** The union of live session ids across every cached board - the bootstrap's stream desired-set source. */
 export function selectLiveSessionIds(state: { boardsByProjectId: Record<string, ProjectBoard> }): Set<string> {
   const liveSessionIds = new Set<string>();
   for (const board of Object.values(state.boardsByProjectId)) {
     for (const task of Object.values(board.tasksById)) {
-      if (task.session_id !== null && task.archived_at === null) liveSessionIds.add(task.session_id);
+      if (rowHasLiveSession(task)) liveSessionIds.add(task.session_id);
     }
   }
   return liveSessionIds;
+}
+
+/**
+ * Whether the board lists `sessionId` as the task's live session: the task is
+ * located, names exactly that session, and is not archived. The same
+ * definition selectLiveSessionIds uses, so the session screen and the stream
+ * reconciler agree on what "live" means. Returns a primitive, so it is safe as
+ * a Zustand selector.
+ */
+export function selectBoardListsLiveSession(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  taskId: string,
+  sessionId: string,
+): boolean {
+  const located = findTaskById(state, taskId);
+  return located !== null && rowHasLiveSession(located.task) && located.task.session_id === sessionId;
 }
 
 /**
