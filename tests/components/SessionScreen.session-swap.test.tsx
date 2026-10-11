@@ -484,11 +484,59 @@ describe('SessionScreen session binding', () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
-  it('declares the session over when its feed stays rejected past the grace window: the veil, then the wait', async () => {
+  /**
+   * A refused subscribe is not proof of death: the desktop answers any
+   * exception thrown inside a handler with a codeless refusal, so a transient
+   * throw on a LIVE session reads exactly like "No such session". While the
+   * board lists the session as the task's live one, the screen never shows
+   * the session as over, however long the refusal stands.
+   *
+   * Mutation seen failing: neutralising `!boardListsBoundSession` in signal 3
+   * - "expect(received).toBeNull()" on `session-swap-veil`, the quiet veil
+   * appearing past the grace window, on both platforms.
+   */
+  it('never declares a refused session over while the board lists it as the task\'s live session', async () => {
     jest.useFakeTimers();
     try {
       mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
       seedTaskWithSession('sess-a');
+      useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
+      await renderSessionScreen();
+
+      await act(() => {
+        useActivityStore.getState().markRejected('sess-a');
+      });
+      expectNoSwapSurface();
+
+      await act(() => {
+        jest.advanceTimersByTime(1600);
+      });
+      expectNoSwapSurface();
+
+      await passQuietDeadline();
+      expectNoSwapSurface();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
+   * The case signal 3 exists for: a session already dead when the phone
+   * subscribed, on a desktop or projection that drops the task, so the board
+   * does not list it and the refusal is all there is. The board is seeded
+   * WITHOUT the task from the start and the session comes from the nav param.
+   * Seeding the task and then removing it would not test this: once located,
+   * a task that drops off resolves to no session at all (everLocated), and the
+   * test would pass or fail for that reason instead.
+   *
+   * "Located with a different session" is not constructible here: the screen
+   * rebinds to whatever session the board names, so its feed is that one's.
+   */
+  it('declares a refused session over when the board does not list it: the veil, then the wait', async () => {
+    jest.useFakeTimers();
+    try {
+      mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+      seedBoardWithoutTask();
       useActivityStore.getState().registerSession('sess-a', 'task-1', 'project-1');
       await renderSessionScreen();
 

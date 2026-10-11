@@ -1,0 +1,124 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+#
+# A refused stream subscribe is NOT proof the session is gone. The desktop's
+# capability router answers any exception thrown inside a handler with a
+# codeless `ok: false`, so a transient throw on a LIVE session reads exactly
+# like "No such session". The screen must not show that session as over while
+# the board still lists it, and it must ask again once the desktop answers.
+#
+# `/refuse-stream on` makes the stub refuse every read-stream subscribe for the
+# live session that way, with the board row untouched and no session-ended
+# pushed. No real desktop can be made to do that on demand, which is why this
+# lives on the stub rig only.
+#
+# Fail-first (2026-10-11, e2e build on kangentic_pixel): with SessionScreen's
+# `!boardListsBoundSession` gate neutralised, the reopened screen showed the
+# live session as ended - the waiting veil over an empty terminal, the footer
+# down to the switcher - and "id: session-swap-veil is not visible" failed.
+# The same build passes with the gate restored. The stub's log shows four
+# subscribes refused (the leave, its retry, the reopen, its retry), then the
+# first one after `off` accepted.
+- launchApp
+# 60s: cold boot + channel re-establish after launchApp's force-stop.
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 60000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    # 45s: this screen mounts all three panes at once, terminal WebView
+    # included. 20s held only on a warm emulator.
+    timeout: 45000
+- tapOn:
+    id: "session-mode-chat"
+- extendedWaitUntil:
+    visible:
+      id: "composer-input"
+    timeout: 10000
+- tapOn:
+    id: "composer-input"
+- inputText: "/refuse-stream on"
+- tapOn:
+    id: "composer-send"
+# Leaving re-subscribes the session list-only (closeSessionScreen), and that is
+# the first refused subscribe. The phone's one queued retry, 2s later, is
+# refused too. So the screen opened below mounts with its feed already refused.
+- tapOn:
+    id: "task-back-button"
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 30000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 45000
+# The TERMINAL lens, deliberately: an ended state's veil stays up there
+# through both of its phases. The screen reopens on Chat (the lens chosen
+# above is remembered), where the veil yields to the pane once the quiet
+# deadline passes - so a hold on Chat can watch the veil come and go and then
+# pass. That is exactly what the first fail-first run did; only the composer
+# step below caught it.
+- tapOn:
+    id: "session-mode-terminal"
+# THE ONE TIMED HOLD IN THIS FLOW, and the reason it is legitimate: the claim
+# is that something does NOT appear. A refusal used to end the session after a
+# 1.5s grace window, and on this lens the veil then stays up for good (quiet,
+# then waiting), so 8s is several times the window it has to outlast.
+# OPTIONAL, so it runs its full timeout and never fails by itself; if the veil
+# does appear, it returns early and the assertNotVisible below fails.
+- extendedWaitUntil:
+    visible:
+      id: "session-swap-veil"
+    timeout: 8000
+    optional: true
+- assertNotVisible:
+    id: "session-swap-veil"
+# The footer is whole: the quick keys are still there. The waiting phase drops
+# the footer to the switcher alone, so this also fails if the veil was missed.
+- assertVisible:
+    id: "quick-key-esc"
+- tapOn:
+    id: "session-mode-chat"
+- extendedWaitUntil:
+    visible:
+      id: "composer-input"
+    timeout: 10000
+- tapOn:
+    id: "composer-input"
+- inputText: "/refuse-stream off"
+- tapOn:
+    id: "composer-send"
+# Leave and reopen: both re-subscribe, and the first one the stub accepts after
+# `off` appends the marker below. Its presence proves the phone asked again
+# after being refused (the old code dropped the session from its wanted set,
+# so these re-asks sent nothing). The count in it is the refusals the stub
+# actually served, so a toggle that never fired cannot pass here.
+- tapOn:
+    id: "task-back-button"
+- extendedWaitUntil:
+    visible:
+      id: "activity-row-stub-session-1"
+    timeout: 30000
+- tapOn:
+    id: "activity-row-stub-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 45000
+- tapOn:
+    id: "session-mode-chat"
+# Anchored regex: the markdown renderer can split the marker across text
+# nodes, and Maestro's text matcher is full-string - match the stable head.
+- extendedWaitUntil:
+    visible: "Stream subscribe accepted after [1-9].*"
+    timeout: 25000
+- assertNotVisible:
+    id: "session-swap-veil"

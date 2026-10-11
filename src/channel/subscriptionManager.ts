@@ -1,10 +1,11 @@
-import type {
-  DiffFileListWire,
-  ReadBoardSnapshotResponsePayload,
-  ReadBoardView,
-  ReadDiffScope,
-  ReadStreamResponsePayload,
-  Unsubscribe,
+import {
+  RESPONSE_TOO_LARGE_ERROR_CODE,
+  type DiffFileListWire,
+  type ReadBoardSnapshotResponsePayload,
+  type ReadBoardView,
+  type ReadDiffScope,
+  type ReadStreamResponsePayload,
+  type Unsubscribe,
 } from '@kangentic/protocol';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { createBoundedTaskQueue } from '../lib/boundedTaskQueue';
@@ -47,7 +48,13 @@ export const SUBSCRIBE_FAN_OUT_CONCURRENCY = 4;
 
 export interface SubscriptionSnapshotSinks {
   onStreamSnapshot(sessionId: string, snapshot: ReadStreamResponsePayload): void;
-  /** A stream subscribe the desktop rejected (e.g. "No such session") - the id is pruned from the desired set before this fires. */
+  /**
+   * A stream subscribe the desktop refused. NOT proof the session is gone: the
+   * desktop answers any exception inside a handler with a codeless refusal, so
+   * the id stays desired and is retried once, and the board decides whether
+   * the session is dead. Never fired for `response-too-large`, which the
+   * protocol says means the target still exists.
+   */
   onStreamRejected(sessionId: string, error: CapabilityError): void;
   onBoardSnapshot(snapshot: ReadBoardSnapshotResponsePayload): void;
   onDiffFileList(taskId: string, fileList: DiffFileListWire): void;
@@ -509,14 +516,24 @@ export class SubscriptionManager {
       // A newer request is on the wire and decides; this failure is moot.
       if (!isNewest) return;
       if (error instanceof CapabilityError) {
-        // The desktop said no (session gone) - prune; the next board
-        // snapshot reconcile re-adds it if it comes back.
-        this.desiredStreamIds.delete(sessionId);
+        // A refusal is not proof of death, so the session stays DESIRED. The
+        // desktop's capability router answers any exception thrown inside a
+        // handler with a codeless `ok: false`, so a transient throw on a live
+        // session looks exactly like "No such session". Pruning it here used
+        // to make every re-ask a no-op (refreshStream gates on the desired
+        // set) until a board snapshot happened to re-list it, and the session
+        // screen showed a live session as ended meanwhile. The board decides
+        // whether it is dead; see SessionScreen's signal 3.
+        //
+        // `response-too-large` is the one refusal that is neither reported
+        // nor retried: the protocol says the target still exists, and the
+        // same request would be refused again.
+        if (error.code === RESPONSE_TOO_LARGE_ERROR_CODE) return;
         this.sinks.onStreamRejected(sessionId, error);
-        return;
       }
-      // Timeout / transient transport failure: retry once after a beat,
-      // then leave it to the next reconcile (established or board-driven).
+      // A refusal, a timeout or a transient transport failure: retry once
+      // after a beat, then leave it to the next re-ask (a screen opening, an
+      // established, a board snapshot's reconcile).
       if (!isRetry && !this.streamRetryTimers.has(sessionId)) {
         this.streamRetryTimers.set(
           sessionId,

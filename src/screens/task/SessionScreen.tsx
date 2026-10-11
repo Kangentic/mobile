@@ -7,7 +7,15 @@ import { cardSessionDisplay, toCardSession, toCardTaskRow } from '@/components/b
 import { useScreenFocusActive } from '@/components/motion/ScreenMotion';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
-import { findArchivedTaskById, findTaskById, isDoneRole, isTodoRole, selectTaskRow, useBoardStore } from '@/state/boardStore';
+import {
+  findArchivedTaskById,
+  findTaskById,
+  isDoneRole,
+  isTodoRole,
+  selectBoardListsLiveSession,
+  selectTaskRow,
+  useBoardStore,
+} from '@/state/boardStore';
 import { selectSessionEnded, selectSessionSpawnProgressLabel, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
@@ -32,9 +40,10 @@ import type { SessionMode } from './SessionModeToggle';
 
 /**
  * How long a 'rejected' stream feed must persist before the screen declares
- * the session dead. A respawn races the board snapshot against the old
- * stream's rejection; the grace window keeps the ended state from flashing
- * when the successor sessionId is about to arrive.
+ * the session dead, and only when the board does not list it as the task's
+ * live session (signal 3 below). A respawn races the board snapshot against
+ * the old stream's rejection; the grace window keeps the ended state from
+ * flashing when the successor sessionId is about to arrive.
  */
 const REJECTED_FEED_GRACE_MS = 1500;
 
@@ -214,8 +223,14 @@ export function SessionScreen(): React.JSX.Element {
   //    a null session_id (an older desktop's projection drops the task).
   // 2. The desktop pushed `session-ended` for the bound session (see below).
   // 3. The stream feed for the bound session sits 'rejected' past a grace
-  //    window: the desktop refused the subscribe (dead session on a desktop
-  //    that predates the session-ended event) and no successor arrived.
+  //    window AND the board does not list it as the task's live session: a
+  //    session already dead when the phone subscribed, on a desktop or
+  //    projection that drops the task. A refusal alone is not proof of death
+  //    (the desktop answers any exception inside a handler with a codeless
+  //    refusal), so while the board lists the session this screen keeps its
+  //    normal wait, and the re-asks (this screen opening, a foreground, an
+  //    established, a board snapshot, the subscription manager's one retry)
+  //    land a snapshot that clears it.
   // "Had one before" is state adjusted during render (the sanctioned
   // derive-from-props pattern), not a ref read in render.
   const [lastBoundSessionId, setLastBoundSessionId] = useState<string | null>(null);
@@ -325,15 +340,25 @@ export function SessionScreen(): React.JSX.Element {
   const boundSessionEnded = useActivityStore((state) =>
     selectSessionEnded(state, sessionId ?? lastBoundSessionId),
   );
+  // Signal 3's gate. Once the board locates the task, `sessionId` IS the
+  // board's session (resolveCurrentSessionId), and a task that drops off after
+  // that resolves to null, so in practice this is false only for a session
+  // bound from the navigation param while the board has never located the
+  // task. Spelled as the board check rather than as "never located" so the
+  // rule reads as what it is: the board, not the refusal, decides.
+  const boardListsBoundSession = useBoardStore((state) =>
+    sessionId !== null ? selectBoardListsLiveSession(state, taskId, sessionId) : false,
+  );
   const sessionEnded =
     (taskLocated && sessionId === null && lastBoundSessionId !== null) ||
-    // Needs no grace window: unlike a refused subscribe, which can be a
-    // transient race with the desktop's registry, this is the desktop telling
-    // us the session it was streaming is gone. It is also the only signal a
-    // session that dies while subscribed produces - markRejected fires from a
-    // refused subscribe, which that path never hits.
+    // Needs no grace window: unlike a refused subscribe, which says nothing
+    // certain (a transient throw inside the desktop's handler reads exactly
+    // like a dead session), this is the desktop telling us the session it was
+    // streaming is gone. It is also the only signal a session that dies while
+    // subscribed produces - markRejected fires from a refused subscribe, which
+    // that path never hits.
     boundSessionEnded ||
-    (sessionId !== null && feedStatus === 'rejected' && gracePassedForSessionId === sessionId);
+    (sessionId !== null && feedStatus === 'rejected' && gracePassedForSessionId === sessionId && !boardListsBoundSession);
 
   /**
    * FINISHED AND RESET TASKS LEAVE THIS SCREEN.
@@ -447,7 +472,8 @@ export function SessionScreen(): React.JSX.Element {
    *
    * Opens on ANY end of the bound session - a labelled or unlabelled
    * `session-ended`, the full board reporting the task sessionless, a refused
-   * feed past its grace - keyed on the session that ended, in the same
+   * feed past its grace for a session the board does not list - keyed on the
+   * session that ended, in the same
    * id-not-boolean shape as the two latches above and for the same reason:
    * `sessionEnded` stays true for that session forever, so a boolean would
    * re-arm on the next render after the deadline and the card would never

@@ -1,7 +1,8 @@
 /**
  * SubscriptionManager: desired-state flush on established, full resubscribe
- * after a transport drop + fresh handshake, rejection pruning, and the
- * debounced board refresh. Runs over the real loopback + stub initiator.
+ * after a transport drop + fresh handshake, a refused stream kept desired and
+ * retried once, and the debounced board refresh. Runs over the real loopback
+ * + stub initiator.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -1250,9 +1251,9 @@ describe('SubscriptionManager', () => {
   /**
    * A refusal of the OLDER request while a newer one is on the wire is moot:
    * the newer one decides. Without the staleness check the CapabilityError
-   * path prunes the session from the desired set and reports it rejected
-   * (which would blank a session screen that is still asking), and the
-   * newer answer is then dropped as undesired.
+   * path reports the session rejected and arms a retry on top of the request
+   * still on the wire. (It used to prune the session from the desired set as
+   * well, after which the newer answer was dropped as undesired.)
    *
    * Mutation that reddens this and the transient case below: delete the
    * `if (!isNewest) return;` line in subscribeStream's catch.
@@ -1466,29 +1467,106 @@ describe('SubscriptionManager', () => {
     expect(sinkCalls.diffFileLists).toEqual(['task-1', 'task-1']);
   });
 
-  it('prunes a stream the desktop rejects and reports it through the sink', async () => {
-    const { stub, manager, sinkCalls, requests } = await harness((request) => {
-      if (request.verb === 'read-stream') {
-        return { type: 'capability-response', requestId: request.requestId, ok: false, error: 'No such session: sess-dead' };
-      }
-      return defaultResponder(request);
-    });
-    stub.beginHandshake();
-    await flushLoopback();
+  /**
+   * A refused stream subscribe is NOT proof the session is gone: the desktop's
+   * capability router answers any exception thrown inside a handler with a
+   * codeless `ok: false`, so a transient throw on a live session reads exactly
+   * like "No such session". The refusal is reported (the store marks the feed,
+   * and the session screen asks the board whether it is dead), the session
+   * stays desired so the screen's own re-ask is not a no-op, and it is retried
+   * once through the queue the way a timeout is.
+   *
+   * Mutations seen failing: restoring `this.desiredStreamIds.delete(sessionId)`
+   * and the early return after the sink in subscribeStream's catch - "expected
+   * [] to deeply equal [ 'sess-flaky' ]" on the desired set; and the early
+   * return alone, session kept desired but no retry armed - "expected
+   * [ Array(1) ] to have a length of 2 but got 1".
+   */
+  it('keeps a refused stream desired, reports it, and retries it once through the queue', async () => {
+    vi.useFakeTimers();
+    try {
+      const { stub, manager, sinkCalls, requests } = await harness((request) => {
+        if (request.verb === 'read-stream') {
+          return { type: 'capability-response', requestId: request.requestId, ok: false, error: 'No such session: sess-flaky' };
+        }
+        return defaultResponder(request);
+      });
+      stub.beginHandshake();
+      await flushLoopbackFakeTimers();
 
-    manager.setDesiredStreams(new Set(['sess-dead']));
-    await flushLoopback();
+      manager.setDesiredStreams(new Set(['sess-flaky']));
+      await flushLoopbackFakeTimers();
 
-    expect(sinkCalls.streamRejections).toHaveLength(1);
-    expect(sinkCalls.streamRejections[0].sessionId).toBe('sess-dead');
-    expect(sinkCalls.streamRejections[0].error.message).toMatch(/No such session/);
+      expect(readStreamSubscribes(requests)).toHaveLength(1);
+      expect(sinkCalls.streamRejections).toHaveLength(1);
+      expect(sinkCalls.streamRejections[0].sessionId).toBe('sess-flaky');
+      expect(sinkCalls.streamRejections[0].error.message).toMatch(/No such session/);
+      expect(manager.debugSnapshot().desiredStreams).toEqual(['sess-flaky']);
 
-    // Pruned: re-declaring an unrelated desired set must not retry sess-dead.
-    const requestCount = requests.length;
-    manager.setDesiredStreams(new Set(['sess-dead']));
-    await flushLoopback();
-    // Re-declaring DOES retry (it is a fresh desired set)...
-    expect(requests.length).toBe(requestCount + 1);
+      // The retry: one more subscribe after STREAM_RETRY_DELAY_MS, refused too.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(2);
+      expect(sinkCalls.streamRejections).toHaveLength(2);
+
+      // Once only: nothing more on the clock alone.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(2);
+
+      // Still desired, so a session screen opening re-asks (refreshStream
+      // gates on the desired set, which is what the old prune broke).
+      expect(manager.debugSnapshot().desiredStreams).toEqual(['sess-flaky']);
+      manager.refreshStream('sess-flaky');
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * `response-too-large` (protocol 0.19.0) means the request was valid and its
+   * target still exists, and the same request would be refused again. So it is
+   * neither reported as a rejection nor retried, and the session stays desired
+   * for the next re-ask. The desktop never refuses a read-stream subscribe for
+   * size today (it shrinks the seed), so this is the backstop.
+   *
+   * Mutations seen failing: deleting the too-large early return - "expected
+   * [ {...}, {...} ] to have a length of 1 but got 2", the retry going out;
+   * and pruning ahead of the code check - "expected [] to deeply equal
+   * [ 'sess-huge' ]".
+   */
+  it('keeps a response-too-large refusal desired, unreported and unretried', async () => {
+    vi.useFakeTimers();
+    try {
+      const { stub, manager, sinkCalls, requests } = await harness((request) => {
+        if (request.verb === 'read-stream') {
+          return {
+            type: 'capability-response',
+            requestId: request.requestId,
+            ok: false,
+            error: 'Response too large to send',
+            code: 'response-too-large',
+          };
+        }
+        return defaultResponder(request);
+      });
+      stub.beginHandshake();
+      await flushLoopbackFakeTimers();
+
+      manager.setDesiredStreams(new Set(['sess-huge']));
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushLoopbackFakeTimers();
+      expect(readStreamSubscribes(requests)).toHaveLength(1);
+      expect(sinkCalls.streamRejections).toHaveLength(0);
+      expect(manager.debugSnapshot().desiredStreams).toEqual(['sess-huge']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**
