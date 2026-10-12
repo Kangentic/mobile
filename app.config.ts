@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '1.0.0',
+  version: '1.1.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -185,7 +185,21 @@ const config: ExpoConfig = {
     // terminal fit in one write with no black flash. Native dependencies moved
     // with the dependency refresh (Reanimated 4.7.1, Sentry React Native 8.29,
     // enriched-markdown 1.1.1), so this is a new native build.
-    buildNumber: '17',
+    //
+    // 18 is the v1.1.0 release cut 2026-10-12, uploaded to App Store Connect
+    // for an App Store submission. 17 is spent, tagged ios-b17. The iOS-only
+    // item is the form-sheet surface colour (64edf7d), which landed after the
+    // 1.0.0 cut: the native sheet container now paints the sheet surface, so
+    // no darker band shows under a sheet's content. The rest is cross-platform:
+    // Command Terminals (protocol 0.20.0: the Board header's Terminals button,
+    // the Terminals sheet, the terminal screen, terminal cards on the Agents
+    // feed and terminal push routing), which appear only against a desktop
+    // that offers them; the design review pass on headers, sheets and the
+    // needs-you colour; a live session never shown as ended because a
+    // subscribe was refused; and a terminal's Chat lens no longer showing its
+    // screen twice after a re-init. No native dependency moved since 1.0.0
+    // (only the protocol pin), but there is no OTA path, so it is a new build.
+    buildNumber: '18',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -415,13 +429,18 @@ const config: ExpoConfig = {
     // (modules/foreground-service-guard, Sentry MOBILE-3). The rest is the
     // cross-platform list on ios.buildNumber's 17 above.
     //
+    // 16 is the v1.1.0 release cut 2026-10-12, going to the PRODUCTION track as
+    // a staged rollout. 15 is spent, tagged android-vc15. Nothing in it is
+    // Android-only; it is the cross-platform list on ios.buildNumber's 18
+    // above, Command Terminals first.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 15,
+    versionCode: 16,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
