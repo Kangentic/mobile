@@ -19,7 +19,7 @@ import { formatActivityLine } from '@/lib/activityLine';
 import { useActivityStore } from '@/state/activityStore';
 import { COMMAND_TERMINAL_LIMIT, selectCommandTerminals, useBoardStore } from '@/state/boardStore';
 import { useCommandTerminalStore } from '@/state/commandTerminalStore';
-import { commandTerminalTone, projectTerminals, type ProjectTerminal } from './terminalDisplay';
+import { commandTerminalTone, projectTerminals, type ProjectTerminal } from './terminals/terminalDisplay';
 
 /** Shown under the list while any row's Stop was refused (design change 3). */
 export const STOP_FAILED_MESSAGE = 'Stop failed - check the connection';

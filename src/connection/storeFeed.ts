@@ -18,7 +18,7 @@ import {
   sessionlessTaskStatus,
   useBoardStore,
 } from '@/state/boardStore';
-import { selectUnlistedStartedLaunches, useCommandTerminalStore } from '@/state/commandTerminalStore';
+import { LAUNCH_LISTING_GRACE_MS, selectUnlistedStartedLaunches, useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { diffKeyFor, useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import {
@@ -92,11 +92,14 @@ function pendingSuccessorTaskFor(sessionId: string): string | null {
  * id). Without that half, the first board snapshot after a start would drop
  * the stream the screen was reading.
  *
- * Bookkeeping it settles on the way: a launch the board now lists has done its
- * job and is cleared (the screen bound the session when the start answered),
- * as is one past its grace window; and a Stop whose terminal no board or launch
- * lists any more is over, so its "Stopping..." (or its failure) goes with the
- * row.
+ * Bookkeeping it settles on the way: a started launch is cleared once its grace
+ * window has passed, listed or not. NOT the moment a board lists it: the screen
+ * that opened on the tap binds the session by reading the launch, and a board
+ * snapshot that raced the start's answer would otherwise clear it before that
+ * screen had rendered once, stranding it on its starting face. A listed launch
+ * costs nothing meanwhile (the board's row is the one drawn). And a Stop whose
+ * terminal no board or launch lists any more is over, so its "Stopping..." (or
+ * its failure) goes with the row.
  */
 function reconcileCommandTerminals(liveSessionIds: Set<string>): void {
   const listedSessionIds = selectCommandTerminalSessionIds(useBoardStore.getState());
@@ -107,15 +110,16 @@ function reconcileCommandTerminals(liveSessionIds: Set<string>): void {
     }
   }
   const terminalStore = useCommandTerminalStore.getState();
-  const unlistedLaunches = selectUnlistedStartedLaunches(terminalStore, listedSessionIds, Date.now());
-  const unlistedLaunchIds = new Set(unlistedLaunches.map((launch) => launch.launchId));
-  for (const launch of unlistedLaunches) {
+  const now = Date.now();
+  for (const launch of selectUnlistedStartedLaunches(terminalStore, listedSessionIds, now)) {
     if (launch.sessionId === null) continue;
     useActivityStore.getState().registerCommandTerminal(launch.sessionId, launch.projectId);
     liveSessionIds.add(launch.sessionId);
   }
   for (const launch of Object.values(terminalStore.launchesById)) {
-    if (launch.phase === 'started' && !unlistedLaunchIds.has(launch.launchId)) terminalStore.clearLaunch(launch.launchId);
+    if (launch.phase === 'started' && launch.settledAt !== null && now - launch.settledAt >= LAUNCH_LISTING_GRACE_MS) {
+      terminalStore.clearLaunch(launch.launchId);
+    }
   }
   // Failed ones too: a Stop that timed out may still have landed, and once the
   // terminal is gone its failure line has nothing left to describe.

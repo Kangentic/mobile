@@ -153,9 +153,10 @@ src/
   screens/        # TriageHome (+ home/ needs-you cards, feed sections and the section filter's
                   #   header button and empty state), Board, task/ (SessionScreen, mode toggle,
                   #   input bar, ChatPane, ChangesTab, ResumePanel), CompletedTask, the form-sheet
-                  #   screens (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker/SectionFilter), FileDiff,
+                  #   screens (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker/SectionFilter,
+                  #   and the Command Terminal pair CommandTerminals/CommandTerminalActions), FileDiff,
                   #   Pairing (Scan/Confirm), Settings, Devices, terminals/ (the Command Terminal
-                  #   screen, its sheets and the Board header's Terminals button)
+                  #   screen and the Board header's Terminals button)
   components/     # Design system primitives (incl. the shared SegmentedSwitcher) + brand/ (Overseer,
                   #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and

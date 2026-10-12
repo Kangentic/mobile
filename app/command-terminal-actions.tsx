@@ -1,3 +1,3 @@
-import { CommandTerminalActionsScreen } from '@/screens/terminals/CommandTerminalActionsScreen';
+import { CommandTerminalActionsScreen } from '@/screens/CommandTerminalActionsScreen';
 
 export default CommandTerminalActionsScreen;

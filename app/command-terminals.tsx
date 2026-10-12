@@ -1,3 +1,3 @@
-import { CommandTerminalsScreen } from '@/screens/terminals/CommandTerminalsScreen';
+import { CommandTerminalsScreen } from '@/screens/CommandTerminalsScreen';
 
 export default CommandTerminalsScreen;
