@@ -51,7 +51,12 @@ import {
   streamingUsedTokens,
 } from '@/connection/mockDesktop';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
-import { COMMAND_TERMINAL_RECORDED_PROMPT, COMMAND_TERMINAL_TURN, type RecordedCommandTerminalTurn } from '@/devsupport/commandTerminalCapture';
+import {
+  COMMAND_TERMINAL_RECORDED_PROMPT,
+  COMMAND_TERMINAL_RECORDED_TURN_MS,
+  COMMAND_TERMINAL_TURN,
+  type RecordedCommandTerminalTurn,
+} from '@/devsupport/commandTerminalCapture';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import { createLiveTailBuffer, stripAnsiPreservingLayout } from '@/terminal/liveTail';
 import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCapture';
@@ -821,6 +826,40 @@ describe('the Command Terminal frames are one real Claude Code session', () => {
     expect(screen('answered')).toMatch(/●/);
     expect(screen('answered')).toMatch(/for \d+s · done/);
     expect(screen('answered')).toMatch(/─{20}/);
+  });
+
+  /**
+   * The prompt the recording was asked, read back OFF the screen: Claude Code
+   * wraps it at the recorded 66 columns, so it is the first `❯` row with text
+   * on it plus the indented rows that follow, up to the next blank row. The
+   * opening frame has no such row (its input box is empty), and the submitted
+   * and answered frames' own input box, below, is empty again.
+   */
+  function promptShownOn(frame: keyof RecordedCommandTerminalTurn): string {
+    const rows = commandTerminalRows[frame];
+    const firstRow = rows.findIndex((row) => row.startsWith('❯') && row.slice(1).trim().length > 0);
+    expect(firstRow, `${frame} shows a prompt`).toBeGreaterThanOrEqual(0);
+    const promptRows = [rows[firstRow].slice(1)];
+    for (let index = firstRow + 1; index < rows.length && rows[index].trim().length > 0; index += 1) {
+      promptRows.push(rows[index]);
+    }
+    return promptRows.map((row) => row.trim()).join(' ');
+  }
+
+  it.each(['submitted', 'answered'] as const)('%s shows the whole recorded prompt, which the terminal name and the capture flow both key on', (frame) => {
+    // Matching only the prompt's opening words (above) would let a re-recording
+    // that asked a different tail pass, while the mock's name lookup compares
+    // the WHOLE prompt and the flow types it verbatim.
+    expect(promptShownOn(frame)).toBe(COMMAND_TERMINAL_RECORDED_PROMPT);
+  });
+
+  it('paces the mock turn at the length the recorded answer reports', () => {
+    // The answer says how long its own turn took ("Cogitated for 11s"); the mock
+    // holds the submitted screen for that long, so a re-recording with another
+    // turn length and an untouched constant would pace the demo wrongly.
+    const reported = /for (\d+)s · done/.exec(screen('answered'));
+    expect(reported, 'the answered frame reports its own turn length').not.toBeNull();
+    expect(Number(reported?.[1]) * 1000).toBe(COMMAND_TERMINAL_RECORDED_TURN_MS);
   });
 
   it('wraps every line of the recording inside the narrowest store shelf, 69 columns', () => {
