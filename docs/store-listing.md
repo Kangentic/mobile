@@ -9,13 +9,15 @@ ready to paste.
 (maintainer, 2026-10-07), so the listing and its declarations went through review; the "entered,
 not submitted" notes further down describe the state on 2026-07-29 and are kept for their lessons.
 
-**The images in both consoles are behind `store/screenshots/`, by decision.** All four shelves
-were re-captured on 2026-10-08 (task #103) for v1.0.0: the Agents feed's Idle/Active/Queued/Paused
-sections and filter, the 210x48 terminal frame, and the regenerated changes story. v1.0.0 shipped
-to both stores with the previous images, and the maintainer chose to upload the new set with the
-next release rather than hold v1.0.0 for it. So upload from `store/screenshots/` at that release:
-the three Play shelves under the store listing, and the iPhone set through App Store Connect's
-Media Manager on the 6.9" slot (see Screenshots below).
+**The images in both consoles are behind `store/screenshots/` until the v1.1.0 upload.** All four
+shelves were re-captured on 2026-10-12 (task #115) for v1.1.0, now seven frames each: the
+redesigned headers and sheets, the Board header's Terminals button, and a seventh frame of a
+Command Terminal, which replays one RECORDED Claude Code turn (src/devsupport/commandTerminalCapture.ts),
+never authored output. The 2026-10-08 set (task #103) was never uploaded; this set replaces it.
+Upload from `store/screenshots/`: the three Play shelves under the store listing, AFTER the Play
+release has committed (an unsent listing edit blocks the release's API commit), and the iPhone set
+through App Store Connect's Media Manager on the 6.9" slot (see Screenshots below). Once both are
+up, say so here.
 
 The two Play Console image uploads are produced by `@kangentic/branding` and are not bundled
 into the app - upload them by hand from `node_modules/@kangentic/branding/resources/mobile/`
