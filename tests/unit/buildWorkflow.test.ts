@@ -1002,6 +1002,46 @@ describe('build-ios simulator compile cost', () => {
   });
 });
 
+/**
+ * The iOS store-screenshot capture runs the same Maestro flow as Android, and
+ * Maestro BUILDS its XCUITest driver on its first command. Run 38203357441
+ * (2026-10-12, a capacity-constrained macOS runner) was still compiling it when
+ * the default startup window ran out, so the flow never reached its first step
+ * and the run captured nothing, behind a step that is continue-on-error and so
+ * still reads green. Nothing at any JS tier can prove the window is long enough
+ * for a given runner; what a test can keep is that the step still asks for one
+ * and in the unit Maestro reads it in.
+ */
+describe('build-ios screenshot capture driver startup', () => {
+  interface CaptureWorkflowStep {
+    id?: string;
+    env?: Record<string, string | number>;
+  }
+  const captureWorkflow = parseYaml(iosWorkflowSource) as {
+    jobs: Record<string, { steps?: CaptureWorkflowStep[] }>;
+  };
+
+  function findMaestroCaptureStep(): CaptureWorkflowStep | undefined {
+    for (const job of Object.values(captureWorkflow.jobs)) {
+      const step = job.steps?.find((candidate) => candidate.id === 'ios-maestro');
+      if (step !== undefined) return step;
+    }
+    return undefined;
+  }
+
+  it('gives the Maestro capture step its own driver startup timeout, written in milliseconds', () => {
+    const step = findMaestroCaptureStep();
+    expect(step, 'build-ios.yml still has the capture step (id ios-maestro)').toBeDefined();
+
+    const timeout = String(step?.env?.MAESTRO_DRIVER_STARTUP_TIMEOUT);
+    expect(timeout, 'MAESTRO_DRIVER_STARTUP_TIMEOUT is set on the step itself, as digits').toMatch(/^\d+$/);
+    // The variable is read in MILLISECONDS, so a value written in seconds ('600')
+    // is a 0.6 s window that fails every capture. Five minutes is half of the ten
+    // the step asks for and far above any seconds-for-milliseconds slip.
+    expect(Number(timeout)).toBeGreaterThanOrEqual(300_000);
+  });
+});
+
 describe('ci.yml Native config (prebuild) R8 checks', () => {
   function readCiJobs(): Record<string, { steps?: { name?: string; run?: string }[] }> {
     const ciSource = readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8');

@@ -276,22 +276,6 @@ describe('the shot list matches the capture flow', () => {
   });
 
   /**
-   * Regression cover for Android's scrollbar flash. A scrollable flashes its
-   * scrollbar on first layout or after a programmatic scroll and fades it about
-   * a second later, and the settle step before each shot calls that thin strip
-   * settled. 2026-10-08 shipped it twice on the phone's file diff (the diff is
-   * wider than a phone, so a horizontal bar) and once on the 7-inch board (the
-   * column-chip tap pages the list, so a vertical thumb). The scrollbar is not a
-   * hierarchy node, so the flow waits a bounded time on a selector that never
-   * exists; it must be OPTIONAL, or the wait would fail the flow instead of
-   * merely elapsing.
-   *
-   * The wait is gated to Android, because iOS flashes nothing on mount and an
-   * ungated wait cost each iOS capture its full timeout for nothing. The gate
-   * is pinned with the wait: a misspelt `platform` condition would skip the
-   * wait on Android too, and nothing else would fail.
-   */
-  /**
    * The Command Terminal frame is canvas text under a native header, so the
    * flow's only signals are native: the pill (the first prompt named the
    * terminal) and the mark's tone returning to needs-you (the turn's answer was
@@ -319,6 +303,42 @@ describe('the shot list matches the capture flow', () => {
     expect(prompts).toEqual([COMMAND_TERMINAL_RECORDED_PROMPT]);
   });
 
+  /**
+   * The Command Terminal frame is the only one that STARTS something: the
+   * flow's own comment says the Board header's Terminals button starts and
+   * opens a terminal straight away only while none is running, and that the
+   * mock lists no terminal until one is started, so nothing before this frame
+   * can show one it left behind. So the flow starts it after every other shot,
+   * and takes its own shot last. Compared by position in the flow, not by
+   * SHOT_NAMES order: the flow takes 06 before 05.
+   */
+  it('starts the Command Terminal only after every other shot, and takes its shot last', () => {
+    expect(flowShotNames[flowShotNames.length - 1]).toBe('07-command-terminal');
+
+    const startTapAt = flowSource.indexOf('id: "header-terminals-button"');
+    expect(startTapAt, 'the flow still taps the Board header\'s Terminals button').toBeGreaterThanOrEqual(0);
+    const otherShotAts = SHOT_NAMES.filter((shotName) => shotName !== '07-command-terminal').map(shotPathIndex);
+    expect(otherShotAts.length, 'there are other shots to come before it').toBeGreaterThan(0);
+    expect(startTapAt).toBeGreaterThan(Math.max(...otherShotAts));
+    expect(startTapAt).toBeLessThan(shotPathIndex('07-command-terminal'));
+  });
+
+  /**
+   * Regression cover for Android's scrollbar flash. A scrollable flashes its
+   * scrollbar on first layout or after a programmatic scroll and fades it about
+   * a second later, and the settle step before each shot calls that thin strip
+   * settled. 2026-10-08 shipped it twice on the phone's file diff (the diff is
+   * wider than a phone, so a horizontal bar) and once on the 7-inch board (the
+   * column-chip tap pages the list, so a vertical thumb). The scrollbar is not a
+   * hierarchy node, so the flow waits a bounded time on a selector that never
+   * exists; it must be OPTIONAL, or the wait would fail the flow instead of
+   * merely elapsing.
+   *
+   * The wait is gated to Android, because iOS flashes nothing on mount and an
+   * ungated wait cost each iOS capture its full timeout for nothing. The gate
+   * is pinned with the wait: a misspelt `platform` condition would skip the
+   * wait on Android too, and nothing else would fail.
+   */
   it.each(['05-board', '06-file-diff'])('waits out the scrollbar flash on Android after the settle and before %s', (shotName) => {
     const shotAt = shotPathIndex(shotName);
     const settleAt = flowSource.lastIndexOf('- waitForAnimationToEnd:', shotAt);

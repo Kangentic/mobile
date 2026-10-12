@@ -35,6 +35,7 @@ import {
   COMMAND_TERMINAL_TURN,
 } from '@/devsupport/commandTerminalCapture';
 import { waitUntil } from '../helpers/async';
+import { renderCaptureRows } from '../helpers/renderCapture';
 
 const MOCK_PROJECT_ID = 'mock-project';
 /** The second project's real id (probed from the fixtures, not guessed): the checkout-api board. */
@@ -82,6 +83,27 @@ afterEach(() => {
 
 function eventsFor(kind: BridgeEvent['kind'], sessionId: string): BridgeEvent[] {
   return feedEvents.filter((event) => event.kind === kind && 'sessionId' in event && event.sessionId === sessionId);
+}
+
+/** Every chunk a terminal has been sent so far, in order: what a phone subscribed from its start has drawn. */
+function drawnOn(sessionId: string): string[] {
+  return eventsFor('terminal', sessionId).map((event) => (event.kind === 'terminal' ? event.payload.data : ''));
+}
+
+/**
+ * Claude Code's input box once `chunks` are drawn: the last row opening with its prompt glyph, read off
+ * a headless terminal at the recorded grid. The bytes a terminal is sent only mean something drawn.
+ * xterm parses on timers the fake clock would hold back, so this turns the fake clock off: call it
+ * after the last thing the mock has to do.
+ */
+async function inputBoxRowAfter(chunks: string[]): Promise<string> {
+  vi.useRealTimers();
+  const { cols, rows } = COMMAND_TERMINAL_TURN.opening;
+  const screen = await renderCaptureRows({ cols, rows, seedFrame: chunks.join(''), chunks: [] });
+  const inputBoxRows = screen.filter((row) => row.startsWith('❯'));
+  // Claude Code follows its glyph with a no-break space, which reads as a space and compares as not one,
+  // and a rubbed-out key leaves a written blank cell behind it that the terminal does not trim.
+  return (inputBoxRows[inputBoxRows.length - 1] ?? '').replace(/ /g, ' ').trimEnd();
 }
 
 function sessionEndedEventsFor(sessionId: string): BridgeEvent[] {
@@ -364,6 +386,87 @@ describe('typing into a terminal', () => {
     expect(named.name).toBe('Fix The Flaky Test');
   });
 
+  /**
+   * The echo bytes above are only half the claim: the recorded opening screen has to leave the
+   * cursor in Claude Code's input box for them to land there, and the placeholder has to be gone
+   * for the line to read as typed. Drawn through a headless terminal, the input box is what a user
+   * sees.
+   */
+  it('types into Claude Code\'s own input box over its placeholder, and a Backspace rubs the last key out', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'lsx');
+    await vi.advanceTimersByTimeAsync(10);
+    const afterTyping = drawnOn(started.sessionId);
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, '\u007f');
+    await vi.advanceTimersByTimeAsync(10);
+    const afterBackspace = drawnOn(started.sessionId);
+
+    expect(await inputBoxRowAfter(afterTyping)).toBe('❯ lsx');
+    expect(await inputBoxRowAfter(afterBackspace)).toBe('❯ ls');
+    // The control that lets the two lines above fail: take the erase out of the echo and the
+    // placeholder's tail shows through behind the keys.
+    const echoWithoutErase = afterTyping[afterTyping.length - 1].replace('\u001b[K', '');
+    expect(await inputBoxRowAfter([...afterTyping.slice(0, -1), echoWithoutErase])).toContain('refactor <filepath>');
+  });
+
+  it('draws nothing for a Backspace on an empty line, which would rub out the prompt glyph', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    const drawnBefore = drawnOn(started.sessionId).length;
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, '\u007f');
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(drawnOn(started.sessionId).slice(drawnBefore)).toEqual([]);
+  });
+
+  it('starts no turn for an Enter on an empty line: nothing drawn, no thinking, still idle', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    const drawnBefore = drawnOn(started.sessionId).length;
+    const activityBefore = eventsFor('activity', started.sessionId).length;
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, '\r');
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(drawnOn(started.sessionId).slice(drawnBefore)).toEqual([]);
+    expect(eventsFor('activity', started.sessionId)).toHaveLength(activityBefore);
+    expect((await listedTerminals())[0].activity.state).toBe('idle');
+  });
+
+  it('draws a line\'s echo BEFORE the recorded screen its Enter brings up, so that screen is never typed over', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    const drawnBefore = drawnOn(started.sessionId).length;
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'fix the flaky test\r');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Order, not a joined string: the frame replaces the screen, so it must come last.
+    expect(drawnOn(started.sessionId).slice(drawnBefore)).toEqual([
+      '\u001b[Kfix the flaky test',
+      `\u001b[2J${COMMAND_TERMINAL_TURN.submitted.seedFrame}`,
+    ]);
+    // And a later subscriber is handed that screen and nothing after it.
+    const streamed = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
+    expect(streamed.scrollback).toBe(`\u001b[2J${COMMAND_TERMINAL_TURN.submitted.seedFrame}`);
+  });
+
+  it('starts the next line fresh: its first key erases the line tail again, and echoes alone', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'hello\r');
+    await vi.advanceTimersByTimeAsync(10);
+    const drawnBefore = drawnOn(started.sessionId).length;
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'x');
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(drawnOn(started.sessionId).slice(drawnBefore)).toEqual(['\u001b[Kx']);
+  });
+
   it('names the terminal from its first prompt: Title Case, after a beat, and a later snapshot lists the new name', async () => {
     const started = await startTerminal();
     await letAgentArrive();
@@ -552,6 +655,24 @@ describe('ending a terminal', () => {
 
     expect(sessionEndedEventsFor(started.sessionId)).toHaveLength(0);
     expect(await listedTerminals()).toHaveLength(1);
+  });
+
+  it('draws no answer and reports no activity for a terminal stopped mid-turn', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, `${COMMAND_TERMINAL_RECORDED_PROMPT}\r`);
+    await vi.advanceTimersByTimeAsync(100);
+
+    await controller.verbs.stopCommandTerminal(started.sessionId);
+    const drawnAtStop = drawnOn(started.sessionId).length;
+    const activityAtStop = eventsFor('activity', started.sessionId).length;
+    // Past the recorded turn's own length. 'replays the recorded turn' shows a LIVE terminal's
+    // answer and its idle land inside exactly this window, so nothing here is vacuous.
+    await vi.advanceTimersByTimeAsync(COMMAND_TERMINAL_RECORDED_TURN_MS + 1_000);
+
+    expect(drawnOn(started.sessionId)).toHaveLength(drawnAtStop);
+    expect(eventsFor('activity', started.sessionId)).toHaveLength(activityAtStop);
+    expect(sessionEndedEventsFor(started.sessionId)).toHaveLength(1);
   });
 
   it('announces the end with a command-terminals-changed board event', async () => {
