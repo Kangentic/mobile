@@ -25,6 +25,12 @@ import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtur
 import { hasSpawnLabel, isDoneRole, isTodoRole } from '@/state/boardStore';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
 import {
+  COMMAND_TERMINAL_RECORDED_NAME,
+  COMMAND_TERMINAL_RECORDED_PROMPT,
+  COMMAND_TERMINAL_RECORDED_TURN_MS,
+  COMMAND_TERMINAL_TURN,
+} from '@/devsupport/commandTerminalCapture';
+import {
   playRecordedTerminal,
   type RecordedTerminalCapture,
   type RecordedTerminalPlayback,
@@ -3108,61 +3114,28 @@ function mockCommandTerminalWire(terminal: MockCommandTerminal): JsonValue {
   } as unknown as JsonValue;
 }
 
-/** The terminal's opening frame once its agent arrives: a prompt waiting at the project root. Demo content only. */
-function mockCommandTerminalBanner(projectName: string): string {
-  return `\u001b[38;5;214m*\u001b[0m Welcome to Claude Code\r\n\r\n  ${projectName}\r\n\r\n> `;
-}
-
-/** A turn's one-line answer for any prompt the mock has no story for. Demo content only. */
-const MOCK_COMMAND_TERMINAL_DONE_REPLY = '\r\n\u001b[38;5;214m●\u001b[0m Done. Nothing in the project folder needed changing.\r\n\r\n> ';
-
-/** One row of `gh run list`: the lead (the result glyph or its indent), a pass or fail mark, the title padded so the branch column lines up. */
-function mockCiRunRow(lead: string, passed: boolean, title: string, minutes: number): string {
-  const mark = passed ? '\u001b[38;5;114m✓\u001b[0m' : '\u001b[38;5;203m✗\u001b[0m';
-  return `${lead}${mark} ${title.padEnd(31)} main  ${minutes}m`;
-}
-
-/** A prompt asking about CI: the store-capture flow's 07-command-terminal frame asks one. */
-const MOCK_COMMAND_TERMINAL_CI_PROMPT = /\b(ci|fail|failed|failing)\b/i;
-
 /**
- * The answer to a CI question: a tool call, its result, and a short read of
- * it, the way Claude Code lays a turn out. It is the 07-command-terminal
- * listing frame, so every line sits inside the iPhone shelf's 69 visible
- * columns (the cell is fitted to the pane height, so the shelf decides the
- * columns, not the grid), and the failing run is a task on the mock board.
- * Demo content only.
+ * A recorded frame REPLACES the screen. Each frame is a self-contained seed
+ * that enters the alternate screen and homes the cursor, but entering the
+ * alternate screen while already on it clears nothing, so a frame drawn over
+ * the last one would leave the last one's rows wherever the new one is blank.
+ * Erasing the display first is what Claude Code's own full repaint amounts to.
+ * A control sequence, not content: it draws no cell.
  */
-const MOCK_COMMAND_TERMINAL_CI_REPLY = [
-  '',
-  '\u001b[38;5;114m●\u001b[0m \u001b[1mBash\u001b[0m(gh run list --branch main --limit 4)',
-  mockCiRunRow('  \u001b[38;5;245m⎿\u001b[0m  ', true, 'Retry the webhook delivery', 6),
-  mockCiRunRow('     ', false, 'Bump the design tokens package', 9),
-  mockCiRunRow('     ', true, 'Cache the product-grid query', 7),
-  mockCiRunRow('     ', true, 'Rate-limit the password reset', 5),
-  '',
-  '\u001b[38;5;214m●\u001b[0m One failure overnight: the design tokens bump. The',
-  '  product-grid snapshot still expects the 4.1 spacing scale.',
-  '  Updating its three snapshots should clear it. Want me to?',
-  '',
-  '> ',
-].join('\r\n');
+const MOCK_FRAME_REPLACE = '\u001b[2J';
 
-/**
- * What a terminal's turn ends with: the CI story for a CI question, otherwise a
- * plain done. Exported for tests/unit/storeScreenshots.test.ts, which checks
- * the capture flow asks a question that draws the story.
- */
-export function mockCommandTerminalReply(prompt: string): string {
-  return MOCK_COMMAND_TERMINAL_CI_PROMPT.test(prompt) ? MOCK_COMMAND_TERMINAL_CI_REPLY : MOCK_COMMAND_TERMINAL_DONE_REPLY;
-}
+/** Erase to the end of the line: the first key of a prompt takes Claude Code's placeholder text with it, as the real input box does. */
+const MOCK_ERASE_LINE_TAIL = '\u001b[K';
 
 /**
  * The name the desktop's namer gives a terminal from its first prompt: a short
- * Title Case title, at most 80 characters (command-terminal-name.ts). The mock
- * takes the prompt's first six words rather than asking an agent.
+ * Title Case title, at most 80 characters (command-terminal-namer.ts). For the
+ * recorded prompt the mock answers with the name a real desktop gave it
+ * (COMMAND_TERMINAL_RECORDED_NAME); for any other it takes the prompt's first
+ * six words rather than asking an agent.
  */
 function mockCommandTerminalName(prompt: string): string {
+  if (prompt === COMMAND_TERMINAL_RECORDED_PROMPT) return COMMAND_TERMINAL_RECORDED_NAME;
   const words = prompt
     .replace(/[^A-Za-z0-9 ]/g, ' ')
     .split(/\s+/)
@@ -3339,6 +3312,45 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   }
 
   /**
+   * Draw one RECORDED frame of the Command Terminal turn (src/devsupport/commandTerminalCapture.ts)
+   * over whatever the terminal showed. The frame also becomes the terminal's whole scrollback, as a
+   * desktop's serialized grid is: a later subscriber is handed the screen as it now stands, not a
+   * history of every frame drawn over it.
+   */
+  function showCommandTerminalFrame(terminal: MockCommandTerminal, frame: RecordedTerminalCapture): void {
+    const data = MOCK_FRAME_REPLACE + frame.seedFrame;
+    terminal.scrollback = data;
+    emit({ kind: 'terminal', sessionId: terminal.sessionId, taskId: terminal.transientTaskId, payload: { data } });
+  }
+
+  /**
+   * Keys typed into a terminal's own keyboard. Every recorded frame leaves the cursor in Claude
+   * Code's input box, so the keys echo there, the first one erasing the placeholder the way the real
+   * input box does, and a Backspace rubs out the last key. Enter submits the line.
+   */
+  function typeIntoCommandTerminal(terminal: MockCommandTerminal, data: string): void {
+    let echo = '';
+    for (const character of data) {
+      if (character === '\r') {
+        if (echo.length > 0) writeCommandTerminal(terminal, echo);
+        echo = '';
+        const line = terminal.promptBuffer;
+        terminal.promptBuffer = '';
+        submitCommandTerminalPrompt(terminal, line);
+      } else if (character === '\u007f') {
+        if (terminal.promptBuffer.length === 0) continue;
+        terminal.promptBuffer = terminal.promptBuffer.slice(0, -1);
+        echo += '\b \b';
+      } else {
+        if (terminal.promptBuffer.length === 0) echo += MOCK_ERASE_LINE_TAIL;
+        terminal.promptBuffer += character;
+        echo += character;
+      }
+    }
+    if (echo.length > 0) writeCommandTerminal(terminal, echo);
+  }
+
+  /**
    * A start, the way the desktop's `startCommandTerminal` runs one: refused at
    * four, otherwise the lowest free slot, answered before the agent has drawn
    * anything. The agent "arrives" a beat later, which is when the phone's held
@@ -3366,7 +3378,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     announceCommandTerminalsChanged(terminal);
     later(MOCK_COMMAND_TERMINAL_READY_MS, () => {
       if (!commandTerminals.includes(terminal)) return;
-      writeCommandTerminal(terminal, mockCommandTerminalBanner(projectId === MOCK_PROJECT_2.id ? MOCK_PROJECT_2.name : MOCK_PROJECT.name));
+      // Claude Code's recorded opening screen. It was recorded in the
+      // storefront-web repo, so a checkout-api terminal shows that folder too:
+      // one recording, not one per project.
+      showCommandTerminalFrame(terminal, COMMAND_TERMINAL_TURN.opening);
       emitCommandTerminalActivity(terminal, 'idle');
     });
     return terminal;
@@ -3385,6 +3400,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * One prompt line typed into a terminal (its keyboard or the Chat composer).
    * `/exit` ends it a moment later, as Claude Code's own does; anything else is
    * a turn, and the FIRST one names the terminal, as the desktop's namer does.
+   *
+   * A turn is the RECORDED one, whatever was asked: the submitted frame at
+   * once, the answer when the recorded turn's own 11 seconds are up. Both show
+   * the prompt the recording was asked (COMMAND_TERMINAL_RECORDED_PROMPT), so
+   * another prompt reads back as that one. That is the price of showing only
+   * output a real agent produced: there is no real answer to an arbitrary
+   * question, and an authored one is what this replaced.
    */
   function submitCommandTerminalPrompt(terminal: MockCommandTerminal, line: string): void {
     const prompt = line.trim();
@@ -3394,6 +3416,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       return;
     }
     emitCommandTerminalActivity(terminal, 'thinking');
+    showCommandTerminalFrame(terminal, COMMAND_TERMINAL_TURN.submitted);
     if (!terminal.named) {
       later(1500, () => {
         if (!commandTerminals.includes(terminal) || terminal.named) return;
@@ -3402,9 +3425,9 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         announceCommandTerminalsChanged(terminal);
       });
     }
-    later(2500, () => {
+    later(COMMAND_TERMINAL_RECORDED_TURN_MS, () => {
       if (!commandTerminals.includes(terminal)) return;
-      writeCommandTerminal(terminal, mockCommandTerminalReply(prompt));
+      showCommandTerminalFrame(terminal, COMMAND_TERMINAL_TURN.answered);
       emitCommandTerminalActivity(terminal, 'idle');
     });
   }
@@ -4366,7 +4389,8 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         // the sender was not looking at.
         const chatTerminal = commandTerminals.find((terminal) => terminal.sessionId === payload.sessionId);
         if (chatTerminal !== undefined) {
-          writeCommandTerminal(chatTerminal, `${payload.text}\r\n`);
+          // No echo: the submitted frame draws the prompt in Claude Code's own
+          // transcript, and a raw line written first would scroll it.
           submitCommandTerminalPrompt(chatTerminal, payload.text);
           return ok(request, { delivered: true });
         }
@@ -4537,18 +4561,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         // A Command Terminal echoes its own keys and acts on each Enter.
         const typedTerminal = commandTerminals.find((terminal) => terminal.sessionId === payload.sessionId);
         if (typedTerminal !== undefined) {
-          writeCommandTerminal(typedTerminal, payload.data.replace(/\r/g, '\r\n'));
-          for (const character of payload.data) {
-            if (character === '\r') {
-              const line = typedTerminal.promptBuffer;
-              typedTerminal.promptBuffer = '';
-              submitCommandTerminalPrompt(typedTerminal, line);
-            } else if (character === '\u007f') {
-              typedTerminal.promptBuffer = typedTerminal.promptBuffer.slice(0, -1);
-            } else {
-              typedTerminal.promptBuffer += character;
-            }
-          }
+          typeIntoCommandTerminal(typedTerminal, payload.data);
           return ok(request, { written: true });
         }
         // Echo into the session the keystrokes were TYPED IN, not blindly into

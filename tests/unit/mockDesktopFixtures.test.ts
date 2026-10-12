@@ -51,6 +51,7 @@ import {
   streamingUsedTokens,
 } from '@/connection/mockDesktop';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
+import { COMMAND_TERMINAL_RECORDED_PROMPT, COMMAND_TERMINAL_TURN, type RecordedCommandTerminalTurn } from '@/devsupport/commandTerminalCapture';
 import { buildUnifiedDiffLines } from '@/diff/diffLines';
 import { createLiveTailBuffer, stripAnsiPreservingLayout } from '@/terminal/liveTail';
 import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCapture';
@@ -65,10 +66,16 @@ import { renderCaptureAllRows, renderCaptureRows } from '../helpers/renderCaptur
 let shotsRows: string[] = [];
 /** Every row the capture shows at ANY point, not just on its closing frame. */
 let shotsEveryRow: string[] = [];
+/** The Command Terminal's recorded frames, each as the screen it draws. */
+const commandTerminalRows: Record<keyof RecordedCommandTerminalTurn, string[]> = { opening: [], submitted: [], answered: [] };
+const COMMAND_TERMINAL_FRAMES = Object.keys(COMMAND_TERMINAL_TURN) as (keyof RecordedCommandTerminalTurn)[];
 
 beforeAll(async () => {
   shotsRows = await renderCaptureRows(CLAUDE_CAPTURE_SHOTS);
   shotsEveryRow = await renderCaptureAllRows(CLAUDE_CAPTURE_SHOTS);
+  for (const frame of COMMAND_TERMINAL_FRAMES) {
+    commandTerminalRows[frame] = await renderCaptureRows(COMMAND_TERMINAL_TURN[frame]);
+  }
 });
 
 /**
@@ -224,6 +231,13 @@ function renderedFixtureText(): { label: string; text: string }[] {
   for (const row of shotsEveryRow) {
     collected.push({ label: 'terminal row', text: row });
   }
+  // The Command Terminal's recorded frames, one of which is the
+  // 07-command-terminal listing image.
+  for (const frame of COMMAND_TERMINAL_FRAMES) {
+    for (const row of commandTerminalRows[frame]) {
+      collected.push({ label: `command terminal ${frame} row`, text: row });
+    }
+  }
   return collected;
 }
 
@@ -240,6 +254,9 @@ describe('the mock fixtures stay inside the customer fiction', () => {
     expect(collected.some((entry) => entry.label.startsWith('transcript.'))).toBe(true);
     expect(collected.some((entry) => entry.label.startsWith('archived.'))).toBe(true);
     expect(collected.some((entry) => entry.text === 'Cache the product-grid query on the storefront home')).toBe(true);
+    for (const frame of COMMAND_TERMINAL_FRAMES) {
+      expect(collected.some((entry) => entry.label === `command terminal ${frame} row` && entry.text.includes('Claude Code'))).toBe(true);
+    }
   });
 
   it.each(KANGENTIC_DOMAIN_TERMS)('never says "%s" in anything it renders', (term) => {
@@ -759,6 +776,62 @@ describe('the recorded terminal is real Claude Code, not an authored script', ()
       expect(turnedOn).toBeGreaterThan(turnedOff);
       expect((await modesAfterReplaying(seedFrame)).wraparoundMode).toBe(true);
     });
+  });
+});
+
+/**
+ * The Command Terminal's three frames (src/devsupport/commandTerminalCapture.ts). They replaced an
+ * authored "* Welcome to Claude Code" banner and a hand-written reply, which is exactly what a store
+ * listing must never show: every one is a screen a real Claude Code session drew.
+ */
+describe('the Command Terminal frames are one real Claude Code session', () => {
+  /** The whole screen as text, rows joined. */
+  function screen(frame: keyof RecordedCommandTerminalTurn): string {
+    return commandTerminalRows[frame].join('\n');
+  }
+
+  it.each(COMMAND_TERMINAL_FRAMES)('%s is a settled, seed-only frame at the grid every mock session reports', (frame) => {
+    // Widened to 210 columns, so a streamed chunk recorded at 66 would paint
+    // the wrong cells; scripts/buildTerminalFixture.mjs refuses one.
+    expect(COMMAND_TERMINAL_TURN[frame].chunks).toEqual([]);
+    expect({ cols: COMMAND_TERMINAL_TURN[frame].cols, rows: COMMAND_TERMINAL_TURN[frame].rows }).toEqual(activeGrid());
+  });
+
+  it.each(COMMAND_TERMINAL_FRAMES)("%s carries Claude Code's own header, at a folder with no one's name in it", (frame) => {
+    // The header's third line is the working directory. The recording ran in
+    // ~\code\storefront-web precisely so that line names no home directory;
+    // anywhere under the temp folder it spelled out the operator's account.
+    expect(screen(frame)).toMatch(/Claude Code v\d+\.\d+\.\d+/);
+    expect(screen(frame)).toContain('~\\code\\storefront-web');
+  });
+
+  it.each(COMMAND_TERMINAL_FRAMES)("%s shows no usage notice, which would be the recording account's", (frame) => {
+    expect(screen(frame)).not.toMatch(/weekly\s+limit/i);
+  });
+
+  it('opens on an empty prompt, then shows the recorded question, then the answer under it', () => {
+    expect(screen('opening')).not.toContain(COMMAND_TERMINAL_RECORDED_PROMPT.slice(0, 40));
+    for (const frame of ['submitted', 'answered'] as const) {
+      // Claude Code wraps the prompt at the recorded 66 columns, so match its opening words.
+      expect(screen(frame)).toContain(COMMAND_TERMINAL_RECORDED_PROMPT.slice(0, 40));
+    }
+    // The answer is a real turn: Claude Code's tool summary, its answer bullet,
+    // its "done" line, and the input box below it.
+    expect(screen('answered')).toMatch(/Searched for \d+ patterns?, read \d+ files?/);
+    expect(screen('answered')).toMatch(/●/);
+    expect(screen('answered')).toMatch(/for \d+s · done/);
+    expect(screen('answered')).toMatch(/─{20}/);
+  });
+
+  it('wraps every line of the recording inside the narrowest store shelf, 69 columns', () => {
+    // Recorded at 66 columns, so a wrapped line never reaches the iPhone's 69:
+    // anything past column 66 is the widened rule, not text.
+    for (const frame of COMMAND_TERMINAL_FRAMES) {
+      const textPastRecordedWidth = commandTerminalRows[frame]
+        .map((row) => [...row].slice(66).join(''))
+        .filter((tail) => tail.trim().length > 0 && !/^─+$/.test(tail.trim()));
+      expect({ frame, textPastRecordedWidth }).toEqual({ frame, textPastRecordedWidth: [] });
+    }
   });
 });
 
