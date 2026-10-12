@@ -83,11 +83,13 @@ export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): Re
   const openFile = useCallback(
     (file: DiffFileWire) => {
       if (projectId === null) return;
-      // A project-folder diff carries no taskId at all, so the file screen
-      // fetches the same project-folder content rather than a task's.
+      // A project-folder diff carries no taskId, and says so EXPLICITLY
+      // (`target: 'project'`): the file screen never reads a missing taskId as
+      // "the project folder", which would show the main checkout's changes
+      // under a task's name.
       router.push({
         pathname: '/file-diff',
-        params: taskId !== null ? { taskId, projectId, path: file.path, scope } : { projectId, path: file.path, scope },
+        params: taskId !== null ? { taskId, projectId, path: file.path, scope } : { target: 'project', projectId, path: file.path, scope },
       });
     },
     [router, taskId, projectId, scope],

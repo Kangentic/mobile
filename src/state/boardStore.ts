@@ -339,7 +339,9 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
         // Ordered by slot here rather than trusted: the protocol says the
         // desktop sends them that way, and the sheet's rows and every
         // "Command Terminal N" read top to bottom in that order.
-        commandTerminals: [...(snapshot.commandTerminals ?? [])].sort((first, second) => first.slot - second.slot),
+        commandTerminals: [...(snapshot.commandTerminals ?? [])]
+          .sort((first, second) => first.slot - second.slot)
+          .map((terminal) => ({ ...terminal, name: capCommandTerminalName(terminal.name) })),
         commandTerminalsOffered: snapshot.commandTerminalsOffered === true,
       };
       // Re-apply in-flight optimistic mutations on top, so a snapshot racing
@@ -622,6 +624,19 @@ export const COMMAND_TERMINAL_LIMIT = 4;
  */
 export function commandTerminalTitle(slot: number): string {
   return `Command Terminal ${slot}`;
+}
+
+/** The desktop namer's own ceiling for a terminal's name (command-terminal-name.ts). */
+export const COMMAND_TERMINAL_NAME_MAX_LENGTH = 80;
+
+/**
+ * A terminal's name as the phone stores it: desktop-supplied display text,
+ * derived from a prompt someone typed, so it is capped where it is stored
+ * rather than trusted to arrive at the desktop's own limit. Every surface that
+ * draws it (titles, rows, accessibility labels) then holds at most this much.
+ */
+export function capCommandTerminalName(name: string): string {
+  return name.length > COMMAND_TERMINAL_NAME_MAX_LENGTH ? name.slice(0, COMMAND_TERMINAL_NAME_MAX_LENGTH) : name;
 }
 
 /**
