@@ -12,8 +12,8 @@ import {
   type JsonValue,
 } from '@kangentic/protocol';
 import { SessionManager } from '@/channel/sessionManager';
-import { CapabilityClient } from '@/channel/capabilityClient';
-import { CapabilityError, VerbClient } from '@/channel/verbClient';
+import { CapabilityClient, CapabilityTimeoutError } from '@/channel/capabilityClient';
+import { COMMAND_TERMINAL_START_TIMEOUT_MS, CapabilityError, VerbClient } from '@/channel/verbClient';
 import { createLoopbackPair } from '@/devsupport/loopbackTransport';
 import { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
 import { boardSnapshotFixture, diffFileListFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
@@ -341,5 +341,196 @@ describe('VerbClient', () => {
     const { verbs } = await establishedHarness((request) => okResponse(request, {}));
 
     await expect(verbs.pauseSession({ taskId: 'task-1', projectId: 'project-1' })).rejects.toThrowError(CapabilityError);
+  });
+
+  /**
+   * command-terminal (protocol 0.20.0): `start` names only the project and the
+   * desktop answers with the new terminal's session, slot and name; `stop`
+   * names the session. One verb, two actions.
+   */
+  describe('command-terminal', () => {
+    const startedPayload = { ok: true, sessionId: 'sess-terminal-1', slot: 2, name: 'Command Terminal 2' };
+
+    it('startCommandTerminal sends the start action for the project and parses the answer', async () => {
+      const { verbs, requests } = await establishedHarness((request) => okResponse(request, startedPayload));
+
+      await expect(verbs.startCommandTerminal('project-1')).resolves.toEqual(startedPayload);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0].verb).toBe('command-terminal');
+      expect(requests[0].payload).toEqual({ action: 'start', projectId: 'project-1' });
+    });
+
+    /**
+     * A start waits on the desktop's git steps on the project folder (a 6 s
+     * budget) before the session exists, which is most of the shared 10 s
+     * default before a relay round trip, so it gets its own longer timeout. A
+     * start that read as a failure at 10 s would show "didn't answer" for a
+     * terminal that was in fact starting.
+     *
+     * Mutation seen failing: dropping `{ timeoutMs: COMMAND_TERMINAL_START_TIMEOUT_MS }`
+     * from startCommandTerminal - the start has already rejected at 11 s.
+     */
+    it('gives a start a longer timeout than the shared default, and still gives up at it', async () => {
+      // Harness first, on real timers: the handshake flush needs them.
+      const { verbs } = await establishedHarness(() => null); // the desktop never answers
+      vi.useFakeTimers();
+      try {
+        const startSettled = verbs.startCommandTerminal('project-1').then(
+          () => 'resolved',
+          (error: unknown) => error,
+        );
+        const stopSettled = verbs.stopCommandTerminal('sess-terminal-1').then(
+          () => 'resolved',
+          () => 'rejected',
+        );
+        let startHasSettled = false;
+        void startSettled.then(() => {
+          startHasSettled = true;
+        });
+
+        // Past the shared default: an ordinary verb, the stop, is already gone.
+        await vi.advanceTimersByTimeAsync(11_000);
+        await expect(stopSettled).resolves.toBe('rejected');
+        expect(startHasSettled).toBe(false);
+
+        // The last millisecond before its own bound: still waiting.
+        await vi.advanceTimersByTimeAsync(COMMAND_TERMINAL_START_TIMEOUT_MS - 11_000 - 1);
+        expect(startHasSettled).toBe(false);
+
+        // And at the bound it gives up as a timeout, rather than hanging forever.
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(startSettled).resolves.toBeInstanceOf(CapabilityTimeoutError);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(['command-terminal-limit', 'unknown-project', 'agent-unavailable', 'command-terminal-start-failed', 'unsupported-verb'] as const)(
+      'startCommandTerminal surfaces the refusal code %s on the CapabilityError',
+      async (code) => {
+        const { verbs } = await establishedHarness((request) => ({
+          type: 'capability-response',
+          requestId: request.requestId,
+          ok: false,
+          error: 'The desktop said no',
+          code,
+        }));
+
+        const refusal = await verbs.startCommandTerminal('project-1').catch((error: unknown) => error);
+
+        expect(refusal).toBeInstanceOf(CapabilityError);
+        expect((refusal as CapabilityError).code).toBe(code);
+        expect((refusal as CapabilityError).verb).toBe('command-terminal');
+        expect((refusal as CapabilityError).message).toBe('The desktop said no');
+      },
+    );
+
+    it.each([
+      ['no session id', { ok: true, slot: 1, name: 'Command Terminal 1' }],
+      ['no slot', { ok: true, sessionId: 'sess-1', name: 'Command Terminal 1' }],
+      ['no ok flag', { sessionId: 'sess-1', slot: 1, name: 'Command Terminal 1' }],
+    ])('startCommandTerminal throws CapabilityError for a response with %s', async (_label, payload) => {
+      const { verbs } = await establishedHarness((request) => okResponse(request, payload));
+
+      await expect(verbs.startCommandTerminal('project-1')).rejects.toThrowError(CapabilityError);
+    });
+
+    it('stopCommandTerminal sends the stop action for the session and resolves on the accept', async () => {
+      const { verbs, requests } = await establishedHarness((request) => okResponse(request, { ok: true }));
+
+      await expect(verbs.stopCommandTerminal('sess-terminal-1')).resolves.toBeUndefined();
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0].verb).toBe('command-terminal');
+      expect(requests[0].payload).toEqual({ action: 'stop', sessionId: 'sess-terminal-1' });
+    });
+
+    it.each(['unknown-session', 'not-command-terminal'] as const)('stopCommandTerminal surfaces the refusal code %s', async (code) => {
+      const { verbs } = await establishedHarness((request) => ({
+        type: 'capability-response',
+        requestId: request.requestId,
+        ok: false,
+        error: 'Refused',
+        code,
+      }));
+
+      await expect(verbs.stopCommandTerminal('sess-terminal-1')).rejects.toMatchObject({ verb: 'command-terminal', code });
+    });
+
+    it('stopCommandTerminal throws CapabilityError for an answer that is not ok:true', async () => {
+      const { verbs } = await establishedHarness((request) => okResponse(request, {}));
+
+      await expect(verbs.stopCommandTerminal('sess-terminal-1')).rejects.toThrowError(CapabilityError);
+    });
+  });
+
+  /**
+   * A project-folder diff (protocol 0.20.0, a Command Terminal's Changes) is
+   * told from a task's by the ABSENCE of `taskId` on the wire. `toEqual` treats
+   * a missing key and an undefined one as the same, and the loopback's JSON
+   * round trip drops undefined, so the assertion that can fail is on the
+   * property itself: the regression to catch is `taskId: null` reaching the
+   * desktop, which reads a present key as a task id.
+   *
+   * Mutation seen failing: replacing the conditional spread with
+   * `taskId: input.taskId` in readDiffFileList - the key is present, holding null.
+   */
+  describe('a project-folder diff (taskId null)', () => {
+    function diffRespond(request: CapabilityRequestMessage): CapabilityResponseMessage {
+      const payload = request.payload as { filePath?: string; action?: string };
+      if (payload.action === 'unsubscribe') return { type: 'capability-response', requestId: request.requestId, ok: true };
+      return okResponse(
+        request,
+        payload.filePath !== undefined
+          ? { original: 'old', modified: 'new', language: 'typescript' }
+          : (diffFileListFixture() as unknown as JsonValue),
+      );
+    }
+
+    function ownKeys(request: CapabilityRequestMessage): string[] {
+      return Object.keys(request.payload as object).sort();
+    }
+
+    it('readDiffFileList omits the taskId key and names the project', async () => {
+      const { verbs, requests } = await establishedHarness(diffRespond);
+
+      await verbs.readDiffFileList({ taskId: null, projectId: 'project-1', scope: 'working' });
+
+      expect(Object.hasOwn(requests[0].payload as object, 'taskId')).toBe(false);
+      expect(requests[0].payload).toEqual({ projectId: 'project-1', scope: 'working' });
+    });
+
+    it('readDiffFileContent omits the taskId key and names the project and the file', async () => {
+      const { verbs, requests } = await establishedHarness(diffRespond);
+
+      await verbs.readDiffFileContent({ taskId: null, projectId: 'project-1', filePath: 'src/a.ts', scope: 'branch' });
+
+      expect(Object.hasOwn(requests[0].payload as object, 'taskId')).toBe(false);
+      expect(requests[0].payload).toEqual({ projectId: 'project-1', filePath: 'src/a.ts', scope: 'branch' });
+    });
+
+    it('readDiffUnsubscribe omits the taskId key and names the project', async () => {
+      const { verbs, requests } = await establishedHarness(diffRespond);
+
+      await verbs.readDiffUnsubscribe({ taskId: null, projectId: 'project-1' });
+
+      expect(Object.hasOwn(requests[0].payload as object, 'taskId')).toBe(false);
+      expect(requests[0].payload).toEqual({ projectId: 'project-1', action: 'unsubscribe' });
+    });
+
+    it('still sends a task\'s taskId on all three (the control)', async () => {
+      const { verbs, requests } = await establishedHarness(diffRespond);
+
+      await verbs.readDiffFileList({ taskId: 'task-1', projectId: 'project-1' });
+      await verbs.readDiffFileContent({ taskId: 'task-1', projectId: 'project-1', filePath: 'src/a.ts' });
+      await verbs.readDiffUnsubscribe({ taskId: 'task-1', projectId: 'project-1' });
+
+      expect(requests.map(ownKeys)).toEqual([
+        ['projectId', 'taskId'],
+        ['filePath', 'projectId', 'taskId'],
+        ['action', 'projectId', 'taskId'],
+      ]);
+    });
   });
 });

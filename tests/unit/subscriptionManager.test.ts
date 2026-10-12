@@ -1865,4 +1865,103 @@ describe('SubscriptionManager', () => {
     ]);
     expect((diffRequests[2].payload as { projectId?: string }).projectId).toBe('project-1');
   });
+
+  /**
+   * A project-folder diff watch (protocol 0.20.0, a Command Terminal's Changes)
+   * is a desired diff with `taskId: null`, told from a task's by the absence of
+   * the key on the wire. The assertions are on the property itself
+   * (`Object.hasOwn`), because `toEqual` ignores a missing key and the loopback
+   * drops undefined: the regression to catch is `taskId: null` going out.
+   */
+  describe('a project-folder diff watch', () => {
+    const PROJECT_FOLDER_KEY = 'project:project-1';
+
+    const diffRequestsOf = (requests: CapabilityRequestMessage[]): CapabilityRequestMessage[] =>
+      requests.filter((request) => request.verb === 'read-diff');
+    const hasTaskIdKey = (request: CapabilityRequestMessage): boolean => Object.hasOwn(request.payload as object, 'taskId');
+
+    it('subscribes with no taskId key and reports its snapshot under the project-folder key', async () => {
+      const { stub, manager, requests, sinkCalls } = await harness();
+      stub.beginHandshake();
+      await flushLoopback();
+
+      manager.setDesiredDiff(PROJECT_FOLDER_KEY, { taskId: null, projectId: 'project-1', scope: 'working' });
+      await flushLoopback();
+
+      const diffRequests = diffRequestsOf(requests);
+      expect(diffRequests).toHaveLength(1);
+      expect(hasTaskIdKey(diffRequests[0])).toBe(false);
+      expect(diffRequests[0].payload).toEqual({ projectId: 'project-1', scope: 'working' });
+      expect(sinkCalls.diffFileLists).toEqual([PROJECT_FOLDER_KEY]);
+    });
+
+    it('unsubscribes with no taskId key when the watch is dropped', async () => {
+      const { stub, manager, requests } = await harness();
+      stub.beginHandshake();
+      await flushLoopback();
+      manager.setDesiredDiff(PROJECT_FOLDER_KEY, { taskId: null, projectId: 'project-1', scope: 'working' });
+      await flushLoopback();
+
+      manager.setDesiredDiff(PROJECT_FOLDER_KEY, null);
+      await flushLoopback();
+
+      const diffRequests = diffRequestsOf(requests);
+      expect(diffRequests).toHaveLength(2);
+      expect(hasTaskIdKey(diffRequests[1])).toBe(false);
+      expect(diffRequests[1].payload).toEqual({ projectId: 'project-1', action: 'unsubscribe' });
+    });
+
+    it('re-subscribes with no taskId key after a transport drop and a fresh handshake', async () => {
+      const { session, stub, manager, requests } = await harness();
+      stub.beginHandshake();
+      await flushLoopback();
+      manager.setDesiredDiff(PROJECT_FOLDER_KEY, { taskId: null, projectId: 'project-1', scope: 'branch' });
+      await flushLoopback();
+      const requestCountBeforeDrop = requests.length;
+
+      session.reset();
+      stub.beginHandshake();
+      await flushLoopback();
+
+      const diffRequestsAfterDrop = diffRequestsOf(requests.slice(requestCountBeforeDrop));
+      expect(diffRequestsAfterDrop).toHaveLength(1);
+      expect(hasTaskIdKey(diffRequestsAfterDrop[0])).toBe(false);
+      expect(diffRequestsAfterDrop[0].payload).toEqual({ projectId: 'project-1', scope: 'branch' });
+    });
+
+    /**
+     * Mutation seen failing: dropping `previous.taskId !== input.taskId` from
+     * setDesiredDiff's scopeChanged test - the second call is a no-op and only
+     * one read-diff goes out.
+     */
+    it('re-subscribes when the task changes under the same key, in either direction', async () => {
+      const { stub, manager, requests } = await harness();
+      stub.beginHandshake();
+      await flushLoopback();
+
+      manager.setDesiredDiff('shared-key', { taskId: null, projectId: 'project-1', scope: 'working' });
+      await flushLoopback();
+      manager.setDesiredDiff('shared-key', { taskId: 'task-1', projectId: 'project-1', scope: 'working' });
+      await flushLoopback();
+      manager.setDesiredDiff('shared-key', { taskId: null, projectId: 'project-1', scope: 'working' });
+      await flushLoopback();
+
+      const diffRequests = diffRequestsOf(requests);
+      expect(diffRequests.map(hasTaskIdKey)).toEqual([false, true, false]);
+      expect((diffRequests[1].payload as { taskId?: string }).taskId).toBe('task-1');
+    });
+
+    it('does not re-subscribe for an identical desired watch (the control for the change test)', async () => {
+      const { stub, manager, requests } = await harness();
+      stub.beginHandshake();
+      await flushLoopback();
+
+      manager.setDesiredDiff(PROJECT_FOLDER_KEY, { taskId: null, projectId: 'project-1', scope: 'working' });
+      await flushLoopback();
+      manager.setDesiredDiff(PROJECT_FOLDER_KEY, { taskId: null, projectId: 'project-1', scope: 'working' });
+      await flushLoopback();
+
+      expect(diffRequestsOf(requests)).toHaveLength(1);
+    });
+  });
 });

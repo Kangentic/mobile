@@ -1,22 +1,14 @@
 import type { CommandTerminalWire } from '@kangentic/protocol';
 import { useBoardStore } from '@/state/boardStore';
+import { commandTerminalWire } from './commandTerminalWire';
 
 /**
- * A Command Terminal as the board lists it (protocol 0.20.0). No fixture for it
- * exists in the shipped desktopFixtures, so the component tests build the wire
- * rows here. `named: false` is the default because a fresh terminal has no name
- * of its own until the desktop derives one from the first prompt.
+ * A Command Terminal as the board lists it (protocol 0.20.0), for the
+ * component tests: the shared wire fixture (commandTerminalWire.ts) under the
+ * session id these tests were written against.
  */
 export function commandTerminalWireFixture(overrides: Partial<CommandTerminalWire> = {}): CommandTerminalWire {
-  return {
-    sessionId: 'terminal-session-1',
-    projectId: 'project-1',
-    slot: 1,
-    name: 'Command Terminal 1',
-    named: false,
-    activity: { state: null, reason: null },
-    ...overrides,
-  };
+  return commandTerminalWire({ sessionId: 'terminal-session-1', ...overrides });
 }
 
 /**

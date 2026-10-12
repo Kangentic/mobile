@@ -57,7 +57,9 @@ export function projectTerminals(
   }));
   for (const launch of launches) {
     if (launch.projectId !== projectId || launch.phase === 'failed') continue;
-    if (launch.sessionId !== null && listedSessionIds.has(launch.sessionId)) continue;
+    // Listed, or listed once and since ended: the board's row (or its
+    // absence) is the truth from then on.
+    if (launch.listedOnce || (launch.sessionId !== null && listedSessionIds.has(launch.sessionId))) continue;
     rows.push({ sessionId: launch.sessionId, slot: launch.slot, name: launch.name, named: false });
   }
   return rows.sort((first, second) => first.slot - second.slot);

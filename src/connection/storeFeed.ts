@@ -109,6 +109,12 @@ function reconcileCommandTerminals(liveSessionIds: Set<string>): void {
       liveSessionIds.add(terminal.sessionId);
     }
   }
+  // Latch which launches a board has listed BEFORE choosing which to protect:
+  // a launch whose terminal was listed and is no longer has ended, and must not
+  // be held alive (wanted, drawn, "Stopping...") for the rest of its grace.
+  for (const launch of Object.values(useCommandTerminalStore.getState().launchesById)) {
+    if (launch.sessionId !== null && listedSessionIds.has(launch.sessionId)) useCommandTerminalStore.getState().markLaunchListed(launch.launchId);
+  }
   const terminalStore = useCommandTerminalStore.getState();
   const now = Date.now();
   for (const launch of selectUnlistedStartedLaunches(terminalStore, listedSessionIds, now)) {
@@ -468,11 +474,15 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       // that does not exist. The board drops it on the desktop's own
       // `command-terminals-changed`; this re-read is the backstop for an event
       // that never arrives.
-      const endedEntry = useActivityStore.getState().bySessionId[event.sessionId];
+      const endedActivityState = useActivityStore.getState();
+      const endedEntry = endedActivityState.bySessionId[event.sessionId];
       if (endedEntry?.kind === 'command-terminal') {
         subscriptions.refreshBoard(endedEntry.projectId);
         return;
       }
+      // A terminal whose entry a board drop already pruned: nothing left to
+      // refresh, and still never a task's swap.
+      if (endedActivityState.commandTerminalSessionIds[event.sessionId] === true) return;
       const respawnedTaskId = event.taskId;
       const pendingSweep = respawnSweepTimers.get(respawnedTaskId);
       if (pendingSweep !== undefined) clearTimeout(pendingSweep);

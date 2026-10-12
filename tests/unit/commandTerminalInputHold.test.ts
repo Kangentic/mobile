@@ -1,127 +1,118 @@
 /**
- * The Command Terminal input hold at its chokepoint (protocol 0.20.0): the
- * three input actions every keystroke, message and prompt answer takes refuse a
- * terminal session whose agent the desktop has not classified yet. The
- * terminal screen holds the same input in its UI, but that layer is opt-in per
- * component; this one is what a screen that forgets the prop (a prompt card on
- * the Chat lens, or a future surface) still cannot get past. The desktop's
- * mobile-bridge.md documents this hold as the phone's half of the promise that
- * `command-terminal` adds no shell reach, so it is asserted on the mechanism:
- * the verb client is never called.
+ * The Command Terminal input hold (protocol 0.20.0), run as a matrix: every
+ * case against each of the three input actions on its own, where
+ * commandTerminalInputHold.test.ts asserts the headline behaviour once. This
+ * file adds what that one leaves out - a snapshot that still carries no
+ * classified state keeps the hold, and a session neither the phone nor a board
+ * knows is not held (the screen's own gate covers it) - and proves each action
+ * is individually guarded rather than one of them riding on another.
+ *
+ * Nothing typed reaches a terminal until the desktop has classified its agent:
+ * in the moment after spawn the PTY can be a bare shell at the project root, and
+ * holding input there is the phone's half of the promise that `command-terminal`
+ * adds no shell reach.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CommandTerminalWire } from '@kangentic/protocol';
-import {
-  CommandTerminalInputHeldError,
-  answerPermissionPrompt,
-  sendUserMessage,
-  writeTerminal,
-} from '@/connection/actions';
-import { boardSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CommandTerminalInputHeldError, answerPermissionPrompt, sendUserMessage, writeTerminal } from '@/connection/actions';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
+import { boardSnapshotFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { commandTerminalWire } from '../helpers/commandTerminalWire';
 
-const { writeInteractiveTerminal, verbSendUserMessage, verbAnswerPermissionPrompt } = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
+  sendUserMessage: vi.fn(),
+  answerPermissionPrompt: vi.fn(),
   writeInteractiveTerminal: vi.fn(),
-  verbSendUserMessage: vi.fn(),
-  verbAnswerPermissionPrompt: vi.fn(),
 }));
 
 vi.mock('@/connection/connectionManager', () => ({
-  getActiveConnection: () => null,
+  NotConnectedError: class NotConnectedError extends Error {},
+  getActiveConnection: vi.fn(),
   reconnectNow: vi.fn(),
   requireSubscriptions: vi.fn(),
   requireVerbClient: () => ({
-    writeInteractiveTerminal,
-    sendUserMessage: verbSendUserMessage,
-    answerPermissionPrompt: verbAnswerPermissionPrompt,
+    sendUserMessage: mocks.sendUserMessage,
+    answerPermissionPrompt: mocks.answerPermissionPrompt,
+    writeInteractiveTerminal: mocks.writeInteractiveTerminal,
   }),
 }));
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: vi.fn() }));
-// @/connection/actions also imports settingsStore, which persists via
-// expo-secure-store - fake it so the vitest (node) run has no native module.
+vi.mock('@/connection/storeFeed', () => ({ reconcileSessionsFromBoards: vi.fn() }));
 vi.mock('expo-secure-store', () => ({
   getItemAsync: () => Promise.resolve(null),
   setItemAsync: () => Promise.resolve(),
 }));
 
-const TERMINAL_SESSION_ID = 'sess-terminal';
-const TASK_SESSION_ID = 'sess-task';
+const PROJECT_ID = 'project-1';
+const TERMINAL_SESSION_ID = 'sess-terminal-1';
 
-function terminalWire(overrides: Partial<CommandTerminalWire> = {}): CommandTerminalWire {
-  return {
-    sessionId: TERMINAL_SESSION_ID,
-    projectId: 'project-1',
-    slot: 1,
-    name: 'Command Terminal 1',
-    named: false,
-    activity: { state: null, reason: null },
-    ...overrides,
-  };
-}
-
-/** The desktop has classified the terminal's agent: what opens the hold. */
-function observeTerminalActivity(): void {
-  useActivityStore.getState().applyActivityEvent({
-    kind: 'activity',
-    sessionId: TERMINAL_SESSION_ID,
-    taskId: 'desktop-made-up-task-id',
-    payload: { type: 'activity', state: 'idle', reason: { kind: 'idle', since: 1 } },
-  });
-}
+const INPUT_ACTIONS = [
+  ['sendUserMessage', () => sendUserMessage(TERMINAL_SESSION_ID, 'hello'), mocks.sendUserMessage],
+  ['answerPermissionPrompt', () => answerPermissionPrompt(TERMINAL_SESSION_ID, `${TERMINAL_SESSION_ID}:tool-1`, '1\r'), mocks.answerPermissionPrompt],
+  ['writeTerminal', () => writeTerminal(TERMINAL_SESSION_ID, 'ls\r'), mocks.writeInteractiveTerminal],
+] as const;
 
 beforeEach(() => {
+  mocks.sendUserMessage.mockReset().mockResolvedValue({ delivered: true });
+  mocks.answerPermissionPrompt.mockReset().mockResolvedValue({ answered: true });
+  mocks.writeInteractiveTerminal.mockReset().mockResolvedValue({ written: true });
   useActivityStore.getState().reset();
   useBoardStore.getState().reset();
-  writeInteractiveTerminal.mockResolvedValue({ written: true });
-  verbSendUserMessage.mockResolvedValue({ delivered: true });
-  verbAnswerPermissionPrompt.mockResolvedValue({ answered: true });
 });
 
-afterEach(() => {
-  writeInteractiveTerminal.mockReset();
-  verbSendUserMessage.mockReset();
-  verbAnswerPermissionPrompt.mockReset();
-});
+describe.each(INPUT_ACTIONS)('%s and a Command Terminal', (_name, act, verb) => {
+  it('is held while the terminal\'s agent is unclassified, and sends nothing', async () => {
+    useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, PROJECT_ID);
 
-describe('the Command Terminal input hold at the input actions', () => {
-  it('refuses all three input actions for a registered terminal whose agent is not classified yet, and sends nothing', async () => {
-    useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, 'project-1');
+    await expect(act()).rejects.toBeInstanceOf(CommandTerminalInputHeldError);
 
-    await expect(writeTerminal(TERMINAL_SESSION_ID, 'ls\r')).rejects.toBeInstanceOf(CommandTerminalInputHeldError);
-    await expect(sendUserMessage(TERMINAL_SESSION_ID, 'hello')).rejects.toBeInstanceOf(CommandTerminalInputHeldError);
-    await expect(answerPermissionPrompt(TERMINAL_SESSION_ID, 'prompt-1', '1\r')).rejects.toBeInstanceOf(CommandTerminalInputHeldError);
-
-    expect(writeInteractiveTerminal).not.toHaveBeenCalled();
-    expect(verbSendUserMessage).not.toHaveBeenCalled();
-    expect(verbAnswerPermissionPrompt).not.toHaveBeenCalled();
+    expect(verb).not.toHaveBeenCalled();
   });
 
-  it('refuses a terminal the board lists before any activity entry exists for it', async () => {
-    useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture({ commandTerminals: [terminalWire()] }));
+  it('is held when only a board lists the session as a terminal and the phone has no entry yet', async () => {
+    useBoardStore.getState().applyBoardSnapshot(
+      boardSnapshotFixture({ projectId: PROJECT_ID, tasks: [], commandTerminals: [commandTerminalWire({ sessionId: TERMINAL_SESSION_ID })] }),
+    );
 
-    await expect(writeTerminal(TERMINAL_SESSION_ID, 'ls\r')).rejects.toBeInstanceOf(CommandTerminalInputHeldError);
-    expect(writeInteractiveTerminal).not.toHaveBeenCalled();
+    await expect(act()).rejects.toBeInstanceOf(CommandTerminalInputHeldError);
+
+    expect(verb).not.toHaveBeenCalled();
   });
 
-  it('opens once the desktop has classified the agent', async () => {
-    useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, 'project-1');
-    observeTerminalActivity();
+  it('is held after a snapshot that still carries no classified state', async () => {
+    useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, PROJECT_ID);
+    useActivityStore.getState().applySnapshot(
+      TERMINAL_SESSION_ID,
+      '',
+      PROJECT_ID,
+      streamSnapshotFixture({ activity: { state: null, reason: null } }),
+    );
 
-    await writeTerminal(TERMINAL_SESSION_ID, 'ls\r');
-    await sendUserMessage(TERMINAL_SESSION_ID, 'hello');
-    await answerPermissionPrompt(TERMINAL_SESSION_ID, 'prompt-1', '1\r');
+    await expect(act()).rejects.toBeInstanceOf(CommandTerminalInputHeldError);
 
-    expect(writeInteractiveTerminal).toHaveBeenCalledWith(TERMINAL_SESSION_ID, 'ls\r');
-    expect(verbSendUserMessage).toHaveBeenCalledWith(TERMINAL_SESSION_ID, 'hello');
-    expect(verbAnswerPermissionPrompt).toHaveBeenCalledWith({ sessionId: TERMINAL_SESSION_ID, promptId: 'prompt-1', keystrokes: '1\r' });
+    expect(verb).not.toHaveBeenCalled();
   });
 
-  it("never holds a task's session, classified or not", async () => {
-    useActivityStore.getState().registerSession(TASK_SESSION_ID, 'task-1', 'project-1');
+  it('goes through once the desktop has classified the agent', async () => {
+    useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, PROJECT_ID);
+    useActivityStore.getState().applySnapshot(TERMINAL_SESSION_ID, '', PROJECT_ID, streamSnapshotFixture());
 
-    await writeTerminal(TASK_SESSION_ID, 'ls\r');
+    await act();
 
-    expect(writeInteractiveTerminal).toHaveBeenCalledWith(TASK_SESSION_ID, 'ls\r');
+    expect(verb).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not held for a task\'s session, even one whose activity was never classified', async () => {
+    useActivityStore.getState().registerSession(TERMINAL_SESSION_ID, 'task-1', PROJECT_ID);
+
+    await act();
+
+    expect(verb).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not held for a session neither the phone nor a board knows (the screen\'s own gate covers it)', async () => {
+    await act();
+
+    expect(verb).toHaveBeenCalledTimes(1);
   });
 });

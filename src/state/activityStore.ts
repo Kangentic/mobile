@@ -351,6 +351,16 @@ interface ActivityStoreState {
    * window passes and dropped by the next release.
    */
   pendingSuccessorByTaskId: Record<string, PendingSuccessor>;
+  /**
+   * Every session ever registered as a Command Terminal, kept SEPARATELY from
+   * `bySessionId` for the reason `endedSessionIds` is: the entry is pruned the
+   * moment a board stops listing the terminal, and a `session-ended` push can
+   * land after that. Without this fact such an end, carrying the desktop's
+   * made-up task id, was read as a task's and armed a respawn record and sweep
+   * for a task that does not exist. Grows by one short string per terminal in
+   * an app run, in memory only.
+   */
+  commandTerminalSessionIds: Record<string, true>;
   registerSession: (sessionId: string, taskId: string, projectId: string) => void;
   /**
    * Registers a Command Terminal's session (protocol 0.20.0): an entry with no
@@ -529,6 +539,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
   spawnProgressLabelBySessionId: {},
   respawnByTaskId: {},
   pendingSuccessorByTaskId: {},
+  commandTerminalSessionIds: {},
 
   registerSession: (sessionId, taskId, projectId) =>
     set((state) => {
@@ -573,11 +584,21 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
   registerCommandTerminal: (sessionId, projectId) =>
     set((state) => {
       const existing = state.bySessionId[sessionId];
+      const commandTerminalSessionIds =
+        state.commandTerminalSessionIds[sessionId] === true
+          ? state.commandTerminalSessionIds
+          : { ...state.commandTerminalSessionIds, [sessionId]: true as const };
       if (existing) {
-        if (existing.kind !== 'command-terminal' || existing.projectId === projectId) return state;
-        return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, projectId } } };
+        if (existing.kind !== 'command-terminal') return state;
+        if (existing.projectId === projectId) {
+          return commandTerminalSessionIds === state.commandTerminalSessionIds ? state : { commandTerminalSessionIds };
+        }
+        return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, projectId } }, commandTerminalSessionIds };
       }
-      return { bySessionId: { ...state.bySessionId, [sessionId]: emptyEntry(sessionId, '', projectId, 'command-terminal') } };
+      return {
+        bySessionId: { ...state.bySessionId, [sessionId]: emptyEntry(sessionId, '', projectId, 'command-terminal') },
+        commandTerminalSessionIds,
+      };
     }),
 
   applySnapshot: (sessionId, taskId, projectId, snapshot) =>
@@ -654,7 +675,9 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // Never for a Command Terminal: it has no task, and the desktop stamps
       // its events with a made-up task id that names no board row. Recording
       // its end here would arm a retention for a task that does not exist.
-      const ownedByTask = existing?.kind !== 'command-terminal';
+      // Asked of the remembered fact as well as the entry: the end can land
+      // after the entry was pruned (see `commandTerminalSessionIds`).
+      const ownedByTask = existing?.kind !== 'command-terminal' && state.commandTerminalSessionIds[event.sessionId] !== true;
       const respawnByTaskId: Record<string, RespawnInFlight> =
         payload.type === 'session-ended' && ownedByTask
           ? {
@@ -852,7 +875,14 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
     }),
 
   reset: () =>
-    set({ bySessionId: {}, endedSessionIds: {}, spawnProgressLabelBySessionId: {}, respawnByTaskId: {}, pendingSuccessorByTaskId: {} }),
+    set({
+      bySessionId: {},
+      endedSessionIds: {},
+      spawnProgressLabelBySessionId: {},
+      respawnByTaskId: {},
+      pendingSuccessorByTaskId: {},
+      commandTerminalSessionIds: {},
+    }),
 }));
 
 /**
