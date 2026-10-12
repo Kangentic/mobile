@@ -161,7 +161,8 @@ app/              # expo-router route wrappers (thin - render the src/screens/ i
                   #   command-terminal-actions.tsx are its two form sheets
 src/
   screens/        # TriageHome (+ home/ empty states), Board, task/ (SessionScreen + lenses),
-                  #   terminals/ (Command Terminal screen, sheets, the Board's Terminals button),
+                  #   terminals/ (the Command Terminal screen, the Board's Terminals button; its
+                  #   two sheets sit with the other sheet screens),
                   #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
   components/      # Design system + conversation/ cells and prompt cards, terminal/ pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells
