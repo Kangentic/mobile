@@ -57,12 +57,20 @@ export interface SubscriptionSnapshotSinks {
    */
   onStreamRejected(sessionId: string, error: CapabilityError): void;
   onBoardSnapshot(snapshot: ReadBoardSnapshotResponsePayload): void;
-  onDiffFileList(taskId: string, fileList: DiffFileListWire): void;
+  onDiffFileList(diffKey: string, fileList: DiffFileListWire): void;
   /** A diff fetch that failed, so the Changes pane can stop waiting and say so. */
-  onDiffFetchFailed(taskId: string, scope: ReadDiffScope): void;
+  onDiffFetchFailed(diffKey: string, scope: ReadDiffScope): void;
 }
 
+/**
+ * One wanted diff watch, keyed by the caller's diff key. `taskId` names the
+ * task whose worktree to diff, or is null for the project folder itself
+ * (protocol 0.20.0, a Command Terminal's Changes). Required, never optional:
+ * a task watch that lost its id would silently diff the project folder and
+ * show the main checkout's changes as the task's.
+ */
 interface DesiredDiff {
+  taskId: string | null;
   projectId: string;
   scope: ReadDiffScope;
 }
@@ -119,7 +127,7 @@ export class SubscriptionManager {
 
   private desiredStreamIds = new Set<string>();
   private desiredBoardIds = new Set<string>();
-  private readonly desiredDiffsByTaskId = new Map<string, DesiredDiff>();
+  private readonly desiredDiffsByKey = new Map<string, DesiredDiff>();
 
   private readonly activeStreamIds = new Set<string>();
   private readonly activeBoardIds = new Set<string>();
@@ -156,7 +164,7 @@ export class SubscriptionManager {
    * desktop actually lost.
    */
   private readonly pendingBoardViewByProjectId = new Map<string, ReadBoardView>();
-  private readonly activeDiffTaskIds = new Set<string>();
+  private readonly activeDiffKeys = new Set<string>();
 
   private readonly boardRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly diffRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -261,20 +269,23 @@ export class SubscriptionManager {
   }
 
   /** At most a screenful of these exist (the Changes tab sets one on focus, null on blur) - the desktop fs-watcher is the scarce resource. */
-  setDesiredDiff(taskId: string, input: DesiredDiff | null): void {
+  setDesiredDiff(diffKey: string, input: DesiredDiff | null): void {
     if (input === null) {
-      const previous = this.desiredDiffsByTaskId.get(taskId);
-      this.desiredDiffsByTaskId.delete(taskId);
-      if (this.activeDiffTaskIds.has(taskId) && previous) this.dropDiff(taskId, previous.projectId);
+      const previous = this.desiredDiffsByKey.get(diffKey);
+      this.desiredDiffsByKey.delete(diffKey);
+      if (this.activeDiffKeys.has(diffKey) && previous) this.dropDiff(diffKey, previous);
       return;
     }
-    const previous = this.desiredDiffsByTaskId.get(taskId);
-    this.desiredDiffsByTaskId.set(taskId, input);
-    const scopeChanged = previous !== undefined && (previous.scope !== input.scope || previous.projectId !== input.projectId);
+    const previous = this.desiredDiffsByKey.get(diffKey);
+    this.desiredDiffsByKey.set(diffKey, input);
+    const scopeChanged =
+      previous !== undefined &&
+      (previous.scope !== input.scope || previous.projectId !== input.projectId || previous.taskId !== input.taskId);
     if (!this.session.isEstablished) return;
-    // A scope change is a re-subscribe (the desktop keys the watch by task
-    // only and replaces it); an unchanged active watch needs nothing.
-    if (!this.activeDiffTaskIds.has(taskId) || scopeChanged) void this.subscribeDiff(taskId, input);
+    // A scope change is a re-subscribe (the desktop keys the watch by task, or
+    // by project for a project-folder diff, and replaces it); an unchanged
+    // active watch needs nothing.
+    if (!this.activeDiffKeys.has(diffKey) || scopeChanged) void this.subscribeDiff(diffKey, input);
   }
 
   /** Debounced re-subscribe: the BoardEvent delta carries ids only, so reconciliation is a fresh snapshot. */
@@ -316,15 +327,15 @@ export class SubscriptionManager {
   }
 
   /** Debounced diff refetch after a DiffEvent (the event is a payload-less "re-fetch" signal). */
-  refreshDiff(taskId: string): void {
-    if (!this.desiredDiffsByTaskId.has(taskId)) return;
-    if (this.diffRefreshTimers.has(taskId)) return;
+  refreshDiff(diffKey: string): void {
+    if (!this.desiredDiffsByKey.has(diffKey)) return;
+    if (this.diffRefreshTimers.has(diffKey)) return;
     this.diffRefreshTimers.set(
-      taskId,
+      diffKey,
       setTimeout(() => {
-        this.diffRefreshTimers.delete(taskId);
-        const desired = this.desiredDiffsByTaskId.get(taskId);
-        if (desired && this.session.isEstablished) void this.subscribeDiff(taskId, desired);
+        this.diffRefreshTimers.delete(diffKey);
+        const desired = this.desiredDiffsByKey.get(diffKey);
+        if (desired && this.session.isEstablished) void this.subscribeDiff(diffKey, desired);
       }, DIFF_REFRESH_DEBOUNCE_MS),
     );
   }
@@ -338,8 +349,8 @@ export class SubscriptionManager {
     desiredBoards: string[];
     activeBoards: string[];
     fullBoards: string[];
-    desiredDiffTaskIds: string[];
-    activeDiffTaskIds: string[];
+    desiredDiffKeys: string[];
+    activeDiffKeys: string[];
   } {
     return {
       desiredStreams: [...this.desiredStreamIds].sort(),
@@ -348,8 +359,8 @@ export class SubscriptionManager {
       desiredBoards: [...this.desiredBoardIds].sort(),
       activeBoards: [...this.activeBoardIds].sort(),
       fullBoards: [...this.boardViewByProjectId.entries()].filter(([, view]) => view === 'full').map(([projectId]) => projectId).sort(),
-      desiredDiffTaskIds: [...this.desiredDiffsByTaskId.keys()].sort(),
-      activeDiffTaskIds: [...this.activeDiffTaskIds].sort(),
+      desiredDiffKeys: [...this.desiredDiffsByKey.keys()].sort(),
+      activeDiffKeys: [...this.activeDiffKeys].sort(),
     };
   }
 
@@ -420,7 +431,7 @@ export class SubscriptionManager {
     this.activeStreamIds.clear();
     this.activeBoardIds.clear();
     this.activeBoardViewByProjectId.clear();
-    this.activeDiffTaskIds.clear();
+    this.activeDiffKeys.clear();
     // Anything still pending was issued on the previous session's keys; the
     // controller rejected it, and the catch below clears it as it settles. A
     // fresh handshake starts from nothing in flight, and every board is
@@ -443,7 +454,7 @@ export class SubscriptionManager {
     );
     for (const projectId of boardsFullFirst) this.enqueueBoardSubscribe(projectId);
     for (const sessionId of this.desiredStreamIds) this.enqueueStreamSubscribe(sessionId);
-    for (const [taskId, desired] of this.desiredDiffsByTaskId) void this.subscribeDiff(taskId, desired);
+    for (const [diffKey, desired] of this.desiredDiffsByKey) void this.subscribeDiff(diffKey, desired);
   }
 
   /**
@@ -609,12 +620,12 @@ export class SubscriptionManager {
     }
   }
 
-  private async subscribeDiff(taskId: string, desired: DesiredDiff): Promise<void> {
+  private async subscribeDiff(diffKey: string, desired: DesiredDiff): Promise<void> {
     try {
-      const fileList = await this.verbs.readDiffFileList({ taskId, projectId: desired.projectId, scope: desired.scope });
-      if (this.disposed || this.desiredDiffsByTaskId.get(taskId) !== desired) return;
-      this.activeDiffTaskIds.add(taskId);
-      this.sinks.onDiffFileList(taskId, fileList);
+      const fileList = await this.verbs.readDiffFileList({ taskId: desired.taskId, projectId: desired.projectId, scope: desired.scope });
+      if (this.disposed || this.desiredDiffsByKey.get(diffKey) !== desired) return;
+      this.activeDiffKeys.add(diffKey);
+      this.sinks.onDiffFileList(diffKey, fileList);
     } catch {
       // Screen-driven, and the Changes tab can re-trigger via setDesiredDiff -
       // but it can only show the failure if it is TOLD about it. Swallowing
@@ -624,8 +635,8 @@ export class SubscriptionManager {
       //
       // Same staleness guard as the success path: a watch that has since been
       // dropped or re-scoped must not write over the current one's state.
-      if (this.disposed || this.desiredDiffsByTaskId.get(taskId) !== desired) return;
-      this.sinks.onDiffFetchFailed(taskId, desired.scope);
+      if (this.disposed || this.desiredDiffsByKey.get(diffKey) !== desired) return;
+      this.sinks.onDiffFetchFailed(diffKey, desired.scope);
     }
   }
 
@@ -666,10 +677,10 @@ export class SubscriptionManager {
     if (this.session.isEstablished) void this.verbs.readBoardUnsubscribe(projectId).catch(() => undefined);
   }
 
-  private dropDiff(taskId: string, projectId: string): void {
-    this.activeDiffTaskIds.delete(taskId);
+  private dropDiff(diffKey: string, desired: DesiredDiff): void {
+    this.activeDiffKeys.delete(diffKey);
     if (this.session.isEstablished) {
-      void this.verbs.readDiffUnsubscribe({ taskId, projectId }).catch(() => undefined);
+      void this.verbs.readDiffUnsubscribe({ taskId: desired.taskId, projectId: desired.projectId }).catch(() => undefined);
     }
   }
 }

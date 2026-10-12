@@ -16,12 +16,17 @@ import {
   type SegmentedTabBarItem,
   type TextColorRole,
 } from '@/components';
-import { selectTaskDiff, useDiffStore } from '@/state/diffStore';
+import { diffKeyFor, selectDiff, useDiffStore } from '@/state/diffStore';
 import { setDiffWatch } from '@/connection/actions';
 import { splitPathForDisplay } from '@/diff/pathDisplay';
 
 export interface ChangesTabProps {
-  taskId: string;
+  /**
+   * The task whose worktree to diff, or null for the project folder against
+   * its default base branch: a Command Terminal's Changes (protocol 0.20.0),
+   * as the desktop terminal window's own Changes panel shows it.
+   */
+  taskId: string | null;
   projectId: string | null;
   /** True while this tab is the visible one - the diff watch is screen-scoped. */
   isActive: boolean;
@@ -50,22 +55,24 @@ function isReadDiffScope(value: string): value is ReadDiffScope {
 }
 
 /**
- * The task's diff file list, live while the tab is visible: the diff watch
+ * The diff file list, live while the tab is visible: the diff watch
  * subscribes on focus/scope change and tears down on blur, and rows open the
- * per-file unified diff screen.
+ * per-file unified diff screen. A task's worktree, or a project folder.
  */
 export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const [scope, setScope] = useState<ReadDiffScope>('working');
-  const taskDiff = useDiffStore((state) => selectTaskDiff(state, taskId));
+  const diffKey = projectId !== null ? diffKeyFor({ taskId, projectId }) : null;
+  const taskDiff = useDiffStore((state) => (diffKey !== null ? selectDiff(state, diffKey) : null));
 
   useEffect(() => {
     if (!isActive || projectId === null) return;
-    setDiffWatch(taskId, { projectId, scope });
+    const target = { taskId, projectId };
+    setDiffWatch(target, scope);
     return () => {
       // Also fires on a scope change; the next effect run re-sets the watch.
-      setDiffWatch(taskId, null);
+      setDiffWatch(target, null);
     };
   }, [isActive, scope, taskId, projectId]);
 
@@ -76,9 +83,11 @@ export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): Re
   const openFile = useCallback(
     (file: DiffFileWire) => {
       if (projectId === null) return;
+      // A project-folder diff carries no taskId at all, so the file screen
+      // fetches the same project-folder content rather than a task's.
       router.push({
         pathname: '/file-diff',
-        params: { taskId, projectId, path: file.path, scope },
+        params: taskId !== null ? { taskId, projectId, path: file.path, scope } : { projectId, path: file.path, scope },
       });
     },
     [router, taskId, projectId, scope],

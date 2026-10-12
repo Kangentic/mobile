@@ -9,9 +9,17 @@ import {
   selectPendingSuccessor,
   selectTaskRespawn,
   useActivityStore,
+  type SessionOwnerKind,
 } from '@/state/activityStore';
-import { findTaskById, sessionlessTaskStatus, useBoardStore, selectLiveSessionIds } from '@/state/boardStore';
-import { useDiffStore } from '@/state/diffStore';
+import {
+  findTaskById,
+  selectCommandTerminalSessionIds,
+  selectLiveSessionIds,
+  sessionlessTaskStatus,
+  useBoardStore,
+} from '@/state/boardStore';
+import { selectUnlistedStartedLaunches, useCommandTerminalStore } from '@/state/commandTerminalStore';
+import { diffKeyFor, useDiffStore } from '@/state/diffStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import {
   appendChunk,
@@ -36,21 +44,31 @@ import {
  * so a snapshot that beats the board used to blank a correctly registered
  * entry's `taskId` to ''.
  */
-function sessionOwnerFor(sessionId: string): { taskId: string; projectId: string } | null {
+function sessionOwnerFor(sessionId: string): { taskId: string; projectId: string; kind: SessionOwnerKind } | null {
   const boardState = useBoardStore.getState();
   for (const [projectId, board] of Object.entries(boardState.boardsByProjectId)) {
     for (const task of Object.values(board.tasksById)) {
-      if (task.session_id === sessionId) return { taskId: task.id, projectId };
+      if (task.session_id === sessionId) return { taskId: task.id, projectId, kind: 'task' };
+    }
+    // A Command Terminal (protocol 0.20.0) belongs to no task. Without this a
+    // terminal's snapshot resolved to no owner and blanked its entry's project.
+    if (board.commandTerminals.some((terminal) => terminal.sessionId === sessionId)) {
+      return { taskId: '', projectId, kind: 'command-terminal' };
     }
   }
   const pendingTaskId = pendingSuccessorTaskFor(sessionId);
   if (pendingTaskId !== null) {
     const pending = useActivityStore.getState().pendingSuccessorByTaskId[pendingTaskId];
     const projectId = pending?.projectId ?? findTaskById(boardState, pendingTaskId)?.projectId ?? null;
-    if (projectId !== null) return { taskId: pendingTaskId, projectId };
+    if (projectId !== null) return { taskId: pendingTaskId, projectId, kind: 'task' };
   }
   const entry = useActivityStore.getState().bySessionId[sessionId];
-  if (entry !== undefined && entry.taskId !== '' && entry.projectId !== '') return { taskId: entry.taskId, projectId: entry.projectId };
+  // A terminal the board has not listed yet (just started from this phone),
+  // registered from its launch by the reconcile.
+  if (entry !== undefined && entry.kind === 'command-terminal' && entry.projectId !== '') {
+    return { taskId: '', projectId: entry.projectId, kind: 'command-terminal' };
+  }
+  if (entry !== undefined && entry.taskId !== '' && entry.projectId !== '') return { taskId: entry.taskId, projectId: entry.projectId, kind: 'task' };
   return null;
 }
 
@@ -61,6 +79,49 @@ function pendingSuccessorTaskFor(sessionId: string): string | null {
     if (pending.sessionId === sessionId && selectPendingSuccessor(activityState, taskId) !== null) return taskId;
   }
   return null;
+}
+
+/**
+ * The Command Terminal half of the reconcile (protocol 0.20.0): every terminal
+ * a board lists is registered and its stream wanted, exactly as a task's live
+ * agent is, so the Agents feed and the Terminals sheet can say what each one is
+ * doing. Plus the terminals this phone has just started and no board lists
+ * yet (`selectUnlistedStartedLaunches`): the start answers a round trip before
+ * the `command-terminals-changed` refresh lands, and the screen that opened on
+ * the tap needs the stream NOW (`refreshStream` only re-subscribes a wanted
+ * id). Without that half, the first board snapshot after a start would drop
+ * the stream the screen was reading.
+ *
+ * Bookkeeping it settles on the way: a launch the board now lists has done its
+ * job and is cleared (the screen bound the session when the start answered),
+ * as is one past its grace window; and a Stop whose terminal no board or launch
+ * lists any more is over, so its "Stopping..." (or its failure) goes with the
+ * row.
+ */
+function reconcileCommandTerminals(liveSessionIds: Set<string>): void {
+  const listedSessionIds = selectCommandTerminalSessionIds(useBoardStore.getState());
+  for (const [projectId, board] of Object.entries(useBoardStore.getState().boardsByProjectId)) {
+    for (const terminal of board.commandTerminals) {
+      useActivityStore.getState().registerCommandTerminal(terminal.sessionId, projectId);
+      liveSessionIds.add(terminal.sessionId);
+    }
+  }
+  const terminalStore = useCommandTerminalStore.getState();
+  const unlistedLaunches = selectUnlistedStartedLaunches(terminalStore, listedSessionIds, Date.now());
+  const unlistedLaunchIds = new Set(unlistedLaunches.map((launch) => launch.launchId));
+  for (const launch of unlistedLaunches) {
+    if (launch.sessionId === null) continue;
+    useActivityStore.getState().registerCommandTerminal(launch.sessionId, launch.projectId);
+    liveSessionIds.add(launch.sessionId);
+  }
+  for (const launch of Object.values(terminalStore.launchesById)) {
+    if (launch.phase === 'started' && !unlistedLaunchIds.has(launch.launchId)) terminalStore.clearLaunch(launch.launchId);
+  }
+  // Failed ones too: a Stop that timed out may still have landed, and once the
+  // terminal is gone its failure line has nothing left to describe.
+  for (const sessionId of Object.keys(terminalStore.stopsBySessionId)) {
+    if (!liveSessionIds.has(sessionId)) terminalStore.clearStop(sessionId);
+  }
 }
 
 /**
@@ -110,7 +171,7 @@ function pendingSuccessorTaskFor(sessionId: string): string | null {
  * successor has already answered "nothing in flight" and the ghost is
  * released in that same pass. One snapshot, never two rows.
  */
-function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
+export function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
   const boardState = useBoardStore.getState();
   const liveSessionIds = selectLiveSessionIds(boardState);
 
@@ -121,6 +182,7 @@ function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
       }
     }
   }
+  reconcileCommandTerminals(liveSessionIds);
   for (const [taskId, pending] of Object.entries(useActivityStore.getState().pendingSuccessorByTaskId)) {
     const boardSessionId = findTaskById(boardState, taskId)?.task.session_id ?? null;
     const boardCaughtUp = boardSessionId !== null && boardSessionId !== pending.endedSessionId;
@@ -133,13 +195,16 @@ function reconcileSessionsFromBoards(subscriptions: SubscriptionManager): void {
   }
   const claimedTaskIds = new Set<string>();
   for (const entry of Object.values(useActivityStore.getState().bySessionId)) {
-    if (liveSessionIds.has(entry.sessionId)) claimedTaskIds.add(entry.taskId);
+    if (entry.kind === 'task' && liveSessionIds.has(entry.sessionId)) claimedTaskIds.add(entry.taskId);
   }
   for (const sessionId of Object.keys(useActivityStore.getState().bySessionId)) {
     if (liveSessionIds.has(sessionId)) continue;
     const activityState = useActivityStore.getState();
     const entry = activityState.bySessionId[sessionId];
-    if (entry !== undefined && !claimedTaskIds.has(entry.taskId)) {
+    // A Command Terminal has no task to hold a row for: once neither a board
+    // nor a fresh start lists it, it is over (decision C2: the terminal ends
+    // with its agent), and its card goes in the same pass.
+    if (entry !== undefined && entry.kind === 'task' && !claimedTaskIds.has(entry.taskId)) {
       if (selectTaskRespawn(activityState, entry.taskId) !== null) {
         claimedTaskIds.add(entry.taskId);
         continue;
@@ -170,6 +235,9 @@ export function createSnapshotSinks(getSubscriptions: () => SubscriptionManager)
       const hopTaskId = pendingSuccessorTaskFor(sessionId);
       const hopRegisters = hopTaskId !== null && owner !== null && useActivityStore.getState().bySessionId[sessionId] === undefined;
       if (hopRegisters) useActivityStore.getState().registerSession(sessionId, owner.taskId, owner.projectId);
+      // A terminal's entry is registered as one before its snapshot lands on
+      // it, so the snapshot cannot create it as a task's.
+      if (owner !== null && owner.kind === 'command-terminal') useActivityStore.getState().registerCommandTerminal(sessionId, owner.projectId);
       useActivityStore.getState().applySnapshot(sessionId, owner?.taskId ?? '', owner?.projectId ?? '', snapshot);
       if (hopRegisters) reconcileSessionsFromBoards(getSubscriptions());
       if (isTerminalRetained(sessionId)) {
@@ -187,14 +255,14 @@ export function createSnapshotSinks(getSubscriptions: () => SubscriptionManager)
       useBoardStore.getState().applyBoardSnapshot(snapshot);
       reconcileSessionsFromBoards(getSubscriptions());
     },
-    onDiffFileList: (taskId, fileList) => {
-      const scope = useDiffStore.getState().byTaskId[taskId]?.scope ?? 'working';
-      useDiffStore.getState().applyFileList(taskId, scope, fileList);
+    onDiffFileList: (diffKey, fileList) => {
+      const scope = useDiffStore.getState().byKey[diffKey]?.scope ?? 'working';
+      useDiffStore.getState().applyFileList(diffKey, scope, fileList);
     },
-    onDiffFetchFailed: (taskId, scope) => {
+    onDiffFetchFailed: (diffKey, scope) => {
       // The scope the FETCH was for, not whatever the store happens to hold:
       // a scope switch mid-flight must not mark the new scope failed.
-      useDiffStore.getState().setStatus(taskId, scope, 'error');
+      useDiffStore.getState().setStatus(diffKey, scope, 'error');
     },
   };
 }
@@ -390,6 +458,17 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       // already a no-op, and one extra reconcile per swap is cheaper than the
       // bookkeeping to avoid it.
       if (event.payload.type !== 'session-ended') return;
+      // A Command Terminal's end is never a swap: no task, no successor, no
+      // retention window (decision C2, the terminal ends with its agent). Its
+      // event carries a made-up task id, so the sweep below would key on a task
+      // that does not exist. The board drops it on the desktop's own
+      // `command-terminals-changed`; this re-read is the backstop for an event
+      // that never arrives.
+      const endedEntry = useActivityStore.getState().bySessionId[event.sessionId];
+      if (endedEntry?.kind === 'command-terminal') {
+        subscriptions.refreshBoard(endedEntry.projectId);
+        return;
+      }
       const respawnedTaskId = event.taskId;
       const pendingSweep = respawnSweepTimers.get(respawnedTaskId);
       if (pendingSweep !== undefined) clearTimeout(pendingSweep);
@@ -415,8 +494,19 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       subscriptions.refreshBoard(event.projectId);
     }),
     feed.on('diff', (event) => {
-      useDiffStore.getState().markStale(event.taskId);
-      subscriptions.refreshDiff(event.taskId);
+      // A task's worktree names its taskId; a project folder (protocol 0.20.0,
+      // a Command Terminal's Changes) names its projectId instead. The
+      // protocol says exactly one is set; an event naming neither has nothing
+      // to re-fetch.
+      const diffKey =
+        event.taskId !== undefined
+          ? diffKeyFor({ taskId: event.taskId, projectId: event.projectId ?? '' })
+          : event.projectId !== undefined
+            ? diffKeyFor({ taskId: null, projectId: event.projectId })
+            : null;
+      if (diffKey === null) return;
+      useDiffStore.getState().markStale(diffKey);
+      subscriptions.refreshDiff(diffKey);
     }),
   ];
   return () => {

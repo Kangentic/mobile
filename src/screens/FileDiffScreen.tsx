@@ -6,7 +6,7 @@ import type { ReadDiffScope } from '@kangentic/protocol';
 import { MonoText, Screen, Skeleton, Stack, Text, useTheme } from '@/components';
 import { DiffLineCell } from '@/components/diff/DiffLineCell';
 import { buildUnifiedDiffLines, maxLineLength, type DiffLine } from '@/diff/diffLines';
-import { useDiffStore } from '@/state/diffStore';
+import { diffKeyFor, useDiffStore } from '@/state/diffStore';
 import { fetchDiffFileContent } from '@/connection/actions';
 
 const DIFF_CONTEXT_LINES = 3;
@@ -34,8 +34,10 @@ function isReadDiffScope(value: string | undefined): value is ReadDiffScope {
  */
 export function FileDiffScreen(): React.JSX.Element {
   const theme = useTheme();
-  const params = useLocalSearchParams<{ taskId: string; projectId: string; path: string; scope: string }>();
-  const taskId = params.taskId ?? '';
+  const params = useLocalSearchParams<{ taskId?: string; projectId: string; path: string; scope: string }>();
+  // No taskId is the project folder (a Command Terminal's Changes), never an
+  // empty task id: the request then omits the field, as the list's did.
+  const taskId = params.taskId !== undefined && params.taskId.length > 0 ? params.taskId : null;
   const projectId = params.projectId ?? '';
   const filePath = params.path ?? '';
   const scope: ReadDiffScope = isReadDiffScope(params.scope) ? params.scope : 'working';
@@ -43,11 +45,12 @@ export function FileDiffScreen(): React.JSX.Element {
   const [fetchFailed, setFetchFailed] = useState(false);
 
   useEffect(() => {
-    if (taskId.length === 0 || projectId.length === 0 || filePath.length === 0) return;
+    if (projectId.length === 0 || filePath.length === 0) return;
     fetchDiffFileContent({ taskId, projectId, filePath, scope }).catch(() => setFetchFailed(true));
   }, [taskId, projectId, filePath, scope]);
 
-  const content = useDiffStore((state) => state.byTaskId[taskId]?.contentByPath[filePath] ?? null);
+  const diffKey = diffKeyFor({ taskId, projectId });
+  const content = useDiffStore((state) => state.byKey[diffKey]?.contentByPath[filePath] ?? null);
 
   const lines = useMemo<DiffLine[]>(
     () => (content === null ? [] : buildUnifiedDiffLines(content.original, content.modified, { context: DIFF_CONTEXT_LINES })),

@@ -1449,7 +1449,7 @@ describe('SubscriptionManager', () => {
     await flushLoopback();
     manager.setDesiredBoards(new Set(['project-1']));
     manager.setDesiredStreams(new Set(['sess-1']));
-    manager.setDesiredDiff('task-1', { projectId: 'project-1', scope: 'working' });
+    manager.setDesiredDiff('task-1', { taskId: 'task-1', projectId: 'project-1', scope: 'working' });
     await flushLoopback();
     const requestCountBeforeDrop = requests.length;
 
@@ -1693,7 +1693,7 @@ describe('SubscriptionManager', () => {
     stub.beginHandshake();
     await flushLoopback();
 
-    manager.setDesiredDiff('task-1', { projectId: 'project-1', scope: 'branch' });
+    manager.setDesiredDiff('task-1', { taskId: 'task-1', projectId: 'project-1', scope: 'branch' });
     await flushLoopback();
 
     expect(sinkCalls.diffFetchFailures).toEqual([{ taskId: 'task-1', scope: 'branch' }]);
@@ -1710,7 +1710,7 @@ describe('SubscriptionManager', () => {
     stub.beginHandshake();
     await flushLoopback();
 
-    manager.setDesiredDiff('task-1', { projectId: 'project-1', scope: 'working' });
+    manager.setDesiredDiff('task-1', { taskId: 'task-1', projectId: 'project-1', scope: 'working' });
     // Dropped before the refusal comes back: the screen has moved on, and a
     // late error must not reopen an error state on a pane nobody is watching.
     manager.setDesiredDiff('task-1', null);
@@ -1741,14 +1741,14 @@ describe('SubscriptionManager', () => {
     stub.beginHandshake();
     await flushLoopback();
 
-    manager.setDesiredDiff('task-1', { projectId: 'project-1', scope: 'working' });
+    manager.setDesiredDiff('task-1', { taskId: 'task-1', projectId: 'project-1', scope: 'working' });
     await flushLoopback();
     expect(heldWorkingRequests).toHaveLength(1);
 
     // Re-scoped while the 'working' fetch is still outstanding. This issues
     // its own subscribeDiff for 'branch', which the default responder answers
     // successfully.
-    manager.setDesiredDiff('task-1', { projectId: 'project-1', scope: 'branch' });
+    manager.setDesiredDiff('task-1', { taskId: 'task-1', projectId: 'project-1', scope: 'branch' });
     await flushLoopback();
     expect(sinkCalls.diffFileLists).toEqual(['task-1']);
 
@@ -1850,9 +1850,9 @@ describe('SubscriptionManager', () => {
     stub.beginHandshake();
     await flushLoopback();
 
-    manager.setDesiredDiff('task-1', { projectId: 'project-1', scope: 'working' });
+    manager.setDesiredDiff('task-1', { taskId: 'task-1', projectId: 'project-1', scope: 'working' });
     await flushLoopback();
-    manager.setDesiredDiff('task-1', { projectId: 'project-1', scope: 'branch' });
+    manager.setDesiredDiff('task-1', { taskId: 'task-1', projectId: 'project-1', scope: 'branch' });
     await flushLoopback();
     manager.setDesiredDiff('task-1', null);
     await flushLoopback();

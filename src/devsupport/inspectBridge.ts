@@ -153,12 +153,12 @@ export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' |
           revision: window.revision,
           needsTailFetch: window.needsTailFetch,
         })),
-        diff: Object.entries(diffs.byTaskId).map(([taskId, taskDiff]) => ({
-          taskId,
-          scope: taskDiff.scope,
-          files: taskDiff.fileList?.files.length ?? 0,
-          status: taskDiff.fileListStatus,
-          stale: taskDiff.stale,
+        diff: Object.entries(diffs.byKey).map(([diffKey, diffState]) => ({
+          diffKey,
+          scope: diffState.scope,
+          files: diffState.fileList?.files.length ?? 0,
+          status: diffState.fileListStatus,
+          stale: diffState.stale,
         })),
       };
     }

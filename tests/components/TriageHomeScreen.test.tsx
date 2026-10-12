@@ -108,6 +108,8 @@ function seedStores(): void {
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
     },
     pendingMoves: [],
@@ -173,6 +175,8 @@ function seedTwoProjectBoards(): void {
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
       'project-2': {
         columns: [
@@ -193,6 +197,8 @@ function seedTwoProjectBoards(): void {
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
     },
     pendingMoves: [],

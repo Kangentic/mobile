@@ -2,7 +2,7 @@ import { AppState, type AppStateStatus, type NativeEventSubscription } from 'rea
 import notifee from '@notifee/react-native';
 import type { PushCategory } from '@kangentic/protocol';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
-import { useBoardStore } from '@/state/boardStore';
+import { selectCommandTerminal, useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { channelIdForCategory, titleForCategory } from './categoryCopy';
 import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
@@ -89,8 +89,23 @@ function isSettledIdle(entry: SessionActivityEntry): boolean {
 }
 
 function resolveTaskTitle(entry: SessionActivityEntry): string {
+  // A Command Terminal is named by its board listing (protocol 0.20.0), never
+  // by a task: it has none.
+  if (entry.kind === 'command-terminal') {
+    return selectCommandTerminal(useBoardStore.getState(), entry.sessionId)?.name ?? 'Command Terminal';
+  }
   const boardTask = useBoardStore.getState().boardsByProjectId[entry.projectId]?.tasksById[entry.taskId];
   return boardTask && boardTask.title.length > 0 ? boardTask.title : 'Agent session';
+}
+
+/**
+ * What a tap on this alert routes by (see tapRouter). A Command Terminal's
+ * carries `sessionKind` so the tap opens the terminal by its session rather
+ * than an empty task id as a task.
+ */
+function routingDataFor(entry: SessionActivityEntry): Record<string, string> {
+  const routing = { taskId: entry.taskId, projectId: entry.projectId, sessionId: entry.sessionId };
+  return entry.kind === 'command-terminal' ? { ...routing, sessionKind: 'command-terminal' } : routing;
 }
 
 /**
@@ -140,7 +155,7 @@ export function startLocalNotifier(): () => void {
       .displayNotification({
         title: titleForCategory(category),
         body: resolveTaskTitle(entry),
-        data: { taskId: entry.taskId, projectId: entry.projectId, sessionId: entry.sessionId },
+        data: routingDataFor(entry),
         android: {
           ...ANDROID_NOTIFICATION_PRESENTATION,
           channelId: channelIdForCategory(category),

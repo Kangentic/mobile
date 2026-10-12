@@ -11,6 +11,10 @@ export interface TerminalTabProps {
   cleanFeedEnabled?: boolean;
   /** False while the footer is in a state the lens is never read in; see TerminalPane's prop of the same name. */
   fitLayoutIsReference?: boolean;
+  /** False drops every keystroke the pane would send; see TerminalPane's prop of the same name. */
+  inputEnabled?: boolean;
+  /** The placeholder's line when there is no session; a task's by default. */
+  emptyMessage?: string;
 }
 
 /**
@@ -24,12 +28,14 @@ export function TerminalTab({
   active,
   cleanFeedEnabled = false,
   fitLayoutIsReference = true,
+  inputEnabled = true,
+  emptyMessage = 'No active session for this task',
 }: TerminalTabProps): React.JSX.Element {
   if (sessionId === null) {
     return (
       <Stack gap="sm" style={styles.placeholder}>
         <Text variant="body" color="secondary">
-          No active session for this task
+          {emptyMessage}
         </Text>
       </Stack>
     );
@@ -40,6 +46,7 @@ export function TerminalTab({
       isActive={active}
       cleanFeedEnabled={cleanFeedEnabled}
       fitLayoutIsReference={fitLayoutIsReference}
+      inputEnabled={inputEnabled}
     />
   );
 }

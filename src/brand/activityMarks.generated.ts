@@ -21,21 +21,32 @@
  * attributes rather than passing SVG through.
  */
 
-export type ActivityMarkName = 'agent-idle' | 'agent-working';
+export type ActivityMarkName = 'agent-idle' | 'agent-working' | 'terminal-idle' | 'terminal-new' | 'control-stop-idle' | 'control-stop-working';
 
 /** How a mark renders when the OS asks for reduced motion. */
 export type ActivityRestRendering = 'static' | 'keep-dash' | 'drop-dash';
 
-export interface ActivityRectShape {
+/**
+ * Set on a shape inside the group a motion turns (the `kng-spin` group in the
+ * source SVG). A renderer moves exactly these and holds the rest still, which
+ * is what keeps the stop control's square from spinning with its ring.
+ */
+export interface ActivityShapeMotion {
+  moving?: true;
+}
+
+export interface ActivityRectShape extends ActivityShapeMotion {
   kind: 'rect';
   x: number;
   y: number;
   width: number;
   height: number;
   rx: number;
+  /** Drawn as a solid fill in the mark's colour rather than an outline (the stop control's square). */
+  filled?: true;
 }
 
-export interface ActivityCircleShape {
+export interface ActivityCircleShape extends ActivityShapeMotion {
   kind: 'circle';
   cx: number;
   cy: number;
@@ -44,7 +55,7 @@ export interface ActivityCircleShape {
   dash?: readonly [number, number];
 }
 
-export interface ActivityPathShape {
+export interface ActivityPathShape extends ActivityShapeMotion {
   kind: 'path';
   d: string;
 }
@@ -92,10 +103,45 @@ export const activityMarks: Record<ActivityMarkName, ActivityMark> = {
   },
   'agent-working': {
     shapes: [
-      { kind: 'circle', cx: 12, cy: 12, r: 9, dash: [42.4115, 14.1372] },
+      { kind: 'circle', cx: 12, cy: 12, r: 9, dash: [42.4115, 14.1372], moving: true },
     ],
     spin: { durationMs: 1400 },
     restRendering: 'keep-dash',
     minPx: 12,
+  },
+  'terminal-idle': {
+    shapes: [
+      { kind: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 3 },
+      { kind: 'path', d: 'M7.5 9.5 L10.5 12 L7.5 14.5' },
+      { kind: 'path', d: 'M12.5 14.5 H16.5' },
+    ],
+    restRendering: 'static',
+    minPx: 12,
+  },
+  'terminal-new': {
+    shapes: [
+      { kind: 'rect', x: 3, y: 3, width: 18, height: 18, rx: 3 },
+      { kind: 'path', d: 'M12 8.5 V15.5' },
+      { kind: 'path', d: 'M8.5 12 H15.5' },
+    ],
+    restRendering: 'static',
+    minPx: 12,
+  },
+  'control-stop-idle': {
+    shapes: [
+      { kind: 'circle', cx: 12, cy: 12, r: 10 },
+      { kind: 'rect', x: 7.2, y: 7.2, width: 9.6, height: 9.6, rx: 2.4, filled: true },
+    ],
+    restRendering: 'static',
+    minPx: 16,
+  },
+  'control-stop-working': {
+    shapes: [
+      { kind: 'circle', cx: 12, cy: 12, r: 10, dash: [47.1239, 15.708], moving: true },
+      { kind: 'rect', x: 7.2, y: 7.2, width: 9.6, height: 9.6, rx: 2.4, filled: true },
+    ],
+    spin: { durationMs: 1400 },
+    restRendering: 'keep-dash',
+    minPx: 16,
   },
 };

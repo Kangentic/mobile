@@ -71,6 +71,8 @@ function seedBoard(): void {
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
     },
     pendingMoves: [],
@@ -166,6 +168,8 @@ describe('MoveTaskScreen', () => {
           showTicketNumbers: true,
           view: 'full' as const,
           taskCountsByColumnId: {},
+          commandTerminals: [],
+          commandTerminalsOffered: false,
         },
       },
     }));

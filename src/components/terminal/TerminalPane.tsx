@@ -53,6 +53,15 @@ export interface TerminalPaneProps {
    * measured then must not become the fit height. Defaults to true.
    */
   fitLayoutIsReference?: boolean;
+  /**
+   * False drops every keystroke this pane would send: keys typed inside the
+   * xterm page, the soft keyboard a tap raises, and the direct key field. A
+   * Command Terminal holds this false until the desktop has classified its
+   * agent (protocol 0.20.0): in the moment after spawn the PTY is a bare shell
+   * at the project root, and the desktop's mobile-bridge.md states the phone's
+   * half of the "no shell reach" promise as exactly this. Defaults to true.
+   */
+  inputEnabled?: boolean;
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
@@ -199,8 +208,15 @@ export function TerminalPane({
   isActive,
   cleanFeedEnabled = false,
   fitLayoutIsReference = true,
+  inputEnabled = true,
 }: TerminalPaneProps): React.JSX.Element {
   const theme = useTheme();
+  // Read by the message handler at fire time, so a gate that opens does not
+  // rebuild the handler the WebView holds.
+  const inputEnabledRef = useRef(inputEnabled);
+  useEffect(() => {
+    inputEnabledRef.current = inputEnabled;
+  }, [inputEnabled]);
   // `WebView<object>`, not bare `WebView`: react-native-webview 14 changed its
   // class declaration's props generic default from `{}` to `undefined`
   // (`declare class WebView<P = undefined> extends Component<WebViewProps & P>`),
@@ -956,10 +972,15 @@ export function TerminalPane({
       }
       if (message.type === 'tapped') {
         // A clean tap (never a drag or pinch - the WebView's own gesture
-        // code decides) toggles the soft keyboard for direct typing.
+        // code decides) toggles the soft keyboard for direct typing. Not while
+        // input is held: there is nothing the keyboard may send.
+        if (!inputEnabledRef.current) return;
         directKeyRef.current?.toggle();
         return;
       }
+      // Input held (see `inputEnabled`): the keys go nowhere, and are not
+      // counted as write attempts either, since none was made.
+      if (!inputEnabledRef.current) return;
       // 'input': keys typed inside the xterm WebView go to the desktop PTY.
       // Failures (not connected, capability revoked) are dropped silently -
       // the connection banner is the surface for that state - but they are
@@ -1067,7 +1088,7 @@ export function TerminalPane({
           style={[styles.flex, { backgroundColor: theme.colors.terminalBackground }]}
         />
         {awaitingFirstFrame ? <TerminalWaitOverlay key={sessionId} sessionId={sessionId} active={isActive} /> : null}
-        <DirectKeyInput ref={directKeyRef} sessionId={sessionId} />
+        <DirectKeyInput ref={directKeyRef} sessionId={sessionId} inputEnabled={inputEnabled} />
         <View style={styles.scrollLatestButton}>
           <IconButton
             iconName="to-latest"

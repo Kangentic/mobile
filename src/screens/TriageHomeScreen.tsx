@@ -44,6 +44,7 @@ import { subscribeToMemoryPressure } from '@/observability/memoryPressure';
 import { MapperLoad } from '@/devsupport/MapperLoad';
 import { useConcurrencyProbeDepth } from '@/devsupport/concurrencyProbe';
 import { AllQuietEmptyState } from './home/AllQuietEmptyState';
+import { CommandTerminalRow } from './home/CommandTerminalRow';
 import { ConnectingEmptyState } from './home/ConnectingEmptyState';
 import { FilteredEmptyState } from './home/FilteredEmptyState';
 import { SectionFilterButton } from './home/SectionFilterButton';
@@ -310,7 +311,8 @@ export function TriageHomeScreen(): React.JSX.Element {
       if (!section) continue;
       if (hiddenTitles.includes(FEED_SECTION_TITLES[sectionKind])) continue;
       for (const row of section.rows) {
-        // A task row has no session, so there is nothing to peek.
+        // A task row has no session, so there is nothing to peek; a Command
+        // Terminal has no transcript, and its card reads the activity line.
         if (row.kind !== 'session') continue;
         const entry = row.entry;
         if (warmedSessionIdsRef.current.has(entry.sessionId)) continue;
@@ -482,6 +484,10 @@ export function TriageHomeScreen(): React.JSX.Element {
             ) : item.kind === 'session' ? (
               <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
                 <ActivityRow entry={item.entry} onLongPressTask={onLongPressTask} />
+              </View>
+            ) : item.kind === 'terminal' ? (
+              <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
+                <CommandTerminalRow entry={item.entry} />
               </View>
             ) : (
               <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>

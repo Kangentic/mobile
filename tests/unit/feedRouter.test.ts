@@ -41,7 +41,7 @@ describe('FeedRouter', () => {
     const { session, stub } = await establishedPair();
     const router = new FeedRouter(session);
     const terminalEvents: TerminalEvent[] = [];
-    const diffTaskIds: string[] = [];
+    const diffTaskIds: (string | undefined)[] = [];
     router.on('terminal', (event) => terminalEvents.push(event));
     router.on('diff', (event) => diffTaskIds.push(event.taskId));
 

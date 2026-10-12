@@ -1,4 +1,5 @@
 import {
+  parseCommandTerminalStartResponsePayload,
   parsePauseSessionResponsePayload,
   parseReadBoardResponsePayload,
   parseReadDiffResponsePayload,
@@ -12,6 +13,8 @@ import {
   type CapabilityErrorCode,
   type CapabilityResponseMessage,
   type CapabilityVerb,
+  type CommandTerminalRequestPayload,
+  type CommandTerminalStartResponsePayload,
   type DiffFileContentWire,
   type DiffFileListWire,
   type InteractiveTerminalRequestPayload,
@@ -63,6 +66,20 @@ function asRequestJson(payload: unknown): JsonValue {
  */
 const MOVE_TASK_TIMEOUT_MS = 45_000;
 
+/**
+ * A `command-terminal` start's own timeout. The desktop answers once the
+ * terminal's session exists, which is after the git steps a New terminal runs
+ * on the project folder: a phone start runs them unattended, with a 5 s abort
+ * on the fetch inside one 6 s budget for the whole git phase, and then spawns
+ * (read from the desktop's command-terminal handler and its bridge doc, not
+ * measured from the phone). That budget alone is most of the shared 10 s
+ * default before a relay round trip is counted, so a slow start would read as
+ * a failure while the terminal was in fact starting. 30 s clears it with room,
+ * and a timeout still re-reads the board (see startCommandTerminal), because
+ * the terminal may well be running.
+ */
+export const COMMAND_TERMINAL_START_TIMEOUT_MS = 30_000;
+
 /** A capability request the desktop answered with ok:false (or whose response payload failed its parse guard). */
 export class CapabilityError extends Error {
   readonly verb: CapabilityVerb;
@@ -83,7 +100,13 @@ export class CapabilityError extends Error {
 }
 
 export interface ReadDiffFileListInput {
-  taskId: string;
+  /**
+   * The task whose worktree to diff, or null for the project folder against
+   * the project's default base branch (protocol 0.20.0, a Command Terminal's
+   * Changes). Null OMITS the field on the wire, which is how the desktop tells
+   * the two apart; it never sends a placeholder id.
+   */
+  taskId: string | null;
   projectId: string;
   scope?: ReadDiffScope;
 }
@@ -210,7 +233,7 @@ export class VerbClient {
   /** Fetches the diff file list AND (desktop-side) subscribes the task's diff watch; DiffEvents follow until readDiffUnsubscribe. */
   async readDiffFileList(input: ReadDiffFileListInput): Promise<DiffFileListWire> {
     const response = await this.requireOk('read-diff', {
-      taskId: input.taskId,
+      ...(input.taskId !== null ? { taskId: input.taskId } : {}),
       projectId: input.projectId,
       ...(input.scope ? { scope: input.scope } : {}),
     });
@@ -222,7 +245,7 @@ export class VerbClient {
   /** One-shot single-file content fetch; never affects the diff watch. */
   async readDiffFileContent(input: ReadDiffFileContentInput): Promise<DiffFileContentWire> {
     const response = await this.requireOk('read-diff', {
-      taskId: input.taskId,
+      ...(input.taskId !== null ? { taskId: input.taskId } : {}),
       projectId: input.projectId,
       filePath: input.filePath,
       ...(input.scope ? { scope: input.scope } : {}),
@@ -232,8 +255,12 @@ export class VerbClient {
     return parsed;
   }
 
-  async readDiffUnsubscribe(input: { taskId: string; projectId: string }): Promise<void> {
-    await this.requireOk('read-diff', { taskId: input.taskId, projectId: input.projectId, action: 'unsubscribe' });
+  async readDiffUnsubscribe(input: { taskId: string | null; projectId: string }): Promise<void> {
+    await this.requireOk('read-diff', {
+      ...(input.taskId !== null ? { taskId: input.taskId } : {}),
+      projectId: input.projectId,
+      action: 'unsubscribe',
+    });
   }
 
   async sendUserMessage(sessionId: string, text: string): Promise<SendUserMessageResponsePayload> {
@@ -276,6 +303,37 @@ export class VerbClient {
   async pauseSession(input: PauseSessionRequestPayload): Promise<PauseSessionResponsePayload> {
     const response = await this.requireOk('pause-session', asRequestJson(input));
     return this.parsePayload('pause-session', response, parsePauseSessionResponsePayload);
+  }
+
+  /**
+   * Starts a Command Terminal in a project (protocol 0.20.0): the agent the
+   * desktop's own New terminal runs at the project root, on the default branch,
+   * with no task. The phone names only the project. Answered once the session
+   * exists, before the agent has drawn anything. A refusal is a CapabilityError
+   * carrying its typed `code` (`command-terminal-limit`, `unknown-project`,
+   * `agent-unavailable`, `command-terminal-start-failed`, or `unsupported-verb`
+   * from a desktop that predates the verb).
+   */
+  async startCommandTerminal(projectId: string): Promise<CommandTerminalStartResponsePayload> {
+    const payload: CommandTerminalRequestPayload = { action: 'start', projectId };
+    const response = await this.requireOk('command-terminal', asRequestJson(payload), { timeoutMs: COMMAND_TERMINAL_START_TIMEOUT_MS });
+    return this.parsePayload('command-terminal', response, parseCommandTerminalStartResponsePayload);
+  }
+
+  /**
+   * Stops a Command Terminal by its session (protocol 0.20.0), the desktop
+   * Stop's own call. Answered once the terminal has ended. The desktop refuses
+   * any session that is not a Command Terminal (`not-command-terminal`), and
+   * answers `unknown-session` for one that already ended, which the caller
+   * treats as stopped.
+   */
+  async stopCommandTerminal(sessionId: string): Promise<void> {
+    const payload: CommandTerminalRequestPayload = { action: 'stop', sessionId };
+    const response = await this.requireOk('command-terminal', asRequestJson(payload));
+    this.parsePayload('command-terminal', response, (value) => {
+      if (!isRecord(value) || value.ok !== true) throw new Error('command-terminal stop response is missing "ok"');
+      return value;
+    });
   }
 
   async answerPermissionPrompt(input: AnswerPermissionPromptRequestPayload): Promise<AnswerPermissionPromptResponsePayload> {

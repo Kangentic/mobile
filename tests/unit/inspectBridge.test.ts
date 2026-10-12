@@ -175,8 +175,8 @@ describe('buildInspectPayload', () => {
       activeStreams: [],
       desiredBoards: ['project-1'],
       activeBoards: ['project-1'],
-      desiredDiffTaskIds: [],
-      activeDiffTaskIds: [],
+      desiredDiffKeys: [],
+      activeDiffKeys: [],
     };
     setInspectSubscriptions({ debugSnapshot: () => snapshot } as unknown as SubscriptionManager);
     await expect(payloadFor('subscriptions')).resolves.toEqual(snapshot);

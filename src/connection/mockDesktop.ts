@@ -3,6 +3,7 @@ import {
   parseCapabilityRequestPayload,
   type BoardTaskWire,
   type BridgeEvent,
+  type CapabilityErrorCode,
   type CapabilityRequestMessage,
   type CapabilityResponseMessage,
   type DiffFileContentWire,
@@ -3064,6 +3065,68 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
   ];
 }
 
+/** The desktop's per-project cap (MAX_COMMAND_TERMINALS), mirrored for the mock's own refusal. */
+const MOCK_COMMAND_TERMINAL_LIMIT = 4;
+
+/** How long a mock terminal's agent takes to "arrive" after a start: long enough to see the starting face. */
+const MOCK_COMMAND_TERMINAL_READY_MS = 900;
+
+/** One live Command Terminal of the mock desktop (protocol 0.20.0). */
+interface MockCommandTerminal {
+  sessionId: string;
+  projectId: string;
+  slot: number;
+  name: string;
+  named: boolean;
+  /** The made-up task id a real desktop stamps on a terminal's stream events; it names no board row. */
+  transientTaskId: string;
+  /** Null until the agent has arrived, which is what holds the phone's input. */
+  activityState: 'thinking' | 'idle' | null;
+  idleSince: number;
+  scrollback: string;
+  /** Keys typed since the last Enter, for spotting `/exit` and the first prompt. */
+  promptBuffer: string;
+}
+
+/** What the desktop lists for a terminal (CommandTerminalWire). */
+function mockCommandTerminalWire(terminal: MockCommandTerminal): JsonValue {
+  const activity =
+    terminal.activityState === null
+      ? { state: null, reason: null }
+      : terminal.activityState === 'idle'
+        ? { state: 'idle', reason: { kind: 'idle', since: terminal.idleSince } }
+        : { state: 'thinking', reason: { kind: 'turn-active' } };
+  return {
+    sessionId: terminal.sessionId,
+    projectId: terminal.projectId,
+    slot: terminal.slot,
+    name: terminal.name,
+    named: terminal.named,
+    activity,
+  } as unknown as JsonValue;
+}
+
+/** The terminal's opening frame once its agent arrives: a prompt waiting at the project root. Demo content only. */
+function mockCommandTerminalBanner(projectName: string): string {
+  return `\u001b[38;5;214m*\u001b[0m Welcome to Claude Code\r\n\r\n  ${projectName}\r\n\r\n> `;
+}
+
+/**
+ * The name the desktop's namer gives a terminal from its first prompt: a short
+ * Title Case title, at most 80 characters (command-terminal-name.ts). The mock
+ * takes the prompt's first six words rather than asking an agent.
+ */
+function mockCommandTerminalName(prompt: string): string {
+  const words = prompt
+    .replace(/[^A-Za-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 0)
+    .slice(0, 6)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
+  const title = words.join(' ').slice(0, 80);
+  return title.length > 0 ? title : 'Command Terminal Task';
+}
+
 export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockDesktop {
   const [phoneTransport, desktopTransport] = createLoopbackPair();
   const identity = options.identity ?? generateX25519KeyPair();
@@ -3196,10 +3259,108 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   let failNextResume = false;
   let codexStreamSubscribed = false;
   let geminiStreamSubscribed = false;
+  /**
+   * The Command Terminals this connection's reviewer has started (protocol
+   * 0.20.0). None are seeded: the store-capture flow and every fixture test
+   * see the feed they always saw, and New on the Board's Terminals button is
+   * how one appears. Reset per connection with the rest of the scenario.
+   */
+  const commandTerminals: MockCommandTerminal[] = [];
+  let commandTerminalCounter = 0;
 
   function emit(event: BridgeEvent): void {
     if (!peer.isEstablished) return;
     peer.emitEvent(event);
+  }
+
+  /** The desktop's `command-terminals-changed`: on a start, an end or a rename, never on activity. */
+  function announceCommandTerminalsChanged(terminal: MockCommandTerminal): void {
+    later(50, () => {
+      emit({ kind: 'board', projectId: terminal.projectId, payload: { change: 'command-terminals-changed', ids: [terminal.sessionId] } });
+    });
+  }
+
+  function emitCommandTerminalActivity(terminal: MockCommandTerminal, state: 'thinking' | 'idle'): void {
+    terminal.activityState = state;
+    if (state === 'idle') terminal.idleSince = Date.now();
+    const reason = state === 'idle' ? { kind: 'idle' as const, since: terminal.idleSince } : { kind: 'turn-active' as const };
+    emit({ kind: 'activity', sessionId: terminal.sessionId, taskId: terminal.transientTaskId, payload: { type: 'activity', state, reason } });
+  }
+
+  function writeCommandTerminal(terminal: MockCommandTerminal, data: string): void {
+    terminal.scrollback += data;
+    emit({ kind: 'terminal', sessionId: terminal.sessionId, taskId: terminal.transientTaskId, payload: { data } });
+  }
+
+  /**
+   * A start, the way the desktop's `startCommandTerminal` runs one: refused at
+   * four, otherwise the lowest free slot, answered before the agent has drawn
+   * anything. The agent "arrives" a beat later, which is when the phone's held
+   * input opens (its first activity event).
+   */
+  function startMockCommandTerminal(projectId: string): MockCommandTerminal | null {
+    if (commandTerminals.filter((candidate) => candidate.projectId === projectId).length >= MOCK_COMMAND_TERMINAL_LIMIT) return null;
+    const takenSlots = new Set(commandTerminals.filter((candidate) => candidate.projectId === projectId).map((candidate) => candidate.slot));
+    let slot = 1;
+    while (takenSlots.has(slot)) slot += 1;
+    commandTerminalCounter += 1;
+    const terminal: MockCommandTerminal = {
+      sessionId: `mock-command-terminal-${commandTerminalCounter}`,
+      projectId,
+      slot,
+      name: `Command Terminal ${slot}`,
+      named: false,
+      transientTaskId: `mock-command-terminal-task-${commandTerminalCounter}`,
+      activityState: null,
+      idleSince: Date.now(),
+      scrollback: '',
+      promptBuffer: '',
+    };
+    commandTerminals.push(terminal);
+    announceCommandTerminalsChanged(terminal);
+    later(MOCK_COMMAND_TERMINAL_READY_MS, () => {
+      if (!commandTerminals.includes(terminal)) return;
+      writeCommandTerminal(terminal, mockCommandTerminalBanner(projectId === MOCK_PROJECT_2.id ? MOCK_PROJECT_2.name : MOCK_PROJECT.name));
+      emitCommandTerminalActivity(terminal, 'idle');
+    });
+    return terminal;
+  }
+
+  /** Stop, or the agent exiting: decision C2 ends the terminal with its agent, and the board drops it in the same edge. */
+  function endMockCommandTerminal(terminal: MockCommandTerminal): void {
+    const index = commandTerminals.indexOf(terminal);
+    if (index < 0) return;
+    commandTerminals.splice(index, 1);
+    emit({ kind: 'activity', sessionId: terminal.sessionId, taskId: terminal.transientTaskId, payload: { type: 'session-ended', intentional: true } });
+    announceCommandTerminalsChanged(terminal);
+  }
+
+  /**
+   * One prompt line typed into a terminal (its keyboard or the Chat composer).
+   * `/exit` ends it a moment later, as Claude Code's own does; anything else is
+   * a turn, and the FIRST one names the terminal, as the desktop's namer does.
+   */
+  function submitCommandTerminalPrompt(terminal: MockCommandTerminal, line: string): void {
+    const prompt = line.trim();
+    if (prompt.length === 0) return;
+    if (prompt === '/exit') {
+      later(800, () => endMockCommandTerminal(terminal));
+      return;
+    }
+    emitCommandTerminalActivity(terminal, 'thinking');
+    if (!terminal.named) {
+      later(1500, () => {
+        if (!commandTerminals.includes(terminal) || terminal.named) return;
+        terminal.name = mockCommandTerminalName(prompt);
+        terminal.named = true;
+        announceCommandTerminalsChanged(terminal);
+      });
+    }
+    later(2500, () => {
+      if (!commandTerminals.includes(terminal)) return;
+      writeCommandTerminal(terminal, '\r\n\u001b[38;5;214m●\u001b[0m Done. Nothing in the project folder needed changing.\r\n\r\n> ');
+      emitCommandTerminalActivity(terminal, 'idle');
+    });
   }
 
   function emitPtyResize(): void {
@@ -3901,7 +4062,15 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       showTicketNumbers: !isSecondProject,
       ...(view !== undefined ? { view } : {}),
       ...(view === 'sessions' ? { taskCountsByColumnId } : {}),
+      // Protocol 0.20.0: on every view, and offered, as the default pairing
+      // grant on a current desktop offers it.
+      commandTerminals: commandTerminals.filter((terminal) => terminal.projectId === servedProjectId).map(mockCommandTerminalWire),
+      commandTerminalsOffered: true,
     } as unknown as JsonValue;
+  }
+
+  function failWithCode(request: CapabilityRequestMessage, code: CapabilityErrorCode, error: string): CapabilityResponseMessage {
+    return { type: 'capability-response', requestId: request.requestId, ok: false, error, code };
   }
 
   /**
@@ -3989,6 +4158,31 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       }
       case 'read-stream': {
         const payload = parseCapabilityRequestPayload('read-stream', request.payload);
+        // A Command Terminal first, before the unsubscribe branch below, whose
+        // fallthrough would stop the streaming task's playback.
+        const streamedTerminal = commandTerminals.find((terminal) => terminal.sessionId === payload.sessionId);
+        if (streamedTerminal !== undefined) {
+          if (payload.action === 'unsubscribe') return ok(request);
+          // No transcript record, as on the desktop: the Chat lens settles on
+          // the reading view of the live terminal.
+          if (payload.action === 'transcript-window') return ok(request, { revision: 0, totalEntries: 0, startIndex: 0, entries: [] });
+          const terminalSnapshot: ReadStreamResponsePayload = {
+            scrollback: (payload.terminal ?? true) ? streamedTerminal.scrollback : '',
+            activity:
+              streamedTerminal.activityState === null
+                ? { state: null, reason: null }
+                : streamedTerminal.activityState === 'idle'
+                  ? { state: 'idle', reason: { kind: 'idle', since: streamedTerminal.idleSince } }
+                  : { state: 'thinking', reason: { kind: 'turn-active' } },
+            usage: null,
+            awaitedPromptId: null,
+            ptyDimensions: activeGrid(),
+            sessionStatus: 'running',
+            resuming: false,
+            resumable: false,
+          };
+          return ok(request, terminalSnapshot as unknown as JsonValue);
+        }
         if (payload.action === 'unsubscribe') {
           if (payload.sessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
           else if (payload.sessionId === MOCK_GEMINI_SESSION_ID) geminiStreamSubscribed = false;
@@ -4079,6 +4273,12 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       case 'read-diff': {
         const payload = parseCapabilityRequestPayload('read-diff', request.payload);
         if (payload.action === 'unsubscribe') return ok(request);
+        // The project folder (protocol 0.20.0, a Command Terminal's Changes):
+        // the mock's folders are clean, which is the honest answer.
+        if (payload.taskId === undefined) {
+          if (payload.filePath) return ok(request, { original: '', modified: '', language: 'plaintext' });
+          return ok(request, { files: [], totalInsertions: 0, totalDeletions: 0 });
+        }
         // Routed by the TASK, because a reviewer can open any of them. This
         // used to serve the streaming session's sign-in diff to every task,
         // so seven of eight Changes tabs contradicted their own session's
@@ -4123,6 +4323,12 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         // handler did before the demo pairing shipped - made chat a dead end
         // in every session but the streaming one: the message went to a feed
         // the sender was not looking at.
+        const chatTerminal = commandTerminals.find((terminal) => terminal.sessionId === payload.sessionId);
+        if (chatTerminal !== undefined) {
+          writeCommandTerminal(chatTerminal, `${payload.text}\r\n`);
+          submitCommandTerminalPrompt(chatTerminal, payload.text);
+          return ok(request, { delivered: true });
+        }
         const staticChatState = staticSessionStates.get(payload.sessionId);
         if (staticChatState) {
           entryCounter += 1;
@@ -4287,6 +4493,23 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           emitPtyResize();
           return ok(request, { released: true });
         }
+        // A Command Terminal echoes its own keys and acts on each Enter.
+        const typedTerminal = commandTerminals.find((terminal) => terminal.sessionId === payload.sessionId);
+        if (typedTerminal !== undefined) {
+          writeCommandTerminal(typedTerminal, payload.data.replace(/\r/g, '\r\n'));
+          for (const character of payload.data) {
+            if (character === '\r') {
+              const line = typedTerminal.promptBuffer;
+              typedTerminal.promptBuffer = '';
+              submitCommandTerminalPrompt(typedTerminal, line);
+            } else if (character === '\u007f') {
+              typedTerminal.promptBuffer = typedTerminal.promptBuffer.slice(0, -1);
+            } else {
+              typedTerminal.promptBuffer += character;
+            }
+          }
+          return ok(request, { written: true });
+        }
         // Echo into the session the keystrokes were TYPED IN, not blindly into
         // the active one. The pre-demo version emitted to activeSessionId for
         // every write, so typing in any other session's terminal returned
@@ -4428,6 +4651,30 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         if (located.task.id === MOCK_TASK_ID) pauseActiveSession();
         else pauseStaticSession(located.task, located.projectId);
         return ok(request, { ok: true });
+      }
+      case 'command-terminal': {
+        // Mirrors the desktop's handler (protocol 0.20.0): a start names only
+        // the project and is answered with the session the moment it exists;
+        // a stop ends only a Command Terminal. Every refusal carries the
+        // desktop's typed code, which is all the phone reads.
+        const payload = parseCapabilityRequestPayload('command-terminal', request.payload);
+        if (payload.action === 'stop') {
+          const stopped = commandTerminals.find((terminal) => terminal.sessionId === payload.sessionId);
+          if (stopped === undefined) {
+            const isTaskSession = payload.sessionId === activeSessionId || staticSessionStates.has(payload.sessionId);
+            return isTaskSession
+              ? failWithCode(request, 'not-command-terminal', 'That session is not a Command Terminal.')
+              : failWithCode(request, 'unknown-session', `No live Command Terminal: ${payload.sessionId}`);
+          }
+          endMockCommandTerminal(stopped);
+          return ok(request, { ok: true });
+        }
+        if (payload.projectId !== MOCK_PROJECT.id && payload.projectId !== MOCK_PROJECT_2.id) {
+          return failWithCode(request, 'unknown-project', `No such project: ${payload.projectId}`);
+        }
+        const started = startMockCommandTerminal(payload.projectId);
+        if (started === null) return failWithCode(request, 'command-terminal-limit', 'Command Terminal limit reached');
+        return ok(request, { ok: true, sessionId: started.sessionId, slot: started.slot, name: started.name });
       }
       default:
         return failWith(request, `Mock desktop has no handler for ${request.verb}`);

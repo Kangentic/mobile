@@ -40,6 +40,18 @@ export type PendingNavigation =
       readonly projectId: string;
       readonly sessionId: string;
     }
+  /**
+   * A Command Terminal's notification (protocol 0.20.0, `sessionKind:
+   * 'command-terminal'`): opens that terminal by its session. Its own variant,
+   * never `open-task`, because a terminal's envelope names a made-up task id
+   * that no board row has, and opening it as a task lands on a blank "Task"
+   * screen that never connects (design change 7's "Today").
+   */
+  | {
+      readonly kind: 'open-command-terminal';
+      readonly projectId: string;
+      readonly sessionId: string;
+    }
   | { readonly kind: 'reset-to-root' };
 
 let pendingNavigation: PendingNavigation | null = null;

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   BoardColumnWire,
   BoardTaskWire,
+  CommandTerminalWire,
   ReadBoardArchivedResponsePayload,
   ReadBoardProjectGroup,
   ReadBoardProjectSummary,
@@ -31,6 +32,21 @@ export interface ProjectBoard {
    * optimistic moves).
    */
   taskCountsByColumnId: Record<string, number>;
+  /**
+   * The project's live Command Terminals by slot (protocol 0.20.0), from every
+   * snapshot view. Empty against an older desktop, which cannot report them. A
+   * `command-terminals-changed` board event re-reads it (the debounced board
+   * refresh), on a start, an end or a rename; a terminal's activity rides its
+   * own read-stream, not this list.
+   */
+  commandTerminals: CommandTerminalWire[];
+  /**
+   * Whether this desktop serves `command-terminal` AND this phone holds it
+   * (protocol 0.20.0). The phone keeps no grant list, so this one flag decides
+   * whether the Board header offers Terminals at all, the way `pausable` gates
+   * Pause. Absent on the wire (an older desktop) reads false.
+   */
+  commandTerminalsOffered: boolean;
 }
 
 /**
@@ -320,6 +336,11 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
         // sends the whole board - absent means full, never "filtered, unknown".
         view: snapshot.view ?? 'full',
         taskCountsByColumnId: snapshot.taskCountsByColumnId ?? {},
+        // Ordered by slot here rather than trusted: the protocol says the
+        // desktop sends them that way, and the sheet's rows and every
+        // "Command Terminal N" read top to bottom in that order.
+        commandTerminals: [...(snapshot.commandTerminals ?? [])].sort((first, second) => first.slot - second.slot),
+        commandTerminalsOffered: snapshot.commandTerminalsOffered === true,
       };
       // Re-apply in-flight optimistic mutations on top, so a snapshot racing
       // one does not visibly bounce the card before the mutation commits.
@@ -582,6 +603,86 @@ export function selectLiveSessionIds(state: { boardsByProjectId: Record<string, 
     }
   }
   return liveSessionIds;
+}
+
+/**
+ * How many Command Terminals one project may run at once: the desktop's own
+ * cap (main owns it from protocol 0.20.0). Mirrored here only to grey out New
+ * at the limit, as the desktop's New button greys out; the desktop's refusal
+ * (`command-terminal-limit`) stays the authority for a start that races
+ * another.
+ */
+export const COMMAND_TERMINAL_LIMIT = 4;
+
+/**
+ * A terminal with no name of its own, by its slot: the desktop's own
+ * "Command Terminal N" (`commandTerminalTitle` in its command-terminal-name.ts).
+ * The desktop sends the finished name with every terminal; this only titles a
+ * terminal the phone has asked for and the desktop has not answered yet.
+ */
+export function commandTerminalTitle(slot: number): string {
+  return `Command Terminal ${slot}`;
+}
+
+/**
+ * The slot the desktop will give the next terminal: its lowest free one, the
+ * way `reserveCommandTerminalSlot` allocates. A PREDICTION, for the title a
+ * new terminal's screen shows while the start is in flight; the start's answer
+ * carries the real slot. Null at the limit.
+ */
+export function lowestFreeCommandTerminalSlot(occupiedSlots: ReadonlySet<number>): number | null {
+  for (let slot = 1; slot <= COMMAND_TERMINAL_LIMIT; slot += 1) {
+    if (!occupiedSlots.has(slot)) return slot;
+  }
+  return null;
+}
+
+/** Shared empty value, so a project with no terminals hands a selector a stable array. */
+const NO_COMMAND_TERMINALS: CommandTerminalWire[] = [];
+
+/** A project's live Command Terminals by slot, or a stable empty array. The stored array itself, so safe as a selector. */
+export function selectCommandTerminals(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  projectId: string | null,
+): CommandTerminalWire[] {
+  if (projectId === null) return NO_COMMAND_TERMINALS;
+  return state.boardsByProjectId[projectId]?.commandTerminals ?? NO_COMMAND_TERMINALS;
+}
+
+/** Whether the project's desktop offers Command Terminals to this phone (protocol 0.20.0); false until a snapshot says so. */
+export function selectCommandTerminalsOffered(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  projectId: string | null,
+): boolean {
+  if (projectId === null) return false;
+  return state.boardsByProjectId[projectId]?.commandTerminalsOffered ?? false;
+}
+
+/**
+ * The Command Terminal a session belongs to, across every cached board, or
+ * null when no board lists it. The row is the object the store holds, so this
+ * is safe as a Zustand selector (it changes identity only when a snapshot
+ * replaces the project's list).
+ */
+export function selectCommandTerminal(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  sessionId: string | null,
+): CommandTerminalWire | null {
+  if (sessionId === null) return null;
+  for (const board of Object.values(state.boardsByProjectId)) {
+    const terminal = board.commandTerminals.find((candidate) => candidate.sessionId === sessionId);
+    if (terminal !== undefined) return terminal;
+  }
+  return null;
+}
+
+/** Every Command Terminal session any cached board lists: streamed like a task's agent, for the Agents feed and the Terminals sheet. */
+export function selectCommandTerminalSessionIds(state: { boardsByProjectId: Record<string, ProjectBoard> }): Set<string> {
+  const sessionIds = new Set<string>();
+  for (const board of Object.values(state.boardsByProjectId)) {
+    for (const terminal of board.commandTerminals) sessionIds.add(terminal.sessionId);
+  }
+  return sessionIds;
 }
 
 /**

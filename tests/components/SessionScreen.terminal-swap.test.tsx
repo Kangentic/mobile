@@ -167,6 +167,8 @@ function seedTaskWithSession(sessionId: string | null): void {
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
     },
     pendingMoves: [],
