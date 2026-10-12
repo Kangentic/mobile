@@ -376,3 +376,121 @@ describe('selectFeedSections - the 0.16.0 board row', () => {
     expect(sessionIdsIn('paused')).toEqual(['task-task-newer', 'sess-paused', 'task-task-older']);
   });
 });
+
+/** A Command Terminal (protocol 0.20.0) built through the store's own actions; `observed: false` leaves it as registered, before any snapshot. */
+function seedTerminal(sessionId: string, options: { observed: boolean; state?: ActivityStateWire; sessionStatus?: ReadStreamSessionStatusWire }): void {
+  useActivityStore.getState().registerCommandTerminal(sessionId, 'project-1');
+  if (!options.observed) return;
+  const state = options.state ?? 'thinking';
+  useActivityStore
+    .getState()
+    .applySnapshot(
+      sessionId,
+      '',
+      'project-1',
+      streamSnapshotFixture({ activity: { state, reason: REASON_FOR_STATE[state] }, sessionStatus: options.sessionStatus ?? 'running' }),
+    );
+}
+
+function rowKindOf(rowKey: string): string | null {
+  for (const section of selectFeedSections(feedSources())) {
+    const row = section.rows.find((candidate) => feedRowKey(candidate) === rowKey);
+    if (row !== undefined) return row.kind;
+  }
+  return null;
+}
+
+/**
+ * A Command Terminal is an agent with no task, drawn with the "Command
+ * Terminal" pill: its own row kind, in the sections a task's agent sits in, and
+ * never any of the task machinery (no respawn, no Resume, no task row).
+ */
+describe('selectFeedSections - Command Terminals', () => {
+  it('yields a terminal row, not a session row', () => {
+    seedTerminal('sess-terminal', { observed: true });
+
+    expect(rowKindOf('sess-terminal')).toBe('terminal');
+    seedTaskSession('sess-task', 'task-1', 'thinking', 'running');
+    expect(rowKindOf('sess-task')).toBe('session');
+  });
+
+  it('keys the row by its session id', () => {
+    seedTerminal('sess-terminal', { observed: true });
+
+    const row = selectFeedSections(feedSources())
+      .flatMap((section) => section.rows)
+      .find((candidate) => candidate.kind === 'terminal');
+    expect(row).toBeDefined();
+    expect(feedRowKey(row!)).toBe('sess-terminal');
+  });
+
+  it('puts a terminal waiting for a free slot in Queued', () => {
+    seedTerminal('sess-terminal', { observed: true, state: 'idle', sessionStatus: 'queued' });
+
+    expect(sectionOf('sess-terminal')).toBe('queued');
+  });
+
+  /**
+   * The desktop classes a start as an active phase. Both ways a terminal can be
+   * unobserved: a bare registration, and a snapshot whose state is still null
+   * (which the store records as idle, so only the observed flag tells them apart).
+   */
+  it('puts a terminal the desktop has not classified yet in Active, whatever state the store holds', () => {
+    seedTerminal('sess-registered', { observed: false });
+    useActivityStore.getState().registerCommandTerminal('sess-unclassified', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-unclassified', '', 'project-1', streamSnapshotFixture({ activity: { state: null, reason: null } }));
+    expect(useActivityStore.getState().bySessionId['sess-unclassified'].state).toBe('idle');
+
+    expect(sectionOf('sess-registered')).toBe('working');
+    expect(sectionOf('sess-unclassified')).toBe('working');
+  });
+
+  it('puts an observed terminal in the bucket of its activity', () => {
+    seedTerminal('sess-thinking', { observed: true, state: 'thinking' });
+    seedTerminal('sess-idle', { observed: true, state: 'idle' });
+    seedTerminal('sess-permission', { observed: true, state: 'permission' });
+
+    expect(sectionOf('sess-thinking')).toBe('working');
+    expect(sectionOf('sess-idle')).toBe('idle');
+    expect(sectionOf('sess-permission')).toBe('needs-you');
+  });
+
+  /**
+   * A terminal's `taskId` is '' (the store never records the desktop's made-up
+   * one), so it cannot claim a board task; the paused task still gets its own row.
+   * Not backed by a mutation that turns it red: with entries built through the
+   * store no terminal can carry a task id to claim with.
+   */
+  it('leaves a board task\'s own row alone: both are drawn, each once', () => {
+    seedBoard([boardTaskFixture({ id: 'task-paused', swimlane_id: 'lane-doing', session_id: null, resumable: true })]);
+    seedTerminal('sess-terminal', { observed: true });
+
+    expect(sessionIdsIn('paused')).toEqual(['task-task-paused']);
+    expect(sessionIdsIn('working')).toEqual(['sess-terminal']);
+  });
+
+  it('keeps an ended terminal beside a live one: neither has a task to be folded into the other under', () => {
+    seedTerminal('sess-ended', { observed: true });
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-ended',
+      taskId: 'terminal-task-made-up',
+      payload: { type: 'session-ended', intentional: true },
+    });
+    seedTerminal('sess-live', { observed: true });
+
+    const placed = selectFeedSections(feedSources()).flatMap((section) => section.rows.map(feedRowKey));
+    expect([...placed].sort()).toEqual(['sess-ended', 'sess-live']);
+  });
+
+  it('counts a terminal under its section\'s title', () => {
+    seedTerminal('sess-thinking', { observed: true, state: 'thinking' });
+    seedTerminal('sess-waiting', { observed: true, state: 'idle', sessionStatus: 'queued' });
+
+    const counts = countFeedSectionsByTitle(feedSources());
+    expect(counts.get('Active')).toBe(1);
+    expect(counts.get('Queued')).toBe(1);
+  });
+});

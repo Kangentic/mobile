@@ -32,6 +32,15 @@ export interface CommandTerminalLaunch {
   failureMessage: string | null;
   /** When the desktop answered (`started` or `failed`), epoch ms; null while starting. */
   settledAt: number | null;
+  /**
+   * True once a board has listed this launch's terminal. From then on the board
+   * is the authority on whether it exists: the launch no longer keeps its
+   * stream wanted or draws a row of its own, so a terminal that ends (and
+   * leaves the board) is not held alive by its launch for the rest of the grace
+   * window. Latched, because "not listed" after "listed" means ended, where
+   * before it means not listed YET.
+   */
+  listedOnce: boolean;
 }
 
 /**
@@ -58,6 +67,8 @@ interface CommandTerminalStoreState {
   beginLaunch: (projectId: string, predictedSlot: number) => string;
   markLaunchStarted: (launchId: string, started: { sessionId: string; slot: number; name: string }) => void;
   markLaunchFailed: (launchId: string, failureMessage: string) => void;
+  /** A board has listed the launch's terminal (see `listedOnce`). A no-op once set. */
+  markLaunchListed: (launchId: string) => void;
   clearLaunch: (launchId: string) => void;
   markStopping: (sessionId: string) => void;
   markStopFailed: (sessionId: string) => void;
@@ -86,6 +97,7 @@ export const useCommandTerminalStore = create<CommandTerminalStoreState>((set) =
           sessionId: null,
           failureMessage: null,
           settledAt: null,
+          listedOnce: false,
         },
       },
     }));
@@ -118,6 +130,13 @@ export const useCommandTerminalStore = create<CommandTerminalStoreState>((set) =
       return {
         launchesById: { ...state.launchesById, [launchId]: { ...launch, phase: 'failed', failureMessage, settledAt: Date.now() } },
       };
+    }),
+
+  markLaunchListed: (launchId) =>
+    set((state) => {
+      const launch = state.launchesById[launchId];
+      if (launch === undefined || launch.listedOnce) return state;
+      return { launchesById: { ...state.launchesById, [launchId]: { ...launch, listedOnce: true } } };
     }),
 
   clearLaunch: (launchId) =>
@@ -171,10 +190,12 @@ export function selectStartingSlots(state: Pick<CommandTerminalStoreState, 'laun
 }
 
 /**
- * Started terminals the board has not listed yet, still inside their grace
- * window: the reconcile keeps their streams wanted, so the screen that just
- * opened one gets its terminal before the board catches up. `now` is passed
- * in, so the clock stays with the caller.
+ * Started terminals no board has listed YET, still inside their grace window:
+ * the reconcile keeps their streams wanted, so the screen that just opened one
+ * gets its terminal before the board catches up. Never one a board has already
+ * listed (`listedOnce`): once listed, the board decides, and a terminal it has
+ * since dropped has ended. `now` is passed in, so the clock stays with the
+ * caller.
  */
 export function selectUnlistedStartedLaunches(
   state: Pick<CommandTerminalStoreState, 'launchesById'>,
@@ -184,6 +205,7 @@ export function selectUnlistedStartedLaunches(
   return Object.values(state.launchesById).filter(
     (launch) =>
       launch.phase === 'started' &&
+      !launch.listedOnce &&
       launch.sessionId !== null &&
       !listedSessionIds.has(launch.sessionId) &&
       launch.settledAt !== null &&
