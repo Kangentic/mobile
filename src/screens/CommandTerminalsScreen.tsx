@@ -34,9 +34,10 @@ const STOP_MARK_SIZE = 16;
  * four with no text under it.
  *
  * A row opens its terminal by REPLACING this sheet rather than pushing over
- * it: a full screen pushed above a native form sheet opens inside the sheet's
- * own presentation on iOS. New does the same, so a start that fails routes
- * back to the Board.
+ * it: a stack screen pushed after a native modal is expected to open inside
+ * that modal's own presentation on iOS (react-native-screens nests it; recalled
+ * from the library, not yet observed on a device here). New does the same, so
+ * a start that fails routes back to the Board.
  *
  * When the last terminal ends while the sheet is open, the sheet closes, and
  * the header button is back to its "new terminal" mark.

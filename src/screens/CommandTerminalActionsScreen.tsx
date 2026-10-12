@@ -13,8 +13,9 @@ import { selectCommandTerminal, useBoardStore } from '@/state/boardStore';
  * tap stops it (change 3) and closes the sheet. No Move, Edit, Archive or
  * Delete: a terminal has no task to act on.
  *
- * Open REPLACES this sheet with the terminal's screen: a full screen pushed
- * above a native form sheet opens inside the sheet's own presentation on iOS.
+ * Open REPLACES this sheet with the terminal's screen, for the reason the
+ * Terminals sheet does (CommandTerminalsScreen): a screen pushed after a native
+ * modal is expected to open inside it on iOS.
  */
 export function CommandTerminalActionsScreen(): React.JSX.Element {
   const theme = useTheme();
