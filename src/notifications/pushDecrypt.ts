@@ -74,10 +74,12 @@ export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotifi
     if (!identityPublicKey) return null;
     const plaintext = openPushEnvelope(pushKey, identityPublicKey, blob);
     // For a Command Terminal the desktop puts the terminal's name in
-    // `taskTitle` (protocol 0.20.0); a nameless one still reads as what it is.
+    // `taskTitle` (protocol 0.20.0). The empty-title fallback stays one string
+    // for every kind: the iOS extension composes the same body without reading
+    // `sessionKind` (targets/nse/CategoryCopy.swift), and
+    // nseConstantsParity.test.ts holds the two platforms to one expression.
     const isCommandTerminal = plaintext.sessionKind === 'command-terminal';
-    const fallbackTitle = isCommandTerminal ? 'Command Terminal' : 'Agent session';
-    const taskTitle = plaintext.taskTitle.length > 0 ? plaintext.taskTitle : fallbackTitle;
+    const taskTitle = plaintext.taskTitle.length > 0 ? plaintext.taskTitle : 'Agent session';
     return {
       title: titleForCategory(plaintext.category),
       body: plaintext.detail.length > 0 ? `${taskTitle} - ${plaintext.detail}` : taskTitle,

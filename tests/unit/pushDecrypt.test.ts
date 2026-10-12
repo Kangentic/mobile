@@ -231,17 +231,19 @@ describe('decryptPushBlob', () => {
   });
 
   /**
-   * A nameless row still reads as what it is: a terminal falls back to
-   * 'Command Terminal', a task to 'Agent session'. The same empty `taskTitle`
-   * goes in both, so only `sessionKind` can be the difference.
+   * An empty `taskTitle` falls back to 'Agent session' for a terminal exactly
+   * as for a task. The iOS extension composes the body without reading
+   * `sessionKind` (targets/nse/CategoryCopy.swift), so a terminal-only fallback
+   * here would make the same push read differently on the two platforms. The
+   * desktop names every terminal in `taskTitle`, so this is the edge case only.
    *
-   * Mutation that reddens this: collapse the fallback to one string (a terminal
-   * notification reading "Agent session", or a task reading "Command Terminal").
+   * Mutation that reddens this: give a terminal its own fallback (the
+   * notification reading "Command Terminal" on Android alone).
    */
   it.each([
-    { label: 'a Command Terminal', sessionKind: 'command-terminal' as const, expectedBody: 'Command Terminal' },
+    { label: 'a Command Terminal', sessionKind: 'command-terminal' as const, expectedBody: 'Agent session' },
     { label: 'a task', sessionKind: undefined, expectedBody: 'Agent session' },
-  ])('falls back to the right nameless title for $label with an empty taskTitle', async ({ sessionKind, expectedBody }) => {
+  ])('falls back to the one shared nameless title for $label with an empty taskTitle', async ({ sessionKind, expectedBody }) => {
     const pushKey = randomBytes(32);
     const identity = generateX25519KeyPair();
     secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
@@ -272,7 +274,7 @@ describe('decryptPushBlob', () => {
     );
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
-    expect(decrypted?.body).toBe('Command Terminal - Bash: npm run test');
+    expect(decrypted?.body).toBe('Agent session - Bash: npm run test');
   });
 
   it('exports the generic placeholder copy the callers degrade to', async () => {
