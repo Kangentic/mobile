@@ -11,7 +11,7 @@ description: >-
 
 # Re-capture the store screenshots
 
-Four shelves, 24 frames, one flow. Android runs locally in minutes; iOS runs on
+Four shelves, 28 frames, one flow. Android runs locally in minutes; iOS runs on
 a macOS runner and costs roughly **45 minutes per attempt**, almost all of it
 the Xcode build. That asymmetry drives the whole order below: **dispatch iOS
 first, then capture Android while it builds.**
@@ -31,8 +31,8 @@ changing anything about the capture itself.
 
 Only these change a frame. Everything else is churn:
 
-- **Any of the six captured screens** (Agents feed, session terminal / chat /
-  changes, file diff, board).
+- **Any of the seven captured screens** (Agents feed, session terminal / chat /
+  changes, file diff, board, Command Terminal).
 - **The mock content** (`src/connection/mockDesktop.ts`). Mock copy is IN the
   frames, so a rename or a new line means all four shelves drift.
 - **The tab bar** (`app/(tabs)/_layout.tsx`). It appears in `01-agents` and

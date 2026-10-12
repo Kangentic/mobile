@@ -28,7 +28,7 @@ into the app - upload them by hand from `node_modules/@kangentic/branding/resour
 ## Screenshots
 
 **Produced and tracked**, in [`store/screenshots/`](../store/screenshots/README.md). Every shelf
-below carries the same six raw device captures, so both listings tell one story:
+below carries the same seven raw device captures, so both listings tell one story:
 
 | Shelf | Size | Directory | Captured by |
 |---|---|---|---|
@@ -44,7 +44,7 @@ decision rather than a blocker. `ios.supportsTablet` is `false`, so App Store Co
 single 6.9-inch shelf. Apple's minimum there is **one** (its upload help: "you're only required to
 provide a single screenshot"), the cap is 10, and only the first 3 appear on install sheets - so
 the "minimum three" an earlier version of this file claimed was the number Apple DISPLAYS, not the
-number it requires. Six are tracked.
+number it requires. Seven are tracked.
 
 Upload the iPhone set through **Media Manager**, targeting **6.9"**. That is the source slot, and
 App Store Connect derives 6.5", 6.3" and smaller from it - their controls are greyed out. The

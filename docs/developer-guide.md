@@ -1548,7 +1548,7 @@ section claimed EAS Workflows on cloud iOS simulators was "the only supported pa
 without a Mac". That was never true in practice: there is no `.eas/workflows/` directory in this
 repo on any branch, so nothing was ever wired. The route it dismissed is the one that works:
 `build-ios.yml -f screenshots=true` boots a simulator on a free `macos-latest` runner with
-`xcrun simctl` and drives `.maestro/screenshots/store-capture.yaml` through six screens by testID,
+`xcrun simctl` and drives `.maestro/screenshots/store-capture.yaml` through seven screens by testID,
 with no Apple Developer account and no EAS spend. That is how the WKWebView terminal was finally
 executed on iOS, and it renders.
 

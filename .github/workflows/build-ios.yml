@@ -543,7 +543,7 @@ jobs:
       #
       # It runs the SAME flow as Android. Every selector in it is a testID,
       # which maps to accessibilityIdentifier on iOS, so if the driver works the
-      # whole six-shot set comes for free rather than needing an iOS-specific
+      # whole seven-shot set comes for free rather than needing an iOS-specific
       # flow to maintain alongside it.
       - name: Install Maestro for the screenshot flow
         if: inputs.screenshots == 'true'
