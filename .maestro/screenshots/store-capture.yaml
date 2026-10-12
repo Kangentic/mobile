@@ -383,12 +383,12 @@ env:
           id: "session-mode-chat"
 - tapOn:
     id: "composer-input"
-# The mock answers a CI question with its listing story and anything else with
-# a plain "Done." (mockCommandTerminalReply in src/connection/mockDesktop.ts),
-# and names the terminal from this first prompt: "Check CI", short enough to
-# sit whole beside the "Command Terminal" pill on a 360dp phone header, where
-# "Why did CI fail?" was cut to "Why Did CI F...".
-- inputText: "Check CI"
+# EXACTLY the question the recorded turn answers
+# (COMMAND_TERMINAL_RECORDED_PROMPT, src/devsupport/commandTerminalCapture.ts).
+# The terminal's frames are three settled screens of one real Claude Code
+# session, which show this prompt whatever is typed, and the mock names the
+# terminal with the name a real desktop gave it.
+- inputText: "Which routes send a signed-out user to the login page? Short answer."
 - tapOn:
     id: "composer-send"
 # Android only: Maestro's iOS hideKeyboard is a gesture, and this screen is a
@@ -411,7 +411,8 @@ env:
 # The pill appears once the first prompt has named the terminal, and the mark
 # goes back to needs-you once the turn's answer has been written, so these two
 # waits in this order are "named, then answered". The answer is canvas text,
-# so the mark is the only native signal that it has landed.
+# so the mark is the only native signal that it has landed. It lands at the
+# recorded turn's own pace, about 11 s after the prompt.
 - extendedWaitUntil:
     visible:
       id: "command-terminal-pill"

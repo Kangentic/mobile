@@ -25,8 +25,8 @@ import {
   isValidDeviceSerial,
   readPngSize,
 } from '../../scripts/storeScreenshots.mjs';
-import { mockCommandTerminalReply } from '@/connection/mockDesktop';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
+import { COMMAND_TERMINAL_RECORDED_PROMPT } from '@/devsupport/commandTerminalCapture';
 import { renderCaptureCells, renderCaptureRows, type RenderedCell } from '../helpers/renderCapture';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -307,10 +307,16 @@ describe('the shot list matches the capture flow', () => {
     expect(flowSource.slice(answeredWaitAt, shotAt)).toMatch(/^[ \t]*- waitForAnimationToEnd:/m);
   });
 
-  it('asks the Command Terminal a question the mock answers with its listing story', () => {
+  /**
+   * The Command Terminal frame is a RECORDED Claude Code turn, and its frames
+   * show the prompt the recording was asked. The mock replays that turn for
+   * any prompt, so a flow that typed something else would still capture, and
+   * the phone's header would carry a name made from one question over a
+   * terminal answering another.
+   */
+  it('asks the Command Terminal exactly the question its recorded turn answers', () => {
     const prompts = [...flowSource.matchAll(/^[ \t]*- inputText: "([^"]+)"$/gm)].map((match) => match[1]);
-    expect(prompts).toHaveLength(1);
-    expect(mockCommandTerminalReply(prompts[0])).toContain('gh run list');
+    expect(prompts).toEqual([COMMAND_TERMINAL_RECORDED_PROMPT]);
   });
 
   it.each(['05-board', '06-file-diff'])('waits out the scrollbar flash on Android after the settle and before %s', (shotName) => {

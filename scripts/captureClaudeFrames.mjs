@@ -72,6 +72,32 @@
  * ends on --per-prompt-ms. Ask for no commands ("there is no need to run
  * anything") and expect a few takes regardless.
  *
+ * THE COMMAND TERMINAL TURN (src/devsupport/commandTerminalCapture.ts) is a
+ * second recording, one prompt, against the same storefront repo at
+ * ~/code/storefront-web, NOT under the temp folder:
+ *
+ *   node scripts/captureClaudeFrames.mjs --cwd ~/code/storefront-web \
+ *     --cols 66 --rows 48 --out command-terminal.jsonl \
+ *     --max-ms 400000 --per-prompt-ms 300000 \
+ *     --prompt "Which routes send a signed-out user to the login page? \
+ * Short answer."
+ *
+ * The folder matters because Claude Code's opening header prints the working
+ * directory home-relative: from a scratch folder it spells out the operator's
+ * account and the builder refuses every frame, from ~/code/storefront-web it
+ * reads `~\code\storefront-web`. Three frames of that one run are built, each
+ * seed-only with the usual --grid-cols 210 --grid-rows 48 and its own --out
+ * src/devsupport/commandTerminal<Frame>.ts and --export: the settled opening
+ * screen before the prompt (COMMAND_TERMINAL_OPENING), the screen just after
+ * submit with the spinner up (COMMAND_TERMINAL_SUBMITTED), and the last chunk
+ * (COMMAND_TERMINAL_ANSWERED). Nothing between the second and third can be
+ * used: about a second after submit the status area shows the account's weekly
+ * usage until the turn settles, and the builder refuses it. The routes the
+ * answer names (src/routes/checkout.tsx, src/routes/account.tsx,
+ * src/auth/guard.ts) must exist in the repo, at 48 columns like the rest. The
+ * name in COMMAND_TERMINAL_RECORDED_NAME is a real desktop namer's for the same
+ * prompt, read off a paired phone; re-read it if the prompt changes.
+ *
  * Output is JSONL, one `{ offsetMs, data }` per PTY chunk, where `offsetMs` is
  * milliseconds since the first chunk. The timing matters: Claude Code's cadence
  * is bursty while a turn streams and silent during a tool call, and replaying

@@ -28,6 +28,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BridgeEvent, CapabilityErrorCode, CommandTerminalWire } from '@kangentic/protocol';
 import { CapabilityError, ChannelController } from '@/channel';
 import { createMockDesktop, MOCK_IDLE_STATIC_SESSION, type MockDesktop } from '@/connection/mockDesktop';
+import {
+  COMMAND_TERMINAL_RECORDED_NAME,
+  COMMAND_TERMINAL_RECORDED_PROMPT,
+  COMMAND_TERMINAL_RECORDED_TURN_MS,
+  COMMAND_TERMINAL_TURN,
+} from '@/devsupport/commandTerminalCapture';
 import { waitUntil } from '../helpers/async';
 
 const MOCK_PROJECT_ID = 'mock-project';
@@ -231,14 +237,14 @@ describe('the terminal\'s agent arriving', () => {
     expect(boardTaskIds).not.toContain(arrival.taskId);
   });
 
-  it('serves the opening frame on a terminal subscribe once it arrives, and nothing on a list-only one', async () => {
+  it('serves the recorded opening screen on a terminal subscribe once it arrives, and nothing on a list-only one', async () => {
     const started = await startTerminal();
     await letAgentArrive();
 
     const withTerminal = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
     const listOnly = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: false });
 
-    expect(withTerminal.scrollback).toContain('Welcome to Claude Code');
+    expect(withTerminal.scrollback).toContain(COMMAND_TERMINAL_TURN.opening.seedFrame);
     expect(listOnly.scrollback).toBe('');
   });
 
@@ -327,7 +333,7 @@ describe('read-stream unsubscribe of a terminal', () => {
 });
 
 describe('typing into a terminal', () => {
-  it('echoes the keys into that terminal only, never into the streaming session\'s feed', async () => {
+  it('echoes the keys into that terminal only, the first one clearing the placeholder, never into the streaming session\'s feed', async () => {
     const started = await startTerminal();
     await letAgentArrive();
 
@@ -335,10 +341,27 @@ describe('typing into a terminal', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     expect(response.written).toBe(true);
-    const typedEcho = eventsFor('terminal', started.sessionId).filter((event) => event.kind === 'terminal' && event.payload.data === 'ls');
+    // The opening frame leaves the cursor in Claude Code's input box, over its
+    // "Try ..." placeholder: the first key erases the rest of that line first.
+    const typedEcho = eventsFor('terminal', started.sessionId).filter((event) => event.kind === 'terminal' && event.payload.data === '\u001b[Kls');
     expect(typedEcho).toHaveLength(1);
     expect(eventsFor('terminal', MOCK_STREAMING_SESSION_ID)).toHaveLength(0);
     expect(eventsFor('terminal', MOCK_IDLE_STATIC_SESSION.sessionId)).toHaveLength(0);
+  });
+
+  it('rubs a Backspace out on screen and out of the line it submits', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'fix thee\u007f flaky test\r');
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const echoed = eventsFor('terminal', started.sessionId)
+      .map((event) => (event.kind === 'terminal' ? event.payload.data : ''))
+      .join('');
+    expect(echoed).toContain('thee\b \b flaky test');
+    const [named] = await listedTerminals();
+    expect(named.name).toBe('Fix The Flaky Test');
   });
 
   it('names the terminal from its first prompt: Title Case, after a beat, and a later snapshot lists the new name', async () => {
@@ -362,44 +385,72 @@ describe('typing into a terminal', () => {
     expect(named.named).toBe(true);
     expect(named.name).toBe('Fix The Flaky Test');
     expect(named.name.length).toBeLessThanOrEqual(80);
-    // The turn finished: back to idle.
-    expect(named.activity.state).toBe('idle');
-    const streamed = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
-    expect(streamed.scrollback).toContain('Done.');
   });
 
   /**
-   * The answer to a CI question is the 07-command-terminal listing frame. The
-   * mirror's cell is fitted to the pane HEIGHT, so the iPhone shelf shows only
-   * 69 columns of a 210-column grid, and a word past column 69 is cut there and
-   * nowhere else (tests/unit/storeScreenshots.test.ts models the shelves).
+   * Every frame a terminal shows is RECORDED (src/devsupport/commandTerminalCapture.ts): the
+   * screens of one real Claude Code session, never output written here. A turn replays that
+   * session's: the submitted screen at once, the answer when the recorded turn's own time is up.
    */
-  it('answers a CI question with a run list and a diagnosis, every line inside the iPhone shelf', async () => {
-    const IPHONE_VISIBLE_COLUMNS = 69;
+  it('replays the recorded turn: the submitted screen at once, the answer at the recorded pace, then idle', async () => {
     const started = await startTerminal();
     await letAgentArrive();
 
-    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'why did CI fail?\r');
-    await vi.advanceTimersByTimeAsync(5_000);
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, `${COMMAND_TERMINAL_RECORDED_PROMPT}\r`);
+    await vi.advanceTimersByTimeAsync(100);
+    const midTurn = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
+    expect(midTurn.scrollback).toContain(COMMAND_TERMINAL_TURN.submitted.seedFrame);
+    expect(midTurn.scrollback).not.toContain(COMMAND_TERMINAL_TURN.answered.seedFrame);
+    expect(midTurn.activity.state).toBe('thinking');
 
-    const streamed = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
-    expect(streamed.scrollback).toContain('gh run list');
-    expect(streamed.scrollback).not.toContain('Done.');
-    const visibleLines = streamed.scrollback.replace(/\u001b\[[0-9;]*m/g, '').split('\r\n');
-    const tooWide = visibleLines.filter((line) => [...line].length > IPHONE_VISIBLE_COLUMNS);
-    expect(tooWide).toEqual([]);
+    // Not a moment before the recorded turn's own length.
+    await vi.advanceTimersByTimeAsync(COMMAND_TERMINAL_RECORDED_TURN_MS - 1_000);
+    expect((await listedTerminals())[0].activity.state).toBe('thinking');
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    const answered = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
+    expect(answered.scrollback).toContain(COMMAND_TERMINAL_TURN.answered.seedFrame);
+    expect(answered.activity.state).toBe('idle');
   });
 
-  it('answers anything else with a plain done, so the demo never reads a CI report back to "hello"', async () => {
+  it('hands a later subscriber the screen as it stands, not every frame drawn over it', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, `${COMMAND_TERMINAL_RECORDED_PROMPT}\r`);
+    await vi.advanceTimersByTimeAsync(COMMAND_TERMINAL_RECORDED_TURN_MS + 1_000);
+
+    const streamed = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
+
+    expect(streamed.scrollback).not.toContain(COMMAND_TERMINAL_TURN.opening.seedFrame);
+    expect(streamed.scrollback).not.toContain(COMMAND_TERMINAL_TURN.submitted.seedFrame);
+    // And the frame erases the one before it, or its blank rows would show the old screen through.
+    expect(streamed.scrollback.startsWith('\u001b[2J')).toBe(true);
+  });
+
+  it('names the recorded prompt with the name a real desktop gave it', async () => {
     const started = await startTerminal();
     await letAgentArrive();
 
-    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'hello\r');
+    await controller.verbs.sendUserMessage(started.sessionId, COMMAND_TERMINAL_RECORDED_PROMPT);
     await vi.advanceTimersByTimeAsync(5_000);
 
-    const streamed = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
-    expect(streamed.scrollback).toContain('Done.');
-    expect(streamed.scrollback).not.toContain('gh run list');
+    const [named] = await listedTerminals();
+    expect(named.name).toBe(COMMAND_TERMINAL_RECORDED_NAME);
+    expect(named.name.length).toBeLessThanOrEqual(80);
+  });
+
+  it('draws no raw line for a prompt sent through the composer: the recorded screen carries it', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    const before = eventsFor('terminal', started.sessionId).length;
+
+    await controller.verbs.sendUserMessage(started.sessionId, 'review the migration');
+    await vi.advanceTimersByTimeAsync(10);
+
+    const drawn = eventsFor('terminal', started.sessionId)
+      .slice(before)
+      .map((event) => (event.kind === 'terminal' ? event.payload.data : ''));
+    expect(drawn).toEqual([`\u001b[2J${COMMAND_TERMINAL_TURN.submitted.seedFrame}`]);
   });
 
   it('names a one-word first prompt too ("hello" becomes "Hello")', async () => {
