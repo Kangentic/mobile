@@ -41,7 +41,7 @@ android/ten-inch/     1440x2560   Play 10-inch tablet shelf
 ios/iphone-6.9/       1320x2868   App Store 6.9-inch iPhone shelf
 ```
 
-All four shelves carry the same six shots, so the two listings tell one story.
+All four shelves carry the same seven shots, so the two listings tell one story.
 
 Filenames are numbered because both stores display screenshots in upload order and the upload
 tools (fastlane `supply` / `deliver`) sort by filename. The numbering is the display order, not
@@ -55,6 +55,7 @@ the order the capture flow visits the screens.
 | `04-session-changes` | The changed files in the agent's worktree |
 | `05-board` | The board's Executing column, with live sessions |
 | `06-file-diff` | A unified diff for one changed file |
+| `07-command-terminal` | A Command Terminal, started from the Board, answering a question about the project |
 
 The directory names map onto fastlane's metadata layout
 (`fastlane/metadata/android/en-US/images/phoneScreenshots` and its `sevenInch` / `tenInch`
@@ -89,7 +90,7 @@ eligible for Play's promotional surfaces.
 
 ## iOS
 
-All six shots at 1320x2868, an accepted **6.9-inch** size (Apple also lists 1260x2736 and
+All seven shots at 1320x2868, an accepted **6.9-inch** size (Apple also lists 1260x2736 and
 1290x2796 for that display). `ios.supportsTablet` is `false` in `app.config.ts`, so App Store
 Connect wants one shelf only.
 
