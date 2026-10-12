@@ -34,10 +34,14 @@ function isReadDiffScope(value: string | undefined): value is ReadDiffScope {
  */
 export function FileDiffScreen(): React.JSX.Element {
   const theme = useTheme();
-  const params = useLocalSearchParams<{ taskId?: string; projectId: string; path: string; scope: string }>();
-  // No taskId is the project folder (a Command Terminal's Changes), never an
-  // empty task id: the request then omits the field, as the list's did.
+  const params = useLocalSearchParams<{ taskId?: string; target?: string; projectId: string; path: string; scope: string }>();
+  // A task's file, or the project folder's (a Command Terminal's Changes) when
+  // the route says `target: 'project'`. Never inferred from a missing taskId:
+  // a task route that lost its id must fail, not show the main checkout's
+  // changes as the task's.
   const taskId = params.taskId !== undefined && params.taskId.length > 0 ? params.taskId : null;
+  const projectFolder = taskId === null && params.target === 'project';
+  const targetKnown = taskId !== null || projectFolder;
   const projectId = params.projectId ?? '';
   const filePath = params.path ?? '';
   const scope: ReadDiffScope = isReadDiffScope(params.scope) ? params.scope : 'working';
@@ -45,9 +49,9 @@ export function FileDiffScreen(): React.JSX.Element {
   const [fetchFailed, setFetchFailed] = useState(false);
 
   useEffect(() => {
-    if (projectId.length === 0 || filePath.length === 0) return;
+    if (!targetKnown || projectId.length === 0 || filePath.length === 0) return;
     fetchDiffFileContent({ taskId, projectId, filePath, scope }).catch(() => setFetchFailed(true));
-  }, [taskId, projectId, filePath, scope]);
+  }, [targetKnown, taskId, projectId, filePath, scope]);
 
   const diffKey = diffKeyFor({ taskId, projectId });
   const content = useDiffStore((state) => state.byKey[diffKey]?.contentByPath[filePath] ?? null);
@@ -63,7 +67,7 @@ export function FileDiffScreen(): React.JSX.Element {
   );
 
   let body: React.JSX.Element;
-  if (content === null && fetchFailed) {
+  if (content === null && (fetchFailed || !targetKnown)) {
     body = (
       <Stack gap="sm" style={styles.centered}>
         <Text variant="body" color="danger">

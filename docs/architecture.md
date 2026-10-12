@@ -1053,9 +1053,11 @@ project. The phone starts, opens and stops them over the `command-terminal` verb
 - **Input is held** until the desktop has classified the terminal's agent
   (`SessionActivityEntry.activityObserved`: a non-null snapshot state, or an `activity` or
   prompt push): the xterm pane, the direct key field, the quick keys and the composer all drop
-  input before then. In the moment after spawn the PTY can be a bare shell at the project root;
-  holding input there is the phone's half of the desktop's promise that the verb adds no shell
-  reach.
+  input before then, and the input actions themselves (`writeTerminal`, `sendUserMessage`,
+  `answerPermissionPrompt`) refuse a terminal session that is not yet classified, so a surface
+  that forgets the screen's prop, a prompt card included, still cannot send. In the moment after
+  spawn the PTY can be a bare shell at the project root; holding input there is the phone's half
+  of the desktop's promise that the verb adds no shell reach.
 - **Elsewhere.** The Agents feed draws a terminal beside task agents in Idle, Active and Queued,
   always with the pill and never a #number; long-press opens its two actions (Open, Stop). A
   terminal's notification carries `sessionKind: 'command-terminal'` and the terminal's name in

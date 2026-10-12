@@ -216,14 +216,21 @@ nothing. The phone sends it only for a task the desktop marks `pausable`.
 CLI at the project root, exactly as the desktop's Ctrl+Shift+P New does, never a shell and never a
 command the phone names (a `start` carries only the project id; the desktop's parser drops any
 branch, model or effort key). Stop ends only a Command Terminal, refusing a task's session. What
-keeps the verb from being shell reach is that a Command Terminal ENDS when its agent exits
-(desktop decision C2), so `interactive-terminal` never has a bare shell to type into. One window
-remains, shared with every task session: the moment after spawn before the agent starts. The phone
-closes its half of it by holding ALL input to a terminal (the xterm pane, the direct key field,
-the quick keys, the composer) until the desktop has classified the agent's activity
+keeps the verb from being shell reach is the desktop's promise that a Command Terminal ENDS when
+its agent exits (decision C2), so no exited terminal is left as a bare shell for
+`interactive-terminal` to type into. Two short windows remain, and the desktop documents both as
+shared with every task session: the moment after spawn before the agent starts, and the seconds
+between an agent exiting and the desktop confirming it. For the first, on a Command Terminal, the
+phone holds ALL input until the desktop has classified the agent's activity
 (`SessionActivityEntry.activityObserved`), which is the guarantee the desktop's mobile-bridge.md
-documents the phone as giving. The phone offers Terminals only where a snapshot's
-`commandTerminalsOffered` is true: this desktop serves the verb AND this device holds it.
+documents the phone as giving. The hold is enforced twice: in the terminal screen's UI (the xterm
+pane, the direct key field, the quick keys, the composer) and, fail-closed, at the one path every
+keystroke, message and prompt answer takes (`writeTerminal`, `sendUserMessage` and
+`answerPermissionPrompt` in `src/connection/actions.ts` refuse a terminal session that is not yet
+classified, whichever screen calls them). Task sessions are NOT held this way on the phone: a
+task's agent is started by the desktop's own column flow, not by this verb. The phone offers
+Terminals only where a snapshot's `commandTerminalsOffered` is true: this desktop serves the verb
+AND this device holds it.
 `interactive-terminal` is deliberately
 raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
 already running, never a new shell. Its resize/release actions (the phone sizing that PTY to the

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { commandTerminalTitle } from './boardStore';
+import { capCommandTerminalName, commandTerminalTitle } from './boardStore';
 
 /**
  * Command Terminal starts and stops the phone has in flight (protocol 0.20.0).
@@ -99,7 +99,14 @@ export const useCommandTerminalStore = create<CommandTerminalStoreState>((set) =
       return {
         launchesById: {
           ...state.launchesById,
-          [launchId]: { ...launch, phase: 'started', sessionId: started.sessionId, slot: started.slot, name: started.name, settledAt: Date.now() },
+          [launchId]: {
+            ...launch,
+            phase: 'started',
+            sessionId: started.sessionId,
+            slot: started.slot,
+            name: capCommandTerminalName(started.name),
+            settledAt: Date.now(),
+          },
         },
       };
     }),

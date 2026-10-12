@@ -15,6 +15,7 @@ import {
   COMMAND_TERMINAL_LIMIT,
   isDoneColumn,
   lowestFreeCommandTerminalSlot,
+  selectCommandTerminal,
   selectCommandTerminals,
   selectTaskRow,
   useBoardStore,
@@ -44,15 +45,51 @@ import { reconcileSessionsFromBoards } from './storeFeed';
  * (or CapabilityError) for the caller's inline error state.
  */
 
+/**
+ * Thrown by the three input actions for a Command Terminal whose agent the
+ * desktop has not classified yet. A typed error rather than a silent drop, so a
+ * caller that shows its failures (the composer, a prompt card) says something
+ * rather than nothing; the terminal pane counts it like any failed write.
+ */
+export class CommandTerminalInputHeldError extends Error {
+  constructor() {
+    super('The terminal is still starting');
+    this.name = 'CommandTerminalInputHeldError';
+  }
+}
+
+/**
+ * The input hold's chokepoint (protocol 0.20.0): nothing typed reaches a
+ * Command Terminal until the desktop has classified its agent
+ * (`activityObserved`). In the moment after spawn the PTY can be a bare shell
+ * at the project root, and holding input there is the phone's half of the
+ * desktop's promise that `command-terminal` adds no shell reach.
+ *
+ * The terminal screen holds the same input in its UI (the pane, the quick
+ * keys, the composer), but that layer is opt-in per component; this one is the
+ * single path every keystroke, message and prompt answer takes, so a screen
+ * that forgets the prop still cannot send. A session is a terminal if its
+ * activity entry says so or a board lists it as one; one neither knows yet is
+ * not held here, and the screen's own gate (no entry reads as held) covers it.
+ */
+function assertTerminalInputOpen(sessionId: string): void {
+  const entry = useActivityStore.getState().bySessionId[sessionId];
+  const isCommandTerminal = entry?.kind === 'command-terminal' || selectCommandTerminal(useBoardStore.getState(), sessionId) !== null;
+  if (isCommandTerminal && entry?.activityObserved !== true) throw new CommandTerminalInputHeldError();
+}
+
 export async function sendUserMessage(sessionId: string, text: string): Promise<void> {
+  assertTerminalInputOpen(sessionId);
   await requireVerbClient().sendUserMessage(sessionId, text);
 }
 
 export async function answerPermissionPrompt(sessionId: string, promptId: string, keystrokes: string): Promise<void> {
+  assertTerminalInputOpen(sessionId);
   await requireVerbClient().answerPermissionPrompt({ sessionId, promptId, keystrokes });
 }
 
 export async function writeTerminal(sessionId: string, data: string): Promise<void> {
+  assertTerminalInputOpen(sessionId);
   await requireVerbClient().writeInteractiveTerminal(sessionId, data);
 }
 

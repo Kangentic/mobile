@@ -75,10 +75,12 @@ function nonEmpty(value: string | undefined): string | null {
  * (`activityObserved`): before then the PTY can be a bare shell at the project
  * root, and keeping it untyped is the phone's half of the desktop's promise
  * that the `command-terminal` verb adds no shell reach. The terminal pane, the
- * quick keys and the composer all hold it.
+ * quick keys and the composer all hold it here, and the input actions
+ * themselves refuse it (`assertTerminalInputOpen` in actions.ts), which also
+ * covers the Chat lens's prompt cards and any surface that forgets the prop.
  */
 export function CommandTerminalScreen(): React.JSX.Element {
-  const params = useLocalSearchParams<{ launchId?: string; sessionId?: string; projectId?: string; name?: string }>();
+  const params = useLocalSearchParams<{ launchId?: string; sessionId?: string; projectId?: string }>();
   const router = useRouter();
   const launchId = nonEmpty(params.launchId);
   const projectId = nonEmpty(params.projectId);
@@ -167,7 +169,7 @@ export function CommandTerminalScreen(): React.JSX.Element {
   const chatFallbackActive = useTranscriptStore((state) => selectChatLens(state, boundSessionId) === 'reading-view');
 
   const [mode, setMode] = useState<SessionMode>('terminal');
-  const title = terminal?.name ?? launch?.name ?? nonEmpty(params.name) ?? 'Command Terminal';
+  const title = terminal?.name ?? launch?.name ?? 'Command Terminal';
   const named = terminal?.named === true;
   const startingFaceShown = !startFailed && mode === 'terminal' && (boundSessionId === null || !painted);
 
