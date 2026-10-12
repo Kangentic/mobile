@@ -4,11 +4,33 @@ import { describe, expect, it } from 'vitest';
 import { diffCleanLines } from '../../src/terminal/cleanFeedDiff';
 
 describe('diffCleanLines', () => {
-  it('emits everything on the first frame', () => {
+  it('emits everything on the first frame, as a REPLACE', () => {
     const result = diffCleanLines([], 'hello\nworld\n\n');
     expect(result.lines).toEqual(['hello', 'world']);
-    expect(result.reset).toBe(false);
+    expect(result.reset).toBe(true);
     expect(result.nextLines).toEqual(['hello', 'world']);
+  });
+
+  /**
+   * Regression cover, from a live check against a real desktop: a Command
+   * Terminal's Chat lens showed Claude Code's whole header twice. The page
+   * rebuilds the differ on every terminal (re-)init, a lens switch's re-seed
+   * included, while the reading view keeps its lines, so the re-seeded screen
+   * was diffed against nothing and APPENDED under the screen already shown.
+   * Modelled end to end: a reader fed by one differ, then by a fresh one.
+   */
+  it('a re-initialised differ replaces what the reader shows instead of stacking a second copy', () => {
+    let reader: string[] = [];
+    const feed = (previousLines: string[], frame: string): string[] => {
+      const result = diffCleanLines(previousLines, frame);
+      reader = result.reset ? [...result.lines] : [...reader, ...result.lines];
+      return result.nextLines;
+    };
+    feed([], 'Claude Code v2\n~/code/storefront-web\n\n> Try "refactor"');
+    // The re-init: the page forgets its previous frame, the reader does not.
+    feed([], 'Claude Code v2\n~/code/storefront-web\n\n> Which routes?\nTwo routes do it.');
+    expect(reader.filter((line) => line === 'Claude Code v2')).toHaveLength(1);
+    expect(reader).toEqual(['Claude Code v2', '~/code/storefront-web', '> Which routes?', 'Two routes do it.']);
   });
 
   it('emits only appended lines on growth', () => {
