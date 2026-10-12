@@ -1,0 +1,208 @@
+import React from 'react';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { ThemeProvider } from '@/components';
+import { CommandTerminalRow } from '@/screens/home/CommandTerminalRow';
+import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
+import { useBoardStore } from '@/state/boardStore';
+import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { commandTerminalWireFixture, seedCommandTerminalBoard } from '../helpers/commandTerminals';
+
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: mockPush, replace: jest.fn(), back: jest.fn() }),
+}));
+
+const SESSION_ID = 'terminal-1';
+const PROJECT_ID = 'project-1';
+const ROW = `terminal-row-${SESSION_ID}`;
+
+function entryFor(sessionId: string = SESSION_ID): SessionActivityEntry {
+  const entry = useActivityStore.getState().bySessionId[sessionId];
+  if (entry === undefined) throw new Error(`no activity entry registered for ${sessionId}`);
+  return entry;
+}
+
+function snapshotTerminal(snapshot: Parameters<typeof streamSnapshotFixture>[0]): void {
+  useActivityStore.getState().registerCommandTerminal(SESSION_ID, PROJECT_ID);
+  useActivityStore.getState().applySnapshot(SESSION_ID, '', PROJECT_ID, streamSnapshotFixture(snapshot));
+}
+
+async function renderRow(): Promise<ReturnType<typeof render>> {
+  return render(
+    <ThemeProvider>
+      <CommandTerminalRow entry={entryFor()} />
+    </ThemeProvider>,
+  );
+}
+
+describe('CommandTerminalRow', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    seedCommandTerminalBoard({
+      terminals: [commandTerminalWireFixture({ sessionId: SESSION_ID, slot: 1, name: 'Command Terminal 1', named: false })],
+    });
+  });
+
+  describe('what makes it a terminal at a glance', () => {
+    it('carries the "Command Terminal" pill even when the terminal has no name of its own', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-pill`)).toHaveTextContent('Command Terminal');
+    });
+
+    it('carries the pill when the terminal is named, too, so it is never told apart by its title', async () => {
+      seedCommandTerminalBoard({
+        terminals: [commandTerminalWireFixture({ sessionId: SESSION_ID, slot: 1, name: 'Fix the flaky login test', named: true })],
+      });
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-pill`)).toBeTruthy();
+      expect(screen.getByTestId(`${ROW}-name`)).toHaveTextContent('Fix the flaky login test');
+    });
+
+    it('titles the card with the terminal\'s name from the board, and no #number', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-name`)).toHaveTextContent('Command Terminal 1');
+      expect(screen.queryByText(/^#\d+/)).toBeNull();
+    });
+
+    it('falls back to a generic title when the board does not list the terminal', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      seedCommandTerminalBoard({ terminals: [] });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-name`)).toHaveTextContent('Command Terminal');
+    });
+
+    it('names the project in the band, as a task card does', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-band-project`)).toHaveTextContent('Alpha');
+    });
+  });
+
+  describe('the status mark', () => {
+    it('is green while the terminal works', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: { kind: 'turn-active' } } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-mark-working`)).toBeTruthy();
+      expect(screen.queryByTestId(`${ROW}-mark-needs-you`)).toBeNull();
+    });
+
+    it('is amber, the needs-you mark, once the terminal is idle', async () => {
+      snapshotTerminal({ activity: { state: 'idle', reason: null } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-mark-needs-you`)).toBeTruthy();
+      expect(screen.queryByTestId(`${ROW}-mark-working`)).toBeNull();
+    });
+
+    it('is amber when the terminal is asking for permission', async () => {
+      snapshotTerminal({ activity: { state: 'permission', reason: null } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-mark-needs-you`)).toBeTruthy();
+    });
+
+    it('is green for a terminal the desktop has not classified yet, whatever its default state', async () => {
+      useActivityStore.getState().registerCommandTerminal(SESSION_ID, PROJECT_ID);
+      await renderRow();
+
+      expect(entryFor().activityObserved).toBe(false);
+      expect(screen.getByTestId(`${ROW}-mark-working`)).toBeTruthy();
+    });
+  });
+
+  describe('the body', () => {
+    it('is the desktop\'s message preview when it has pushed one', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: { kind: 'tool', pendingCount: 1, currentTool: 'Bash' } } });
+      await act(() => {
+        useActivityStore.getState().applyActivityEvent({
+          kind: 'activity',
+          sessionId: SESSION_ID,
+          taskId: '',
+          payload: { type: 'message-preview', text: 'Reading the failing spec before I change it.' },
+        });
+      });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-snippet`)).toHaveTextContent('Reading the failing spec before I change it.');
+      expect(screen.queryByText('Running Bash')).toBeNull();
+    });
+
+    it('is the desktop\'s words for the activity when it has pushed no preview', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: { kind: 'tool', pendingCount: 1, currentTool: 'Bash' } } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-snippet`)).toHaveTextContent('Running Bash');
+    });
+
+    it('reads "Starting..." for a terminal the desktop has not classified yet', async () => {
+      useActivityStore.getState().registerCommandTerminal(SESSION_ID, PROJECT_ID);
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-snippet`)).toHaveTextContent('Starting...');
+    });
+
+    /**
+     * The band already shows the wait, so the activity line must not say it a
+     * second time. Only an idle reason with a `since` minutes in the past can
+     * tell the two apart: with no `since`, a duration-bearing line and a bare
+     * one both print "Idle".
+     */
+    it('leaves the duration off the activity line, since the band already shows the wait', async () => {
+      const idleSinceMs = Date.now() - 10 * 60_000;
+      snapshotTerminal({ activity: { state: 'idle', reason: { kind: 'idle', since: idleSinceMs } } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-snippet`)).toHaveTextContent(/^Idle$/);
+      expect(screen.queryByText(/ for \d+m/)).toBeNull();
+      // The wait is in the band, where the duration belongs.
+      expect(screen.getByTestId(`${ROW}-wait`)).toHaveTextContent(/10m/);
+    });
+
+    it('leaves the duration off an "Awaiting permission" line too', async () => {
+      const waitingSinceMs = Date.now() - 5 * 60_000;
+      snapshotTerminal({ activity: { state: 'permission', reason: { kind: 'permission', since: waitingSinceMs } } });
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-snippet`)).toHaveTextContent(/^Awaiting permission$/);
+    });
+  });
+
+  describe('navigation', () => {
+    it('opens the terminal by its session on a tap', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      await renderRow();
+
+      await fireEvent.press(screen.getByTestId(ROW));
+
+      expect(mockPush).toHaveBeenCalledTimes(1);
+      expect(mockPush).toHaveBeenCalledWith({
+        pathname: '/command-terminal',
+        params: { sessionId: SESSION_ID, projectId: PROJECT_ID },
+      });
+    });
+
+    it('opens the terminal\'s two actions on a long press, with the same params', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      await renderRow();
+
+      await fireEvent(screen.getByTestId(ROW), 'longPress');
+
+      expect(mockPush).toHaveBeenCalledTimes(1);
+      expect(mockPush).toHaveBeenCalledWith({
+        pathname: '/command-terminal-actions',
+        params: { sessionId: SESSION_ID, projectId: PROJECT_ID },
+      });
+    });
+  });
+});

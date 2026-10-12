@@ -168,6 +168,113 @@ describe('decryptPushBlob', () => {
     expect(await pushDecrypt.decryptPushBlob(blob)).toBeNull();
   });
 
+  /**
+   * A Command Terminal's envelope (protocol 0.20.0) names a made-up task id, so
+   * the tap must be able to tell it from a task's agent by `sessionKind` alone.
+   * The key rides into notifee's string-valued `data` and is what tapRouter
+   * branches on; losing it opens the made-up id as a blank task screen.
+   *
+   * Mutation that reddens this: drop the `sessionKind` spread from `data` in
+   * decryptPushBlob (data comes back without the key).
+   */
+  it('carries sessionKind through for a Command Terminal envelope', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const blob = sealPushEnvelope(
+      pushKey,
+      identity.publicKey,
+      plaintextFixture({
+        taskId: 'made-up-terminal-task',
+        sessionId: 'terminal-sess-1',
+        taskTitle: 'Fix The Flaky Test',
+        sessionKind: 'command-terminal',
+      }),
+    );
+    const decrypted = await pushDecrypt.decryptPushBlob(blob);
+
+    expect(decrypted?.data).toStrictEqual({
+      taskId: 'made-up-terminal-task',
+      projectId: 'project-1',
+      sessionId: 'terminal-sess-1',
+      sessionKind: 'command-terminal',
+    });
+    // The terminal's own name leads the body, as a task's title would.
+    expect(decrypted?.body).toBe('Fix The Flaky Test - Bash: npm run test');
+  });
+
+  /**
+   * The other half: a task's envelope must come back with NO `sessionKind` key
+   * at all, not `sessionKind: undefined`. notifee rejects non-string `data`
+   * values, and a present-but-undefined key is exactly that. toStrictEqual is
+   * what tells an absent key from an undefined one; toEqual cannot.
+   *
+   * Mutation that reddens this: set `sessionKind: plaintext.sessionKind`
+   * unconditionally in `data` (a stray `sessionKind: undefined` key).
+   */
+  it('omits the sessionKind key entirely for a task envelope', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const blob = sealPushEnvelope(pushKey, identity.publicKey, plaintextFixture());
+    const decrypted = await pushDecrypt.decryptPushBlob(blob);
+
+    expect(decrypted).not.toBeNull();
+    expect(decrypted?.data).toStrictEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(Object.keys(decrypted?.data ?? {})).not.toContain('sessionKind');
+  });
+
+  /**
+   * A nameless row still reads as what it is: a terminal falls back to
+   * 'Command Terminal', a task to 'Agent session'. The same empty `taskTitle`
+   * goes in both, so only `sessionKind` can be the difference.
+   *
+   * Mutation that reddens this: collapse the fallback to one string (a terminal
+   * notification reading "Agent session", or a task reading "Command Terminal").
+   */
+  it.each([
+    { label: 'a Command Terminal', sessionKind: 'command-terminal' as const, expectedBody: 'Command Terminal' },
+    { label: 'a task', sessionKind: undefined, expectedBody: 'Agent session' },
+  ])('falls back to the right nameless title for $label with an empty taskTitle', async ({ sessionKind, expectedBody }) => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const blob = sealPushEnvelope(
+      pushKey,
+      identity.publicKey,
+      plaintextFixture({ taskTitle: '', detail: '', ...(sessionKind !== undefined ? { sessionKind } : {}) }),
+    );
+    const decrypted = await pushDecrypt.decryptPushBlob(blob);
+
+    expect(decrypted?.body).toBe(expectedBody);
+  });
+
+  it('puts the fallback title ahead of the detail when the terminal is nameless but has detail', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const blob = sealPushEnvelope(
+      pushKey,
+      identity.publicKey,
+      plaintextFixture({ taskTitle: '', detail: 'Bash: npm run test', sessionKind: 'command-terminal' }),
+    );
+    const decrypted = await pushDecrypt.decryptPushBlob(blob);
+
+    expect(decrypted?.body).toBe('Command Terminal - Bash: npm run test');
+  });
+
   it('exports the generic placeholder copy the callers degrade to', async () => {
     const { pushDecrypt } = await loadModules();
     expect(pushDecrypt.PUSH_PLACEHOLDER_TITLE).toBe('Kangentic');

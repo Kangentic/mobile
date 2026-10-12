@@ -149,14 +149,24 @@ jest.mock('@/components/terminal/DirectKeyInput', () => {
   const focusMock = jest.fn();
   const toggleMock = jest.fn();
   const blurMock = jest.fn();
+  // The props the pane last handed the direct-key input, so the input gate's
+  // forwarding (the pane's `inputEnabled` reaching the field) is observable.
+  const lastProps: { current: { sessionId: string; inputEnabled?: boolean } | null } = { current: null };
   const MockDirectKeyInput = mockReact.forwardRef(function MockDirectKeyInput(
-    props: { sessionId: string },
+    props: { sessionId: string; inputEnabled?: boolean },
     ref: unknown,
   ) {
+    lastProps.current = props;
     mockReact.useImperativeHandle(ref, () => ({ toggle: toggleMock, focus: focusMock, blur: blurMock }));
     return mockReact.createElement(View, { testID: 'terminal-direct-key-input' });
   });
-  return { __esModule: true, DirectKeyInput: MockDirectKeyInput, __focusMock: focusMock };
+  return {
+    __esModule: true,
+    DirectKeyInput: MockDirectKeyInput,
+    __focusMock: focusMock,
+    __toggleMock: toggleMock,
+    __lastProps: lastProps,
+  };
 });
 
 interface WebViewMockModule {
@@ -173,6 +183,8 @@ interface WebViewMockModule {
 
 interface DirectKeyInputMockModule {
   __focusMock: jest.Mock;
+  __toggleMock: jest.Mock;
+  __lastProps: { current: { sessionId: string; inputEnabled?: boolean } | null };
 }
 
 interface GestureHandlerMockModule {
@@ -2010,6 +2022,165 @@ describe('TerminalPane (faithful mirror)', () => {
 
       await firePinchCallback('onFinalize');
       expect(findPinchMessage()?.active).toBe(false);
+    });
+  });
+
+  /**
+   * THE INPUT GATE (protocol 0.20.0, Command Terminals). A terminal's PTY is a
+   * bare shell at the project root until the desktop has classified its agent,
+   * and keeping it untyped is the phone's half of the promise that the
+   * `command-terminal` verb adds no shell reach. The pane is where that is
+   * enforced for everything typed INTO the terminal: the WebView's 'input'
+   * messages (keys and scroll bursts), the 'tapped' message that raises the
+   * soft keyboard, and the direct-key field itself.
+   *
+   * Every denial here is paired with an enabled control in the same block that
+   * proves the same message DOES write or toggle, so a message the harness
+   * never delivered cannot pass for the gate holding.
+   */
+  describe('the input gate (inputEnabled)', () => {
+    beforeEach(() => {
+      directKeyInputMock.__lastProps.current = null;
+    });
+
+    function paneWithInput(inputEnabled: boolean): React.JSX.Element {
+      return (
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive inputEnabled={inputEnabled} />
+        </ThemeProvider>
+      );
+    }
+
+    async function renderGatedPaneAndReady(inputEnabled: boolean): Promise<RenderResult> {
+      const result = await render(paneWithInput(inputEnabled));
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
+      return result;
+    }
+
+    it('writes an input message to the PTY while input is enabled', async () => {
+      retainTerminal('sess-1');
+      await renderGatedPaneAndReady(true);
+
+      await postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
+
+      expect(actionsMock.writeTerminal).toHaveBeenCalledTimes(1);
+      expect(actionsMock.writeTerminal).toHaveBeenCalledWith('sess-1', 'ls');
+    });
+
+    it('drops an input message while input is held, writing nothing', async () => {
+      retainTerminal('sess-1');
+      await renderGatedPaneAndReady(false);
+
+      await postFromWebView(JSON.stringify({ type: 'input', data: 'rm -rf /' }));
+      await postFromWebView(JSON.stringify({ type: 'input', data: '\r' }));
+
+      expect(actionsMock.writeTerminal).not.toHaveBeenCalled();
+    });
+
+    it('does not count a held input as an echo, so the batch timer is not skipped for bytes nobody sent', async () => {
+      jest.useFakeTimers();
+      try {
+        retainTerminal('sess-1');
+        await renderGatedPaneAndReady(false);
+        webViewMock.__postMessageMock.mockClear();
+
+        await postFromWebView(JSON.stringify({ type: 'input', data: 'ls' }));
+        await act(() => appendChunk('sess-1', 'unprompted-output'));
+
+        // Still waiting out the batch timer: the held input did not open the echo window.
+        expect(decodedPosts().some((message) => message?.type === 'write')).toBe(false);
+        await act(() => {
+          jest.advanceTimersByTime(32);
+        });
+        expect(decodedPosts().some((message) => message?.type === 'write')).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('raises the soft keyboard on a tap while input is enabled', async () => {
+      retainTerminal('sess-1');
+      await renderGatedPaneAndReady(true);
+
+      await postFromWebView(JSON.stringify({ type: 'tapped' }));
+
+      expect(directKeyInputMock.__toggleMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not raise the soft keyboard on a tap while input is held', async () => {
+      retainTerminal('sess-1');
+      await renderGatedPaneAndReady(false);
+
+      await postFromWebView(JSON.stringify({ type: 'tapped' }));
+
+      expect(directKeyInputMock.__toggleMock).not.toHaveBeenCalled();
+      expect(directKeyInputMock.__focusMock).not.toHaveBeenCalled();
+    });
+
+    it('hands the gate to the direct-key field, enabled and held alike', async () => {
+      retainTerminal('sess-1');
+      const result = await renderGatedPaneAndReady(false);
+      expect(directKeyInputMock.__lastProps.current?.inputEnabled).toBe(false);
+
+      await result.rerender(paneWithInput(true));
+      expect(directKeyInputMock.__lastProps.current?.inputEnabled).toBe(true);
+    });
+
+    it('opens when the desktop classifies the agent', async () => {
+      retainTerminal('sess-1');
+      const result = await renderGatedPaneAndReady(false);
+      await postFromWebView(JSON.stringify({ type: 'input', data: 'before' }));
+      await postFromWebView(JSON.stringify({ type: 'tapped' }));
+      expect(actionsMock.writeTerminal).not.toHaveBeenCalled();
+      expect(directKeyInputMock.__toggleMock).not.toHaveBeenCalled();
+
+      await result.rerender(paneWithInput(true));
+      await postFromWebView(JSON.stringify({ type: 'input', data: 'after' }));
+      await postFromWebView(JSON.stringify({ type: 'tapped' }));
+
+      expect(actionsMock.writeTerminal).toHaveBeenCalledTimes(1);
+      expect(actionsMock.writeTerminal).toHaveBeenCalledWith('sess-1', 'after');
+      expect(directKeyInputMock.__toggleMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes again if the gate is held after having been open', async () => {
+      retainTerminal('sess-1');
+      const result = await renderGatedPaneAndReady(true);
+      await postFromWebView(JSON.stringify({ type: 'input', data: 'open' }));
+      expect(actionsMock.writeTerminal).toHaveBeenCalledTimes(1);
+
+      await result.rerender(paneWithInput(false));
+      await postFromWebView(JSON.stringify({ type: 'input', data: 'closed' }));
+      await postFromWebView(JSON.stringify({ type: 'tapped' }));
+
+      expect(actionsMock.writeTerminal).toHaveBeenCalledTimes(1);
+      expect(directKeyInputMock.__toggleMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps a keyboard-focus request pending while input is held, and serves it once input opens', async () => {
+      retainTerminal('sess-1');
+      useTerminalUiStore.getState().requestSessionMode('sess-1', 'terminal', { focusKeyboard: true });
+      const result = await renderGatedPaneAndReady(false);
+
+      // Held: no keyboard for a field that can type nothing, and the request
+      // is not spent, so it is still there when input opens.
+      expect(directKeyInputMock.__focusMock).not.toHaveBeenCalled();
+      expect(useTerminalUiStore.getState().focusKeyboardRequestBySessionId['sess-1']).toBe(true);
+
+      await result.rerender(paneWithInput(true));
+
+      await waitFor(() => expect(directKeyInputMock.__focusMock).toHaveBeenCalledTimes(1));
+      expect(useTerminalUiStore.getState().focusKeyboardRequestBySessionId['sess-1']).toBeUndefined();
+    });
+
+    it('still takes the non-typing messages while input is held (modes, paint reports)', async () => {
+      retainTerminal('sess-1');
+      await renderGatedPaneAndReady(false);
+
+      await postFromWebView(JSON.stringify({ type: 'modes', applicationCursorKeys: true }));
+
+      expect(useTerminalUiStore.getState().applicationCursorModeBySessionId['sess-1']).toBe(true);
     });
   });
 });

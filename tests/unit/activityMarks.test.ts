@@ -29,6 +29,9 @@ import {
 } from '@/brand/activityMarks.generated';
 
 interface ActivityManifestMark {
+  file: string;
+  /** The mark's role family ('envelope', 'ring', 'terminal', 'control-stop', ...): what the floors are keyed on upstream. */
+  silhouette: string;
   dash?: string;
   dashUserUnits?: string;
   reducedMotion: string;
@@ -93,6 +96,86 @@ function elementNumberAttribute(elementMarkup: string, attributeName: string): n
 const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
+/**
+ * The six marks the app draws, and no others. The package ships eleven; the
+ * rest are left out on purpose, each for a reason that is a design decision and
+ * not an oversight (scripts/syncBranding.mjs, ACTIVITY_MARKS):
+ *
+ * - `terminal-working` has a `blink` (an opacity), and the approved design draws
+ *   a working terminal STATIC, because a blink on every working row would be an
+ *   animation that never stops (motion-conventions.md).
+ * - `control-pause-*` is not drawn: the phone's Pause is a sheet row, not the
+ *   desktop's ring control.
+ */
+const EXPECTED_MARK_NAMES = [
+  'agent-idle',
+  'agent-working',
+  'control-stop-idle',
+  'control-stop-working',
+  'terminal-idle',
+  'terminal-new',
+];
+
+/** The raw markup of a mark's upstream SVG, resolved through the manifest's own `file` field. */
+function svgSourceFor(markName: ActivityMarkName): string {
+  return readFileSync(
+    fileURLToPath(new URL(`../../node_modules/@kangentic/branding/assets/activity/${manifest.marks[markName].file}`, import.meta.url)),
+    'utf8',
+  );
+}
+
+interface UpstreamElement {
+  tagName: 'rect' | 'circle' | 'path';
+  attributes: Record<string, string>;
+  /** Whether the element sits inside the `<g>` the motion's class hangs on (`kng-spin`). */
+  insideMotionGroup: boolean;
+}
+
+/**
+ * Every drawable element of a mark's upstream SVG, in document order, parsed
+ * independently of the generator under test: this is the source of truth the
+ * generated shapes are compared against, so it must not share the generator's
+ * parsing.
+ */
+function upstreamElements(markName: ActivityMarkName): UpstreamElement[] {
+  const svgSource = svgSourceFor(markName);
+  const groupMatch = /<g\b[^>]*>[\s\S]*?<\/g>/.exec(svgSource);
+  const groupStart = groupMatch === null ? -1 : groupMatch.index;
+  const groupEnd = groupMatch === null ? -1 : groupMatch.index + groupMatch[0].length;
+  const elements: UpstreamElement[] = [];
+  for (const elementMatch of svgSource.matchAll(/<(rect|circle|path)\b([^>]*?)\/?>/g)) {
+    const attributes: Record<string, string> = {};
+    for (const attributeMatch of elementMatch[2].matchAll(/([a-zA-Z-]+)="([^"]*)"/g)) {
+      attributes[attributeMatch[1]] = attributeMatch[2];
+    }
+    elements.push({
+      tagName: elementMatch[1] as UpstreamElement['tagName'],
+      attributes,
+      insideMotionGroup: groupMatch !== null && elementMatch.index > groupStart && elementMatch.index < groupEnd,
+    });
+  }
+  return elements;
+}
+
+function upstreamNumber(element: UpstreamElement, attributeName: string, fallback?: number): number {
+  const rawValue = element.attributes[attributeName];
+  if (rawValue === undefined) {
+    if (fallback !== undefined) return fallback;
+    throw new Error(`<${element.tagName}> has no ${attributeName} attribute in the upstream svg; cannot cross-check it`);
+  }
+  return Number(rawValue);
+}
+
+/** The rect shapes of a generated mark, in order. */
+function rectShapes(markName: ActivityMarkName): ActivityRectShape[] {
+  return activityMarks[markName].shapes.filter((shape): shape is ActivityRectShape => shape.kind === 'rect');
+}
+
+/** The shapes a renderer moves with the mark's motion. */
+function movingShapes(markName: ActivityMarkName) {
+  return activityMarks[markName].shapes.filter((shape) => shape.moving === true);
+}
+
 /** The dashed outline of an animated mark, as the only circle carrying a dash. */
 function dashedCircle(markName: ActivityMarkName): ActivityCircleShape {
   const dashed = activityMarks[markName].shapes.filter(
@@ -114,8 +197,19 @@ describe('activityMarks', () => {
     expect(Object.keys(manifest.marks).length).toBe(9);
   });
 
-  it('generates the two marks AgentStatusIcon renders', () => {
-    expect(MARK_NAMES.sort()).toEqual(['agent-idle', 'agent-working']);
+  it('generates exactly the six marks the app draws, and deliberately not terminal-working or the pause controls', () => {
+    expect([...MARK_NAMES].sort()).toEqual(EXPECTED_MARK_NAMES);
+    // The omissions are decisions, so they are pinned by name: a package bump
+    // or a generator edit that quietly started shipping a blinking terminal
+    // would otherwise only show up as extra bytes in the bundle.
+    for (const omittedMarkName of ['terminal-working', 'control-pause-idle', 'control-pause-working']) {
+      expect(MARK_NAMES, `${omittedMarkName} must stay unsynced`).not.toContain(omittedMarkName);
+      // ...while still existing upstream, so "unsynced" is a choice and not a missing file.
+      expect(Object.keys(manifest.marks), `${omittedMarkName} exists in the package`).toContain(omittedMarkName);
+    }
+    // And every one of the six is a real manifest entry, not a name the
+    // generator invented.
+    for (const markName of EXPECTED_MARK_NAMES) expect(Object.keys(manifest.marks)).toContain(markName);
   });
 
   it('carries the manifest grid, not a restated one', () => {
@@ -165,12 +259,248 @@ describe('activityMarks', () => {
     }
   });
 
-  it('keeps the indicator floor at the manifest value', () => {
-    // Both agent marks are indicators (12px), not controls (16px). Below the
-    // floor AgentStatusIcon draws a dot instead of the mark.
+  it('keeps each mark on its role\'s floor: the control floor for the stop controls, the indicator floor for the rest', () => {
+    // Indicators (the agent marks and the terminal silhouettes) hold at 12px;
+    // the stop controls are tap targets and hold at 16px. Below its floor
+    // AgentStatusIcon draws a dot instead of the mark. The role comes from the
+    // manifest's own silhouette, not from the mark's name, so this and the
+    // generator derive it from different fields.
+    expect(manifest.floors).toEqual({ indicator: 12, control: 16 });
+    const controlMarkNames = MARK_NAMES.filter((markName) => manifest.marks[markName].silhouette.startsWith('control-'));
+    // Non-vacuity: the filter must actually find both stop controls.
+    expect(controlMarkNames.sort()).toEqual(['control-stop-idle', 'control-stop-working']);
     for (const markName of MARK_NAMES) {
-      expect(activityMarks[markName].minPx, `${markName} minPx`).toBe(manifest.floors.indicator);
+      const expectedFloor = controlMarkNames.includes(markName) ? manifest.floors.control : manifest.floors.indicator;
+      expect(activityMarks[markName].minPx, `${markName} minPx`).toBe(expectedFloor);
+      expect(activityMarks[markName].minPx, `${markName} minPx against its manifest entry`).toBe(manifest.marks[markName].minPx);
     }
+  });
+
+  /**
+   * The seam between the generator and AgentStatusIcon: a renderer moves exactly
+   * the shapes flagged `moving`, and the generator derives the flag from which
+   * `<g>` the upstream SVG put a shape in. Compared element by element against
+   * the SVG, parsed independently, for every mark, so a mark added later is
+   * covered without anyone remembering to extend a list.
+   */
+  it.each(EXPECTED_MARK_NAMES as ActivityMarkName[])('%s matches its upstream svg element by element', (markName) => {
+    const upstream = upstreamElements(markName);
+    const generated = activityMarks[markName].shapes;
+
+    // Non-vacuity: a regex that found nothing would compare two empty lists.
+    expect(upstream.length, `${markName} upstream elements`).toBeGreaterThan(0);
+    expect(generated.map((shape) => shape.kind)).toEqual(upstream.map((element) => element.tagName));
+
+    generated.forEach((shape, shapeIndex) => {
+      const element = upstream[shapeIndex];
+      const context = `${markName} shape ${shapeIndex} (${shape.kind})`;
+      expect(shape.moving === true, `${context} moving`).toBe(element.insideMotionGroup);
+      if (shape.kind === 'rect') {
+        expect(shape.x, `${context} x`).toBe(upstreamNumber(element, 'x', 0));
+        expect(shape.y, `${context} y`).toBe(upstreamNumber(element, 'y', 0));
+        expect(shape.width, `${context} width`).toBe(upstreamNumber(element, 'width'));
+        expect(shape.height, `${context} height`).toBe(upstreamNumber(element, 'height'));
+        expect(shape.rx, `${context} rx`).toBe(upstreamNumber(element, 'rx', 0));
+        // Filled is exactly `fill="currentColor" stroke="none"`: the stop square.
+        expect(shape.filled === true, `${context} filled`).toBe(element.attributes.fill === 'currentColor' && element.attributes.stroke === 'none');
+      } else if (shape.kind === 'circle') {
+        expect(shape.cx, `${context} cx`).toBe(upstreamNumber(element, 'cx'));
+        expect(shape.cy, `${context} cy`).toBe(upstreamNumber(element, 'cy'));
+        expect(shape.r, `${context} r`).toBe(upstreamNumber(element, 'r'));
+        expect(shape.dash !== undefined, `${context} dashed`).toBe(element.attributes['stroke-dasharray'] !== undefined);
+      } else {
+        expect(shape.d, `${context} d`).toBe(element.attributes.d);
+      }
+    });
+  });
+
+  it('flags a shape moving only on an animated mark, and then only its one dashed outline', () => {
+    for (const markName of MARK_NAMES) {
+      const declaredMotion = manifest.marks[markName].motion;
+      const moving = movingShapes(markName);
+      if (declaredMotion === null) {
+        expect(moving, `${markName} is static, so nothing in it may move`).toEqual([]);
+        continue;
+      }
+      expect(moving.length, `${markName} moves exactly one shape`).toBe(1);
+      expect(moving[0].kind).toBe('circle');
+      expect(moving[0].kind === 'circle' && moving[0].dash !== undefined, `${markName} moves its dashed outline`).toBe(true);
+    }
+  });
+
+  it('draws a filled shape on the stop controls only', () => {
+    const marksWithFilledShape = MARK_NAMES.filter((markName) =>
+      activityMarks[markName].shapes.some((shape) => shape.kind === 'rect' && shape.filled === true),
+    );
+    expect(marksWithFilledShape.sort()).toEqual(['control-stop-idle', 'control-stop-working']);
+  });
+});
+
+describe('the terminal silhouettes (terminal-idle, terminal-new)', () => {
+  const terminalMarkNames = ['terminal-idle', 'terminal-new'] as const;
+
+  /** An outlined window, then the glyph's two strokes: a prompt and an underscore, or a plus. */
+  it.each(terminalMarkNames)('%s is the upstream outline: a rounded window and two stroked paths, verbatim', (markName) => {
+    const upstream = upstreamElements(markName);
+    const [windowRect] = rectShapes(markName);
+    const upstreamRect = upstream.find((element) => element.tagName === 'rect');
+    if (upstreamRect === undefined) throw new Error(`${markName} has no <rect> upstream; cannot cross-check it`);
+
+    expect(activityMarks[markName].shapes.map((shape) => shape.kind)).toEqual(['rect', 'path', 'path']);
+    expect(windowRect).toMatchObject({
+      x: upstreamNumber(upstreamRect, 'x'),
+      y: upstreamNumber(upstreamRect, 'y'),
+      width: upstreamNumber(upstreamRect, 'width'),
+      height: upstreamNumber(upstreamRect, 'height'),
+      rx: upstreamNumber(upstreamRect, 'rx'),
+    });
+    const generatedPaths = activityMarks[markName].shapes.flatMap((shape) => (shape.kind === 'path' ? [shape.d] : []));
+    const upstreamPaths = upstream.flatMap((element) => (element.tagName === 'path' ? [element.attributes.d] : []));
+    expect(generatedPaths).toEqual(upstreamPaths);
+    // The window is an outline: filling it would paint a solid block under the glyph.
+    expect(windowRect.filled).toBeUndefined();
+  });
+
+  it('draws the window centred on the grid with the same 18 x 18 box in both marks, so they swap without a jump', () => {
+    const [, , gridWidth, gridHeight] = ACTIVITY_VIEW_BOX.split(' ').map(Number);
+    const [idleWindow] = rectShapes('terminal-idle');
+    const [newWindow] = rectShapes('terminal-new');
+
+    expect(newWindow).toEqual(idleWindow);
+    expect(idleWindow.x + idleWindow.width / 2).toBe(gridWidth / 2);
+    expect(idleWindow.y + idleWindow.height / 2).toBe(gridHeight / 2);
+    expect(idleWindow.width).toBe(manifest.grid.inkBox);
+    expect(idleWindow.height).toBe(manifest.grid.inkBox);
+  });
+
+  /**
+   * terminal-working is the one terminal mark with a blink, and the app draws a
+   * working terminal with terminal-idle's shapes, static, in the working tone.
+   * So neither synced terminal mark may carry any motion at all.
+   */
+  it.each(terminalMarkNames)('%s is static: no dash, no spin, no march, nothing moving', (markName) => {
+    const mark = activityMarks[markName];
+    expect(mark.spin).toBeUndefined();
+    expect(mark.march).toBeUndefined();
+    expect(mark.restRendering).toBe('static');
+    expect(manifest.marks[markName].motion).toBeNull();
+    expect(movingShapes(markName)).toEqual([]);
+    for (const shape of mark.shapes) {
+      if (shape.kind === 'circle') expect(shape.dash).toBeUndefined();
+    }
+  });
+});
+
+describe('the stop control (control-stop-idle, control-stop-working)', () => {
+  const [, , gridWidth, gridHeight] = ACTIVITY_VIEW_BOX.split(' ').map(Number);
+
+  /** The one circle of a stop mark: its ring. */
+  function ringOf(markName: 'control-stop-idle' | 'control-stop-working'): ActivityCircleShape {
+    const rings = activityMarks[markName].shapes.filter((shape): shape is ActivityCircleShape => shape.kind === 'circle');
+    expect(rings.length, `${markName} must have exactly one ring`).toBe(1);
+    return rings[0];
+  }
+
+  /** The one rect of a stop mark: its square. */
+  function squareOf(markName: 'control-stop-idle' | 'control-stop-working'): ActivityRectShape {
+    const squares = rectShapes(markName);
+    expect(squares.length, `${markName} must have exactly one square`).toBe(1);
+    return squares[0];
+  }
+
+  describe('working', () => {
+    it('spins at the manifest duration and does not also march', () => {
+      const spin = activityMarks['control-stop-working'].spin;
+      expect(spin, 'control-stop-working must spin').toBeDefined();
+      expect(spin?.durationMs).toBe(manifest.motion.spin.durationMs);
+      expect(manifest.marks['control-stop-working'].motion).toBe('spin');
+      expect(activityMarks['control-stop-working'].march).toBeUndefined();
+      expect(activityMarks['control-stop-working'].restRendering).toBe('keep-dash');
+    });
+
+    /**
+     * THE assertion that makes the stop control readable: the ring turns and the
+     * square holds still. The renderer moves exactly the shapes flagged
+     * `moving`, so a square flagged too would spin with its ring, and a ring
+     * left unflagged would hold still while the control claims to be working.
+     */
+    it('moves its ring and only its ring: the filled square holds still', () => {
+      const ring = ringOf('control-stop-working');
+      const square = squareOf('control-stop-working');
+
+      expect(ring.moving).toBe(true);
+      expect(square.moving).toBeUndefined();
+      expect(movingShapes('control-stop-working')).toEqual([ring]);
+      expect(square.filled).toBe(true);
+    });
+
+    it('draws the ring on the grid centre, the premise the spin transform relies on', () => {
+      const ring = ringOf('control-stop-working');
+      expect(ring.cx).toBe(gridWidth / 2);
+      expect(ring.cy).toBe(gridHeight / 2);
+    });
+
+    it('takes the user-unit dash and closes the r=10 ring with one cycle', () => {
+      const ring = ringOf('control-stop-working');
+      const manifestMark = manifest.marks['control-stop-working'];
+      expect(ring.r).toBe(10);
+      expect(ring.dash, 'the ring must carry the dash').toBeDefined();
+
+      expect([...(ring.dash ?? [])]).toEqual(parseManifestDash(manifestMark.dashUserUnits ?? ''));
+      expect([...(ring.dash ?? [])]).not.toEqual(parseManifestDash(manifestMark.dash ?? ''));
+      const dashCycle = (ring.dash ?? [0, 0])[0] + (ring.dash ?? [0, 0])[1];
+      expect(dashCycle).toBeCloseTo(2 * Math.PI * ring.r, 3);
+      // Roughly three quarters inked, so the arc reads as an arc.
+      expect((ring.dash ?? [0, 0])[0] / dashCycle).toBeCloseTo(0.75, 2);
+    });
+  });
+
+  describe('idle', () => {
+    it('is static: a solid ring, with no dash and no motion of either kind', () => {
+      const mark = activityMarks['control-stop-idle'];
+      const ring = ringOf('control-stop-idle');
+
+      expect(ring.dash, 'an idle ring is solid, not torn').toBeUndefined();
+      expect(ring.r).toBe(10);
+      expect(ring.cx).toBe(gridWidth / 2);
+      expect(ring.cy).toBe(gridHeight / 2);
+      expect(mark.spin).toBeUndefined();
+      expect(mark.march).toBeUndefined();
+      expect(mark.restRendering).toBe('static');
+      expect(manifest.marks['control-stop-idle'].motion).toBeNull();
+      expect(movingShapes('control-stop-idle')).toEqual([]);
+    });
+
+    it('draws a filled square, not an outlined one', () => {
+      const square = squareOf('control-stop-idle');
+      expect(square.filled).toBe(true);
+      expect(square.moving).toBeUndefined();
+    });
+  });
+
+  describe('square', () => {
+    it('is the same in both states, so working and idle swap without the square jumping', () => {
+      expect(squareOf('control-stop-working')).toEqual(squareOf('control-stop-idle'));
+    });
+
+    it('takes its geometry verbatim from the upstream svg and sits centred inside the ring', () => {
+      for (const markName of ['control-stop-idle', 'control-stop-working'] as const) {
+        const square = squareOf(markName);
+        const upstreamRect = upstreamElements(markName).find((element) => element.tagName === 'rect');
+        if (upstreamRect === undefined) throw new Error(`${markName} has no <rect> upstream; cannot cross-check it`);
+
+        expect(square.x, `${markName} x`).toBe(upstreamNumber(upstreamRect, 'x'));
+        expect(square.y, `${markName} y`).toBe(upstreamNumber(upstreamRect, 'y'));
+        expect(square.width, `${markName} width`).toBe(upstreamNumber(upstreamRect, 'width'));
+        expect(square.height, `${markName} height`).toBe(upstreamNumber(upstreamRect, 'height'));
+        expect(square.rx, `${markName} rx`).toBe(upstreamNumber(upstreamRect, 'rx'));
+        // A square, centred on the ring, and strictly inside it (clear of the stroke).
+        expect(square.width).toBe(square.height);
+        expect(square.x + square.width / 2).toBeCloseTo(gridWidth / 2, 5);
+        expect(square.y + square.height / 2).toBeCloseTo(gridHeight / 2, 5);
+        expect(square.width / 2 + ACTIVITY_STROKE_WIDTH / 2).toBeLessThan(ringOf(markName).r);
+      }
+    });
   });
 });
 
@@ -293,6 +623,21 @@ describe('the working ring (agent-working)', () => {
     // carrying both would mean the generator emitted a motion it did not select
     // and AgentStatusIcon would drive two animations over one outline.
     expect(activityMarks['agent-working'].march, 'a spinning mark must not also march').toBeUndefined();
+  });
+
+  /**
+   * The ring is the lone shape of a lone-ring mark, and it sits inside the
+   * upstream `kng-spin` group, so the generator flags it `moving`. The renderer
+   * turns exactly the flagged shapes (the stop control relies on this to hold
+   * its square still), so an unflagged ring would be a working mark that does
+   * not turn.
+   */
+  it('flags its one ring as the moving shape', () => {
+    const shapes = activityMarks['agent-working'].shapes;
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0].kind).toBe('circle');
+    expect(shapes[0].moving).toBe(true);
+    expect(movingShapes('agent-working')).toEqual(shapes);
   });
 
   /**

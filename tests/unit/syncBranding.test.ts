@@ -7,6 +7,12 @@
  * at a filename nothing regenerates, passes that check cleanly, and the
  * asset then silently rots the next time @kangentic/branding is upgraded.
  *
+ * (The last describe block, the activity guards, is the one exception to "never
+ * run the script": it runs a scratch COPY of the script, beside a scratch copy of
+ * the branding package, as a child process. The copy resolves its repo root from
+ * its own location, so it reads and writes only the scratch tree and the real
+ * working tree is never touched.)
+ *
  * This test closes that gap directly: it asserts the set of assets/brand
  * PNG filenames the app references equals the set PNG_COPIES declares, in
  * both directions. It does not import scripts/syncBranding.mjs
@@ -30,7 +36,10 @@
  * file byte-identical to what it was told to copy and reports "in sync" while
  * shipping a soft icon. This test measures the pixels instead.
  */
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { ExpoConfig } from 'expo/config';
@@ -212,4 +221,193 @@ describe('syncBranding.mjs PNG_COPIES', () => {
       expect([4, 6], `${filename} IHDR colour type ${colorType} carries no alpha channel`).toContain(colorType);
     }
   });
+});
+
+interface GeneratorRun {
+  exitStatus: number | null;
+  stderr: string;
+  /** Whether the run got far enough to write the activity module into the scratch tree. */
+  wroteActivityModule: boolean;
+  /** The activity module the run wrote, or null when it threw before writing. */
+  activityModuleSource: string | null;
+}
+
+/**
+ * Runs the REAL generator against a scratch copy of the branding package whose
+ * activity SVGs the caller has rewritten. Everything is a copy: the script is
+ * copied to `<scratch>/scripts/` so its repo-root lookup (`..` from its own
+ * location) lands in the scratch tree, and the package to
+ * `<scratch>/node_modules/@kangentic/branding`. The real working tree is never
+ * read as a target or written.
+ */
+function runGeneratorAgainstScratchPackage(rewriteActivityAssets: (activityDirectory: string) => void): GeneratorRun {
+  const scratchRoot = mkdtempSync(join(tmpdir(), 'kangentic-syncbranding-test-'));
+  try {
+    mkdirSync(join(scratchRoot, 'scripts'));
+    copyFileSync(repoPath('scripts/syncBranding.mjs'), join(scratchRoot, 'scripts', 'syncBranding.mjs'));
+    const scratchPackageRoot = join(scratchRoot, 'node_modules', '@kangentic', 'branding');
+    cpSync(repoPath('node_modules/@kangentic/branding'), scratchPackageRoot, { recursive: true, dereference: true });
+    rewriteActivityAssets(join(scratchPackageRoot, 'assets', 'activity'));
+
+    const result = spawnSync(process.execPath, [join(scratchRoot, 'scripts', 'syncBranding.mjs')], {
+      cwd: scratchRoot,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    const activityModulePath = join(scratchRoot, 'src', 'brand', 'activityMarks.generated.ts');
+    const wroteActivityModule = existsSync(activityModulePath);
+    return {
+      exitStatus: result.status,
+      stderr: result.stderr,
+      wroteActivityModule,
+      activityModuleSource: wroteActivityModule ? readFileSync(activityModulePath, 'utf8') : null,
+    };
+  } finally {
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+}
+
+/** Rewrites one activity SVG in place, and fails loudly if the rewrite changed nothing (a vacuous fixture). */
+function rewriteActivitySvg(activityDirectory: string, fileName: string, transform: (source: string) => string): void {
+  const svgPath = join(activityDirectory, fileName);
+  const original = readFileSync(svgPath, 'utf8');
+  const rewritten = transform(original);
+  if (rewritten === original) throw new Error(`the fixture rewrite of ${fileName} changed nothing; the case would test nothing`);
+  writeFileSync(svgPath, rewritten);
+}
+
+/**
+ * The generator's hard-fail guards for the activity marks. `--check` proves the
+ * committed output matches what the INSTALLED package generates, so it can only
+ * ever exercise the happy path; a guard that stopped firing would pass it
+ * forever and the next upstream bump would ship a mark the renderer draws
+ * wrongly (a square outlined instead of filled, a square spinning with its ring).
+ * Each case here feeds the real generator a rewritten SVG and asserts it STOPS,
+ * naming the file, rather than emitting anything.
+ */
+describe('syncBranding.mjs activity guards (the real generator against rewritten svgs)', () => {
+  const GENERATOR_TEST_TIMEOUT_MS = 30_000;
+
+  /**
+   * The control for every case below: an unmodified scratch copy generates the
+   * committed module byte for byte (line endings aside). Without it a failure
+   * below could be the harness (a missing file in the scratch tree) rather than
+   * the guard under test.
+   */
+  it(
+    'generates the committed activity module from an untouched scratch copy (the control)',
+    () => {
+      const run = runGeneratorAgainstScratchPackage(() => undefined);
+
+      expect(run.stderr).toBe('');
+      expect(run.exitStatus).toBe(0);
+      expect(run.wroteActivityModule).toBe(true);
+      const committedSource = readFileSync(repoPath('src/brand/activityMarks.generated.ts'), 'utf8');
+      expect(run.activityModuleSource?.replaceAll('\r\n', '\n')).toBe(committedSource.replaceAll('\r\n', '\n'));
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * A filled shape is exactly `fill="currentColor" stroke="none"`. Anything else
+   * on a rect is a paint the renderer does not know, and drawing it as an outline
+   * would ship the stop square hollow.
+   */
+  it.each([
+    { label: 'a named fill colour', paint: 'fill="red" stroke="none"' },
+    { label: 'a fill with no stroke override', paint: 'fill="currentColor"' },
+    { label: 'a stroke with no fill', paint: 'stroke="currentColor"' },
+    { label: 'an explicit fill none', paint: 'fill="none" stroke="none"' },
+  ])(
+    'refuses a rect painted with $label',
+    ({ paint }) => {
+      const run = runGeneratorAgainstScratchPackage((activityDirectory) => {
+        rewriteActivitySvg(activityDirectory, 'control-stop-idle.svg', (source) =>
+          source.replace('fill="currentColor" stroke="none"', paint),
+        );
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain('control-stop-idle.svg <rect> paints');
+      expect(run.stderr).toContain('fill="currentColor" stroke="none"');
+      expect(run.wroteActivityModule, 'a refused mark must not leave a partial module behind').toBe(false);
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    { label: 'a path with a fill', file: 'terminal-idle.svg', element: '<path>', from: '<path d="M12.5 14.5 H16.5"/>', to: '<path d="M12.5 14.5 H16.5" fill="currentColor"/>' },
+    { label: 'a path with a stroke', file: 'terminal-new.svg', element: '<path>', from: '<path d="M12 8.5 V15.5"/>', to: '<path d="M12 8.5 V15.5" stroke="red"/>' },
+    { label: 'a circle with a stroke', file: 'control-stop-idle.svg', element: '<circle>', from: '<circle cx="12" cy="12" r="10"', to: '<circle cx="12" cy="12" r="10" stroke="red"' },
+  ])(
+    'refuses $label, since only a rect may carry its own paint',
+    ({ file, element, from, to }) => {
+      const run = runGeneratorAgainstScratchPackage((activityDirectory) => {
+        rewriteActivitySvg(activityDirectory, file, (source) => source.replace(from, to));
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain(`${file} ${element} carries its own fill or stroke`);
+      expect(run.wroteActivityModule).toBe(false);
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * The renderer turns exactly the shapes inside the motion's `<g>`. A static
+   * shape in it would spin with the ring (the stop square rotating), so the
+   * generator refuses rather than emit a mark that animates its own square.
+   */
+  it(
+    'refuses a static shape inside the motion group (the stop square spinning with its ring)',
+    () => {
+      const run = runGeneratorAgainstScratchPackage((activityDirectory) => {
+        rewriteActivitySvg(activityDirectory, 'control-stop-working.svg', (source) => {
+          const squareMarkup = /<rect\b[^>]*\/>/.exec(source)?.[0];
+          if (squareMarkup === undefined) throw new Error('control-stop-working.svg has no <rect>; the fixture cannot move it');
+          return source.replace(squareMarkup, '').replace('</g>', `${squareMarkup}</g>`);
+        });
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain('control-stop-working.svg <rect> is inside the motion group');
+      expect(run.stderr).toContain("it is not the mark's moving outline");
+      expect(run.wroteActivityModule).toBe(false);
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a moving outline that sits OUTSIDE the motion group (a working ring that holds still)',
+    () => {
+      const run = runGeneratorAgainstScratchPackage((activityDirectory) => {
+        rewriteActivitySvg(activityDirectory, 'agent-working.svg', (source) =>
+          source.replace('<g class="kng-spin">', '').replace('</g>', ''),
+        );
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain('agent-working.svg <circle> is outside the motion group');
+      expect(run.stderr).toContain("it is the mark's moving outline");
+      expect(run.wroteActivityModule).toBe(false);
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    { label: 'an unclosed group', file: 'agent-working.svg', transform: (source: string) => source.replace('</g>', '') },
+    { label: 'a stray closing tag', file: 'agent-idle.svg', transform: (source: string) => source.replace('</svg>', '</g></svg>') },
+  ])(
+    'refuses $label as an unbalanced <g>',
+    ({ file, transform }) => {
+      const run = runGeneratorAgainstScratchPackage((activityDirectory) => {
+        rewriteActivitySvg(activityDirectory, file, transform);
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain(`${file} has an unbalanced <g> element`);
+      expect(run.wroteActivityModule).toBe(false);
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
 });

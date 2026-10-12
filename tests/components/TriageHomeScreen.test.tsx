@@ -2124,4 +2124,95 @@ describe('TriageHomeScreen', () => {
       expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Resuming agent...');
     });
   });
+
+  /**
+   * Command Terminals on the feed (protocol 0.20.0, task #113): a terminal
+   * sits beside the task agents in the same sections, as a card of its own.
+   * The card's own contract (tones, body, wait) is in CommandTerminalRow.test.tsx;
+   * what is asserted HERE is the assembly only the feed can break: that a
+   * terminal's activity entry reaches the terminal card rather than a task
+   * card, in the right section, and that its taps carry the terminal's own
+   * ids.
+   */
+  describe('Command Terminal cards', () => {
+    function seedIdleTerminal(overrides: { named?: boolean; name?: string } = {}): void {
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        if (board === undefined) return state;
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-1': {
+              ...board,
+              commandTerminals: [
+                {
+                  sessionId: 'terminal-1',
+                  projectId: 'project-1',
+                  slot: 1,
+                  name: overrides.name ?? 'Command Terminal 1',
+                  named: overrides.named ?? false,
+                  activity: { state: 'idle', reason: null },
+                },
+              ],
+            },
+          },
+        };
+      });
+      useActivityStore.getState().registerCommandTerminal('terminal-1', 'project-1');
+      // Idle since ten minutes ago: only an idle reason with a real `since` can
+      // tell an activity line that prints a duration ("Idle for 10m") from one
+      // that does not, and the band already shows the wait.
+      useActivityStore
+        .getState()
+        .applySnapshot(
+          'terminal-1',
+          '',
+          'project-1',
+          streamSnapshotFixture({ activity: { state: 'idle', reason: { kind: 'idle', since: Date.now() - 10 * 60_000 } } }),
+        );
+    }
+
+    it('draws a listed terminal as its own card, pill and needs-you mark included, beside the task cards', async () => {
+      seedIdleTerminal();
+      await renderHome();
+
+      expect(screen.getByTestId('terminal-row-terminal-1')).toBeTruthy();
+      // A terminal is never drawn as a task card.
+      expect(screen.queryByTestId('activity-row-terminal-1')).toBeNull();
+      // The pill is on every terminal card, named or not.
+      expect(screen.getByTestId('terminal-row-terminal-1-pill')).toBeTruthy();
+      expect(screen.getByTestId('terminal-row-terminal-1-name')).toHaveTextContent('Command Terminal 1');
+      expect(screen.getByTestId('terminal-row-terminal-1-mark-needs-you')).toBeTruthy();
+      // Without a duration: the band shows the wait.
+      expect(screen.getByTestId('terminal-row-terminal-1-snippet')).toHaveTextContent(/^Idle$/);
+      // The task agent's card is still there.
+      expect(screen.getByTestId('activity-row-sess-1')).toBeTruthy();
+    });
+
+    it('keeps the pill on a terminal the desktop has named', async () => {
+      seedIdleTerminal({ named: true, name: 'Fix the flaky login test' });
+      await renderHome();
+
+      expect(screen.getByTestId('terminal-row-terminal-1-pill')).toBeTruthy();
+      expect(screen.getByTestId('terminal-row-terminal-1-name')).toHaveTextContent('Fix the flaky login test');
+    });
+
+    it('opens the terminal on a tap and its actions on a long press, with the terminal\'s own ids', async () => {
+      seedIdleTerminal();
+      await renderHome();
+
+      await fireEvent.press(screen.getByTestId('terminal-row-terminal-1'));
+      expect(mockPush).toHaveBeenLastCalledWith({
+        pathname: '/command-terminal',
+        params: { sessionId: 'terminal-1', projectId: 'project-1' },
+      });
+
+      await fireEvent(screen.getByTestId('terminal-row-terminal-1'), 'longPress');
+      expect(mockPush).toHaveBeenLastCalledWith({
+        pathname: '/command-terminal-actions',
+        params: { sessionId: 'terminal-1', projectId: 'project-1' },
+      });
+      expect(mockPush).toHaveBeenCalledTimes(2);
+    });
+  });
 });

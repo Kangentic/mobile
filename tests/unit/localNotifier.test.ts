@@ -600,6 +600,143 @@ describe('startLocalNotifier', () => {
     expect(displayNotification.mock.calls[0][0].body).toBe('Agent session');
   });
 
+  /**
+   * Task alerts must not grow a `sessionKind` key now that Command Terminals
+   * share this notifier. notifee's `data` is string-valued, so a present
+   * `sessionKind: undefined` would be rejected at display time; toStrictEqual is
+   * what tells an absent key from an undefined one (toEqual cannot).
+   *
+   * Mutation that reddens this: add `sessionKind: entry.kind` (or `undefined`)
+   * to the base routing object in routingDataFor.
+   */
+  it('keeps a task alert\'s data to exactly taskId, projectId and sessionId, with no sessionKind key', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    const { data } = displayNotification.mock.calls[0][0];
+    expect(data).toStrictEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(Object.keys(data ?? {})).not.toContain('sessionKind');
+  });
+
+  describe('a Command Terminal alert', () => {
+    const TERMINAL_SESSION_ID = 'terminal-sess-1';
+
+    /** The desktop stamps a terminal's events with a made-up task id that names no board row. */
+    function terminalPermissionEvent(promptId: string): ActivityEvent {
+      return {
+        kind: 'activity',
+        sessionId: TERMINAL_SESSION_ID,
+        taskId: 'made-up-terminal-task',
+        payload: { type: 'permission', promptId, pending: true },
+      };
+    }
+
+    function listTerminalOnBoard(name: string): void {
+      useBoardStore.getState().applyBoardSnapshot(
+        boardSnapshotFixture({
+          projectId: 'project-1',
+          tasks: [],
+          commandTerminals: [
+            { sessionId: TERMINAL_SESSION_ID, projectId: 'project-1', slot: 1, name, named: true, activity: { state: 'idle', reason: null } },
+          ],
+          commandTerminalsOffered: true,
+        }),
+      );
+    }
+
+    /**
+     * A terminal has no task, so its alert is named by the board's listing of
+     * it and carries `sessionKind` so a tap opens the terminal by its session
+     * (tapRouter) instead of an empty task id as a task. `taskId` is the empty
+     * string: the activity store never records the desktop's made-up id.
+     *
+     * Mutation that reddens this: drop the `sessionKind` spread from
+     * routingDataFor (data comes back without the key), or name the body from
+     * `boardsByProjectId[...].tasksById[entry.taskId]` unconditionally ('Agent
+     * session').
+     */
+    it('is named by its board listing and carries sessionKind for the tap router', () => {
+      listTerminalOnBoard('Fix The Flaky Test');
+      useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, 'project-1');
+      stopNotifier = startLocalNotifier();
+      appStateMock.emit('background');
+
+      useActivityStore.getState().applyActivityEvent(terminalPermissionEvent('prompt-1'));
+
+      expect(displayNotification).toHaveBeenCalledTimes(1);
+      const notification = displayNotification.mock.calls[0][0];
+      expect(notification.title).toBe('Agent needs your input');
+      expect(notification.body).toBe('Fix The Flaky Test');
+      expect(notification.android?.channelId).toBe('needs-attention');
+      expect(notification.data).toStrictEqual({
+        taskId: '',
+        projectId: 'project-1',
+        sessionId: TERMINAL_SESSION_ID,
+        sessionKind: 'command-terminal',
+      });
+    });
+
+    it('falls back to "Command Terminal" when no board lists the terminal, never the task fallback', () => {
+      // Registered but unlisted: a board snapshot has not named it yet, or has
+      // already dropped it (its end removes it from the listing).
+      useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, 'project-1');
+      stopNotifier = startLocalNotifier();
+      appStateMock.emit('background');
+
+      useActivityStore.getState().applyActivityEvent(terminalPermissionEvent('prompt-1'));
+
+      expect(displayNotification).toHaveBeenCalledTimes(1);
+      expect(displayNotification.mock.calls[0][0].body).toBe('Command Terminal');
+      expect(displayNotification.mock.calls[0][0].body).not.toBe('Agent session');
+    });
+
+    it('follows a rename: the next alert carries the terminal\'s new listed name', () => {
+      listTerminalOnBoard('Command Terminal 1');
+      useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, 'project-1');
+      stopNotifier = startLocalNotifier();
+      appStateMock.emit('background');
+
+      useActivityStore.getState().applyActivityEvent(terminalPermissionEvent('prompt-1'));
+      expect(displayNotification.mock.calls[0][0].body).toBe('Command Terminal 1');
+
+      // Past the cooldown, with the desktop having named the terminal from its first prompt.
+      nowMs += 31_000;
+      listTerminalOnBoard('Fix The Flaky Test');
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: TERMINAL_SESSION_ID,
+        taskId: 'made-up-terminal-task',
+        payload: { type: 'permission', promptId: 'prompt-1', pending: false },
+      });
+      useActivityStore.getState().applyActivityEvent(terminalPermissionEvent('prompt-2'));
+
+      expect(displayNotification).toHaveBeenCalledTimes(2);
+      expect(displayNotification.mock.calls[1][0].body).toBe('Fix The Flaky Test');
+    });
+
+    it('does not read a task off the board for a terminal whose id collides with a task\'s', () => {
+      // A task titled like the terminal's made-up task id would be the "name" if
+      // the terminal were resolved as a task. The kind, not the id, decides.
+      useBoardStore.getState().applyBoardSnapshot(
+        boardSnapshotFixture({
+          projectId: 'project-1',
+          tasks: [boardTaskFixture({ id: 'made-up-terminal-task', session_id: null, title: 'A real task with that id' })],
+        }),
+      );
+      useActivityStore.getState().registerCommandTerminal(TERMINAL_SESSION_ID, 'project-1');
+      stopNotifier = startLocalNotifier();
+      appStateMock.emit('background');
+
+      useActivityStore.getState().applyActivityEvent(terminalPermissionEvent('prompt-1'));
+
+      expect(displayNotification.mock.calls[0][0].body).toBe('Command Terminal');
+    });
+  });
+
   it('a category disabled in settings never fires locally, even backgrounded and off cooldown', () => {
     seedSession();
     useSettingsStore.getState().setPushCategoryEnabled('input-required', false);

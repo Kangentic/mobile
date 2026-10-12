@@ -72,16 +72,21 @@ function openTaskFromNotification(notification: Notification | undefined): void 
   if (!notification) return;
   const data = notification.data;
   if (!data) return;
-  const taskId = typeof data.taskId === 'string' ? data.taskId : null;
-  if (!taskId) return;
+  const taskId = typeof data.taskId === 'string' ? data.taskId : '';
+  const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+  const sessionKind = typeof data.sessionKind === 'string' ? data.sessionKind : null;
+  // What a press needs to route: a task's alert its task, a Command Terminal's
+  // its session. A terminal's LOCAL alert (the foreground-service notifier)
+  // carries an empty task id, since a terminal has none, so requiring a task
+  // id here dropped exactly that tap.
+  const routable = sessionKind === 'command-terminal' ? sessionId.length > 0 : taskId.length > 0;
+  if (!routable) return;
   const notificationId = notification.id;
   if (typeof notificationId === 'string' && notificationId.length > 0) {
     if (notificationId === lastRoutedPressNotificationId) return;
     lastRoutedPressNotificationId = notificationId;
   }
   const projectId = typeof data.projectId === 'string' ? data.projectId : '';
-  const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
-  const sessionKind = typeof data.sessionKind === 'string' ? data.sessionKind : null;
   openTask(taskId, projectId, sessionId, sessionKind);
 }
 
