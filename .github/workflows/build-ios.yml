@@ -567,6 +567,16 @@ jobs:
         id: ios-maestro
         if: inputs.screenshots == 'true'
         continue-on-error: true
+        env:
+          # Maestro BUILDS its XCUITest driver on the first command, and waits
+          # only so long for it to answer. Run 38203357441 (2026-10-12, a
+          # capacity-constrained macos-26-arm64 runner) was still compiling it
+          # when the default window ran out: "iOS driver not ready in time,
+          # consider increasing timeout by configuring
+          # MAESTRO_DRIVER_STARTUP_TIMEOUT". The flow never reached its first
+          # step and the run captured nothing. Milliseconds; ten minutes is
+          # far past any healthy build and still bounded.
+          MAESTRO_DRIVER_STARTUP_TIMEOUT: '600000'
         run: |
           set -euo pipefail
           maestro --device "$(xcrun simctl list devices booted -j | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);for(const runtime of Object.values(j.devices))for(const device of runtime)if(device.state==="Booted")return process.stdout.write(device.udid)})')" \
