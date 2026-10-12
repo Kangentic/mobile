@@ -122,7 +122,7 @@ const BRANDMARK_SOURCES = [
 /**
  * The activity marks this app renders, and only those.
  *
- * The package ships eleven. The Command Terminal surfaces (task #113) draw the
+ * The package ships nine. The Command Terminal surfaces (task #113) draw the
  * terminal silhouette (`terminal-idle`, and `terminal-new` on the Board's
  * Terminals button) and the desktop's stop control (`control-stop-*`, the open
  * terminal's Stop). Left out, each for a reason:
@@ -155,7 +155,7 @@ const ACTIVITY_MARKS = ['agent-idle', 'agent-working', 'terminal-idle', 'termina
 const KNOWN_ACTIVITY_ELEMENTS = new Set(['rect', 'circle', 'path']);
 
 /**
- * The reduced-motion renderings AgentStatusIcon implements. Upstream's contract
+ * The reduced-motion renderings activityMarkRendering implements. Upstream's contract
  * is that reduced motion is a RENDERING, not a mute button: 'keep-dash' rests
  * holding its arc, 'drop-dash' sheds the dash entirely (a frozen 65/35 outline
  * reads as torn rather than as at rest), 'static' never moved. A new value
@@ -178,8 +178,9 @@ const KNOWN_ACTIVITY_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-das
  * primitives stay in lockstep.
  *
  * A motion absent from this table stops the run rather than shipping a mark
- * that quietly holds still, so adding one is a deliberate renderer change in
- * AgentStatusIcon. `blink` (an opacity, added in 2.8.0 for terminal-working) is
+ * that quietly holds still, so adding one is a deliberate renderer change (the
+ * spin lives in activityMarkRendering, the march in AgentStatusIcon). `blink`
+ * (an opacity, added in 2.8.0 for terminal-working) is
  * deliberately missing: ACTIVITY_MARKS does not sync that mark, so nothing here
  * can select it.
  */
@@ -715,7 +716,7 @@ function parseActivityMark(markName, manifest) {
     throw new Error(`syncBranding: ${file} root stroke is "${rootAttributes.stroke}", expected "currentColor"`);
   }
   // Presence-checked here rather than left to the point of use. These two are
-  // read off the root because AgentStatusIcon applies one stroke style to the
+  // read off the root because activityMarkRendering applies one stroke style to the
   // whole mark set, and buildActivityModule hands them straight to
   // quoteString, which on undefined throws a bare TypeError naming neither the
   // file nor the attribute. The run fails either way, so this buys a legible
@@ -729,7 +730,7 @@ function parseActivityMark(markName, manifest) {
     throw new Error(
       `syncBranding: mark "${markName}" declares reducedMotion "${mark.reducedMotion}", expected one of ` +
         `${[...KNOWN_ACTIVITY_REST_RENDERINGS].join(', ')}. Reduced motion is a rendering, not a mute button, so a ` +
-        'new value needs a deliberate branch in AgentStatusIcon rather than a silent pass-through.',
+        'new value needs a deliberate branch in activityMarkRendering rather than a silent pass-through.',
     );
   }
   // The SVG's data-rest attribute restates the manifest's reducedMotion for the
@@ -772,7 +773,7 @@ function parseActivityMark(markName, manifest) {
     if (!KNOWN_ACTIVITY_ELEMENTS.has(tagName)) {
       throw new Error(
         `syncBranding: ${file} contains a <${tagName}> element, which the activity renderer cannot draw. ` +
-          `Known elements: ${[...KNOWN_ACTIVITY_ELEMENTS].join(', ')}. Teach AgentStatusIcon the element ` +
+          `Known elements: ${[...KNOWN_ACTIVITY_ELEMENTS].join(', ')}. Teach activityMarkRendering the element ` +
           'deliberately rather than shipping a mark missing part of its glyph.',
       );
     }
@@ -789,7 +790,7 @@ function parseActivityMark(markName, manifest) {
   if (!KNOWN_ACTIVITY_MOTIONS.has(declaredMotion)) {
     throw new Error(
       `syncBranding: mark "${markName}" declares motion "${declaredMotion}", expected one of ` +
-        `${[...KNOWN_ACTIVITY_MOTIONS].map((motion) => String(motion)).join(', ')}. AgentStatusIcon implements those ` +
+        `${[...KNOWN_ACTIVITY_MOTIONS].map((motion) => String(motion)).join(', ')}. The renderers (activityMarkRendering's spin, AgentStatusIcon's march) implement those ` +
         'motions only, so a new one must stop the run rather than render a mark that quietly holds still.',
     );
   }
@@ -852,7 +853,7 @@ function parseActivityMark(markName, manifest) {
     if (motionSpec.timing !== 'linear') {
       throw new Error(
         `syncBranding: activity.json motion.${declaredMotion}.timing is "${motionSpec.timing}", expected "linear". ` +
-          'AgentStatusIcon drives Easing.linear; another curve needs a deliberate change there.',
+          "activityMarkRendering's spin and AgentStatusIcon's march drive Easing.linear; another curve needs a deliberate change there.",
       );
     }
     if (motionSpec.property !== expectedProperty) {
@@ -977,7 +978,7 @@ function buildActivityModule() {
       throw new Error(
         `syncBranding: activity marks disagree on stroke style ("${mark.markName}" is ${mark.strokeLinecap}/` +
           `${mark.strokeLinejoin}, "${firstMark.markName}" is ${firstMark.strokeLinecap}/${firstMark.strokeLinejoin}). ` +
-          'AgentStatusIcon applies one stroke style to the whole set.',
+          'activityMarkRendering applies one stroke style to the whole set.',
       );
     }
   }

@@ -97,7 +97,7 @@ const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
 /**
- * The six marks the app draws, and no others. The package ships eleven; the
+ * The six marks the app draws, and no others. The package ships nine; the
  * rest are left out on purpose, each for a reason that is a design decision and
  * not an oversight (scripts/syncBranding.mjs, ACTIVITY_MARKS):
  *

@@ -64,7 +64,7 @@ export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): Re
   const router = useRouter();
   const [scope, setScope] = useState<ReadDiffScope>('working');
   const diffKey = projectId !== null ? diffKeyFor({ taskId, projectId }) : null;
-  const taskDiff = useDiffStore((state) => (diffKey !== null ? selectDiff(state, diffKey) : null));
+  const diffState = useDiffStore((state) => (diffKey !== null ? selectDiff(state, diffKey) : null));
 
   useEffect(() => {
     if (!isActive || projectId === null) return;
@@ -95,12 +95,12 @@ export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): Re
     [router, taskId, projectId, scope],
   );
 
-  const fileList = taskDiff?.fileList ?? null;
+  const fileList = diffState?.fileList ?? null;
 
   let body: React.JSX.Element;
   if (projectId === null) {
     body = <CenteredNote color="secondary" message="No project linked to this task" />;
-  } else if (fileList === null && taskDiff?.fileListStatus === 'error') {
+  } else if (fileList === null && diffState?.fileListStatus === 'error') {
     // Only when there is nothing else to show. A refresh that fails over a
     // list already on screen leaves that list up rather than blanking work the
     // user can still read; the next successful fetch clears the status.
@@ -133,7 +133,7 @@ export function ChangesTab({ taskId, projectId, isActive }: ChangesTabProps): Re
   return (
     <View style={styles.flex}>
       <SegmentedTabBar compact items={SCOPE_ITEMS} activeKey={scope} onChange={onScopeChange} testID="changes-scope" />
-      {taskDiff?.stale === true ? (
+      {diffState?.stale === true ? (
         <View style={{ paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs }}>
           <Text variant="caption" color="muted" testID="changes-refreshing">
             refreshing...

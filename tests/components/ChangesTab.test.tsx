@@ -35,10 +35,44 @@ function seedFileList(): void {
   });
 }
 
+/**
+ * The project folder's diff (a Command Terminal's Changes) is stored under
+ * `project:<projectId>`, a different list from the task's, so a tab that read
+ * the wrong key would show the wrong file.
+ */
+const PROJECT_FOLDER_DIFF_KEY = 'project:project-1';
+
+function seedProjectFolderFileList(): void {
+  useDiffStore.setState({
+    byKey: {
+      ...useDiffStore.getState().byKey,
+      [PROJECT_FOLDER_DIFF_KEY]: {
+        scope: 'working',
+        fileList: {
+          files: [{ path: 'docs/Guide.md', status: 'M', insertions: 3, deletions: 1, binary: false }],
+          totalInsertions: 3,
+          totalDeletions: 1,
+        },
+        fileListStatus: 'idle',
+        contentByPath: {},
+        stale: false,
+      },
+    },
+  });
+}
+
 function renderChangesTab(isActive: boolean): ReturnType<typeof render> {
   return render(
     <ThemeProvider>
       <ChangesTab taskId="task-1" projectId="project-1" isActive={isActive} />
+    </ThemeProvider>,
+  );
+}
+
+function renderProjectFolderChangesTab(isActive: boolean): ReturnType<typeof render> {
+  return render(
+    <ThemeProvider>
+      <ChangesTab taskId={null} projectId="project-1" isActive={isActive} />
     </ThemeProvider>,
   );
 }
@@ -180,5 +214,69 @@ describe('ChangesTab', () => {
     expect(screen.getByText('No changes')).toBeTruthy();
     // The mascot subtree is hidden from accessibility (decorative art).
     expect(screen.getByTestId('changes-empty-overseer', { includeHiddenElements: true })).toBeTruthy();
+  });
+
+  /**
+   * A Command Terminal's Changes lens passes `taskId={null}`: it diffs the
+   * project folder. Every case above renders a task, so none of them reaches
+   * the null branch of the watch effect or of openFile.
+   */
+  describe('for a project folder (taskId null)', () => {
+    beforeEach(() => {
+      seedProjectFolderFileList();
+    });
+
+    it('sets the diff watch for the project folder while active, and clears it on blur', async () => {
+      const { setDiffWatch } = jest.requireMock<{ setDiffWatch: jest.Mock }>('@/connection/actions');
+
+      const view = await renderProjectFolderChangesTab(true);
+      expect(setDiffWatch).toHaveBeenCalledTimes(1);
+      expect(setDiffWatch).toHaveBeenCalledWith({ taskId: null, projectId: 'project-1' }, 'working');
+
+      await view.rerender(
+        <ThemeProvider>
+          <ChangesTab taskId={null} projectId="project-1" isActive={false} />
+        </ThemeProvider>,
+      );
+      expect(setDiffWatch).toHaveBeenCalledTimes(2);
+      expect(setDiffWatch).toHaveBeenLastCalledWith({ taskId: null, projectId: 'project-1' }, null);
+    });
+
+    it('clears the project folder watch when the tab unmounts', async () => {
+      const { setDiffWatch } = jest.requireMock<{ setDiffWatch: jest.Mock }>('@/connection/actions');
+
+      const view = await renderProjectFolderChangesTab(true);
+      setDiffWatch.mockClear();
+
+      await view.unmount();
+      expect(setDiffWatch).toHaveBeenCalledTimes(1);
+      expect(setDiffWatch).toHaveBeenCalledWith({ taskId: null, projectId: 'project-1' }, null);
+    });
+
+    it('lists the project folder\'s files, not the task\'s', async () => {
+      await renderProjectFolderChangesTab(true);
+
+      expect(screen.getByText('docs/Guide.md')).toBeTruthy();
+      expect(screen.queryByText('src/screens/Alpha.tsx')).toBeNull();
+    });
+
+    it('pushes the file-diff route naming the project target and carrying NO taskId', async () => {
+      await renderProjectFolderChangesTab(true);
+
+      // A non-default scope, so the project branch is also shown to forward it.
+      await fireEvent.press(screen.getByTestId('changes-scope-staged'));
+      await fireEvent.press(screen.getByTestId('changes-file-0'));
+
+      expect(mockPush).toHaveBeenCalledTimes(1);
+      const pushed = mockPush.mock.calls[0][0] as { pathname: string; params: Record<string, string> };
+      // toStrictEqual, not toHaveBeenCalledWith: the latter treats
+      // `taskId: undefined` as absent, and the file screen reads a missing
+      // taskId without `target: 'project'` as a task route that lost its id.
+      expect(pushed).toStrictEqual({
+        pathname: '/file-diff',
+        params: { target: 'project', projectId: 'project-1', path: 'docs/Guide.md', scope: 'staged' },
+      });
+      expect(pushed.params).not.toHaveProperty('taskId');
+    });
   });
 });

@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LAUNCH_LISTING_GRACE_MS,
   selectLaunch,
-  selectStartingCount,
   selectStartingSlots,
   selectUnlistedStartedLaunches,
   useCommandTerminalStore,
@@ -134,25 +133,6 @@ describe('commandTerminalStore', () => {
   });
 
   describe('starts in flight', () => {
-    it('selectStartingCount counts only this project\'s launches still starting', () => {
-      const starting = store().beginLaunch('project-1', 1);
-      store().beginLaunch('project-1', 2);
-      store().beginLaunch('project-2', 1);
-      const started = store().beginLaunch('project-1', 3);
-      store().markLaunchStarted(started, { sessionId: 'sess-3', slot: 3, name: 'Command Terminal 3' });
-      const failed = store().beginLaunch('project-1', 4);
-      store().markLaunchFailed(failed, 'x');
-
-      expect(selectStartingCount(store(), 'project-1')).toBe(2);
-      expect(selectStartingCount(store(), 'project-2')).toBe(1);
-      expect(selectStartingCount(store(), 'project-unknown')).toBe(0);
-      expect(selectStartingCount(store(), null)).toBe(0);
-
-      // A launch leaves the count the moment it settles either way.
-      store().markLaunchStarted(starting, { sessionId: 'sess-1', slot: 1, name: 'Command Terminal 1' });
-      expect(selectStartingCount(store(), 'project-1')).toBe(1);
-    });
-
     it('selectStartingSlots lists the slots this project\'s starting launches are predicted to take', () => {
       store().beginLaunch('project-1', 1);
       store().beginLaunch('project-1', 3);

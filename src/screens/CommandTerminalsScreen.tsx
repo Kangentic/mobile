@@ -17,7 +17,7 @@ import {
 import { launchCommandTerminal, stopCommandTerminal } from '@/connection/actions';
 import { formatActivityLine } from '@/lib/activityLine';
 import { useActivityStore } from '@/state/activityStore';
-import { COMMAND_TERMINAL_LIMIT, selectCommandTerminals, useBoardStore } from '@/state/boardStore';
+import { COMMAND_TERMINAL_LIMIT, selectCommandTerminals, selectCommandTerminalsOffered, useBoardStore } from '@/state/boardStore';
 import { useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { commandTerminalTone, projectTerminals, type ProjectTerminal } from './terminals/terminalDisplay';
 
@@ -26,6 +26,7 @@ export const STOP_FAILED_MESSAGE = 'Stop failed - check the connection';
 
 const ROW_MARK_SIZE = 18;
 const STOP_MARK_SIZE = 16;
+const STOP_ACCESSIBILITY_ACTIONS = [{ name: 'stop', label: 'Stop' }];
 
 /**
  * A project's Command Terminals, as a native form sheet route (design changes
@@ -49,6 +50,9 @@ export function CommandTerminalsScreen(): React.JSX.Element {
   const { projectId: projectIdParam } = useLocalSearchParams<{ projectId?: string }>();
   const projectId = projectIdParam !== undefined && projectIdParam.length > 0 ? projectIdParam : null;
   const listed = useBoardStore((state) => selectCommandTerminals(state, projectId));
+  // The Board button hides itself when the desktop stops offering the verb;
+  // a sheet already open keeps its rows but stops offering New.
+  const offered = useBoardStore((state) => selectCommandTerminalsOffered(state, projectId));
   const launchesById = useCommandTerminalStore((state) => state.launchesById);
   const stopsBySessionId = useCommandTerminalStore((state) => state.stopsBySessionId);
   const terminals = useMemo(
@@ -77,10 +81,10 @@ export function CommandTerminalsScreen(): React.JSX.Element {
   );
 
   const onNew = useCallback(() => {
-    if (projectId === null) return;
+    if (projectId === null || !offered) return;
     const launchId = launchCommandTerminal(projectId);
     router.replace({ pathname: '/command-terminal', params: { launchId, projectId } });
-  }, [projectId, router]);
+  }, [offered, projectId, router]);
 
   return (
     <View
@@ -109,7 +113,7 @@ export function CommandTerminalsScreen(): React.JSX.Element {
             label="New terminal"
             leading={<ActivityMarkIcon mark="terminal-new" tone="rest" size={ROW_MARK_SIZE} />}
             variant="primary"
-            disabled={atLimit || projectId === null}
+            disabled={atLimit || projectId === null || !offered}
             onPress={onNew}
             testID="command-terminals-new"
           />
@@ -144,12 +148,21 @@ function TerminalRow({
       ? formatActivityLine(entry, nowMs)
       : 'Starting...';
   const testIdKey = sessionId ?? `starting-${terminal.slot}`;
+  const stopAvailable = sessionId !== null && !stopping;
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Open ${terminal.name}`}
       accessibilityState={{ disabled: sessionId === null || stopping }}
+      // The row is one accessibility element (an accessible view groups its
+      // children on iOS), so the Stop nested in it is also offered as the
+      // row's own action, or a screen reader could open a terminal but never
+      // stop it from here.
+      accessibilityActions={stopAvailable ? STOP_ACCESSIBILITY_ACTIONS : undefined}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === 'stop' && sessionId !== null) void stopCommandTerminal(sessionId);
+      }}
       disabled={sessionId === null || stopping}
       onPress={() => {
         if (sessionId !== null) onOpen(sessionId);

@@ -481,17 +481,15 @@ export function TriageHomeScreen(): React.JSX.Element {
                 collapsed={collapsedTriageSections.includes(item.title)}
                 onToggle={() => void useSettingsStore.getState().toggleTriageSectionCollapsed(item.title)}
               />
-            ) : item.kind === 'session' ? (
-              <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-                <ActivityRow entry={item.entry} onLongPressTask={onLongPressTask} />
-              </View>
-            ) : item.kind === 'terminal' ? (
-              <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-                <CommandTerminalRow entry={item.entry} />
-              </View>
             ) : (
               <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-                <SessionlessTaskRow task={item.task} projectId={item.projectId} onLongPressTask={onLongPressTask} />
+                {item.kind === 'session' ? (
+                  <ActivityRow entry={item.entry} onLongPressTask={onLongPressTask} />
+                ) : item.kind === 'terminal' ? (
+                  <CommandTerminalRow entry={item.entry} />
+                ) : (
+                  <SessionlessTaskRow task={item.task} projectId={item.projectId} onLongPressTask={onLongPressTask} />
+                )}
               </View>
             )
           }

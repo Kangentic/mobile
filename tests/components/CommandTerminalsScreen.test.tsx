@@ -275,6 +275,58 @@ describe('CommandTerminalsScreen', () => {
     });
   });
 
+  /**
+   * A row is ONE accessibility element (an accessible view groups its children
+   * on iOS), so the Stop button nested in it is unreachable to a screen reader.
+   * The row offers Stop as its own custom action instead, or a screen reader
+   * could open a terminal from this sheet but never stop one.
+   */
+  describe('Stop as a screen reader action', () => {
+    function fireAccessibilityAction(rowTestId: string, actionName: string): Promise<unknown> {
+      return fireEvent(screen.getByTestId(rowTestId), 'accessibilityAction', { nativeEvent: { actionName } });
+    }
+
+    it('offers Stop as an action on a running row', async () => {
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminal-row-terminal-1').props.accessibilityActions).toEqual([{ name: 'stop', label: 'Stop' }]);
+    });
+
+    it('stops that row\'s terminal when the action is fired, and opens nothing', async () => {
+      await renderSheet();
+
+      await fireAccessibilityAction('command-terminal-row-terminal-2', 'stop');
+
+      expect(mockStopCommandTerminal).toHaveBeenCalledTimes(1);
+      expect(mockStopCommandTerminal).toHaveBeenCalledWith('terminal-2');
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it('ignores an action it did not advertise', async () => {
+      await renderSheet();
+
+      await fireAccessibilityAction('command-terminal-row-terminal-1', 'activate');
+
+      expect(mockStopCommandTerminal).not.toHaveBeenCalled();
+    });
+
+    it('offers no action on a row that is stopping', async () => {
+      useCommandTerminalStore.getState().markStopping('terminal-1');
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminal-row-terminal-1').props.accessibilityActions).toBeUndefined();
+      // The control: the other row still offers it, so the absence above is the stopping state's.
+      expect(screen.getByTestId('command-terminal-row-terminal-2').props.accessibilityActions).toEqual([{ name: 'stop', label: 'Stop' }]);
+    });
+
+    it('offers no action on a start still in flight, which has no session to stop', async () => {
+      useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 3);
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminal-row-starting-3').props.accessibilityActions).toBeUndefined();
+    });
+  });
+
   describe('New terminal', () => {
     it('starts a terminal in this project and replaces the sheet with its screen on the launch', async () => {
       await renderSheet();
@@ -307,6 +359,52 @@ describe('CommandTerminalsScreen', () => {
 
       expect(mockLaunchCommandTerminal).not.toHaveBeenCalled();
       expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The Board's header button hides when the desktop stops offering the verb
+     * (`commandTerminalsOffered`, protocol 0.20.0), but a sheet already open
+     * stays open with its rows. New is the only thing on it that STARTS a
+     * terminal, so it must stop offering itself rather than send a
+     * `command-terminal` start the desktop will refuse. Terminals are listed so
+     * the empty-sheet effect does not close the sheet before the assertions.
+     */
+    it('is disabled when the desktop does not offer Command Terminals, and a tap starts nothing', async () => {
+      seedCommandTerminalBoard({ terminals: [terminalFixture(1), terminalFixture(2)], offered: false });
+      await renderSheet();
+
+      const newButton = screen.getByTestId('command-terminals-new');
+      expect(newButton.props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
+      await fireEvent.press(newButton);
+
+      expect(mockLaunchCommandTerminal).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it('keeps listing and opening the rows it already has when New is not offered', async () => {
+      seedCommandTerminalBoard({ terminals: [terminalFixture(1), terminalFixture(2)], offered: false });
+      await renderSheet();
+
+      await fireEvent.press(screen.getByTestId('command-terminal-row-terminal-2'));
+
+      expect(mockReplace).toHaveBeenCalledWith({
+        pathname: '/command-terminal',
+        params: { sessionId: 'terminal-2', projectId: PROJECT_ID },
+      });
+    });
+
+    it('is enabled again once the desktop offers the verb', async () => {
+      seedCommandTerminalBoard({ terminals: [terminalFixture(1), terminalFixture(2)], offered: false });
+      await renderSheet();
+      expect(screen.getByTestId('command-terminals-new').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
+
+      await act(() => {
+        seedCommandTerminalBoard({ terminals: [terminalFixture(1), terminalFixture(2)], offered: true });
+      });
+
+      expect(screen.getByTestId('command-terminals-new').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+      await fireEvent.press(screen.getByTestId('command-terminals-new'));
+      expect(mockLaunchCommandTerminal).toHaveBeenCalledWith(PROJECT_ID);
     });
 
     it('counts a start in flight toward the four, so a second New does not look allowed', async () => {

@@ -224,10 +224,13 @@ between an agent exiting and the desktop confirming it. For the first, on a Comm
 phone holds ALL input until the desktop has classified the agent's activity
 (`SessionActivityEntry.activityObserved`), which is the guarantee the desktop's mobile-bridge.md
 documents the phone as giving. The hold is enforced twice: in the terminal screen's UI (the xterm
-pane, the direct key field, the quick keys, the composer) and, fail-closed, at the one path every
-keystroke, message and prompt answer takes (`writeTerminal`, `sendUserMessage` and
-`answerPermissionPrompt` in `src/connection/actions.ts` refuse a terminal session that is not yet
-classified, whichever screen calls them). Task sessions are NOT held this way on the phone: a
+pane, the direct key field, the quick keys, the composer), which holds a session it has no
+activity entry for yet, and at the one path every keystroke, message and prompt answer takes
+(`writeTerminal`, `sendUserMessage` and `answerPermissionPrompt` in `src/connection/actions.ts`
+refuse a terminal session that is not yet classified, whichever screen calls them). The second
+layer knows a session is a terminal from its activity entry or a board listing; one that neither
+names yet is not held there, so the screen's gate is what covers it. Task sessions are NOT held
+this way on the phone: a
 task's agent is started by the desktop's own column flow, not by this verb. The phone offers
 Terminals only where a snapshot's `commandTerminalsOffered` is true: this desktop serves the verb
 AND this device holds it.

@@ -9,7 +9,7 @@ import { useScreenMotionActive } from '@/components/motion/ScreenMotion';
 import { WaitCursor } from '@/components/motion/WaitCursor';
 import { closeSessionScreen, openSessionScreen, stopCommandTerminal } from '@/connection/actions';
 import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
-import { selectCommandTerminal, useBoardStore } from '@/state/boardStore';
+import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } from '@/state/boardStore';
 import { selectLaunch, useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
@@ -161,15 +161,20 @@ export function CommandTerminalScreen(): React.JSX.Element {
     setStopTapped(true);
   }, [boundSessionId]);
 
-  const entry = useActivityStore((state) => (boundSessionId !== null ? (state.bySessionId[boundSessionId] ?? null) : null));
-  const activityObserved = entry?.activityObserved === true;
+  // Primitives, not the entry: an activity event that changes neither (usage,
+  // a preview) leaves the screen alone, as on the sheet and the Board button.
+  const activityObserved = useActivityStore(
+    (state) => boundSessionId !== null && state.bySessionId[boundSessionId]?.activityObserved === true,
+  );
+  const tone = useActivityStore((state) =>
+    commandTerminalTone(boundSessionId !== null ? (state.bySessionId[boundSessionId] ?? null) : null),
+  );
   const inputEnabled = activityObserved && !startFailed;
-  const tone = commandTerminalTone(entry);
   const painted = useTerminalUiStore((state) => selectTerminalPainted(state, boundSessionId));
   const chatFallbackActive = useTranscriptStore((state) => selectChatLens(state, boundSessionId) === 'reading-view');
 
   const [mode, setMode] = useState<SessionMode>('terminal');
-  const title = terminal?.name ?? launch?.name ?? 'Command Terminal';
+  const title = terminal?.name ?? launch?.name ?? COMMAND_TERMINAL_FALLBACK_NAME;
   const named = terminal?.named === true;
   const startingFaceShown = !startFailed && mode === 'terminal' && (boundSessionId === null || !painted);
 
@@ -328,12 +333,21 @@ function CommandTerminalHeader({
  * "Starting Command Terminal...", the desktop's own words, over the empty
  * terminal with its wait cursor, until the terminal's first frame paints. The
  * cursor blinks on the shared two-frames-a-second toggle (WaitCursor), gated
- * by reduced motion and the route's motion provider like the swap veil's.
+ * by reduced motion and the route's motion provider like the swap veil's, and
+ * BOUNDED like the pane's own wait (TerminalWaitOverlay): past
+ * `terminalWaitCursor.holdAfterMs` it holds still, because a loop must stop
+ * even when the first frame never comes (motion-conventions.md).
  */
 function StartingFace(): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
   const screenMotionActive = useScreenMotionActive();
+  const holdAfterMs = theme.motion.terminalWaitCursor.holdAfterMs;
+  const [blinkExpired, setBlinkExpired] = useState(false);
+  useEffect(() => {
+    const holdTimer = setTimeout(() => setBlinkExpired(true), holdAfterMs);
+    return () => clearTimeout(holdTimer);
+  }, [holdAfterMs]);
   return (
     <View
       style={[styles.overlay, { backgroundColor: theme.colors.terminalBackground }]}
@@ -342,7 +356,7 @@ function StartingFace(): React.JSX.Element {
       accessibilityState={{ busy: true }}
       testID="command-terminal-starting"
     >
-      <WaitCursor testID="command-terminal-starting-cursor" blinking={!reducedMotion && screenMotionActive} />
+      <WaitCursor testID="command-terminal-starting-cursor" blinking={!reducedMotion && screenMotionActive && !blinkExpired} />
       <View style={styles.centered} pointerEvents="none">
         <Text variant="body" color="muted">
           {STARTING_COMMAND_TERMINAL_CAPTION}

@@ -1,12 +1,14 @@
 import React from 'react';
 import { Dimensions, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import type { TestInstance } from 'test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 import { ProjectPickerScreen } from '@/screens/ProjectPickerScreen';
+import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
+import { boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import {
   clampSheetContentHeight,
   LIST_FLOOR_HEIGHT,
@@ -155,6 +157,79 @@ describe('ProjectPickerScreen', () => {
 
     const rows = screen.getAllByRole('radio');
     expect(rows.map((row) => row.props.testID)).toEqual(['board-project-project-early', 'board-project-project-late']);
+  });
+});
+
+/**
+ * Each row carries its project's live agent status. A task's agent reaches its
+ * project session -> task -> board; a Command Terminal (protocol 0.20.0) has no
+ * task at all, so it must be attributed by the project it was registered
+ * under. The terminal's project here has NO board and no task, so a count can
+ * only have come from the terminal path and never from a task lookup.
+ */
+describe('ProjectPickerScreen per-project agent counts', () => {
+  beforeEach(() => {
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    useBoardStore.setState({
+      projects: [
+        { id: 'project-1', name: 'Alpha' },
+        { id: 'project-2', name: 'Beta' },
+      ],
+      boardsByProjectId: {
+        'project-1': {
+          columns: [],
+          tasksById: { 'task-1': boardTaskFixture({ id: 'task-1' }) },
+          snapshotAt: 0,
+          showTicketNumbers: true,
+          view: 'full',
+          taskCountsByColumnId: {},
+          commandTerminals: [],
+          commandTerminalsOffered: false,
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    // The activity store outlives the render, and the describes below this one
+    // count nothing: an entry left here would put a badge on their rows.
+    useActivityStore.getState().reset();
+  });
+
+  function observeTaskAgent(): void {
+    useActivityStore.getState().registerSession('session-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('session-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'thinking', reason: null } }));
+  }
+
+  function observeCommandTerminal(state: 'thinking' | 'permission'): void {
+    useActivityStore.getState().registerCommandTerminal('terminal-1', 'project-2');
+    useActivityStore
+      .getState()
+      .applySnapshot('terminal-1', '', 'project-2', streamSnapshotFixture({ activity: { state, reason: null } }));
+  }
+
+  it('counts a Command Terminal that needs you toward its own project, beside a task agent counted the usual way', async () => {
+    observeTaskAgent();
+    observeCommandTerminal('permission');
+    await renderProjectPicker();
+
+    // The control: the task's agent still resolves through its task to project 1.
+    expect(screen.getByTestId('board-project-project-1').props.accessibilityLabel).toBe('Alpha, current project, 1 working');
+    // The terminal reaches project 2 with no task to resolve through.
+    const terminalProjectRow = screen.getByTestId('board-project-project-2');
+    expect(terminalProjectRow.props.accessibilityLabel).toBe('Beta, 1 needing you');
+    expect(within(terminalProjectRow).getByText('1')).toBeTruthy();
+  });
+
+  it('counts a working Command Terminal as working in its own project, and none in another', async () => {
+    observeCommandTerminal('thinking');
+    await renderProjectPicker();
+
+    expect(screen.getByTestId('board-project-project-2').props.accessibilityLabel).toBe('Beta, 1 working');
+    expect(screen.getByTestId('board-project-project-1').props.accessibilityLabel).toBe('Alpha, current project');
   });
 });
 

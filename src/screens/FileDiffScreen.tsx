@@ -53,8 +53,10 @@ export function FileDiffScreen(): React.JSX.Element {
     fetchDiffFileContent({ taskId, projectId, filePath, scope }).catch(() => setFetchFailed(true));
   }, [targetKnown, taskId, projectId, filePath, scope]);
 
+  // Read only for a known target: an unknown one would key as the project
+  // folder and could show a Command Terminal's cached diff under this route.
   const diffKey = diffKeyFor({ taskId, projectId });
-  const content = useDiffStore((state) => state.byKey[diffKey]?.contentByPath[filePath] ?? null);
+  const content = useDiffStore((state) => (targetKnown ? (state.byKey[diffKey]?.contentByPath[filePath] ?? null) : null));
 
   const lines = useMemo<DiffLine[]>(
     () => (content === null ? [] : buildUnifiedDiffLines(content.original, content.modified, { context: DIFF_CONTEXT_LINES })),

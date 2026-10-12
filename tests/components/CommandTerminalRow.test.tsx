@@ -121,6 +121,53 @@ describe('CommandTerminalRow', () => {
     });
   });
 
+  /**
+   * The band's wait timer is gated on the desktop having CLASSIFIED the terminal
+   * (`activityObserved`). An unclassified terminal sits at the store's default
+   * 'idle' state, which `selectWaitingSince` reads as waiting, and its mark and
+   * body already say "Starting...", so a "10m" beside them would claim the user
+   * has kept a terminal waiting that never said it wanted anything.
+   *
+   * A register-only entry cannot pin this: it is still `feedStatus: 'pending'`,
+   * which `selectWaitingSince` rejects on its own, and its clock was just
+   * started, which `WaitLabel` hides for the first minute. So the entry here is
+   * LIVE (a snapshot landed) and OLD (registered ten minutes ago), and the two
+   * tests differ only in whether that snapshot classified the agent.
+   */
+  describe('the wait timer', () => {
+    const REGISTERED_MS_AGO = 10 * 60_000;
+
+    function listAgedTerminal(snapshotState: 'idle' | null): void {
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() - REGISTERED_MS_AGO);
+      try {
+        useActivityStore.getState().registerCommandTerminal(SESSION_ID, PROJECT_ID);
+        useActivityStore
+          .getState()
+          .applySnapshot(SESSION_ID, '', PROJECT_ID, streamSnapshotFixture({ activity: { state: snapshotState, reason: null } }));
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+
+    it('draws no wait for a live terminal the desktop has not classified, however long it has been listed', async () => {
+      listAgedTerminal(null);
+      expect(entryFor().feedStatus).toBe('live');
+      expect(entryFor().activityObserved).toBe(false);
+      await renderRow();
+
+      expect(screen.queryByTestId(`${ROW}-wait`)).toBeNull();
+    });
+
+    it('draws the wait once the same terminal is classified idle', async () => {
+      // The control: identical age and feed status, but the snapshot classified it.
+      listAgedTerminal('idle');
+      expect(entryFor().activityObserved).toBe(true);
+      await renderRow();
+
+      expect(screen.getByTestId(`${ROW}-wait`)).toHaveTextContent(/10m/);
+    });
+  });
+
   describe('the body', () => {
     it('is the desktop\'s message preview when it has pushed one', async () => {
       snapshotTerminal({ activity: { state: 'thinking', reason: { kind: 'tool', pendingCount: 1, currentTool: 'Bash' } } });

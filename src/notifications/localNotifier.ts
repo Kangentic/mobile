@@ -1,8 +1,8 @@
 import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import notifee from '@notifee/react-native';
-import type { PushCategory } from '@kangentic/protocol';
+import type { PushCategory, PushSessionKind } from '@kangentic/protocol';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
-import { selectCommandTerminal, useBoardStore } from '@/state/boardStore';
+import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { channelIdForCategory, titleForCategory } from './categoryCopy';
 import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
@@ -92,7 +92,7 @@ function resolveTaskTitle(entry: SessionActivityEntry): string {
   // A Command Terminal is named by its board listing (protocol 0.20.0), never
   // by a task: it has none.
   if (entry.kind === 'command-terminal') {
-    return selectCommandTerminal(useBoardStore.getState(), entry.sessionId)?.name ?? 'Command Terminal';
+    return selectCommandTerminal(useBoardStore.getState(), entry.sessionId)?.name ?? COMMAND_TERMINAL_FALLBACK_NAME;
   }
   const boardTask = useBoardStore.getState().boardsByProjectId[entry.projectId]?.tasksById[entry.taskId];
   return boardTask && boardTask.title.length > 0 ? boardTask.title : 'Agent session';
@@ -105,7 +105,7 @@ function resolveTaskTitle(entry: SessionActivityEntry): string {
  */
 function routingDataFor(entry: SessionActivityEntry): Record<string, string> {
   const routing = { taskId: entry.taskId, projectId: entry.projectId, sessionId: entry.sessionId };
-  return entry.kind === 'command-terminal' ? { ...routing, sessionKind: 'command-terminal' } : routing;
+  return entry.kind === 'command-terminal' ? { ...routing, sessionKind: 'command-terminal' satisfies PushSessionKind } : routing;
 }
 
 /**
