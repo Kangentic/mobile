@@ -16,7 +16,8 @@
     if (commonPrefixLength === newLines.length && newLines.length === previousLines.length) {
       return { lines: [], reset: false, nextLines: newLines };
     }
-    var reset = commonPrefixLength < previousLines.length;
+    // A fresh differ (every init rebuilds it) REPLACES: see cleanFeedDiff.ts.
+    var reset = previousLines.length === 0 || commonPrefixLength < previousLines.length;
     var candidateLines = reset ? newLines : newLines.slice(commonPrefixLength);
     var decorative = /^[\u2500-\u257F\s\-=_\u00B7\u2022]+$/;
     var emitted = candidateLines.filter(function (line) {

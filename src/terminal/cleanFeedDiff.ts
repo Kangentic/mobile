@@ -42,7 +42,15 @@ export function diffCleanLines(previousLines: readonly string[], serialized: str
 
   // Content above the previous tail changed (or the frame shrank): a repaint
   // replaced what the reader already shows. Otherwise it is a pure append.
-  const reset = commonPrefixLength < previousLines.length;
+  //
+  // With NO previous frame there is nothing to append to, and nothing known
+  // about what the reader shows: the page rebuilds this differ on every
+  // terminal (re-)init, a lens switch's re-seed included, while the reader
+  // keeps the lines it already had. Appending there stacked a second copy of
+  // the whole screen under the first (a Command Terminal's Chat lens showed
+  // Claude Code's header twice against a real desktop), so the first frame of
+  // a fresh differ REPLACES.
+  const reset = previousLines.length === 0 || commonPrefixLength < previousLines.length;
   const emitted = (reset ? newLines : newLines.slice(commonPrefixLength)).filter(
     (line) => line.length > 0 && !CLEAN_FEED_DECORATIVE_RE.test(line),
   );
