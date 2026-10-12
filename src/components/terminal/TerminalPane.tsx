@@ -846,11 +846,14 @@ export function TerminalPane({
   const focusKeyboardRequested = useTerminalUiStore(
     (state) => state.focusKeyboardRequestBySessionId[sessionId] ?? false,
   );
+  // Held while input is (see `inputEnabled`): the request stays pending and is
+  // served the moment input opens, rather than raising a keyboard that can type
+  // nothing.
   useEffect(() => {
-    if (!focusKeyboardRequested || !isActive || !terminalReady) return;
+    if (!focusKeyboardRequested || !isActive || !terminalReady || !inputEnabled) return;
     directKeyRef.current?.focus();
     useTerminalUiStore.getState().consumeFocusKeyboardRequest(sessionId);
-  }, [focusKeyboardRequested, isActive, terminalReady, sessionId]);
+  }, [focusKeyboardRequested, isActive, terminalReady, inputEnabled, sessionId]);
 
   const onWebViewMessage = useCallback(
     (event: WebViewMessageEvent) => {

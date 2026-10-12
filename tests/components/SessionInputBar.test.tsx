@@ -23,6 +23,14 @@ jest.mock('expo-speech-recognition', () => ({
   useSpeechRecognitionEvent: jest.fn(),
 }));
 
+// The locked-row tests press a real quick key and read whether it reached the
+// terminal write.
+const mockWriteTerminal = jest.fn();
+jest.mock('@/connection/actions', () => ({
+  writeTerminal: (sessionId: string, data: string) => mockWriteTerminal(sessionId, data),
+  sendUserMessage: jest.fn().mockResolvedValue(undefined),
+}));
+
 async function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): Promise<void> {
   await render(
     <ThemeProvider>
@@ -131,6 +139,107 @@ describe('SessionInputBar', () => {
     it('renders no mode-row wrapper in changes mode, so nothing adds a gap above the pill', async () => {
       await renderBar('changes');
       expect(screen.queryByTestId('session-input-row')).toBeNull();
+    });
+  });
+
+  /**
+   * A Command Terminal before the desktop has classified its agent (protocol
+   * 0.20.0), and one whose start failed: nothing typed may reach the session,
+   * because the PTY can still be a bare shell at the project root. The mode row
+   * stays in place but is inert exactly as `suspended` holds it; `dimmed`
+   * additionally fades it, for the failed start the design draws greyed.
+   *
+   * The locked state is asserted twice over: as the props that hold it, and as
+   * the behaviour they exist for (a pressed key writes nothing), with an
+   * unlocked control beside each so a press that never reached the key at all
+   * cannot pass for the lock working.
+   */
+  describe('inputLocked (a Command Terminal that may not be typed into yet)', () => {
+    beforeEach(() => {
+      mockWriteTerminal.mockReset();
+      mockWriteTerminal.mockResolvedValue(undefined);
+    });
+
+    async function renderLockableBar(props: { inputLocked?: boolean; dimmed?: boolean; mode?: SessionMode }): Promise<void> {
+      await render(
+        <ThemeProvider>
+          <SessionInputBar
+            sessionId="sess-1"
+            mode={props.mode ?? 'terminal'}
+            onModeChange={jest.fn()}
+            chatAttention={false}
+            inputLocked={props.inputLocked}
+            dimmed={props.dimmed}
+          />
+        </ThemeProvider>,
+      );
+    }
+
+    it.each(['terminal', 'chat'] as const)('takes no touches on the %s row and leaves the accessibility tree', async (mode) => {
+      await renderLockableBar({ inputLocked: true, mode });
+
+      const modeRow = screen.getByTestId('session-input-row', { includeHiddenElements: true });
+      expect(modeRow.props.pointerEvents).toBe('none');
+      expect(modeRow.props.accessibilityElementsHidden).toBe(true);
+      expect(modeRow.props.importantForAccessibility).toBe('no-hide-descendants');
+      // Held in place, not removed: the footer keeps its geometry.
+      expect(screen.getByTestId(mode === 'terminal' ? 'quick-key-esc' : 'composer-input', { includeHiddenElements: true })).toBeTruthy();
+    });
+
+    it('leaves the row live when not locked', async () => {
+      await renderLockableBar({ inputLocked: false });
+
+      const modeRow = screen.getByTestId('session-input-row');
+      expect(modeRow.props.pointerEvents).toBe('auto');
+      expect(modeRow.props.accessibilityElementsHidden).toBe(false);
+      expect(modeRow.props.importantForAccessibility).toBe('auto');
+    });
+
+    it('sends nothing when a quick key is pressed while locked, and sends the key once unlocked', async () => {
+      await renderLockableBar({ inputLocked: true });
+      await fireEvent.press(screen.getByTestId('quick-key-esc', { includeHiddenElements: true }));
+      expect(mockWriteTerminal).not.toHaveBeenCalled();
+      await screen.unmount();
+
+      await renderLockableBar({ inputLocked: false });
+      await fireEvent.press(screen.getByTestId('quick-key-esc'));
+      expect(mockWriteTerminal).toHaveBeenCalledTimes(1);
+      expect(mockWriteTerminal).toHaveBeenCalledWith('sess-1', expect.any(String));
+    });
+
+    it('keeps the mode pill live, since it is the way out to Changes', async () => {
+      const onModeChange = jest.fn();
+      await render(
+        <ThemeProvider>
+          <SessionInputBar sessionId="sess-1" mode="terminal" onModeChange={onModeChange} chatAttention={false} inputLocked />
+        </ThemeProvider>,
+      );
+
+      await fireEvent.press(screen.getByTestId('session-mode-changes'));
+
+      expect(onModeChange).toHaveBeenCalledWith('changes');
+    });
+
+    it('applies the faded style only when dimmed', async () => {
+      await renderLockableBar({ inputLocked: true, dimmed: true });
+      const dimmedRow = screen.getByTestId('session-input-row', { includeHiddenElements: true });
+      expect(StyleSheet.flatten(dimmedRow.props.style)?.opacity).toBe(0.4);
+      await screen.unmount();
+
+      await renderLockableBar({ inputLocked: true, dimmed: false });
+      const lockedRow = screen.getByTestId('session-input-row', { includeHiddenElements: true });
+      expect(lockedRow.props.style).toBeUndefined();
+    });
+
+    it('does not fade by locking alone, and does not lock by fading alone', async () => {
+      await renderLockableBar({ inputLocked: true });
+      expect(StyleSheet.flatten(screen.getByTestId('session-input-row', { includeHiddenElements: true }).props.style)?.opacity).toBeUndefined();
+      await screen.unmount();
+
+      await renderLockableBar({ dimmed: true });
+      const fadedRow = screen.getByTestId('session-input-row');
+      expect(StyleSheet.flatten(fadedRow.props.style)?.opacity).toBe(0.4);
+      expect(fadedRow.props.pointerEvents).toBe('auto');
     });
   });
 

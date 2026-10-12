@@ -180,6 +180,56 @@ describe('PendingNavigationRunner', () => {
   });
 
   /**
+   * A Command Terminal opens by its SESSION (protocol 0.20.0), on its own route
+   * with exactly `sessionId` and `projectId`. Its made-up task id has no home
+   * here: opening it through '/task/[taskId]' is the blank "Task" screen that
+   * never connects. NAVIGATE, not push, for the reason the task case gives: a
+   * second tap for the terminal already on top replaces its params.
+   *
+   * Mutations that redden this: dropping the `open-command-terminal` branch in
+   * performPendingNavigation (the intent falls through to '/task/[taskId]' and
+   * reads `undefined` ids), `router.push`, or a different pathname.
+   */
+  it('performs an open-command-terminal intent as one navigate to the terminal route', async () => {
+    publishPendingNavigation({ kind: 'open-command-terminal', projectId: 'project-1', sessionId: 'terminal-sess-1' });
+
+    await render(<PendingNavigationRunner />);
+
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledWith({
+      pathname: '/command-terminal',
+      params: { sessionId: 'terminal-sess-1', projectId: 'project-1' },
+    });
+    expect(mockRouterPush).not.toHaveBeenCalled();
+    expect(mockRouterDismissAll).not.toHaveBeenCalled();
+  });
+
+  it('carries a decrypted Command Terminal push tap through to the terminal route, once, and not on remount', async () => {
+    mockDecryptPushBlob.mockResolvedValue({
+      title: 'Agent went idle',
+      body: 'Fix The Flaky Test',
+      category: 'turn-complete',
+      data: { taskId: 'made-up-terminal-task', projectId: 'project-1', sessionId: 'terminal-sess-2', sessionKind: 'command-terminal' },
+    });
+    await render(<PendingNavigationRunner />);
+
+    await act(async () => {
+      await publishTap('terminal-warm-notification');
+    });
+
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledWith({
+      pathname: '/command-terminal',
+      params: { sessionId: 'terminal-sess-2', projectId: 'project-1' },
+    });
+    // The made-up task id never reaches the router, as a param or a path.
+    expect(JSON.stringify(mockRouterNavigate.mock.calls)).not.toContain('made-up-terminal-task');
+
+    await (await render(<PendingNavigationRunner />)).unmount();
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  /**
    * The second publisher: a desktop revocation resets to root. This used to
    * call router.navigate('/') directly from connectionManager, behind a
    * try/catch whose comment named the one case it could not handle.

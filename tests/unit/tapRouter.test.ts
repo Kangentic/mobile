@@ -115,6 +115,29 @@ const DECRYPTED_TARGET = {
   sessionId: 'sess-1',
 };
 
+/**
+ * A Command Terminal's decrypted envelope (protocol 0.20.0). The desktop stamps
+ * a made-up `taskId` on it that names no board row, so the only thing that can
+ * route it correctly is `sessionKind`. The expected target carries no `taskId`
+ * at all: opening the made-up id as a task is the blank "Task" screen that
+ * never connects.
+ */
+const DECRYPTED_COMMAND_TERMINAL = {
+  title: 'Agent went idle',
+  body: 'Fix The Flaky Test',
+  category: 'turn-complete',
+  data: { taskId: 'made-up-terminal-task', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal' },
+};
+
+/** The string-valued notifee `data` Android posts for a decrypted Command Terminal push (decryptPushBlob's routing). */
+const COMMAND_TERMINAL_PRESS_DATA = DECRYPTED_COMMAND_TERMINAL.data;
+
+const COMMAND_TERMINAL_TARGET = {
+  kind: 'open-command-terminal',
+  projectId: 'project-1',
+  sessionId: 'terminal-sess-1',
+};
+
 describe('tapRouter - iOS push responses', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -193,6 +216,54 @@ describe('tapRouter - iOS push responses', () => {
 
     expect(decryptPushBlobMock).toHaveBeenCalledWith('wrapped-blob');
     expect(published).toHaveLength(1);
+  });
+
+  /**
+   * Mutation that reddens this: drop the `sessionKind === 'command-terminal'`
+   * branch in openTask (the tap publishes open-task for the made-up task id).
+   */
+  it('publishes open-command-terminal, not open-task, for a decrypted Command Terminal envelope', async () => {
+    decryptPushBlobMock.mockResolvedValue(DECRYPTED_COMMAND_TERMINAL);
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }));
+
+    expect(published).toEqual([COMMAND_TERMINAL_TARGET]);
+    // Strict, so a stray `taskId: undefined` key (or the made-up id) cannot ride along.
+    expect(pendingNavigation.getPendingNavigation()).toStrictEqual(COMMAND_TERMINAL_TARGET);
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  it('routes a Command Terminal envelope with no session id nowhere, rather than opening the made-up task', async () => {
+    decryptPushBlobMock.mockResolvedValue({
+      ...DECRYPTED_COMMAND_TERMINAL,
+      data: { ...DECRYPTED_COMMAND_TERMINAL.data, sessionId: '' },
+    });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }));
+
+    expect(decryptPushBlobMock).toHaveBeenCalledTimes(1);
+    expect(published).toHaveLength(0);
+    expect(pendingNavigation.getPendingNavigation()).toBeNull();
+  });
+
+  it('still publishes open-task for a decrypted envelope that carries no sessionKind', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'task-blob' }, 'task-notification'));
+    decryptPushBlobMock.mockResolvedValue(DECRYPTED_COMMAND_TERMINAL);
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'terminal-blob' }, 'terminal-notification'));
+    decryptPushBlobMock.mockResolvedValue(DECRYPTED);
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'task-blob-again' }, 'task-notification-again'));
+
+    // Each tap routes by ITS OWN envelope: the terminal in the middle does not
+    // turn the task taps around it into terminal opens, or the reverse.
+    expect(published).toEqual([DECRYPTED_TARGET, COMMAND_TERMINAL_TARGET, DECRYPTED_TARGET]);
   });
 
   it('routes nowhere when the blob cannot be decrypted', async () => {
@@ -520,6 +591,167 @@ describe('tapRouter - Android notifee presses', () => {
 
     expect(routerMock.push).not.toHaveBeenCalled();
     expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Android posts a push AFTER decrypting it, so its press carries the
+   * envelope's routing identity in notifee `data`, string-valued, with
+   * `sessionKind` only for a Command Terminal. The made-up `taskId` is present
+   * and must be ignored.
+   *
+   * Mutation that reddens this: drop the `data.sessionKind` read in
+   * openTaskFromNotification (the press publishes open-task).
+   */
+  it('publishes open-command-terminal for a press whose data names a Command Terminal', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { id: 'terminal-alert-1', data: COMMAND_TERMINAL_PRESS_DATA } },
+    });
+
+    expect(decryptPushBlobMock).not.toHaveBeenCalled();
+    expect(published).toEqual([COMMAND_TERMINAL_TARGET]);
+    expect(published[0]).toStrictEqual(COMMAND_TERMINAL_TARGET);
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * All three Android delivery paths share the resolution: the foreground
+   * listener, the background listener, and the one-time read of the press that
+   * launched a killed process. A branch wired into only one of them would send
+   * the others' terminal taps to the made-up task.
+   */
+  it.each(['foreground', 'background', 'launch'] as const)(
+    'resolves a Command Terminal press delivered through the %s path',
+    async (deliveryPath) => {
+      const terminalNotification = { id: `terminal-alert-${deliveryPath}`, data: COMMAND_TERMINAL_PRESS_DATA };
+      if (deliveryPath === 'launch') {
+        notifeeMock.getInitialNotification.mockResolvedValue({ notification: terminalNotification, pressAction: { id: 'default' } });
+      }
+      const { tapRouter, pendingNavigation } = await loadModules();
+      const published = recordPublished(pendingNavigation);
+      tapRouter.registerNotificationTapHandlers();
+
+      if (deliveryPath === 'foreground') {
+        const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+        onForegroundEvent({ type: 1, detail: { notification: terminalNotification } });
+      } else if (deliveryPath === 'background') {
+        const onBackgroundEvent = notifeeMock.onBackgroundEvent.mock.calls[0][0] as (event: unknown) => Promise<void>;
+        await onBackgroundEvent({ type: 1, detail: { notification: terminalNotification } });
+      }
+      await flushMicrotasks();
+
+      expect(published).toEqual([COMMAND_TERMINAL_TARGET]);
+    },
+  );
+
+  it('publishes nothing for a Command Terminal press with an empty session id, not the made-up task', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { id: 'terminal-alert-2', data: { ...COMMAND_TERMINAL_PRESS_DATA, sessionId: '' } } },
+    });
+
+    expect(published).toHaveLength(0);
+    expect(pendingNavigation.getPendingNavigation()).toBeNull();
+  });
+
+  it('keeps routing a task press as open-task between two Command Terminal presses', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({ type: 1, detail: { notification: { id: 'terminal-alert-3', data: COMMAND_TERMINAL_PRESS_DATA } } });
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { id: 'task-alert-1', data: { taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' } } },
+    });
+    onForegroundEvent({ type: 1, detail: { notification: { id: 'terminal-alert-4', data: COMMAND_TERMINAL_PRESS_DATA } } });
+
+    expect(published).toEqual([
+      COMMAND_TERMINAL_TARGET,
+      { kind: 'open-task', taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' },
+      COMMAND_TERMINAL_TARGET,
+    ]);
+  });
+
+  /**
+   * REGRESSION. The local notifier (foreground-service mode, app backgrounded)
+   * posts a Command Terminal alert whose data comes from its activity-store
+   * entry, and a terminal's entry has NO task: `taskId` is the empty string
+   * (localNotifier.test.ts pins this exact data shape). openTaskFromNotification
+   * used to bail on `!taskId` BEFORE it read `sessionKind`, so tapping that alert
+   * routed nowhere while the same terminal's PUSH alert (made-up non-empty taskId,
+   * the test above) opened it. The identity that matters for a terminal is its
+   * sessionId, so the task-id requirement must not apply to it.
+   *
+   * Mutation that reddens this: restore `if (!taskId) return;` right after the
+   * taskId read (the press publishes nothing).
+   */
+  it('publishes open-command-terminal for a LOCAL notifier press, whose data carries an empty taskId', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: {
+        notification: {
+          id: 'local-terminal-alert-1',
+          data: { taskId: '', projectId: 'project-1', sessionId: 'sess-term', sessionKind: 'command-terminal' },
+        },
+      },
+    });
+
+    expect(published).toEqual([{ kind: 'open-command-terminal', projectId: 'project-1', sessionId: 'sess-term' }]);
+    expect(published[0]).toStrictEqual({ kind: 'open-command-terminal', projectId: 'project-1', sessionId: 'sess-term' });
+  });
+
+  it('publishes nothing for a local Command Terminal press with neither a task id nor a session id', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { data: { taskId: '', projectId: 'project-1', sessionId: '', sessionKind: 'command-terminal' } } },
+    });
+
+    expect(published).toHaveLength(0);
+  });
+
+  /**
+   * The other side of the same relaxation: it is keyed on `sessionKind`, so a
+   * TASK press with an empty task id (a session id alone is not enough for a
+   * task) must still publish nothing rather than open a blank task screen.
+   *
+   * Mutation that reddens this: relax the guard to "taskId or sessionId" for
+   * every press (the task press publishes open-task with an empty task id).
+   */
+  it('still publishes nothing for a task press whose task id is empty, even with a session id', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { id: 'task-alert-empty', data: { taskId: '', projectId: 'project-1', sessionId: 'sess-term' } } },
+    });
+
+    expect(published).toHaveLength(0);
   });
 
   it('ignores a press carrying no taskId', async () => {
