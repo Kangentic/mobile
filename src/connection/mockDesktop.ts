@@ -3113,6 +3113,50 @@ function mockCommandTerminalBanner(projectName: string): string {
   return `\u001b[38;5;214m*\u001b[0m Welcome to Claude Code\r\n\r\n  ${projectName}\r\n\r\n> `;
 }
 
+/** A turn's one-line answer for any prompt the mock has no story for. Demo content only. */
+const MOCK_COMMAND_TERMINAL_DONE_REPLY = '\r\n\u001b[38;5;214m●\u001b[0m Done. Nothing in the project folder needed changing.\r\n\r\n> ';
+
+/** One row of `gh run list`: the lead (the result glyph or its indent), a pass or fail mark, the title padded so the branch column lines up. */
+function mockCiRunRow(lead: string, passed: boolean, title: string, minutes: number): string {
+  const mark = passed ? '\u001b[38;5;114m✓\u001b[0m' : '\u001b[38;5;203m✗\u001b[0m';
+  return `${lead}${mark} ${title.padEnd(31)} main  ${minutes}m`;
+}
+
+/** A prompt asking about CI: the store-capture flow's 07-command-terminal frame asks one. */
+const MOCK_COMMAND_TERMINAL_CI_PROMPT = /\b(ci|fail|failed|failing)\b/i;
+
+/**
+ * The answer to a CI question: a tool call, its result, and a short read of
+ * it, the way Claude Code lays a turn out. It is the 07-command-terminal
+ * listing frame, so every line sits inside the iPhone shelf's 69 visible
+ * columns (the cell is fitted to the pane height, so the shelf decides the
+ * columns, not the grid), and the failing run is a task on the mock board.
+ * Demo content only.
+ */
+const MOCK_COMMAND_TERMINAL_CI_REPLY = [
+  '',
+  '\u001b[38;5;114m●\u001b[0m \u001b[1mBash\u001b[0m(gh run list --branch main --limit 4)',
+  mockCiRunRow('  \u001b[38;5;245m⎿\u001b[0m  ', true, 'Retry the webhook delivery', 6),
+  mockCiRunRow('     ', false, 'Bump the design tokens package', 9),
+  mockCiRunRow('     ', true, 'Cache the product-grid query', 7),
+  mockCiRunRow('     ', true, 'Rate-limit the password reset', 5),
+  '',
+  '\u001b[38;5;214m●\u001b[0m One failure overnight: the design tokens bump. The',
+  '  product-grid snapshot still expects the 4.1 spacing scale.',
+  '  Updating its three snapshots should clear it. Want me to?',
+  '',
+  '> ',
+].join('\r\n');
+
+/**
+ * What a terminal's turn ends with: the CI story for a CI question, otherwise a
+ * plain done. Exported for tests/unit/storeScreenshots.test.ts, which checks
+ * the capture flow asks a question that draws the story.
+ */
+export function mockCommandTerminalReply(prompt: string): string {
+  return MOCK_COMMAND_TERMINAL_CI_PROMPT.test(prompt) ? MOCK_COMMAND_TERMINAL_CI_REPLY : MOCK_COMMAND_TERMINAL_DONE_REPLY;
+}
+
 /**
  * The name the desktop's namer gives a terminal from its first prompt: a short
  * Title Case title, at most 80 characters (command-terminal-name.ts). The mock
@@ -3360,7 +3404,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     }
     later(2500, () => {
       if (!commandTerminals.includes(terminal)) return;
-      writeCommandTerminal(terminal, '\r\n\u001b[38;5;214m●\u001b[0m Done. Nothing in the project folder needed changing.\r\n\r\n> ');
+      writeCommandTerminal(terminal, mockCommandTerminalReply(prompt));
       emitCommandTerminalActivity(terminal, 'idle');
     });
   }

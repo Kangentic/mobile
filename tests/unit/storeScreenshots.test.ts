@@ -25,6 +25,7 @@ import {
   isValidDeviceSerial,
   readPngSize,
 } from '../../scripts/storeScreenshots.mjs';
+import { mockCommandTerminalReply } from '@/connection/mockDesktop';
 import { CLAUDE_CAPTURE_SHOTS } from '@/devsupport/claudeCapture';
 import { renderCaptureCells, renderCaptureRows, type RenderedCell } from '../helpers/renderCapture';
 
@@ -290,6 +291,28 @@ describe('the shot list matches the capture flow', () => {
    * is pinned with the wait: a misspelt `platform` condition would skip the
    * wait on Android too, and nothing else would fail.
    */
+  /**
+   * The Command Terminal frame is canvas text under a native header, so the
+   * flow's only signals are native: the pill (the first prompt named the
+   * terminal) and the mark's tone returning to needs-you (the turn's answer was
+   * written). A shot taken before the second photographs the question with no
+   * answer under it, a frame every size check passes.
+   */
+  it('takes the Command Terminal shot only once the terminal is named and its answer is in', () => {
+    const shotAt = shotPathIndex('07-command-terminal');
+    const pillWaitAt = flowSource.lastIndexOf('id: "command-terminal-pill"', shotAt);
+    const answeredWaitAt = flowSource.lastIndexOf('id: "command-terminal-mark-needs-you"', shotAt);
+    expect(pillWaitAt, 'the flow waits for the pill before the shot').toBeGreaterThanOrEqual(0);
+    expect(answeredWaitAt, 'the flow waits for the needs-you mark after the pill').toBeGreaterThan(pillWaitAt);
+    expect(flowSource.slice(answeredWaitAt, shotAt)).toMatch(/^[ \t]*- waitForAnimationToEnd:/m);
+  });
+
+  it('asks the Command Terminal a question the mock answers with its listing story', () => {
+    const prompts = [...flowSource.matchAll(/^[ \t]*- inputText: "([^"]+)"$/gm)].map((match) => match[1]);
+    expect(prompts).toHaveLength(1);
+    expect(mockCommandTerminalReply(prompts[0])).toContain('gh run list');
+  });
+
   it.each(['05-board', '06-file-diff'])('waits out the scrollbar flash on Android after the settle and before %s', (shotName) => {
     const shotAt = shotPathIndex(shotName);
     const settleAt = flowSource.lastIndexOf('- waitForAnimationToEnd:', shotAt);
@@ -351,11 +374,11 @@ describe('the committed listing images', () => {
     SHOT_NAMES.map((shotName): [string, CommittedShelf, string] => [`${shelf.directory}/${shotName}.png`, shelf, shotName]),
   );
 
-  it('covers the three Android shelves and the iOS one, with six shots each', () => {
+  it('covers the three Android shelves and the iOS one, with seven shots each', () => {
     // Non-vacuity guard: every case below is generated from these two lists.
     expect(committedShelves.length).toBe(4);
-    expect(SHOT_NAMES.length).toBe(6);
-    expect(shotCases.length).toBe(24);
+    expect(SHOT_NAMES.length).toBe(7);
+    expect(shotCases.length).toBe(28);
   });
 
   it.each(committedShelves.map((shelf): [string, CommittedShelf] => [shelf.directory, shelf]))(

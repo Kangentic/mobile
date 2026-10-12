@@ -85,6 +85,7 @@ export const SHOT_NAMES = [
   '04-session-changes',
   '05-board',
   '06-file-diff',
+  '07-command-terminal',
 ];
 
 const APP_PACKAGE = 'com.kangentic.mobile';

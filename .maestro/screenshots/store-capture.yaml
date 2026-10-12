@@ -349,3 +349,79 @@ env:
 - takeScreenshot:
     path: ${OUTPUT_DIR}/05-board
     label: Kanban board with live agent sessions
+# A COMMAND TERMINAL (protocol 0.20.0), LAST: it is the one frame that starts
+# something, and the mock lists no terminal until one is started, so nothing
+# before it can show a terminal it left behind.
+#
+# With none running, the Board header's Terminals button starts one and opens
+# it straight away (no sheet). The terminal's input is HELD until the desktop
+# classifies its agent; the header mark leaves its muted starting tone on that
+# first activity, and needs-you is the tone of an idle agent, so waiting for it
+# is waiting for the input to open.
+- tapOn:
+    id: "header-terminals-button"
+- extendedWaitUntil:
+    visible:
+      id: "command-terminal-screen"
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: "command-terminal-mark-needs-you"
+    timeout: 30000
+# Ask through the Chat composer, the one text field with a testID; typing into
+# the terminal itself goes through the xterm canvas, which Maestro cannot see.
+# Guarded like the session's segment taps, for the same dispatched-but-ignored
+# failure mode.
+- tapOn:
+    id: "session-mode-chat"
+- runFlow:
+    when:
+      notVisible:
+        id: "composer-input"
+    commands:
+      - tapOn:
+          id: "session-mode-chat"
+- tapOn:
+    id: "composer-input"
+# The mock answers a CI question with its listing story and anything else with
+# a plain "Done." (mockCommandTerminalReply in src/connection/mockDesktop.ts),
+# and names the terminal from this first prompt: "Check CI", short enough to
+# sit whole beside the "Command Terminal" pill on a 360dp phone header, where
+# "Why did CI fail?" was cut to "Why Did CI F...".
+- inputText: "Check CI"
+- tapOn:
+    id: "composer-send"
+# Android only: Maestro's iOS hideKeyboard is a gesture, and this screen is a
+# three-page pager. On iOS the lens switch below unmounts the composer, which
+# takes the keyboard with it.
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- tapOn:
+    id: "session-mode-terminal"
+- runFlow:
+    when:
+      notVisible:
+        id: "terminal-webview"
+    commands:
+      - tapOn:
+          id: "session-mode-terminal"
+# The pill appears once the first prompt has named the terminal, and the mark
+# goes back to needs-you once the turn's answer has been written, so these two
+# waits in this order are "named, then answered". The answer is canvas text,
+# so the mark is the only native signal that it has landed.
+- extendedWaitUntil:
+    visible:
+      id: "command-terminal-pill"
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: "command-terminal-mark-needs-you"
+    timeout: 30000
+- waitForAnimationToEnd:
+    timeout: 15000
+- takeScreenshot:
+    path: ${OUTPUT_DIR}/07-command-terminal
+    label: A Command Terminal answering a question about the project
