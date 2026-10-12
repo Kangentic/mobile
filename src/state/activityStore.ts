@@ -90,10 +90,39 @@ export interface PendingSuccessor {
   reportedAt: number;
 }
 
+/**
+ * Who owns a session. A board task's agent, or a Command Terminal (protocol
+ * 0.20.0): an agent the desktop runs at a project's root with no task.
+ */
+export type SessionOwnerKind = 'task' | 'command-terminal';
+
 export interface SessionActivityEntry {
   sessionId: string;
+  /**
+   * The owning task's id, or '' for a Command Terminal, which belongs to no
+   * task. The desktop stamps a terminal's stream events with a made-up task id
+   * of its own; it is never recorded here, because the task-keyed machinery
+   * below (the respawn retention, the successor hop) would then treat a
+   * terminal's end as a task's session swap and keep its row on screen.
+   */
   taskId: string;
   projectId: string;
+  /**
+   * Set once, at registration, and never inferred from `taskId`: everything
+   * that must not touch a terminal (the swap retention, the respawn sweep, the
+   * successor hop) branches on this.
+   */
+  kind: SessionOwnerKind;
+  /**
+   * True once the desktop has classified the session's activity at all: a
+   * snapshot whose activity state is non-null, or any `activity` or prompt
+   * push. A Command Terminal's input stays disabled until then, because in
+   * the moment after spawn the agent has not started and the PTY is a bare
+   * shell (the desktop's mobile-bridge.md states this as the phone's half of
+   * the "no shell reach" promise). `state` alone cannot say it: a snapshot
+   * with a null state is recorded as 'idle'.
+   */
+  activityObserved: boolean;
   state: ActivityStateWire;
   reason: ActivityReasonWire | null;
   usage: SessionUsageWire | null;
@@ -323,6 +352,12 @@ interface ActivityStoreState {
    */
   pendingSuccessorByTaskId: Record<string, PendingSuccessor>;
   registerSession: (sessionId: string, taskId: string, projectId: string) => void;
+  /**
+   * Registers a Command Terminal's session (protocol 0.20.0): an entry with no
+   * task, which the Agents feed draws as a terminal card. Idempotent, like
+   * registerSession; an existing task entry for the same id is never relabelled.
+   */
+  registerCommandTerminal: (sessionId: string, projectId: string) => void;
   applySnapshot: (sessionId: string, taskId: string, projectId: string, snapshot: ReadStreamResponsePayload) => void;
   applyActivityEvent: (event: ActivityEvent) => void;
   markRejected: (sessionId: string) => void;
@@ -340,11 +375,13 @@ interface ActivityStoreState {
   reset: () => void;
 }
 
-function emptyEntry(sessionId: string, taskId: string, projectId: string): SessionActivityEntry {
+function emptyEntry(sessionId: string, taskId: string, projectId: string, kind: SessionOwnerKind = 'task'): SessionActivityEntry {
   return {
     sessionId,
     taskId,
     projectId,
+    kind,
+    activityObserved: false,
     state: 'idle',
     reason: null,
     usage: null,
@@ -530,13 +567,31 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       };
     }),
 
+  // No respawn bookkeeping at all: a terminal has no task, so nothing is
+  // anyone's successor, and an end is just an end (the desktop ends a terminal
+  // with its agent, and the board drops it in the same edge).
+  registerCommandTerminal: (sessionId, projectId) =>
+    set((state) => {
+      const existing = state.bySessionId[sessionId];
+      if (existing) {
+        if (existing.kind !== 'command-terminal' || existing.projectId === projectId) return state;
+        return { bySessionId: { ...state.bySessionId, [sessionId]: { ...existing, projectId } } };
+      }
+      return { bySessionId: { ...state.bySessionId, [sessionId]: emptyEntry(sessionId, '', projectId, 'command-terminal') } };
+    }),
+
   applySnapshot: (sessionId, taskId, projectId, snapshot) =>
     set((state) => {
       const existing = state.bySessionId[sessionId] ?? emptyEntry(sessionId, taskId, projectId);
       const next: SessionActivityEntry = {
         ...existing,
-        taskId,
+        // A Command Terminal keeps its empty task id: the caller hands in the
+        // owner it resolved, and a terminal's owner has no task.
+        taskId: existing.kind === 'command-terminal' ? '' : taskId,
         projectId,
+        // Latched: a later snapshot taken while the engine reclassifies (a
+        // re-subscribe) must not lock input that was already open.
+        activityObserved: existing.activityObserved || snapshot.activity.state !== null,
         state: snapshot.activity.state ?? 'idle',
         reason: snapshot.activity.reason,
         usage: snapshot.usage,
@@ -595,8 +650,13 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // during the gap - EVERY end, label or not, since the desktop's own
       // column-move swap arrives unlabelled. Written from the SAME extracted
       // label, so the two maps cannot disagree about what the desktop said.
+      //
+      // Never for a Command Terminal: it has no task, and the desktop stamps
+      // its events with a made-up task id that names no board row. Recording
+      // its end here would arm a retention for a task that does not exist.
+      const ownedByTask = existing?.kind !== 'command-terminal';
       const respawnByTaskId: Record<string, RespawnInFlight> =
-        payload.type === 'session-ended'
+        payload.type === 'session-ended' && ownedByTask
           ? {
               ...state.respawnByTaskId,
               [event.taskId]: { label: spawnProgressLabel, reportedAt: Date.now(), endedSessionId: event.sessionId },
@@ -607,7 +667,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       // an entry too, for the same reason as the facts above.
       const successorSessionId = extractSuccessorSessionId(event);
       const pendingSuccessorByTaskId: Record<string, PendingSuccessor> =
-        successorSessionId !== null
+        successorSessionId !== null && ownedByTask
           ? {
               ...state.pendingSuccessorByTaskId,
               [event.taskId]: {
@@ -658,6 +718,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
       }
       switch (payload.type) {
         case 'activity':
+          updated.activityObserved = true;
           updated.state = payload.state;
           updated.reason = payload.reason;
           // The 'suspended' retirement, and deliberately much NARROWER than the
@@ -684,6 +745,8 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           updated.unreadCount = existing.unreadCount + 1;
           break;
         case 'permission':
+          // A prompt is the agent asking something, so the agent is up.
+          updated.activityObserved = true;
           updated.awaitedPromptId = payload.pending ? payload.promptId : null;
           // Options belong to THIS prompt: replaced on a new pending prompt
           // (absent = desktop probed nothing), cleared when it resolves.

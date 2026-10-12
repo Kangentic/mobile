@@ -145,6 +145,12 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="project-picker" options={formSheetOptions} />
         <Stack.Screen name="task-actions" options={formSheetOptions} />
         <Stack.Screen name="section-filter" options={formSheetOptions} />
+        {/* Command Terminals (task #113): a project's terminals as a sheet, a
+            terminal's long-press actions as another, and the open terminal as
+            a full screen with its own header, like a task's session. */}
+        <Stack.Screen name="command-terminals" options={formSheetOptions} />
+        <Stack.Screen name="command-terminal-actions" options={formSheetOptions} />
+        <Stack.Screen name="command-terminal" options={{ headerShown: false, title: 'Command Terminal' }} />
         {/* Renders its own TaskHeader, exactly as the session screen does, so the
             two kinds of task open into the same chrome. */}
         <Stack.Screen name="completed-task" options={{ headerShown: false, title: 'Completed task' }} />

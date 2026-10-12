@@ -1,4 +1,4 @@
-import { openPushEnvelope, type PushCategory } from '@kangentic/protocol';
+import { openPushEnvelope, type PushCategory, type PushSessionKind } from '@kangentic/protocol';
 import { getPushKeyIfExists } from './pushKeys';
 import { getPushIdentityPublicKey } from './pushIdentity';
 import { titleForCategory } from './categoryCopy';
@@ -44,15 +44,26 @@ export function extractBlobFromTaskData(data: unknown): string | null {
   return null;
 }
 
+/**
+ * The routing identity a decrypted notification carries into notifee's
+ * `data` (string values only, which notifee requires). `sessionKind` is set
+ * only for a Command Terminal (protocol 0.20.0), whose `taskId` names no board
+ * task: the tap then opens that terminal by `sessionId`, and must never open
+ * the made-up task id as a task. A type alias rather than an interface, so it
+ * assigns to notifee's string-keyed `data` as it is.
+ */
+export type DecryptedPushRouting = {
+  taskId: string;
+  projectId: string;
+  sessionId: string;
+  sessionKind?: PushSessionKind;
+};
+
 export interface DecryptedPushNotification {
   title: string;
   body: string;
   category: PushCategory;
-  data: {
-    taskId: string;
-    projectId: string;
-    sessionId: string;
-  };
+  data: DecryptedPushRouting;
 }
 
 export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotification | null> {
@@ -62,7 +73,11 @@ export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotifi
     const identityPublicKey = await getPushIdentityPublicKey();
     if (!identityPublicKey) return null;
     const plaintext = openPushEnvelope(pushKey, identityPublicKey, blob);
-    const taskTitle = plaintext.taskTitle.length > 0 ? plaintext.taskTitle : 'Agent session';
+    // For a Command Terminal the desktop puts the terminal's name in
+    // `taskTitle` (protocol 0.20.0); a nameless one still reads as what it is.
+    const isCommandTerminal = plaintext.sessionKind === 'command-terminal';
+    const fallbackTitle = isCommandTerminal ? 'Command Terminal' : 'Agent session';
+    const taskTitle = plaintext.taskTitle.length > 0 ? plaintext.taskTitle : fallbackTitle;
     return {
       title: titleForCategory(plaintext.category),
       body: plaintext.detail.length > 0 ? `${taskTitle} - ${plaintext.detail}` : taskTitle,
@@ -71,6 +86,7 @@ export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotifi
         taskId: plaintext.taskId,
         projectId: plaintext.projectId,
         sessionId: plaintext.sessionId,
+        ...(isCommandTerminal ? { sessionKind: plaintext.sessionKind } : {}),
       },
     };
   } catch {

@@ -48,12 +48,17 @@ export const FEED_SECTION_DISPLAY_TITLES: readonly string[] = Array.from(
 
 /**
  * One card on the feed. Almost always a SESSION (an activity entry, live or a
- * retained ghost). A TASK row is the one exception: a board task the desktop
+ * retained ghost). A TERMINAL row is a Command Terminal's session (protocol
+ * 0.20.0): an agent with no task, drawn with the "Command Terminal" pill
+ * (design change 5). A TASK row is the one exception: a board task the desktop
  * keeps in its `'sessions'` projection with no session on it (protocol 0.16.0,
  * see `sessionlessTaskStatus`) and that no entry claims - a paused task after a
  * cold start, or a first start before its agent exists.
  */
-export type FeedRow = { kind: 'session'; entry: SessionActivityEntry } | { kind: 'task'; task: BoardTaskWire; projectId: string };
+export type FeedRow =
+  | { kind: 'session'; entry: SessionActivityEntry }
+  | { kind: 'terminal'; entry: SessionActivityEntry }
+  | { kind: 'task'; task: BoardTaskWire; projectId: string };
 
 /** The store slices the feed's sectioning reads. Passed as plain state so the screen, the warm-up and the tests read one shape. */
 export interface FeedSectionSources {
@@ -68,9 +73,9 @@ export interface FeedSectionRows {
   rows: FeedRow[];
 }
 
-/** The FlashList key: the session id for a session row (unchanged, so a swap's same-slot remount still works), `task-<id>` for a task row. */
+/** The FlashList key: the session id for a session or terminal row (unchanged, so a swap's same-slot remount still works), `task-<id>` for a task row. */
 export function feedRowKey(row: FeedRow): string {
-  return row.kind === 'session' ? row.entry.sessionId : `task-${row.task.id}`;
+  return row.kind === 'task' ? `task-${row.task.id}` : row.entry.sessionId;
 }
 
 /** The task a session row's card draws, located the way the row itself locates it (by the entry's own project). */
@@ -97,6 +102,16 @@ function boardRowForEntry(entry: SessionActivityEntry, sources: FeedSectionSourc
  *   earlier, at its own labelled end, which lands in the first case above.
  */
 export function feedSectionForEntry(entry: SessionActivityEntry, sources: FeedSectionSources): FeedSection {
+  // A Command Terminal sits in the sections a task's agent does, as on the
+  // desktop's Agent Monitor (design change 5): Queued while it waits for a
+  // free slot, Active while it starts (the desktop classes a start as an
+  // active phase) or works, Idle once it is the user's move. It has no task,
+  // no respawn and no Resume, so none of the judgement below applies.
+  if (entry.kind === 'command-terminal') {
+    if (entry.sessionStatus === 'queued') return 'queued';
+    if (!entry.activityObserved) return 'working';
+    return sectionForEntry(entry);
+  }
   const task = boardRowForEntry(entry, sources);
   const display = cardSessionDisplay({ session: toCardSession(entry), respawn: selectTaskRespawn(sources, entry.taskId), task });
   const bucket = sectionForEntry(entry);
@@ -136,7 +151,7 @@ function withoutShadowedGhosts(entries: SessionActivityEntry[]): SessionActivity
 
 /** A row's ordering key: when a session entered its section; for a task row, when the desktop last changed it (a pause, a new label). */
 function orderKey(row: FeedRow): number {
-  if (row.kind === 'session') return row.entry.enteredSectionAt;
+  if (row.kind !== 'task') return row.entry.enteredSectionAt;
   const updatedAt = Date.parse(row.task.updated_at);
   return Number.isNaN(updatedAt) ? 0 : updatedAt;
 }
@@ -154,8 +169,8 @@ function orderKey(row: FeedRow): number {
 function compareRows(section: FeedSection): (first: FeedRow, second: FeedRow) => number {
   return (first, second) => {
     if (section === 'idle') {
-      const firstHasUnread = first.kind === 'session' && first.entry.unreadCount > 0 ? 1 : 0;
-      const secondHasUnread = second.kind === 'session' && second.entry.unreadCount > 0 ? 1 : 0;
+      const firstHasUnread = first.kind !== 'task' && first.entry.unreadCount > 0 ? 1 : 0;
+      const secondHasUnread = second.kind !== 'task' && second.entry.unreadCount > 0 ? 1 : 0;
       if (firstHasUnread !== secondHasUnread) return secondHasUnread - firstHasUnread;
     }
     const firstKey = orderKey(first);
@@ -177,9 +192,11 @@ function compareRows(section: FeedSection): (first: FeedRow, second: FeedRow) =>
 export function selectFeedSections(sources: FeedSectionSources): FeedSectionRows[] {
   const rowsBySection = new Map<FeedSection, FeedRow[]>(FEED_SECTION_ORDER.map((section) => [section, []]));
   const entries = withoutShadowedGhosts(Object.values(sources.bySessionId));
-  const claimedTaskIds = new Set(entries.map((entry) => entry.taskId));
+  const claimedTaskIds = new Set(entries.filter((entry) => entry.kind === 'task').map((entry) => entry.taskId));
   for (const entry of entries) {
-    rowsBySection.get(feedSectionForEntry(entry, sources))?.push({ kind: 'session', entry });
+    rowsBySection
+      .get(feedSectionForEntry(entry, sources))
+      ?.push(entry.kind === 'command-terminal' ? { kind: 'terminal', entry } : { kind: 'session', entry });
   }
   for (const [projectId, board] of Object.entries(sources.boardsByProjectId)) {
     for (const task of Object.values(board.tasksById)) {

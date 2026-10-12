@@ -22,6 +22,7 @@ import {
 import { useActivityStore, sectionForEntry, selectTaskRespawn } from '@/state/activityStore';
 import { ARCHIVED_PAGE_SIZE, loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
 import { reportHandledError } from '@/observability/crashReporting';
+import { TerminalsButton } from './terminals/TerminalsButton';
 
 /** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
 const NO_TASKS: BoardTaskWire[] = [];
@@ -226,6 +227,8 @@ export function BoardScreen(): React.JSX.Element {
         subtitle={projectName ? 'Board' : undefined}
         onTitlePress={projects.length > 0 ? () => router.push('/project-picker') : undefined}
         divider={columns.length === 0}
+        // The project's Command Terminals (design change 1), beside Settings.
+        actions={projectId !== null ? <TerminalsButton projectId={projectId} /> : undefined}
         testID="board-header"
       />
       <ConnectionBanner />

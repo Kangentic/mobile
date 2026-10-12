@@ -1,11 +1,26 @@
-import type { JsonValue, ReadDiffScope } from '@kangentic/protocol';
-import { CapabilityError, CapabilityTimeoutError } from '@/channel';
+import {
+  COMMAND_TERMINAL_LIMIT_ERROR_CODE,
+  UNKNOWN_PROJECT_ERROR_CODE,
+  UNKNOWN_SESSION_ERROR_CODE,
+  UNSUPPORTED_VERB_ERROR_CODE,
+  type JsonValue,
+  type ReadDiffScope,
+} from '@kangentic/protocol';
+import { CapabilityError, CapabilityTimeoutError, ChannelDisconnectedError } from '@/channel';
 import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { useActivityStore } from '@/state/activityStore';
 import { useChannelStore } from '@/state/channelStore';
-import { isDoneColumn, selectTaskRow, useBoardStore } from '@/state/boardStore';
-import { useDiffStore } from '@/state/diffStore';
+import {
+  COMMAND_TERMINAL_LIMIT,
+  isDoneColumn,
+  lowestFreeCommandTerminalSlot,
+  selectCommandTerminals,
+  selectTaskRow,
+  useBoardStore,
+} from '@/state/boardStore';
+import { selectStartingSlots, useCommandTerminalStore } from '@/state/commandTerminalStore';
+import { diffKeyFor, useDiffStore, type DiffTarget } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { resumeProgress, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -13,6 +28,7 @@ import { useTranscriptStore } from '@/state/transcriptStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
 import { lastContentLineFromScrollback } from '@/terminal/liveTail';
 import {
+  NotConnectedError,
   getActiveConnection,
   reconnectNow,
   requireSubscriptions,
@@ -20,6 +36,7 @@ import {
   type ConnectionTeardownIntent,
 } from './connectionManager';
 import { runBootstrap } from './bootstrap';
+import { reconcileSessionsFromBoards } from './storeFeed';
 
 /**
  * The imperative API screens call - they never touch VerbClient or
@@ -213,6 +230,98 @@ export async function pauseTaskSession(taskId: string, projectId: string): Promi
   }
 }
 
+/**
+ * The one plain line a failed Command Terminal start shows, for the moment
+ * the terminal's screen holds it before routing back (design change 4). Read
+ * off the refusal's typed code, never parsed out of its text; where the
+ * desktop has its own words for a refusal it names (an agent it cannot find,
+ * a start that failed), those are shown, capped, as Resume and Pause show
+ * theirs.
+ */
+export function commandTerminalStartFailureLine(error: unknown): string {
+  if (error instanceof CapabilityTimeoutError) return "The desktop didn't answer.";
+  if (error instanceof NotConnectedError || error instanceof ChannelDisconnectedError) return 'Not connected to the desktop.';
+  if (!(error instanceof CapabilityError)) return "The desktop couldn't start it.";
+  switch (error.code) {
+    case COMMAND_TERMINAL_LIMIT_ERROR_CODE:
+      // Another start (this phone's, or the desktop's own New) got there
+      // first: the phone greys New out at four, so this is only ever a race.
+      return 'This project already runs four.';
+    case UNKNOWN_PROJECT_ERROR_CODE:
+      return "The desktop doesn't have this project.";
+    case UNSUPPORTED_VERB_ERROR_CODE:
+      return "This desktop can't start terminals.";
+    default: {
+      const refusalText = error.message.trim().slice(0, DESKTOP_REFUSAL_MESSAGE_MAX_LENGTH);
+      return refusalText.length > 0 ? refusalText : "The desktop couldn't start it.";
+    }
+  }
+}
+
+/**
+ * Starts a Command Terminal in a project and returns its launch id at once
+ * (protocol 0.20.0). The tap opens the terminal's screen straight away (design
+ * change 4); the screen follows the launch in `useCommandTerminalStore`, which
+ * outlives it, so leaving before the answer cannot lose the terminal or start
+ * a second one on a remount.
+ *
+ * The predicted slot is the lowest one neither the board nor another start in
+ * flight holds, for the screen's title until the answer carries the real one.
+ * On success the session joins the wanted streams at once (the reconcile
+ * reads the launch) and the board is re-read; the desktop's own
+ * `command-terminals-changed` follows anyway. A timeout re-reads the board as
+ * well, because the terminal may be running after all.
+ */
+export function launchCommandTerminal(projectId: string): string {
+  const occupiedSlots = new Set<number>([
+    ...selectCommandTerminals(useBoardStore.getState(), projectId).map((terminal) => terminal.slot),
+    ...selectStartingSlots(useCommandTerminalStore.getState(), projectId),
+  ]);
+  const predictedSlot = lowestFreeCommandTerminalSlot(occupiedSlots) ?? COMMAND_TERMINAL_LIMIT;
+  const launchId = useCommandTerminalStore.getState().beginLaunch(projectId, predictedSlot);
+  void (async () => {
+    try {
+      const started = await requireVerbClient().startCommandTerminal(projectId);
+      useCommandTerminalStore.getState().markLaunchStarted(launchId, started);
+      const connection = getActiveConnection();
+      if (connection !== null) {
+        reconcileSessionsFromBoards(connection.subscriptions);
+        connection.subscriptions.refreshBoard(projectId);
+      }
+    } catch (error) {
+      useCommandTerminalStore.getState().markLaunchFailed(launchId, commandTerminalStartFailureLine(error));
+      if (error instanceof CapabilityTimeoutError) getActiveConnection()?.subscriptions.refreshBoard(projectId);
+    }
+  })();
+  return launchId;
+}
+
+/**
+ * Stops a Command Terminal, the desktop Stop's own call, in one tap (design
+ * change 3). The row reads "Stopping..." from the tap until the board drops
+ * the terminal (the reconcile clears it then), not merely until the verb
+ * answers. `unknown-session` means the terminal had already ended, which is
+ * what was asked for. Any other failure marks the Stop failed, which brings
+ * the row back with the sheet's failure line, and re-reads the board: a Stop
+ * that timed out may still have landed.
+ */
+export async function stopCommandTerminal(sessionId: string): Promise<void> {
+  const terminalStore = useCommandTerminalStore.getState();
+  if (terminalStore.stopsBySessionId[sessionId] === 'stopping') return;
+  terminalStore.markStopping(sessionId);
+  const projectId = useActivityStore.getState().bySessionId[sessionId]?.projectId ?? null;
+  try {
+    await requireVerbClient().stopCommandTerminal(sessionId);
+  } catch (error) {
+    if (!(error instanceof CapabilityError && error.code === UNKNOWN_SESSION_ERROR_CODE)) {
+      useCommandTerminalStore.getState().markStopFailed(sessionId);
+      if (projectId !== null) getActiveConnection()?.subscriptions.refreshBoard(projectId);
+      return;
+    }
+  }
+  if (projectId !== null) getActiveConnection()?.subscriptions.refreshBoard(projectId);
+}
+
 export async function moveTaskOptimistic(input: {
   projectId: string;
   taskId: string;
@@ -346,29 +455,30 @@ export async function loadArchivedTasks(input: { projectId: string; append?: boo
   }
 }
 
-/** Sets the Changes tab's live diff watch (scope changes re-subscribe); pass null on blur. */
-export function setDiffWatch(taskId: string, input: { projectId: string; scope: ReadDiffScope } | null): void {
+/**
+ * Sets the Changes tab's live diff watch (scope changes re-subscribe); pass
+ * null on blur. The target is a task's worktree, or the project folder for a
+ * Command Terminal (`taskId: null`).
+ */
+export function setDiffWatch(target: DiffTarget, scope: ReadDiffScope | null): void {
   const connection = getActiveConnection();
   if (!connection) return;
-  if (input) {
-    useDiffStore.getState().setStatus(taskId, input.scope, 'loading');
-    connection.subscriptions.setDesiredDiff(taskId, input);
+  const diffKey = diffKeyFor(target);
+  if (scope !== null) {
+    useDiffStore.getState().setStatus(diffKey, scope, 'loading');
+    connection.subscriptions.setDesiredDiff(diffKey, { taskId: target.taskId, projectId: target.projectId, scope });
   } else {
-    connection.subscriptions.setDesiredDiff(taskId, null);
-    useDiffStore.getState().clearTask(taskId);
+    connection.subscriptions.setDesiredDiff(diffKey, null);
+    useDiffStore.getState().clearKey(diffKey);
   }
 }
 
-export async function fetchDiffFileContent(input: {
-  taskId: string;
-  projectId: string;
-  filePath: string;
-  scope: ReadDiffScope;
-}): Promise<void> {
-  const cached = useDiffStore.getState().byTaskId[input.taskId]?.contentByPath[input.filePath];
+export async function fetchDiffFileContent(input: DiffTarget & { filePath: string; scope: ReadDiffScope }): Promise<void> {
+  const diffKey = diffKeyFor(input);
+  const cached = useDiffStore.getState().byKey[diffKey]?.contentByPath[input.filePath];
   if (cached) return;
   const content = await requireVerbClient().readDiffFileContent(input);
-  useDiffStore.getState().applyFileContent(input.taskId, input.filePath, content);
+  useDiffStore.getState().applyFileContent(diffKey, input.filePath, content);
 }
 
 /** Initial window size on screen open - enough to fill the list a few screens deep; older pages load on scroll-up. */
@@ -630,6 +740,7 @@ export function wipeDesktopContent(): void {
   useTranscriptStore.getState().reset();
   useDiffStore.getState().reset();
   useReadingViewStore.getState().reset();
+  useCommandTerminalStore.getState().reset();
   resetTerminalFeed();
   awaitedPromptPeekCache.clear();
   lastMessagePeekBySession.clear();

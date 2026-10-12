@@ -63,7 +63,10 @@ export function ProjectPickerScreen(): React.JSX.Element {
     }
     const counts = new Map<string, ProjectAgentCounts>();
     for (const entry of Object.values(bySessionId)) {
-      const projectId = entry.taskId === null ? undefined : taskProjectId.get(entry.taskId);
+      // A Command Terminal belongs to its project directly, with no task to
+      // resolve through: one asking for permission wants you as much as a
+      // task's agent does.
+      const projectId = entry.kind === 'command-terminal' ? entry.projectId : taskProjectId.get(entry.taskId);
       if (projectId === undefined) continue;
       const current = counts.get(projectId) ?? { needsYou: 0, working: 0 };
       const section = sectionForEntry(entry);

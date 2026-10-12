@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
-import { Icon, Row, Stack, Text, sheetRowSurface, useTheme, type TextColorRole } from '@/components';
+import { Icon, SheetActionRow, Stack, Text, useTheme, type TextColorRole } from '@/components';
 import { prStateSummary } from '@/components/board/prChipPresentation';
 import { CapabilityError } from '@/channel';
 import { PAUSE_WAIT_MS, archiveTask, deleteTaskFromBoard, pauseTaskSession, resumeTaskSession } from '@/connection/actions';
@@ -382,54 +382,22 @@ function ActionRow({
   color?: TextColorRole;
   caption?: string | null;
 }): React.JSX.Element {
-  const theme = useTheme();
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
+    <SheetActionRow
+      label={label}
+      glyph={<Icon name={iconName} color={color === 'danger' ? 'danger' : 'secondary'} size={20} />}
       onPress={onPress}
+      disabled={disabled}
       testID={testID}
-      style={[
-        styles.actionRow,
-        sheetRowSurface(theme),
-        {
-          minHeight: theme.minTouchSize,
-          paddingHorizontal: theme.spacing.md,
-          opacity: disabled ? 0.4 : 1,
-        },
-      ]}
-    >
-      <Row gap="sm" style={styles.actionRowContent}>
-        <Icon name={iconName} color={color === 'danger' ? 'danger' : 'secondary'} size={20} />
-        <Stack gap="xs" style={styles.flex}>
-          <Text variant="body" color={color}>
-            {label}
-          </Text>
-          {caption ? (
-            <Text variant="caption" color="muted">
-              {caption}
-            </Text>
-          ) : null}
-        </Stack>
-      </Row>
-    </Pressable>
+      color={color}
+      caption={caption}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  actionRow: {
-    justifyContent: 'center',
-    paddingVertical: 8,
-  },
-  actionRowContent: {
-    alignItems: 'center',
-  },
   container: {
     // Deliberately not flex: 1 - 'fitToContents' needs measurable content.
     width: '100%',
-  },
-  flex: {
-    flex: 1,
   },
 });

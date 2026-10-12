@@ -111,6 +111,8 @@ function seedBoard({
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
     },
     pendingMoves: [],

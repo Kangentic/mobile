@@ -20,6 +20,7 @@ import {
   ShieldHalf,
   Shrink,
   SquarePen,
+  SquareTerminal,
   Trash,
   User,
   type LucideIcon,
@@ -51,7 +52,8 @@ export type IconName =
   | 'git-pull-request'
   | 'filter'
   | 'resume'
-  | 'pause';
+  | 'pause'
+  | 'terminal';
 
 const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   'chevron-forward': ChevronRight,
@@ -79,6 +81,9 @@ const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   resume: CirclePlay,
   // The desktop task header's own pair: CirclePause beside CirclePlay.
   pause: CirclePause,
+  // The session switcher's Terminal glyph (SquareTerminal), so "Open terminal"
+  // on a terminal's long-press sheet names the lens it opens.
+  terminal: SquareTerminal,
 };
 
 export interface IconProps {

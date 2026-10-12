@@ -43,6 +43,8 @@ function seedLocatedTask(): void {
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
     },
     pendingMoves: [],

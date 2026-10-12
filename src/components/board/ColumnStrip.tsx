@@ -63,6 +63,12 @@ export interface ColumnStripProps {
   waitTestID: string;
   /** Root testID; parts key off it as `-project`, `-track`, `-marker` (holding `-icon` or `-dot`), and `-step-<columnId>-<done|ahead>` (the current step is the `-marker`; a skipped step draws nothing). */
   testID: string;
+  /**
+   * Drawn last on the right, where a task's track goes: a Command Terminal's
+   * "Command Terminal" pill (decision G1). A terminal has no column, so it
+   * passes `column: null` and its band carries the pill instead of a track.
+   */
+  trailing?: React.ReactNode;
 }
 
 /**
@@ -105,6 +111,7 @@ export const ColumnStrip = React.memo(function ColumnStrip({
   waitingSinceMs,
   waitTestID,
   testID,
+  trailing,
 }: ColumnStripProps): React.JSX.Element {
   const theme = useTheme();
   const visibleSteps = track.filter((step) => step.state !== 'skipped');
@@ -166,6 +173,7 @@ export const ColumnStrip = React.memo(function ColumnStrip({
                 )}
           </View>
         ) : null}
+        {trailing}
       </View>
     </View>
   );

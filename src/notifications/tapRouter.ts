@@ -38,7 +38,18 @@ import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
  * `src/navigation/pendingNavigation.ts`.
  */
 
-function openTask(taskId: string, projectId: string, sessionId: string): void {
+/**
+ * Publishes where a tap should land. A Command Terminal's notification
+ * (protocol 0.20.0, `sessionKind: 'command-terminal'`) opens that terminal by
+ * its session: its `taskId` is the desktop's made-up one, which names no board
+ * task and must never be opened as one.
+ */
+function openTask(taskId: string, projectId: string, sessionId: string, sessionKind: string | null): void {
+  if (sessionKind === 'command-terminal') {
+    if (sessionId.length === 0) return;
+    publishPendingNavigation({ kind: 'open-command-terminal', projectId, sessionId });
+    return;
+  }
   publishPendingNavigation({ kind: 'open-task', taskId, projectId, sessionId });
 }
 
@@ -70,7 +81,8 @@ function openTaskFromNotification(notification: Notification | undefined): void 
   }
   const projectId = typeof data.projectId === 'string' ? data.projectId : '';
   const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
-  openTask(taskId, projectId, sessionId);
+  const sessionKind = typeof data.sessionKind === 'string' ? data.sessionKind : null;
+  openTask(taskId, projectId, sessionId, sessionKind);
 }
 
 /**
@@ -124,7 +136,7 @@ export async function routeFromPushResponse(response: Notifications.Notification
   if (blob === null) return;
   const decrypted = await decryptPushBlob(blob);
   if (!decrypted) return;
-  openTask(decrypted.data.taskId, decrypted.data.projectId, decrypted.data.sessionId);
+  openTask(decrypted.data.taskId, decrypted.data.projectId, decrypted.data.sessionId, decrypted.data.sessionKind ?? null);
 }
 
 let handlersRegistered = false;

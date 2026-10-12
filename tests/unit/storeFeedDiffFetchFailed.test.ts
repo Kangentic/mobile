@@ -32,18 +32,18 @@ describe('createSnapshotSinks onDiffFetchFailed', () => {
 
     sinks.onDiffFetchFailed('task-1', 'working');
 
-    const taskDiff = useDiffStore.getState().byTaskId['task-1'];
+    const taskDiff = useDiffStore.getState().byKey['task-1'];
     expect(taskDiff?.fileListStatus).toBe('error');
     expect(taskDiff?.scope).toBe('working');
   });
 
   it('creates an entry for a task the store has never seen, so a fetch that fails on the first look still reports', () => {
     const sinks = createSnapshotSinks(() => ({}) as SubscriptionManager);
-    expect(useDiffStore.getState().byTaskId['task-new']).toBeUndefined();
+    expect(useDiffStore.getState().byKey['task-new']).toBeUndefined();
 
     sinks.onDiffFetchFailed('task-new', 'working');
 
-    const taskDiff = useDiffStore.getState().byTaskId['task-new'];
+    const taskDiff = useDiffStore.getState().byKey['task-new'];
     expect(taskDiff?.fileListStatus).toBe('error');
     expect(taskDiff?.scope).toBe('working');
   });

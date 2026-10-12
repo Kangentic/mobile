@@ -46,6 +46,15 @@ function performPendingNavigation(navigation: PendingNavigation): void {
     router.navigate('/');
     return;
   }
+  if (navigation.kind === 'open-command-terminal') {
+    // NAVIGATE for the reason given below: a tap for the terminal already on
+    // top replaces its params rather than stacking a second screen on it.
+    router.navigate({
+      pathname: '/command-terminal',
+      params: { sessionId: navigation.sessionId, projectId: navigation.projectId },
+    });
+    return;
+  }
   // NAVIGATE, not push. In expo-router 57 a PUSH with no getId always appends a
   // route, so a tap for the task already on top stacked a second session screen
   // on the same session. NAVIGATE to the same [taskId] on top replaces that

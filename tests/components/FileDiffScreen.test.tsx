@@ -31,7 +31,7 @@ jest.mock('@/connection/actions', () => ({
 
 function seedFileContent(): void {
   useDiffStore.setState({
-    byTaskId: {
+    byKey: {
       'task-1': {
         scope: 'working',
         fileList: null,

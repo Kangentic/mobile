@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { StyleSheet, TextInput } from 'react-native';
 import { writeTerminal } from '@/connection/actions';
 
@@ -12,6 +12,8 @@ export interface DirectKeyInputHandle {
 
 export interface DirectKeyInputProps {
   sessionId: string;
+  /** False holds every keystroke (see TerminalPane's `inputEnabled`): the field takes no edits and sends nothing. Defaults to true. */
+  inputEnabled?: boolean;
 }
 
 const SENTINEL = ' ';
@@ -29,12 +31,18 @@ const BUFFER_RESET_LENGTH = 400;
  * Android reports no change for backspace on an empty field.
  */
 export const DirectKeyInput = forwardRef<DirectKeyInputHandle, DirectKeyInputProps>(function DirectKeyInput(
-  { sessionId },
+  { sessionId, inputEnabled = true },
   ref,
 ): React.JSX.Element {
   const inputRef = useRef<TextInput>(null);
   const lastValueRef = useRef(SENTINEL);
   const [value, setValue] = useState(SENTINEL);
+  const inputEnabledRef = useRef(inputEnabled);
+  useEffect(() => {
+    inputEnabledRef.current = inputEnabled;
+    // A keyboard raised before the gate closed must not stay up typing into it.
+    if (!inputEnabled) inputRef.current?.blur();
+  }, [inputEnabled]);
 
   useImperativeHandle(ref, () => ({
     toggle: () => {
@@ -50,7 +58,7 @@ export const DirectKeyInput = forwardRef<DirectKeyInputHandle, DirectKeyInputPro
 
   const sendToPty = useCallback(
     (data: string) => {
-      if (data.length === 0) return;
+      if (data.length === 0 || !inputEnabledRef.current) return;
       void writeTerminal(sessionId, data).catch(() => undefined);
     },
     [sessionId],
@@ -108,6 +116,7 @@ export const DirectKeyInput = forwardRef<DirectKeyInputHandle, DirectKeyInputPro
     <TextInput
       ref={inputRef}
       testID="terminal-direct-key-input"
+      editable={inputEnabled}
       accessible={false}
       importantForAccessibility="no"
       style={styles.hidden}

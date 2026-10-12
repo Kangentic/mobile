@@ -45,6 +45,8 @@ function seedLocatedTask(swimlaneId: string = 'lane-todo', taskOverrides: Partia
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered: false,
       },
     },
     pendingMoves: [],

@@ -42,6 +42,16 @@ export interface SessionInputBarProps {
    * `text-xs text-fg-muted`), and as the Resume panel does. Null draws nothing.
    */
   notice?: string | null;
+  /**
+   * True while nothing typed may reach the session: a Command Terminal before
+   * the desktop has classified its agent (protocol 0.20.0, see TerminalPane's
+   * `inputEnabled`), and one whose start failed. The quick keys and the
+   * composer stay in place but take no touches and leave the accessibility
+   * tree, exactly as `suspended` holds them; `dimmed` also fades them, for a
+   * row that will not come back (the failed start the design draws greyed).
+   */
+  inputLocked?: boolean;
+  dimmed?: boolean;
 }
 
 /**
@@ -69,10 +79,13 @@ export function SessionInputBar({
   switcherOnly = false,
   quickKeysHidden = false,
   notice = null,
+  inputLocked = false,
+  dimmed = false,
 }: SessionInputBarProps): React.JSX.Element {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const modeRowShown = mode !== 'changes' && !switcherOnly && !(mode === 'terminal' && quickKeysHidden);
+  const modeRowInert = suspended || inputLocked;
   return (
     <Stack
       gap="sm"
@@ -101,9 +114,10 @@ export function SessionInputBar({
       {sessionId !== null && modeRowShown ? (
         <View
           testID="session-input-row"
-          pointerEvents={suspended ? 'none' : 'auto'}
-          accessibilityElementsHidden={suspended}
-          importantForAccessibility={suspended ? 'no-hide-descendants' : 'auto'}
+          pointerEvents={modeRowInert ? 'none' : 'auto'}
+          accessibilityElementsHidden={modeRowInert}
+          importantForAccessibility={modeRowInert ? 'no-hide-descendants' : 'auto'}
+          style={dimmed ? styles.dimmed : undefined}
         >
           {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}
           {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}
@@ -113,3 +127,11 @@ export function SessionInputBar({
     </Stack>
   );
 }
+
+const styles = StyleSheet.create({
+  // The disabled weight the sheet rows and buttons use for a control that is
+  // there but cannot be used.
+  dimmed: {
+    opacity: 0.4,
+  },
+});

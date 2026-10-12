@@ -122,13 +122,25 @@ const BRANDMARK_SOURCES = [
 /**
  * The activity marks this app renders, and only those.
  *
- * The package ships nine. The four `terminal-*` and four `control-*` marks
- * serve the desktop's Command Terminal and its pause/stop controls, which have
- * no surface here yet; inlining them would put geometry in the bundle that
- * nothing draws. Same reason BRANDMARK_SOURCES omits brandmark-filled.svg.
- * Adding a mark here is all it takes when a consumer appears.
+ * The package ships eleven. The Command Terminal surfaces (task #113) draw the
+ * terminal silhouette (`terminal-idle`, and `terminal-new` on the Board's
+ * Terminals button) and the desktop's stop control (`control-stop-*`, the open
+ * terminal's Stop). Left out, each for a reason:
+ *
+ * - `terminal-working`: the same geometry as `terminal-idle` plus a `blink`,
+ *   and the approved design draws a working terminal STATIC in the working
+ *   tone. A blink on every working terminal row would be an animation that
+ *   never stops (motion-conventions.md), so `terminal-idle`'s shapes serve
+ *   both states and no blink is generated or implemented.
+ * - `control-pause-*`: the phone's Pause is a sheet row, not the desktop's
+ *   ring control.
+ *
+ * Same reason BRANDMARK_SOURCES omits brandmark-filled.svg: geometry nothing
+ * draws stays out of the bundle. Adding a mark here is all it takes when a
+ * consumer appears, unless it brings an element or a motion this script does
+ * not know, which stops the run by design.
  */
-const ACTIVITY_MARKS = ['agent-idle', 'agent-working'];
+const ACTIVITY_MARKS = ['agent-idle', 'agent-working', 'terminal-idle', 'terminal-new', 'control-stop-idle', 'control-stop-working'];
 
 /**
  * The SVG elements the activity renderer knows how to draw as react-native-svg
@@ -740,12 +752,23 @@ function parseActivityMark(markName, manifest) {
   if (bodyEnd < bodyStart) throw new Error(`syncBranding: ${file} has no closing </svg>`);
 
   const elements = [];
-  const elementPattern = /<([a-zA-Z]+)\b([^>]*?)\s*\/?>/g;
+  // Closing `</g>` tags are matched too, so the walk knows which shapes sit
+  // INSIDE the group a motion's class hangs on. That is what lets the stop
+  // control spin its ring while its square stays put: the desktop's CSS turns
+  // only the `kng-spin` group, and a renderer that turned the whole mark (as
+  // AgentStatusIcon does for agent-working, a lone centred ring) would spin the
+  // square with it.
+  const elementPattern = /<(\/?)([a-zA-Z]+)\b([^>]*?)\s*\/?>/g;
+  let groupDepth = 0;
   let elementMatch;
   while ((elementMatch = elementPattern.exec(svgXml.slice(bodyStart, bodyEnd))) !== null) {
-    const [, tagName, attributeText] = elementMatch;
+    const [, closingSlash, tagName, attributeText] = elementMatch;
     // Unwrapped rather than drawn - see KNOWN_ACTIVITY_ELEMENTS.
-    if (tagName === 'g') continue;
+    if (tagName === 'g') {
+      groupDepth += closingSlash === '/' ? -1 : 1;
+      continue;
+    }
+    if (closingSlash === '/') continue;
     if (!KNOWN_ACTIVITY_ELEMENTS.has(tagName)) {
       throw new Error(
         `syncBranding: ${file} contains a <${tagName}> element, which the activity renderer cannot draw. ` +
@@ -753,8 +776,9 @@ function parseActivityMark(markName, manifest) {
           'deliberately rather than shipping a mark missing part of its glyph.',
       );
     }
-    elements.push({ tagName, attributes: parseSvgAttributes(attributeText), context: `${file} <${tagName}>` });
+    elements.push({ tagName, attributes: parseSvgAttributes(attributeText), context: `${file} <${tagName}>`, inGroup: groupDepth > 0 });
   }
+  if (groupDepth !== 0) throw new Error(`syncBranding: ${file} has an unbalanced <g> element`);
   if (elements.length === 0) throw new Error(`syncBranding: ${file} contains no drawable elements`);
 
   // The SVG says WHICH outline is dashed; the manifest says with what. The
@@ -853,9 +877,37 @@ function parseActivityMark(markName, manifest) {
     );
   }
 
+  // Only the moving outline may sit in the motion's group, and only an
+  // animated mark may have one: the renderer turns exactly the shapes marked
+  // `moving`, so a static shape in the group would spin and a moving outline
+  // outside it would hold still.
+  for (const element of elements) {
+    const isMovingOutline = declaredMotion !== null && element.attributes['stroke-dasharray'] !== undefined;
+    if (element.inGroup !== isMovingOutline) {
+      throw new Error(
+        `syncBranding: ${element.context} is ${element.inGroup ? 'inside' : 'outside'} the motion group, but it ` +
+          `${isMovingOutline ? 'is' : 'is not'} the mark's moving outline. The renderer moves exactly the shapes in ` +
+          'that group, so the two must agree.',
+      );
+    }
+  }
+
   const shapes = elements.map((element) => {
     const { tagName, attributes, context } = element;
     if (tagName === 'rect') {
+      // A filled shape is `fill="currentColor" stroke="none"` (the stop
+      // control's square). Anything else on fill or stroke is a paint this
+      // renderer does not know, so it stops the run rather than drawing a
+      // filled square as an outline.
+      const fill = attributes.fill;
+      const stroke = attributes.stroke;
+      const filled = fill === 'currentColor' && stroke === 'none';
+      if (!filled && (fill !== undefined || stroke !== undefined)) {
+        throw new Error(
+          `syncBranding: ${context} paints fill="${fill}" stroke="${stroke}". The activity renderer draws an ` +
+            'outline (no fill or stroke attribute) or a filled shape (fill="currentColor" stroke="none") only.',
+        );
+      }
       return {
         kind: 'rect',
         x: parseFloatAttribute(attributes, 'x', 0, context),
@@ -863,7 +915,12 @@ function parseActivityMark(markName, manifest) {
         width: parseFloatAttribute(attributes, 'width', undefined, context),
         height: parseFloatAttribute(attributes, 'height', undefined, context),
         rx: parseFloatAttribute(attributes, 'rx', 0, context),
+        filled,
+        moving: element.inGroup,
       };
+    }
+    if (attributes.fill !== undefined || attributes.stroke !== undefined) {
+      throw new Error(`syncBranding: ${context} carries its own fill or stroke, which the activity renderer draws only on a rect`);
     }
     if (tagName === 'circle') {
       return {
@@ -872,13 +929,14 @@ function parseActivityMark(markName, manifest) {
         cy: parseFloatAttribute(attributes, 'cy', undefined, context),
         r: parseFloatAttribute(attributes, 'r', undefined, context),
         dash: attributes['stroke-dasharray'] !== undefined ? dashUserUnits : undefined,
+        moving: element.inGroup,
       };
     }
     const pathData = attributes.d;
     if (pathData === undefined || pathData.trim() === '') {
       throw new Error(`syncBranding: ${context} is missing required attribute "d"`);
     }
-    return { kind: 'path', d: pathData };
+    return { kind: 'path', d: pathData, moving: element.inGroup };
   });
 
   return {
@@ -893,15 +951,20 @@ function parseActivityMark(markName, manifest) {
   };
 }
 
+/** The optional flags, emitted only when set so a static outline's literal stays as short as it always was. */
+function activityShapeFlags(shape) {
+  return `${shape.filled === true ? ', filled: true' : ''}${shape.moving === true ? ', moving: true' : ''}`;
+}
+
 function activityShapeLiteral(shape) {
   if (shape.kind === 'rect') {
-    return `{ kind: 'rect', x: ${shape.x}, y: ${shape.y}, width: ${shape.width}, height: ${shape.height}, rx: ${shape.rx} }`;
+    return `{ kind: 'rect', x: ${shape.x}, y: ${shape.y}, width: ${shape.width}, height: ${shape.height}, rx: ${shape.rx}${activityShapeFlags(shape)} }`;
   }
   if (shape.kind === 'circle') {
     const dash = shape.dash === undefined ? '' : `, dash: [${shape.dash[0]}, ${shape.dash[1]}]`;
-    return `{ kind: 'circle', cx: ${shape.cx}, cy: ${shape.cy}, r: ${shape.r}${dash} }`;
+    return `{ kind: 'circle', cx: ${shape.cx}, cy: ${shape.cy}, r: ${shape.r}${dash}${activityShapeFlags(shape)} }`;
   }
-  return `{ kind: 'path', d: ${quoteString(shape.d)} }`;
+  return `{ kind: 'path', d: ${quoteString(shape.d)}${activityShapeFlags(shape)} }`;
 }
 
 function buildActivityModule() {
@@ -943,16 +1006,27 @@ function buildActivityModule() {
     '/** How a mark renders when the OS asks for reduced motion. */',
     `export type ActivityRestRendering = ${[...KNOWN_ACTIVITY_REST_RENDERINGS].map(quoteString).join(' | ')};`,
     '',
-    'export interface ActivityRectShape {',
+    '/**',
+    ' * Set on a shape inside the group a motion turns (the `kng-spin` group in the',
+    ' * source SVG). A renderer moves exactly these and holds the rest still, which',
+    " * is what keeps the stop control's square from spinning with its ring.",
+    ' */',
+    'export interface ActivityShapeMotion {',
+    '  moving?: true;',
+    '}',
+    '',
+    'export interface ActivityRectShape extends ActivityShapeMotion {',
     "  kind: 'rect';",
     '  x: number;',
     '  y: number;',
     '  width: number;',
     '  height: number;',
     '  rx: number;',
+    '  /** Drawn as a solid fill in the mark\'s colour rather than an outline (the stop control\'s square). */',
+    '  filled?: true;',
     '}',
     '',
-    'export interface ActivityCircleShape {',
+    'export interface ActivityCircleShape extends ActivityShapeMotion {',
     "  kind: 'circle';",
     '  cx: number;',
     '  cy: number;',
@@ -961,7 +1035,7 @@ function buildActivityModule() {
     '  dash?: readonly [number, number];',
     '}',
     '',
-    'export interface ActivityPathShape {',
+    'export interface ActivityPathShape extends ActivityShapeMotion {',
     "  kind: 'path';",
     '  d: string;',
     '}',

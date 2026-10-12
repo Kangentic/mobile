@@ -16,7 +16,7 @@ jest.mock('@/connection/actions', () => ({
 
 function seedFileList(): void {
   useDiffStore.setState({
-    byTaskId: {
+    byKey: {
       'task-1': {
         scope: 'working',
         fileList: {
@@ -106,14 +106,14 @@ describe('ChangesTab', () => {
     const { setDiffWatch } = jest.requireMock<{ setDiffWatch: jest.Mock }>('@/connection/actions');
 
     const view = await renderChangesTab(true);
-    expect(setDiffWatch).toHaveBeenCalledWith('task-1', { projectId: 'project-1', scope: 'working' });
+    expect(setDiffWatch).toHaveBeenCalledWith({ taskId: 'task-1', projectId: 'project-1' }, 'working');
 
     await view.rerender(
       <ThemeProvider>
         <ChangesTab taskId="task-1" projectId="project-1" isActive={false} />
       </ThemeProvider>,
     );
-    expect(setDiffWatch).toHaveBeenLastCalledWith('task-1', null);
+    expect(setDiffWatch).toHaveBeenLastCalledWith({ taskId: 'task-1', projectId: 'project-1' }, null);
   });
 
   it('re-subscribes the watch when the scope changes', async () => {
@@ -123,8 +123,8 @@ describe('ChangesTab', () => {
     setDiffWatch.mockClear();
 
     await fireEvent.press(screen.getByTestId('changes-scope-staged'));
-    expect(setDiffWatch).toHaveBeenNthCalledWith(1, 'task-1', null);
-    expect(setDiffWatch).toHaveBeenNthCalledWith(2, 'task-1', { projectId: 'project-1', scope: 'staged' });
+    expect(setDiffWatch).toHaveBeenNthCalledWith(1, { taskId: 'task-1', projectId: 'project-1' }, null);
+    expect(setDiffWatch).toHaveBeenNthCalledWith(2, { taskId: 'task-1', projectId: 'project-1' }, 'staged');
   });
 
   it('shows the refreshing caption when the list is stale', async () => {
@@ -165,7 +165,7 @@ describe('ChangesTab', () => {
 
   it('shows the Overseer empty state when there are no changes', async () => {
     useDiffStore.setState({
-      byTaskId: {
+      byKey: {
         'task-1': {
           scope: 'working',
           fileList: { files: [], totalInsertions: 0, totalDeletions: 0 },

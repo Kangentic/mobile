@@ -43,7 +43,7 @@ describe('wipeDesktopContent', () => {
   it('clears every store holding the paired desktop content', () => {
     useActivityStore.setState({ bySessionId: { 's-1': { sessionId: 's-1' } } } as never);
     useTranscriptStore.setState({ bySessionId: { 's-1': { entries: [] } } } as never);
-    useDiffStore.setState({ byTaskId: { 't-1': { files: [] } } } as never);
+    useDiffStore.setState({ byKey: { 't-1': { files: [] } } } as never);
     useReadingViewStore.setState({ bySessionId: { 's-1': { lines: ['secret output'] } } } as never);
     useBoardStore.setState({ projects: [{ id: 'p-1', name: 'Secret project' }] } as never);
     retainTerminal('s-1');
@@ -54,7 +54,7 @@ describe('wipeDesktopContent', () => {
 
     expect(useActivityStore.getState().bySessionId).toEqual({});
     expect(useTranscriptStore.getState().bySessionId).toEqual({});
-    expect(useDiffStore.getState().byTaskId).toEqual({});
+    expect(useDiffStore.getState().byKey).toEqual({});
     expect(useReadingViewStore.getState().bySessionId).toEqual({});
     expect(useBoardStore.getState().projects).toEqual([]);
     expect(getBufferedData('s-1')).toBe('');
