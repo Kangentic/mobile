@@ -190,6 +190,9 @@ src/
                   #   guide) - shared
                   #   by tests + rigs - plus claudeCapture.ts: RECORDED real Claude Code PTY output
                   #   the mock terminal replays (generated, never hand-edited; see scripts/ below),
+                  #   and commandTerminalCapture.ts: the three recorded screens of one real
+                  #   Claude Code turn the mock's Command Terminals replay (the frames are
+                  #   generated into commandTerminal{Opening,Submitted,Answered}.ts),
                   #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE), the concurrency
                   #   probe (EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE: sweeps the Agents feed's
                   #   snippet-warm queue depth on a LIVE queue, so the MOBILE-8 A/B happens in one
