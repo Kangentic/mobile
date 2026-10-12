@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityMarkIcon, Icon, SheetActionRow, Stack, Text, useTheme } from '@/components';
 import { stopCommandTerminal } from '@/connection/actions';
-import { selectCommandTerminal, useBoardStore } from '@/state/boardStore';
+import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } from '@/state/boardStore';
 
 /**
  * A Command Terminal's long-press sheet on the Agents feed (design change 19):
@@ -46,7 +46,7 @@ export function CommandTerminalActionsScreen(): React.JSX.Element {
     >
       <Stack gap="xs">
         <Text variant="title" numberOfLines={2}>
-          {terminal?.name ?? 'Command Terminal'}
+          {terminal?.name ?? COMMAND_TERMINAL_FALLBACK_NAME}
         </Text>
         <SheetActionRow
           label="Open terminal"

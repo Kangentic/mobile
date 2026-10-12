@@ -168,20 +168,6 @@ export function selectLaunch(state: Pick<CommandTerminalStoreState, 'launchesByI
   return state.launchesById[launchId] ?? null;
 }
 
-/**
- * How many starts this phone has in flight for a project. They count toward
- * the four-per-project limit until they settle: a slot is being taken, and a
- * second New behind the first would otherwise read as allowed.
- */
-export function selectStartingCount(state: Pick<CommandTerminalStoreState, 'launchesById'>, projectId: string | null): number {
-  if (projectId === null) return 0;
-  let starting = 0;
-  for (const launch of Object.values(state.launchesById)) {
-    if (launch.projectId === projectId && launch.phase === 'starting') starting += 1;
-  }
-  return starting;
-}
-
 /** The slots a project's in-flight starts are predicted to take, so a second New predicts the next one. */
 export function selectStartingSlots(state: Pick<CommandTerminalStoreState, 'launchesById'>, projectId: string): number[] {
   return Object.values(state.launchesById)

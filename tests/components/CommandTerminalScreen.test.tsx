@@ -1,7 +1,8 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ActivityEventPayload } from '@kangentic/protocol';
-import { ThemeProvider } from '@/components';
+import { ThemeProvider, darkTerminalTheme } from '@/components';
 import {
   CommandTerminalScreen,
   START_FAILURE_HOLD_MS,
@@ -42,14 +43,41 @@ const mockCanGoBack = jest.fn(() => true);
 // callback on the router, and a fresh object per render would re-run it (and
 // re-pop) on every render, which no real app does.
 const mockRouter = { back: mockBack, replace: mockReplace, setParams: mockSetParams, canGoBack: mockCanGoBack, push: jest.fn() };
-jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => mockParams,
-  useRouter: () => mockRouter,
-  // The real one throws outside a navigator. Everything mounted here is
-  // focused for its whole life, so a plain effect is the faithful stand-in.
+// Whether the screen is the focused route. Focused by default (beforeEach resets
+// it), so a test that never touches it sees the screen as it always was: focused
+// for its whole life. `mockSetFocused` is the test's stand-in for a route being
+// pushed over the screen (false) and popped off again (true).
+let mockIsFocused = true;
+const mockFocusListeners = new Set<() => void>();
+function mockSetFocused(nextFocused: boolean): void {
+  mockIsFocused = nextFocused;
+  mockFocusListeners.forEach((listener) => listener());
+}
+jest.mock('expo-router', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  useFocusEffect: (effect: () => void | (() => void)) => require('react').useEffect(effect, [effect]),
-}));
+  const ReactModule = require('react');
+  return {
+    useLocalSearchParams: () => mockParams,
+    useRouter: () => mockRouter,
+    // The real one throws outside a navigator. It runs the effect while the
+    // route is focused, runs its cleanup on blur, and runs it again when focus
+    // returns, which is all the screen's focus-gated leave depends on.
+    useFocusEffect: (effect: () => void | (() => void)) => {
+      const [focused, setFocused] = ReactModule.useState(mockIsFocused);
+      ReactModule.useEffect(() => {
+        const onFocusChange = (): void => setFocused(mockIsFocused);
+        mockFocusListeners.add(onFocusChange);
+        return () => {
+          mockFocusListeners.delete(onFocusChange);
+        };
+      }, []);
+      ReactModule.useEffect(() => {
+        if (!focused) return undefined;
+        return effect();
+      }, [effect, focused]);
+    },
+  };
+});
 
 const mockStopCommandTerminal = jest.fn();
 const mockWriteTerminal = jest.fn();
@@ -157,6 +185,8 @@ describe('CommandTerminalScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCanGoBack.mockReturnValue(true);
+    mockIsFocused = true;
+    mockFocusListeners.clear();
     mockParams = {};
     mockTerminalTabProps.current = null;
     mockChatPaneProps.current = null;
@@ -445,6 +475,56 @@ describe('CommandTerminalScreen', () => {
       expect(screen.queryByTestId('command-terminal-starting')).toBeNull();
     });
 
+    /**
+     * motion-conventions.md: a loop must stop even when what it waits for never
+     * comes, and a terminal whose first frame never paints is exactly that. The
+     * starting face's cursor blinks on the wait-cursor interval and holds still
+     * (at the blink's mid opacity, on the plain View branch) once
+     * `terminalWaitCursor.holdAfterMs` has passed. The cursor's opacity is the
+     * mechanism: BlinkingBlock toggles it every interval, the still branch
+     * never does, so "still at the resting opacity across a further interval"
+     * is a blink that stopped, not a frame that happened to land.
+     *
+     * Mutation seen failing: dropping `&& !blinkExpired` from the `blinking`
+     * prop in StartingFace (the cursor kept toggling past the bound: "Expected:
+     * 0.575, Received: 1", the fiftieth toggle landing lit).
+     */
+    it('blinks the starting cursor on the wait-cursor interval and holds it still once holdAfterMs has passed', async () => {
+      const { intervalMs, opacityMin, opacityMax } = darkTerminalTheme.motion.waitCursorBlink;
+      const restingOpacity = (opacityMin + opacityMax) / 2;
+      const { holdAfterMs } = darkTerminalTheme.motion.terminalWaitCursor;
+      const cursorOpacity = (): number =>
+        StyleSheet.flatten(screen.getByTestId('command-terminal-starting-cursor').props.style).opacity as number;
+      jest.useFakeTimers();
+      seedListedTerminal();
+      await renderScreen();
+
+      // Blinking: lit at mount, dim one interval later.
+      expect(cursorOpacity()).toBe(opacityMax);
+      await act(() => {
+        jest.advanceTimersByTime(intervalMs);
+      });
+      expect(cursorOpacity()).toBe(opacityMin);
+
+      // One millisecond short of the bound it is still a blinking cursor (lit
+      // or dim, never the resting mid opacity)...
+      await act(() => {
+        jest.advanceTimersByTime(holdAfterMs - intervalMs - 1);
+      });
+      expect([opacityMin, opacityMax]).toContain(cursorOpacity());
+
+      // ...and at the bound it holds still, and stays there across a further interval.
+      await act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(cursorOpacity()).toBe(restingOpacity);
+      await act(() => {
+        jest.advanceTimersByTime(intervalMs);
+      });
+      expect(cursorOpacity()).toBe(restingOpacity);
+      expect(screen.getByTestId('command-terminal-starting')).toBeTruthy();
+    });
+
     it('releases the session screen when it unmounts', async () => {
       seedListedTerminal();
       const { unmount } = await renderScreen();
@@ -516,6 +596,58 @@ describe('CommandTerminalScreen', () => {
       });
 
       expect(mockBack).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The leave is focus-gated (`useFocusEffect`): a pop from underneath a route
+     * pushed over this screen would pop THAT route instead. Both halves are
+     * asserted in one test: the ended terminal does NOT navigate while
+     * unfocused, and DOES, once, when focus returns (a leave that never ran
+     * would pass the first half alone).
+     *
+     * Mutation seen failing: swapping `useFocusEffect(` for a plain
+     * `useEffect(` in CommandTerminalScreen (the leave fired while a route sat
+     * over the screen: "Expected number of calls: 0, Received number of calls: 1").
+     */
+    it('does not leave while a route is pushed over it, then leaves once when focus returns (session-ended)', async () => {
+      seedListedTerminal();
+      await renderScreen();
+      await act(() => {
+        mockSetFocused(false);
+      });
+
+      await act(() => {
+        pushActivityEvent({ type: 'session-ended', intentional: false });
+      });
+      expect(mockBack).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
+
+      await act(() => {
+        mockSetFocused(true);
+      });
+      expect(mockBack).toHaveBeenCalledTimes(1);
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    /** The same gate on the other way a terminal ends: it drops off the board's listing. Same mutation, same failure. */
+    it('does not leave while a route is pushed over it, then leaves once when focus returns (listing dropped)', async () => {
+      seedListedTerminal();
+      await renderScreen();
+      await act(() => {
+        mockSetFocused(false);
+      });
+
+      await act(() => {
+        setBoardCommandTerminals(PROJECT_ID, []);
+      });
+      expect(mockBack).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
+
+      await act(() => {
+        mockSetFocused(true);
+      });
+      expect(mockBack).toHaveBeenCalledTimes(1);
+      expect(mockReplace).not.toHaveBeenCalled();
     });
 
     describe('for a terminal no board lists', () => {

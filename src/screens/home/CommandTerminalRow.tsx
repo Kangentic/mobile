@@ -8,7 +8,7 @@ import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessio
 import { ColumnStrip } from '@/components/board/ColumnStrip';
 import { formatActivityLine } from '@/lib/activityLine';
 import { selectWaitingSince, type SessionActivityEntry } from '@/state/activityStore';
-import { selectCommandTerminal, useBoardStore } from '@/state/boardStore';
+import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } from '@/state/boardStore';
 import { commandTerminalTone } from '@/screens/terminals/terminalDisplay';
 import { SectionLandingPulse } from './SectionLandingPulse';
 
@@ -41,7 +41,7 @@ export const CommandTerminalRow = React.memo(function CommandTerminalRow({ entry
   const router = useRouter();
   const terminal = useBoardStore((state) => selectCommandTerminal(state, entry.sessionId));
   const projectName = useBoardStore((state) => state.projects.find((project) => project.id === entry.projectId)?.name ?? null);
-  const name = terminal?.name ?? 'Command Terminal';
+  const name = terminal?.name ?? COMMAND_TERMINAL_FALLBACK_NAME;
   const tone = commandTerminalTone(entry);
   const sessionDisplay = cardSessionDisplay({ session: toCardSession(entry), respawn: null, task: null });
   const waitingSinceMs = sessionDisplay.kind === 'running' && entry.activityObserved ? selectWaitingSince(entry) : null;

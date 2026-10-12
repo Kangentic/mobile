@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import notifee, { EventType, type Notification } from '@notifee/react-native';
 import * as Notifications from 'expo-notifications';
+import { isPushSessionKind, type PushSessionKind } from '@kangentic/protocol';
 import { publishPendingNavigation } from '@/navigation/pendingNavigation';
 import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
 
@@ -44,7 +45,7 @@ import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
  * its session: its `taskId` is the desktop's made-up one, which names no board
  * task and must never be opened as one.
  */
-function openTask(taskId: string, projectId: string, sessionId: string, sessionKind: string | null): void {
+function openTask(taskId: string, projectId: string, sessionId: string, sessionKind: PushSessionKind | null): void {
   if (sessionKind === 'command-terminal') {
     if (sessionId.length === 0) return;
     publishPendingNavigation({ kind: 'open-command-terminal', projectId, sessionId });
@@ -74,7 +75,9 @@ function openTaskFromNotification(notification: Notification | undefined): void 
   if (!data) return;
   const taskId = typeof data.taskId === 'string' ? data.taskId : '';
   const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
-  const sessionKind = typeof data.sessionKind === 'string' ? data.sessionKind : null;
+  // Parsed with the protocol's own guard, so a kind this build does not know
+  // routes as a task's alert would, as the envelope parser drops it.
+  const sessionKind = isPushSessionKind(data.sessionKind) ? data.sessionKind : null;
   // What a press needs to route: a task's alert its task, a Command Terminal's
   // its session. A terminal's LOCAL alert (the foreground-service notifier)
   // carries an empty task id, since a terminal has none, so requiring a task

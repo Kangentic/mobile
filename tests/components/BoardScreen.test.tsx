@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { BoardScreen } from '@/screens/BoardScreen';
 import { ENDED_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
-import { useBoardStore } from '@/state/boardStore';
+import { useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 
@@ -29,7 +29,11 @@ const mockDeleteTaskFromBoard = jest.fn().mockResolvedValue(undefined);
 const mockArchiveTask = jest.fn().mockResolvedValue(undefined);
 const mockOpenProjectBoard = jest.fn();
 const mockLoadArchivedTasks = jest.fn().mockResolvedValue(undefined);
+// The header's Terminals button starts a terminal when none is running, so the
+// action mock below has to carry it or a press would throw "not a function".
+const mockLaunchCommandTerminal = jest.fn().mockReturnValue('launch-from-header');
 jest.mock('@/connection/actions', () => ({
+  launchCommandTerminal: (projectId: string) => mockLaunchCommandTerminal(projectId),
   moveTaskOptimistic: (input: unknown) => mockMoveTaskOptimistic(input),
   openProjectBoard: (projectId: string) => mockOpenProjectBoard(projectId),
   // The Done column's own read: completed tasks are in neither board
@@ -106,6 +110,7 @@ describe('BoardScreen', () => {
     mockPush.mockClear();
     mockMoveTaskOptimistic.mockClear();
     mockCreateTask.mockClear();
+    mockLaunchCommandTerminal.mockClear();
     mockReportHandledError.mockClear();
     // Without this, a prior test's selectProject('project-2') (or an
     // archived-page cursor, or a pending move) survives into the next test's
@@ -783,6 +788,91 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-column-lane-review')).toBeTruthy();
     expect(screen.getByText('Ship the beta banner')).toBeTruthy();
     expect(screen.queryByText('Fix the login bug')).toBeNull();
+  });
+
+  /**
+   * Protocol 0.20.0. The header carries the Command Terminals button for the
+   * ACTIVE project, and the button hides itself unless that project's board
+   * says the desktop offers the verb. Every other board in this file is seeded
+   * `commandTerminalsOffered: false`, so the button renders null whether or not
+   * the header mounts it, and nothing else here would notice it going missing.
+   * TerminalsButton.test.tsx owns the button's own states; this pins the wiring.
+   */
+  describe('the header Terminals button', () => {
+    function boardOffering(commandTerminalsOffered: boolean): ProjectBoard {
+      return {
+        columns: [column('lane-todo', 'To Do', 0)],
+        tasksById: {},
+        snapshotAt: 0,
+        showTicketNumbers: true,
+        view: 'full',
+        taskCountsByColumnId: {},
+        commandTerminals: [],
+        commandTerminalsOffered,
+      };
+    }
+
+    function seedTwoProjects({ project1Offered, project2Offered }: { project1Offered: boolean; project2Offered: boolean }): void {
+      useBoardStore.setState({
+        projects: [
+          { id: 'project-1', name: 'Alpha' },
+          { id: 'project-2', name: 'Beta' },
+        ],
+        boardsByProjectId: {
+          'project-1': boardOffering(project1Offered),
+          'project-2': boardOffering(project2Offered),
+        },
+        pendingMoves: [],
+      });
+    }
+
+    async function renderBoard(): Promise<void> {
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+    }
+
+    it('draws the button in the header when the desktop offers Command Terminals', async () => {
+      seedTwoProjects({ project1Offered: true, project2Offered: false });
+      await renderBoard();
+
+      expect(within(screen.getByTestId('board-header')).getByTestId('header-terminals-button')).toBeTruthy();
+    });
+
+    it('draws no button when the desktop does not offer them', async () => {
+      // The control: the default seed, and the same screen. Without it the test
+      // above would pass on a header that always drew the button.
+      await renderBoard();
+
+      expect(screen.queryByTestId('header-terminals-button')).toBeNull();
+    });
+
+    it('asks about the ACTIVE project, not the first or any other', async () => {
+      // Project 1 is offered and project 2 is not; the active project is 2.
+      seedTwoProjects({ project1Offered: true, project2Offered: false });
+      useBoardStore.getState().selectProject('project-2');
+      await renderBoard();
+
+      expect(screen.queryByTestId('header-terminals-button')).toBeNull();
+    });
+
+    it('starts a terminal in the active project when pressed with none running', async () => {
+      // The reverse arrangement: only project 2 is offered, and it is active.
+      seedTwoProjects({ project1Offered: false, project2Offered: true });
+      useBoardStore.getState().selectProject('project-2');
+      await renderBoard();
+
+      await fireEvent.press(screen.getByTestId('header-terminals-button'));
+
+      expect(mockLaunchCommandTerminal).toHaveBeenCalledTimes(1);
+      expect(mockLaunchCommandTerminal).toHaveBeenCalledWith('project-2');
+      expect(mockPush).toHaveBeenCalledWith({
+        pathname: '/command-terminal',
+        params: { launchId: 'launch-from-header', projectId: 'project-2' },
+      });
+    });
   });
 
   it('shows the disconnected empty state when no boards are cached', async () => {

@@ -352,8 +352,6 @@ export async function stopCommandTerminal(sessionId: string): Promise<void> {
   } catch (error) {
     if (!(error instanceof CapabilityError && error.code === UNKNOWN_SESSION_ERROR_CODE)) {
       useCommandTerminalStore.getState().markStopFailed(sessionId);
-      if (projectId !== null) getActiveConnection()?.subscriptions.refreshBoard(projectId);
-      return;
     }
   }
   if (projectId !== null) getActiveConnection()?.subscriptions.refreshBoard(projectId);

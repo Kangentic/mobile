@@ -3088,21 +3088,23 @@ interface MockCommandTerminal {
   promptBuffer: string;
 }
 
+/** A terminal's activity as the desktop reports it, the same in its board listing and its stream snapshot. */
+function mockCommandTerminalActivity(terminal: MockCommandTerminal): ReadStreamResponsePayload['activity'] {
+  if (terminal.activityState === null) return { state: null, reason: null };
+  return terminal.activityState === 'idle'
+    ? { state: 'idle', reason: { kind: 'idle', since: terminal.idleSince } }
+    : { state: 'thinking', reason: { kind: 'turn-active' } };
+}
+
 /** What the desktop lists for a terminal (CommandTerminalWire). */
 function mockCommandTerminalWire(terminal: MockCommandTerminal): JsonValue {
-  const activity =
-    terminal.activityState === null
-      ? { state: null, reason: null }
-      : terminal.activityState === 'idle'
-        ? { state: 'idle', reason: { kind: 'idle', since: terminal.idleSince } }
-        : { state: 'thinking', reason: { kind: 'turn-active' } };
   return {
     sessionId: terminal.sessionId,
     projectId: terminal.projectId,
     slot: terminal.slot,
     name: terminal.name,
     named: terminal.named,
-    activity,
+    activity: mockCommandTerminalActivity(terminal),
   } as unknown as JsonValue;
 }
 
@@ -4168,12 +4170,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           if (payload.action === 'transcript-window') return ok(request, { revision: 0, totalEntries: 0, startIndex: 0, entries: [] });
           const terminalSnapshot: ReadStreamResponsePayload = {
             scrollback: (payload.terminal ?? true) ? streamedTerminal.scrollback : '',
-            activity:
-              streamedTerminal.activityState === null
-                ? { state: null, reason: null }
-                : streamedTerminal.activityState === 'idle'
-                  ? { state: 'idle', reason: { kind: 'idle', since: streamedTerminal.idleSince } }
-                  : { state: 'thinking', reason: { kind: 'turn-active' } },
+            activity: mockCommandTerminalActivity(streamedTerminal),
             usage: null,
             awaitedPromptId: null,
             ptyDimensions: activeGrid(),

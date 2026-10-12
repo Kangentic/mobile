@@ -626,6 +626,9 @@ export function commandTerminalTitle(slot: number): string {
   return `Command Terminal ${slot}`;
 }
 
+/** What a terminal reads as when neither a board listing nor a launch names it (no slot to number it by). */
+export const COMMAND_TERMINAL_FALLBACK_NAME = 'Command Terminal';
+
 /** The desktop namer's own ceiling for a terminal's name (command-terminal-name.ts). */
 export const COMMAND_TERMINAL_NAME_MAX_LENGTH = 80;
 

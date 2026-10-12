@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { peekLastAssistantMessage, wipeDesktopContent } from '@/connection/actions';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
+import { useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
@@ -46,6 +47,13 @@ describe('wipeDesktopContent', () => {
     useDiffStore.setState({ byKey: { 't-1': { files: [] } } } as never);
     useReadingViewStore.setState({ bySessionId: { 's-1': { lines: ['secret output'] } } } as never);
     useBoardStore.setState({ projects: [{ id: 'p-1', name: 'Secret project' }] } as never);
+    // A launch carries the old desktop's project id and terminal name, and a
+    // stop its session id, so both outlive an unpair unless the wipe resets
+    // this store.
+    const launchId = useCommandTerminalStore.getState().beginLaunch('p-1', 1);
+    useCommandTerminalStore.getState().markStopping('s-1');
+    expect(useCommandTerminalStore.getState().launchesById[launchId]).toBeDefined();
+    expect(useCommandTerminalStore.getState().stopsBySessionId).toEqual({ 's-1': 'stopping' });
     retainTerminal('s-1');
     appendChunk('s-1', 'secret scrollback');
     expect(getBufferedData('s-1')).toContain('secret scrollback');
@@ -57,6 +65,8 @@ describe('wipeDesktopContent', () => {
     expect(useDiffStore.getState().byKey).toEqual({});
     expect(useReadingViewStore.getState().bySessionId).toEqual({});
     expect(useBoardStore.getState().projects).toEqual([]);
+    expect(useCommandTerminalStore.getState().launchesById).toEqual({});
+    expect(useCommandTerminalStore.getState().stopsBySessionId).toEqual({});
     expect(getBufferedData('s-1')).toBe('');
   });
 
