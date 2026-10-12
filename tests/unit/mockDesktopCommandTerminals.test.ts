@@ -368,6 +368,40 @@ describe('typing into a terminal', () => {
     expect(streamed.scrollback).toContain('Done.');
   });
 
+  /**
+   * The answer to a CI question is the 07-command-terminal listing frame. The
+   * mirror's cell is fitted to the pane HEIGHT, so the iPhone shelf shows only
+   * 69 columns of a 210-column grid, and a word past column 69 is cut there and
+   * nowhere else (tests/unit/storeScreenshots.test.ts models the shelves).
+   */
+  it('answers a CI question with a run list and a diagnosis, every line inside the iPhone shelf', async () => {
+    const IPHONE_VISIBLE_COLUMNS = 69;
+    const started = await startTerminal();
+    await letAgentArrive();
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'why did CI fail?\r');
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const streamed = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
+    expect(streamed.scrollback).toContain('gh run list');
+    expect(streamed.scrollback).not.toContain('Done.');
+    const visibleLines = streamed.scrollback.replace(/\u001b\[[0-9;]*m/g, '').split('\r\n');
+    const tooWide = visibleLines.filter((line) => [...line].length > IPHONE_VISIBLE_COLUMNS);
+    expect(tooWide).toEqual([]);
+  });
+
+  it('answers anything else with a plain done, so the demo never reads a CI report back to "hello"', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+
+    await controller.verbs.writeInteractiveTerminal(started.sessionId, 'hello\r');
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const streamed = await controller.verbs.readStreamSubscribe(started.sessionId, { terminal: true });
+    expect(streamed.scrollback).toContain('Done.');
+    expect(streamed.scrollback).not.toContain('gh run list');
+  });
+
   it('names a one-word first prompt too ("hello" becomes "Hello")', async () => {
     const started = await startTerminal();
     await letAgentArrive();
