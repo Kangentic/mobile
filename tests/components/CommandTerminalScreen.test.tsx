@@ -1,8 +1,10 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import * as Reanimated from 'react-native-reanimated';
 import type { ActivityEventPayload } from '@kangentic/protocol';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
+import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import {
   CommandTerminalScreen,
   START_FAILURE_HOLD_MS,
@@ -523,6 +525,65 @@ describe('CommandTerminalScreen', () => {
       });
       expect(cursorOpacity()).toBe(restingOpacity);
       expect(screen.getByTestId('command-terminal-starting')).toBeTruthy();
+    });
+
+    /**
+     * The bound above is the third gate on the same prop. The other two keep a
+     * cursor from blinking at all: a route pushed over the terminal (the Changes
+     * tab's file diff) and OS reduced motion. Both read as "no blink" only by
+     * their effect, so the mechanism is the cursor's opacity again: the blink
+     * mounts lit at `opacityMax` and toggles, the still branch sits at the
+     * resting mid opacity and never moves.
+     *
+     * Mutation seen failing: dropping `&& screenMotionActive` from the
+     * `blinking` prop in StartingFace (the cursor kept blinking under a pushed
+     * route: "Expected: 0.575, Received: 1").
+     */
+    it('holds the starting cursor still while a route is pushed over the terminal', async () => {
+      const { intervalMs, opacityMin, opacityMax } = darkTerminalTheme.motion.waitCursorBlink;
+      const restingOpacity = (opacityMin + opacityMax) / 2;
+      const cursorOpacity = (): number =>
+        StyleSheet.flatten(screen.getByTestId('command-terminal-starting-cursor').props.style).opacity as number;
+      jest.useFakeTimers();
+      seedListedTerminal();
+      await render(
+        <ThemeProvider>
+          <ScreenMotionOverride active={false}>
+            <CommandTerminalScreen />
+          </ScreenMotionOverride>
+        </ThemeProvider>,
+      );
+
+      expect(cursorOpacity()).toBe(restingOpacity);
+      await act(() => {
+        jest.advanceTimersByTime(intervalMs * 3);
+      });
+      expect(cursorOpacity()).toBe(restingOpacity);
+      expect(screen.getByTestId('command-terminal-starting')).toBeTruthy();
+    });
+
+    // Mutation seen failing: dropping `!reducedMotion &&` from the same prop
+    // ("Expected: 0.575, Received: 1" at mount, the blink lit).
+    it('holds the starting cursor still under OS reduced motion', async () => {
+      const { intervalMs, opacityMin, opacityMax } = darkTerminalTheme.motion.waitCursorBlink;
+      const restingOpacity = (opacityMin + opacityMax) / 2;
+      const cursorOpacity = (): number =>
+        StyleSheet.flatten(screen.getByTestId('command-terminal-starting-cursor').props.style).opacity as number;
+      const reducedMotionSpy = jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
+      try {
+        jest.useFakeTimers();
+        seedListedTerminal();
+        await renderScreen();
+
+        expect(cursorOpacity()).toBe(restingOpacity);
+        await act(() => {
+          jest.advanceTimersByTime(intervalMs * 3);
+        });
+        expect(cursorOpacity()).toBe(restingOpacity);
+        expect(screen.getByTestId('command-terminal-starting')).toBeTruthy();
+      } finally {
+        reducedMotionSpy.mockRestore();
+      }
     });
 
     it('releases the session screen when it unmounts', async () => {

@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react-native';
-import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import type { TestInstance } from 'test-renderer';
 import { CircleCheckBig, Layers, SquareCode } from 'lucide-react-native';
 import { ThemeProvider } from '@/components';
@@ -286,6 +286,51 @@ describe('ColumnStrip', () => {
       await renderStrip({ column: null, waitingSinceMs: Date.now() - 4 * 60 * MINUTE });
       expect(screen.getByTestId(WAIT_TEST_ID)).toHaveTextContent('4h');
       expect(screen.queryByTestId(`${STRIP_TEST_ID}-marker`)).toBeNull();
+    });
+  });
+
+  /**
+   * A Command Terminal has no column, so its Agents card passes `column: null`
+   * and hands the band its "Command Terminal" pill as `trailing` instead of a
+   * track (decision G1). The slot is the band's right edge: after the track
+   * where a task has one, and the only thing on that edge where it has none.
+   *
+   * Mutations seen failing: moving `{trailing}` ahead of the track (the order
+   * test, "Expected: < 7, Received: 8"), and drawing it only when a column
+   * resolves (the column-less test: "Unable to find an element with testID:
+   * strip-trailing", which is exactly the terminal case).
+   */
+  describe('the trailing slot, at the band\'s right edge', () => {
+    const TRAILING_TEST_ID = 'strip-trailing';
+
+    /** Every host node of the render in tree order, so "after" is a position and not a guess. */
+    function renderOrder(): TestInstance[] {
+      return screen.container.queryAll(() => true);
+    }
+
+    it('draws the node inside the band, after the track', async () => {
+      await renderStrip({ trailing: <View testID={TRAILING_TEST_ID} /> });
+
+      const trailing = screen.getByTestId(TRAILING_TEST_ID);
+      expect(screen.getByTestId(STRIP_TEST_ID).queryAll(() => true)).toContain(trailing);
+      expect(renderOrder().indexOf(screen.getByTestId(`${STRIP_TEST_ID}-track`))).toBeLessThan(renderOrder().indexOf(trailing));
+    });
+
+    it('sits on the right with the project on the left, for a band that has no column', async () => {
+      await renderStrip({ column: null, track: [], trailing: <View testID={TRAILING_TEST_ID} /> });
+
+      const trailing = screen.getByTestId(TRAILING_TEST_ID);
+      expect(screen.getByTestId(`${STRIP_TEST_ID}-project`)).toHaveTextContent('storefront-web');
+      expect(renderOrder().indexOf(screen.getByTestId(`${STRIP_TEST_ID}-project`))).toBeLessThan(renderOrder().indexOf(trailing));
+      // The pill replaces the track rather than joining one.
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-track`)).toBeNull();
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-marker`)).toBeNull();
+    });
+
+    it('draws nothing in the slot when no node is given', async () => {
+      await renderStrip();
+
+      expect(screen.queryByTestId(TRAILING_TEST_ID)).toBeNull();
     });
   });
 
