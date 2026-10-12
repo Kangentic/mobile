@@ -35,6 +35,10 @@ app/                           # expo-router route wrappers (thin - render the s
   create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx,
   section-filter.tsx            #   native form-sheet routes (they replaced the custom board sheets;
                                 #   section-filter is the Agents feed's Show sections sheet)
+  command-terminal.tsx          # an open Command Terminal (protocol 0.20.0): its own screen, not a
+                                #   mode of the task session view (no task, swap, Resume or archive)
+  command-terminals.tsx, command-terminal-actions.tsx
+                                #   form sheets: a project's terminals, a terminal's long-press actions
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen
   +native-intent.ts             # deep links; routes ONLY the demo code (kangentic-pair://demo).
                                 #   OS routing of a REAL kangentic-pair:// payload is still a later
@@ -150,7 +154,8 @@ src/
                   #   header button and empty state), Board, task/ (SessionScreen, mode toggle,
                   #   input bar, ChatPane, ChangesTab, ResumePanel), CompletedTask, the form-sheet
                   #   screens (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker/SectionFilter), FileDiff,
-                  #   Pairing (Scan/Confirm), Settings, Devices
+                  #   Pairing (Scan/Confirm), Settings, Devices, terminals/ (the Command Terminal
+                  #   screen, its sheets and the Board header's Terminals button)
   components/     # Design system primitives (incl. the shared SegmentedSwitcher) + brand/ (Overseer,
                   #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
@@ -201,7 +206,8 @@ src/
                   #   decrypts in the targets/nse/ extension, Android in the Notifee handler)
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory; resume, the one Resume attempt per task that the
-                  #   session screen, header and long-press hub share) + the non-Zustand
+                  #   session screen, header and long-press hub share; commandTerminal, the
+                  #   Command Terminal starts and stops in flight) + the non-Zustand
                   #   terminalFeed PTY ring buffers +
                   #   memoryShed (registers the OS-memory-pressure reactions; lives here rather
                   #   than in observability/ because it touches the stores, and here rather than
@@ -409,13 +415,16 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   initiates the KK handshake and owns the ~2 minute rekey timer; the phone is the responder.
   Version negotiation is bound into the prologue to close downgrade attacks.
 - **Capability allowlist:** the channel proves which device is connected; a desktop-enforced
-  allowlist decides what it may do. Twelve verbs (`read-stream`, `read-board`, `read-diff`,
+  allowlist decides what it may do. Thirteen verbs (`read-stream`, `read-board`, `read-diff`,
   `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
   `board-tool-read`, `board-tool-write`, `register-push`, since protocol 0.15.0
   `start-session`, which the phone sends only for Resume, gated on a desktop flag that arrives
-  with protocol 0.16.0, and since 0.18.0 `pause-session`, which the phone sends only for Pause,
-  gated on the board row's `pausable`); **the default pairing grant is all
-  twelve** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts` - pairing proves
+  with protocol 0.16.0, since 0.18.0 `pause-session`, which the phone sends only for Pause,
+  gated on the board row's `pausable`, and since 0.20.0 `command-terminal`, which starts or stops
+  a Command Terminal, gated on the snapshot's `commandTerminalsOffered`; a terminal is the
+  project's agent CLI, never a shell, and the phone holds its input until the agent is classified);
+  **the default pairing grant is all
+  thirteen** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts` - pairing proves
   possession of both devices, so pairing is the approval). The per-verb allowlist exists to
   NARROW a device from the desktop's devices panel, not as a default-deny gate.
   **There is no shell, file, or arbitrary-command verb in the protocol - absent, not filtered.**

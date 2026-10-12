@@ -121,7 +121,7 @@ decides *what* it may do:
 |------|---------|
 | `read-stream` | Subscribe one session's live feeds: raw PTY tail, activity/usage/permission telemetry, and chunked transcript deltas; its `transcript-window` action serves byte-budgeted history pages (the subscribe response carries the scrollback snapshot and the outstanding `awaitedPromptId`). `transcript-window` alone needs no LIVE session (protocol 0.10.0): it reads session records plus their on-disk JSONL, which is what lets a completed task's conversation be read after its agent is gone. Every other action still requires one. |
 | `read-board` | Project list (no `projectId`, carrying the desktop's project groups since 0.11.0), a board snapshot + live board-change subscription, or - via the `archived` action (0.10.0) - a one-shot page of COMPLETED tasks with each one's lifetime session summary. Archived tasks are deliberately not in the snapshot: a board subscription re-snapshots on every change, and the archive only grows. |
-| `read-diff` | A task's diff file list (+ a live change-signal watch) or one file's old/new content |
+| `read-diff` | A task's diff file list (+ a live change-signal watch) or one file's old/new content. With no `taskId` (protocol 0.20.0) it diffs the PROJECT FOLDER against the project's default base branch, a Command Terminal's Changes, and its pings carry `projectId` instead |
 | `send-user-message` | Send a composed message into an agent session (bracketed paste desktop-side) |
 | `move-task` | Move a task between board columns |
 | `answer-permission-prompt` | Respond to an outstanding agent permission prompt |
@@ -131,12 +131,17 @@ decides *what* it may do:
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
 | `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it only for Resume on a paused task, gated on the board row's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it. The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
 | `pause-session` | Ask the desktop to pause a task's LIVE session exactly as its Pause button does (protocol 0.18.0): keyed by task, the conversation kept for a later Resume, and the pause sticks on an auto-spawn column. The desktop answers `{ ok }` when the pause is ACCEPTED (recorded), while the agent shuts down behind it; the paused row then arrives as a board event. The phone sends it only from the long-press hub's Pause, gated on the board row's `pausable` (see Pause below) |
+| `command-terminal` | Start or stop a Command Terminal (protocol 0.20.0): the AGENT CLI the desktop's Ctrl+Shift+P layer runs at a project's root, with no task. `start` names only the project (no command, branch, model or effort); the desktop runs its own New terminal path unattended and answers `{ ok, sessionId, slot, name }` once the session exists. `stop` names the session and ends only a Command Terminal. Refusals carry typed codes (`command-terminal-limit`, `unknown-project`, `agent-unavailable`, `command-terminal-start-failed`, `not-command-terminal`, `unknown-session`). The phone shows Terminals only where a snapshot's `commandTerminalsOffered` says the desktop serves it AND this device holds it (see Command Terminals below) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
 is being approved, and the desktop enforces that the response binds to a specific outstanding
 prompt id (`${sessionId}:${toolUseId}`, also covering `AskUserQuestion`/`ExitPlanMode` pauses,
-which ride the same permission machinery). The default pairing grant is ALL TWELVE verbs
+which ride the same permission machinery). `command-terminal` is the one verb whose name
+reads like a command channel, and is not one: it starts the project's agent CLI, never a shell,
+the phone names no command, and the desktop ends a terminal the moment its agent exits, so no
+bare shell is ever left for `interactive-terminal` to type into (the phone's half of that
+promise is under Command Terminals below). The default pairing grant is ALL THIRTEEN verbs
 (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts`): pairing proves
 possession of both devices, so pairing is the approval, and the desktop's Mobile Devices
 settings narrow a device per-verb after the fact. The `board-tool-*` surface is NOT
@@ -152,8 +157,11 @@ app/              # expo-router route wrappers (thin - render the src/screens/ i
   task/[taskId]/  # index = the Session view (terminal/chat lenses; the header's column chip
                   #   opens the move-task sheet); changes = the diff destination;
                   #   file-diff.tsx hosts the per-file diff on the stack
+  command-terminal.tsx  # an open Command Terminal (its own screen); command-terminals.tsx and
+                  #   command-terminal-actions.tsx are its two form sheets
 src/
   screens/        # TriageHome (+ home/ empty states), Board, task/ (SessionScreen + lenses),
+                  #   terminals/ (Command Terminal screen, sheets, the Board's Terminals button),
                   #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
   components/      # Design system + conversation/ cells and prompt cards, terminal/ pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells
@@ -176,8 +184,8 @@ src/
                   #   expo-router's imperative router enqueues rather than navigates, and the
                   #   queue drains in an effect that throws fatally when no navigator has
                   #   mounted (the iOS 0.6.3 build 13 cold-start crash)
-  state/           # Zustand stores (activity/board/transcript/diff/channel/settings) +
-                  #   the non-Zustand terminalFeed PTY ring buffers
+  state/           # Zustand stores (activity/board/transcript/diff/channel/settings/
+                  #   commandTerminal) + the non-Zustand terminalFeed PTY ring buffers
   voice/           # Dictation hook over the OS speech engines
   observability/   # Sentry crash reporting: the ONLY module allowed to import the SDK, plus
                   #   the pure event/breadcrumb scrubber (lint-enforced, crash-reporting-scope.md)
@@ -1008,6 +1016,55 @@ hold it past the phone's 10 s, so the board is re-read and the sheet keeps waiti
 pause yet". A paused row landing after that takes the line down again, with the sheet left open
 where the user is. The session view's header has no Pause yet; the desktop's own header carries a
 pause/resume toggle, which is the next surface if one is wanted.
+
+**Command Terminals** (protocol 0.20.0, task #113) are the desktop's Ctrl+Shift+P agents: the
+project's default agent at the project ROOT, on the default branch, with no task, four at most per
+project. The phone starts, opens and stops them over the `command-terminal` verb.
+
+- **Where they live.** Every board snapshot, either view, lists its project's live terminals
+  (`commandTerminals`, by slot) and says whether this desktop offers the verb to this device
+  (`commandTerminalsOffered`); the board store keeps both per project. A terminal's start, end and
+  rename arrive as a `command-terminals-changed` board event (the debounced board refresh); its
+  activity rides its own `read-stream`, exactly as a task agent's does.
+- **The activity entry** is registered as its own kind (`SessionActivityEntry.kind:
+  'command-terminal'`, `taskId: ''`) by the same reconcile that registers task agents, and its
+  stream is wanted the same way. It never touches the task machinery: a terminal's end arms no
+  respawn retention, no successor hop and no ghost row (decision C2: a terminal ends with its
+  agent, so its card goes in the pass that sees it unlisted). The desktop stamps a terminal's
+  stream events with a made-up task id that names no board row; the store never records it.
+- **Starting.** The Board header's Terminals button (hidden unless offered) is the "new
+  terminal" mark with none running, and one tap starts one; otherwise the terminal mark and the
+  count, amber when any terminal is idle or asking (H1), green otherwise, and a tap opens the
+  Terminals sheet. A start goes through `launchCommandTerminal`, which opens the terminal's screen
+  at once and records the start in `commandTerminalStore` (which outlives the screen), titled
+  with the predicted lowest free slot until the answer carries the real one. The reconcile keeps
+  a started terminal's stream wanted until a board lists it (`LAUNCH_LISTING_GRACE_MS`), because
+  the screen subscribes a round trip before the board event lands. A refusal shows one plain
+  line by its typed code for `START_FAILURE_HOLD_MS`, then the screen routes back.
+- **The terminal's screen** (`CommandTerminalScreen`, its own route, not a mode of the task
+  SessionScreen, whose swap, Resume and archive machinery a terminal has none of) has the three
+  lenses: Terminal, Chat (the reading view, since a terminal has no transcript record) and
+  Changes (the project folder, `read-diff` with no `taskId`). The header shows the terminal mark,
+  its name, the "Command Terminal" pill once it has a name of its own, and the desktop's round
+  Stop. It LEAVES whenever the terminal ends: its own Stop (one tap), a `session-ended`, a listed
+  terminal leaving the board, or one the loaded board never lists past
+  `UNLISTED_TERMINAL_GRACE_MS` (a notification tapped after it ended).
+- **Input is held** until the desktop has classified the terminal's agent
+  (`SessionActivityEntry.activityObserved`: a non-null snapshot state, or an `activity` or
+  prompt push): the xterm pane, the direct key field, the quick keys and the composer all drop
+  input before then. In the moment after spawn the PTY can be a bare shell at the project root;
+  holding input there is the phone's half of the desktop's promise that the verb adds no shell
+  reach.
+- **Elsewhere.** The Agents feed draws a terminal beside task agents in Idle, Active and Queued,
+  always with the pill and never a #number; long-press opens its two actions (Open, Stop). A
+  terminal's notification carries `sessionKind: 'command-terminal'` and the terminal's name in
+  `taskTitle`, so a tap opens the terminal by its session (`open-command-terminal` on the pending
+  navigation slot) and never the made-up task id as a task.
+- **Where the phone differs from the desktop:** no floating windows (a sheet, then a full screen);
+  no branch shown or switched (E1); no model or effort change; no "limit reached" text (New greys
+  out at four); a working terminal's mark is drawn static, not blinking, since a blink on every
+  working row would be an animation that never stops; and a stopped or failed terminal sends the
+  user back rather than closing a window.
 
 **The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
 you), Active, then the two statuses that are not running: Queued, its own section, and Paused,

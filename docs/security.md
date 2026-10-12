@@ -191,20 +191,20 @@ software matches, with no repeat of the QR/SAS ceremony.
 ## Authorization
 
 The encrypted channel proves *which* device is talking; a desktop-enforced capability allowlist
-decides *what* it may do (see `docs/architecture.md` for the twelve-verb table). **There is no
+decides *what* it may do (see `docs/architecture.md` for the thirteen-verb table). **There is no
 shell, file-read, or arbitrary-command verb in the protocol at all: it is absent, not filtered.**
 This follows the lesson of Chrome Remote Desktop and VS Code tunnels, which are identity-gated
 but capability-unscoped, and of the SSH forced-command pattern, which shows that a filter on an
 otherwise-general command channel is the wrong shape.
 
-The default pairing grant is **all twelve verbs** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's
-`pairing-service.ts` spreads `CAPABILITY_VERBS` whole; a device paired before `start-session` or
-`pause-session` existed is re-granted on the desktop's next bridge start, with no re-pair, by
+The default pairing grant is **all thirteen verbs** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's
+`pairing-service.ts` spreads `CAPABILITY_VERBS` whole; a device paired before `start-session`,
+`pause-session` or `command-terminal` existed is re-granted on the desktop's next bridge start, with no re-pair, by
 `migrateDevicesToFullCapabilityGrant` in its `mobile-bridge-service.ts`). This is deliberate: the pairing ceremony
 proves possession of both devices, so pairing is the approval, and the per-verb allowlist in the
 desktop's Mobile Devices settings exists to NARROW a device after the fact rather than as a
 default-deny gate. The load-bearing guarantee is the previous paragraph's - the verbs a grant
-can contain are the twelve above, with no shell, file, or arbitrary-command verb to grant.
+can contain are the thirteen above, with no shell, file, or arbitrary-command verb to grant.
 `start-session` starts or resumes the agent the desktop would have started for that task anyway
 (the desktop's own Resume button, reachable from the phone), never a shell. The phone sends it only
 for a paused session the desktop marks `resumable` (protocol 0.16.0), so it only ever reaches a
@@ -212,6 +212,18 @@ desktop that answers it with that same Resume path. `pause-session` (protocol 0.
 inverse and narrower still: it only suspends the agent the desktop is already running for that
 task, keeping the conversation for a later Resume (the desktop's own Pause button), and starts
 nothing. The phone sends it only for a task the desktop marks `pausable`.
+`command-terminal` (protocol 0.20.0) starts or stops a Command Terminal: the project's own agent
+CLI at the project root, exactly as the desktop's Ctrl+Shift+P New does, never a shell and never a
+command the phone names (a `start` carries only the project id; the desktop's parser drops any
+branch, model or effort key). Stop ends only a Command Terminal, refusing a task's session. What
+keeps the verb from being shell reach is that a Command Terminal ENDS when its agent exits
+(desktop decision C2), so `interactive-terminal` never has a bare shell to type into. One window
+remains, shared with every task session: the moment after spawn before the agent starts. The phone
+closes its half of it by holding ALL input to a terminal (the xterm pane, the direct key field,
+the quick keys, the composer) until the desktop has classified the agent's activity
+(`SessionActivityEntry.activityObserved`), which is the guarantee the desktop's mobile-bridge.md
+documents the phone as giving. The phone offers Terminals only where a snapshot's
+`commandTerminalsOffered` is true: this desktop serves the verb AND this device holds it.
 `interactive-terminal` is deliberately
 raw keystrokes to one session's PTY - powerful, but scoped to the agent session the desktop is
 already running, never a new shell. Its resize/release actions (the phone sizing that PTY to the
@@ -352,7 +364,9 @@ reject.
 The extension mutates only the notification's title and body. It never writes to `userInfo`,
 and in particular never puts the decrypted `taskId` there: tap routing re-derives it by
 decrypting on tap (`src/notifications/tapRouter.ts`), so task identity never enters the
-OS-visible object. It logs nothing, on any path. Every failure - a missing key, a Keychain read
+OS-visible object. The same holds for a Command Terminal's alert (protocol 0.20.0): its
+`sessionKind` and its name (carried in `taskTitle`) exist only inside the envelope, and the tap
+reads `sessionKind` after decrypting to open the terminal by its session. It logs nothing, on any path. Every failure - a missing key, a Keychain read
 that returns nothing because the device is locked or the entitlement is absent, a decrypt
 failure, an unknown category, or simply running out of execution time - delivers the placeholder
 exactly as it arrived.
