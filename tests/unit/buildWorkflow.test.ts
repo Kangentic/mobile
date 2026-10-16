@@ -776,6 +776,11 @@ describe('build-ios crash-test probe', () => {
       const refusal = requireStep(jobName, 'Refuse a probe build that is also a store submission');
       expect(refusal.if).toContain('inputs.crash_test == true');
       expect(refusal.if).toContain("inputs.submit == 'testflight'");
+      // An App Store release uploads too, so it is refused for a probe build
+      // the same way. Named positively: `!= 'none'` is also true on the cron,
+      // where `inputs.submit` is empty.
+      expect(refusal.if).toContain("inputs.submit == 'appstore'");
+      expect(refusal.if).not.toContain("!= 'none'");
     }
     // The submit job will not run for a probe build even if the refusal were
     // ever removed, mirroring submit-play on Android.
@@ -1190,7 +1195,14 @@ describe('workflow env-gated steps are defined in their own job', () => {
   //
   // Parsed with the yaml package that is already a transitive dependency, because
   // this needs job structure rather than a text match.
-  const workflowFiles = ['build-ios.yml', 'build-android.yml', 'ci.yml', 'e2e.yml', 'cache-cleanup.yml'];
+  const workflowFiles = [
+    'build-ios.yml',
+    'build-android.yml',
+    'ci.yml',
+    'e2e.yml',
+    'cache-cleanup.yml',
+    'app-store-check.yml',
+  ];
 
   it.each(workflowFiles)('%s gates steps only on env its job defines', (workflowFile) => {
     const source = readFileSync(`${repositoryRoot}.github/workflows/${workflowFile}`, 'utf8');
@@ -1542,16 +1554,17 @@ describe('build-android staged rollout', () => {
   });
 
   it('refuses an unstaged release to a track with real users', () => {
-    // A `completed` Play release can never be pulled back, only superseded by a
-    // higher version code, so releasing to alpha, beta or production without a
-    // staged rollout is irreversible the moment it lands. That used to be a
-    // prose rule in .claude/skills/release/SKILL.md telling the operator to pass
-    // `-f rollout=0.1`, which is the kind of rule that holds right up until
-    // somebody is in a hurry. Production is where it matters most: both apps
-    // are live there, so an unstaged release reaches every user at once.
+    // A staged rollout limits how many users a bad build reaches before anyone
+    // notices. (It is not what makes a release haltable: the Play Console halts
+    // a release at 100% too.) alpha and beta are refused without a rollout:
+    // neither is in use, so the guard costs nothing there. That used to be a prose rule in
+    // .claude/skills/release/SKILL.md, which is the kind of rule that holds right
+    // up until somebody is in a hurry.
     //
     // `internal` is deliberately NOT covered: the track is small and known, and
     // the documented recovery there is simply shipping a higher version code.
+    // `production` is not covered either, by maintainer decision; see the test
+    // below that pins its absence.
     const workflow = parseYaml(workflowSource) as {
       jobs: Record<string, { steps?: { name?: string; if?: string }[] }>;
     };
@@ -1559,16 +1572,18 @@ describe('build-android staged rollout', () => {
       (step) => step.name === 'Refuse an unstaged release to a track with real users'
     );
     expect(refusal?.if).toBe(
-      "(inputs.submit_track == 'alpha' || inputs.submit_track == 'beta' || inputs.submit_track == 'production') && inputs.rollout == ''"
+      "(inputs.submit_track == 'alpha' || inputs.submit_track == 'beta') && inputs.rollout == ''"
     );
   });
 
-  it('offers production as a submit track, and every non-internal track is refused unstaged', () => {
+  it('offers production as a submit track, and every track but internal and production is refused unstaged', () => {
     // A track missing from the choice list cannot be dispatched at all, which is
     // how the first production release found this workflow could only reach
     // internal, alpha and beta. The second half ties the list to the refusal
     // above, so a track added later without a staged-rollout guard fails here
-    // rather than in front of real users.
+    // rather than in front of real users. `production` is excluded on purpose:
+    // it releases to everyone by default (maintainer decision, 2026-10-15), and
+    // the next test pins that.
     const workflow = parseYaml(workflowSource) as {
       on: { workflow_dispatch: { inputs: { submit_track: { options: string[] } } } };
       jobs: Record<string, { steps?: { name?: string; if?: string }[] }>;
@@ -1578,9 +1593,37 @@ describe('build-android staged rollout', () => {
     const refusal = workflow.jobs.plan.steps?.find(
       (step) => step.name === 'Refuse an unstaged release to a track with real users'
     );
-    for (const track of tracks.filter((name) => name !== 'none' && name !== 'internal')) {
+    const guardedTracks = tracks.filter(
+      (name) => name !== 'none' && name !== 'internal' && name !== 'production'
+    );
+    expect(guardedTracks.length).toBeGreaterThan(0);
+    for (const track of guardedTracks) {
       expect(refusal?.if).toContain(`inputs.submit_track == '${track}'`);
     }
+  });
+
+  it('lets an unstaged production release through (maintainer decision, 2026-10-15)', () => {
+    // Production used to be refused without `-f rollout=...`, so every release
+    // landed as a staged rollout and stayed partial until someone widened it by
+    // hand in the Play Console (v1.1.0 went out at 10%). The maintainer chose a
+    // full release by default instead, knowing the cost: a bad build reaches
+    // everyone who updates before it is halted (the Console can halt a release
+    // at 100%, but users who already have it keep it), this app has no OTA
+    // updates, and the fix is a higher version code. A staged rollout stays
+    // available as an opt-in on a hand-run dispatch.
+    //
+    // If this fails, someone re-added production to the refusal. That reverses
+    // a deliberate decision and breaks `/release`, which dispatches production
+    // with no rollout, so change it only together with that skill.
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<string, { steps?: { name?: string; if?: string }[] }>;
+    };
+    const refusal = workflow.jobs.plan.steps?.find(
+      (step) => step.name === 'Refuse an unstaged release to a track with real users'
+    );
+    // A renamed step would make every assertion below pass vacuously.
+    expect(refusal).toBeDefined();
+    expect(refusal?.if).not.toContain("'production'");
   });
 
   it('sends the release notes with both uploads, within Play\'s 500-character cap', () => {
@@ -1604,6 +1647,234 @@ describe('build-android staged rollout', () => {
     const notes = readFileSync(notesPath, 'utf8');
     expect(notes.trim().length).toBeGreaterThan(0);
     expect(notes.length).toBeLessThanOrEqual(500);
+  });
+});
+
+describe('build-ios App Store release', () => {
+  // `submit=appstore` takes an iOS release to 100% of users in two stages, each
+  // behind its own approval of the app-store-connect environment (maintainer
+  // decision, 2026-10-15). Stage 1, at the end of submit-testflight, prepares the
+  // App Store version; stage 2, submit-app-review, sends it to App Review. The
+  // App Store Connect calls themselves are covered by
+  // tests/unit/prepareAppStoreRelease.test.ts; these lock the wiring around them.
+  interface IosStep {
+    name?: string;
+    if?: string;
+    run?: string;
+  }
+  interface IosJob {
+    if?: string;
+    needs?: string | string[];
+    environment?: string;
+    'runs-on'?: string;
+    steps?: IosStep[];
+  }
+  const iosWorkflow = parseYaml(iosWorkflowSource) as {
+    on: { workflow_dispatch: { inputs: { submit: { options: string[]; default: string } } } };
+    jobs: Record<string, IosJob>;
+  };
+  const stepNames = (jobName: string) => (iosWorkflow.jobs[jobName]?.steps ?? []).map((step) => step.name);
+
+  it('offers appstore as a submit option while the default stays none', () => {
+    const submit = iosWorkflow.on.workflow_dispatch.inputs.submit;
+    expect(submit.options).toContain('appstore');
+    // A changed default would turn every ordinary dispatch into an upload.
+    expect(submit.default).toBe('none');
+  });
+
+  it('uploads for an App Store release as well as for TestFlight', () => {
+    const condition = iosWorkflow.jobs['submit-testflight'].if ?? '';
+    expect(condition).toContain("inputs.submit == 'testflight'");
+    expect(condition).toContain("inputs.submit == 'appstore'");
+    expect(condition).toContain("github.event_name != 'schedule'");
+  });
+
+  it('prepares the version only for appstore, and only after the spent build number is tagged', () => {
+    // The tag step has no `if: always()`. A prepare step placed before it would,
+    // on failure, skip the tag and lose the record of a build number Apple has
+    // already accepted; a 403 from a key without the App Manager role is the
+    // likeliest first-run failure.
+    const names = stepNames('submit-testflight');
+    const prepareIndex = names.indexOf('Prepare the App Store version for a full release');
+    expect(prepareIndex).toBeGreaterThan(-1);
+    expect(prepareIndex).toBeGreaterThan(names.indexOf('Wait for Apple to accept the build'));
+    expect(prepareIndex).toBeGreaterThan(names.indexOf('Record the spent build number as a tag'));
+
+    const prepare = iosWorkflow.jobs['submit-testflight'].steps?.[prepareIndex];
+    expect(prepare?.if).toBe("inputs.submit == 'appstore'");
+    expect(prepare?.run).toContain('scripts/prepareAppStoreRelease.mjs');
+    expect(prepare?.run).toContain('--mode prepare');
+  });
+
+  it('submits for App Review in its own job, behind its own approval', () => {
+    // Every job naming a protected environment pauses for its own approval,
+    // which is what makes this a second, separate "submit" click.
+    const job = iosWorkflow.jobs['submit-app-review'];
+    expect(job).toBeDefined();
+    expect(job.environment).toBe('app-store-connect');
+    expect(job.needs).toContain('submit-testflight');
+    expect(job.if).toContain("inputs.submit == 'appstore'");
+    expect(job.if).toContain("github.event_name != 'schedule'");
+    expect(job.if).toContain('inputs.crash_test != true');
+    expect(job.if).toContain('inputs.nse_probe != true');
+    const runs = (job.steps ?? []).map((step) => step.run ?? '').join('\n');
+    expect(runs).toContain('scripts/prepareAppStoreRelease.mjs');
+    expect(runs).toContain('--mode submit');
+  });
+
+  it('refuses an App Store release without an API key before the archive', () => {
+    // The app-specific password fallback can upload but cannot reach the App
+    // Store Connect API, so both App Store stages would fail after a full build.
+    const names = stepNames('device');
+    const refusalIndex = names.indexOf('Refuse an App Store release without an ASC API key');
+    expect(refusalIndex).toBeGreaterThan(-1);
+    expect(refusalIndex).toBeLessThan(names.indexOf('Require signing material'));
+    const refusal = iosWorkflow.jobs.device.steps?.[refusalIndex];
+    expect(refusal?.if).toBe("inputs.submit == 'appstore' && env.HAS_ASC_API_KEY != 'true'");
+  });
+
+  describe('wiring between the steps and jobs', () => {
+    // A workflow expression that names a step id, output or job that does not
+    // exist evaluates to an empty string with no error. These pin the names that
+    // would otherwise fail silently: a summary that claims "NOT prepared" after a
+    // success, or a stage run with an empty bundle id, version or build number.
+    interface WiringStep extends IosStep {
+      id?: string;
+      env?: Record<string, string>;
+    }
+    interface WiringJob {
+      needs?: string | string[];
+      outputs?: Record<string, string>;
+      permissions?: Record<string, string>;
+      steps?: WiringStep[];
+    }
+    const wiringJobs = (parseYaml(iosWorkflowSource) as { jobs: Record<string, WiringJob> }).jobs;
+
+    function findStep(jobName: string, stepName: string): WiringStep | undefined {
+      const step = wiringJobs[jobName]?.steps?.find((candidate) => candidate.name === stepName);
+      expect(step, `${jobName} has a step named "${stepName}"`).toBeDefined();
+      return step;
+    }
+
+    const PREPARE_STEP = 'Prepare the App Store version for a full release';
+
+    it('writes the submit summary from the prepare step\'s own outcome, even when that step failed', () => {
+      const prepare = findStep('submit-testflight', PREPARE_STEP);
+      // Without an id there is no `steps.<id>.outcome`, the expression reads
+      // empty, and the summary says "NOT prepared" after a success.
+      expect(typeof prepare?.id).toBe('string');
+      expect(prepare?.id).not.toBe('');
+
+      const summary = findStep('submit-testflight', 'Write the submit summary');
+      // A failed prepare step is exactly when the summary matters most.
+      expect(summary?.if).toBe('always()');
+      expect(summary?.env?.PREPARE_OUTCOME).toBe(`\${{ steps.${prepare?.id}.outcome }}`);
+      expect(summary?.env?.SUBMIT).toBe('${{ inputs.submit }}');
+      expect(summary?.run).toContain('[ "$PREPARE_OUTCOME" = "success" ]');
+      expect(summary?.run).toContain('NOT prepared');
+    });
+
+    it('declares the three outputs the App Store stages read, each from a step that exists', () => {
+      const outputs = wiringJobs.device.outputs ?? {};
+      for (const key of ['bundle-id', 'build-number', 'version-name']) {
+        expect(Object.keys(outputs), `jobs.device.outputs declares ${key}`).toContain(key);
+        const reference = outputs[key]?.match(/^\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$/);
+        expect(reference, `device output ${key} is a steps.<id>.outputs.<name> expression`).not.toBeNull();
+        expect(reference?.[2]).toBe(key);
+        expect(
+          wiringJobs.device.steps?.some((step) => step.id === reference?.[1]),
+          `the device job has a step with id "${reference?.[1]}"`
+        ).toBe(true);
+      }
+    });
+
+    it('hands both App Store stages the bundle id, build number and version from the device job', () => {
+      const stages = [
+        { jobName: 'submit-testflight', step: findStep('submit-testflight', PREPARE_STEP) },
+        { jobName: 'submit-app-review', step: findStep('submit-app-review', 'Submit the App Store version for review') },
+      ];
+      for (const { jobName, step } of stages) {
+        // `needs.device.outputs.*` only resolves for a job that lists device in `needs`.
+        expect([wiringJobs[jobName].needs].flat(), `${jobName} needs the device job`).toContain('device');
+        expect(step?.env).toMatchObject({
+          BUNDLE_ID: '${{ needs.device.outputs.bundle-id }}',
+          BUILD_NUMBER: '${{ needs.device.outputs.build-number }}',
+          VERSION_NAME: '${{ needs.device.outputs.version-name }}',
+        });
+        expect(step?.run).toContain('--bundle-id "$BUNDLE_ID"');
+        expect(step?.run).toContain('--version "$VERSION_NAME"');
+        expect(step?.run).toContain('--build-number "$BUILD_NUMBER"');
+      }
+    });
+
+    it('gives the App Review job the three API key secrets, and no more repository access than it reads', () => {
+      const submit = findStep('submit-app-review', 'Submit the App Store version for review');
+      expect(submit?.env).toMatchObject({
+        ASC_API_KEY_BASE64: '${{ secrets.ASC_API_KEY_BASE64 }}',
+        ASC_KEY_ID: '${{ secrets.ASC_KEY_ID }}',
+        ASC_ISSUER_ID: '${{ secrets.ASC_ISSUER_ID }}',
+      });
+      expect(wiringJobs['submit-app-review'].permissions).toEqual({ contents: 'read' });
+    });
+  });
+});
+
+describe('app-store-check read-only preflight', () => {
+  // A dispatch-only workflow that holds the App Store Connect key with no
+  // approval gate. That is safe exactly as long as it can only read, so the
+  // three properties that make it read-only are pinned here.
+  const checkWorkflow = parseYaml(
+    readFileSync(`${repositoryRoot}.github/workflows/app-store-check.yml`, 'utf8')
+  ) as {
+    on: Record<string, unknown>;
+    permissions?: Record<string, string>;
+    jobs: Record<
+      string,
+      {
+        environment?: string;
+        permissions?: Record<string, string>;
+        steps?: { run?: string; env?: Record<string, string> }[];
+      }
+    >;
+  };
+
+  it('runs only when dispatched by hand', () => {
+    expect(Object.keys(checkWorkflow.on)).toEqual(['workflow_dispatch']);
+  });
+
+  it('runs the script in check mode and never a writing mode', () => {
+    const runs = Object.values(checkWorkflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .map((step) => step.run ?? '')
+      .join('\n');
+    expect(runs).toContain('scripts/prepareAppStoreRelease.mjs');
+    expect(runs).toContain('--mode check');
+    expect(runs).not.toMatch(/--mode (prepare|submit)/);
+  });
+
+  it('names the bundle id the app ships under, and takes the version from the dispatched input', () => {
+    // The workflow carries the bundle id as a literal (there is no build in it
+    // to read one from), so only this keeps it from drifting from the app.
+    const shippedBundleId = readFileSync(`${repositoryRoot}app.config.ts`, 'utf8').match(
+      /ios:\s*\{\s*bundleIdentifier:\s*'([^']+)'/
+    )?.[1];
+    expect(shippedBundleId).toBeTruthy();
+
+    const checkStep = Object.values(checkWorkflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .find((step) => step.run?.includes('scripts/prepareAppStoreRelease.mjs'));
+    expect(checkStep).toBeDefined();
+    expect(checkStep?.run?.match(/--bundle-id (\S+)/)?.[1]).toBe(shippedBundleId);
+    // Through env, not interpolated into the script text.
+    expect(checkStep?.env?.VERSION).toBe('${{ inputs.version }}');
+    expect(checkStep?.run).toContain('--version "$VERSION"');
+  });
+
+  it('holds no write permission on the repository', () => {
+    expect(checkWorkflow.permissions).toEqual({ contents: 'read' });
+    for (const job of Object.values(checkWorkflow.jobs)) {
+      expect(Object.values(job.permissions ?? {})).not.toContain('write');
+    }
   });
 });
 

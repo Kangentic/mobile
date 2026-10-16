@@ -257,7 +257,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
                   #   pretypecheck stale-node_modules guard), the store preflights
-                  #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs, storeScreenshots.mjs
+                  #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs,
+                  #   prepareAppStoreRelease.mjs (the two App Store stages of
+                  #   `build-ios.yml -f submit=appstore`: prepare, then submit; plus the
+                  #   read-only `check` mode that app-store-check.yml runs), storeScreenshots.mjs
                   #   (listing captures, driven by /store-screenshots),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
                   #   pack in the session scratchpad that every finder reads instead of
@@ -296,8 +299,11 @@ store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) 
 - `gh workflow run build-ios.yml` - **The normal way to build for iOS.** Runs on a free macOS
   runner. Defaults to an unsigned simulator compile check, which needs no Apple Developer account
   and no signing. Add `-f target=device` for a signed `.ipa`, and `-f submit=testflight` to upload
-  it to App Store Connect. The upload talks to Apple directly with `xcrun altool`, so an EAS Submit
-  outage cannot block it. See the CI builds section of
+  it to App Store Connect, or `-f submit=appstore` to also prepare the App Store version (auto
+  release after approval, no phased release) and submit it for App Review behind a second
+  approval. The upload talks to Apple directly with `xcrun altool`, so an EAS Submit
+  outage cannot block it. `gh workflow run app-store-check.yml` is the read-only preflight for the
+  `appstore` path: it writes nothing and reports what both stages would find. See the CI builds section of
   [docs/developer-guide.md](docs/developer-guide.md).
 - The `eas build` wrappers below are **cloud** builds that each spend one of the 15 free monthly
   builds per platform and enter a low-priority queue that can take hours. Prefer the workflows above;
