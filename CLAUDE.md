@@ -630,8 +630,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   `kangentic.json`, and every move keys on the last line of the agent's final message (a Text
   match: the whole line, ignoring case, punctuation and markdown, checked in code at no cost).
   **Executing** moves on to Code Review on `Findings: applied`, holds on
-  `Design: waiting on you` until the user approves a visible change ("ship it"), and otherwise
-  asks the agent once per visit to apply its own findings and end on one of the two. **Code
+  `Design: waiting on you` until the user approves a visible change ("ship it"), and at the
+  first turn end of a visit that does not move on, asks the agent once to apply its own findings
+  and end on one of the two. That includes a turn ending on the design line, since a
+  notification does not stop the rows below it, so that turn both notifies and asks. **Code
   Review** moves to Testing on `Verdict: Ready` and back to Executing on `Verdict: Blocked`.
   **Testing** moves to Merge on `PR: ready to merge`. **Merge** moves to Done on `PR: merged`.
   Each final line is a contract with what prints it (`scripts/review-verdict.mjs` for
