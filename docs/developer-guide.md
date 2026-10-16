@@ -2694,8 +2694,9 @@ build. It is configured in exactly one place, `src/observability/crashReporting.
 by `.claude/rules/crash-reporting-scope.md`. **Investigating an arriving issue** goes through
 `/sentry` (`.claude/skills/sentry/SKILL.md`), which retrieves and diagnoses issues from the
 `mobile` project through Sentry's own CLI (`npx -y sentry@0.46.0`, signed in once with
-`auth login`), and ends a triage sweep by filing grouped board tasks. Its reads and its
-assignment write are pre-approved for auto mode in `.claude/settings.json`.
+`auth login`), and ends a triage sweep by filing grouped board tasks. Its reads, its
+assignment write, and an archive the user asked for are pre-approved for auto mode in
+`.claude/settings.json`.
 
 **Two secrets, two different jobs.** They are deliberately separate:
 

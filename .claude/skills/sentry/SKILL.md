@@ -72,6 +72,7 @@ npx -y sentry@0.46.0 issue view kangentic/MOBILE-9
 npx -y sentry@0.46.0 api organizations/kangentic/issues/MOBILE-9/tags/release/
 npx -y sentry@0.46.0 auth whoami --json --fields id
 npx -y sentry@0.46.0 api organizations/kangentic/issues/MOBILE-9/ -X PUT -f assignedTo=user:<id>
+npx -y sentry@0.46.0 api organizations/kangentic/issues/MOBILE-9/ -X PUT -d "{\"status\":\"ignored\",\"statusDetails\":{\"ignoreCount\":1}}" --json --fields status,substatus,statusDetails.ignoreCount
 ```
 
 - **`issue list`** returns 25 rows from the last 30 days by default (`-n 100`, `--cursor next`,
@@ -97,6 +98,11 @@ npx -y sentry@0.46.0 api organizations/kangentic/issues/MOBILE-9/ -X PUT -f assi
   A query string written into the path was ignored in testing (desktop).
 - **Assigning** is the PUT above, with your own user id read at runtime from `auth whoami`. Never
   write a user id, email, or name into this file or a task: the repo is public.
+- **Archiving** is the last PUT above, and only on the user's OK (see Boundaries). It archives
+  until the issue occurs again, so one more event puts the SAME issue back in the unresolved
+  stream. Never archive forever, which hides a recurrence. The body is nested JSON, so it goes in
+  with `-d`; `-f` sends flat strings. Keep the `--fields` list as written: bare `statusDetails`
+  includes an `actor` object carrying the account's emails, which must not land in a reply.
 
 **What reaches the output unscrubbed.** Nothing in this repo rewrites the CLI's output, and no
 server-side Data Scrubbing rule is documented for the mobile project (the desktop project's rule
@@ -209,8 +215,8 @@ these tasks in parallel worktrees and prefers fewer, larger ones, so:
   desktop repo or `@kangentic/protocol` (name the repo; a task on THAT board is filed when
   someone starts the work, not by the sweep); an OS kill with no app-side lead (a
   `WatchdogTermination` with no memory evidence); and an issue an unreleased change already
-  addresses. They stay unassigned, so offer to archive them in Sentry and do it only on the
-  user's OK.
+  addresses. They stay unassigned, so offer to archive them in Sentry (until it occurs again)
+  and do it only on the user's OK.
 
 Close the sweep with the filed tasks (number, title, priority, and the files each touches, which
 is what shows the set is safe to run at once), the issues not filed and why, and any recurrence
@@ -342,8 +348,10 @@ its own board.
   separate ask, unless the user asked only to list or diagnose. A single-issue investigation
   files a task only when asked.
 - **Auto mode:** `.claude/settings.json`'s `autoMode.allow` names exactly what this skill does
-  unattended - Sentry reads, and the single-issue assign PUT - and states that DELETEs, bulk
-  mutations, settings writes, and other orgs stay classified. If this skill grows a new write,
+  unattended - Sentry reads, the single-issue assign PUT, and the single-issue
+  archive-until-it-recurs PUT once the user has said yes to it in the current conversation - and
+  states that resolving, archiving forever, DELETEs, bulk mutations, settings writes, and other
+  orgs stay classified. If this skill grows a new write,
   add its rule there in the same change, or a sweep will stall on a denial mid-run.
 - **Never paste a raw event payload, or a `user.id` / `contexts.device.id` value, into a task,
   commit, PR, reply, or artifact.** Quote only the specific frames and fields that carry the

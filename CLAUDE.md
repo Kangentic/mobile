@@ -402,9 +402,10 @@ see `.claude/rules/e2e-maestro-runs.md`.
   through Sentry's own CLI (`npx -y sentry@0.46.0`, a stored OAuth login, never bare `sentry`,
   which resolves to the old upload tool wherever that is installed) by numeric project id, so a project rename
   cannot silently point it at nothing, and it carries the diagnosis and duplicate-guard steps
-  this bullet does not. Its reads and its single-issue assign PUT are pre-approved for auto mode
-  in `.claude/settings.json`'s `autoMode.allow` (keep the `"$defaults"` entry first: without it
-  the array silently replaces every built-in allow rule); every other Sentry write stays
+  this bullet does not. Its reads, its single-issue assign PUT, and a single-issue archive (until
+  it occurs again) that the user asked for in the same conversation are pre-approved for auto
+  mode in `.claude/settings.json`'s `autoMode.allow` (keep the `"$defaults"` entry first: without
+  it the array silently replaces every built-in allow rule); every other Sentry write stays
   classified.
 
 ## Architecture
