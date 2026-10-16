@@ -25,7 +25,30 @@
       "icon": "square-terminal",
       "autoSpawn": true,
       "modelOverride": "opus",
-      "effortOverride": "xhigh"
+      "effortOverride": "xhigh",
+      "automations": {
+        "onTurnEnd": [
+          {
+            "name": "On to Code Review",
+            "type": "move_to_column",
+            "finalLine": "Findings: applied",
+            "maxRuns": 4,
+            "targetColumn": "Code Review"
+          },
+          {
+            "name": "Design hold",
+            "type": "notify",
+            "finalLine": "Design: waiting on you",
+            "title": "{{title}}",
+            "body": "Waiting on your design review. Say \"ship it\" to send it on to Code Review."
+          },
+          {
+            "name": "Apply findings",
+            "type": "send_message",
+            "message": "Check your last message for findings, recommendations or follow-up changes you have not applied yet, and apply them here in this task, not as follow-up tasks. Where one needs a decision, take your recommended option and name the alternative, unless it is a design choice you laid out for the user, which stays theirs. If there are none, say so. Then end your turn with a short summary and one final line, alone.\n\nWrite \"Design: waiting on you\" when the user should see this before it ships: a visible change to a screen, layout, styling, motion, haptics, user-facing copy or store frames, a design choice you laid out for the user, or a task where the user has given design feedback. Keep ending every turn on that line until the user says the design is ready, for example \"ship it\". Once they have, write \"Findings: applied\", on this visit and any later one.\n\nOtherwise write \"Findings: applied\"."
+          }
+        ]
+      }
     },
     {
       "id": "9a7ef24b-2417-4277-bfd3-862250c1b6f7",
@@ -44,6 +67,23 @@
             "type": "send_message",
             "message": "/code-review {{baseBranch}}",
             "mode": "immediate"
+          }
+        ],
+        "onTurnEnd": [
+          {
+            "name": "Back for revisions",
+            "type": "move_to_column",
+            "finalLine": "Verdict: Blocked",
+            "maxRuns": 3,
+            "targetColumn": "Executing",
+            "message": "Code Review sent this back. Do the numbered steps above its verdict, commit (never with the review scope), then end your turn.\n\n{{agentReply}}"
+          },
+          {
+            "name": "On to Testing",
+            "type": "move_to_column",
+            "finalLine": "Verdict: Ready",
+            "maxRuns": 1,
+            "targetColumn": "Testing"
           }
         ]
       }
@@ -64,6 +104,15 @@
             "message": "/pull-request",
             "mode": "immediate"
           }
+        ],
+        "onTurnEnd": [
+          {
+            "name": "On to Merge",
+            "type": "move_to_column",
+            "finalLine": "PR: ready to merge",
+            "maxRuns": 1,
+            "targetColumn": "Merge"
+          }
         ]
       }
     },
@@ -82,6 +131,15 @@
             "type": "send_message",
             "message": "/merge-pull-request",
             "mode": "immediate"
+          }
+        ],
+        "onTurnEnd": [
+          {
+            "name": "Finish",
+            "type": "move_to_column",
+            "finalLine": "PR: merged",
+            "maxRuns": 1,
+            "targetColumn": "Done"
           }
         ]
       }

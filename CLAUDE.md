@@ -626,8 +626,20 @@ in a gitignored `CLAUDE.local.md` at the project root.
 - **Landing changes goes through a PR by default.** The board drives it: the **Testing** column
   runs `/pull-request` (commit, conventional branch, push, create the PR, drive its CI checks to
   green), and the **Merge** column runs `/merge-pull-request` (merge the green PR, pull back to
-  local `main`). For a deliberate direct quick-push that bypasses the PR gate, use `/merge-back`.
-  Only push, land, or merge when the user explicitly asks.
+  local `main`). The board also moves the card itself, through On agent turn end rows in
+  `kangentic.json`, and every move keys on the last line of the agent's final message (a Text
+  match: the whole line, ignoring case, punctuation and markdown, checked in code at no cost).
+  **Executing** moves on to Code Review on `Findings: applied`, holds on
+  `Design: waiting on you` until the user approves a visible change ("ship it"), and otherwise
+  asks the agent once per visit to apply its own findings and end on one of the two. **Code
+  Review** moves to Testing on `Verdict: Ready` and back to Executing on `Verdict: Blocked`.
+  **Testing** moves to Merge on `PR: ready to merge`. **Merge** moves to Done on `PR: merged`.
+  Each final line is a contract with what prints it (`scripts/review-verdict.mjs` for
+  `/code-review`, then `/pull-request` and `/merge-pull-request`), so change the row and the
+  skill together; `tests/unit/boardTurnEndContracts.test.ts` fails when they drift. A card that
+  ends on no matching line waits in its column. For a deliberate direct quick-push that bypasses
+  the PR gate, use `/merge-back`. Outside the board, only push, land, or merge when the user
+  explicitly asks.
 - **A column move makes no git writes, so uncommitted work survives it.** Moving a task between
   two active columns performs **zero git writes**: the desktop app suspends or respawns a PTY and
   injects the destination column's `autoCommand`, and `ensureWorktree` short-circuits as
@@ -643,8 +655,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   `git add -A`. It fixes every finding it verifies (Lows included), applies its recommended
   option on a decision and lists the alternative, adds tests, and commits that pass itself, so
   Testing can open on a branch carrying a `*(review)` commit no local agent authored. That is
-  expected, not corruption. The pass ends with a verdict computed by `scripts/review-verdict.mjs`:
-  **Ready** (move to Testing) or **Blocked** (move back to Executing and do the named steps).
+  expected, not corruption. The pass ends with a verdict computed by `scripts/review-verdict.mjs`,
+  printed as the message's last line after any numbered steps, and the column's turn-end rows
+  route on exactly that line: `Verdict: Ready` moves the card to Testing, and `Verdict: Blocked`
+  moves it back to Executing (at most three times) with the review's reply, to do the named steps.
   There is no "skipped" status, and the commit body carries a `Refuted:`/`Decisions:` ledger the
   next pass reads. Never give a commit that is not a review pass the `review` scope: the next pass
   reads `<type>(review):` subjects as its own.
