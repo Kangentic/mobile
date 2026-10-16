@@ -18,6 +18,10 @@
  * 5. Merge: /merge-pull-request prints the Finish line and names the row that reads it.
  * 6. Every row is well formed: a Text match only on a turn-end row, never beside a condition, and
  *    every Move to column target is a column that exists.
+ * 7. Every Text match row's routing (type, target column, run cap) is pinned in one table, and the
+ *    table must list exactly the rows that carry a finalLine, so a new or removed row fails by name.
+ * 8. Executing ends on the unconditional Apply findings message, so the move that ends the group
+ *    is checked before the message is sent.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -52,10 +56,14 @@ function readRepositoryFile(relativePath: string): string {
 
 const board = JSON.parse(readRepositoryFile('kangentic.json')) as BoardConfig;
 
-function turnEndRow(columnName: string, rowName: string): AutomationRow {
+function turnEndRows(columnName: string): AutomationRow[] {
   const column = board.columns.find((candidate) => candidate.name === columnName);
   if (!column) throw new Error(`kangentic.json has no "${columnName}" column`);
-  const row = column.automations?.onTurnEnd?.find((candidate) => candidate.name === rowName);
+  return column.automations?.onTurnEnd ?? [];
+}
+
+function turnEndRow(columnName: string, rowName: string): AutomationRow {
+  const row = turnEndRows(columnName).find((candidate) => candidate.name === rowName);
   if (!row) throw new Error(`kangentic.json's ${columnName} column has no "${rowName}" turn-end row`);
   return row;
 }
@@ -69,6 +77,24 @@ function finalLineOf(columnName: string, rowName: string): string {
 // A boolean with a message, so a failure names the missing text instead of printing a whole skill.
 function expectTextIn(source: string, sourceName: string, expectedText: string): void {
   expect(source.includes(expectedText), `${sourceName} does not contain ${expectedText}`).toBe(true);
+}
+
+function escapeRegularExpression(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// The skill must INSTRUCT the agent to end the message, alone, on the line. A bare mention of the
+// backticked line (a summary, a cross-reference) does not count, and neither does the failure
+// path's "last line of that message" for a different line. `[^`]*` crosses a line break.
+function expectLastLineInstruction(skill: string, skillPath: string, finalLine: string): void {
+  const instruction = new RegExp(
+    `last line of the message, alone[^\`]*\`${escapeRegularExpression(finalLine)}\``,
+    'i',
+  );
+  expect(
+    instruction.test(skill),
+    `${skillPath} does not tell the agent the last line of the message, alone, is \`${finalLine}\``,
+  ).toBe(true);
 }
 
 function lastLineOf(text: string): string {
@@ -123,7 +149,7 @@ describe('board turn-end contracts: Testing', () => {
     const onToMerge = finalLineOf('Testing', 'On to Merge');
     const skillPath = '.claude/skills/pull-request/SKILL.md';
     const pullRequestSkill = readRepositoryFile(skillPath);
-    expectTextIn(pullRequestSkill, skillPath, `\`${onToMerge}\``);
+    expectLastLineInstruction(pullRequestSkill, skillPath, onToMerge);
     expectTextIn(pullRequestSkill, skillPath, '"On to Merge"');
   });
 });
@@ -134,6 +160,16 @@ describe('board turn-end contracts: Executing', () => {
     const sourceName = 'the Apply findings message';
     expectTextIn(applyFindingsMessage, sourceName, `"${finalLineOf('Executing', 'On to Code Review')}"`);
     expectTextIn(applyFindingsMessage, sourceName, `"${finalLineOf('Executing', 'Design hold')}"`);
+    expectTextIn(applyFindingsMessage, sourceName, 'final line, alone');
+  });
+
+  it('ends on Apply findings, the unconditional catch-all checked after the On to Code Review move', () => {
+    const rows = turnEndRows('Executing');
+    const applyFindings = turnEndRow('Executing', 'Apply findings');
+    expect(applyFindings.type).toBe('send_message');
+    expect(applyFindings.finalLine).toBeUndefined();
+    expect(applyFindings.condition).toBeUndefined();
+    expect(rows[rows.length - 1].name).toBe('Apply findings');
   });
 });
 
@@ -142,10 +178,29 @@ describe('board turn-end contracts: Merge', () => {
     const finish = finalLineOf('Merge', 'Finish');
     const skillPath = '.claude/skills/merge-pull-request/SKILL.md';
     const mergePullRequestSkill = readRepositoryFile(skillPath);
-    expectTextIn(mergePullRequestSkill, skillPath, `\`${finish}\``);
+    expectLastLineInstruction(mergePullRequestSkill, skillPath, finish);
     expectTextIn(mergePullRequestSkill, skillPath, '"Finish"');
   });
 });
+
+interface TextMatchRoute {
+  columnName: string;
+  rowName: string;
+  type: string;
+  targetColumn?: string;
+  maxRuns?: number;
+}
+
+// Every row with a finalLine and where it sends the card. An absent field here must be absent in
+// kangentic.json too. The test below keeps this list and the board the same set of rows.
+const TEXT_MATCH_ROUTES: readonly TextMatchRoute[] = [
+  { columnName: 'Executing', rowName: 'On to Code Review', type: 'move_to_column', targetColumn: 'Code Review', maxRuns: 4 },
+  { columnName: 'Executing', rowName: 'Design hold', type: 'notify' },
+  { columnName: 'Code Review', rowName: 'Back for revisions', type: 'move_to_column', targetColumn: 'Executing', maxRuns: 3 },
+  { columnName: 'Code Review', rowName: 'On to Testing', type: 'move_to_column', targetColumn: 'Testing', maxRuns: 1 },
+  { columnName: 'Testing', rowName: 'On to Merge', type: 'move_to_column', targetColumn: 'Merge', maxRuns: 1 },
+  { columnName: 'Merge', rowName: 'Finish', type: 'move_to_column', targetColumn: 'Done', maxRuns: 1 },
+];
 
 describe('board turn-end contracts: row shape', () => {
   const columnNames = new Set(board.columns.map((column) => column.name));
@@ -155,8 +210,25 @@ describe('board turn-end contracts: row shape', () => {
     ),
   );
 
-  it('finds the rows it pins, so an empty board cannot pass vacuously', () => {
-    expect(everyRow.filter(({ row }) => row.finalLine !== undefined).length).toBeGreaterThanOrEqual(6);
+  // The listed set is never empty, so an emptied board cannot pass this vacuously.
+  it('has a finalLine on exactly the rows TEXT_MATCH_ROUTES pins, no more and no fewer', () => {
+    expect(TEXT_MATCH_ROUTES.length).toBeGreaterThan(0);
+    const rowKey = (columnName: string, rowName: string): string => `${columnName} / ${rowName}`;
+    const boardKeys = everyRow
+      .filter(({ row }) => row.finalLine !== undefined)
+      .map(({ columnName, row }) => rowKey(columnName, row.name))
+      .sort();
+    const pinnedKeys = TEXT_MATCH_ROUTES.map(({ columnName, rowName }) => rowKey(columnName, rowName)).sort();
+    expect(boardKeys).toEqual(pinnedKeys);
+  });
+
+  it.each(TEXT_MATCH_ROUTES)('routes $columnName "$rowName" as pinned', (route) => {
+    const row = turnEndRow(route.columnName, route.rowName);
+    const label = `${route.columnName} "${route.rowName}"`;
+    expect(row.type, label).toBe(route.type);
+    // toBe(undefined) is toBeUndefined: a pinned-absent field must be absent on the row.
+    expect(row.targetColumn, label).toBe(route.targetColumn);
+    expect(row.maxRuns, label).toBe(route.maxRuns);
   });
 
   it('puts a Text match only on a turn-end row, never beside a condition', () => {
