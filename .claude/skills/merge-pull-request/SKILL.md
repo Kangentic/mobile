@@ -15,6 +15,10 @@ reviewer, so that bypass is the normal Merge-column path. It NEVER bypasses the 
 confirmed green first; `--admin` only waives the missing review. For a deliberate direct
 quick-push that skips the whole PR gate, use `/merge-back` instead.
 
+A run that merged and finished ends on the line `PR: merged`, and the Merge column's "Finish"
+turn-end row (`kangentic.json`) reads that line and moves the task to Done. See "Outcome line"
+below.
+
 **Usage:** `/merge-pull-request`
 
 ## Mobile differences from the desktop repo's flow
@@ -141,6 +145,13 @@ NOT use `--merge` (a merge commit breaks the linear-`main` convention). Record `
 If the merge fails for any other reason than the expected missing-review block, do not force
 past it; report the unmet requirement and stop.
 
+**A non-zero exit is not proof the merge failed.** `gh pr merge` merges and deletes the remote
+head first, then checks out the source branch locally, and that last step fails with
+`'main' is already used by worktree` whenever the local branch IS the PR head (a release branch;
+`/pull-request` pushes normal task branches to a different name). So on any error, read
+`gh pr view <pr> --json state` before deciding: `MERGED` means carry on to the realign as if the
+merge had reported success.
+
 ### Refresh the board's PR status
 
 If Step 0 resolved a `<taskId>`, call `kangentic_link_pr` with that task ID right after the
@@ -177,7 +188,34 @@ background refresh timer.
 
 Summarize: PR URL and the branch merged; the source branch and commit count landed; branch
 cleanup status (remote PR head deleted, local worktree branch realigned); local `main` checkout
-status. Remind the user to move the task to Done on the board to trigger worktree cleanup.
+status. Then, only when "Outcome line" below allows it, the last line of the message, alone:
+`PR: merged`. On the board that moves the task to Done, which triggers worktree cleanup. Outside
+the Merge column nothing reads the line, so remind the user to move the task to Done.
+
+## Outcome line
+
+The Merge column's "Finish" row (`kangentic.json`) is a Text match: each time a turn ends here,
+it reads the last line of your final message that still has a word in it, ignoring case,
+punctuation and markdown, and moves the task to Done only when that WHOLE line reads
+`PR: merged`. Done archives the card and removes its worktree, so the line is a contract, and
+this section and that row change together (`tests/unit/boardTurnEndContracts.test.ts` fails when
+they drift):
+
+- `PR: merged` comes only from Step 5, and only when all three hold:
+  - `gh pr view <pr> --json state` reads `MERGED`. Read it; never infer it from `gh pr merge`'s
+    exit code (see Step 3).
+  - The realign finished with a clean worktree. A realign skipped for uncommitted work, or
+    aborted on a conflict, leaves work or commits in the worktree that Done would remove.
+  - Step 4 fast-forwarded the main checkout. When Step 4 stops to report, or offers to reconcile
+    the ahead case, print no line. The row checks again at every turn end until it runs, so the
+    turn that finishes the reconciliation ends on `PR: merged` instead.
+- Every other stop prints no outcome line, and the card waits in Merge for a person: the main repo
+  and detached-HEAD pre-flight stops, a failed `gh auth status`, no PR resolved in Step 0, a Step
+  2 rebase that aborted, a required check that is red, pending or missing, a merge refused for
+  anything but the missing review, and the realign and Step 4 stops above.
+
+The `PR:` prefix marks a pull request outcome, shared with Testing's `PR: ready to merge`. Code
+Review ends on `Verdict: Ready`.
 
 ## Rules
 

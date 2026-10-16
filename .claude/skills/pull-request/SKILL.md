@@ -10,8 +10,10 @@ Commit, rebase, create a pull request, and drive its CI checks to all-green. Thi
 column** skill: it offloads CI checks to GitHub Actions instead of running them on the local
 machine, then auto-fixes any failures until the PR is green.
 
-It **never merges**. When the PR is green, the user manually moves the task Testing -> Merge,
+It **never merges**. A green run ends on the line `PR: ready to merge`, and the Testing column's
+"On to Merge" turn-end row (`kangentic.json`) reads that line and moves the task Testing -> Merge,
 where `/merge-pull-request` merges it and pulls the result back into the local `main` checkout.
+See "Outcome line" below.
 
 **Usage:** `/pull-request [commit message]`
 
@@ -352,7 +354,8 @@ classify (real regression vs broken test vs flaky test), fix with `Edit` or dele
 `test-builder`, commit (conventional message via `.kangentic/COMMIT_MSG.tmp`), push
 (`git push origin HEAD:<branch> --force-with-lease`), then return to Step 6. After 3
 unsuccessful rounds, stop: report the classification and root cause per failing check, plus the
-PR URL, and do not `--admin` bypass.
+PR URL, and do not `--admin` bypass. The last line of that message, alone: `PR: blocked`. The task
+stays in Testing for a person.
 
 ## Step 8 - Report (success)
 
@@ -364,9 +367,38 @@ Report the PR URL, branch name, commit count, and "All required checks green." I
 - **`E2E Tests (Paired)`'s state**, read non-blocking in Step 6. Say green, red, or still running.
   Never fold it into "all green": it is advisory, so a green required gate proves smoke coverage
   only. A reader who wants the paired suite's verdict has to be told it separately.
+- The last line of the message, alone, after the two items above: `PR: ready to merge`. On the
+  board that moves the task to Merge, where `/merge-pull-request` merges it. Outside the Testing
+  column nothing reads the line, so the user moves the task.
 
-Next step: the user moves the task Testing -> Merge, where `/merge-pull-request` merges it. Do
-NOT merge.
+**Do NOT merge.** Merging is `/merge-pull-request`'s job.
+
+## Outcome line
+
+The Testing column's "On to Merge" row (`kangentic.json`) is a Text match: each time a turn ends
+here, it reads the last line of your final message that still has a word in it, ignoring case,
+punctuation and markdown, and moves the task to Merge only when that WHOLE line reads
+`PR: ready to merge`. The same words anywhere else in the message never match, and anything
+written after the line means no move. So the line is a contract, and this section and that row
+change together (`tests/unit/boardTurnEndContracts.test.ts` fails when they drift):
+
+- `PR: ready to merge` comes only from Step 8: Step 6's comparison returned `missing: []`, and
+  both Step 6b build runs concluded success or were skipped because the diff touches none of the
+  paths that step lists. `E2E Tests (Paired)` does not gate it. It is advisory, so Step 8 reports
+  its state (green, red or still running) on a line above and prints the outcome line regardless.
+- `PR: blocked` comes only from Step 7's stop after three rounds.
+- Every other stop prints no outcome line. Each one still ends a turn, so the row still reads it
+  and, finding no outcome line, leaves the task in Testing: the Step 0 typecheck or lint failure,
+  a failed `gh auth status`, a detached HEAD, the Step 1 escalation (a diff unrelated to the task
+  or genuinely half-written), the Step 3 rebase-conflict question, a push the lease rejects, and a
+  turn that ends while a check watch or build run is still going. Main repo mode, the
+  `/merge-back` fallback, prints none either. It opens no PR, so Merge would have nothing to merge.
+
+A misjudged move cannot merge red CI: `/merge-pull-request`'s Step 2 re-reads `statusCheckRollup`
+and refuses anything not green before it merges.
+
+The `PR:` prefix marks a pull request outcome, shared with Merge's `PR: merged`. Code Review ends
+on `Verdict: Ready`, and a separate token keeps each column's Text match readable on its own.
 
 ## Rules
 

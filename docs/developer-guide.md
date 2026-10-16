@@ -2090,7 +2090,10 @@ the real gap and below a user's patience. The gap is a phone-side number, not th
 emulator (`kangentic_pixel`), paired to the real desktop over the hosted relay, the session screen
 open in terminal mode, and a scratch task in an active column driven back and forth with
 `kangentic_move_task` (never into the Testing or Merge columns, which run `/pull-request` and
-`/merge-pull-request`). After each move:
+`/merge-pull-request`). Executing and Code Review now carry turn-end rows, so a turn that ends
+there can carry the scratch task on by itself: Code Review's own `/code-review` ends on a verdict
+line that sends it to Testing, which opens a PR. Take each reading before that turn ends. After
+each move:
 
 ```
 adb -s emulator-5554 logcat -d -s ReactNativeJS -e "session-swap|terminal-init|terminal-painted"
