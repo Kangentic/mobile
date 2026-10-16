@@ -1356,11 +1356,11 @@ mode, because Play only rejects it after a human has spent the upload.
 | Input | Meaning |
 |---|---|
 | `target` | `simulator` (default) is the unsigned compile check, needs no secrets. `device` archives, signs, and exports an `.ipa`. `both` runs the two jobs in parallel. |
-| `submit` | `none` (default) keeps the `.ipa` as a run artifact. `testflight` uploads it to App Store Connect. |
+| `submit` | `none` (default) keeps the `.ipa` as a run artifact. `testflight` uploads it to App Store Connect. `appstore` uploads it, prepares the App Store version, then submits it for App Review behind a second approval (below). |
 | `maestro` | `none` (default). `smoke` installs Maestro's iOS driver and runs `.maestro/smoke.yaml` against the simulator the launch step booted. EXPERIMENTAL, see the job comment. |
 | `screenshots` | `'false'` (default). `'true'` captures the App Store 6.9-inch listing frames instead of the launch check (`/store-screenshots`). Refused together with `crash_test`. |
-| `crash_test` | `false` (default). `true` turns the simulator job into the crash-test probe: an ad-hoc-signed Release build carrying the DSN and `EXPO_PUBLIC_KANGENTIC_CRASHTEST=1`, two Maestro-driven crashes from Settings with a relaunch after each, evidence uploaded as `ios-probe-evidence-*`. Refused together with `submit=testflight` or `screenshots=true`. See the crash reporting section. |
-| `nse_probe` | `false` (default). `true` turns the simulator job into the Notification Service Extension probe: an ad-hoc-signed Release build carrying `EXPO_PUBLIC_KANGENTIC_NSE_PROBE=1` and a `FAKETEAMID.`-prefixed shared Keychain group, a Maestro-driven seed of known push vectors, a `simctl push` of an envelope sealed with the same vectors, and a read-back of what the OS displayed. Combinable with `crash_test` (one simulator, both questions); refused together with `submit=testflight` or `screenshots=true`. EXPERIMENTAL, see the iOS deployment paragraph in the notifications section. |
+| `crash_test` | `false` (default). `true` turns the simulator job into the crash-test probe: an ad-hoc-signed Release build carrying the DSN and `EXPO_PUBLIC_KANGENTIC_CRASHTEST=1`, two Maestro-driven crashes from Settings with a relaunch after each, evidence uploaded as `ios-probe-evidence-*`. Refused together with `submit=testflight`, `submit=appstore` or `screenshots=true`. See the crash reporting section. |
+| `nse_probe` | `false` (default). `true` turns the simulator job into the Notification Service Extension probe: an ad-hoc-signed Release build carrying `EXPO_PUBLIC_KANGENTIC_NSE_PROBE=1` and a `FAKETEAMID.`-prefixed shared Keychain group, a Maestro-driven seed of known push vectors, a `simctl push` of an envelope sealed with the same vectors, and a read-back of what the OS displayed. Combinable with `crash_test` (one simulator, both questions); refused together with `submit=testflight`, `submit=appstore` or `screenshots=true`. EXPERIMENTAL, see the iOS deployment paragraph in the notifications section. |
 
 The two build jobs are deliberately independent rather than one matrix. The simulator check needs no
 Apple account, so it is the only iOS signal available when a certificate has expired or a profile has
@@ -1371,6 +1371,49 @@ been revoked, and a signing problem must not be able to take it down too.
 reviewer, and it re-verifies the `.ipa` it downloads rather than trusting the build job. Splitting it
 also makes an Apple-side failure cheap: re-running that one job retries the upload against the
 already-verified artifact, with no rebuild and no new build number.
+
+**`submit=appstore` adds two App Store stages, each behind its own approval** of that same
+environment (every job naming a protected environment pauses separately). The maintainer decided
+on 2026-10-15 that a production release reaches every user at 100%, every time. Both stages run
+`scripts/prepareAppStoreRelease.mjs`, which talks to the App Store Connect API directly:
+
+1. **Prepare**, the last release step of `submit-testflight` (only the job summary follows it),
+   after the spent-build-number tag so a failure here cannot skip the tag. It creates or updates the App Store version, attaches the
+   build, fills What's New from `store/whatsnew/whatsnew-<locale>`, sets `releaseType:
+   AFTER_APPROVAL` (live as soon as App Review approves) and cancels any planned 7-day phased
+   release. It then reports, without failing, whether the App Review notes and contact details are
+   present and how many screenshots each localization has. The gap before the next approval is
+   where listing screenshots get changed by hand; the script never touches them.
+2. **Submit**, the `submit-app-review` job (`Submit (App Review)`, Ubuntu, no xcrun). It re-applies
+   the full-release settings, refuses a version with empty review notes (they carry the reviewer
+   demo pairing code) or a localization with no screenshots, then submits through
+   `reviewSubmissions` and waits for `WAITING_FOR_REVIEW`. Rejecting this gate leaves a prepared
+   draft that can still be submitted by hand with Add for Review.
+
+It needs the `ASC_*` API key on the **App Manager** role. The app-specific-password fallback can
+upload but cannot reach the API, so the `device` job refuses `appstore` without the key, before
+the archive. Both active team keys were on App Manager when checked in Users and Access on
+2026-10-15, so whichever one `ASC_KEY_ID` names qualifies. **Neither stage has run against Apple
+yet** (2026-10-15). One thing only the first run can answer: whether a version created through the
+API inherits the previous version's screenshots and App Review Information. The stage-1 report
+shows it.
+
+**`app-store-check.yml` is the read-only preflight for that path.** `gh workflow run
+app-store-check.yml --ref main` (add `-f version=1.2.0` to pick a version) runs the same script
+with `--mode check`. It writes nothing, holds no approval gate for that reason, and is pinned
+read-only by `tests/unit/buildWorkflow.test.ts`: dispatch only, check mode only, no write
+permission. It answers whether the key still authenticates and whether the reads both stages
+start with still answer: the versions with their `include`s, the localizations and screenshot
+sets, the build query with its `preReleaseVersion` filters, and the open review submissions. The
+writes it cannot try. It also reports the newest iOS version's review notes, contact details and
+screenshot counts (it says so when a named version does not exist yet and the newest is inspected
+instead), and any other unreleased version, a draft or one in review or waiting to release, that
+would make stage 1 refuse. Apple has marked one of those endpoints, the screenshot sets,
+deprecated in API 4.5, so this check is where its removal would surface first. `/release` runs it
+before every App Store release.
+
+`/release` drives the whole flow and can approve the gates itself when the maintainer grants it
+for that release.
 
 If that environment is ever deleted, **recreate it with a required reviewer before dispatching**.
 GitHub silently auto-creates a missing environment with no protection rules, which would turn the
@@ -3064,7 +3107,7 @@ does not upload at crash time: sentry-android writes it to its outbox and flushe
 just the tap. You cannot dispatch a store-track build with this flag on: the `plan` job refuses a
 run that sets both `crash_test` and a `submit_track`, and `submit-play` additionally will not run
 for one. Dispatch them as two separate runs. On iOS the same refusal is the first step of both
-build jobs (against `submit=testflight`, and against `screenshots=true`, which skips the
+build jobs (against `submit=testflight` or `submit=appstore`, and against `screenshots=true`, which skips the
 simulator the probe drives), and `submit-testflight` will not run for one either. The iOS
 dispatch drives the rows itself, on the CI simulator, and relaunches after each crash; see the
 capture audit block below.
@@ -4188,15 +4231,28 @@ testing does not count toward production access.**
 | Internal | up to 100, by email list | none, live in minutes | every release through v0.8.1 (vc14) went here first, one tester list | **No** |
 | Closed (`alpha`) | 12+ required, opted in 14 continuous days | yes | the gate has been passed; the workflow has never submitted here | **Yes**, this is the gate |
 | Open (`beta`) | unlimited, publicly discoverable | yes | not used | optional |
-| Production | everyone | yes | **live** (maintainer, 2026-10-07); v1.0.0 (vc15) is the first release `build-android.yml` submits here itself, as a staged rollout | n/a |
+| Production | everyone | yes | **live** (maintainer, 2026-10-07); v1.0.0 (vc15) is the first release `build-android.yml` submits here itself, as a staged rollout; since 2026-10-15 a production release is a full release by default | n/a |
 
-**Releasing to production from the workflow** is
-`-f submit_track=production -f rollout=0.1`: the `plan` job refuses production without a rollout,
-because only an `inProgress` release can be halted. Two Console preconditions the Play API cannot
-see: the service account needs **Release to production** under Users and permissions, and
-Publishing overview must hold **no unsent changes** (a listing edit waiting there makes the commit
-fail with "Changes cannot be sent for review automatically"). Upload new listing images after the
-release commits, not before. Release notes travel from `store/whatsnew/whatsnew-en-US`.
+**Releasing to production from the workflow** is `-f submit_track=production`, with no rollout: a
+full `completed` release to every user. That is a maintainer decision (2026-10-15). The `plan` job
+used to refuse production without `-f rollout=...`, so every release landed as a staged rollout
+and stayed partial until someone widened it by hand in the Play Console (v1.1.0 went out at 10%),
+and that was not worth a manual step every time. The cost was accepted knowingly: a bad build
+reaches everyone who updates before it is halted, and there is no OTA path. **A full release can
+still be halted.** An earlier version of this paragraph said a `completed` release cannot be halted,
+and that was wrong. Play Console -> Releases -> Manage rollout -> Halt rollout works at 100%: it
+was offered on v1.1.0 at 100% on 2026-10-15, and Google documents it. Halting stops new installs
+and updates of that version and serves the previous one to new users. Whoever already updated keeps
+the build until a higher versionCode ships, and a first release on a track cannot be halted. A
+staged rollout stays available as an opt-in, `-f rollout=0.1` on a hand-run dispatch, for a release
+that feels risky: what it buys is a smaller blast radius before anyone notices, not haltability.
+`/release` never passes one. `alpha` and `beta` are still refused without a rollout. Three Console
+preconditions the Play API cannot see: the service account needs **Release to production** under
+Users and permissions; Publishing overview must hold **no unsent changes** (a listing edit waiting
+there makes the commit fail with "Changes cannot be sent for review automatically"); and **Managed
+publishing must be off** (it was, checked 2026-10-15), or a committed release waits for a manual
+Publish. Upload new listing images after the release commits, not before. Release notes travel
+from `store/whatsnew/whatsnew-en-US`.
 
 **"None, live in minutes" is the steady state, not the first time.** The first internal release on
 a new app record is served under a temporary app name (`com.kangentic.mobile (unreviewed)`) while
@@ -4242,7 +4298,7 @@ testing needs no review at all.
 |---|---|---|---|
 | TestFlight internal | up to 100, must be App Store Connect users on the team | none | every build uploads here first |
 | TestFlight external | up to 10,000, by link or email | yes, a lighter Beta App Review | not used |
-| App Store | everyone | yes, full App Review | **live** (maintainer, 2026-10-07); the submission is manual in App Store Connect after the workflow's upload |
+| App Store | everyone | yes, full App Review | **live** (maintainer, 2026-10-07); since 2026-10-15 `submit=appstore` prepares the version and submits it through the API, releasing automatically after approval with no phased release (unexercised until its first run) |
 
 The ladder:
 
@@ -4255,7 +4311,9 @@ The ladder:
 3. **External testing** needs a Beta App Review, plus a description, feedback email, and beta test
    information.
 4. **App Store submission** additionally needs screenshots, the privacy questionnaire, the age
-   rating, and a resolved answer on export compliance.
+   rating, and a resolved answer on export compliance. All of that is in place for this app. A
+   release is `gh workflow run build-ios.yml -f target=device -f submit=appstore`, the two-stage
+   flow described under "Triggering an iOS build"; `/release` dispatches it by default.
 
 Two things to settle before anything leaves internal testing:
 

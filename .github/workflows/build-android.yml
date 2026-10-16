@@ -119,23 +119,40 @@ jobs:
           echo "::error::crash_test and submit_track are mutually exclusive. A crash-test build reveals the Settings crash rows and enables Sentry debug logging, so it must never be submitted to a Play track. Dispatch them as two separate runs."
           exit 1
 
-      # A `completed` Play release cannot be halted, only superseded by a higher
-      # version code, so an unstaged release to a track with real users is
-      # irreversible the moment it lands. That was previously a prose rule in
-      # .claude/skills/release/SKILL.md telling the operator to pass
-      # `-f rollout=0.1`, which is exactly the kind of rule that holds until the
-      # one time somebody is in a hurry. Refused here instead, in the same job
-      # and the same style as the crash-test refusal above.
+      # What a staged rollout buys is a smaller blast radius: a bad build reaches
+      # a fraction of users before anyone notices. It is NOT what makes a
+      # release haltable. An earlier version of this comment said a `completed`
+      # release cannot be halted; that was wrong. The Play Console halts a
+      # release at any percentage, 100% included (Manage rollout -> Halt
+      # rollout, offered on v1.1.0 at 100% on 2026-10-15), which stops new
+      # installs and updates of that version and serves the previous one to new
+      # users. Users who already updated keep the bad build either way, and a
+      # first release on a track has nothing to fall back to.
       #
-      # `internal` is deliberately exempt: the track is small, known, and the
-      # documented escape hatch for it is simply shipping a higher version code.
-      # `production` is the track this matters most on: both apps are live
-      # there, so an unstaged release reaches every user at once with no halt.
+      # alpha and beta are refused without an explicit `-f rollout=...`: neither
+      # track is in use, and the guard costs nothing there. Refused here rather
+      # than left as a prose rule, in the same job and the same style as the
+      # crash-test refusal above.
+      #
+      # Two tracks are exempt on purpose. `internal` is small and known, and its
+      # recovery is simply shipping a higher version code. `production` releases
+      # to everyone by default, by maintainer choice (2026-10-15): it used to be
+      # refused here, so every release landed as a staged rollout and stayed
+      # partial until someone widened it by hand in the Play Console (v1.1.0
+      # went out at 10%), and that was not worth a manual step on every
+      # release. The cost was accepted knowingly: with no OTA updates, a bad
+      # production build reaches everyone who updates before it is halted, and
+      # the fix is a higher version code. A staged rollout stays available as an
+      # opt-in, `-f rollout=0.1` on a hand-run dispatch; /release never passes one.
+      #
+      # So "real users" in the step name is deliberate, not stale: production is
+      # the one such track this does not refuse. tests/unit/buildWorkflow.test.ts
+      # pins production's absence, so re-adding it fails with this reason in view.
       - name: Refuse an unstaged release to a track with real users
-        if: (inputs.submit_track == 'alpha' || inputs.submit_track == 'beta' || inputs.submit_track == 'production') && inputs.rollout == ''
+        if: (inputs.submit_track == 'alpha' || inputs.submit_track == 'beta') && inputs.rollout == ''
         run: |
           set -euo pipefail
-          echo "::error::submit_track '${{ inputs.submit_track }}' needs an explicit staged rollout, e.g. -f rollout=0.1. Play can only HALT a release whose status is inProgress, which is what a userFraction rollout produces; a completed release can never be pulled back, only superseded by a higher versionCode. Re-dispatch with a rollout, or use submit_track=internal."
+          echo "::error::submit_track '${{ inputs.submit_track }}' needs an explicit staged rollout, e.g. -f rollout=0.1, so a bad build reaches a fraction of testers before anyone notices rather than all of them. Re-dispatch with a rollout, or use submit_track=internal."
           exit 1
 
       # Preflight the version code HERE rather than only in submit-play, because
@@ -725,5 +742,8 @@ jobs:
               echo "Play Console, or it stays partial indefinitely. To pull it, use Halt rollout there."
             else
               echo "Full release, status \`completed\`."
+              echo ""
+              echo "If it turns out bad, Halt rollout in the Play Console (Releases -> Manage rollout) still"
+              echo "works at 100%: it stops new installs and updates of this version. Then ship a higher versionCode."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

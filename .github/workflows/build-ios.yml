@@ -7,6 +7,9 @@ name: Build iOS
 #               secrets. Cheap enough to run on any change.
 #   device    - signed .ipa for TestFlight and the App Store, archived and
 #               exported with xcodebuild and uploaded straight to Apple.
+#               `submit=appstore` then prepares the App Store version and,
+#               behind a second approval, submits it for App Review
+#               (scripts/prepareAppStoreRelease.mjs).
 #
 # The device path exists for the same reason build-android.yml does: EAS Free
 # gives 15 iOS cloud builds a month at concurrency 1 in a low-priority queue,
@@ -33,12 +36,13 @@ on:
           - device
           - both
       submit:
-        description: 'Upload the signed .ipa to App Store Connect (device builds only).'
+        description: 'Device builds only. testflight = upload to App Store Connect. appstore = upload, prepare the App Store version, then submit it for App Review behind a second approval.'
         type: choice
         default: none
         options:
           - none
           - testflight
+          - appstore
       maestro:
         description: 'Run a Maestro flow against the simulator. EXPERIMENTAL, see the job comment.'
         type: choice
@@ -128,11 +132,14 @@ jobs:
       # an NSE-probe build reveals rows that seed KNOWN push keys into the
       # Keychain. Neither must ever reach TestFlight. submit-testflight refuses
       # them too.
+      #
+      # Both submit values are named rather than written as `!= 'none'`: on the
+      # weekly cron `inputs.submit` is empty, and an empty string is not 'none'.
       - name: Refuse a probe build that is also a store submission
-        if: (inputs.crash_test == true || inputs.nse_probe == true) && inputs.submit == 'testflight'
+        if: (inputs.crash_test == true || inputs.nse_probe == true) && (inputs.submit == 'testflight' || inputs.submit == 'appstore')
         run: |
           set -euo pipefail
-          echo "::error::crash_test / nse_probe and submit=testflight are mutually exclusive. A probe build reveals Settings rows that crash the app or seed known Keychain keys, so it must never be uploaded to App Store Connect. Dispatch them as separate runs."
+          echo "::error::crash_test / nse_probe and submit=testflight or submit=appstore are mutually exclusive. A probe build reveals Settings rows that crash the app or seed known Keychain keys, so it must never be uploaded to App Store Connect. Dispatch them as separate runs."
           exit 1
 
       # A screenshot run skips the `Launch the app on a simulator` step, which
@@ -1130,10 +1137,21 @@ jobs:
       # a 30-minute artifact nobody can run. The simulator job is where the
       # probes live.
       - name: Refuse a probe build that is also a store submission
-        if: (inputs.crash_test == true || inputs.nse_probe == true) && inputs.submit == 'testflight'
+        if: (inputs.crash_test == true || inputs.nse_probe == true) && (inputs.submit == 'testflight' || inputs.submit == 'appstore')
         run: |
           set -euo pipefail
-          echo "::error::crash_test / nse_probe and submit=testflight are mutually exclusive. A probe build reveals Settings rows that crash the app or seed known Keychain keys, so it must never be uploaded to App Store Connect. Dispatch them as separate runs."
+          echo "::error::crash_test / nse_probe and submit=testflight or submit=appstore are mutually exclusive. A probe build reveals Settings rows that crash the app or seed known Keychain keys, so it must never be uploaded to App Store Connect. Dispatch them as separate runs."
+          exit 1
+
+      # An App Store release prepares and submits the version through the App
+      # Store Connect API, which an app-specific password cannot reach. Without
+      # an API key, the upload would land and both App Store stages would then
+      # fail. Refused here, before the archive is paid for.
+      - name: Refuse an App Store release without an ASC API key
+        if: inputs.submit == 'appstore' && env.HAS_ASC_API_KEY != 'true'
+        run: |
+          set -euo pipefail
+          echo "::error::submit=appstore needs ASC_API_KEY_BASE64, ASC_KEY_ID and ASC_ISSUER_ID, with the key on the App Manager role. The Apple ID and app-specific password fallback can upload, but cannot prepare or submit an App Store version. Use submit=testflight for an upload only."
           exit 1
 
       - uses: actions/checkout@v7
@@ -1543,7 +1561,11 @@ jobs:
     # `inputs.crash_test != true` is belt-and-braces to the refusal step at the
     # top of both build jobs, mirroring submit-play on Android: a probe build
     # must not reach App Store Connect even if that step were ever removed.
-    if: github.event_name != 'schedule' && inputs.submit == 'testflight' && inputs.crash_test != true && inputs.nse_probe != true
+    #
+    # `appstore` runs this job too: an App Store release is a TestFlight upload
+    # first, and the version is prepared at the end of this job (see the last
+    # steps) before submit-app-review takes it to App Review.
+    if: github.event_name != 'schedule' && (inputs.submit == 'testflight' || inputs.submit == 'appstore') && inputs.crash_test != true && inputs.nse_probe != true
     runs-on: macos-latest
     timeout-minutes: 60
     environment: app-store-connect
@@ -1655,11 +1677,48 @@ jobs:
             -f sha="${GITHUB_SHA}" >/dev/null
           echo "Tagged ${GITHUB_SHA} as ${tag} (v${VERSION_NAME})."
 
+      # Stage 1 of an App Store release (maintainer decision, 2026-10-15: a
+      # production release reaches every user at 100%, every time). Creates or
+      # updates the App Store version, attaches this build, fills What's New
+      # from store/whatsnew/, sets it to release automatically after approval,
+      # and cancels any planned 7-day phased release. It reports, without
+      # failing on, missing review notes or screenshots: fixing those is what
+      # the gap before submit-app-review's approval is for.
+      #
+      # Deliberately AFTER the tag step, never between it and the wait step.
+      # The tag step has no `if: always()`, so a failure here placed before it
+      # would skip the durable record of a build number Apple has already
+      # accepted. The likeliest first-run failure is exactly that: a 403 from a
+      # key that is not yet on the App Manager role.
+      - name: Prepare the App Store version for a full release
+        id: prepare-app-store
+        if: inputs.submit == 'appstore'
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
+          BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
+          VERSION_NAME: ${{ needs.device.outputs.version-name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/prepareAppStoreRelease.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id "$BUNDLE_ID" \
+            --version "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER" \
+            --mode prepare
+
       - name: Write the submit summary
         if: always()
         env:
           BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
           BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
+          SUBMIT: ${{ inputs.submit }}
+          PREPARE_OUTCOME: ${{ steps.prepare-app-store.outcome }}
         run: |
           {
             echo "### App Store Connect upload"
@@ -1668,4 +1727,63 @@ jobs:
             echo ""
             echo "It appears in TestFlight once Apple finishes processing, usually 5 to 30 minutes."
             echo "If this job failed, re-run it: the verified .ipa is attached to this run, so no rebuild is needed."
+            if [ "$SUBMIT" = "appstore" ] && [ "$PREPARE_OUTCOME" = "success" ]; then
+              echo ""
+              echo "**App Store release:** the version is prepared (see the report above). Submit (App Review) is"
+              echo "waiting for its own approval. Update the listing screenshots in App Store Connect first if"
+              echo "this release needs new ones, then approve it."
+            elif [ "$SUBMIT" = "appstore" ]; then
+              echo ""
+              echo "**App Store release:** the version was NOT prepared (step outcome: \`${PREPARE_OUTCOME:-not run}\`)."
+              echo "Fix what its log names, then re-run this job. A 403 means the API key needs the App Manager role."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Stage 2 of an App Store release: submits the version stage 1 prepared for
+  # App Review. Its own job so that it waits for its OWN approval of the
+  # app-store-connect environment: every job that names a protected
+  # environment pauses separately. That second click is the "submit" button,
+  # and the time before it is where the listing screenshots get updated by
+  # hand when a release needs new ones. The script refuses to submit a version
+  # with empty review notes (they carry the reviewer demo pairing code) or a
+  # localization with no screenshots, and it re-applies the full-release
+  # settings in case they were changed in App Store Connect meanwhile.
+  #
+  # Approving it means the version goes live to every user the moment App
+  # Review approves it. Rejecting it leaves a prepared, unsubmitted version
+  # that can still be submitted by hand with Add for Review.
+  #
+  # Ubuntu, not macOS: the script is plain Node with no xcrun. Note the
+  # workflow's concurrency group cancels in-progress runs, so a second iOS
+  # device dispatch on the same ref cancels a run waiting at this gate.
+  submit-app-review:
+    name: Submit (App Review)
+    needs: [device, submit-testflight]
+    if: github.event_name != 'schedule' && inputs.submit == 'appstore' && inputs.crash_test != true && inputs.nse_probe != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: app-store-connect
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Submit the App Store version for review
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
+          BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
+          VERSION_NAME: ${{ needs.device.outputs.version-name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/prepareAppStoreRelease.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id "$BUNDLE_ID" \
+            --version "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER" \
+            --mode submit

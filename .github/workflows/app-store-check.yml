@@ -1,0 +1,68 @@
+name: App Store check
+
+# Read-only preflight for the iOS App Store release path (build-ios.yml
+# -f submit=appstore). It runs scripts/prepareAppStoreRelease.mjs --mode check,
+# which reads the App Store Connect API and writes nothing. It answers:
+#
+#   - does the API key still authenticate;
+#   - do the reads both release stages start with still answer: the versions
+#     with their `include`s, the localizations and screenshot sets (marked
+#     deprecated by Apple), the build query, and the open review submissions.
+#     The writes cannot be tried from a read-only check;
+#   - does the newest iOS version have its App Review notes, contact details and
+#     screenshots, which is what the next version starts from if Apple carries
+#     them over;
+#   - is there another unreleased version (a draft, or one in review or waiting
+#     to release) that would make stage 1 refuse.
+#
+# Run it before a release day, `gh workflow run app-store-check.yml --ref main`,
+# or add `-f version=1.2.0` to inspect one version. It cannot prove write access:
+# that needs the key's App Manager role, which was checked by eye in Users and
+# Access on 2026-10-15.
+#
+# No environment gate, deliberately. It only reads, and the ASC_* secrets are
+# repository secrets that build-ios.yml's device job already reads without one.
+# Dispatch only, so it spends nothing unless someone asks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string to inspect, e.g. 1.2.0. Empty inspects the newest iOS version.'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (App Store Connect)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The bundle id is a literal here, unlike build-ios.yml, which reads it
+      # out of the signing profile: there is no build in this workflow to read
+      # it from, and it is the app's permanent store identity.
+      - name: Check the App Store release path
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ASC_API_KEY_BASE64" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ]; then
+            echo "::error::Needs ASC_API_KEY_BASE64, ASC_KEY_ID and ASC_ISSUER_ID as repository secrets."
+            exit 1
+          fi
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/prepareAppStoreRelease.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id com.kangentic.mobile \
+            --version "$VERSION" \
+            --mode check
